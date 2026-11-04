@@ -1524,13 +1524,12 @@ read_2007_section_classes (Bit_Chain *restrict dat, Dwg_Data *restrict dwg,
       LOG_TRACE ("\nClasses\n-------------------\n");
       size = bit_read_RL (&sec_dat); // size of class data area
       LOG_TRACE ("size: " FORMAT_RL " [RL]\n", size);
-      /*
-      if (dat->from_version >= R_2010 && dwg->header.maint_version > 3)
+      if ((dat->from_version >= R_2010 && dwg->header.maint_version > 3)
+          || dat->from_version >= R_2018)
         {
-          BITCODE_RL hsize = bit_read_RL(&sec_dat);
-          LOG_TRACE("hsize: " FORMAT_RL " [RL]\n", hsize);
+          BITCODE_RL hsize = bit_read_RL (&sec_dat);
+          LOG_TRACE ("hsize: " FORMAT_RL " [RL]\n", hsize);
         }
-      */
       if (dat->from_version >= R_2007)
         {
           bitsize = bit_read_RL (&sec_dat);

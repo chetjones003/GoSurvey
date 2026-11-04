@@ -376,11 +376,9 @@ DWG_ENTITY (ATTRIB)
     SINCE (R_2007a) {
       FIELD_B (lock_position_flag, 0); // 70
     }
-    // XRECORD subclass
-    SINCE (R_2010b) {
-      FIELD_RC (keep_duplicate_records, 0);
-      VALUEOUTOFBOUNDS (keep_duplicate_records, 1)
-    }
+    // keep_duplicate_records belongs to the DXF AcDbXrecord metadata above, not the binary
+    // attribute payload. An extra RC here reads into the string stream and makes AutoCAD
+    // erase exported ATTRIBs (verified against an AutoCAD-authored R2018 control).
   }
   COMMON_ENTITY_HANDLE_DATA;
   SINCE (R_13b1) {
@@ -589,11 +587,9 @@ DWG_ENTITY (ATTDEF)
     LOG_FLAG_ATTDEF
     SINCE (R_2007a)
       FIELD_B (lock_position_flag, 0);
-    // XRECORD subclass
-    SINCE (R_2010b) {
+    // Unlike ATTRIB, ATTDEF retains this byte in its binary representation.
+    SINCE (R_2010b)
       FIELD_RC (keep_duplicate_records, 0);
-      VALUEOUTOFBOUNDS (keep_duplicate_records, 1)
-    }
     FIELD_T (prompt, 0);
   }
 
@@ -3375,7 +3371,8 @@ DWG_ENTITY (MTEXT)
         FIELD_B (default_flag, 70);   // def: 1
         FIELD_HANDLE (appid, 5, 0);
         // redundant fields
-        FIELD_BL (ignore_attachment, 0); // not in DXF. prev as BS
+        ENCODER { FIELD_VALUE (ignore_attachment) = FIELD_VALUE (attachment); }
+        FIELD_BL (ignore_attachment, 0); // duplicate attachment in the embedded object
         DXF {
           FIELD_3BD (ins_pt, 10);
           FIELD_3BD (x_axis_dir, 11);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -7,6 +8,10 @@
 namespace crashReporter {
 
 std::string ExceptionCodeToWireReason(unsigned long exceptionCode);
+
+/// REQ-425 §5: returns at most maxBytes of text, backing up so a UTF-8 sequence is never split.
+/// The report is JSON-encoded for upload, and the encoder rejects invalid UTF-8.
+std::string TruncateUtf8(std::string_view text, std::size_t maxBytes);
 
 /// REQ-425 §2: a crash report read back from the bundle file the crash handler wrote.
 struct CrashReport {

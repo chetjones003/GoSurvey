@@ -2629,6 +2629,10 @@ dwg_ctrl_table (Dwg_Data *restrict dwg, const char *restrict table)
     {
       ctrl = dwg_find_dictionary (dwg, "ACAD_MLEADERSTYLE");
     }
+  else if (strEQc (table, "TABLESTYLE") || strEQc (table, "ACAD_TABLESTYLE"))
+    {
+      ctrl = dwg_find_dictionary (dwg, "ACAD_TABLESTYLE");
+    }
   else if (strEQc (table, "NAMED_OBJECT"))
     // The very first DICTIONARY 0.1.C with all the names
     {

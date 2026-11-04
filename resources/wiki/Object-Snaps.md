@@ -84,9 +84,9 @@ This is how you reach a snap that is buried under other geometry, or one that is
 
 ## Snapping to PDF underlays
 
-Object snap also works on attached PDFs. Snap targets are found by analysing the **rendered raster
-image** rather than the internal PDF path structure, so snap fires at the geometry you can actually
-see.
+Object snap also works on attached PDFs. Vector endpoints, corners and circle centers use the
+PDF viewer's snap-point index. Its ranking favors stable features over dense clusters of tiny
+curve vertices. Legacy attachments without that index use raster-derived targets and a visibility mask.
 
 | Target | How it is recognised |
 |---|---|
@@ -99,12 +99,11 @@ see.
 Candidates are filtered through a visibility mask, so only points in areas with visible content are
 offered.
 
-Each attachment has its own snap toggles — **Lines**, **Circles**, **Text** — on the PDF Underlay
-ribbon section and in the Properties panel. See [[PDF Underlays]].
+Each attachment has an **Enable Snap** switch on its PDF Underlay ribbon. The corresponding
+line/circle options decide which targets are offered; disabling circle targets does not turn
+their centers into endpoints. See [[PDF Underlays]].
 
-> **Why raster-based** — GIS exports, scanned drawings, and other dense PDFs routinely contain
-> internal path objects that do not correspond to visible line geometry. Reading the rendered image
-> is what makes snap land on what you see.
+The raster fallback is useful when a PDF has no usable vector targets, including scanned drawings.
 
 ---
 
@@ -120,9 +119,9 @@ a corner off target:
 
 ## Preview versus commit
 
-Rubber-band previews follow the **cursor**; the pick commits at the **snapped point**. These are
-not always the same place — hover just inside the rim of a circle with **Center** enabled and the
-preview shows the rim while the commit takes the centre.
+During point-entry commands, the visible crosshair follows the active **snap point**, so it agrees
+with the snap marker and the committed point. Object-selection steps deliberately use the raw
+cursor and suppress object snapping, making it easier to pick the intended object.
 
 If a result lands somewhere unexpected, look at the snap glyph before you click: the glyph marks
 where the pick will actually go.

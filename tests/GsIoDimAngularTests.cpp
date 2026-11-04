@@ -1,4 +1,4 @@
-// Issue #125 — DIMANGULAR must survive SaveGoSurveyTemplateFile / LoadGoSurveyTemplateFile (the SAVEAS/OPEN path).
+// Issue #125 — DIMANGULAR must survive document-payload serialization and loading.
 // Linked here (GoSurveySnapTests) because GoSurveyTests cannot link GsIo.cpp.
 
 #include <catch2/catch_approx.hpp>
@@ -15,6 +15,7 @@
 #include "CadCommands.hpp"
 #include "GsAnnotationJson.hpp"
 #include "GsIo.hpp"
+#include "GsIoTestSupport.hpp"
 
 namespace {
 
@@ -27,7 +28,7 @@ std::filesystem::path UniqueGsPath(const char* stem) {
 
 }  // namespace
 
-TEST_CASE("DIMANGULAR survives SaveGoSurveyTemplateFile then LoadGoSurveyTemplateFile (issue #125)", "[payload][dimangular]") {
+TEST_CASE("DIMANGULAR survives document-payload serialization and loading (issue #125)", "[payload][dimangular]") {
   AppCommandState st;
   CadAnnotation a;
   a.kind = CadAnnotation::Kind::DimAngular;
@@ -51,7 +52,7 @@ TEST_CASE("DIMANGULAR survives SaveGoSurveyTemplateFile then LoadGoSurveyTemplat
 
   const std::filesystem::path path = UniqueGsPath("dimangular");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyTemplateFile(st, path.string().c_str(), log));
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
 
   {
     std::ifstream in(path, std::ios::binary);
@@ -62,7 +63,7 @@ TEST_CASE("DIMANGULAR survives SaveGoSurveyTemplateFile then LoadGoSurveyTemplat
   }
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.string().c_str(), log));
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
   REQUIRE(loaded.cadAnnotations.size() == 1);
   const CadAnnotation& b = loaded.cadAnnotations[0];
   REQUIRE(b.kind == CadAnnotation::Kind::DimAngular);
@@ -96,10 +97,10 @@ TEST_CASE("kind text in a saved document JSON payload reloads as TEXT, not DIMAN
 
   const std::filesystem::path path = UniqueGsPath("text-not-angular");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyTemplateFile(st, path.string().c_str(), log));
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.string().c_str(), log));
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
   REQUIRE(loaded.cadAnnotations.size() == 1);
   REQUIRE(loaded.cadAnnotations[0].kind == CadAnnotation::Kind::Text);
   REQUIRE(loaded.cadAnnotations[0].text == "just a label");

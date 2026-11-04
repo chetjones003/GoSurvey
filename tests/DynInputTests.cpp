@@ -212,6 +212,14 @@ TEST_CASE("dyninput: the prompt decides the opening layout, base and Z box", "[r
   const dyninput::Live pl = CadDynInputLive(st, p, Mode::RelativePolar, 4.0, 6.0, 0.0);
   CHECK(pl.v[0] == Approx(5.0));
 
+  st.orthoMode = true;
+  p = CadDynInputPromptFor(st);
+  CHECK(p.directDistance);
+  dyninput::Group orthoDist = Fresh(Mode::RelativePolar);
+  dyninput::TypeText(orthoDist, "6.5");
+  CHECK(dyninput::Compose(orthoDist, pl, p.directDistance) == "6.5");
+  st.orthoMode = false;
+
   AppCommandState pr;
   StartPipeRunCommand(pr, log);
   CHECK_FALSE(CadDynInputPromptFor(pr).pointEntry);  // the size prompt is not a point

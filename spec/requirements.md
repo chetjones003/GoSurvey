@@ -495,20 +495,20 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-06-15 — initial.
 
-### REQ-031 — Persist layouts and viewports in .gs
+### REQ-031 — Persist layouts and viewports in DWG and DXF
 - Purpose: layouts survive save/reload
 - Priority: should
 - Type: functional
 - Statement: Paper layouts, their paper size/orientation, their viewports
   (rectangle, scale, center) and per-viewport frozen layers are **persisted in the
-  native `.gs` file** and restored on load. DXF persistence of layouts/viewports is
-  **deferred** to a later requirement (decision log, 2026-06-15).
+  drawing's DWG file** and restored on open. DXF export and import of layouts and
+  viewports is governed by REQ-113.
 - Acceptance: a drawing with multiple layouts and viewports (with set scales, paper
-  sizes, and per-viewport frozen layers) saved to `.gs` then reloaded restores all
+  sizes, and per-viewport frozen layers) saved to DWG then reopened restores all
   of them identically.
 - Owner-layer: IO
 - Status: accepted
-- Revisions: 2026-06-15 — initial.
+- Revisions: 2026-06-15 — initial. 2026-10-28 — persistence restated from the retired `.gs` format to DWG and DXF (issue #1018; D-2026-10-20-a, D-2026-09-03-h); DXF deferral lifted by REQ-113.
 
 ### REQ-032 — Contextual "Layout" ribbon in paper space
 - Purpose: surface paper-space commands only when they apply
@@ -600,14 +600,15 @@ requirements is a planning failure, not a sign of rigor.
   model-space UX. Survey-specific tools (survey points, CSV import) remain
   **model-only**. Snapping in paper space resolves to **paper-space entities only**
   (snapping to viewport-displayed model geometry is deferred). Paper-space entities
-  **persist per layout in the native `.gs` file** and are unaffected by model edits.
+  **persist per layout in the drawing's DWG file** (the DWG and DXF form is set by
+  REQ-113) and are unaffected by model edits.
 - Acceptance: in a paper layout the user can draw lines and place text on the sheet;
   each can be moved/copied/rotated/deleted and snapped to; they do **not** appear in
-  model space or in other layouts; a drawing with paper-space entities saved to `.gs`
-  then reloaded restores them per layout.
+  model space or in other layouts; a drawing with paper-space entities saved to DWG
+  then reopened restores them per layout.
 - Owner-layer: Domain / UI / Commands / Renderer / IO
 - Status: accepted
-- Revisions: 2026-06-16 — initial (Paper Space Inc 5; SPEC GAP resolution, ADR-009).
+- Revisions: 2026-06-16 — initial (Paper Space Inc 5; SPEC GAP resolution, ADR-009). 2026-10-28 — persistence restated from `.gs` to DWG (issue #1018; REQ-113).
 
 ### REQ-038 — Clipboard copy/paste within and across model & paper space
 - Purpose: reuse existing geometry — e.g. copy a DXF title block from model space
@@ -627,8 +628,8 @@ requirements is a planning failure, not a sign of rigor.
   (layer, color, linetype, text style/typeface). Copy/paste works **model→paper,
   paper→model, and within the same space**. **Ctrl+V with an empty clipboard does
   nothing** (no crash). Survey points and survey-specific tools remain model-only.
-  The clipboard is in-memory only (not persisted; DXF persistence of the new paper
-  types stays deferred per the ADR-013 amendment).
+  The clipboard is in-memory only (not persisted). Paper objects pasted onto a sheet
+  persist with that sheet's DWG and DXF output under REQ-113.
 - Acceptance: (1) a model-space selection + Ctrl+C, switch to a paper layout +
   Ctrl+V shows a cursor-tracking preview and a click places the copies in paper
   space; (2) the reverse (paper→model) works the same way; (3) same-space copy/paste
@@ -658,14 +659,16 @@ requirements is a planning failure, not a sign of rigor.
   General (layer/color/linetype/lineweight/transparency) and per-type Geometry and Text
   (contents/height/rotation/style) — the same panel used for model selection; (d) **object
   snapping** to paper objects; (e) **draw** commands LINE, TEXT, MTEXT, CIRCLE, ARC, ELLIPSE,
-  POLYLINE create into the active layout's paper store (paper inches); (f) **modify** commands
-  MOVE, COPY, ROTATE, SCALE, DELETE, JOIN, TRIM, OFFSET operate on the paper selection.
+  POLYLINE, SPLINE, POINT, and LEADER create into the active layout's paper store (paper inches);
+  (f) **modify** commands
+  MOVE, COPY, ROTATE, SCALE, DELETE, JOIN, TRIM, OFFSET, PEDIT operate on the paper selection.
+  MEASURE, DIVIDE, AREA, and LIST also run against paper objects while a paper layout is active.
   Additionally, **double-clicking a text object opens an in-place editor** to edit its
   contents — implemented for **both** model space and paper space (the same shared editor).
   Survey-specific tools (survey points, CSV import) remain **model-only**; paper edits never
   alter model geometry; coordinates never cross spaces implicitly (REQ-038's 1:1 paste is the
   one sanctioned exception). Paper-space objects and their edits **persist per layout in the
-  native `.gs`** (REQ-031/037 pattern); DXF persistence of paper objects stays deferred.
+  drawing's DWG file** (REQ-031/037 pattern; DXF per REQ-113).
 - Acceptance: in a paper layout — (1) a window box (L→R) selects paper objects fully inside it
   and a crossing box (R→L) selects any it touches, for every paper object type; (2) clicking a
   paper text selects it with no vertical offset, and double-clicking any text (model or paper)
@@ -673,13 +676,14 @@ requirements is a planning failure, not a sign of rigor.
   paper object(s) populates the Properties panel and edits made there apply to the object(s);
   (4) selected paper objects show grips and dragging a grip edits the geometry; (5) CIRCLE,
   ARC, ELLIPSE, POLYLINE, and MTEXT draw onto the sheet, and SCALE/JOIN/TRIM/OFFSET operate on
-  the paper selection; (6) none of these paper edits change model geometry; (7) a `.gs`
-  round-trip restores the edited paper objects per layout.
+  the paper selection; (6) none of these paper edits change model geometry; (7) a DWG
+  save and reopen restores the edited paper objects per layout.
 - Owner-layer: UI / Commands / Domain / IO
 - Status: accepted
 - Revisions: 2026-06-18 — initial (paper-space object parity; ADR-014). Delivered incrementally:
   Phase 1 selection/text-pick/Properties, Phase 2 in-place text editor, Phase 3 grips, Phase 4
-  draw + modify parity.
+  draw + modify parity. 2026-10-28 — D-2026-10-28-c / issue #1019: SPLINE, POINT, LEADER draw onto
+  the sheet; PEDIT, MEASURE, DIVIDE, AREA, LIST run on paper objects.
 
 ### REQ-040 — AutoCAD-style floating command line with fading history and an F2 console
 - Purpose: the command line should read and behave like AutoCAD's — a compact
@@ -972,8 +976,8 @@ requirements is a planning failure, not a sign of rigor.
   deferred), the override colors **only the overridden layers**; general true-color viewport
   rendering is out of scope. All per-viewport freeze and color state is **strictly per
   viewport** — model space and other viewports are unaffected — and **persists per viewport in
-  the native `.gs`** (extends REQ-031, the `frozenLayers` pattern; missing/garbage → empty, no
-  crash). DXF persistence of per-viewport overrides stays deferred.
+  the drawing's DWG file** (extends REQ-031, the `frozenLayers` pattern; missing/garbage → empty,
+  no crash). DXF carries the same overrides under REQ-113.
 - Acceptance:
   - the standalone "Frozen Layers" panel no longer appears;
   - with a current viewport, the Layer Manager shows the **VP Freeze** and **VP Color** columns;
@@ -984,7 +988,7 @@ requirements is a planning failure, not a sign of rigor.
     the current viewport only; clearing the override reverts to the normal color;
   - **VPFREEZE** → select objects → those entities' layers are frozen in the current viewport
     only; **VPTHAW** → select objects → those layers are thawed; Esc / empty pick changes nothing;
-  - a `.gs` save/load round-trips per-viewport frozen layers **and** color overrides;
+  - a DWG save/reopen round-trips per-viewport frozen layers **and** color overrides;
   - a PDF plot of a viewport shows frozen layers **absent** and VP-Color layers in their
     **override color**, matching the screen;
   - existing global layer freeze/color and model-space rendering are unchanged.
@@ -1356,7 +1360,7 @@ requirements is a planning failure, not a sign of rigor.
 - Owner-layer: UI (tab bar selection) / IO (`GsIo` view key)
 - Status: accepted
 - Revisions: 2026-08-11 — initial. 2026-11-03 — DWG open also restores the saved active model-space VPORT and
-  CANNOSCALE, independently of zoom (D-2026-11-03-b). Root causes: the tab loop assigned `activeDrawingIdx` and consumed
+  CANNOSCALE, independently of zoom (D-2026-11-03-d). Root causes: the tab loop assigned `activeDrawingIdx` and consumed
   `pendingDrawingTabSwitch` from whichever tab ImGui reported selected, and tabs are submitted in index
   order — so the still-selected old tab always won before the new tab was reached. The `.gs` writer had
   no view state at all.
@@ -2256,14 +2260,14 @@ requirements is a planning failure, not a sign of rigor.
 - Type: functional
 - Statement: `PaperLayout` geometry remains 2D paper inches (ADR-009/013 stores unchanged).
   Each `Viewport` gains a stored camera direction, up vector and projection, persisted
-  additively in `.gs`. Screen rendering and the PDF plot each render a viewport's model
+  in the drawing's DWG file. Screen rendering and the PDF plot each render a viewport's model
   content from that viewport's own camera.
 - Acceptance:
   - a layout with two viewports — one plan, one isometric — renders both correctly on screen
     and plots both correctly to PDF;
-  - a legacy `.gs` loads with every viewport in plan view and renders identically to
-    pre-change.
-- Owner-layer: Domain (data), Renderer (draw), IO (`.gs` + plot)
+  - a drawing saved before this requirement loads with every viewport in plan view and renders
+    identically to pre-change.
+- Owner-layer: Domain (data), Renderer (draw), IO (DWG + plot)
 - Status: accepted — **implemented 2026-08-31** (GitHub issue #175, split from #155). `Viewport`
   carries `cam{Azimuth,Elevation,Roll}Deg` + `camPerspective`/`camFovDeg`, defaulting to the
   straight-down orthographic plan view; `render/ViewportProjection.hpp`
@@ -3179,6 +3183,14 @@ requirements is a planning failure, not a sign of rigor.
     drawing canvas uses a deep navy ground with a fine, low-contrast blue grid. The Light theme
     remains unchanged. *(Qt accent colours superseded by REQ-436: the primary accent is now
     topo-line amber, D-2026-10-21-f.)*
+  - **(added 2026-10-28, D-2026-10-28-b; GitHub issue #1041)** the Qt drawing workspace
+    chrome has a narrow appearance exception in both Light and Dark: the ribbon/workspace
+    boundary and the Properties, viewport, and Toolspace surfaces are visibly separated; the
+    ribbon and dock panels have restrained rounded, raised edges; and the permanent ribbon tabs
+    have modest rounding with distinct hover and selected states. Preserve each theme's palette,
+    the viewport's usable area, all ribbon and docking behavior, and all drawing/viewport content.
+    This Qt-only workspace treatment does not alter the ImGui frontend or extend the floating
+    dialog gradient/bevel treatment from D-2026-09-01-a.
 - Owner-layer: UI (`src/ui/CadUi.cpp`; Qt frontend `src/qt/QtAppearance.cpp`, `src/qt/EditorChrome.cpp`, and `src/qt/EditorWindow.cpp`)
 - Status: accepted (2026-08-16)
 - Revisions: 2026-08-16 — initial. Resolved as a SPEC GAP: both shipped themes
@@ -3187,7 +3199,9 @@ requirements is a planning failure, not a sign of rigor.
   colours regardless of which theme was active. User supplied the Hazel editor as
   the visual reference and chose (1) the **Dark** theme as the one to restyle,
   leaving the classic theme intact, and (2) full parity including the
-  property-grid widgets. See ADR-033.
+  property-grid widgets. See ADR-033. 2026-10-28 — D-2026-10-28-b / GitHub issue #1041 adds the
+  Qt drawing-workspace chrome exception above in both Qt appearances; the original ImGui theme
+  direction and the floating-dialog-only scope of D-2026-09-01-a remain intact.
   2026-08-16 (revision 2) — after seeing revision 1 running, the user asked that
   the palette be put on a proper footing rather than left as hand-picked values.
   Measuring the shipped ramp found three defects the eye had registered but not
@@ -4382,7 +4396,7 @@ requirements is a planning failure, not a sign of rigor.
 - Acceptance (sketch): live preview, commit on the snapped point per the project's preview-vs-commit invariant; each new entity kind is added at every integration site (selection, extents, layer, undo, `.gs`, DXF, render, snap, grips, properties); a spline's chord deviation is within REQ-101 wherever REQ-101 applies.
 - Owner-layer: Commands/Domain/IO/UI
 - Status: accepted
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-20 — SPLINE, REVCLOUD and WIPEOUT split out into REQ-443, REQ-444 and REQ-442 (GitHub #803, D-2026-10-20-e); SPLINE is REQ-443 because REQ-440 was assigned to ImGui removal on beta; XLINE, RAY, DONUT, SOLID and MLINE remain here, still proposed. A drawn POINT entity was deliberately left out of #803 by the user.
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-20 — SPLINE, REVCLOUD and WIPEOUT split out into REQ-443, REQ-444 and REQ-442 (GitHub #803, D-2026-10-20-e); SPLINE is REQ-443 because REQ-440 was assigned to ImGui removal on beta; XLINE, RAY, DONUT, SOLID and MLINE remain here, still proposed. A drawn POINT entity was deliberately left out of #803 by the user. 2026-10-28 — POINT is REQ-456 (D-2026-10-28-c / issue #1019); remaining names here are unchanged.
 
 ### REQ-105 — Inquiry commands
 - Purpose: AREA, DIST, LIST, and MASSPROP are missing outside the Properties panel (which only reports a circle's area)
@@ -4412,8 +4426,8 @@ requirements is a planning failure, not a sign of rigor.
   - two points at the same elevation report "level (0.00%)" and no ratio;
   - all four figures are taken in the active UCS, and a tilted UCS moves them together.
 - Owner-layer: Commands/UI
-- Status: accepted (DIST only — issue #382); AREA/LIST/MASSPROP remain proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i); 2026-09-07 — accepted scoped to DIST (issue #382); 2026-09-09 — DIST amended to report horizontal distance and grade (D-2026-09-09-f, TASK-235, GitHub #149 acceptance 1)
+- Status: accepted (DIST — issue #382; AREA and LIST — D-2026-10-28-c / issue #1019 / REQ-456); MASSPROP remains proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i); 2026-09-07 — accepted scoped to DIST (issue #382); 2026-09-09 — DIST amended to report horizontal distance and grade (D-2026-09-09-f, TASK-235, GitHub #149 acceptance 1); 2026-10-28 — AREA and LIST accepted as REQ-456 (D-2026-10-28-c)
 
 ### REQ-106 — View-management commands
 - Purpose: no view-stack undo, no named views, no isometric presets beyond the ViewCube's standard faces
@@ -4549,7 +4563,7 @@ requirements is a planning failure, not a sign of rigor.
 - Acceptance (sketch): dragging dimensioned geometry updates the displayed value and leader within REQ-101; DXF round-trip preserves it as a `DIMENSION`, not exploded geometry; erasing the dimensioned geometry is handled per REQ-201, not silently.
 - Owner-layer: Domain/Commands/IO/Renderer
 - Status: accepted
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i) 2026-09-03 — Purpose corrected (issue #252, TASK-193); the requirement itself is unchanged and stays proposed.
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i) 2026-09-03 — Purpose corrected (issue #252, TASK-193); the requirement itself is unchanged. 2026-10-29 — accepted (user decision on issue #804); this supersedes the earlier "stays proposed" status.
 
 ### REQ-112 — Binary DXF import
 - Purpose: only ASCII DXF is read; a binary DXF must be round-tripped through AutoCAD's Save As first
@@ -4569,13 +4583,34 @@ requirements is a planning failure, not a sign of rigor.
 - Type: functional
 - Statement: The **paper-space entity set** that DXF and DWG must carry is: LINE, TEXT, MTEXT, CIRCLE, ARC, ELLIPSE, polyline, block reference (INSERT) and VIEWPORT. DXF export writes every member of that set from each layout's `PaperLayout` store into that layout's paper space; DXF import and DWG import reconstruct every member into the matching layout's native store (REQ-037/ADR-009), the same way model-space entities reconstruct. A paper-space entity of any type outside the set is named in the log with its count and type, never silently dropped (REQ-201).
 - Acceptance (sketch): (1) a drawing with a paper line, circle, arc, ellipse, polyline, text, MTEXT, block reference and a viewport survives DXF export then DXF import with each present on the same layout, with equal geometry; (2) `samples/duke-main-clean-r2018.dwg` imports its paper-space members of the set (it logs 203 "unsupported type" skips today) and any remaining skip is reported by type per REQ-201; (3) a paper-space type outside the set is reported, not dropped silently; (4) a malformed paper-space entity is rejected per REQ-001, not partially absorbed.
-- Also in this requirement (D-2026-10-20-a): the set additionally includes hatch/fill, leader, table, spline, image and point, each with its own paper store in paper inches (REQ-037, ADR-009). DWG and DXF also carry each layout's **paper size and orientation** and each viewport's **view direction, frozen layers, lock and on/off**; the values read back equal the values written. DWG export writes the full set into the AutoCAD-readable part of the file, not only the GoSurvey trailer (issue #753 I3). Paper-object persistence is DWG and DXF; the retired .gs format (D-2026-09-03-h) is not a target, and the older .gs wording in REQ-037/REQ-039 is superseded by this requirement. Delivery order is DWG first, then DXF, one increment per PR.
+- Also in this requirement (D-2026-10-20-a): the set additionally includes hatch/fill, leader, table, spline, image, point and dimension, each with its own paper store in paper inches (REQ-037, ADR-009). A sheet dimension is written with the same DIMENSION writer model space uses (D-2026-10-29-a). Sheet points and sheet images are defined by REQ-456 and REQ-457. DWG and DXF also carry each layout's **paper size and orientation** and each viewport's **view direction, frozen layers, lock and on/off**; the values read back equal the values written. DWG export writes the full set into the AutoCAD-readable part of the file, not only the GoSurvey trailer (issue #753 I3). Paper-object persistence is DWG and DXF; the retired .gs format (D-2026-09-03-h) is not a target, and the older .gs wording in REQ-037/REQ-039 is superseded by this requirement. Delivery order is DWG first, then DXF, one increment per PR.
 - Further viewport state (D-2026-10-25-a/b/c, issue #1013): DWG and DXF export/import also carry each viewport's full camera orientation and projection (REQ-061), per-viewport layer color overrides (REQ-046), active UCS frame (REQ-155), and an **independent per-viewport annotative scale** chosen from the drawing's annotation scale list. New viewports initialize this choice from the drawing's current annotation scale. The Viewports controls allow changing it independently of viewport zoom. These properties use AutoCAD-readable viewport and layer records in both formats and survive save/open; they are not trailer-only data. DXF export is R2018 regardless of the selected DWG version so the annotation scale list is representable.
 - Acceptance (additional): (5) each of hatch, leader, table, spline, image and point drawn on a sheet survives DWG save then open on the same layout; (6) paper size, orientation and each viewport's view direction, frozen layers, lock and on/off survive DWG save then open; (7) AutoCAD opens our DWG sheet showing the paper text, arcs, polylines and fills (checked with the local AutoCAD oracle); (8) the same holds for DXF in a later increment.
 - Acceptance (issue #1013): (9) a DWG and a DXF viewport with a non-plan camera/projection, per-viewport layer color override, non-World UCS and an annotative scale different from its zoom each survive GoSurvey export/import with those values preserved; (10) both emitted formats contain the state in AutoCAD-readable data, and AutoCAD shows the expected view, layer color and annotative visibility; (11) a plan/World/no-override viewport and a legacy DWG or DXF without the added fields load with existing defaults; (12) new viewports inherit the drawing's current annotation scale and users can change the viewport's annotative scale independently from its zoom.
+- Acceptance (issue #1010, proposed, D-2026-10-29-a): (13) a sheet dimension (linear, aligned or angular, with its measured points, text and dimension style) survives DWG save then open on the same layout with the same measured geometry and text; (14) AutoCAD shows each sheet dimension, sheet point (REQ-456) and sheet image (REQ-457) on the same layout in the oracle check.
 - Owner-layer: IO
 - Status: accepted
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-06 — accepted, widened from "DXF paper-space import" to the entity set above for DXF export, DXF import and DWG import (D-2026-10-06-o). First increment: DXF export + DWG import (issue #765); DXF import and DWG export are follow-on increments. 2026-10-20 — widened again to hatch/leader/table/spline/image/point paper stores, paper size/orientation, viewport state and DWG-first full export; persistence restated against DWG/DXF (D-2026-10-20-a, issue #768). 2026-10-25 — widened viewport persistence to camera/projection, layer color overrides, UCS and annotative scale in both DWG and DXF; DXF export set to R2018 for native scale support (D-2026-10-25-a/b/c, issue #1013).
+- Revisions: 2026-10-29 — amended (D-2026-10-29-a, issue #1010, accepted by the user): dimension added to the paper set, and acceptance (13)–(14) added. 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-06 — accepted, widened from "DXF paper-space import" to the entity set above for DXF export, DXF import and DWG import (D-2026-10-06-o). First increment: DXF export + DWG import (issue #765); DXF import and DWG export are follow-on increments. 2026-10-20 — widened again to hatch/leader/table/spline/image/point paper stores, paper size/orientation, viewport state and DWG-first full export; persistence restated against DWG/DXF (D-2026-10-20-a, issue #768). 2026-10-25 — widened viewport persistence to camera/projection, layer color overrides, UCS and annotative scale in both DWG and DXF; DXF export set to R2018 for native scale support (D-2026-10-25-a/b/c, issue #1013). 2026-10-28 — a paper-space VIEWPORT is imported whatever its size; the sheet-span test that dropped full-sheet viewports (issue #1012) is removed, and AutoCAD's own layout frame may therefore appear as a viewport the user can delete (D-2026-10-28-a).
+
+### REQ-456 — Sheet POINT objects in DWG (issue #1010)
+- Purpose: a drawn point on a sheet is a marker for a fixed place on the printed page; today a DWG save drops it, so AutoCAD shows an empty spot
+- Priority: should
+- Type: functional
+- Statement: A layout's paper store may hold POINT objects in paper inches, each with position, layer, colour and linetype (EntityAttributes, REQ-037). A sheet point is **not** a survey point: it never enters the survey-point store, point groups or surface data (REQ-023, REQ-067). DWG export writes each sheet point as a DWG POINT entity in that layout's paper space. DWG import reads a POINT found in a paper-space block into that layout's paper store. A POINT in model space keeps REQ-023 behaviour. Point display follows the drawing's point mode and size (PDMODE, PDSIZE), read and written with the drawing; they are drawing-level, not per point. Creating or editing sheet points through commands is not part of this requirement; the store and its DWG round trip are (user decision, D-2026-10-29-a).
+- Acceptance: (1) a sheet point at a given paper position, layer and colour survives DWG save then open on the same layout with equal position, layer and colour; (2) a POINT in model space still imports as a survey point, unchanged; (3) a POINT in a paper-space block never appears as a survey point after import; (4) PDMODE and PDSIZE survive save then open; (5) AutoCAD shows the point at its paper position in the oracle check (REQ-113 acceptance 14).
+- Owner-layer: IO / Domain
+- Status: accepted
+- Revisions: 2026-10-29 — proposed and accepted with D-2026-10-29-a (issue #1010). Command creation and editing of sheet points is deferred to a later requirement by user decision.
+
+### REQ-457 — Sheet raster IMAGE underlays in DWG (issue #1010)
+- Purpose: a photo, scan or logo placed on a sheet should survive a DWG save as an AutoCAD IMAGE object, not only in GoSurvey's own trailer
+- Priority: should
+- Type: functional
+- Statement: A layout's paper store may hold raster IMAGE underlays under the same rules as REQ-173 (JPEG, PNG, BMP; insertion point, rotation, width and height; layer; a missing file unloads that image and logs it; a truncated file is refused), with all placement in paper inches. DWG export writes each sheet image as an AutoCAD IMAGE entity in that layout's paper space, with an IMAGEDEF object that records the file path and the pixel size taken when the image was attached. DWG import reads IMAGE entities in a paper-space block into that layout's paper store. Image data is referenced by path, as REQ-173 stores it; embedding pixel data is not part of this requirement. A model-space IMAGE keeps REQ-173 behaviour.
+- Acceptance: (1) a PNG attached to a sheet at a given position, size and rotation survives DWG save then open on the same layout with the same insertion point, size and rotation; (2) when the image file is missing on open, the image unloads, the log says so, and the rest of the sheet loads (REQ-173); (3) a truncated PNG is refused and no image is added; (4) AutoCAD shows the image on the sheet in the oracle check when the file exists at the stored path (REQ-113 acceptance 14).
+- Owner-layer: IO / Domain / Renderer
+- Status: accepted
+- Revisions: 2026-10-29 — proposed and accepted with D-2026-10-29-a (issue #1010). Storage is by path only, matching REQ-173 (user decision); embedding pixel data was considered and not chosen.
 
 ### REQ-114 — Autosave, backup, and crash recovery
 - Purpose: there is no safety net between manual `Ctrl+S` saves; a crash or accidental close loses unsaved work
@@ -5795,8 +5830,11 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: must
 - Type: functional
 - Statement: A dockable **TOOLSPACE** window has a dark title, a view combo, a light
-  tree, a right-edge pair of **readable** vertical tabs (**Prospector**, **Settings**), and an empty
-  preview strip. There is **no** decorative toolbar (D-2026-08-28-m). Tree labels use Segoe UI when
+  tree, a right-edge set of three **readable** vertical tabs (**Project**, **Prospector**, **Settings**), and an empty
+  preview strip. Each tab shows only its own data and keeps its own tree; switching tabs changes no project or drawing data:
+  - **Project** lists open projects with their tracked items (REQ-379), and the open drawings that belong to a project. Its header carries **Refresh** (REQ-379 clause 6) and **Project Health** (REQ-379 clause 4). With no project open it shows "No project is open"; Refresh and Project Health are disabled unless the active drawing belongs to a project (Refresh also in a read-only project).
+  - **Prospector** is the active drawing's object tree, made of the collections described in this requirement. With no drawing open it shows "No drawing is open".
+  - **Settings** lists drawing-level style tables only (General and Surface, below). It does not repeat app-wide preferences, which stay in View → Settings. With no drawing open it shows "No drawing is open". There is **no** decorative toolbar (D-2026-08-28-m). Tree labels use Segoe UI when
   installed (else the app UI font), near-black ink on off-white paper, and darker hierarchy lines. Prospector is rooted at the active drawing name and lists Points (light context menu:
   Create, Import, Export, Edit, Select, Zoom to, Pan to), Point Groups, Surfaces, and Feature Lines.
   Left-click on a **collection** folder does nothing; right-click shows that collection's Civil 3D
@@ -5818,10 +5856,15 @@ requirements is a planning failure, not a sign of rigor.
   - `TOOLSPACE SETTINGS` then `LIST` names Text Styles and Surface Styles and does not name Parcel
     or Grading;
   - `TOOLSPACE NOSUCH` is a named refusal and does not change the tab.
+  - the Qt Toolspace shows three tabs in the order Project, Prospector, Settings; choosing a tab with the mouse and `TOOLSPACE PROJECT` / `PROSPECTOR` / `SETTINGS` select the same tab;
+  - with no project open the Project tab shows "No project is open" and its Refresh and Project Health buttons are disabled;
+  - with a drawing in a project, Project Health and (if the project is not read-only) Refresh are enabled and run the same actions as the File menu items;
+  - the Settings tab does not contain a button or entry that opens app-wide Settings.
 - Owner-layer: UI, Commands
-- Status: accepted (2026-08-28)
+- Status: accepted (2026-08-28); amended to three tabs (D-2026-10-28-d)
 - Revisions: 2026-08-28 — D-2026-08-28-c: collection left-click, Civil 3D menus, definition from tree.
   2026-08-28 — D-2026-08-28-m: omit dummy toolbar; Segoe UI tree face; stronger text/line contrast.
+  2026-10-28 — D-2026-10-28-d (GitHub issue #1040): Project tab added; Project items and open drawings move from Prospector to Project; Settings no longer contains the application-settings button.
 
 ### REQ-143 — Contextual TIN Surface ribbon tab
 - Purpose: Civil 3D-shaped tools appear when a surface is selected, without inventing unimplemented objects
@@ -10872,7 +10915,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Revisions: 2026-10-01 — initial (issue #619; D-2026-10-01-g). 2026-10-01 — R2010+ native
   `MULTILEADER` export (D-2026-10-01-h). 2026-11-03 — associated legacy `LEADER` + `MTEXT` callouts
   preserve their stored label attachment, rotation, text rectangle, DIMSTYLE arrow size, and flagged hookline;
-  model-space rendering and DWG export use the stored label rotation and attachment (D-2026-11-03-a,
+  model-space rendering and DWG export use the stored label rotation and attachment (D-2026-11-03-c,
   amended 2026-11-03).
 
 ### REQ-368 — Live fields on TEXT/MTEXT and DWG field codes (GitHub issue #617)
@@ -11121,7 +11164,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Depends on: REQ-064 (GoSurvey visual styles), REQ-170 / issue #610 (paper VIEWPORT export),
   issue #600 (R2007+ export path).
 - Statement:
-  1. **Storage.** Each `Viewport` carries a `VisualStyle` (default 2D Wireframe), persisted in `.gs`
+  1. **Storage.** Each `Viewport` carries a `VisualStyle` (default 2D Wireframe), persisted in the drawing's DWG file
      additively on the layout viewport object.
   2. **Import.** Opening a DWG reads each paper-space VIEWPORT's `visualstyle` handle, resolves the
      VISUALSTYLE object when LibreDWG decodes it, and maps AutoCAD's style to the nearest
@@ -11143,9 +11186,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - `LibreDwgCadTests` tag `[issue624][req371]`: R2018 export of two paper viewports with Hidden and
     Shaded re-import with the same `VisualStyle` values; tag `[model]` round-trips model
     `viewportVisualStyle` via VPORT `*Active`;
-  - `GsIoViewportCameraTests` tag `[req371]`: `.gs` save/load preserves `visualStyle` on layout viewports;
+  - `GsIoViewportCameraTests` tag `[req371]`: DWG save/reopen preserves `visualStyle` on layout viewports;
   - REQ-201 / `#614` do not claim visual styles are an untracked #601 gap for paper viewports at R2007+.
-- Owner-layer: IO (`LibreDwgVisualStyle.cpp`, `LibreDwgCad.cpp`), Domain (`PaperSpace.hpp`), IO (`.gs`)
+- Owner-layer: IO (`LibreDwgVisualStyle.cpp`, `LibreDwgCad.cpp`), Domain (`PaperSpace.hpp`), IO (DWG)
 - Status: accepted
 - Revisions: 2026-10-05 — initial (issue #624 increment 1; D-2026-10-05-b). 2026-10-05 — model VPORT
   `*Active` import/export (increment 2).
@@ -11447,7 +11490,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      missing at its stored path is resolved to the tracked item of the same file name associated with
      the drawing. A tracked file that is missing on open is reported (REQ-201) and the drawing still
      opens. A drawing outside any project is unchanged.
-  3. **Project Files section** in the Toolspace lists tracked items by folder, with a link badge on
+  3. **Project Files section** in the Toolspace **Project tab** (REQ-142) lists tracked items by folder, with a link badge on
      `local-link` entries.
   4. **Project Health** reports: linked (non-travelling) files, missing files, unsaved drawings, and
      offers **copy links into the project**. It runs before **Pack Project** (REQ-380) and before a
@@ -11459,7 +11502,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      the clause 1 prompt (copy into the PDFs folder by default, or link, flagged). It has no drawing
      association and no placements. Tracking the same file twice changes nothing. Files other than
      PDFs are not accepted here (point clouds and point files keep their own import commands).
-  6. **Refresh (D-2026-10-06-d).** A **Refresh** button at the top of the Toolspace (project drawings
+  6. **Refresh (D-2026-10-06-d).** A **Refresh** button at the top of the Toolspace **Project tab** (project drawings
      only; disabled in a read-only project) looks through the project folder for **new files** — files
      of a kind the Project Files list understands (`.dwg`, `.pdf`, `.e57`) that the project does not
      track — and, **only when the user pressed Refresh**, asks which of them to track. The question
@@ -11607,11 +11650,22 @@ capability that does not exist. They are recorded here rather than quietly dropp
        into a drawing of a *different project* warns. A paste where either drawing is in a project and
        the coordinate systems differ is **blocked**: the user may **convert** the pasted objects or
        cancel (D-2026-10-07-a); differing units warn, and the same convert is offered. A paste between
-       two standalone drawings (neither in a Project) still warns and offers convert on a **unit**
-       mismatch alone — replicating how AutoCAD scales pasted/inserted content by the source and
-       destination drawings' `INSUNITS` — but never checks or blocks on coordinate system, since no
-       zone concept is attached to a standalone drawing pairing (D-2026-10-11-c, GitHub issue #831).
-       Survey points are not carried by Copy/Paste today, so no point number can collide through paste (issue #782).
+       two standalone drawings (neither in a Project) warns and offers convert on a **unit** mismatch —
+       replicating how AutoCAD scales pasted/inserted content by the source and destination drawings'
+       `INSUNITS`. If both drawings have a defined but different coordinate system, the same
+       **Convert / Cancel** flow applies to every drawing pairing, including standalone and cross-project
+       pastes: pasting without conversion is blocked because it would place the copied content in the wrong
+       place on the ground (D-2026-11-02-b). A drawing with no defined coordinate system has nothing to
+       compare, as before.
+       Copy/Paste carries selected model-space survey points as well as drawing geometry for every
+       source/destination drawing pairing: standalone-to-standalone, within one project, and across
+       projects (D-2026-11-02-a, issue #782). Pasted points join the destination drawing's point
+       store, which is the destination project's shared database when the drawing uses shared project
+       points. A point number already present at the destination is resolved before the paste through
+       the existing **overwrite / renumber / cancel** question: overwrite replaces that numbered
+       destination point with the copied point, renumber assigns a free number, and cancel leaves the
+       destination and clipboard unchanged. This rule applies equally to PASTE and PASTEORIG. Points
+  are model-space data and are not pasted into paper space.
      - **Convert pasted content (3).** The copied objects are transformed into the destination
        drawing's coordinate system and units with the SAME one similarity transform as Add Drawing
        (REQ-378 clause 5): scale, rotation about the vertical axis and shift, computed with CS-MAP at the
@@ -11641,7 +11695,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — P9: clause 7 added
   (D-2026-10-05-k). 2026-10-07 — clause 7: convert for pasted content (D-2026-10-07-a, issue #722).
   2026-10-11 — clause 7: a unit (not coordinate-system) mismatch between two standalone drawings now
-  also warns and offers convert (D-2026-10-11-c, GitHub issue #831).
+  also warns and offers convert (D-2026-10-11-c, GitHub issue #831). 2026-11-02 — clause 7: Copy/Paste
+  carries selected model-space survey points between all drawing pairings, with destination number
+  conflicts resolved by overwrite / renumber / cancel (D-2026-11-02-a, GitHub issue #782), and defined
+  coordinate-system mismatches now use Convert / Cancel for all drawing pairs (D-2026-11-02-b).
 
 ### REQ-384 — AutoCAD annotation context objects DWG interop (GitHub issue #688)
 
@@ -12290,7 +12347,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      - **b. Table** — a header row identifies columns (point number, description, elevation, northing, easting in any order); each subsequent row is one candidate point, point number taken from its column when present.
      - **c. Bare pair** — only a northing and an easting value, no description, elevation, or point number label found.
      Text that does not fit any shape, or is missing both northing and easting, is reported as **unparsed** for that region and produces no candidate.
-  5. **Review before anything changes.** Every parsed candidate is shown next to (or over) its source text in the PDF view, with the fields GoSurvey read, before any drawing is touched. Each candidate (or the batch, for a table) has **Accept** and **Deny** controls. Deny discards it; nothing is created or changed. The review also offers **Accept all** and **Deny all** for the whole list; Accept all goes through each candidate in order exactly as a single Accept would (an existing point number still asks overwrite/offset) and stops at the first candidate that could not be created.
+  5. **Review before anything changes.** Every parsed candidate is shown next to (or over) its source text in the PDF view, with the fields GoSurvey read, before any drawing is touched. Each candidate (or the batch, for a table) has **Accept** and **Deny** controls. Deny discards it; nothing is created or changed. The review also offers **Accept all** and **Deny all** for the whole list; Accept all goes through each candidate in order exactly as a single Accept would (an existing point number still asks overwrite/offset) and stops at the first candidate that could not be created. For **table** extractions, rows that are recognized as table body but lack both valid northing and easting values (or fail numeric parse) are listed separately as **skipped rows** with source text and a short reason; they do not appear as candidates and do not block review of valid rows.
   6. **What Accept creates.**
      - A candidate with northing, easting, elevation **and** description (shape a or b with all fields present) creates a **survey point**.
      - A candidate with only northing and easting (shape c, or shape a/b missing description/elevation) creates a **circle** at that location — not a survey point.
@@ -12300,6 +12357,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Acceptance:
   - `[req399]` test: given the single-monument fixture (description + `N:`/`E:`/`EL.` labels), the parsed candidate's northing, easting, elevation and description match the source, and accepting creates one survey point at that location with an auto-assigned lowest-unused point number.
   - `[req399]` test: given the multi-row table fixture, each row produces one candidate correctly mapped by its header columns (including point number), and accepting creates one survey point per row at the correct coordinates and point numbers.
+  - `[req399]` test: given a table whose body includes a row with incomplete coordinates (for example a footer note), valid rows still become candidates and each skipped row is listed separately in review with its source text and reason; accepting valid rows does not require fixing skipped rows.
   - `[req399]` test: given the bare northing/easting fixture, the candidate has no description/elevation/point number, and accepting creates a circle (not a survey point) at that location.
   - `[req399]` test: a region with no selectable text produces the "likely scanned, no OCR yet" message and creates nothing.
   - `[req399]` test: a region whose text has no recognizable northing/easting is reported unparsed and creates nothing.
@@ -12309,7 +12367,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - Manual: after Accept, the drawing window has focus and the view is framed to include the newly created point(s)/circle(s).
 - Owner-layer: Domain/IO (`src/pdf/PdfCoordExtract`, PDFium text + pure parsing), UI (PDF viewer selection + review panel), Commands (survey point/circle creation, zoom-to-extents)
 - Status: accepted
-- Revisions: 2026-10-08 — initial (D-2026-10-08-d). 2026-10-08 — accepted. 2026-10-25 — Qt review panel (REQ-455, GitHub issue #1037): **Accept all** creates every candidate in list order through the same per-candidate path (an id conflict still asks, and it stops at the first candidate that cannot be created, framing the view once at the end); **Deny all** discards the whole list without touching the drawing.
+- Revisions: 2026-10-08 — initial (D-2026-10-08-d). 2026-10-08 — accepted. 2026-10-25 — Qt review panel (REQ-455, GitHub issue #1037): **Accept all** creates every candidate in list order through the same per-candidate path (an id conflict still asks, and it stops at the first candidate that cannot be created, framing the view once at the end); **Deny all** discards the whole list without touching the drawing. 2026-10-29 — table review lists skipped/incomplete rows separately (TASK-0.7.8 item 9 / D-2026-10-29-h).
 
 ### REQ-400 — Command-line resolution: an exact typed command or alias always wins (GitHub issue #766)
 
@@ -12327,7 +12385,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   6. Idle Qt command suggestions use ranked fuzzy matching, with an exact primary name or alias ahead of prefix matches and prefix matches ahead of subsequence matches. `l` ranks `LINE` first by its registered alias; `lin` ranks `LINE` first by its name. Enter launches the currently highlighted result, and clicking a result launches it; the popup remains scrollable so results beyond the visible rows can be selected.
 - Acceptance:
   - Driven through the real command-bar widget (a unit test on the dispatcher alone cannot see this defect — it lives in which text the UI writes into the submit buffer, not in the dispatcher): typing `ERASE` and pressing Enter starts `DELETE`, even immediately after an unrelated query left a different suggestion highlighted.
-  - Typing `RENAME` or `TABLE` (bare words that name no top-level command — `RENAME` is only a `LAYER` sub-verb, `TABLE` only a volume-report sub-verb) and pressing Enter never starts `SURFACERENAME` or runs `VOLTABLE`; the command line stays idle and reports the line as unrecognized.
+  - Typing `TABLE` starts the TABLE command (REQ-466, D-2026-10-30-b). Typing `RENAME` (a bare word that names no top-level command: `RENAME` is only a `LAYER` sub-verb) and pressing Enter never starts `SURFACERENAME`; the command line stays idle and reports the line as unrecognized.
   - `headless`/DevShell test `req766-fuzzy-exact-wins`.
   - Qt integration coverage verifies `l` and `lin` rank `LINE` first, Enter launches the highlighted result, and mouse selection from a scrolled popup launches the clicked result.
 - Owner-layer: UI (`src/ui/CadUi.cpp` `DrawCommandLinePanel`), Commands (`src/commands/CadCommands.cpp`/`.hpp` `ResolveCommandLineSubmission`, built on the existing `FuzzyCommandSuggestions`).
@@ -12628,17 +12686,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. **Cancel and failure.** Cancelling the chooser creates no tab and leaves the active drawing unchanged. A template that cannot be read or validated is reported; it creates no tab, leaves the active drawing unchanged, and does not prevent choosing another template or Blank Drawing.
   4. **Project behavior.** When the active drawing belongs to an open project, creating a new drawing follows REQ-374: it starts empty with that project's defaults and does not use the standalone template chooser.
   5. **Undo and read-only behavior.** A created drawing has its own undo history; using a template does not add an edit to the source document or its history. Existing project read-only rules continue to govern project data; template discovery itself is read-only and must work when library files are not writable.
+  6. **Save as Template.** File → **Save as Template…** writes a `.gst` containing reusable drawing styles and settings, including layers, text/dimension/multileader/table styles, survey-point marker and label styles, surface and label styles, point-group definitions/rules, named views and named UCS definitions, layouts/page setups, plot scale, insertion units, and drawing settings. It preserves supported vector linework in model space and layouts (lines, polylines, arcs, circles, ellipses, splines, and feature lines), plus layout border block inserts and their recursively referenced definitions. The source drawing's current viewport camera/projection/UCS and active-view state, survey-point instances, model-space block inserts, and non-linework drawing objects such as annotations, tables, surfaces, solids, meshes, and point clouds are excluded. The dialog defaults to `<UserDataDirectory>/drawing-templates/`, so the saved file appears in the New Drawing chooser. The command does not change the active drawing path, saved revision, or recent-drawing list. Cancelling writes nothing and changes no drawing state. `.gst` remains unsupported by File → Open; use the New Drawing chooser or Settings → Files to use a template.
 - Acceptance:
   - `[req424]` Qt workflow coverage: chooser lists Blank Drawing and valid bundled/user `.gst` templates, ignores unrelated file types, and presents deterministic ordering with duplicate names distinguishable.
   - `[req424]` Qt workflow coverage: selecting a valid template creates and focuses a new tab with its content; saving/reopening preserves that content; the source template remains byte-identical.
   - `[req424]` Qt workflow coverage: Blank Drawing creates an empty drawing; cancelling creates no tab and changes no active document state.
   - `[req424]` Qt workflow coverage: malformed/unreadable template reports the failure, preserves the current document and leaves the chooser usable.
   - `[req424]` Qt workflow coverage: a new drawing from an active project is empty, uses project defaults, and does not open the standalone template chooser; project read-only state is not mutated by template discovery.
+  - `[req424]` Qt workflow coverage: Save as Template writes a loadable `.gst` preserving reusable drawing styles/settings, point-group definitions/rules, named views/UCS definitions, and supported model/layout vector linework (including layout border blocks and referenced definitions); it resets source current-view state and excludes survey-point instances and non-linework drawing objects; the file appears in the personal template chooser.
+  - `[req424]` Qt workflow coverage: cancelling template save creates no file and changes no active drawing state; a failed save reports the failure and leaves active drawing state unchanged.
+  - `[req424]` Qt workflow coverage: File → Save as Template defaults to the per-user template directory without changing the active drawing path/revision; File → Open does not open `.gst` as a drawing.
   - The Qt chooser is reachable through the Start screen and the normal New Drawing entry point; a command route or ribbon button alone is not parity.
   - Update `docs/qt-074-parity-ledger.md` with the implemented workflow and its focused evidence.
 - Owner-layer: UI (`src/qt/`); shared `.gst` loading remains in IO (`src/io/GsIo`).
 - Status: accepted (2026-10-17).
-- Revisions: 2026-10-17 — initial (D-2026-10-17-a; GitHub issue #885).
+- Revisions: 2026-10-17 — initial (D-2026-10-17-a; GitHub issue #885); 2026-10-30 — add Save as Template workflow (D-2026-10-30-template-save; GitHub issue #1134).
 
 ### REQ-425 — Crash and startup-failure reports
 
@@ -12675,7 +12737,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - manual: `GoSurveyQt.exe --gosurvey-test-crash` (and `GoSurvey.exe --gosurvey-test-crash`) appends `crash.log` and opens the report window, including `commit:` and `pdb:` lines.
 - Owner-layer: Platform (`src/platform/CrashReporter`, `StartupFailure`, `FailureReportUi`), UI (`src/qt/FailureReport`), Release pipeline (`.github/workflows/release.yml`).
 - Status: accepted.
-- Scope note: crash minidump capture applies to the Qt front end in this increment; both front ends continue to produce and send their existing text reports.
+- Scope note: crash minidump capture applies to the Qt front end in this increment (decision D-2026-10-26-a); both front ends continue to produce and send their existing text reports.
 - Revisions: 2026-10-17 — initial, recording 0.7.4 behaviour for the Qt port (issue #883, D-2026-10-17-b). 2026-10-25 — build identification and exception detail added for issue #1004's first slice. 2026-10-25 — user decisions: `MiniDumpNormal`; automatically upload each available dump with the text report; 30-day server dump retention; 10 MB per-dump upload cap with text-only fallback. Minidumps and privacy are now specified. 2026-10-25 — a non-standard exception active at `std::terminate` is reported generically; name reporting is required for `std::exception` types, avoiding MSVC-specific runtime metadata. 2026-10-25 — disclosure location decision D-2026-10-25-b: keep minidump disclosure in `PRIVACY.md` only, not in Settings or troubleshooting manuals. 2026-10-25 — private PDB archiving for published release builds added per issue #1004 decision 2 and pipeline note; exact-build identity matching and exclusion from shipped/public artifacts are acceptance conditions. 2026-10-25 — D-2026-10-25-d adds user-initiated, report-ID-based agent triage through a local read-only tool; the report, optional dump, and matching PDB are sent to the selected AI provider only when the user requests diagnosis. 2026-10-25 — D-2026-10-25-e specifies a modern branded, theme-aware hierarchy for both crash and startup report windows while preserving their existing report and action behavior.
 
 ### REQ-426 — Qt Pipe Network and Feature Line ribbon workflows (GitHub issue #896)
@@ -12869,7 +12931,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   1. **Surfaces.** The Qt **Dark** appearance uses graphite surfaces throughout the application: the Start page, drawing workspace and canvas ground/grid, shell chrome, menus, and Qt-owned dialogs and panels.
   2. **Primary accent.** In both the **Dark** and **Light** appearances, the primary accent — the colour of active and interactive states in Qt application chrome (selected and hovered controls, pressed and checked buttons, focus rings, selected rows and tabs, links, the application-menu button, checked radio/check indicators, progress and highlight fills) — is the **topo-line amber**: the hue of the amber contours in the topographic artwork (`src/qt/TopographicArtwork.hpp`, RGB 185,100,12, hue about 30 degrees). Each appearance picks its own lightness and saturation of that hue so text on it and the control itself stay readable; the hue is the same in both. Aqua and the Light appearance's light-blue/Windows-blue accent no longer appear as a primary accent in Qt chrome.
   3. **Secondary emphasis.** Secondary emphasis (informational notes, "recommended"/tag labels, secondary cards, quiet detail) uses a calm neutral tone (soft grey-blue in Dark, grey in Light), never the primary amber, so "active" and "secondary" remain distinguishable. Warnings keep a distinct warning look that is readable in both appearances and is not mistaken for an active state.
-  4. **Unchanged.** The ImGui frontend, drawing entities, entity colors, the default crosshair colour (REQ-450), the Dark canvas ground and its grid colouring, and persisted drawing data are unchanged. Light surfaces (non-accent colours) are unchanged.
+  4. **Unchanged.** The ImGui frontend, drawing entities, entity colors, the default crosshair colour (REQ-450), the Dark canvas ground and its grid colouring, and persisted drawing data are unchanged. Light surfaces (non-accent colours) are unchanged except for the Qt drawing-workspace chrome treatment explicitly accepted by D-2026-10-28-b / issue #1041 and the document-tab treatment in clause 5.
+  5. **Document tabs (user direction 2026-10-30).** Start and drawing tabs have trapezoid outlines with sloping sides, visible separation from adjacent tabs and the strip behind them, and readable labels in both appearances. The active tab has a lighter fill and the existing amber indicator. Start remains unclosable; drawing close controls, the new-drawing button, keyboard navigation and overflow scrolling remain usable. Ribbon tabs retain their existing treatment.
 - Acceptance:
   - Start, drawing workspace, menus, and representative Qt dialogs render with the topo-line amber for active, hover, pressed, checked, focus and selected states in Dark and in Light; no aqua (`#55d8d0`/`#168e8a` family) or light/Windows blue (`#0078d7`/`#438fda`/`#0878c5` family) remains as a primary accent in `QtAppearance.cpp`, `EditorSurfaceUi.hpp`, the Start page, or the dialogs that carried their own accent colours.
   - Primary text on an accent-filled control meets 4.5:1 contrast, and an accent border/indicator against its surface meets 3:1, in both appearances; hover, pressed, checked and disabled states are visibly distinct from one another.
@@ -12877,8 +12940,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - No Qt-owned surface in Dark retains the former deep navy as its dominant UI surface color.
   - Switching between Dark and Light leaves neither palette behind in the other appearance.
   - Drawing content, entity colors, the canvas ground/grid, and behavior remain unchanged when appearance changes.
-- Status: accepted (2026-10-19) — D-2026-10-19-h, user direction. Amended (2026-10-21) — D-2026-10-21-f, GitHub issue #1031.
-- Revisions: 2026-10-21 — retitled and rewritten from "Qt Dark appearance uses graphite with aqua and amber accents". Primary accent aqua -> topo-line amber and extended to the Light appearance (previously "Classic light is unchanged"); the former amber secondary role became a neutral tone because one colour cannot be both the primary and the secondary accent. The Dark canvas grid tint is treated as drawing-area colour and stays as shipped.
+- Status: accepted (2026-10-19) — D-2026-10-19-h, user direction. Amended (2026-10-21) — D-2026-10-21-f, GitHub issue #1031; 2026-10-28 — D-2026-10-28-b, GitHub issue #1041.
+- Revisions: 2026-10-21 — retitled and rewritten from "Qt Dark appearance uses graphite with aqua and amber accents". Primary accent aqua -> topo-line amber and extended to the Light appearance (previously "Classic light is unchanged"); the former amber secondary role became a neutral tone because one colour cannot be both the primary and the secondary accent. The Dark canvas grid tint is treated as drawing-area colour and stays as shipped. 2026-10-28 — clarified that the general Light non-accent-surface freeze has the narrow Qt drawing-workspace chrome exception in D-2026-10-28-b; palette, viewport, drawing content, and all other Light surfaces remain unchanged.
 
 ### REQ-431 — Qt least-squares adjustment editor: highlighting, line numbers, inline errors and plan preview (GitHub issue #912)
 
@@ -12985,6 +13048,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   6. **Migration boundary.** This requirement does not change the existing beta editor, switch the
      production default, remove ImGui, or add new geometry/edit operations. The 3D gizmo and
      section-plane overlay work remains under issue #900.
+  7. **Additive boxes (0.7.8 report, user direction 2026-10-29).** A plain idle or command-selection
+     box adds its hits to the existing selection; Shift removes hits. A completed drag must not leave
+     a pending box that consumes the next object click. Clicking an object after an empty click
+     selects the object and ends the pending box.
 - Acceptance:
   - Qt tests prove ordinary click/Shift selection and left-to-right window / right-to-left crossing
     drags, including live preview and cancellation without a selection change, in line with
@@ -13063,9 +13130,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
      curve passes exactly through every point the user clicks) and **CV** (control vertices — the
      curve is pulled toward, but does not touch, the clicked points). Both methods are
      degree 3 and open or closed (`Close` option; Enter ends an open spline).
-  3. The spline is a new entity kind stored in its own store in model space (3D points per
-     REQ-057), with layer, colour and linetype like every other entity. It is shown as a smooth
-     curve whose deviation from the true curve never exceeds REQ-101's tolerance.
+  3. The spline is a new entity kind stored in its own store (3D points per REQ-057), with layer,
+     colour and linetype like every other entity. In model space it lives on `cadSplines`; in
+     paper space it lives on the active layout's paper spline store (D-2026-10-28-c). It is shown
+     as a smooth curve whose deviation from the true curve never exceeds REQ-101's tolerance.
   4. Live preview while picking, committing on the snapped point (the preview-vs-commit invariant).
   5. **Editing.** The spline can be selected, erased, moved, copied, rotated, scaled and mirrored;
      it appears in the Properties panel (method, degree, closed, point count, length); its
@@ -13075,9 +13143,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
   7. **Files.** A spline saves to and loads from DXF and DWG as a standard `SPLINE`
      entity, including its degree, knots, control points, fit points and closed flag. Importing a
      DXF/DWG `SPLINE` creates a real spline entity instead of dropping it.
-  8. Paper space, TRIM, EXTEND, OFFSET, FILLET, JOIN and EXPLODE of a spline are **not** in this
+  8. TRIM, EXTEND, OFFSET, FILLET, JOIN and EXPLODE of a spline are **not** in this
      requirement; a command that cannot act on a spline says so in the command log (REQ-201)
-     and changes nothing.
+     and changes nothing. Paper space: a SPLINE drawn while a paper layout is the active space
+     (and not floating model space) commits to that layout's paper spline store (D-2026-10-28-c /
+     REQ-456). The earlier model-only refusal is lifted.
 - Acceptance:
   - A Fit spline through four clicked points passes within REQ-101's tolerance of all four; a CV
     spline does not pass through its interior control points; both can be closed.
@@ -13098,7 +13168,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Commands/Domain/IO/Qt UI
 - Decision: D-2026-10-20-e.
 - Status: accepted
-- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20.
+- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20. 2026-10-28 — paper-space SPLINE accepted (D-2026-10-28-c / REQ-456 / issue #1019).
 
 
 ### REQ-444 — Revision Cloud command (GitHub issue #803)
@@ -13572,9 +13642,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Statement: The PDF plot of a paper layout honours four Page Setup options, each read from the
   layout's saved settings: (a) **plot offset X and Y**, which move the sheet content by the stated
   amount; (b) **centre the plot**, which centres the content on the sheet; (c) **fit to paper**, which
-  scales the content to fill the printable area; (d) **plot scale**, which sets the scale of the
-  content on the sheet. A Page Setup control that the plot does not honour is a defect, not an
-  accepted limitation.
+  scales the content to fill the sheet in its limiting direction, with its lower-left corner at the
+  sheet's lower-left corner; (d) **plot scale**, a ratio 1 : N that scales the content by 1 / N. Fit and
+  centre use the sheet content extent (viewport frames, line ends, circle, arc and ellipse samples, filled-region vertices, block-reference segments, polyline vertices with their
+  bulge arcs, spline and point marks, multileader leaders, arrowheads and labels, and text anchors); when centre is on, the offsets are ignored. Lineweights keep their width; text sizes and
+  positions scale with the content. A Page Setup control that the plot does not honour is a defect, not
+  an accepted limitation.
 - Acceptance:
   1. with each option set on its own, the PDF differs from the same layout plotted with no option
      set, and a measured offset, centre position, fitted extent or plotted scale matches the stated
@@ -13584,7 +13657,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. a test exists for each of the four options.
 - Owner-layer: IO / Renderer
 - Status: accepted
-- Revisions: 2026-10-20 — catalogued and accepted (D-2026-10-20-f, GitHub issue #769, audit #751 P1).
+- Revisions: 2026-10-20 — catalogued and accepted (D-2026-10-20-f, GitHub issue #769, audit #751 P1). 2026-11-01 — plot scale defined as a ratio 1 : N and the fit, centre and offset rules stated (D-2026-11-01-a, GitHub issue #1145). 2026-11-01 — the fit and centre extent includes bulge arcs, splines, points, multileaders and their labels, and arcs, ellipses, filled regions and block references (CodeRabbit review of PR #1147, GitHub issue #1145).
 
 ### REQ-446 — PDF plot honours lineweights and linetypes (GitHub issue #770)
 
@@ -13952,36 +14025,48 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Priority: should
 - Type: quality
 - Statement: Building the installer is done by CI from a clean checkout, never from a developer
-  workstation. The pipeline runs only on manual dispatch (REQ-202 (d)) — choosing a target branch
-  in the "Run workflow" ref dropdown builds, runs the test suite, and — depending on which branch
-  was targeted — packages and publishes:
+  workstation. A push to `beta` automatically builds, runs the test suite, and publishes the rolling
+  beta release. Stable publication and builds for other branches remain manual dispatches (REQ-202
+  (d)); choosing a target branch in the "Run workflow" ref dropdown builds, runs the test suite,
+  and — depending on which branch was targeted — packages and publishes:
 
-  | Dispatch target | Result |
+  | Trigger / target | Result |
   |---|---|
   | any other branch | build + test only; the installer job is skipped (run it explicitly if an installer artifact is wanted) |
-  | `beta` | build + test, then installer published to a **single rolling prerelease** tagged `channel-beta`, whose assets are replaced each time |
-  | `master` | build + test, then version-gated stable release: tagged `v<version>` and published, **only if** that tag does not already exist |
+  | push to `beta` | build + test, then installer published to a **single rolling prerelease** tagged `channel-beta`, whose assets are replaced each time |
+  | manual dispatch to `beta` | same beta build; a rerun for the same commit reuses its version |
+  | `master` | manual build + test, then version-gated stable release: tagged `v<version>` and published, **only if** that tag does not already exist |
 
   The version gate is what makes a re-dispatch against master safe to repeat: the release step is a
   no-op when `project(VERSION)` still matches the newest release, so re-running the pipeline against
   master does not republish, retag, or re-notify users. Bumping the version *is* the act of releasing.
 
-  Every published release carries the installer, a `latest.json` manifest (version, download URL,
-  SHA-256, size, release notes), and nothing that the machine could not regenerate from the tagged
-  commit. A failing test suite blocks publication.
+  The stable version remains `project(VERSION)` in `CMakeLists.txt`. Each new beta commit gets a
+  plain three-part version one patch above the higher of the latest stable version and the previous
+  beta version: with stable `0.7.8`, successive beta commits receive `0.7.9`, `0.7.10`, and so on;
+  after stable `0.8.0`, beta continues at `0.8.1`. Re-running the workflow for the same beta commit
+  reuses the version already recorded for that commit. The rolling beta manifest records the source
+  commit so this is repeatable. A failing test suite blocks publication.
+
+  Every published release carries the installer and a `latest.json` manifest (version, download URL,
+  SHA-256, size, release notes; beta additionally records its source commit), and nothing else that
+  the machine could not regenerate from the built commit.
 
   This is REQ-200 extended one step: REQ-200 says a clean build of a fixed commit is reproducible;
   this says the artifact users actually receive **is** that build, rather than whatever happened to
   be in a developer's `build/` directory.
 
-  **(d) Manual dispatch only (2026-09-06).** The pipeline previously ran on every push to every
-  branch; that automatic trigger has been removed. A push, including one to `beta` or `master`, now
-  runs no CI job at all until someone explicitly runs the workflow. This trades away the
-  build+test-on-every-push safety net REQ-201/REQ-200 relied on for CI minutes and rolling-beta
-  churn that were being spent on commits nobody needed built yet; the tradeoff is deliberate and the
-  user directs each dispatch by hand, so this is not a SPEC GAP the pipeline itself needs to cover.
+  **(d) Dispatch policy (amended 2026-11-02).** Stable release publishing remains manual so a
+  master push cannot publish a release without an explicit dispatch. Feature-branch pushes remain
+  quiet. Beta pushes run automatically because each changed beta commit is intended to become the
+  newest rolling beta build; beta re-runs for the same commit are idempotent and do not advance its
+  version. This replaces the 2026-09-06 manual-only policy for beta while retaining manual stable
+  publication.
 - Acceptance:
-  - no CI job runs on a plain `git push` to any branch;
+  - a push to `beta` runs build + test and updates the rolling beta release; a push to any other
+    branch runs no release job;
+  - a beta build for a new source commit receives the next patch version after the higher of the
+    latest stable version and previous beta version; rerunning the same commit retains its version;
   - dispatching against a feature branch runs build + test, creates no release and no tag, and does
     not run the installer job;
   - dispatching against `beta` leaves exactly one `channel-beta` prerelease in the releases list
@@ -14000,6 +14085,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
                unchanged.
                2026-09-06 — (d): automatic push trigger removed; the pipeline now runs only on
                manual `workflow_dispatch`, targeting whichever branch is chosen in the ref dropdown.
+               2026-11-02 — D-2026-11-02-a / ADR-074: beta pushes automatically publish a rolling
+               versioned build; only a new beta commit advances the version. Stable releases remain
+               manually dispatched and version-gated.
 
 ### REQ-453 — Microsoft Store installs run without installer UI
 - Purpose: allow GoSurvey's existing Win32 installer to be submitted through the Microsoft Store
@@ -14858,6 +14946,42 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 ---
 
+## Grading toolkit expansion (D-2026-11-02-a)
+
+### REQ-456 — Distance and absolute/relative elevation grading targets
+- Status: accepted (2026-11-02, user selected the full toolkit in stages).
+- Statement and acceptance: [grading-toolkit.md, Stage 1](grading-toolkit.md), Target definitions.
+- Owner-layer: Domain, Commands, IO. Retains REQ-398 surface grading and explicit rebuild.
+
+### REQ-457 — Explicit grading infill and group-aware deletion
+- Status: accepted (2026-11-02, D-2026-11-02-a).
+- Statement and acceptance: [grading-toolkit.md, Stage 1](grading-toolkit.md), Explicit infill
+  and Qt palette/group-aware deletion. Extends REQ-404 without changing automatic-fill behavior.
+- Owner-layer: Domain, Commands, IO.
+
+### REQ-458 — Qt grading creation and editing palette
+- Status: accepted (2026-11-02, D-2026-11-02-a).
+- Statement and acceptance: [grading-toolkit.md, Stage 1](grading-toolkit.md), Qt palette and
+  group-aware deletion. All four grading ribbon controls expose the shared grading services.
+- Owner-layer: UI, Commands. REQ-081 appearance and CLAUDE.md screenshot review apply.
+
+### REQ-459 — Grading reuse and Qt elevation editing
+- Status: accepted (2026-11-03, D-2026-11-03-c; ADR-076).
+- Statement and acceptance: [grading-toolkit.md, Stage 2](grading-toolkit.md). Drawing-local copied presets,
+  independent Copy Create, Qt FLELEV table, grading/group properties and explicit membership transfer.
+- Owner-layer: Domain, Commands, IO, UI.
+
+### REQ-460 — Regional gradings, transitions and explicit bench chains
+- Status: accepted scope (Stage 3; detailed task verification precedes implementation).
+- Statement and acceptance: [grading-toolkit.md, Stage 3](grading-toolkit.md). Interval and
+  compatibility semantics must be resolved before coding this stage.
+- Owner-layer: Domain, Commands, UI, IO.
+
+### REQ-461 — Grading utilities and surface quality controls
+- Status: accepted scope (Stage 4; detailed task verification precedes implementation).
+- Statement and acceptance: [grading-toolkit.md, Stage 4](grading-toolkit.md).
+- Owner-layer: Domain, Commands, UI, IO. Optimizer #813 remains separately scoped.
+
 ## Traceability matrix
 
 > Keep this table current. It is the at-a-glance health check: a requirement with
@@ -14897,7 +15021,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-440 | Qt UI/build | Qt-only configure/build/test/package/CI; source and dependency audit; preserved supported workflow coverage | accepted |
 | REQ-441 | Documentation/product verification | Human-run major-release feature acceptance checklist; manual/UI/command surface cross-check; known limitations and result recording | accepted |
 | REQ-442 | Commands/Domain/Render/IO/Qt UI | Wipeout creation, draw-order masking, plot output, DWG/DXF round-trip | accepted |
-| REQ-443 | Commands/Domain/IO/Qt UI | Spline creation, editing, snapping, rendering, file round-trip and refusal workflows | accepted |
+| REQ-443 | Commands/Domain/IO/Qt UI | Spline creation, editing, snapping, rendering, file round-trip and refusal workflows; paper-space SPLINE (REQ-456) | accepted |
+| REQ-456 | Commands/Domain/IO/Qt UI | `Issue1019CommandTests` `[req456][issue1019]`: LEADER, SPLINE, POINT, PEDIT, MEASURE, DIVIDE, AREA, LIST in model and paper; PDMODE/PDSIZE; named refusals | accepted |
 | REQ-444 | Commands/Qt UI | Revision Cloud creation, object conversion, preview, snapping, and DWG/DXF round-trip | accepted |
 | REQ-448 | IO/Commands/Qt UI | `LandXmlExportTests` (points, TIN, feature lines, units, failures, XML text), `QtEditorTests` `issue1002RibbonExportsLandXmlThroughTheCommand`, transcript `issue1002-landxml-export`, schema check `tools/validate-landxml.ps1` | accepted |
 | REQ-445 | IO/Renderer | `PdfPlot` tests for each Page Setup option (changed output, measured within REQ-101, defaults unchanged) — to be added with the implementing PR | accepted |
@@ -14906,9 +15031,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-449 | Qt UI | `QtEditorTests` `issue1032SettingsWindowStagesAndPersists`, `issue1032WheelZoomUsesPreference` | accepted |
 | REQ-450 | Qt UI/Commands/IO | `QtEditorTests` `issue1033CursorSettingsPreviewAndCancel`, `issue1033StoredCursorValuesAreClamped`, `ViewportPickPolicyTests` REQ-450 cursor shape | accepted |
 | REQ-455 | Qt UI/PDF | `GoSurveyQtTests` `issue1037*`: command tabs and side panel (including narrow-width overflow actions), continuous layout and page sync, wheel/Ctrl+wheel pointer-anchored zoom, middle-button and Browse pan, fit/typed zoom, keyboard pages, tools on later pages, tool hotkeys, Callout and Revision cloud save/read-back, box select, previews, compare panel and detail failure, cache bound and render cancellation, top-level ownership | accepted |
-| REQ-456 | Application / Platform / Qt UI | `GoSurveyQtTests` or Windows process integration: matching executable reuses its editor window, opens the forwarded DWG and activates its tab; a fresh executable opens normally; different worktree paths coexist; helper/test/crash modes remain separate | accepted |
+| REQ-456 | Repository governance/CI | Run PR-Agent reviews automatically for pull requests originating in GoSurvey; do not run automatically for fork-originated pull requests. Allow the repository owner to trigger PR-Agent manually on a fork PR with a `/review` pull request comment, without using `pull_request_target` or checking out fork code in a job with secrets. | accepted |
+| REQ-481 | Application / Platform / Qt UI | `GoSurveyQtTests` or Windows process integration: matching executable reuses its editor window, opens the forwarded DWG and activates its tab; a fresh executable opens normally; different worktree paths coexist; helper/test/crash modes remain separate | accepted |
 | REQ-451 | Qt UI | `QtEditorTests` `issue1036LayerManager*` (sort-then-edit, viewport columns, swatches, current layer) + screenshots | accepted |
-| REQ-453 | Application/Qt UI/Build docs | `GoSurveyQtTests` `[req453]` branch label in native/custom titles and retained after title refresh; launcher branch propagation; docs review of worktree-local build/launch rule | accepted |
+| REQ-473 | Application/Qt UI/Build docs | `GoSurveyQtTests` `[req453]` branch label in native/custom titles and retained after title refresh; launcher branch propagation; docs review of worktree-local build/launch rule | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
@@ -14929,9 +15055,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-034 | UI/Commands/Renderer | ~~manual (polygonal viewport clips model to the polygon) — Inc 3d~~ | withdrawn (2026-07-13) |
 | REQ-035 | UI/Commands | manual (viewport click/window select + grips; MOVE/COPY/DELETE act on viewports) | accepted |
 | REQ-036 | UI/Commands/Renderer | manual (double-click into viewport edits model through it; leave returns to paper) | accepted |
-| REQ-037 | Domain/UI/Commands/Renderer/IO | manual (draw lines+text on a sheet; move/copy/rotate/delete/snap; not in model or other layouts; .gs round-trip) | accepted |
-| REQ-038 | Commands/UI/Domain/IO | `ClipboardTests` (paste offset per type; paper snap; .gs round-trip of new paper types) + manual (model↔paper, same-space; title block to sheet; pasted = selection; props preserved; empty no-op; 1:1) | accepted |
-| REQ-039 | UI/Commands/Domain/IO | `PaperSpaceTests` (paper text bounds top-left; box-select hit per type) + manual (box-select; double-click text edit model+paper; Properties show/edit; grips; draw/modify parity; no model change; .gs round-trip) | accepted |
+| REQ-037 | Domain/UI/Commands/Renderer/IO | manual (draw lines+text on a sheet; move/copy/rotate/delete/snap; not in model or other layouts; DWG save/reopen) | accepted |
+| REQ-038 | Commands/UI/Domain/IO | `ClipboardTests` (paste offset per type; paper snap; DWG save/reopen of new paper types) + manual (model↔paper, same-space; title block to sheet; pasted = selection; props preserved; empty no-op; 1:1) | accepted |
+| REQ-039 | UI/Commands/Domain/IO | `PaperSpaceTests` (paper text bounds top-left; box-select hit per type) + manual (box-select; double-click text edit model+paper; Properties show/edit; grips; draw/modify parity; no model change; DWG save/reopen) | accepted |
 | REQ-040 | UI | `CommandLineTests` (fade-alpha vs elapsed time; recent-tail line selection) + manual (floating bar draggable + position/visibility persist; last ~3 lines fade after idle; F2 toggles console; ESC always cancels; select-to-copy; ×/Ctrl+9 hide/restore; autocomplete + dynamic input + [A]/[2P] preserved; dock still available) | accepted |
 | REQ-041 | UI/IO | `SurveyCsvValidateTests` (file-state classification; duplicate-ID detection within file + vs session) + manual (distinct not-found/empty/locked messages; Import disabled on file-level; row-only prompts to confirm skip; overall status string) | accepted |
 | REQ-042 | Commands/Domain/UI/Renderer/IO | `HatchTests` (point-in-polygon-with-holes pick; box-select hit; move translates loops; .gs round-trip) + manual (click inside selects; outside/in-hole does not; delete/move/copy + undo; hover; box-select) | accepted |
@@ -14988,13 +15114,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-104 | Commands/Domain/IO/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-105 | Commands/UI | **DIST accepted and built** (GitHub issue #382): two-point slope distance + delta X/Y/Z in the active UCS, `DistCommandTests [req105]`. Amended 2026-09-09 (D-2026-09-09-f, TASK-235) to add the surveyor's other two numbers — horizontal distance and grade — in REQ-074's own wording, so SURFELEV and DIST cannot describe one slope two ways; the vertical and level cases are refusals with a stated reason (REQ-201) rather than divisions by a zero run or rise, covered by `DistCommandTests` and `headless.req105-dist-horiz-grade`. This row said "proposed — not yet scoped" until 2026-09-09, two days after the body was accepted — the summary table and the requirement text sit ~4,500 lines apart and drifted. AREA/LIST/MASSPROP remain proposed and unbuilt **GitHub #149 acceptance 8 closed 2026-09-11 (TASK-257).** DIST had no survey-magnitude case at all — before this, no coordinate in `DistCommandTests.cpp` exceeded about 83,000 — while `AppCommandState::distFromX/Y/Z` are `float`, whose resolution at 2.2e6 is about **0.25 ft, 125x REQ-101**. Four `[req149]` cases now measure it at **E 2,196,000 / N 1,400,000**: the 3-4-5 deltas and slope; a **0.010 ft** delta, which is the one a raw float loses entirely; horizontal distance and grade, a RATIO, so quantization shows as a wrong percentage rather than a small absolute error; and small work near the origin followed by a survey-magnitude measurement, with a **fractional** delta, because 2,196,000 and 2,196,003 are both under 2^24 and therefore exact as floats even unabsorbed — an integer delta would have passed whatever the origin did and proved nothing. Each case asserts the OUTCOME and the MECHANISM together: `MaybeEstablishDocumentOriginFromTypedPoint` rebases the document origin once a typed point passes `kLargeCoordinateRebaseThreshold`, so the floats never hold a survey coordinate. That third configuration also **corrected an assumption** — the origin re-establishes when work moves out, rather than staying where earlier small work put it. **Proven to bite:** disabling the rebase fails 3 of the 4 cases and 9 assertions, with `distFromX` reported as `2196000.0` | accepted (DIST only) |
 | REQ-106 | UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
-| REQ-107 | Domain/Commands/IO/UI | proposed — not yet scoped, likely architectural; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
+| REQ-107 | Domain/Commands/IO/UI | accepted — scope not yet defined (user decision 2026-10-29); catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-108 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-109 | Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-110 | Domain/UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-111 | Domain/Commands/IO/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-112 | IO | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
-| REQ-113 | IO | DXF/DWG paper-space entity set (D-2026-10-06-o); first increment DXF export + DWG import (#765) | accepted |
+| REQ-113 | IO | DXF/DWG paper-space entity set (D-2026-10-06-o); first increment DXF export + DWG import (#765); amendment adds dimension (D-2026-10-29-a, #1010) | accepted |
+| REQ-456 | IO/Domain | accepted — sheet POINT objects in DWG; UI point commands deferred (D-2026-10-29-a, #1010) | accepted |
+| REQ-457 | IO/Domain/Renderer | accepted — sheet raster IMAGE underlays in DWG, path-only storage (D-2026-10-29-a, #1010) | accepted |
+| REQ-458 | Commands/Qt/IO | `[req458]` presets, strict ratio validation, drawing-tab isolation, internal JSON and native DWG/DXF round-trips; status-bar comparison captures in TASK-0.7.8 | accepted |
 | REQ-114 | IO/UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-115 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-116 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
@@ -15128,7 +15257,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 ---
 
-### REQ-453 — Identify development windows by worktree branch
+### REQ-473 — Identify development windows by worktree branch (renumbered from a second REQ-453 on 2026-10-29)
 - Purpose: let a developer distinguish simultaneously running GoSurvey instances built from separate agent worktrees, and keep their build and launch artifacts isolated
 - Priority: should
 - Type: functional
@@ -15142,11 +15271,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Application / Qt UI / Build documentation
 - Status: accepted (2026-10-23, user approved scope)
 
-### REQ-456 — Windows DWG file-open reuses the matching GoSurvey process
+### REQ-481 — Windows DWG file-open reuses the matching GoSurvey process
 - Purpose: opening a DWG from Windows while GoSurvey is already running should continue the current editing session instead of creating a second window and process.
 - Priority: should
 - Type: functional (application lifecycle / Windows integration)
-- Decision: D-2026-11-02-a.
+- Decision: D-2026-11-03-e.
 - Depends on: REQ-052 (DWG open), REQ-055 (opened drawing becomes active), REQ-453 (separate worktree executables remain distinguishable).
 - Statement: In a normal desktop launch, when Windows starts GoSurvey with a DWG path and the same executable path already has a running GoSurvey process, the running process receives the path, opens it through the normal drawing-open flow, becomes the foreground window, and activates the opened drawing. When no matching process is running, the new process opens the path normally. Matching is scoped to the executable path, so separately built worktree executables can run side by side. Test, crash-report, and helper-process launch modes keep their own existing behavior.
 - Acceptance:
@@ -15157,6 +15286,710 @@ capability that does not exist. They are recorded here rather than quietly dropp
   5. Test, crash-report, and helper-process modes continue to run without being redirected to the editor process.
 - Owner-layer: Application / Platform / Qt UI
 - Status: accepted (2026-11-02, user approved scope)
+---
+
+### REQ-456 — Paper-space command parity for LEADER, SPLINE, POINT, PEDIT, MEASURE, DIVIDE, AREA, LIST (GitHub issue #1019)
+- Purpose: eight command names from the paper-space audit leftover of #751/#753 (finding V3/N3)
+  currently answer "Unknown command" (or, for SPLINE, refuse paper). Surveyors use them on sheets
+  as well as in the model.
+- Priority: should
+- Type: functional
+- Depends on: REQ-039, REQ-104, REQ-105, REQ-367, REQ-443, REQ-101, REQ-201.
+- Statement:
+  1. Typed `LEADER`, `SPLINE`, `POINT`, `PEDIT`, `MEASURE`, `DIVIDE`, `AREA`, and `LIST` are
+     registered commands. None of them answers "Unknown command". `MLEADER` is also registered
+     (the handler already exists).
+  2. Each command runs in **model space** and in **paper space** while a layout is active and not
+     in floating model space. Paper draws commit to that layout's paper store in paper inches.
+     Model draws commit to the model stores. Paper edits never change model geometry.
+  3. **POINT** creates a `CadPoint` entity (not a survey point, not a Position Marker). The
+     command loops until Enter. `PDMODE` (0/1/2/3/4 plus 32/64/96 for circle/square) and
+     `PDSIZE` (0 = 5% of the view height; negative = percent of view; positive = drawing units)
+     control how every CAD point in the drawing is drawn. A DXF/DWG `POINT` without GOSURVEY
+     XDATA imports as `CadPoint`. Survey-point XDATA still reconstructs a survey point (REQ-023).
+  4. **LEADER** collects vertex points, then annotation (Mtext default, or None) and format
+     (Straight default, Spline, Arrow, None). Tolerance, Copy, and Block annotation are refused
+     by name (REQ-201) and change nothing. The result is a `CadMultileader` in the model
+     multileader store or the layout's `paperMultileaders`.
+  5. **SPLINE** in paper space commits to the layout's paper spline store. The REQ-443
+     model-only refusal is lifted.
+  6. **PEDIT** converts a picked line or arc into a polyline, then Close/Open, Join, Reverse,
+     Edit vertex (Next/Previous/Insert/Move/eXit), Decurve (zero bulges), Fit (bulge arcs
+     between vertices), and Spline (densify vertices). Width and linetype generation are
+     refused by name. Fit/Spline operate on the live vertices; Decurve cannot restore a
+     pre-Fit original vertex set.
+  7. **MEASURE** places `CadPoint` entities at a typed interval along a picked line, polyline,
+     or circle, measured from the end nearest the pick (closed polyline from its start vertex;
+     circle from the pick, with rotation 0 = east).
+  8. **DIVIDE** places `CadPoint` entities that split a picked line, polyline, or circle into N
+     equal segments: N−1 points on an open object, N on a closed object.
+  9. **AREA** reports area and perimeter from typed points (shoelace), from a picked closed
+     polyline/rectangle/circle, and Add/Subtract running totals. Read-only; no undo entry.
+  10. **LIST** prints type, layer, space, and geometry of the selection, or of objects picked
+      after the command starts. Read-only; no undo entry.
+- Acceptance:
+  1. Typing each of the eight names (and `MLEADER`) on a blank drawing leaves a prompt, a
+     report, or a started command — never "Unknown command".
+  2. POINT, LEADER, and SPLINE drawn in model space land in the model stores; the same
+     commands drawn on a paper layout land only in that layout's paper stores.
+  3. A POINT through two typed coordinates exists, is selectable, moves, and one UNDO removes
+     it. PDMODE 0 draws a marker; PDMODE 1 draws nothing; PDSIZE 0 uses 5% of the view.
+  4. LEADER with two points and None annotation creates a multileader; typing Tolerance / Copy
+     / Block logs a named refusal.
+  5. PEDIT Close on an open two-vertex polyline from a line makes it closed; Width logs a
+     named refusal.
+  6. MEASURE of a 10-unit line at interval 2.5 places three interior points; DIVIDE of the
+     same line into 4 segments places three points.
+  7. AREA of a 10×10 rectangle of points reports 100 area and 40 perimeter within REQ-101;
+     LIST of a line reports LINE, its layer, and its endpoints.
+  8. Each of the eight commands run on a paper layout leaves model geometry unchanged.
+- Frontend: **Qt only** for ribbon/icons; command and entity logic lives in Commands / Domain / IO.
+- Owner-layer: Commands / Domain / IO / Qt UI
+- Decision: D-2026-10-28-c.
+- Status: accepted (2026-10-28, user chose Option C on issue #1019)
+
+### REQ-477 — Dimension text reads upright in every direction (DIMLINEAR, DIMALIGNED, DIMANGULAR) (GitHub issue #804 audit)
+- Purpose: a surveyor reading a sheet must never see a dimension number upside down. Today, picking
+  the two extension points in the opposite order turns the text upside down (audit finding A1).
+- Priority: must
+- Type: functional
+- Depends on: REQ-111 (dimension definition), REQ-201 (no silent wrong output).
+- Statement:
+  1. Before it is stored, the measurement text's rotation (`rotationRad`) of every linear and aligned
+     dimension is normalised into the half-turn **(−90°, +90°]**. Angular text is always horizontal (item 1 below). Only the angle is
+     normalised; the dimension geometry is not changed.
+  2. Reversing the order of the two extension-line origins, or picking a span that runs right-to-left
+     or top-to-bottom, must produce the same readable text as picking it left-to-right or
+     bottom-to-top.
+  3. The normalised value is the single value used by every consumer: the commit path, the draft
+     preview, the grip-edit path, the Qt annotation draw, paper-viewport projection, and DWG/DXF
+     export.
+- Acceptance:
+  1. A DIMLINEAR from (10,0) to (0,0) stores text rotation 0°, not 180°.
+  2. A DIMLINEAR from (0,10) to (0,0) stores +90° (text reads bottom to top, the vertical-dimension
+     convention); the same vertical dimension from (0,0) to (0,10) also stores +90°.
+  3. A DIMALIGNED from (0,0) to (10,10) and from (10,10) to (0,0) each store +45°. A DIMALIGNED stored
+     at −135° fails this criterion.
+  4. A DIMANGULAR in any orientation, including one whose bisector points into the lower-left quadrant,
+     stores text rotation 0° (horizontal). The current −135° value fails this criterion.
+  5. Grip-dragging an extension point and then releasing produces the same stored rotation as
+     creating the dimension at that final position.
+  6. Automated test: a unit test over the dimension geometry asserts criteria 1–4 (the existing
+     `[dim-viewport]` tests assert stroke geometry only, which is why this defect was not caught).
+  7. Visual check in the Qt editor: the flipped-direction dimension shows readable text (screenshot
+     under `build/artifacts/`).
+- Decided (D-2026-10-29-c, item 1): angular text is always horizontal (AutoCAD's horizontal text option,
+  DIMTIH/DIMTOH). The normalisation above applies to linear and aligned text.
+- Owner-layer: Commands (commit, draft, grip) / Domain (`CadDimGeom`, `CadDimStroke`) / Qt render / IO.
+- Evidence: the audit probe `build/artifacts/repro/dim_probe.cpp` stored +180° for DIMLINEAR R→L,
+  −90° for T→B, −135° for DIMALIGNED R→L and for DIMANGULAR in the lower-left quadrant.
+  `src/qt/QtAnnotations.cpp` draws the label at `labelRotRad`, which is copied from `rotationRad`.
+- Status: accepted (2026-10-29, user decision on issue #804)
+
+### REQ-458 — Angular dimension measures the angle its arc is placed on (GitHub issue #804 audit)
+- Purpose: the number on an angular dimension must be the angle the user is pointing at, not the
+  smaller of two angles chosen for the user.
+- Priority: must
+- Type: functional
+- Depends on: REQ-111, REQ-477, REQ-201.
+- Statement:
+  1. For the vertex-and-two-points method (current `DIMANGULAR`), the measured angle is the angle
+     between the two rays from the vertex. The arc's radius follows the cursor along the bisector,
+     clamped to the sector; the arc is always drawn inside that sector.
+  2. The displayed value equals the angle between the two ray vectors to within 0.01°, and does not
+     depend on where the arc was placed.
+  3. Reflex angles (larger than 180°) are out of scope (D-2026-10-29-c, item 2). They need a new
+     requirement before anyone implements them.
+- Acceptance:
+  1. Vertex (0,0), rays to (10,0) and (0,10), arc placed at (5,5) or (2,2) or (9,1): all show 90.0°.
+  2. The arc is drawn inside the 90° sector at every placement.
+  3. A placement on the far side of the vertex produces the same 90.0° value and an arc inside the
+     sector, not a reflex value.
+  4. A reflex angle is never displayed: the value is always at most 180°.
+- Decided (D-2026-10-29-c, item 2): angles are measured up to 180°. Reflex angles are not supported.
+  Sources conflict (Autodesk: "The arc is always less than 180 degrees" for line selection; Bricsys: the arc
+  position chooses the interior or supplementary angle); the 180° rule matches the current code and the Autodesk statement.
+- Owner-layer: Domain (`CadDimGeom`) / Commands.
+- Evidence: `CadDimAngularComputeFrame` returns the short sweep (`acos`, ≤180°) and
+  `CadDimAngularPickRadius` clamps the cursor to the interior sector.
+- Status: accepted (2026-10-29, user decision on issue #804)
+
+### REQ-459 — The measured value follows the dimension's style after every edit (GitHub issue #804 audit)
+- Purpose: a dimension must not change its number just because it was moved.
+- Priority: must
+- Type: functional
+- Depends on: REQ-111, REQ-201.
+- Statement:
+  1. The measurement text is always formatted with the dimension's style: unit scale, unit format,
+     and precision. This holds for commit, grip edit, DIMSTY apply, and undo/redo.
+  2. Linear and aligned measurements are the length along the dimension direction (horizontal span
+     for a horizontal dimension, vertical span for a vertical one, true distance for an aligned one).
+  3. An edit that changes geometry refreshes the text; an edit that changes nothing does not change it.
+- Acceptance:
+  1. With unit scale 2.0, a DIMLINEAR that reads 20.00 after commit still reads 20.00 after a grip
+     move that does not change its span. (Audit finding A2: the grip path currently rebuilds the text
+     with a default style, which drops the unit scale, so the value changes to 10.00.)
+  2. Undo of a grip move restores the previous text exactly.
+  3. Changing the precision in the style refreshes every linear dimension's text.
+- Owner-layer: Commands (`CadDimRefreshMeasurementText`, grip path) / Domain (`DimensionStyles`).
+- Evidence: `CadDimRefreshMeasurementText` builds `DimensionStyles::Default()` and sets only
+  `unitPrecision`; the commit paths use `st.activeDimensionStyle`.
+- Status: accepted (2026-10-29, user decision on issue #804)
+
+### REQ-460 — Measurement text position follows the style's text position setting (GitHub issue #804 audit)
+- Purpose: the style settings must control where dimension text sits, as AutoCAD's Text Alignment
+  and text position settings do.
+- Priority: should
+- Type: functional
+- Depends on: REQ-111, REQ-044 (text styles), REQ-201.
+- Statement:
+  1. `DimensionStyle.textAlign` (Center / Above / Beside) is honoured when a dimension is placed and
+     when it is refreshed. Today the value is saved and loaded, but placement always lifts the text
+     above the line (audit finding A4).
+  2. The mapping of the three values to positions is part of the recorded decision, not an assumption.
+- Acceptance:
+  1. Each value places text at the position recorded for it in the decision, and a DWG round trip
+     keeps the value.
+  2. The default value of a new drawing is recorded in the decision because it changes how existing
+     saved dimensions look (the stored default `Center` currently draws as `Above`).
+- Decided (D-2026-10-29-c, item 3): the default stays Above, so existing drawings look the same. Center and
+  Beside become selectable options. Beside (D-2026-10-29-d): text sits at the end of the dimension line,
+  beyond the arrow, on the same line.
+- Owner-layer: Commands / Domain / Qt Properties.
+- Status: proposed (2026-10-29, issue #804 audit)
+
+### REQ-461 — DIMCONTINUE: continue a chain of linear or aligned dimensions (GitHub issue #804, Annotate › Dimensions › Continue)
+- Purpose: add a string of dimensions along an existing one without re-picking the shared point.
+- Priority: should
+- Type: functional
+- Depends on: REQ-111, REQ-477, REQ-459, REQ-201.
+- Statement:
+  1. Typing `DIMCONTINUE` (or pressing the Continue button) uses the last linear or aligned dimension
+     created in the session as the base, unless `Select` chooses another.
+  2. The prompt sequence is: second extension-line origin, then the dimension line location, repeated.
+     The new dimension's first extension origin is the base's second extension origin.
+  3. Options: `Select` (choose another base dimension, then return to the origin prompt); `Undo`
+     (removes the last continued dimension in this session). Esc ends the command.
+  4. Continued dimensions use the active style (GoSurvey has one active style, so no per-dimension
+     style inheritance is needed).
+  5. Continuing from an angular base is refused by name (REQ-201) and changes nothing until an angular
+     continue is specified (open).
+- Acceptance:
+  1. A horizontal DIMLINEAR (0,0)–(10,0) is followed by a continue to (25,0): the new dimension is a
+     DIMLINEAR with ext1 at (10,0), ext2 at (25,0), and measures 15.00.
+  2. `Undo` removes exactly the last continued dimension; a second `Undo` does not remove the base.
+  3. Esc ends the command; the base is unchanged.
+  4. The result is an ordinary `DimLinear`/`DimAligned` (REQ-111) and round-trips through DWG.
+  5. Continuing from an angular base logs a named refusal and creates nothing.
+- Autodesk reference: DIMCONTINUE (Command): "Creates a dimension that starts from an extension line of the
+  previous or selected dimension"; options Select and Undo; Esc ends
+  (help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-LT/files/GUID-27CF5248-EECB-4F5E-9A25-39ED399EA1EC.htm).
+- Decided (D-2026-10-29-c, item 4): angular continue is deferred and refused by name (clause 5).
+- Owner-layer: Commands / Domain.
+- Status: proposed (2026-10-29, issue #804)
+
+### REQ-462 — QDIM: quick dimensioning of selected geometry (GitHub issue #804, Annotate › Dimensions › Quick)
+- Purpose: dimension a whole series of points or line vertices in one pass.
+- Priority: should
+- Type: functional
+- Depends on: REQ-461, REQ-111, REQ-201.
+- Statement:
+  1. `QDIM` prompts `Select geometry to dimension:`, then
+     `Specify dimension line position, or [Continuous/Staggered/Baseline/...]`.
+  2. Supported geometry: points and the vertices of lines and polylines. Extension origins are the
+     selected vertices, in the order they were selected.
+  3. Supported types: `Continuous` (a chain of linear dimensions, as DIMCONTINUE), `Staggered` (the
+     same chain with alternate dimension lines offset), and `Baseline` (every dimension measured from the
+     first selected vertex). Each dimension is a `DimLinear` (REQ-111).
+  4. `Ordinate`, `Radius`, `Diameter`, `Datum Point`, `Edit`, and `Settings` are refused by name
+     (REQ-201) and create nothing, because GoSurvey has no ordinate, radial or diameter dimension kinds
+     yet.
+  5. A whole QDIM is one undo step.
+- Acceptance:
+  1. Selecting three vertices of a line at x=0, 10, 25 with `Continuous` creates two DimLinears of 10 and
+     15.
+  2. `Baseline` creates dimensions measured from x=0 at 10 and 25.
+  3. `Staggered` alternates the dimension line offset between consecutive dimensions.
+  4. `Ordinate` logs a named refusal and creates nothing.
+  5. One UNDO removes every dimension the QDIM created.
+- Autodesk reference: QDIM (Command): "Creates a series of dimensions quickly from selected objects"; prompts and
+  option list as above
+  (help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-LT-MAC/files/GUID-1FB628B7-C2AF-4B6D-B83E-20ADDD70614D.htm).
+- Decided (D-2026-10-29-c, item 5): points and line/polyline vertices only. Arcs and circles wait for radius
+  and diameter dimension kinds.
+- Owner-layer: Commands / Domain.
+- Status: proposed (2026-10-29, issue #804)
+
+### REQ-463 — Dimension style combo ("Use current") on the Dimensions panel (GitHub issue #804)
+- Purpose: show which dimension style new dimensions will use, and let the user return to it.
+- Priority: should
+- Type: functional
+- Depends on: REQ-111, REQ-044, REQ-201.
+- Statement:
+  1. The combo shows `Use current` when new dimensions use the drawing's active `DimensionStyle`.
+  2. Selecting `Use current` changes nothing except re-applying the active style to new dimensions (the
+     same effect as DIMSTY apply).
+  3. Entries for other named styles appear only after a named dimension style table is specified (open).
+- Acceptance:
+  1. The combo is enabled, reads `Use current` on a new drawing, and selecting it changes no existing
+     dimension.
+  2. A new dimension after selecting it takes the active style's text height and unit precision.
+- Decided (D-2026-10-29-c, item 6): one active dimension style. The combo offers only `Use current`.
+- Owner-layer: Qt UI / Commands / Domain.
+- Status: proposed (2026-10-29, issue #804)
+
+### REQ-464 — CENTERMARK: center marks on circles and arcs (GitHub issue #804, Annotate › Centerlines › Center Mark)
+- Purpose: mark the centre of a circle or arc with a cross, as surveyors and drafters do on sheets.
+- Priority: should
+- Type: functional
+- Depends on: REQ-111, REQ-201.
+- Statement:
+  1. `CENTERMARK` prompts `Select Circle or Arc`, places a cross at the centre, and repeats until Esc.
+  2. The cross is two orthogonal line segments of the arm length set in the style (the value is recorded
+     in the decision), centred on the centre point, on the current layer. A `Layer` option places marks
+     on a named layer; the default layer comes from `CENTERLAYER` (Autodesk CENTERMARK page).
+  3. Accepted geometry is circles and arcs only; anything else logs a refusal and changes nothing.
+  4. Each mark is one undo step.
+- Acceptance:
+  1. A circle of radius 5 at (10,10) with a 1-unit arm produces two LINEs from (9,10)–(11,10) and
+     (10,9)–(10,11).
+  2. Selecting a line logs a refusal and creates no marks.
+  3. The marks round-trip through DWG as LINE entities.
+- Decided (D-2026-10-29-c, item 7): plain line segments, not linked to the circle. Documented as a difference
+  from AutoCAD's CENTERMARK. Arm length (D-2026-10-29-d): half the style's text height.
+- Owner-layer: Commands / Domain.
+- Status: accepted (2026-10-30, user request; D-2026-10-30-annotate-controls)
+
+### REQ-465 — CENTERLINE: a centreline between two lines or polylines (GitHub issue #804, Annotate › Centerlines › Centerline)
+- Purpose: draw the symmetry line between two parallel or near-parallel lines.
+- Priority: should
+- Type: functional
+- Depends on: REQ-111, REQ-201. (Distinct from REQ-347's point-cloud EXTRACTCENTERLINE.)
+- Statement:
+  1. `CENTERLINE` prompts `Select First Line`, then `Select Second Line`, and draws one centreline at the
+     apparent midpoint between them.
+  2. When the two lines have different lengths, the centreline spans the apparent intersection of their
+     endpoints (Autodesk CENTERLINE page).
+  3. Accepted objects are lines and polylines. Others log a refusal and change nothing.
+  4. The centreline uses the centre linetype when that linetype exists; otherwise it uses the current
+     linetype and the fallback is logged. A `Layer` option places it on a named layer; the default layer
+     comes from `CENTERLAYER`.
+  5. One undo step per centreline.
+- Acceptance:
+  1. Two parallel lines at y=0 and y=4, both spanning x 0–10: the centreline is at y=2 from x=0 to x=10.
+  2. Lines of different lengths, from (0,0)–(10,0) and (2,4)–(8,4): the centreline is at y=2, spanning the
+     apparent intersection of the endpoints (this must be checked against AutoCAD 2025 in the implementation
+     task before acceptance).
+  3. A circle selected as the first object logs a refusal.
+- Decided (D-2026-10-29-c, item 8): one-time geometry, not linked to the source lines. Documented as a difference
+  from AutoCAD. If the drawing has no CENTER linetype, the standard CENTER pattern is added to the drawing
+  (D-2026-10-29-d).
+- Owner-layer: Commands / Domain.
+- Status: accepted (2026-10-30, user request; D-2026-10-30-annotate-controls)
+
+### REQ-466 — TABLE: insert an annotation table (GitHub issue #804, Annotate › Tables › Table)
+- Purpose: insert an editable grid of cells, as AutoCAD's TABLE does, reusing the drawing TABLE entity
+  introduced for volume reports.
+- Priority: should
+- Type: functional
+- Depends on: REQ-148 (`CadTable` entity, accepted), REQ-107 (block support, accepted), REQ-201.
+- Statement:
+  1. `TABLE` prompts for the insertion point (the upper-left corner of the table), then the number of
+     columns and rows, then width and height, and creates a `CadTable` (REQ-148).
+  2. The table uses the single built-in table style. Table styles, `From Style`, `Auto` (fit to a window),
+     `Data Link`, and formulas are refused by name (REQ-201) until they are specified.
+  3. Each cell can be edited; the whole table can be moved with MOVE/COPY/ROTATE/SCALE/MIRROR (REQ-148); the
+     table round-trips through DWG.
+- Acceptance:
+  1. `TABLE` at (10,10) with 3 columns and 2 rows creates one `CadTable` with 3×2 cells, upper-left at
+     (10,10).
+  2. Editing a cell changes only that cell's text; MOVE moves the whole table.
+  3. `TABLE` with `Auto` or `Data Link` logs a named refusal and creates nothing.
+- Autodesk reference: -TABLE (Command): the insertion point is the upper-left corner; options Auto, From Style,
+  Data Link (help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-LT/files/GUID-B958B73F-E812-41DC-8AA3-074A1E125BF4.htm).
+- Superseded (D-2026-10-30-b): table styles are implemented, see REQ-475.
+- Owner-layer: Commands / Domain (`CadTable`) / Qt Properties.
+- Status: accepted (2026-10-30, user request: fully implement tables, cell editing and table styles)
+- Amendment (D-2026-10-30-b): the table style is no longer fixed. Named table styles and their settings are REQ-475.
+  Cell editing is REQ-476. ADDPOINTTABLE is REQ-474.
+
+### REQ-467 — Extract Data: export selected object data to a table or CSV file (GitHub issue #804, Annotate › Tables › Extract Data)
+- Purpose: produce a schedule of the selected objects (type, layer, text, coordinates) without retyping.
+- Priority: could
+- Type: functional
+- Depends on: REQ-466, REQ-201.
+- Statement:
+  1. `DATAEXTRACTION` takes the selection, then shows a column picker. The picker offers every property the
+     selected object types have (type, layer, text where present, X, Y, Z where present). The user chooses the
+     columns, and one row is written per selected object.
+  2. Output targets: a drawing `CadTable` (REQ-466), a `.csv` file, or a `.xlsx` workbook. The `.xlsx` output uses
+     one small `.xlsx` writer library, approved under the dependency policy as OpenXLSX (troldal/OpenXLSX, BSD-3-Clause,
+     latest release v0.5.1, 2026-06-15; D-2026-10-30-a). It is vendored and integrated when this REQ is accepted.
+  3. Output is one-time: the drawing and file are not kept in sync. Re-running writes a new table or file.
+  4. Objects without the requested data leave the cell empty; nothing is guessed.
+- Acceptance:
+  1. Selecting three text objects and choosing a CSV target writes a header row and three data rows, and
+     the file reads back with the same text.
+  2. Selecting a table target creates one `CadTable` with a header row and one row per object.
+  3. Choosing `.xlsx` writes a workbook whose header and rows match the CSV output for the same selection.
+- Autodesk reference: DATAEXTRACTION (Command) and "To Link Data in a Data Extraction Table to a Spreadsheet":
+  the extraction goes from drawing to a table or an external file (Excel, CSV) and is one-way.
+- Decided (D-2026-10-29-c, item 10): column picker, with CSV and Excel output. The user chose a small
+  `.xlsx` writer library; the specific library is selected under the dependency policy before implementation.
+- Owner-layer: Commands / IO (CSV writer) / Domain.
+- Status: accepted (2026-10-30, user decision: implement now)
+- Implementation notes (2026-10-30, recorded with the acceptance):
+  - Coordinates (X, Y, Z) come from the object's defining point: the insertion point of text and
+    annotations, the point of a POINT, the centre of a CIRCLE, the first vertex of a LINE or POLYLINE.
+    Objects without such a point leave the coordinate cells empty.
+  - The column picker is a typed list on the command line (TYPE,LAYER,TEXT,X,Y,Z, or Enter for all).
+    A graphical picker is not built in this increment.
+  - Clause 2's drawing-table target waits for REQ-466 to be accepted. The CSV and `.xlsx` targets are built.
+  - The library is OpenXLSX (D-2026-10-30-a), vendored in `third_party/OpenXLSX`.
+
+### REQ-468 — Link Data: keep a drawing table linked to an external spreadsheet (GitHub issue #804, Annotate › Tables › Link Data)
+- Purpose: keep a schedule in a drawing in step with a spreadsheet kept by someone else.
+- Priority: could
+- Type: functional
+- Depends on: REQ-466, REQ-467, REQ-201.
+- Statement:
+  1. `DATALINK` creates a named link from a drawing table to a `.csv` or `.xlsx` file, stored in the drawing (DWG).
+  2. `Update Data Link` reads the file and refreshes the table. Changes made in the table write back to the
+     linked spreadsheet (two-way link). When a cell changed on both sides since the last update, the user is shown
+     both values for that cell and chooses which one to keep. Nothing is overwritten silently.
+  3. A missing or unreadable file logs a named error and leaves the table unchanged.
+- Acceptance:
+  1. Create a link to a CSV with two rows; the table shows the two rows.
+  2. Change the CSV and run Update Data Link: the table shows the new values; the drawing is saved and reopened
+     with the link intact.
+  3. Pointing at a missing file logs an error and does not clear the table.
+- Autodesk reference: Data Link Manager and "To Link Data in a Data Extraction Table to a Spreadsheet". The
+  AutoCAD link can be two-way for Excel and needs Excel installed; neither is required here.
+- Decided (D-2026-10-29-c, item 11): Excel (`.xlsx`) with write-back. Conflicts are asked per cell, with both
+  values shown. The spreadsheet library is OpenXLSX, approved under D-2026-10-30-a, the same as REQ-467.
+- Owner-layer: Commands / IO / Domain.
+- Status: proposed (2026-10-29, issue #804)
+
+### REQ-469 — Add Labels: survey-point labels from the Annotate tab (GitHub issue #804, Annotate › Labels & Tables › Add Labels)
+- Purpose: place the existing survey-point labels from the Annotate tab, as Civil 3D places object labels from
+  its Annotate tab.
+- Priority: could
+- Type: functional
+- Depends on: REQ-201, the existing survey-point label behaviour.
+- Statement:
+  1. `Add Labels` lists label commands by object type. The entry for survey points is enabled and places a label
+     on the picked survey point using the existing survey-point label behaviour.
+  2. Survey-point labels and the general labels in clause 4 are enabled in this increment. Surface labels stay
+     disabled, with the reason "waits for the Surface tab specification (#807)", until #807 is accepted. Alignments
+     and other object types stay disabled with a stated reason.
+  3. Each label is one undo step.
+  4. General labels, as the user defined them, are three kinds:
+     a. **Free text**: a text label typed at any picked point, not tied to an object.
+     b. **Line labels** on a picked line or polyline segment, showing any of: azimuth; azimuth over distance;
+        bearing; bearing over distance; grade; grade percentage.
+     c. **Curve labels** on a picked arc or curve, showing survey data about the curve: radius, arc length, chord
+        length, and tangent lengths.
+     Each label kind is one undo step. Label values are computed from the picked geometry in the drawing's units and
+     are recomputed when that geometry moves.
+- Acceptance:
+  1. With a survey point picked, the label matches a label created from the Survey tab: same text and placement.
+  2. The surface and alignment entries are disabled and show the reason as their tooltip.
+- Autodesk reference: Civil 3D "To Work With Adding Labels to Drawings": the Add Labels menu lists label commands
+  by object type, and object-specific lists appear on each object tab.
+- Decided (D-2026-10-29-c, item 12, user's words): survey point labels and general labels are in scope.
+  General labels are free text, line labels (azimuth, bearing, grade and their over-distance and percentage forms),
+  and curve labels (radius, arc length, chord, tangents). Alignments are deferred. Surface labels wait for #807.
+- Owner-layer: Qt UI / Commands.
+- Status: proposed (2026-10-29, issue #804)
+
+### REQ-470 — Annotation scale list: Add Current Scale, Add/Delete Scales, Scale List (GitHub issue #804, Annotate › Annotation Scaling)
+- Purpose: let an annotative object show at several drawing scales, as in AutoCAD's Object Scale List.
+- Priority: could
+- Type: functional
+- Depends on: REQ-438 (accepted: annotation SCALE list in Qt), REQ-050 (MTEXT sized by viewport scale, accepted),
+  REQ-110 (annotative rescale, proposed), REQ-113, REQ-201.
+- Statement:
+  1. `Add Current Scale` adds the drawing's current annotation scale to every selected annotative object's scale
+     list. A repeat does nothing.
+  2. `Add/Delete Scales` (OBJECTSCALE) opens the object scale list for the selection. `+` adds a scale from the
+     drawing's scale list, `−` removes one. The current scale cannot be deleted while it is in use, and the last
+     remaining scale on an object cannot be deleted (Autodesk "Annotation Object Scale List dialog box").
+  3. `Scale List` shows either every scale supported by the selection or only scales common to all selected
+     objects.
+  4. Scales come from the drawing's annotation scale list (REQ-438), not from a separate list.
+- Acceptance:
+  1. An annotative text with scales {1:1}: Add Current Scale at 1:50 gives {1:1, 1:50}; a second Add Current Scale
+     at 1:50 changes nothing.
+  2. Deleting the last scale is refused and changes nothing.
+  3. Scale List "common only" for two objects with {1:1, 1:50} and {1:1} shows {1:1}.
+  4. The scale lists persist in the drawing.
+- Decided (D-2026-10-29-c, item 13): a per-object scale list. In DWG it maps to AutoCAD annotative object data
+  so AutoCAD shows the same scales (D-2026-10-29-d). The exact field mapping is still to be specified before
+  implementation.
+- Owner-layer: Domain / Commands / Qt UI / IO.
+- Status: proposed (2026-10-29, issue #804)
+
+### REQ-471 — Sync Positions: reset alternate-scale positions to the base position (GitHub issue #804, Annotate › Annotation Scaling)
+- Purpose: undo manual moves made on one scale so that every scale shows the object in its base place.
+- Priority: could
+- Type: functional
+- Depends on: REQ-470, REQ-201.
+- Statement:
+  1. `Sync Positions` resets the alternate-scale representations of the selected annotative objects to the base
+     location (Autodesk ANNORESET: "resets the locations of all alternate scale representations").
+  2. It is one undo step.
+  3. It is refused by name on objects that have only one scale.
+- Acceptance:
+  1. An annotative text with a second scale moved by (5,0) is moved back so that its alternate representation
+     matches the base position after Sync Positions.
+  2. UNDO restores the moved position.
+- Open decision: resolved together with REQ-470 (it depends on that model).
+- Owner-layer: Domain / Commands.
+- Status: proposed (2026-10-29, issue #804)
+
+### REQ-472 — FIND: find and replace text in the drawing (GitHub issue #804, Annotate › Text › Find text)
+- Purpose: locate and correct text across a drawing, as AutoCAD's FIND does.
+- Priority: should
+- Type: functional
+- Depends on: REQ-201, REQ-044 (text styles), REQ-148 (table cells).
+- Statement:
+  1. `FIND` opens a Find and Replace dialog with: Find What; Replace With; Find Where (Entire Drawing, Current
+     Layout, Selected Objects; defaults to Selected Objects when something is selected); and a List Results table
+     showing location (model or paper), object type, and text.
+  2. Options: Match Case; Find Whole Words Only; Use Wildcards (AutoCAD's wildcard set is `#`, `@`, `.`, `*`, `?`,
+     `~`, `[ ]`, `[~]`, `[-]`, and a backtick escape).
+  3. Text types searched: single-line text, multiline text, dimension text overrides, and table cell text. Dimension
+     measurements are never changed by Replace; only text overrides are (Autodesk FIND).
+  4. Replace changes the current result; Replace All changes every result in scope. Each Replace All is one undo
+     step.
+  5. Results: double-click zooms to the result; Create Selection Set (Highlighted / All) builds a selection.
+  6. Objects on frozen or off layers are skipped when "Ignore Hidden Items" is on.
+  7. Not applicable to GoSurvey and not offered: XRef search, hyperlinks, block attributes (unless REQ-107 blocks
+     carry attribute text), diacritics and half-/full-width matching.
+- Acceptance:
+  1. TEXT "Front Door" and TEXT "Front Doormat": with Find Whole Words Only, searching "Front Door" finds one result.
+  2. Replace All on a text and UNDO restores the original text.
+  3. A dimension whose measured value is 10.00 and whose text override contains "10" is found by the override text,
+     and Replace All changes the override but not the measured value.
+  4. Entire Drawing and Selected Objects scopes return different result counts when the selection excludes matches.
+- Autodesk reference: FIND (Find and Replace Dialog Box)
+  (help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-Core/files/GUID-03A48719-9C75-4BBB-BFE9-4692BE5A591F.htm).
+- Decided (D-2026-10-29-c, item 14): the full AutoCAD wildcard set is in this increment.
+- Owner-layer: Commands / Qt UI / Domain.
+- Status: proposed (2026-10-29, issue #804)
+
+### REQ-474 — ADDPOINTTABLE: a point table from survey points, chosen in a dialog (GitHub issue #804 follow-up)
+- Purpose: list surveyed points in a styled table, as Civil 3D's Annotate › Labels & Tables › Add Tables › Add Point
+  Table does, so a surveyor can put a control or coordinate list on a sheet.
+- Priority: should
+- Type: functional
+- Depends on: REQ-466 (TABLE entity), REQ-475 (table styles), REQ-067 (point groups), REQ-201.
+- Statement:
+  1. `ADDPOINTTABLE` opens a dialog (Qt) with: a table style list containing only point table styles
+     (REQ-475), a point group selector, a survey point list with a check box per point. The table goes on the current layer (a layer chooser is a follow-up). OK places
+     the table after an insertion point; Cancel changes nothing.
+  2. Points are chosen by any of: a point group (all its members are checked), the check boxes, or a typed list of
+     point numbers. The dialog never shows a point twice.
+  3. Rows are ordered by point number. The table is one row per point below a header row. Columns come from the
+     chosen style (REQ-475).
+  4. The command line form answers the same questions as typed prompts, for scripting and tests: style, then point
+     numbers or a group name, then the insertion point.
+  5. A point table with no points is refused by name (REQ-201) and creates nothing.
+  6. One undo step places the table.
+- Acceptance:
+  1. With points 1, 2 and 5 chosen and the NameNEZD style, the table has a header row and three data rows, in order
+     1, 2, 5, with columns Point Name, Northing, Easting, Elevation.
+  2. A group containing points 3 and 4 checked together with point 4 checked again lists 3 and 4 once each.
+  3. NameNEZD with Comments adds a Description column with each point's description.
+  4. Cancel in the dialog leaves the drawing unchanged.
+  5. ADDPOINTTABLE with no points refuses by name and changes nothing.
+- Autodesk reference: Annotate tab, Labels & Tables panel, Add Tables, Add Point Table; the Point Table Creation dialog
+  holds the generic table controls (table style, layer, behaviour) plus a point group selector and a point selector
+  (help.autodesk.com/cloudhelp/2024/ENG/Civil3D-UserGuide/files/GUID-CF72ED84-E551-42B7-9609-DB3570ABCD11.htm;
+  2016 "To Create Point Tables", GUID-8BCE4FE6-7986-4F40-AD1B-516675F31474).
+- Assumption to verify in Civil 3D: the column list of NameNEZD and NameNEZD with Comments (see REQ-475).
+- Owner-layer: Qt UI (dialog) / Commands / Domain (`CadTable` builder).
+- Status: accepted (2026-10-30, user request)
+
+### REQ-475 — Table styles: named styles that set table layout, text, and point table columns (GitHub issue #804 follow-up)
+- Purpose: let a drawing carry more than one table format, as Civil 3D's Table Style dialog does, and make point tables
+  depend on a style rather than on a fixed layout.
+- Priority: should
+- Type: functional
+- Depends on: REQ-466, REQ-474, REQ-476.
+- Statement:
+  1. A drawing owns a list of table styles. Each style has: a name; a kind (`Data` or `Point`); text height in plotted
+     inches; column width and row height in plotted inches; a header row flag; and, for a Point style, an ordered
+     list of columns, each with a title and a value (Name, Northing, Easting, Elevation, Description).
+  2. Built-in styles, present in every new drawing: `Standard` (Data, header row, the default TABLE style); `NameNEZD`
+     (Point: Point Name, Northing, Easting, Elevation); `NameNEZD with Comments` (Point: the same plus Description).
+     The NameNEZD column list is an assumption to verify against Civil 3D (REQ-474 acceptance).
+  3. TABLE and ADDPOINTTABLE take a style by name. Unknown names are refused by name (REQ-201) and create nothing.
+     Enter takes `Standard` for TABLE and `NameNEZD` for ADDPOINTTABLE.
+  4. A Point style table cannot be used for TABLE, and a Data style table cannot be used for ADDPOINTTABLE.
+  5. A table records the name of its style, and the name persists with the drawing (the drawing's JSON payload).
+  6. Styles are drawing-owned and editable. The built-in styles in clause 2 are present in a new drawing; users can
+     create, copy, rename, edit, and delete eligible styles. A style used by a table cannot be deleted until the
+     table is reassigned. The complete style collection persists in DWG and maps to AutoCAD TABLESTYLE data.
+- Acceptance:
+  1. A new drawing lists exactly the three built-in styles.
+  2. TABLE with `NameNEZD` is refused by name and creates nothing; ADDPOINTTABLE with `Standard` is refused by name.
+  3. Saving and reopening keeps each table's style name.
+  4. Every table records the style it was created with; no command changes that name.
+- Owner-layer: Domain (style list, `CadTable`) / Commands / IO (JSON payload).
+- Status: accepted (2026-10-30, user request)
+
+### REQ-476 — Cell editing: change the text of one table cell (GitHub issue #804 follow-up)
+- Purpose: let a surveyor correct a table's text after it is placed.
+- Priority: should
+- Type: functional
+- Depends on: REQ-466, REQ-475.
+- Statement:
+  1. Double-clicking a model-space table cell opens a text prompt for that cell showing its current text. This is
+     the same pattern the paper-layout table cell editor uses, and it needs no command line.
+  2. The entered text replaces that cell's text. Cancel keeps the cell unchanged.
+  3. A double-click outside every table, and a double-click on a table's edge, changes nothing.
+  4. Each replacement is one undo step.
+  5. A table's cell count and column count are unchanged by editing.
+- Acceptance:
+  1. A TABLE of 2 by 2 with cell (1,1) set to `Pt`: click in cell (1,1), type `Point`, Enter. Cell (1,1) reads `Point`
+     and the other cells are unchanged.
+  2. Cancel leaves the cell as it was.
+  3. A double-click outside every table changes nothing.
+  4. One UNDO restores the previous text of the last edited cell.
+- In-place multi-line editing is a follow-up. The command-line cell editor is not part of this requirement.
+- Owner-layer: Commands / Domain (`CadTable`).
+- Status: accepted (2026-10-30, user request)
+### REQ-458 — Model viewport zoom ratio on the status bar (TASK-0.7.8 item 8)
+
+- Purpose: surveyors set and recall **model-space** editor viewport zoom as a named ratio (such as 1:50),
+  distinct from drawing plot scale, paper viewport model-to-paper scale (REQ-027), and annotative
+  annotation scales (issue #622).
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-29-h (user direction 2026-10-29, TASK-0.7.8).
+- Depends on: REQ-027, REQ-101.
+- Statement:
+  1. While **model space** is active, the Qt status bar shows a **viewport zoom** control listing ratio
+     presets (for example 1:50). Choosing a preset adjusts the model viewport zoom so one plotted inch
+     on screen represents the preset's model-units-per-inch ratio, using the current viewport height and
+     display DPI.
+  2. The user can **add custom ratios** through a dialog; custom entries join the drawing's zoom-scale
+     list. That list is **separate** from `annotationScales`; changing viewport zoom presets does not
+     change annotation scale behavior.
+  3. Custom and preset zoom scales persist with the drawing through **DWG/DXF** round-trip (SCALE objects
+     tagged for viewport zoom, not annotation scales) and through the internal drawing JSON trailer.
+  4. Paper space and floating model space disable the control; it applies only to the model editor view.
+  5. Wheel zoom and other gestures may leave the control on a non-preset zoom until the user picks a
+     preset again; the control may show the closest preset or a neutral label when no preset matches.
+- Acceptance:
+  - `[req458]` test: default presets load on a new drawing; selecting 1:50 changes `viewportZoom` predictably for a fixed viewport height and DPI.
+  - `[req458]` test: adding a custom scale persists through GsIo JSON round-trip and reappears in the status bar list.
+  - `[req458]` test: DWG export writes tagged SCALE objects for viewport zoom scales; re-import restores them into the viewport zoom list and not into annotation scales.
+  - Manual: annotation scale combo and viewport zoom combo show independent lists.
+- Owner-layer: Commands / Qt UI / IO (`ViewportZoomScale`, `EditorWindow`, `GsIo`, `LibreDwgCad`)
+- Status: accepted (2026-10-29, user continued TASK-0.7.8 items 8–9)
+
+### REQ-478 — Drawing-owned styles round-trip through DWG and compatible Autodesk products
+
+- Purpose: a DWG carries the drawing's style definitions so compatible Autodesk products can display and edit
+  styled objects after open/save/reopen.
+- Priority: must
+- Type: functional + interop
+- Depends on: REQ-044, REQ-111, REQ-367, REQ-475, REQ-201.
+- Statement:
+  1. The drawing owns named collections for dimension, text, multileader, table, survey-point, and survey-point
+     label styles. Existing drawings without these collections load with the existing Standard/default styles.
+  2. DIMSTY lists all drawing dimension styles, marks the current style, previews the selected style, and offers
+     Set Current, New, Modify, Override, Compare, Close, and Help. New/Modify includes the tabs and controls shown
+     in the user's AutoCAD references. Unsupported domain fields are not silently accepted and discarded.
+  3. New dimensions reference the current style. Changing the current style leaves existing dimensions attached
+     to their prior style. Editing a style updates referencing dimensions after regeneration; per-object overrides
+     remain local.
+  4. Text, multileader, table, and survey-point entities reference drawing-owned styles by name. Used styles
+     cannot be deleted until references are reassigned. Missing foreign style references use Standard only after
+     an explicit REQ-201 log entry.
+  5. DWG export/import maps supported fields to native DIMSTYLE, STYLE, MLEADERSTYLE, and TABLESTYLE records.
+     Style names, supported settings, current style, and entity references survive GoSurvey DWG export, Autodesk
+     open/save, and GoSurvey re-import.
+  6. Survey point and point-label styles are drawing-owned GoSurvey styles. When imported from Civil 3D,
+     every source field with a GoSurvey equivalent maps into these GoSurvey style definitions. Marker
+     visibility and label visibility are independent and remain off when the source point style suppresses
+     that component. Point-style marker geometry, size, color and label-style references; label templates,
+     text style, height and color; and point-to-style references are retained. DWG export represents mapped
+     values using supported AutoCAD style records and ordinary entities. Civil 3D native style objects are
+     not authored. Unsupported source fields are named in the import/export log.
+  7. DWG round trips preserve every supported style field and entity reference, including GoSurvey-specific
+     style data embedded in the DWG. Standalone `.gs` drawings are not a supported persistence path. Legacy
+     DWGs remain readable and receive defaults for absent style tables.
+  8. Civil 3D objects supported by GoSurvey are decoded into GoSurvey domain objects and saved as ordinary
+     DWG entities and style records supported by AutoCAD. The supported mappings include COGO point number,
+     location, elevation, description, point groups, and mapped point/label styles; TIN vertices and triangle
+     topology, surface style and supported surface-label text/locations; alignment geometry and labels; plus
+     drawing-owned text, dimension, multileader, and table styles. GoSurvey does not author Civil 3D custom
+     objects. Source fields without a GoSurvey representation are named in the import/export log and are not
+     silently represented as semantic GoSurvey data.
+- Acceptance:
+  1. Non-default styles in all six collections survive GoSurvey DWG export, AutoCAD open/save, and GoSurvey
+     re-import with names, supported settings, current-style selection, and entity references intact.
+  2. DIMSTY's manager and seven create/modify tabs match the supplied screenshots and perform their named actions.
+  3. Changing current dimension style affects newly created dimensions only; modifying one named style updates
+     its referencing dimensions and leaves dimensions on other styles unchanged.
+  4. Legacy drawings without named style tables load with the prior Standard/default appearance and save again.
+  5. Unsupported style data logs a specific reason and never silently removes its referencing entity.
+  6. The supplied Rapides Substation baseline opens in GoSurvey with its 353 COGO points and TIN represented
+     by GoSurvey points and a GoSurvey TIN with matching supported metadata/topology. Supported point/surface
+     label locations and style settings map into GoSurvey objects. Point marker and label visibility match
+     each source point's resolved style, including styles that suppress both components; point groups retain
+     their membership rules and style references. Drawing-owned text, dimension, multileader, table, surface,
+     point and point-label style names and supported fields import and remain attached to GoSurvey objects.
+     Saving to DWG emits valid ordinary AutoCAD entities and styles that AutoCAD opens without Recover;
+     re-import preserves the supported mapped data.
+- Owner-layer: Domain / Commands / Qt UI / DWG IO.
+- Decision: D-2026-10-30-style-roundtrip.
+- Status: accepted (2026-10-30, explicit user request)
+
+### REQ-479 — Civil 3D model data maps to GoSurvey objects through DWG IO
+
+- Purpose: users can open a Civil 3D project in GoSurvey, convert supported survey/design data into editable
+  GoSurvey objects, and save a valid DWG that AutoCAD accepts.
+- Priority: must
+- Type: functional + interop
+- Depends on: REQ-044, REQ-111, REQ-170, REQ-201, REQ-478.
+- Statement:
+  GoSurvey opens and saves these drawings entirely in-process. AutoCAD, Civil 3D, their Object Enablers,
+  and a separate CAD process are not runtime or build prerequisites. The DWG codec and the GoSurvey
+  implementation decode and write the supported Civil 3D object data directly.
+  1. GoSurvey's in-process DWG import decodes supported Civil 3D data into GoSurvey domain objects without
+     requiring AutoCAD, Civil 3D, an Object Enabler, a bridge, or another CAD process. Supported data includes
+     COGO point number/location/elevation/descriptions and mapped styles; TIN vertex and triangle data,
+     surface styles and supported label text/locations; and supported alignment geometry and labels.
+     Civil point tables map to editable GoSurvey table cells using their drawing-owned point-group
+     membership, split row offsets and source table styles. Preserve source column order, headers,
+     formatting expressions, text-style references, paper text sizes and insertion geometry.
+  2. DWG export writes the mapped GoSurvey objects as ordinary AutoCAD entities and supported AutoCAD style
+     records. It does not create Civil 3D custom objects or promise preservation of Civil 3D object identity.
+     Output must be accepted by AutoCAD without Recover.
+  3. Unsupported or undecoded Civil 3D data is listed by class and count in the import/export log; supported
+     data must not be silently omitted or substituted with proxy display graphics as semantic content.
+  4. GoSurvey's DWG-embedded persistence preserves the same mapped object data, style ownership, and references.
+- Acceptance:
+  1. The GoSurvey-only test environment has no AutoCAD or Civil 3D installed, and opening, displaying,
+     editing supported data, and saving the supplied DWG does not launch an external CAD process or use
+     an external bridge.
+  2. The supplied Rapides Substation baseline imports 353 COGO points as GoSurvey survey points with matching
+     identifiers, coordinates, elevations, descriptions, and supported point/label style mappings. Its TIN
+     imports with matching vertices and triangle topology; supported surface label text and locations map to
+     GoSurvey annotations. Alignment data represented by GoSurvey is imported as editable GoSurvey geometry.
+     The resaved baseline's 18 point-table segments retain all 353 point rows, source ordering and values;
+     its four point-table style definitions remain drawing-owned and persist through DWG save/reopen.
+  3. Saving the imported drawing as DWG produces ordinary entities and style records accepted by AutoCAD
+     without Recover; importing that DWG into GoSurvey preserves all supported mapped values and relationships.
+  4. Unsupported Civil 3D classes/fields are listed with exact class names and counts; no native-class
+     preservation, editability, or lossless round-trip is claimed for data outside GoSurvey's mapped model.
+- Owner-layer: Domain / DWG IO / Civil 3D interoperability.
+- Decision: D-2026-10-31-b (amends D-2026-10-30-c).
+- Status: accepted (2026-10-31, user clarification)
 
 ## Anti-requirements
 

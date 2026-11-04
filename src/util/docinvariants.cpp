@@ -200,6 +200,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
   CheckAttrCount(out, "arcs", st.userArcs.size(), st.userArcAttrs.size());
   CheckAttrCount(out, "ellipses", st.userEllipses.size(), st.userEllAttrs.size());
   CheckAttrCount(out, "splines", st.cadSplines.size(), st.cadSplineAttrs.size());  // REQ-443
+  CheckAttrCount(out, "points", st.cadPoints.size(), st.cadPointAttrs.size());     // REQ-456
   CheckAttrCount(out, "annotations", st.cadAnnotations.size(), st.cadAnnotationAttrs.size());
   CheckAttrCount(out, "filled regions", st.cadFilledRegions.size(), st.cadFilledRegionAttrs.size());
   CheckAttrCount(out, "meshes", st.cadMeshes.size(), st.cadMeshAttrs.size());
@@ -373,6 +374,9 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
       case T::Arc:          return st.userArcs.size();
       case T::Ellipse:      return st.userEllipses.size();
       case T::Spline:       return st.cadSplines.size();  // REQ-443
+      case T::Point:        return st.cadPoints.size();   // REQ-456
+      case T::PositionMarker: return st.cadPositionMarkers.size();  // -Wswitch with Point
+      case T::Multileader:    return st.cadMultileaders.size();     // -Wswitch with Point
       case T::PdfUnderlay:  return st.pdfAttachments.size();
       case T::FilledRegion: return st.cadFilledRegions.size();
       case T::Mesh:         return st.cadMeshes.size();

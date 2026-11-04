@@ -19,10 +19,11 @@ Only three menus. Almost everything else is on the ribbon or the command line.
 
 | Item | Shortcut | What it does |
 |---|---|---|
-| **New** | — | Opens the New Drawing chooser; choose Blank Drawing or a template |
-| **Open** | `Ctrl+O` | Opens a DWG drawing directly in a new, active tab without showing the New Drawing chooser |
+| **New** | — | Creates a new drawing from the configured default template |
+| **Open** | `Ctrl+O` | Opens a DWG drawing directly in a new, active tab |
 | **Save** | `Ctrl+S` | Saves to the current path; prompts for one if there is none |
 | **Save As…** | — | Saves under a new name and renames the tab |
+| **Save as Template…** | — | Saves reusable standards and setup as a `.gst` without changing the drawing |
 | **Import DXF…** | — | Replaces the CAD geometry from a DXF; keeps survey points ([[Import and Export]]) |
 | **Export DXF…** | — | Writes an ASCII DXF (AC1032) |
 | **Import DWG…** | — | Needs an external converter; greyed out if none is installed |
@@ -55,7 +56,7 @@ The Undo item names the action it will reverse, for example *Undo: Edit hatch*.
 | **Layout ▸ Save current as… / Switch to** | — | Saves and recalls named panel layouts as `.ini` files |
 | **Command line** | `Ctrl+9` | Shows and hides the floating command bar |
 | **Classic command dock** | — | Switches the command line between the floating bar and a docked panel |
-| **Toolspace** | — | Shows and hides the Toolspace panel (Prospector and Settings) |
+| **Toolspace** | — | Shows and hides the Toolspace panel (Project, Prospector and Settings tabs) |
 | **Settings…** | — | Opens the Options dialog ([[Settings and Options]]) |
 
 ---
@@ -97,6 +98,11 @@ equivalent. Tooltips can be turned off in **Settings → Display**.
 
 Above the viewport. Each tab is an independent document — geometry, layers, survey points, paper
 layouts, plot scale, and undo history are all per-tab. Switching tabs switches all of it.
+
+The Qt **Start** and drawing tabs have trapezoid outlines with gaps between them. The active tab
+uses a lighter fill and an amber edge. **Start** cannot be closed; each drawing has its own close
+button, and **+** opens a new drawing. Long names are shortened to keep the close button visible;
+scroll buttons appear when the open drawings do not fit.
 
 Tabs can be hidden with **Settings → Display → Display File Tabs**.
 
@@ -200,6 +206,7 @@ Bottom of the window.
 | **GRID** | Drawing grid on and off |
 | **POLAR** | Polar tracking — **the button toggles but has no effect yet** |
 | **Plot scale** | Annotation-scale dropdown, e.g. `1" = 50'`. Same as `PLOTSCALE` |
+| **Viewport zoom** | Sets the current model editor zoom to a ratio such as **1:50**. **Add custom scale…** adds a preset saved with this drawing in DWG/DXF; the list is separate from annotation scales. See [[Views and Navigation]] |
 | **SEL** | Opens the Selection panel, which lists the selected entities so you can toggle each one |
 
 ---

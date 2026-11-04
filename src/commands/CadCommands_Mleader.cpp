@@ -2,6 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
+#include "util/styleproperty.hpp"
 
 #include <cmath>
 #include <optional>
@@ -32,7 +33,7 @@ void InitMultileaderLabelAtLanding(CadMultileader* ml, float landX, float landY,
   a.boxMinY = landY;
   a.boxMaxX = landX + 22.f * h;
   a.boxMaxY = landY + 2.6f * h;
-  a.text = "Multileader";
+  a.text = StyleProperty(st.activeMultileaderStyle.props, "defaultText", "Multileader");
   StampActiveTextStyleOnNewText(st, a);
 }
 
@@ -95,7 +96,10 @@ void CommitMleaderLandingAt(AppCommandState& st, float landX, float landY, std::
   const float landZ = CadCommitElevation(st);
   PushUndoSnapshot(st, "MLEADER");
   CadMultileader ml;
+  ml.styleName = st.activeMultileaderStyle.name;
   ml.annotative = st.activeMultileaderStyle.annotativeDefault;
+  ml.splinePath = StyleProperty(st.activeMultileaderStyle.props, "leaderType") == "Spline";
+  ml.showArrow = StyleProperty(st.activeMultileaderStyle.props, "arrowSymbol") != "None";
   AppendPathPoint(&ml, st.mleaderTipX, st.mleaderTipY, st.mleaderTipZ);
   AppendPathPoint(&ml, landX, landY, landZ);
   InitMultileaderLabelAtLanding(&ml, landX, landY, landZ, st);

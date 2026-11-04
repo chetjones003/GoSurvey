@@ -1,0 +1,18 @@
+# REQ-466 / REQ-475 (GitHub issue #804, D-2026-10-30-b) — TABLE inserts a styled table.
+#
+# A point table style is refused for TABLE. Then a 3 by 2 table in the Standard style is placed at (10,10).
+
+NEW
+
+CMD TABLE
+CMD NameNEZD
+EXPECT LOG no data table style named "NameNEZD"
+
+CMD TABLE
+CMD
+CMD 3
+CMD 2
+PICK 10 10
+
+EXPECT TABLES 1
+EXPECT LOG TABLE inserted: 3 x 2 in style Standard.

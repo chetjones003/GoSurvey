@@ -7,12 +7,14 @@
 #include "StartupFailure.hpp"
 #include "UserPrefs.hpp"
 #include <QApplication>
+#include <QGuiApplication>
 #include <QFile>
 #include <QElapsedTimer>
 #include <QImage>
 #include <QPalette>
 #include <QSettings>
 #include <QSplashScreen>
+#include <QScreen>
 #include <QThread>
 #include <QSurfaceFormat>
 #include <QTimer>
@@ -174,14 +176,16 @@ int main(int argc, char** argv) {
       return 1;
     }
   }
-  const QPixmap splashBackdrop = qtsplash::MakeBackdrop(QPixmap(QtAsset("qt-splash-bg.png")));
-  QSplashScreen splash(qtsplash::MakeFrame(splashBackdrop, 0.0, qtsplash::PhaseLabelAt(0)));
+  const qreal splashDpr =
+      QGuiApplication::primaryScreen() != nullptr ? QGuiApplication::primaryScreen()->devicePixelRatio() : 1.0;
+  const QPixmap splashBackdrop = qtsplash::MakeBackdrop(QPixmap(QtAsset("qt-splash-bg.png")), splashDpr);
+  QSplashScreen splash(qtsplash::MakeFrame(splashBackdrop, 0.0, qtsplash::PhaseLabelAt(0), splashDpr));
   // REQ-093: the bar and phase label follow wall-clock time on splashClock (restarted once the window is built).
   QElapsedTimer splashClock;
   const auto advanceSplash = [&] {
     const qint64 elapsed = splashClock.elapsed();
     splash.setPixmap(qtsplash::MakeFrame(splashBackdrop, qtsplash::ProgressAt(elapsed),
-                                         qtsplash::PhaseLabelAt(elapsed)));
+                                         qtsplash::PhaseLabelAt(elapsed), splashDpr));
     app.processEvents(QEventLoop::AllEvents, 50);
   };
   if (!smoke) { splash.show(); splashClock.start(); app.processEvents(); }
@@ -192,7 +196,7 @@ int main(int argc, char** argv) {
   int result = 0;
   {
     EditorWindow window(qEnvironmentVariable("GOSURVEY_DEV_BRANCH"));
-    LoadUserStartupPrefSettings(window.State());
+    LoadUserStartupPrefs(window.State());
     // REQ-093: the minimum display time counts from here, so the bar animates for its whole span
     // instead of sitting still while the window above is being built.
     if (!smoke) { splashClock.restart(); advanceSplash(); }

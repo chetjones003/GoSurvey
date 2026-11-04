@@ -33,7 +33,8 @@ public:
   /// \p mergeRadius (> 0): a candidate with another of strictly higher weight within that distance is set aside, so a
   /// cluster of points a few screen pixels apart offers only its strongest (a circle's centre rather than its rim).
   /// Pass the screen distance in points: zoomed in, the cluster's points are far apart on screen and all return.
-  bool Nearest(float x, float y, float radius, Pt& out, float mergeRadius = 0.f) const;
+  bool Nearest(float x, float y, float radius, Pt& out, float mergeRadius = 0.f,
+               float* outWeight = nullptr, bool includeLinework = true, bool includeCenters = true) const;
 
 private:
   static constexpr float kCell = 24.f; ///< grid cell size in points

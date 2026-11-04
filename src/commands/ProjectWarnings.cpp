@@ -228,22 +228,6 @@ PasteCheck CheckClipboardPaste(const AppCommandState& st) {
   const double destUnit = MetersPerUnitOf(st);
   const bool unitsDiffer = cb.srcMetersPerUnit > 0.0 && destUnit > 0.0 && std::fabs(cb.srcMetersPerUnit - destUnit) > 1e-12;
 
-  if (cb.srcProjectUid == 0 && dest == 0) {
-    // Two standalone drawings, neither in a GoSurvey Project: no project or coordinate-system
-    // concept applies (REQ-383 clause 7 still leaves zone mismatch here unchanged), but a real
-    // UNIT mismatch is still warned about and offered a convert, replicating how AutoCAD scales
-    // pasted content by the two drawings' INSUNITS (REQ-383 clause 7 amendment, issue #831
-    // follow-up, D-2026-10-11-c). Never silent.
-    if (!unitsDiffer)
-      return pc;
-    pc.verdict = PasteCheck::Verdict::Warn;
-    pc.text = "The copied objects are drawn in a different unit than this drawing, so they will come in at the wrong "
-              "size unless you convert them.\n";
-    std::string why;
-    pc.canConvert = PlanClipboardConversion(st, why).ok;
-    return pc;
-  }
-
   const Session* ds = dest ? SessionOf(st, dest) : nullptr;
   std::string destName = ds ? ds->project.name : std::string("(no project)");
   std::string srcName = cb.srcProjectName.empty() ? std::string("(no project)") : cb.srcProjectName;
@@ -259,8 +243,9 @@ PasteCheck CheckClipboardPaste(const AppCommandState& st) {
 
   if (zoneDiffers) {
     pc.verdict = PasteCheck::Verdict::Block;
-    pc.text = "The copied objects use the coordinate system " + cb.srcZone + ", but this drawing (project " + destName +
-              ") uses " + st.drawingSettings.zoneCode +
+    const std::string destination = dest ? "this drawing (project " + destName + ")" : "this standalone drawing";
+    pc.text = "The copied objects use the coordinate system " + cb.srcZone + ", but " + destination + " uses " +
+              st.drawingSettings.zoneCode +
               ". Pasting them as they are would put them in the wrong place on the ground, so this paste is blocked.";
     std::string why;
     const geo::ConversionPlan plan = PlanClipboardConversion(st, why);
@@ -273,6 +258,19 @@ PasteCheck CheckClipboardPaste(const AppCommandState& st) {
     } else {
       pc.text += " They cannot be converted: " + why;
     }
+    return pc;
+  }
+
+  if (cb.srcProjectUid == 0 && dest == 0) {
+    // Standalone drawings still offer AutoCAD-compatible unit conversion, never silently. A defined
+    // coordinate-system mismatch is handled above with the existing Convert / Cancel flow.
+    if (!unitsDiffer)
+      return pc;
+    pc.verdict = PasteCheck::Verdict::Warn;
+    pc.text = "The copied objects are drawn in a different unit than this drawing, so they will come in at the wrong "
+              "size unless you convert them.\n";
+    std::string why;
+    pc.canConvert = PlanClipboardConversion(st, why).ok;
     return pc;
   }
   std::string text;

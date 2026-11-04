@@ -7,13 +7,13 @@
 
 ## 1. Authority
 - Goal: no numbered GOAL-NN applies; `spec/project.md` currently defines no GOAL-NN entries.
-- Requirements: REQ-055 (accepted; DWG saved model view added by D-2026-11-03-b), REQ-367 (accepted; legacy LEADER + MTEXT fidelity amended by D-2026-11-03-a), REQ-384 (accepted), REQ-456 (accepted by D-2026-11-02-a).
+- Requirements: REQ-055 (accepted; DWG saved model view added by D-2026-11-03-d), REQ-367 (accepted; legacy LEADER + MTEXT fidelity amended by D-2026-11-03-c), REQ-384 (accepted), REQ-481 (accepted by D-2026-11-03-e).
 - Constraints: REQ-201 (report unsupported/failed operations), REQ-453 (keep separately built worktrees isolated), CON-06 (smallest correct solution).
 - Acceptance:
   - REQ-055: a DWG opens at the saved active model-space VPORT view and saved CANNOSCALE, with annotation scale independent of viewport zoom.
   - REQ-367: native multileaders round-trip and render with the DWG label attachment, rotation, text rectangle and arrow size; associated legacy LEADER + MTEXT callouts retain those same visible properties and flagged hookline.
   - REQ-384 increment 4: import uses default-scale context geometry when present; REQ-384 increment 5: R2018 round trip preserves annotative contexts.
-  - REQ-456 acceptance 1–5: a normal Windows DWG launch activates the matching running executable and opens the file there; it opens normally without a running match; worktree executables remain separate; helper/test/crash modes are unaffected.
+  - REQ-481 acceptance 1–5: a normal Windows DWG launch activates the matching running executable and opens the file there; it opens normally without a running match; worktree executables remain separate; helper/test/crash modes are unaffected.
 - Owning subsystem: Application lifecycle (`src/qt/main.cpp`), Platform process coordination, and DWG IO (`src/io/LibreDwgCad.cpp`, `src/io/LibreDwgAnnotContext.cpp`).
 
 ## 2. Scope
@@ -23,7 +23,7 @@
 
 ## 3. Architectural boundary check
 - Does this need a NEW abstraction / layer / dependency / ownership change / global state / public-API or data-format change / algorithm the spec didn't specify?
-  - [x] No — REQ-456 specifies process reuse; implement it in application startup with the platform mechanism that fits existing dependencies. DWG context merge stays in the IO owner.
+  - [x] No — REQ-481 specifies process reuse; implement it in application startup with the platform mechanism that fits existing dependencies. DWG context merge stays in the IO owner.
 
 ## 4. Questions
 | # | Question | Asked (date) | Answer |
@@ -38,7 +38,7 @@
 - Files/functions to touch: `spec/project.md`, `spec/requirements.md`, this task log; `src/qt/main.cpp`, `src/qt/EditorChrome.cpp` / `EditorWindow::nativeEvent` and a focused `src/platform` helper only if needed; `src/io/LibreDwgCad.cpp`; focused Qt and DWG tests, plus build wiring only if needed.
 - Test approach: verify instance identity/forwarding and separate executable paths using the existing native-event test seam; verify ordinary launch behavior and diagnostic/test modes. For DWG, assert saved VPORT center/height/twist and `CANNOSCALE` restoration, round-trip native MLeader context-manager scale names and label dimensions, and test legacy LEADER MTEXT glyph height/hookline direction/size.
 - Steps:
-  - [x] Confirm this plan against REQ-384 / REQ-456, layer ownership, and current test seams.
+  - [x] Confirm this plan against REQ-384 / REQ-481, layer ownership, and current test seams.
   - [x] Add regression tests that distinguish the current behavior.
   - [x] Implement the process handoff and multileader context merge.
   - [x] Run the full required validation suite/checklists.
@@ -48,8 +48,8 @@
 - Bug: root causes = normal Windows launches created a second editor instead of forwarding the DWG; foreign DWGs did not restore the active model VPORT or CANNOSCALE; native MLeader contexts were not merged; and legacy LEADER + MTEXT import discarded attachment/rotation/rect dimensions and the synthetic DIMASZ hookline. Regression tests assert the saved view, annotation-scale/context data, label geometry, and hookline path.
 
 ## 8. Implementation log
-- 2026-11-02 — User confirmed expected behavior for both bugs and authorized recording REQ-456 and fixing both.
-- 2026-11-03 — Direct inspection of the attached MESSER DWG showed LRP 18 is a legacy `LEADER` + `MTEXT`: MTEXT attachment 6 (middle-right), X-axis direction `(0,1)`, rectangle `5.40643 × 1.02115`, and Standard DIMSTYLE `DIMASZ=0.2`; GoSurvey imported attachment 1 and arrow size 0.18. User directed that text/arrow appearance match Civil 3D, so REQ-367 was amended under D-2026-11-03-a to cover this specific legacy callout path.
+- 2026-11-02 — User confirmed expected behavior for both bugs and authorized recording REQ-481 and fixing both.
+- 2026-11-03 — Direct inspection of the attached MESSER DWG showed LRP 18 is a legacy `LEADER` + `MTEXT`: MTEXT attachment 6 (middle-right), X-axis direction `(0,1)`, rectangle `5.40643 × 1.02115`, and Standard DIMSTYLE `DIMASZ=0.2`; GoSurvey imported attachment 1 and arrow size 0.18. User directed that text/arrow appearance match Civil 3D, so REQ-367 was amended under D-2026-11-03-c to cover this specific legacy callout path.
 - 2026-11-03 — DWG fields confirmed the missing landing: `hookline_on=1`, `hookline_dir=1`, and `x_direction=(0,1,0)`. AutoCAD documents hookline length as one DIMASZ, so this drawing's landing is 3.2 units at the saved annotative scale factor 16. Import now adds that segment to the leader path.
 - 2026-11-03 — A native MLeader export test exposed stored height 2 being serialized as 6.25 because export used a nested annotation's default plotted height at 50 model units/inch. Export now writes `labelHeightWorld` when supplied; the test checks raw serialized and reimported dimensions.
 - 2026-11-03 — A focused Qt regression exposed a renderer unit mismatch: GoSurvey's CAD text height is cap height, while the TTF path treated it as the font em size. TTF setup now calibrates the font pixel size against `QFontMetricsF::capHeight()`; the test failed before the change and passes after it.
@@ -72,7 +72,7 @@
 - Pre-PR product documentation review: `README.md` — reviewed, no update needed; `PRIVACY.md` — reviewed, no update needed; `resources/wiki/` (including Files and Drawings and Import and Export) — reviewed, no update needed for this bug fix; public manual wiki — reviewed, the configured GitHub Wiki URL redirects to the repository, so no editable manual page was available and no product-documentation change was needed.
 
 ## 11. Outcome
-- Requirements satisfied: REQ-055, REQ-367, REQ-384, and REQ-456 (implementation verified; final visual comparison approved)
+- Requirements satisfied: REQ-055, REQ-367, REQ-384, and REQ-481 (implementation verified; final visual comparison approved)
 - Tests added: saved DWG viewport, legacy leader text/hookline, raw MLeader export dimensions, context round trip, and Windows handoff coverage
 - Docs updated: requirements, project decision log, and this task log
 - Done: pending

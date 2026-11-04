@@ -19,6 +19,8 @@ class QResizeEvent;
 class QEvent;
 class QPlainTextEdit;
 class QTreeWidget;
+class QTreeWidgetItem;
+class QPushButton;
 class QScrollArea;
 class QComboBox;
 class QLabel;
@@ -55,6 +57,9 @@ public:
   bool CommitPdfCoordinate(const pdfview::CoordCandidate& candidate);
   std::size_t CommitPdfCoordinates(const std::vector<pdfview::CoordCandidate>& candidates); ///< one redraw for the lot; returns how many were created
   bool RunSmokeChecks(QString& error);
+  void PickRibbonAnnotStyle(const QString& galleryObjectName, const QString& styleName);
+  void OpenRibbonStyleManager(const QString& galleryObjectName);
+  void ShowTableStyles();
 protected:
   void closeEvent(QCloseEvent* event) override;
   void changeEvent(QEvent* event) override;
@@ -73,8 +78,11 @@ private:
   void RefreshRibbon();
   void RefreshToolspace();
   void RunRibbonAction(const QString& id);
+  void ShowGradingTools();
+  void ShowFeatureLineElevations();
   bool ConfirmDwgExport(const QString& path);
   void EditRibbonHatch(const QString& field, const QString& value);
+  void EditRibbonPdf(const QString& field, const QString& value);
   void BuildTitleBar(QMenu* applicationMenu);
   void UpdateChromeIcons();
   void BuildDocks();
@@ -96,10 +104,10 @@ private:
   void Refresh();
   void NewDrawing(std::uint32_t projectUid = 0);
   void CreateDrawingFromTemplate(std::uint32_t projectUid = 0, const QString& templatePath = {});
-  void ShowDrawingTemplateChooser();
   void SwitchDrawing(int index);
   void CloseDrawing(int index);
   bool SaveDrawing(bool saveAs = false);
+  bool SaveDrawingTemplate();
   bool ConfirmSave();
   void ShowWhatsNew();
   void RefreshRecentDrawings();
@@ -141,8 +149,11 @@ private:
   void ShowViewportScale();
   void ShowViewportsManager();
   bool ActiveDrawingReadOnly() const;
-  void ShowToolspaceContextMenu(const QPoint& position);
+  void ShowToolspaceContextMenu(QTreeWidget* tree, const QPoint& position);
+  QMenu* BuildToolspaceMenu(QTreeWidgetItem* item);
+  void ShowPdfFile(const QString& path);
   void ShowPasteWarning();
+  void ShowAlignResultsDialog();
   void ShowProjectAttachPrompt();
   void ShowPdfAttachDialog();
   void AddPdfToProjectFromDisk();
@@ -168,6 +179,7 @@ private:
   void ShowUpdateDialog();
   bool UpdateBlocksLaunch() const;
   QString m_DevelopmentBranchLabel;
+  std::uint64_t m_DocumentGeneration = 0;
   bool m_ModalOpen = false;
   AppCommandState m_State;
   std::vector<std::string> m_Log;
@@ -197,7 +209,12 @@ private:
   ray3d::Vec3 m_DynamicCursor{};
   bool m_DynamicReset = true;
   QLabel* m_WindowTitle = nullptr;
-  QTreeWidget* m_Toolspace = nullptr;
+  QTreeWidget* m_Toolspace = nullptr;              ///< Prospector tab (REQ-142): the active drawing's objects.
+  QTreeWidget* m_ToolspaceProject = nullptr;       ///< Project tab (REQ-142): projects, tracked items and open drawings.
+  QTreeWidget* m_ToolspaceSettings = nullptr;      ///< Settings tab (REQ-142): drawing-level style tables.
+  QPushButton* m_ToolspaceRefresh = nullptr;       ///< Project tab's Refresh (REQ-379 clause 6).
+  QPushButton* m_ToolspaceProjectHealth = nullptr; ///< Project tab's Project Health (REQ-379 clause 4).
+  QPushButton* m_ToolspaceAddPdf = nullptr;        ///< Project tab's Add PDF... (REQ-379 clause 5).
   QScrollArea* m_PropertiesScroll = nullptr;
   std::uint64_t m_PropertiesFingerprint = ~0ull;
   QString m_PropertiesNote;

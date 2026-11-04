@@ -48,4 +48,8 @@ Font* Resolve(const std::string& fontName);
 /// Width of \p text in pixels at the given pixel cap-height, using \p font's advances.
 float MeasureWidthPx(Font& font, const std::string& text, float capPx);
 
+/// Glyph ink extent at a chosen cap height; excludes side bearings/advance whitespace.
+/// Civil table auto-fit measures visible strokes, including descenders, plus cell margins.
+Vec2 MeasureInkExtent(Font& font, const std::string& text, float capHeight);
+
 }  // namespace Shx

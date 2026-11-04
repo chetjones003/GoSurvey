@@ -1,5 +1,6 @@
 #pragma once
 
+#include "PdfSnap.hpp"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -36,6 +37,7 @@ struct PdfAttachment {
   /// Text insertion points: (x,y) pairs.
   std::vector<float> snapTextPos;
 
+  bool snapEnabled = true; ///< Master underlay snap toggle (ribbon Enable Snap).
   bool snapLines   = true;
   bool snapCircles = true;
   bool snapText    = true;
@@ -65,6 +67,9 @@ struct PdfAttachment {
   static constexpr int kVisMaskH = 256;
   std::vector<uint8_t> snapVisMask; ///< kVisMaskW × kVisMaskH
   bool snapVisDark = false;         ///< true when foreground = bright (dark-bg PDF)
+
+  /// REQ-391 calm snap (same extraction as the PDF viewer's SnapPoints + SnapIndex).
+  pdfview::SnapIndex snapCalmIndex;
 };
 
 /// Opaque per-document draft cache used by the PDFATTACH dialog.
@@ -139,6 +144,7 @@ struct PdfAttachPixelResult {
   std::vector<float> snapLinesFlat;
   std::vector<float> snapCirclesCxCyR;
   std::vector<float> snapTextPos;
+  pdfview::SnapIndex snapCalmIndex;
 };
 
 /// Background-thread safe: rasterizes the page and extracts snap geometry into CPU

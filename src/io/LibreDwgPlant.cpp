@@ -52,11 +52,8 @@ class BitReader {
       ok = false;
       return 0;
     }
-    // LibreDWG's `bit_read_bits` keeps whole bytes MSB-first but packs the final partial byte's bits
-    // LSB-first (its encoder writes them back the same way); read that tail accordingly, or the last
-    // few bits of every handle stream come back as zero.
-    const bool tail = pos >= (numBits_ & ~static_cast<size_t>(7));
-    const unsigned shift = tail ? static_cast<unsigned>(pos & 7) : 7u - static_cast<unsigned>(pos & 7);
+    // The opaque stream, including its final partial byte, is packed MSB-first.
+    const unsigned shift = 7u - static_cast<unsigned>(pos & 7);
     const unsigned v = (data_[pos >> 3] >> shift) & 1u;
     ++pos;
     return v;
