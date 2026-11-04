@@ -1293,6 +1293,11 @@ void EditorWindow::ServiceUiRequests() {
     ShowAlignmentStyleDialog(this, m_State, m_Log, m_State.alignmentStyleEditorName);
     m_ModalOpen = false;
     Refresh();
+  } else if (m_State.createAlignmentDialogRequested || m_State.alignmentFromObjectsDialogRequested) {  // REQ-485
+    const bool fromObjects = m_State.alignmentFromObjectsDialogRequested;
+    m_State.createAlignmentDialogRequested = false;
+    m_State.alignmentFromObjectsDialogRequested = false;
+    ShowCreateAlignmentDialog(fromObjects);
   } else if (m_State.alignmentLayoutRequested) {  // REQ-486.1: a dock, so the drawing stays live while it is open
     m_State.alignmentLayoutRequested = false;
     ShowAlignmentLayout(m_State.alignmentLayoutName);

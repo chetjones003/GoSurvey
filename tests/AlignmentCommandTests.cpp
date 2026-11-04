@@ -152,7 +152,15 @@ TEST_CASE("CREATEALIGNMENTFROMOBJECTS converts selected lines and refuses gaps",
   CHECK(st.alignments[0].startingStation == Approx(100.0));
   CHECK(LogHas(log, "created"));
 
-  // A line 2 units away from the chain is refused with its object number, and nothing is created.
+  // A line 2 units away from the chain is refused with its object number, and nothing is created. Creating clears the
+  // selection (as Civil 3D does), so the chain is selected again.
+  CHECK(st.selection.empty());
+  for (int i = 0; i < 2; ++i) {
+    SelectedEntity se;
+    se.type = SelectedEntity::Type::LineSeg;
+    se.index = i;
+    st.selection.push_back(se);
+  }
   PushLine(st, 102, 100, 200, 100);
   SelectedEntity far;
   far.type = SelectedEntity::Type::LineSeg;

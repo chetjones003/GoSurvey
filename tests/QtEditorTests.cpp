@@ -225,6 +225,21 @@ QString Issue914Shot(const char* name) {
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
+/// A window's grab under a plain strip carrying its title: `grab()` misses the title bar Windows draws, and the Civil 3D
+/// captures it is compared with include theirs (REQ-485 panel).
+QPixmap GrabWithTitle(QWidget* window) {
+  const QPixmap body = window->grab();
+  const qreal ratio = body.devicePixelRatio();
+  const int titleHeight = 30;  // logical pixels, like the widget's own coordinates
+  QPixmap framed(body.width(), body.height() + qRound(titleHeight * ratio));
+  framed.setDevicePixelRatio(ratio);
+  framed.fill(window->palette().color(QPalette::Window).darker(115));
+  QPainter painter(&framed);
+  painter.setPen(window->palette().color(QPalette::WindowText));
+  painter.drawText(QRect(10, 0, window->width() - 10, titleHeight), Qt::AlignVCenter | Qt::AlignLeft, window->windowTitle());
+  painter.drawPixmap(0, titleHeight, body);
+  return framed;
+}
 QString Req453Shot(const char* name) {
   const QString directory = QtTestArtifactDirectory();
   QDir().mkpath(directory);
@@ -1090,6 +1105,145 @@ private Q_SLOTS:
                              window.findChild<QLineEdit*>("propAlignmentName")->text() == "Renamed Road", 5000);
     window.Submit("UNDO");
     QCOMPARE(window.State().alignments[0].name, std::string("PRN1"));
+  }
+
+  /// REQ-485: the Create Alignment - Layout dialog, the Alignment Layout Tools window driving a Tangent-Tangent layout,
+  /// Curve and Spiral Settings, and Create Alignment from Objects - each captured for the Civil 3D comparison.
+  void issue121CreateAlignmentDialogsAndLayoutTools() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1440, 900);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    AppCommandState& st = window.State();
+    window.Submit("ALIGNMENTCURVESETTINGS RADIUS=200");
+
+    bool layoutDialog = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("createAlignmentLayoutDialog");
+      QVERIFY(dialog);
+      layoutDialog = true;
+      QTimer::singleShot(20000, dialog, &QDialog::reject);
+      QCOMPARE(dialog->windowTitle(), QString("Create Alignment - Layout"));
+      auto* name = dialog->findChild<QLineEdit*>("createAlignmentName");
+      QCOMPARE(name->text(), QString("Alignment - (1)"));
+      name->setText("Main Road");
+      auto* tabs = dialog->findChild<QTabWidget*>("createAlignmentTabs");
+      QVERIFY(tabs && tabs->count() == 2);
+      QTest::qWait(50);
+      QVERIFY(GrabWithTitle(dialog).save(Issue914Shot("qt-485-create-layout-general.png")));
+      tabs->setCurrentIndex(1);
+      QTest::qWait(50);
+      QVERIFY(GrabWithTitle(dialog).save(Issue914Shot("qt-485-create-layout-criteria.png")));
+      dialog->findChild<QLineEdit*>("createAlignmentSpeed")->setText("30");
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    window.Submit("CREATEALIGNMENT");
+    QVERIFY(layoutDialog);
+    QCOMPARE(st.alignments.size(), size_t(1));
+    QCOMPARE(st.alignments[0].name, std::string("Main Road"));
+    QCOMPARE(st.alignments[0].designSpeeds.size(), size_t(1));
+    QCOMPARE(st.active, AppCommandState::Kind::None);  // like Civil 3D, the toolbar opens and waits for a tool
+    auto* tools = window.findChild<QWidget*>("alignmentLayoutTools");
+    QVERIFY(tools && tools->isVisible());
+    QCOMPARE(tools->windowTitle(), QString("Alignment Layout Tools - Main Road"));
+    auto* status = tools->findChild<QLabel*>("layoutToolsStatus");
+    QCOMPARE(status->text(), QString("Select a command from the layout tools"));
+
+    // Tangent-Tangent (With curves) from the toolbar's menu starts the layout with curves.
+    tools->findChild<QAction*>("layoutToolsWithCurves")->trigger();
+    QCOMPARE(st.active, AppCommandState::Kind::AlignmentLayout);
+    QVERIFY(st.alignmentCurveSettings.addCurves);
+    for (const char* point : {"0,0", "0,500", "400,800", "900,800"}) window.Submit(point);
+    QCOMPARE(st.alignments[0].Entities().size(), size_t(5));
+    tools->findChild<QToolButton*>("layoutToolsUndo")->click();  // during the layout: takes back one PI
+    QCOMPARE(st.alignments[0].Entities().size(), size_t(3));
+    window.Submit("900,800");
+    window.Submit("");
+    QCOMPARE(st.active, AppCommandState::Kind::None);
+    QCOMPARE(st.alignments[0].Entities().size(), size_t(5));
+    QCOMPARE(st.alignments[0].Entities()[0].length, 400.0);
+    QCOMPARE(status->text(), QString("Tan-Tan (With curves)"));
+    window.Submit("ZOOMEXTENTS");
+    window.Refresh();
+    window.m_Viewport->update();
+    QTRY_VERIFY_WITH_TIMEOUT(!st.pendingZoomExtents, 10000);
+    QTest::qWait(250);
+    QVERIFY(GrabWithTitle(tools).save(Issue914Shot("qt-485-layout-toolbar.png")));
+    QPixmap shot = window.grab();
+    {
+      // The labels are painted into the GL framebuffer and the tool window is its own top-level window, so neither is
+      // in the grab: paint both where they sit, the tool window under a plain strip carrying its title.
+      QPainter painter(&shot);
+      painter.drawImage(window.m_Viewport->mapTo(&window, QPoint(0, 0)), window.m_Viewport->grabFramebuffer());
+      const QPixmap toolbar = GrabWithTitle(tools);
+      const int titleHeight = qRound(toolbar.deviceIndependentSize().height()) - tools->height();
+      painter.drawPixmap(window.mapFromGlobal(tools->geometry().topLeft()) - QPoint(0, titleHeight), toolbar);
+    }
+    QVERIFY(shot.save(Issue914Shot("qt-485-window-layout.png")));
+
+    bool settingsDialog = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog && dialog->objectName() == "curveSpiralSettingsDialog");
+      settingsDialog = true;
+      QVERIFY(GrabWithTitle(dialog).save(Issue914Shot("qt-485-curve-spiral-settings.png")));
+      dialog->findChild<QLineEdit*>("curveSettingsRadius")->setText("150");
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    tools->findChild<QAction*>("layoutToolsSettings")->trigger();
+    QVERIFY(settingsDialog);
+    QCOMPARE(EffectiveAlignmentCurveRadius(st), 150.0);
+    window.Submit("ALIGNMENTCURVESETTINGS RADIUS=200");  // the radius Civil 3D's dialog showed for the same objects
+
+    // Create Alignment from Objects: two lines and a tangent arc, picked, direction accepted, then the dialog.
+    for (double v : {2000.0, 0.0, 0.0, 2000.0, 100.0, 0.0, 2000.0, 100.0, 0.0, 2100.0, 100.0, 0.0}) st.userLinesFlat.push_back(v);
+    st.userLineAttrs.resize(st.userLineAttrs.size() + 2);
+    CadArc arc;
+    arc.cx = 2100.0;
+    arc.cy = 50.0;
+    arc.r = 50.0;
+    arc.startRad = 0.f;
+    arc.sweepRad = static_cast<float>(alignment::kPi / 2.0);
+    st.userArcs.push_back(arc);
+    st.userArcAttrs.resize(st.userArcs.size());
+    BumpCadGpuCache(st);
+    const size_t lineCount = st.userLinesFlat.size();
+    window.Submit("CREATEALIGNMENTFROMOBJECTS");
+    QCOMPARE(st.active, AppCommandState::Kind::AlignmentFromObjects);
+    std::vector<std::string> pickLog;
+    QVERIFY(SubmitAlignmentCommandPoint(st, 2000.0, 10.0, pickLog));
+    QVERIFY(SubmitAlignmentCommandPoint(st, 2050.0, 100.0, pickLog));
+    QVERIFY(SubmitAlignmentCommandPoint(st, 2100.0 + 50.0 * std::cos(alignment::kPi / 4.0),
+                                        50.0 + 50.0 * std::sin(alignment::kPi / 4.0), pickLog));
+    window.Submit("");  // done picking: the direction prompt
+    bool objectsDialog = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("createAlignmentFromObjectsDialog");
+      QVERIFY(dialog);
+      objectsDialog = true;
+      QTimer::singleShot(20000, dialog, &QDialog::reject);
+      QVERIFY(dialog->findChild<QCheckBox*>("createAlignmentAddCurves")->isChecked());
+      QVERIFY(dialog->findChild<QCheckBox*>("createAlignmentErase")->isChecked());
+      QTest::qWait(50);
+      QVERIFY(GrabWithTitle(dialog).save(Issue914Shot("qt-485-create-from-objects.png")));
+      // R 200 does not fit the 100-unit tangents (REQ-485.2 leaves such a corner as a PI); Civil 3D fitted R 40.
+      dialog->findChild<QLineEdit*>("createAlignmentRadius")->setText("40");
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    window.Submit("");  // accept the direction
+    QVERIFY(objectsDialog);
+    QCOMPARE(st.alignments.size(), size_t(2));
+    QCOMPARE(st.alignments[1].name, std::string("Alignment - (1)"));
+    QCOMPARE(st.alignments[1].Entities().size(), size_t(4));  // tangent, R 40 curve, tangent, arc
+    QVERIFY(st.userLinesFlat.size() < lineCount);  // Erase existing entities
+    window.Submit("UNDO");
+    QCOMPARE(st.alignments.size(), size_t(1));
+    QCOMPARE(st.userLinesFlat.size(), lineCount);
+
+    auto* ribbonAlignment = window.findChild<QAction*>("ribbon_CdAlignment");
+    QVERIFY(ribbonAlignment && ribbonAlignment->isEnabled() && ribbonAlignment->menu());
+    QCOMPARE(ribbonAlignment->menu()->actions().size(), 2);
   }
 
   void blockEditorPickerUsesQtDialog() {

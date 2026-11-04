@@ -163,13 +163,15 @@ for a compact list inside the program.
 
 | Command | Aliases | Description | Details |
 |---|---|---|---|
-| `ALIGNMENT` | `CREATEALIGNMENT` | Create an empty alignment: ALIGNMENT <name>[, <description>[, <station>[, <layer>[, <style>]]]] | [[Commands/alignment]] |
+| `ALIGNMENT` | `CREATEALIGNMENT`, `CREATEALIGNMENTLAYOUT` | Create an alignment: no arguments opens Create Alignment - Layout; ALIGNMENT <name>[, <description>[, <station>[, <layer>[, <style>]]]][, TYPE=][, LABELSET=][, CRITERIA=][, SPEED=] | [[Commands/alignment]] |
+| `ALIGNMENTLAYOUT` | — | Lay out an alignment by PIs: ALIGNMENTLAYOUT <name>[, CURVES\|NOCURVES][, FROM=<x> <y>][, DIRECTION=<deg>] | [[Commands/alignmentlayout]] |
+| `ALIGNMENTCURVESETTINGS` | — | Curve and spiral settings for the layout: ALIGNMENTCURVESETTINGS [RADIUS=][, SPIRALIN=][, SPIRALOUT=] | [[Commands/alignmentcurvesettings]] |
 | `ALIGNMENTADD` | — | Add tangent, curve or spiral: ALIGNMENTADD <name>, TANGENT\|TANGENTTO\|CURVE\|CURVELEN\|SPIRAL, ... | [[Commands/alignmentadd]] |
 | `ALIGNMENTLIST` | — | Report alignments, stations and entities: ALIGNMENTLIST [<name>] | [[Commands/alignmentlist]] |
 | `ALIGNMENTDELETE` | — | Delete an alignment: ALIGNMENTDELETE <name> | [[Commands/alignmentdelete]] |
 | `GETSTATIONOFFSET` | — | Station and offset of a point: GETSTATIONOFFSET <alignment>, <x>, <y> | [[Commands/getstationoffset]] |
 | `GETPOINTFROMSTATIONOFFSET` | — | Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset> | [[Commands/getpointfromstationoffset]] |
-| `CREATEALIGNMENTFROMOBJECTS` | — | Convert selected lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS <name>[, START=][, FILLET=][, REVERSE] | [[Commands/createalignmentfromobjects]] |
+| `CREATEALIGNMENTFROMOBJECTS` | `CREATEALIGNMENTENTITIES` | Alignment from lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS (pick them) \| <name>[, START=][, FILLET=][, REVERSE][, ERASE] | [[Commands/createalignmentfromobjects]] |
 | `ALIGNMENTEDIT` | — | Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING\|LENGTH\|RADIUS\|STARTRADIUS\|DELTA\|DIRECTION\|CONSTRAINT, <value> | [[Commands/alignmentedit]] |
 | `ALIGNMENTLOCK` | — | Lock a parameter: ALIGNMENTLOCK <name>, <entity#>, RADIUS\|LENGTH\|BEARING\|STATION, ON\|OFF | [[Commands/alignmentlock]] |
 | `ALIGNMENTINSERT` | — | Insert tangent, curve or spiral: ALIGNMENTINSERT <name>, <after#>, TANGENT\|CURVE\|SPIRAL, ... | [[Commands/alignmentinsert]] |
@@ -314,10 +316,11 @@ for a compact list inside the program.
 |---|---|---|
 | `3DPOLY` | `3DP`, `3DPOLYLINE` | [[Commands/3dpoly]] |
 | `ALIGN` | `AL` | [[Commands/align]] |
-| `ALIGNMENT` | `CREATEALIGNMENT` | [[Commands/alignment]] |
+| `ALIGNMENT` | `CREATEALIGNMENT`, `CREATEALIGNMENTLAYOUT` | [[Commands/alignment]] |
 | `ALIGNMENTADD` | — | [[Commands/alignmentadd]] |
 | `ALIGNMENTBEARING` | — | [[Commands/alignmentbearing]] |
 | `ALIGNMENTCONTINUITY` | — | [[Commands/alignmentcontinuity]] |
+| `ALIGNMENTCURVESETTINGS` | — | [[Commands/alignmentcurvesettings]] |
 | `ALIGNMENTDELETE` | — | [[Commands/alignmentdelete]] |
 | `ALIGNMENTDETACH` | — | [[Commands/alignmentdetach]] |
 | `ALIGNMENTDISTANCE` | — | [[Commands/alignmentdistance]] |
@@ -332,6 +335,7 @@ for a compact list inside the program.
 | `ALIGNMENTLABEL` | — | [[Commands/alignmentlabel]] |
 | `ALIGNMENTLABELSET` | — | [[Alignments]] |
 | `ALIGNMENTLABELSTYLE` | — | [[Commands/alignmentlabelstyle]] |
+| `ALIGNMENTLAYOUT` | — | [[Commands/alignmentlayout]] |
 | `ALIGNMENTLIST` | — | [[Commands/alignmentlist]] |
 | `ALIGNMENTLOCK` | — | [[Commands/alignmentlock]] |
 | `ALIGNMENTPROPS` | — | [[Commands/alignmentprops]] |
@@ -372,7 +376,7 @@ for a compact list inside the program.
 | `COPY` | `CP` | [[Commands/copy]] |
 | `COPYCLIP` | — | [[Commands/copyclip]] |
 | `COPYSEL` | — | [[Commands/copysel]] |
-| `CREATEALIGNMENTFROMOBJECTS` | — | [[Commands/createalignmentfromobjects]] |
+| `CREATEALIGNMENTFROMOBJECTS` | `CREATEALIGNMENTENTITIES` | [[Commands/createalignmentfromobjects]] |
 | `CREATEPOINTS` | `CRTPTS` | [[Commands/createpoints]] |
 | `CROSSHAIR3D` | `CURSOR3D`, `XHAIR3D` | [[Commands/crosshair3d]] |
 | `CYLINDER` | `CYL` | [[Commands/cylinder]] |

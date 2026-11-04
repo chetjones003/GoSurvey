@@ -7207,13 +7207,15 @@ const CmdEntry kRegistry[] = {
     {"surfdelline", "sfdelline", "Delete an interior TIN edge: SURFDELLINE <surface>[, <x>, <y>]"},
     {"surfacedelpoint", "sfdelpt", "Delete nearest TIN definition point: SURFACEDELPOINT <surface>[, <x>, <y>]"},
     {"quickprofile", "qprof", "Quick profile along two points: QUICKPROFILE <surface>[, <x1>, <y1>, <x2>, <y2>]"},
-    {"alignment", "createalignment", "Create an empty alignment: ALIGNMENT <name>[, <description>[, <station>[, <layer>[, <style>]]]]"},
+    {"alignment", "createalignment", "Create an alignment (no arguments: the Create Alignment dialog): ALIGNMENT <name>[, <description>[, <station>[, <layer>[, <style>]]]][, TYPE=][, LABELSET=]"},
     {"alignmentadd", "", "Add tangent, curve or spiral: ALIGNMENTADD <name>, TANGENT|TANGENTTO|CURVE|CURVELEN|SPIRAL, ..."},
     {"alignmentlist", "", "Report alignments, stations and entities: ALIGNMENTLIST [<name>]"},
     {"alignmentdelete", "", "Delete an alignment: ALIGNMENTDELETE <name>"},
     {"getstationoffset", "", "Station and offset of a point: GETSTATIONOFFSET <alignment>, <x>, <y>"},
     {"getpointfromstationoffset", "", "Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset>"},
-    {"createalignmentfromobjects", "", "Convert selected lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS <name>[, START=][, FILLET=][, REVERSE]"},
+    {"createalignmentfromobjects", "createalignmententities", "Alignment from lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS (pick them) | <name>[, START=][, FILLET=][, REVERSE][, ERASE]"},
+    {"alignmentlayout", "", "Lay out an alignment by PIs: ALIGNMENTLAYOUT <name>[, CURVES|NOCURVES][, FROM=<x> <y>][, DIRECTION=<deg>]"},
+    {"alignmentcurvesettings", "", "Curve and spiral settings for the layout: ALIGNMENTCURVESETTINGS [RADIUS=][, SPIRALIN=][, SPIRALOUT=]"},
     {"alignmentedit", "", "Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|STARTRADIUS|DELTA|DIRECTION|CONSTRAINT, <value>"},
     {"alignmentlock", "", "Lock a parameter: ALIGNMENTLOCK <name>, <entity#>, RADIUS|LENGTH|BEARING|STATION, ON|OFF"},
     {"alignmentinsert", "", "Insert a tangent, curve or spiral: ALIGNMENTINSERT <name>, <after#>, TANGENT|CURVE|SPIRAL, ..."},
@@ -15064,6 +15066,11 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
   if (st.active == K::GeoMarkPoint || st.active == K::GeoReorientMarker ||
       st.active == K::DrawingSettingsPick || st.active == K::GeoCaptureArea) {  // REQ-359 / 360 / 364
     SubmitGeoCommandPoint(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::AlignmentLayout || st.active == K::AlignmentFromObjects) {  // REQ-485
+    (void)SubmitAlignmentCommandPoint(st, wx, wy, log);
     return;
   }
 
@@ -44669,6 +44676,9 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
            st.active == AppCommandState::Kind::DrawingSettingsPick ||
            st.active == AppCommandState::Kind::GeoCaptureArea)  // REQ-359 / REQ-360 / REQ-364
     log.push_back(std::string(AppCommandState::KindName(st.active)) + " canceled.");
+  else if (st.active == AppCommandState::Kind::AlignmentLayout ||
+           st.active == AppCommandState::Kind::AlignmentFromObjects)  // REQ-485
+    CancelAlignmentCommand(st, log);
   else if (st.active == AppCommandState::Kind::SurveyInverse)
     log.push_back("INVERSE canceled.");
   else if (st.active == AppCommandState::Kind::Dist)
@@ -45760,6 +45770,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // PADSOLID shipped with (#150): a command that looks like it is waiting but cannot be told to go.
     if (st.active == K::Grading) {
       ProcessGradingCommandLine(st, line, log);
+      return;
+    }
+    // REQ-485: Enter finishes a layout, ends object picking and accepts the direction - consumed here for the reason
+    // every note in this block gives.
+    if (st.active == K::AlignmentLayout || st.active == K::AlignmentFromObjects) {
+      (void)HandleAlignmentCommandText(st, line, log);
       return;
     }
     // UCS / PLAN (REQ-154). A bare Enter is *meaningful* at several of their prompts — it takes the
@@ -47095,6 +47111,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "alignment" || plotTok == "createalignment" || plotTok == "alignmentadd" ||
         plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "getstationoffset" ||
         plotTok == "getpointfromstationoffset" || plotTok == "createalignmentfromobjects" ||
+        plotTok == "createalignmententities" || plotTok == "createalignmentlayout" ||
+        plotTok == "alignmentlayout" || plotTok == "alignmentcurvesettings" ||
         plotTok == "alignmentedit" ||
         plotTok == "alignmentlock" ||
         plotTok == "alignmentinsert" ||
@@ -47140,8 +47158,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunSurfDelLine(st, rest, log);
       else if (plotTok == "quickprofile" || plotTok == "qprof")
         RunQuickProfile(st, rest, log);
-      else if (plotTok == "alignment" || plotTok == "createalignment")  // REQ-480 / issue #121
+      else if (plotTok == "alignment" || plotTok == "createalignment" || plotTok == "createalignmentlayout")  // REQ-480 / 485
         RunAlignmentCreate(st, rest, log);
+      else if (plotTok == "alignmentlayout")  // REQ-485.1
+        RunAlignmentLayout(st, rest, log);
+      else if (plotTok == "alignmentcurvesettings")
+        RunAlignmentCurveSettings(st, rest, log);
+      else if (plotTok == "createalignmententities")  // Civil 3D's command name for Create from Objects
+        RunCreateAlignmentFromObjects(st, rest, log);
       else if (plotTok == "alignmentadd")
         RunAlignmentAdd(st, rest, log);
       else if (plotTok == "alignmentlist")
@@ -47449,6 +47473,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   }
 
   if (HandleGeoCommandText(st, line, log))  // REQ-359: GEOMARKLATLONG / GEOMARKPOINT / GEOREORIENTMARKER
+    return;
+  if (HandleAlignmentCommandText(st, line, log))  // REQ-485: ALIGNMENTLAYOUT / CREATEALIGNMENTFROMOBJECTS
     return;
 
   if (st.active == K::IdPoint) {
@@ -48906,6 +48932,8 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
 
   if (st.active == K::IdPoint)
     return "ID: Pick point (OSNAP when enabled) or type X,Y — logs UCS World | ESC cancel";
+  if (const char* alignmentPrompt = AlignmentCommandPrompt(st))  // REQ-485
+    return alignmentPrompt;
   if (st.active == K::GeoMarkPoint)  // REQ-359
     return "GEOMARKPOINT: Pick the position or type X,Y | ESC cancel";
   if (st.active == K::GeoMarkLatLong)

@@ -2143,6 +2143,10 @@ struct AppCommandState {
     DataExtract,
     Table,
     PointTable,
+    /// REQ-485.1 ALIGNMENTLAYOUT: Tangent-Tangent layout, one PI per click or typed point; `U` takes one back.
+    AlignmentLayout,
+    /// REQ-485.2 CREATEALIGNMENTFROMOBJECTS: pick the objects, then accept or reverse the direction.
+    AlignmentFromObjects,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -2250,6 +2254,8 @@ struct AppCommandState {
     case Kind::DrawingSettingsPick: return "DRAWINGSETTINGS";
     case Kind::GeoCaptureArea:     return "GEOCAPTUREAREA";
     case Kind::PadSolid:           return "PADSOLID";
+    case Kind::AlignmentLayout:    return "ALIGNMENTLAYOUT";
+    case Kind::AlignmentFromObjects: return "CREATEALIGNMENTFROMOBJECTS";
     default:                  return "";
     }
   }
@@ -3652,6 +3658,37 @@ struct AppCommandState {
   /// REQ-491: EDITALIGNMENTSTYLE asks the Qt editor to open the style dialog on ef alignmentStyleEditorName.
   bool alignmentStyleEditorRequested = false;
   std::string alignmentStyleEditorName;
+  /// REQ-485: set by the Qt editor. ALIGNMENT / CREATEALIGNMENT with no arguments then ask it for the Create Alignment
+  /// dialog, and CREATEALIGNMENTFROMOBJECTS asks for its dialog once the objects and direction are picked.
+  bool createAlignmentDialogAvailable = false;
+  bool createAlignmentDialogRequested = false;
+  bool alignmentFromObjectsDialogRequested = false;
+  /// REQ-485.1 Curve and Spiral Settings, kept for the session like Civil 3D's layout settings. A radius of 0 means
+  /// the drawing's default (100 ft, or 30 m in a metric drawing). Tangent-Tangent starts without curves, as Civil 3D's
+  /// layout toolbar does; the last mode chosen is kept.
+  alignment::CurveSettings alignmentCurveSettings{false, 0.0, 0.0, 0.0};
+  /// ALIGNMENTLAYOUT (Kind::AlignmentLayout): the PIs picked so far and the alignment as it was before the session, so
+  /// every PI rebuilds the tail from scratch and `U` can take one back.
+  struct AlignmentLayoutSession {
+    std::string name;
+    std::vector<alignment::Point2> pis;  ///< Drawing-local.
+    alignment::Alignment base;
+    bool snapshotTaken = false;
+    bool fixedDirection = false;  ///< The first tangent keeps the dialog's starting direction.
+    double directionAzimuth = 0.0;
+    size_t warningsShown = 0;
+  } alignmentLayout;
+  /// CREATEALIGNMENTFROMOBJECTS picks (Kind::AlignmentFromObjects). The picked objects live in `selection`, so the
+  /// command that finally creates the alignment reads them from there.
+  struct AlignmentFromObjectsPick {
+    enum class Phase : std::uint8_t { WaitFirst, WaitMore, WaitDirection } phase = Phase::WaitFirst;
+    bool hasPick = false;
+    double pickX = 0.0;  ///< Drawing-local point of the first pick: the alignment starts at the end nearest it.
+    double pickY = 0.0;
+    bool reverse = false;
+  } alignmentFromObjects;
+  /// REQ-485.1: the Alignment Layout Tools window follows this alignment while it is open.
+  std::string alignmentLayoutToolsName;
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
@@ -8095,6 +8132,24 @@ void RunAlignmentDelete(AppCommandState& st, const std::string& args, std::vecto
 void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunGetPointFromStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunCreateAlignmentFromObjects(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+// REQ-485 interactive creation: ALIGNMENTLAYOUT picks PIs, CREATEALIGNMENTFROMOBJECTS without a name picks objects.
+void RunAlignmentLayout(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentCurveSettings(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// A click or snapped point for Kind::AlignmentLayout, or an object pick for Kind::AlignmentFromObjects (drawing-local).
+bool SubmitAlignmentCommandPoint(AppCommandState& st, double localX, double localY, std::vector<std::string>& log);
+/// Typed input (including a bare Enter) for the two alignment Kinds; false when neither is active.
+bool HandleAlignmentCommandText(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+/// ESC: the layout keeps what was built (as Civil 3D does); picking objects is abandoned.
+void CancelAlignmentCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Command-line prompt for the two alignment Kinds, or nullptr.
+const char* AlignmentCommandPrompt(const AppCommandState& st);
+/// "Alignment - (n)" with the first n not already used, like Civil 3D's default name.
+std::string NextAlignmentName(const AppCommandState& st);
+/// The picked start and Reverse answer as CREATEALIGNMENTFROMOBJECTS fields (", PICK=<x> <y>[, REVERSE]"), for the
+/// Create Alignment from Objects dialog to submit with its own fields.
+std::string AlignmentFromObjectsPickArgs(const AppCommandState& st);
+/// The curve radius the layout and Create from Objects use: the settings radius, else 100 ft (30 m metric).
+double EffectiveAlignmentCurveRadius(const AppCommandState& st);
 /// REQ-488.3: rebuilds every linked offset alignment from its parent (a vanished parent detaches it).
 void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log);
 void RunAlignmentEdit(AppCommandState& st, const std::string& args, std::vector<std::string>& log);

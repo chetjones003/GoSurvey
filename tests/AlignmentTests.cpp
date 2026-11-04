@@ -485,7 +485,7 @@ TEST_CASE("Create from objects refuses gaps, naming the object and the gap", "[r
   std::string err;
   CHECK_FALSE(alignment::BuildFromSegments({l1, l2}, {}, &out, &err));
   CHECK(out.Empty());
-  CHECK(err.find("loose") != std::string::npos);
+  CHECK(err.find("objects 7 and 9 are not connected: gap of 2 ") != std::string::npos);
 
   alignment::SourceSegment zero;
   zero.a = {5, 5};

@@ -16177,6 +16177,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. Disconnected selections, gaps larger than the position tolerance (default 0.001, user-editable up to 1.0 with
      auto-join), self-overlaps, zero-length segments, non-planar or vertical segments and splines yield a named
      refusal listing the first offending object and gap size (REQ-201). Nothing is created on refusal.
+  4. **Decision D-2026-11-04-h (dialogs and layout tools):** both dialogs follow Civil 3D's (General and Design
+     Criteria tabs; Site and criteria files are not offered; a design check set and a starting design speed are). OK
+     on the layout dialog opens the Alignment Layout Tools window idle unless a starting point was typed. The tools
+     are Tangent-Tangent (No curves / With curves), Curve and Spiral Settings (clothoid spiral in/out lengths and the
+     radius), Delete Sub-entity, Alignment Grid View, Undo and Redo; Tangent-Tangent starts without curves and keeps
+     the last mode, every PI rebuilds the layout (Fixed tangents; Free curves, or spiral-curve-spiral), and a layout
+     session is one undo step. From Objects picks the first object, then more, then Enter or Reverse; its dialog
+     checks "Add curves between tangents" and "Erase existing entities" by default, and erase plus creation is one
+     undo step. Commands: `CREATEALIGNMENT`, `ALIGNMENTLAYOUT`, `ALIGNMENTCURVESETTINGS`,
+     `CREATEALIGNMENTFROMOBJECTS` (`CREATEALIGNMENTENTITIES`).
 - Acceptance:
   1. Create dialog creates an alignment with a custom name, description, layer, style and starting station 5+00;
      `LIST` shows them.

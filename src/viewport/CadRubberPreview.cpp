@@ -205,6 +205,20 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
   // the plane it sat.
   const bool planeIsFlat = CadWorkPlaneIsWorldXy(cmd);
 
+  // REQ-485.1: the next tangent of an alignment layout, from the last PI to the cursor (along the starting direction
+  // when the dialog fixed one).
+  if (cmd.active == AppCommandState::Kind::AlignmentLayout && !cmd.alignmentLayout.pis.empty()) {
+    const alignment::Point2 last = cmd.alignmentLayout.pis.back();
+    double tx = curX, ty = curY;
+    if (cmd.alignmentLayout.fixedDirection && cmd.alignmentLayout.pis.size() == 1) {
+      const double ux = std::sin(cmd.alignmentLayout.directionAzimuth), uy = std::cos(cmd.alignmentLayout.directionAzimuth);
+      const double t = std::max(0.0, (curX - last.x) * ux + (curY - last.y) * uy);
+      tx = last.x + ux * t;
+      ty = last.y + uy * t;
+    }
+    PushRubberSegViewRel(rubberLines, last.x, last.y, tx, ty, 0., 0., zc, zc);
+  }
+
   if (cmd.active == AppCommandState::Kind::Line && cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint) {
     using SAP = AppCommandState::SegmentAnglePickPhase;
     if (cmd.segmentAnglePickPhase == SAP::WaitP2)

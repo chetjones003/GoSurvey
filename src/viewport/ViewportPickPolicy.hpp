@@ -176,6 +176,15 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::GeoCaptureArea:       // REQ-364: Pick Area's two corners (a click while capturing is ignored)
     return R::SnappedPointPick;
 
+  // REQ-485.1 ALIGNMENTLAYOUT: every click is a PI, snapped like any other coordinate.
+  case K::AlignmentLayout:
+    return R::SnappedPointPick;
+  // REQ-485.2 CREATEALIGNMENTFROMOBJECTS: each click names one source object; the direction prompt is typed.
+  case K::AlignmentFromObjects:
+    return cmd.alignmentFromObjects.phase == AppCommandState::AlignmentFromObjectsPick::Phase::WaitDirection
+               ? R::Ignore
+               : R::RawEntityPick;
+
   // --- Entity-pick commands: raw cursor, hit-tested by PickClosestCadEntity. ---
   case K::Offset:
   case K::DesignateBreakline:

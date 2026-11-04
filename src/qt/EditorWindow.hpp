@@ -140,6 +140,10 @@ private:
   void ShowAlignmentLayout(const std::string& name);
   /// Refills the docked Alignment Layout table when the drawing changed (called from Refresh).
   void SyncAlignmentLayout();
+  /// REQ-485.1: shows, retitles or hides the Alignment Layout Tools window (called from Refresh).
+  void SyncAlignmentLayoutTools();
+  /// REQ-485: runs the Create Alignment dialog a command asked for and submits what it collected.
+  void ShowCreateAlignmentDialog(bool fromObjects);
   // Issue #893: surface and surface-style dialogs (EditorSurfaces / EditorSurfaceManager / EditorSurfaceStyles).
   void ShowCreateSurface();
   void ShowSurfaceProperties(int surfaceIndex);

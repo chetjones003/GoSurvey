@@ -20,7 +20,7 @@ inline constexpr Button kButtons[] = {
   {"Home", "Create Design", "##CdParcel", "Parcel", "c3d_parcel", "", "Parcel — not implemented yet.", false, true},
   {"Home", "Create Design", "##CdFeatureLine", "Feature Line", "c3d_featureline", "FEATURELINE", "Feature Line — draw a named 3D line with an elevation at each point.\nCommand bar: FEATURELINE", false, false},
   {"Home", "Create Design", "##CdGrading", "Grading", "c3d_grading", "GRADING", "Grading — side slopes from a feature line out to a surface. Select a grading result first to edit it.\nCommand bar: GRADING", false, false},
-  {"Home", "Create Design", "##CdAlignment", "Alignment", "c3d_alignment", "", "Alignment — not implemented yet.", false, true},
+  {"Home", "Create Design", "##CdAlignment", "Alignment", "c3d_alignment", "@alignmentMenu", "Alignment — Alignment Creation Tools (create and lay out by PIs) or Create Alignment from Objects.\nCommand bar: CREATEALIGNMENT, CREATEALIGNMENTFROMOBJECTS", false, false},
   {"Home", "Create Design", "##CdProfile", "Profile", "c3d_profile", "", "Profile — not implemented yet.", false, true},
   {"Home", "Create Design", "##CdCorridor", "Corridor", "c3d_corridor", "", "Corridor — not implemented yet.", false, true},
   {"Home", "Create Design", "##CdIntersections", "Intersections", "c3d_intersections", "", "Intersections — not implemented yet.", false, true},

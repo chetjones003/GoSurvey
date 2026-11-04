@@ -1063,6 +1063,10 @@ void EditorWindow::BuildRibbonPages() {
           else if (id == "##GeoMap") for (const auto& map : kOnlineMaps) add(Text(map.label), "@map:" + QString::number(static_cast<int>(map.map)), Text(map.icon));
           else if (id == "##GeoEditLocation") { add("Edit Location", "@drawingSettings"); add("Edit Geographic Marker", "@geoReorient"); }
           else if (id == "##GeoMarkPosition") { add("Lat-Long", "GEOMARKLATLONG"); add("Point", "GEOMARKPOINT"); }
+          else if (id == "##CdAlignment") {  // REQ-485
+            add("Alignment Creation Tools", "CREATEALIGNMENT", "c3d_alignment");
+            add("Create Alignment from Objects", "CREATEALIGNMENTFROMOBJECTS", "c3d_alignment");
+          }
           else if (id == "##GeoCaptureArea") { add("Capture Area", "@captureViewport"); add("Pick Area", "@captureArea"); menu->addSeparator(); add("Remove Captured Areas", "@removeCaptures"); }
           else if (id == "##TsAddData") {
             add("Breaklines", "@surfaceBreaklines"); add("Contours", "@surfaceContours"); add("Boundary", "@surfaceBoundary"); add("Point Groups", "@surfaceManager");

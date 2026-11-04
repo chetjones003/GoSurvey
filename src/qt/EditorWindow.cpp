@@ -377,6 +377,8 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   m_State.measureAnnotationText = MeasureQtText;
   // ADDPOINTTABLE opens the point table dialog in this editor rather than asking typed prompts (REQ-474).
   m_State.addPointTableDialogAvailable = true;
+  // REQ-485: ALIGNMENT with no arguments and CREATEALIGNMENTFROMOBJECTS open the Create Alignment dialogs.
+  m_State.createAlignmentDialogAvailable = true;
   // Issue #1083: before any drawing can open, so the zone, grid readouts and the online map work
   // without Drawing Settings having been opened first.
   LoadCoordinateSystemDictionaries();
@@ -2465,6 +2467,7 @@ void EditorWindow::Refresh() {
   }
   RefreshProjects();
   SyncAlignmentLayout();  // REQ-486: the docked layout table follows undo, grips, commands and tab switches
+  SyncAlignmentLayoutTools();  // REQ-485.1: the layout toolbar follows the alignment being laid out
   const QSignalBlocker tabBlock(m_Tabs);
   while (m_Tabs->count() > static_cast<int>(m_State.drawingTabs.size())) m_Tabs->removeTab(m_Tabs->count() - 1);
   for (int i = 0; i < static_cast<int>(m_State.drawingTabs.size()); ++i) {

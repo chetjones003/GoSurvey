@@ -829,6 +829,49 @@ std::string Num(double v) {
   return b;
 }
 
+/// Length over which two source segments lie on top of each other (REQ-485.3 self-overlap); 0 when they only touch or
+/// cross. Lines overlap when collinear; arcs when they share a circle. A line and an arc cannot overlap over a length.
+double OverlapLength(const SourceSegment& a, const SourceSegment& b, double tol) {
+  assert(tol > 0.0);
+  assert(a.isArc || b.isArc || Dist(a.a, a.b) > 0.0);
+  if (a.isArc != b.isArc) return 0.0;
+  if (!a.isArc) {
+    const double len = Dist(a.a, a.b);
+    const double ux = (a.b.x - a.a.x) / len, uy = (a.b.y - a.a.y) / len;
+    auto off = [&](Point2 p) { return std::fabs((p.x - a.a.x) * uy - (p.y - a.a.y) * ux); };
+    if (off(b.a) > tol || off(b.b) > tol) return 0.0;
+    auto along = [&](Point2 p) { return (p.x - a.a.x) * ux + (p.y - a.a.y) * uy; };
+    const double lo = std::max(0.0, std::min(along(b.a), along(b.b)));
+    const double hi = std::min(len, std::max(along(b.a), along(b.b)));
+    return std::max(0.0, hi - lo);
+  }
+  if (Dist(a.center, b.center) > tol || std::fabs(a.radius - b.radius) > tol) return 0.0;
+  // Angular intervals [start, start+sweep], compared on the circle by shifting b next to a.
+  const double sweepA = std::fmod(a.endAngle - a.startAngle + kTwoPi * 4.0, kTwoPi);
+  const double sweepB = std::fmod(b.endAngle - b.startAngle + kTwoPi * 4.0, kTwoPi);
+  const double shift = std::fmod(b.startAngle - a.startAngle + kTwoPi * 4.0, kTwoPi);
+  const double first = std::max(0.0, std::min(sweepA, shift + sweepB) - shift);
+  const double wrapped = std::max(0.0, std::min(sweepA, shift + sweepB - kTwoPi));
+  return a.radius * (first + wrapped);
+}
+
+/// First pair of segments that overlap by more than the tolerance; false when none.
+bool FindSelfOverlap(const std::vector<SourceSegment>& segments, double tol, std::string* message) {
+  assert(message != nullptr);
+  assert(tol > 0.0);
+  for (size_t i = 0; i < segments.size(); ++i) {
+    for (size_t j = i + 1; j < segments.size(); ++j) {
+      const double len = OverlapLength(segments[i], segments[j], tol);
+      if (len <= tol) continue;
+      *message = "objects " + std::to_string(segments[i].sourceIndex) + " and " +
+                 std::to_string(segments[j].sourceIndex) + " overlap for " + Num(len) +
+                 "; an alignment cannot run over itself";
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 bool BuildFromSegments(const std::vector<SourceSegment>& segments, const FromObjectsOptions& opt, Alignment* out,
@@ -861,6 +904,8 @@ bool BuildFromSegments(const std::vector<SourceSegment>& segments, const FromObj
       ends[i] = {s.a, s.b};
     }
   }
+  std::string overlap;
+  if (FindSelfOverlap(segments, std::max(opt.gapTolerance, 1e-9), &overlap)) return fail(overlap);
 
   const double tol = opt.gapTolerance;
   const size_t n = segments.size();
@@ -881,11 +926,6 @@ bool BuildFromSegments(const std::vector<SourceSegment>& segments, const FromObj
       if (!shared) freeEnds.push_back({i, w == 1});
     }
   }
-  if (freeEnds.size() > 2 && n > 1) {
-    return fail("the selection does not form a single chain: objects " + std::to_string(segments[freeEnds[0].seg].sourceIndex) +
-                " and others have loose ends (gap larger than " + Num(tol) + ")");
-  }
-
   // Choose the start: nearest free end to the pick, else the first free end, else (closed loop) the first segment.
   EndRef startRef{0, false};
   if (!freeEnds.empty()) {
@@ -949,20 +989,46 @@ bool BuildFromSegments(const std::vector<SourceSegment>& segments, const FromObj
       }
     }
     if (bi == n || bestD > tol) {
-      // Name the object with the smallest gap to the chain tail.
-      return fail("object " + std::to_string(bi == n ? 0 : segments[bi].sourceIndex) + " is not connected: gap of " +
-                  Num(bestD) + " exceeds the tolerance " + Num(tol) + " after object " + std::to_string(chain.back().source));
+      // Name the smallest gap between what was chained and what was not, and the objects on either side of it.
+      double gap = std::numeric_limits<double>::infinity();
+      size_t from = 0, to = 0;
+      for (size_t u = 0; u < n; ++u) {
+        for (size_t v = 0; v < n && used[u]; ++v) {
+          if (used[v]) continue;
+          for (const Point2 p : {ends[u].p0, ends[u].p1}) {
+            for (const Point2 q : {ends[v].p0, ends[v].p1}) {
+              if (Dist(p, q) < gap) {
+                gap = Dist(p, q);
+                from = u;
+                to = v;
+              }
+            }
+          }
+        }
+      }
+      if (gap <= tol)
+        return fail("objects " + std::to_string(segments[from].sourceIndex) + " and " +
+                    std::to_string(segments[to].sourceIndex) + " branch from the same point; the selection must be "
+                    "a single chain");
+      return fail("objects " + std::to_string(segments[from].sourceIndex) + " and " +
+                  std::to_string(segments[to].sourceIndex) + " are not connected: gap of " + Num(gap) +
+                  " exceeds the tolerance " + Num(tol));
     }
     chain.push_back(orient(bi, brev));
     used[bi] = 1;
   }
 
-  // Convert the ordered, oriented chain to exact entities.
-  for (const Oriented& o : chain) {
+  // Convert the ordered, oriented chain to exact entities. Gaps within the tolerance are joined (REQ-485.3): a line
+  // starts where the previous entity ended and ends where a following arc starts; an arc keeps its own geometry.
+  for (size_t k = 0; k < chain.size(); ++k) {
+    const Oriented& o = chain[k];
     Entity e;
     e.start = o.from;
     if (!o.isArc) {
-      const double dx = o.to.x - o.from.x, dy = o.to.y - o.from.y;
+      const Point2 from = out->Empty() ? o.from : out->EndPoint();
+      const Point2 to = (k + 1 < chain.size() && chain[k + 1].isArc) ? chain[k + 1].from : o.to;
+      e.start = from;
+      const double dx = to.x - from.x, dy = to.y - from.y;
       e.kind = EntityKind::Line;
       e.startAzimuth = std::atan2(dx, dy);
       e.length = std::hypot(dx, dy);

@@ -422,6 +422,21 @@ struct FromObjectsOptions {
 /// Converts a bulge segment (A to B with DXF bulge) to a SourceSegment arc. A bulge of 0 is a line.
 [[nodiscard]] SourceSegment SegmentFromBulge(Point2 a, Point2 b, double bulge, int sourceIndex);
 
+// --- Create by layout (REQ-485.1): Civil 3D's Tangent-Tangent tools and Curve and Spiral Settings ---
+struct CurveSettings {
+  bool addCurves = true;          ///< Tangent-Tangent (With curves); false = No curves.
+  double radius = 100.0;          ///< Default radius; applies to the curve and its spirals.
+  double spiralInLength = 0.0;    ///< Clothoid before the curve; 0 = none.
+  double spiralOutLength = 0.0;   ///< Clothoid after the curve; 0 = none.
+};
+
+/// Builds Fixed tangents between consecutive PIs (repeated points are dropped). With curves, each interior PI becomes a
+/// curve of `s.radius` - Free between its tangents, or spiral-curve-spiral when a spiral length is set - so the chain is
+/// C0 and C1. A corner whose curve does not fit between its tangents is reported in `warnings` and left as a PI
+/// (REQ-485.2). False, with `out` cleared, for fewer than two distinct points or an invalid setting.
+[[nodiscard]] bool BuildFromPis(const std::vector<Point2>& pis, const CurveSettings& s, Alignment* out,
+                                std::string* error, std::vector<std::string>* warnings = nullptr);
+
 // --- REQ-487.1 grips ---
 /// One grip on a selected alignment. `which` is stable across a drag: 0 = the start point (moves the whole alignment),
 /// 1 + 2*i = the END of tangent i (sets its length, and its bearing when it is Fixed), 2 + 2*i = the radius grip at the
