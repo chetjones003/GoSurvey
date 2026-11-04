@@ -24,3 +24,7 @@ the alignment and keeps its station and offset.
 
 Labels belong to the alignment: erasing the alignment removes them. Equation labels and the MAJOR/MINOR rules are set with
 `ALIGNMENTLABELSET`. Minor stations need the major stations, so hiding MAJOR while MINOR shows is refused.
+
+`ALIGNMENTLABEL <name>, STATIONLABEL, LIST` shows each station label with its number.
+`ALIGNMENTLABEL <name>, STATIONLABEL, MOVE, <number>, <x>, <y>` drags a label to a new point. A fixed label takes the point
+as it is; a relative label takes the station and offset of the nearest point on the alignment. Undo restores it.

@@ -1845,19 +1845,54 @@ void RunAlignmentSurface(AppCommandState& st, const std::string& args, std::vect
 // The new label's text is reported straight away. Labels belong to the alignment: deleting it removes them (REQ-492.6).
 void RunAlignmentStationLabel(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
-  const char* usage = "ALIGNMENTLABEL - usage: ALIGNMENTLABEL <name>, STATIONLABEL, FIXED, <x>, <y> | <name>, STATIONLABEL, RELATIVE, <station>, <offset>.";
-  if (f.size() != 5) {
+  const char* usage = "ALIGNMENTLABEL - usage: ALIGNMENTLABEL <name>, STATIONLABEL, FIXED, <x>, <y> | <name>, STATIONLABEL, RELATIVE, <station>, <offset> | <name>, STATIONLABEL, LIST | <name>, STATIONLABEL, MOVE, <number>, <x>, <y>.";
+  if (f.size() < 3) {
     log.push_back(usage);
     return;
   }
   alignment::Alignment* a = Resolve(st, "ALIGNMENTLABEL", f[0], log);
   if (a == nullptr) return;
+  const std::string sub = Lower(f[2]);
+  if (sub == "list" && f.size() == 3) {  // REQ-492.4: the numbers MOVE takes
+    if (a->stationLabels.empty()) log.push_back("ALIGNMENTLABEL - \"" + a->name + "\" has no station labels.");
+    for (size_t i = 0; i < a->stationLabels.size(); ++i) {
+      const alignment::StationOffsetLabelPlacement p = alignment::PlaceStationOffsetLabel(*a, a->stationLabels[i], st.displayLinearPrecision);
+      log.push_back("  LABEL " + std::to_string(i + 1) + "  " + (a->stationLabels[i].fixed ? "fixed" : "relative") + "  " + p.text +
+                    (p.onAlignment ? "" : " (off the alignment)"));
+    }
+    return;
+  }
+  if (sub == "move" && f.size() == 6) {  // REQ-492.5: drag a label to a new point
+    double number = 0.0, x = 0.0, y = 0.0;
+    if (!ParseNum(f[3], &number) || number != std::floor(number) || number < 1.0 ||
+        number > static_cast<double>(a->stationLabels.size()) || !ParseNum(f[4], &x) || !ParseNum(f[5], &y)) {
+      log.push_back("ALIGNMENTLABEL - MOVE needs a label number (1 to " + std::to_string(a->stationLabels.size()) + ") and a point.");
+      return;
+    }
+    double lx = 0.0, ly = 0.0;
+    CadCoord::LocalFromWorld(st, x, y, &lx, &ly);
+    alignment::StationOffsetLabel moved = a->stationLabels[static_cast<size_t>(number) - 1];
+    if (!alignment::MoveStationOffsetLabelTo(*a, &moved, {lx, ly})) {
+      log.push_back("ALIGNMENTLABEL - \"" + a->name + "\" has no geometry to label.");
+      return;
+    }
+    PushUndoSnapshot(st, "Move alignment station label");
+    a = Resolve(st, "ALIGNMENTLABEL", f[0], log);
+    a->stationLabels[static_cast<size_t>(number) - 1] = moved;
+    const alignment::StationOffsetLabelPlacement p = alignment::PlaceStationOffsetLabel(*a, moved, st.displayLinearPrecision);
+    log.push_back("ALIGNMENTLABEL - label " + std::to_string(static_cast<int>(number)) + " moved: " + p.text + ".");
+    return;
+  }
+  if (f.size() != 5) {
+    log.push_back(usage);
+    return;
+  }
   if (a->Empty()) {
     log.push_back("ALIGNMENTLABEL - \"" + a->name + "\" has no geometry to label.");
     return;
   }
   alignment::StationOffsetLabel label;
-  const std::string mode = Lower(f[2]);
+  const std::string mode = sub;
   if (mode == "fixed") {
     double x = 0.0, y = 0.0;
     if (!ParseNum(f[3], &x) || !ParseNum(f[4], &y)) {

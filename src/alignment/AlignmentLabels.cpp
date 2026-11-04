@@ -84,3 +84,19 @@ StationOffsetLabelPlacement PlaceStationOffsetLabel(const Alignment& al, const S
 }
 
 }  // namespace alignment
+
+namespace alignment {
+
+bool MoveStationOffsetLabelTo(const Alignment& al, StationOffsetLabel* label, Point2 point) {
+  if (label == nullptr || al.Empty()) return false;
+  if (label->fixed) {
+    label->fixedPoint = point;
+    return true;
+  }
+  const StationOffset so = al.GetStationOffset(point.x, point.y);
+  label->internalStation = so.internalStation;
+  label->offset = so.offset;
+  return true;
+}
+
+}  // namespace alignment

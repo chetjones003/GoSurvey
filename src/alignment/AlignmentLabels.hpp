@@ -45,4 +45,8 @@ struct StationOffsetLabelPlacement {
 [[nodiscard]] StationOffsetLabelPlacement PlaceStationOffsetLabel(const Alignment& al, const StationOffsetLabel& label,
                                                                   int linearPrecision);
 
+/// Moves a label to a plan point (REQ-492.5, drag). A fixed label takes the point as it is; a relative label takes the
+/// station and offset of the nearest point on the alignment. False when the point has no meaning (empty alignment).
+[[nodiscard]] bool MoveStationOffsetLabelTo(const Alignment& al, StationOffsetLabel* label, Point2 point);
+
 }  // namespace alignment

@@ -179,3 +179,47 @@ TEST_CASE("ALIGNMENTLABEL STATIONLABEL refuses a station outside the alignment",
   CHECK(LogHas(log, "outside"));
   CHECK(st.alignments[0].stationLabels.empty());
 }
+
+TEST_CASE("A station label can be dragged: relative labels take the station and offset of the drop point", "[req492][alignment]") {
+  const Alignment a = EastLine(1000.0);
+  StationOffsetLabel rel;
+  rel.internalStation = 500.0;
+  rel.offset = 5.0;
+  REQUIRE(alignment::MoveStationOffsetLabelTo(a, &rel, {400.0, -3.0}));
+  CHECK(rel.internalStation == Approx(400.0).margin(1e-6));
+  CHECK(rel.offset == Approx(3.0).margin(1e-6));  // south of an eastbound line is right of travel
+
+  StationOffsetLabel fixed;
+  fixed.fixed = true;
+  fixed.fixedPoint = {100.0, 1.0};
+  REQUIRE(alignment::MoveStationOffsetLabelTo(a, &fixed, {250.0, 7.0}));
+  CHECK(fixed.fixedPoint.x == Approx(250.0));
+  CHECK(fixed.fixedPoint.y == Approx(7.0));
+  CHECK_FALSE(alignment::MoveStationOffsetLabelTo(Alignment{}, &rel, {0.0, 0.0}));
+}
+
+TEST_CASE("ALIGNMENTLABEL LIST and MOVE work by label number and undo in one step", "[req492][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT SL3", log);
+  Submit(st, "ALIGNMENTADD SL3, TANGENT, 0, 0, 90, 1000", log);
+  Submit(st, "ALIGNMENTLABEL SL3, STATIONLABEL, RELATIVE, 2+00, 4", log);
+  log.clear();
+  Submit(st, "ALIGNMENTLABEL SL3, STATIONLABEL, LIST", log);
+  CHECK(LogHas(log, "LABEL 1"));
+  CHECK(LogHas(log, "relative"));
+
+  log.clear();
+  Submit(st, "ALIGNMENTLABEL SL3, STATIONLABEL, MOVE, 1, 650, -2", log);
+  CHECK(LogHas(log, "moved"));
+  REQUIRE(st.alignments[0].stationLabels.size() == 1);
+  CHECK(st.alignments[0].stationLabels[0].internalStation == Approx(650.0).margin(1e-6));
+  CHECK(st.alignments[0].stationLabels[0].offset == Approx(2.0).margin(1e-6));
+
+  Submit(st, "UNDO", log);
+  CHECK(st.alignments[0].stationLabels[0].internalStation == Approx(200.0).margin(1e-6));
+
+  log.clear();
+  Submit(st, "ALIGNMENTLABEL SL3, STATIONLABEL, MOVE, 7, 1, 1", log);
+  CHECK(LogHas(log, "needs a label number"));
+}
