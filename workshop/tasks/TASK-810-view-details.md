@@ -36,7 +36,7 @@
 
 - Approach: add a concrete dialog helper owned by `EditorWindow`; produce text from the active `PaperLayout`, using `PageSetupFromLayout` and existing paper preset names. Do not read or select other saved setups. Add the ribbon route and `RefreshRibbon` paper-space availability check.
 - Files/functions:
-  - `spec/requirements.md`, `spec/project.md` — accepted REQ-487 and D-2026-11-04-c.
+  - `spec/requirements.md`, `spec/project.md` — accepted REQ-487 and D-2026-11-04-g.
   - `src/qt/RibbonCatalog.hpp`, `src/qt/EditorRibbon.cpp`, `src/qt/EditorWindow.hpp`, `src/qt/EditorWindow.cpp` — bind, gate, and show View Details.
   - `tests/QtEditorTests.cpp` — active-layout fields, custom dimensions, no-style/no-name, read-only access, model/floating disablement, and state/undo immutability.
   - `resources/wiki/Paper-Space-and-Layouts.md` or `resources/wiki/Plotting.md` — explain View Details once implementation establishes the exact labels.
@@ -68,6 +68,6 @@ See `verification/reviews/TASK-810-view-details-plan-review.md`.
 - Civil 3D comparison: **INCONCLUSIVE** because Civil 3D is unavailable on this machine. No pass is claimed for the cross-product panel.
 - Self-review: UI reads `PageSetupFromLayout` at invocation and introduces no state mutation, persistence, API, dependency, or new abstraction. The action uses the existing Output ribbon item and is refreshed with the Preview item's paper-layout availability.
 - Assumptions: none.
-- Architectural decisions made by Workshop: none; D-2026-11-04-c is the accepted authority.
+- Architectural decisions made by Workshop: none; D-2026-11-04-g is the accepted authority.
 - Technical debt: none identified within this slice. #810 remains open for the combined paper-space PR as directed.
 - Product docs: reviewed the in-app Paper Space and Layouts guide and added the View Details behavior. README and PRIVACY have no affected content; the public manual update is recorded in `TASK-paper-space-issue-batch-pr.md`.

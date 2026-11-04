@@ -7,8 +7,8 @@
 
 ## 1. Authority
 
-- Requirement: REQ-481 (accepted), plus REQ-025/031/113/201.
-- Acceptance: REQ-481 Acceptance 1–5.
+- Requirement: REQ-489 (accepted), plus REQ-025/031/113/201.
+- Acceptance: REQ-489 Acceptance 1–5.
 - Owning subsystems: Commands/Domain, Qt layout-tab menu, DWG/DXF persistence.
 
 ## 2. Scope
@@ -61,9 +61,8 @@
 
 ## 7. Outcome
 
-- Requirements satisfied: REQ-481 implementation and focused command/UI/undo/redo/DWG-DXF coverage complete.
+- Requirements satisfied: REQ-489 implementation and focused command/UI/undo/redo/DWG-DXF coverage complete.
 - Verification: plan approved before implementation.
 - 2026-11-03: Added UI action, command/collision/undo-redo, and DWG/DXF save/reopen coverage. The viewport-control state is included in the round-trip fixture; named page-setup names are not persisted by the existing DXF codec and are outside this feature’s acceptance requirement for the copy itself to retain representable layout state.
 - Civil 3D comparison is inconclusive because Civil 3D is unavailable. Product documentation review remains for the combined PR.
 - Done: ready for closure with the combined PR.
-

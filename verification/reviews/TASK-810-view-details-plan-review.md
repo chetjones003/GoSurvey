@@ -6,7 +6,7 @@
 
 ## Authority and acceptance
 
-Accepted REQ-487 is based on the user's confirmed feature request and decision D-2026-11-04-c. The checks are observable: the Output action presents the active layout's effective stored values; explicit custom and unset cases display correctly; the action is unavailable outside paper space; and inspection leaves the drawing and undo stack unchanged, including for read-only drawings. REQ-445 and REQ-485 govern the meaning of the displayed plot options and style-table selection.
+Accepted REQ-487 is based on the user's confirmed feature request and decision D-2026-11-04-g. The checks are observable: the Output action presents the active layout's effective stored values; explicit custom and unset cases display correctly; the action is unavailable outside paper space; and inspection leaves the drawing and undo stack unchanged, including for read-only drawings. REQ-445 and REQ-485 govern the meaning of the displayed plot options and style-table selection.
 
 ## Architecture
 

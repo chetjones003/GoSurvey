@@ -26,13 +26,13 @@
 
 ## 4. Decision
 
-- D-2026-11-04-d / REQ-488: user selected PDF Export for the Current layout and confirmed the complete feature request on 2026-11-04.
+- D-2026-11-04-h / REQ-488: user selected PDF Export for the Current layout and confirmed the complete feature request on 2026-11-04.
 
 ## 5. Plan
 
 - Approach: route the existing `##OutDwfxExport` action to a Current-layout PDF save flow. Validate the active layout at invocation; stage `PlotLayoutsToPdf` output in a unique temporary file; copy it to a `QSaveFile` for the selected destination and commit only after the complete staged PDF is available. Keep plot failure logs and add a visible error where the Export action otherwise has no command-line feedback.
 - Files/functions:
-  - `spec/requirements.md`, `spec/project.md` — accepted REQ-488 and D-2026-11-04-d.
+  - `spec/requirements.md`, `spec/project.md` — accepted REQ-488 and D-2026-11-04-h.
   - `src/qt/RibbonCatalog.hpp`, `src/qt/EditorRibbon.cpp` — bind the action, gate it, and run the PDF export flow.
   - `tests/QtEditorTests.cpp` — export, cancellation, failure/no partial output, read-only operation, and model/floating-space guards.
   - `resources/wiki/Plotting.md` — document the new Output-tab entry point.
@@ -53,7 +53,7 @@ See `verification/reviews/TASK-810-export-current-layout-pdf-plan-review.md`.
 ## 7. Implementation log
 
 - 2026-11-04: User selected the Current-layout PDF Export slice and confirmed the complete feature request. Repository inspection found the existing Plot action calls `PlotLayoutsToPdf` directly; the PDF writer can leave a partial file if the final write itself fails. This implementation will stage output and publish only on success, leaving Plot and Batch Plot routes unchanged.
-- 2026-11-04: Autodesk/AutoCAD/Civil 3D evidence was already recorded in `TASK-810-output-tab-triage.md`: AutoCAD Core Console did not settle UI semantics, Civil 3D is unavailable, and the repository has no DWF or PC3 backend. Those controls remain out of scope under D-2026-11-04-d.
+- 2026-11-04: Autodesk/AutoCAD/Civil 3D evidence was already recorded in `TASK-810-output-tab-triage.md`: AutoCAD Core Console did not settle UI semantics, Civil 3D is unavailable, and the repository has no DWF or PC3 backend. Those controls remain out of scope under D-2026-11-04-h.
 
 ## 8. Outcome
 
@@ -70,7 +70,7 @@ See `verification/reviews/TASK-810-export-current-layout-pdf-plan-review.md`.
 - Civil 3D comparison: **INCONCLUSIVE** because Civil 3D is unavailable on this machine. No product-parity pass is claimed.
 - Self-review: the Output action is a Qt UI route to existing IO plotting. `QTemporaryFile` and `QSaveFile` ensure failed plotting/publication leaves no partial final file and preserves an existing destination. No output algorithm, plotter backend, dependency, persistent state, public API, or layer was added.
 - Assumptions: none.
-- Architectural decisions made by Workshop: none; D-2026-11-04-d is the accepted authority.
+- Architectural decisions made by Workshop: none; D-2026-11-04-h is the accepted authority.
 - Technical debt: none identified in this slice. DWF, Display-area export, Plotter Manager/device configuration, and Display/Current controls remain explicitly excluded; #810 stays open for the other controls.
 - Product docs: updated the in-app Plotting guide. README and PRIVACY have no affected content. The public manual update and remaining documentation review are recorded in `TASK-paper-space-issue-batch-pr.md`.
 

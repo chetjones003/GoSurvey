@@ -196,8 +196,8 @@ TEST_CASE("LibreDWG DWG round-trips a model-space LINE", "[dwg][libredwg]") {
   REQUIRE(in.userLinesFlat[3] == Catch::Approx(10.f).margin(0.05f));
 }
 
-TEST_CASE("Duplicated layouts and viewport controls persist through DWG and DXF (REQ-481, REQ-482)",
-          "[req481][req482][dwg][dxf][libredwg]") {
+TEST_CASE("Duplicated layouts and viewport controls persist through DWG and DXF (REQ-489, REQ-482)",
+          "[req489][req482][dwg][dxf][libredwg]") {
   for (const bool dxf : {true, false}) {
     INFO("format: " << (dxf ? "DXF" : "DWG"));
     ScratchDir dir(dxf ? "layout-copy-dxf" : "layout-copy-dwg");

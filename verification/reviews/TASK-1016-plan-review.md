@@ -4,7 +4,7 @@ Date: 2026-11-03
 
 ## Architecture
 
-**PASS with ADR-075.** The command layer continues to own MVIEW input and creation. `Viewport` owns its optional copied boundary as a value; it does not store a fragile array index or upward dependency. Qt Renderer owns screen clipping, IO owns DWG/DXF native clip-boundary references, and the plotter owns PDF clipping. The rectangular path remains the existing fast path. The significant data-model, renderer, and file-format choice is recorded before Workshop. No new dependency, layer, global state, or speculative abstraction is planned. The accepted scope reopens only the closed-polyline Object case from withdrawn REQ-034; it does not restore a vertex-drawn polygon command.
+**PASS with ADR-077.** The command layer continues to own MVIEW input and creation. `Viewport` owns its optional copied boundary as a value; it does not store a fragile array index or upward dependency. Qt Renderer owns screen clipping, IO owns DWG/DXF native clip-boundary references, and the plotter owns PDF clipping. The rectangular path remains the existing fast path. The significant data-model, renderer, and file-format choice is recorded before Workshop. No new dependency, layer, global state, or speculative abstraction is planned. The accepted scope reopens only the closed-polyline Object case from withdrawn REQ-034; it does not restore a vertex-drawn polygon command.
 
 ## Correctness and risk
 
@@ -31,4 +31,4 @@ Use the current MVIEW route and `Viewport` value. Add fixed rectangle partition 
 
 ## Verdict
 
-**APPROVE the plan for implementation.** The user's decisions resolve the feature scope and acceptance conditions; ADR-075 resolves the architecture decision before code. Product validation and visual comparison limitations are explicit follow-up gates, not guessed behavior. No tests or builds were run because this was a SPEC/Verification planning turn.
+**APPROVE the plan for implementation.** The user's decisions resolve the feature scope and acceptance conditions; ADR-077 resolves the architecture decision before code. Product validation and visual comparison limitations are explicit follow-up gates, not guessed behavior. No tests or builds were run because this was a SPEC/Verification planning turn.

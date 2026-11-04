@@ -441,14 +441,14 @@ requirements is a planning failure, not a sign of rigor.
   window onto **model space** with its own **scale** and **pan/center**. Viewports
   can be **created, moved, resized**, and have their scale set (model units per
   paper unit). Model geometry renders inside each viewport clipped to its rectangle
-  at the viewport's scale; the model itself is unchanged. REQ-480 adds the
+  at the viewport's scale; the model itself is unchanged. REQ-490 adds the
   closed-polyline boundary case without changing these rectangular defaults.
 - Acceptance: the user can add a viewport and set its scale and model geometry
   appears inside it at that scale; a layout can hold ≥2 viewports showing the model
   at **different** scales simultaneously; viewports can be moved and resized.
 - Owner-layer: UI / Domain / Renderer
 - Status: accepted
-- Revisions: 2026-06-15 — initial. 2026-11-03 — REQ-480 adds clipped viewports created
+- Revisions: 2026-06-15 — initial. 2026-11-03 — REQ-490 adds clipped viewports created
   from closed paper-space polylines; vertex-drawn polygonal viewports remain withdrawn
   under REQ-034.
 
@@ -14992,8 +14992,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 | Requirement | Layer | Test(s) | Status |
 |-------------|-------|---------|--------|
-| REQ-480 | Commands/Domain/Qt Renderer/IO | `[req480]` MVIEW Fit full-sheet rectangle; 2/3/4 fixed tilings; closed-polyline clipping including cancellation/refusal, undo/redo, render/plot clipping, and DWG/DXF round-trip | accepted |
-| REQ-481 | Commands/Domain/Qt UI/IO | `[req481]` full layout duplication from tab menu and `LAYOUT COPY`; unchanged source/current layout; name collision refusal; undo/redo and DWG/DXF round-trip | accepted |
+| REQ-490 | Commands/Domain/Qt Renderer/IO | `[req490]` MVIEW Fit full-sheet rectangle; 2/3/4 fixed tilings; closed-polyline clipping including cancellation/refusal, undo/redo, render/plot clipping, and DWG/DXF round-trip | accepted |
+| REQ-489 | Commands/Domain/Qt UI/IO | `[req489]` full layout duplication from tab menu and `LAYOUT COPY`; unchanged source/current layout; name collision refusal; undo/redo and DWG/DXF round-trip | accepted |
 | REQ-482 | Commands/Domain/Qt Renderer/Plot/IO | `[req482]` viewport on/off, display lock, hide-plot, and DWG/DXF round-trip | accepted |
 | REQ-483 | Commands/Domain | `[req483]` paper-space ARRAY and active-layout-only OVERKILL with isolation and undo coverage | accepted |
 | REQ-485 | Qt UI/Domain/IO | `[req485]` CTB/STB single and batch vector PDF appearance; STB assignment import/export/persistence; default Normal; invalid-table failure and no-table compatibility | accepted |
@@ -16001,7 +16001,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Decision: D-2026-10-31-b (amends D-2026-10-30-c).
 - Status: accepted (2026-10-31, user clarification)
 
-### REQ-481 — Duplicate a paper layout in the current drawing (GitHub issue #1015)
+### REQ-489 — Duplicate a paper layout in the current drawing (GitHub issue #1015)
 
 - Purpose: reuse a completed sheet without rebuilding its setup and contents.
 - Priority: should
@@ -16020,7 +16020,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. DWG and DXF save/reopen retain the copied layout and its contents/settings.
   5. A name collision leaves drawing state and undo state unchanged.
 - Owner-layer: Commands / Domain / Qt UI / IO.
-- Decision: D-2026-11-03-b; no new architecture or data-format decision.
+- Decision: D-2026-11-03-g; no new architecture or data-format decision.
 
 ### REQ-482 — Paper viewport display, lock, and plot controls (GitHub issue #1007)
 - Purpose: let users protect paper sheets and control which viewport contents appear on screen and in plotted output.
@@ -16034,7 +16034,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. Each control is independent and can be combined with the other two.
   5. Each control survives DWG and DXF save/reopen; existing drawings without the new setting default to on, unlocked, and plottable.
 - Owner-layer: Commands / Domain / Qt Renderer / Plot / IO
-- Status: accepted (D-2026-11-03-c)
+- Status: accepted (D-2026-11-03-h)
 - Native storage: DWG/DXF VIEWPORT status flags group 90: 32768 on, 16384 display lock, 2048 hide-plot.
 - Revisions: 2026-11-03 — initial, issue #1007.
 
@@ -16055,12 +16055,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. OVERKILL removes supported duplicates/degenerate paper geometry only from the active layout and reports the result.
   5. OVERKILL changes neither model geometry nor other layouts; existing model-space behavior remains unchanged.
 - Owner-layer: Commands / Domain.
-- Status: accepted (D-2026-11-03-d; user selected support for both commands).
+- Status: accepted (D-2026-11-03-f; user selected support for both commands).
 - Revisions: 2026-11-03 — initial, issue #1005.
 - Evidence: `PaperLayout` owns the complete page setup, viewports, and paper geometry by value; DWG/DXF writers serialize layouts from that value. `MoveOrCopyLayout` already has a copy primitive that duplicates the value but switches active layout and has no undo integration. The layout tab context menu and `LAYOUT` command currently expose no copy action.
 - Status: accepted (2026-11-03, user confirmed feature request and scope).
 
-### REQ-480 — MVIEW fit, viewport presets, and viewport from a closed polyline (GitHub issue #1016)
+### REQ-490 — MVIEW fit, viewport presets, and viewport from a closed polyline (GitHub issue #1016)
 
 - Purpose: create useful paper-space viewports without placing each viewport by hand.
 - Priority: should
@@ -16082,9 +16082,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   5. Selecting an open polyline, another entity type, or cancelling leaves the layout and undo state unchanged and reports the refusal where applicable.
   6. Undo removes each newly created viewport set; redo restores it. Saving and reopening as DWG and DXF retains viewport count, rectangle/polygon boundary, scale, center, and layout membership.
 - Owner-layer: Commands / Domain / Qt Renderer / IO.
-- Architectural decision: ADR-075 (copied paper-space clip boundary in the viewport value; native viewport clip-boundary references in DWG/DXF).
+- Architectural decision: ADR-077 (copied paper-space clip boundary in the viewport value; native viewport clip-boundary references in DWG/DXF).
 - Evidence: `REQ-027` currently stores rectangular viewports; `REQ-034` polygonal viewport work was withdrawn 2026-07-13. `MVIEW` routes to `StartPaperRectViewportCommand` (src/commands/CadCommands.cpp); paper-space viewport composition uses rectangular framebuffer blits (src/qt/EditorViewport.cpp); LibreDWG defines `VIEWPORT.clip_boundary` and `clip_boundary_type` (third_party/libredwg/include/dwg.h), while DXF encodes the clip-boundary reference as group 340 (third_party/libredwg/src/dwg.spec). AutoCAD 2025 accoreconsole confirmed MVIEW is unavailable on the Model tab; the paper-tab scripted query did not yield usable option output. Autodesk Help page fetch and Civil 3D comparison were unavailable in this environment. The user selected closed-polyline outlines and confirmed full-sheet Fit and the three fixed arrangements on 2026-11-03. On 2026-11-03 the user confirmed PDF text should remain searchable, accepting glyph overflow at polygon edges; outside-anchor labels are omitted.
-- Status: accepted (2026-11-03, user confirmed feature request and scope; D-2026-11-03-a).
+- Status: accepted (2026-11-03, user confirmed feature request and scope; D-2026-11-03-i).
 
 ### REQ-484 — Named scale selection for paper viewports (GitHub issue #1017)
 
@@ -16103,7 +16103,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. Applying scales preserves each viewport's model center and frame position/dimensions.
   4. One undo restores all affected viewport scales; redo reapplies them.
 - Owner-layer: Commands / Domain / Qt UI.
-- Decision: D-2026-11-03-e; no data-model or persistence change.
+- Decision: D-2026-11-03-j; no data-model or persistence change.
 - Evidence: `CadAnnotationScaleModelUnitsPerPlottedInch` converts the existing drawing-owned named scale values to model units per plotted inch; `AppCommandState::selectedViewports` provides multi-viewport selection; `VPSCALE` currently edits only the current floating viewport and has undo support. The paper viewport manager currently exposes an annotative-scale picker separately from its free-text actual viewport scale control, so the new dropdown must clearly use the former's named-scale source while changing the latter's model-to-paper value.
 - Status: accepted (2026-11-03, user confirmed the complete feature request and selected properties plus command).
 
@@ -16127,9 +16127,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   5. Applying a plot style changes output only; drawing geometry, colors, layers, assignments, and undo state remain unchanged.
   6. An unavailable or invalid selected table is reported and does not produce a misleading successful PDF.
 - Owner-layer: Qt UI / Domain / IO (DWG/DXF and GoSurvey persistence; PDF plotter).
-- Decision: D-2026-11-04-a and ADR-076; table assignment storage and the existing-file-only scope are explicit architecture decisions.
+- Decision: D-2026-11-04-e and ADR-078; table assignment storage and the existing-file-only scope are explicit architecture decisions.
 - Evidence: REQ-029/030 and ADR-007 define vector PDF; Autodesk documents CTB color-dependent mappings and STB named assignments separately from output devices. The repository has no plot-style name model and DXF currently emits a placeholder `ACAD_PLOTSTYLENAME` dictionary. See `workshop/tasks/TASK-1009-paper-plot-styles-and-output.md`.
-- Status: accepted (2026-11-04, user confirmed feature request; D-2026-11-04-a).
+- Status: accepted (2026-11-04, user confirmed feature request; D-2026-11-04-e).
 
 ### REQ-486 — Preview the active paper layout in the PDF viewer (GitHub issue #810)
 - Purpose: let users inspect a plotted sheet before choosing whether to save a PDF export.
@@ -16147,9 +16147,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. Preview leaves drawing contents and undo state unchanged.
   5. A plot failure is reported and no viewer is opened with a misleading successful result.
 - Owner-layer: Qt UI / IO (existing PDF writer and viewer).
-- Decision: D-2026-11-04-b; reuses the existing vector PDF writer and PDF viewer, with no new output device or file format.
+- Decision: D-2026-11-04-f; reuses the existing vector PDF writer and PDF viewer, with no new output device or file format.
 - Evidence: `REQ-029/030` and `ADR-007` define the existing vector PDF path; `REQ-445` and `REQ-485` define saved placement and CTB/STB appearance. The Output Preview ribbon item is disabled, `PlotLayoutsToPdf` accepts one selected layout and saved settings, and `PdfWindow` already opens PDFs with annotation and Save As workflows. The Autodesk Core Console probe entered its interactive `PREVIEW` prompt but could not display or inspect a preview; this is a Qt UI integration task, not a file-format behavior change.
-- Status: accepted (2026-11-04, user confirmed feature request and scope; D-2026-11-04-b).
+- Status: accepted (2026-11-04, user confirmed feature request and scope; D-2026-11-04-f).
 
 ### REQ-487 — View active layout Page Setup details (GitHub issue #810)
 - Purpose: let users inspect the settings that determine a sheet's PDF output without entering the Page Setup Manager.
@@ -16164,9 +16164,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. View Details is disabled in model space and floating model space.
   5. A read-only drawing can open and dismiss the dialog; no named Page Setup and no selected plot-style table are shown as such rather than treated as errors.
 - Owner-layer: Qt UI (reads existing drawing-owned `PaperLayout` settings).
-- Decision: D-2026-11-04-c. No data-format, output-device, or settings-editing behavior is added.
+- Decision: D-2026-11-04-g. No data-format, output-device, or settings-editing behavior is added.
 - Evidence: #810 lists View Details as an unimplemented Output tab control but gives no behavior. `PaperLayout` stores all listed effective fields; `PageSetupFromLayout` produces a view value; the Page Setup Manager already presents some fields together with Apply/Create/Modify controls. The user chose a compact read-only active-layout summary. Civil 3D is not installed; the product's View Details control cannot be reproduced here.
-- Status: accepted (2026-11-04, user confirmed the feature request; D-2026-11-04-c).
+- Status: accepted (2026-11-04, user confirmed the feature request; D-2026-11-04-g).
 
 ### REQ-488 — Export the current paper layout to PDF from the Output tab (GitHub issue #810)
 - Purpose: export the active sheet directly from the Output tab using the existing vector PDF path.
@@ -16181,9 +16181,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. Success, cancellation, and failure leave layout data, drawing data, and undo depth unchanged.
   5. Existing Plot and Batch Plot routes continue to work unchanged.
 - Owner-layer: Qt UI (action, filename selection, and final-path publication) over the existing IO PDF plotter.
-- Decision: D-2026-11-04-d. This slice implements Current-layout PDF export only. DWF, Display-area export, Plotter Manager/device configuration, and changes to Display/Current controls remain out of scope.
+- Decision: D-2026-11-04-h. This slice implements Current-layout PDF export only. DWF, Display-area export, Plotter Manager/device configuration, and changes to Display/Current controls remain out of scope.
 - Evidence: #810 identifies the DWF/PDF Export button but supplies no acceptance criteria. REQ-029/030 and ADR-007 establish the existing vector PDF plot path; REQ-445 and REQ-485 supply saved placement and CTB/STB behavior. The Output-tab Plot action already selects a PDF path and calls `PlotLayoutsToPdf`. The plotter writes directly to a destination, so this UI route will stage its result and publish it only after success to satisfy the no-partial-final-file acceptance condition. Civil 3D is unavailable, and no DWF or PC3 backend exists.
-- Status: accepted (2026-11-04, user confirmed the feature request; D-2026-11-04-d).
+- Status: accepted (2026-11-04, user confirmed the feature request; D-2026-11-04-h).
 
 ## Anti-requirements
 

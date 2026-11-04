@@ -49,10 +49,10 @@
 ## 7. Implementation log
 
 - 2026-11-03: User confirmed all three controls and DWG/DXF save/reopen.
-- 2026-11-03: Added REQ-482 and D-2026-11-03-c; initial plan and verification recorded.
+- 2026-11-03: Added REQ-482 and D-2026-11-03-h; initial plan and verification recorded.
 - 2026-11-03: Implemented independent viewport on/off, display lock, and hide-plot controls in the viewport manager; enforced off/lock/hide-plot in paper rendering, floating camera controls, command scale changes, and PDF output; mapped native VIEWPORT status flags and GoSurvey DWG payload values.
 - 2026-11-03: Added focused domain/UI/plot and DWG/DXF round-trip checks for the combined control state. Round-trip coverage explicitly verifies off, locked, and hide-plot values in both formats.
-- 2026-11-03: Release build passed. Focused Catch2 run `[req481],[req482],[req480]`: 213 assertions in 15 cases passed, including DWG/DXF round-trip with on=false, locked=true, and hide-plot=true.
+- 2026-11-03: Release build passed. Focused Catch2 run `[req489],[req482],[req490]`: 213 assertions in 15 cases passed, including DWG/DXF round-trip with on=false, locked=true, and hide-plot=true.
 - 2026-11-03: Qt editor shard 0 passed after correcting its undo assertions. The viewport-controls screenshot is `build/artifacts/qt-editor/manual/shard-0/artifacts/qt-1007-viewport-controls.png`. Civil 3D comparison is inconclusive because Civil 3D is unavailable on this machine.
 
 ## 8. Outcome

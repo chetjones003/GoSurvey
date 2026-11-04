@@ -4,7 +4,7 @@ Date: 2026-11-03
 
 ## Scope and architecture
 
-REQ-481 owns the observable behavior. `PaperLayout` is the single owner of its sheet setup, viewports, and paper objects. Copying its value and appending it to the existing layout collection preserves architecture and uses the existing persistence model. No new file field or dependency is proposed.
+REQ-489 owns the observable behavior. `PaperLayout` is the single owner of its sheet setup, viewports, and paper objects. Copying its value and appending it to the existing layout collection preserves architecture and uses the existing persistence model. No new file field or dependency is proposed.
 
 **Architecture: PASS.**
 
@@ -22,4 +22,4 @@ Approve coverage for generated unique names, explicit collision no-op including 
 
 ## Verdict
 
-**APPROVE.** The plan fits REQ-481 and existing subsystem ownership. No code may be written until this review is recorded; it is now recorded before Workshop implementation.
+**APPROVE.** The plan fits REQ-489 and existing subsystem ownership. No code may be written until this review is recorded; it is now recorded before Workshop implementation.

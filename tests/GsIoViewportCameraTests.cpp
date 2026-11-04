@@ -86,8 +86,8 @@ TEST_CASE("Per-viewport visual style round-trips through document JSON payload (
   CHECK(loaded.paperLayouts[0].viewports[2].visualStyle == VisualStyle::Shaded);
 }
 
-TEST_CASE("Closed-polyline viewport clipping boundary round-trips through document JSON (REQ-480)",
-          "[payload][req480]") {
+TEST_CASE("Closed-polyline viewport clipping boundary round-trips through document JSON (REQ-490)",
+          "[payload][req490]") {
   AppCommandState st;
   PaperLayout layout;
   Viewport vp;

@@ -41,7 +41,7 @@ The user confirmed this scope on 2026-11-04:
 ## 3. Authority and decisions
 
 - Requirement: REQ-485 (accepted), with REQ-029/030/048/049/113/201 and REQ-300 constraints.
-- Decision: D-2026-11-04-a; architecture: ADR-076.
+- Decision: D-2026-11-04-e; architecture: ADR-078.
 - Acceptance: REQ-485 Acceptance 1–6.
 - Architectural impact: Domain/GoSurvey data gains table-reference and plot-style-name values; DWG/DXF IO preserves native STB assignments; the existing PDF plotter applies existing CTB/STB files. No new dependency, editor, assignment UI, or output backend.
 
@@ -60,7 +60,7 @@ Likely areas: `src/commands/PaperSpace.hpp`, drawing/entity/layer values in `src
 
 **Verdict: APPROVE the plan for implementation, with the format-coverage checks below treated as blocking acceptance evidence.**
 
-- **Architecture:** Responsibilities follow ADR-076: Domain owns assignments and page-setup references; IO owns GoSurvey/DWG/DXF serialization; the existing PDF plotter owns table evaluation. The plan adds no dependency, global, or new subsystem. The referenced external table is not embedded; missing references fail plotting explicitly.
+- **Architecture:** Responsibilities follow ADR-078: Domain owns assignments and page-setup references; IO owns GoSurvey/DWG/DXF serialization; the existing PDF plotter owns table evaluation. The plan adds no dependency, global, or new subsystem. The referenced external table is not embedded; missing references fail plotting explicitly.
 - **Correctness risks:** CTB effective color resolution; STB entity-over-layer precedence; default `Normal`; table path missing after reopen/on another machine; malformed or unsupported table data; partial/incorrect output in multi-layout batch; maintaining vector output and no-table identity. Unknown CTB/STB file variants must not be silently treated as valid. Verify native handle/name mapping against real DWG/DXF fixtures, including layer and entity assignment.
 - **Dependencies/performance:** No dependency change is authorized. Table parsing must stay out of interactive render paths and run only during plot. Avoid repeated reparsing within a batch; cache only within the plotting operation unless measurements justify longer-lived state.
 - **Required tests:**

@@ -65,7 +65,7 @@ Implementation self-review: `verification/reviews/TASK-810-pdf-preview-implement
 ## 7. Implementation log
 
 - 2026-11-04: The user confirmed the PDF Preview feature request, including the existing editable PDF viewer and its Save As workflow.
-- 2026-11-04: SPEC added REQ-486 and decision D-2026-11-04-b. No architecture/data-format decision is needed; Verification approved the plan before implementation.
+- 2026-11-04: SPEC added REQ-486 and decision D-2026-11-04-f. No architecture/data-format decision is needed; Verification approved the plan before implementation.
 - 2026-11-04: Enabled and space-gated the Output ribbon Preview command. It writes the active layout through `PlotLayoutsToPdf` into a unique temporary directory and transfers that directory to the existing PDF viewer. The viewer keeps annotation and Save As available and removes the temporary files when it closes. Plot failures are shown with the plot log and do not open the viewer.
 - 2026-11-04: Updated `resources/wiki/Plotting.md` with Preview and Save As instructions.
 - 2026-11-04: Added Qt coverage for the ribbon route, one-page paper dimensions, annotation and Save As, unchanged layout/undo state, temporary-file lifetime, missing-table failure cleanup, and model-space refusal.

@@ -5242,8 +5242,8 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   dependency or stable-release behavior changes.
 - Status: accepted (D-2026-11-02-a); backs REQ-202.
 
-### ADR-075 — Value-owned clipping boundary for MVIEW object viewports   (2026-11-03, accepted)
-- Context: REQ-480 adds a viewport made from a closed paper-space polyline. `Viewport` currently
+### ADR-077 — Value-owned clipping boundary for MVIEW object viewports   (2026-11-03, accepted)
+- Context: REQ-490 adds a viewport made from a closed paper-space polyline. `Viewport` currently
   stores only a rectangular paper-space extent; the editor composites each rendered model view as
   a rectangular framebuffer blit. DWG VIEWPORT and DXF VIEWPORT records already provide a native
   clip-boundary handle and distinguish polygon clipping, but GoSurvey does not currently retain
@@ -5266,9 +5266,9 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   a required interoperability check. Viewport selection, MOVE/COPY, undo/redo, and paper-space
   rendering must treat the boundary as part of the viewport state. This supersedes only the
   closed-object use case of REQ-034's withdrawal; vertex-drawn polygonal creation remains deferred.
-- Status: accepted (D-2026-11-03-a); backs REQ-480.
+- Status: accepted (D-2026-11-03-i); backs REQ-490.
 
-### ADR-076 — Drawing-owned plot-style names and Page Setup table references   (2026-11-04, accepted)
+### ADR-078 — Drawing-owned plot-style names and Page Setup table references   (2026-11-04, accepted)
 - Context: REQ-485 adds CTB/STB evaluation to the existing vector PDF path. Page Setup and
   `PageSetup` currently own paper size and plot settings, but no style-table reference. Layers and
   entities currently have no named plot-style assignment, and DXF emits only a placeholder
@@ -5293,4 +5293,4 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   or invalid table is an explicit plot failure. Table files remain external, so a stored reference
   may be unavailable on another machine and must be reported rather than silently ignored. No new
   dependency or renderer abstraction is introduced.
-- Status: accepted (D-2026-11-04-a); backs REQ-485.
+- Status: accepted (D-2026-11-04-e); backs REQ-485.

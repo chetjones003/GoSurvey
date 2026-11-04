@@ -30,7 +30,7 @@
 - Risks: using model selection indices or stores by accident; incomplete duplication/rotation of one paper entity type; cleanup tolerance accidentally derived from model extents; per-instance undo; stale selection after array commit.
 - Tests: rectangular and polar arrays on selected paper geometry; one-step undo; source/model/sibling-layout invariance; active-layout cleanup and no cross-layout effects; unchanged model-space array and cleanup behavior.
 - Steps:
-  - [x] Record D-2026-11-03-d and accepted REQ-483.
+  - [x] Record D-2026-11-03-f and accepted REQ-483.
   - [x] Complete architecture/risk/test review before implementation.
   - [x] Implement both paper-space commands.
   - [x] Add focused command, undo, and isolation coverage.
@@ -45,7 +45,7 @@
 
 ## 6. Implementation log
 
-- 2026-11-03: User chose to support both commands. Added D-2026-11-03-d and REQ-483 before Workshop.
+- 2026-11-03: User chose to support both commands. Added D-2026-11-03-f and REQ-483 before Workshop.
 - 2026-11-03: Implemented paper ARRAY selection, rectangular and polar copy placement, and a single undo snapshot per completed array. Paper copies use the existing paper translate/rotate primitives; polar rotation preserves each copy's correct center placement.
 - 2026-11-03: Routed paper OVERKILL through the existing cleanup rules using only the active layout's line, circle, arc, and polyline stores, with one undo snapshot on the drawing. Model geometry and sibling layouts are not passed to the cleanup operation.
 - 2026-11-03: Updated ARRAY and OVERKILL in-app help and the paper-space guide.

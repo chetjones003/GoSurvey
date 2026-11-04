@@ -28,7 +28,7 @@ AppCommandState MviewState() {
 }
 }  // namespace
 
-TEST_CASE("MVIEW Fit and fixed options create the specified sheet rectangles (REQ-480)", "[req480][mview]") {
+TEST_CASE("MVIEW Fit and fixed options create the specified sheet rectangles (REQ-490)", "[req490][mview]") {
   struct Expected { const char* option; std::vector<std::array<float, 4>> rects; };
   const std::vector<Expected> cases = {
       {"Fit", {{0.f, 0.f, 17.f, 11.f}}},
@@ -56,7 +56,7 @@ TEST_CASE("MVIEW Fit and fixed options create the specified sheet rectangles (RE
   }
 }
 
-TEST_CASE("MVIEW cancellation leaves the active layout unchanged (REQ-480)", "[req480][mview]") {
+TEST_CASE("MVIEW cancellation leaves the active layout unchanged (REQ-490)", "[req490][mview]") {
   AppCommandState state = MviewState();
   std::vector<std::string> log;
   SubmitText(state, "MVIEW", log);
@@ -68,7 +68,7 @@ TEST_CASE("MVIEW cancellation leaves the active layout unchanged (REQ-480)", "[r
   CHECK(state.paperVpMode == 0);
 }
 
-TEST_CASE("MVIEW retains its original two-corner rectangle workflow (REQ-480)", "[req480][mview]") {
+TEST_CASE("MVIEW retains its original two-corner rectangle workflow (REQ-490)", "[req490][mview]") {
   AppCommandState state = MviewState();
   std::vector<std::string> log;
   SubmitText(state, "MVIEW", log);
@@ -85,8 +85,8 @@ TEST_CASE("MVIEW retains its original two-corner rectangle workflow (REQ-480)", 
   CHECK(state.active == AppCommandState::Kind::None);
 }
 
-TEST_CASE("MVIEW Object copies the closed boundary and undo/redo restores the viewport (REQ-480)",
-          "[req480][mview]") {
+TEST_CASE("MVIEW Object copies the closed boundary and undo/redo restores the viewport (REQ-490)",
+          "[req490][mview]") {
   AppCommandState state = MviewState();
   PaperLayout& layout = state.paperLayouts[0];
   layout.paperPolyOffsets = {0, 3};
@@ -112,8 +112,8 @@ TEST_CASE("MVIEW Object copies the closed boundary and undo/redo restores the vi
   CHECK(state.paperLayouts[0].paperPolyVerts == source);
 }
 
-TEST_CASE("MVIEW Object refuses open polylines without changing geometry or undo state (REQ-480)",
-          "[req480][mview]") {
+TEST_CASE("MVIEW Object refuses open polylines without changing geometry or undo state (REQ-490)",
+          "[req490][mview]") {
   AppCommandState state = MviewState();
   PaperLayout& layout = state.paperLayouts[0];
   layout.paperPolyOffsets = {0, 3};
@@ -130,8 +130,8 @@ TEST_CASE("MVIEW Object refuses open polylines without changing geometry or undo
   CHECK(state.active == AppCommandState::Kind::PaperRectViewport);
 }
 
-TEST_CASE("MVIEW Object refuses other paper entities without changing layout state (REQ-480)",
-          "[req480][mview]") {
+TEST_CASE("MVIEW Object refuses other paper entities without changing layout state (REQ-490)",
+          "[req490][mview]") {
   AppCommandState state = MviewState();
   PaperLayout& layout = state.paperLayouts[0];
   layout.paperLines = {0.f, 0.f, 0.f, 4.f, 0.f, 0.f};
@@ -147,7 +147,7 @@ TEST_CASE("MVIEW Object refuses other paper entities without changing layout sta
   CHECK_FALSE(log.empty());
 }
 
-TEST_CASE("MVIEW Object accepts a closed two-vertex bulge outline (REQ-480)", "[req480][mview]") {
+TEST_CASE("MVIEW Object accepts a closed two-vertex bulge outline (REQ-490)", "[req490][mview]") {
   AppCommandState state = MviewState();
   PaperLayout& layout = state.paperLayouts[0];
   layout.paperPolyOffsets = {0, 2};
@@ -165,7 +165,7 @@ TEST_CASE("MVIEW Object accepts a closed two-vertex bulge outline (REQ-480)", "[
   CHECK(state.paperLayouts[0].viewports[0].paperHIn > 0.f);
 }
 
-TEST_CASE("MVIEW refuses model space before starting its prompt (REQ-480)", "[req480][mview]") {
+TEST_CASE("MVIEW refuses model space before starting its prompt (REQ-490)", "[req490][mview]") {
   AppCommandState state;
   std::vector<std::string> log;
   SubmitText(state, "MVIEW", log);
@@ -174,8 +174,8 @@ TEST_CASE("MVIEW refuses model space before starting its prompt (REQ-480)", "[re
   REQUIRE_FALSE(log.empty());
 }
 
-TEST_CASE("CopyPaperLayout duplicates complete value and preserves active layout through undo redo (REQ-481)",
-          "[req481][layout]") {
+TEST_CASE("CopyPaperLayout duplicates complete value and preserves active layout through undo redo (REQ-489)",
+          "[req489][layout]") {
   AppCommandState state;
   PaperLayout source;
   source.name = "Site Plan";
@@ -257,8 +257,8 @@ TEST_CASE("CopyPaperLayout duplicates complete value and preserves active layout
   CHECK(state.paperLayouts[3].name == "Site Plan (3)");
 }
 
-TEST_CASE("LAYOUT COPY supports active and named sources and rejects collisions without undo mutation (REQ-481)",
-          "[req481][layout]") {
+TEST_CASE("LAYOUT COPY supports active and named sources and rejects collisions without undo mutation (REQ-489)",
+          "[req489][layout]") {
   AppCommandState state;
   PaperLayout first;
   first.name = "Main Plan";

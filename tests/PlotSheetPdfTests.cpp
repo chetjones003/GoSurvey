@@ -434,8 +434,8 @@ TEST_CASE("Fit measures an arc as sheet content (REQ-445 c, measured)", "[plot][
   CHECK_THAT(paths.front().right, WithinAbs(kSheetW * kPt, 1.0));
 }
 
-TEST_CASE("Closed-polyline viewport boundary clips plotted model strokes as vector paths (REQ-480)",
-          "[plot][req480]") {
+TEST_CASE("Closed-polyline viewport boundary clips plotted model strokes as vector paths (REQ-490)",
+          "[plot][req490]") {
   AppCommandState st;
   PaperLayout layout;
   layout.name = "Sheet";

@@ -6,7 +6,7 @@
 
 ## Authority and acceptance
 
-REQ-488 is accepted under D-2026-11-04-d and derives PDF geometry and saved plot behavior from REQ-029, REQ-445, and REQ-485. The acceptance checks are observable: one current paper layout becomes a PDF page; its stored paper size, orientation, placement, and CTB/STB selection are honored; cancellation and failure do not mutate drawing state or publish a partial final file; and the action is unavailable outside paper space.
+REQ-488 is accepted under D-2026-11-04-h and derives PDF geometry and saved plot behavior from REQ-029, REQ-445, and REQ-485. The acceptance checks are observable: one current paper layout becomes a PDF page; its stored paper size, orientation, placement, and CTB/STB selection are honored; cancellation and failure do not mutate drawing state or publish a partial final file; and the action is unavailable outside paper space.
 
 ## Architecture
 

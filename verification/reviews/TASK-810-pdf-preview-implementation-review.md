@@ -6,7 +6,7 @@
 
 ## Requirement and architecture
 
-The implementation follows accepted REQ-486 and decision D-2026-11-04-b. The existing Output ribbon action routes to the Qt editor; the existing `PlotLayoutsToPdf` writer creates the active layout's vector PDF using stored layout settings; the existing `PdfWindow` loads it and owns the unique temporary directory. The viewer retains its established annotation and Save As paths. No drawing data is changed and no dependency, output backend, data format, or layer was introduced.
+The implementation follows accepted REQ-486 and decision D-2026-11-04-f. The existing Output ribbon action routes to the Qt editor; the existing `PlotLayoutsToPdf` writer creates the active layout's vector PDF using stored layout settings; the existing `PdfWindow` loads it and owns the unique temporary directory. The viewer retains its established annotation and Save As paths. No drawing data is changed and no dependency, output backend, data format, or layer was introduced.
 
 ## Correctness and failure handling
 

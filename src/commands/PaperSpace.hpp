@@ -65,7 +65,7 @@ struct Viewport {
     float yIn = 0.f;
     float bulge = 0.f;
   };
-  // REQ-480: optional copied paper-space clipping boundary. Empty keeps the rectangular fast path.
+  // REQ-490: optional copied paper-space clipping boundary. Empty keeps the rectangular fast path.
   std::vector<ClipVertex> clipBoundary;
   double modelCenterX = 0.0;  // model-space point shown at the viewport's center
   double modelCenterY = 0.0;

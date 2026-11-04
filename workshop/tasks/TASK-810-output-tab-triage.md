@@ -83,7 +83,7 @@ defines the remaining controls' behavior, and the prior evidence pass found no i
 capability or supported DWF/PC3 backend to settle that scope. Do not implement these controls until
 one independently testable slice is selected and its feature request is accepted.
 
-- D-2026-11-04-d / REQ-488 now defines Current-layout PDF Export through the existing plot pipeline.
+- D-2026-11-04-h / REQ-488 now defines Current-layout PDF Export through the existing plot pipeline.
   The user explicitly excluded DWF, Display-area export, Plotter Manager/device configuration, and
   changes to the Display/Current controls. The slice is implemented and focused verification passed;
   see `TASK-810-export-current-layout-pdf.md`.
