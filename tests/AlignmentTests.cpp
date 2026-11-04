@@ -523,11 +523,13 @@ TEST_CASE("Create from objects: fillet a 90 degree corner", "[req485][alignment]
     CHECK(c.c1);
   }
 
-  opt.filletRadius = 900.0;  // does not fit: left as a PI with a warning
+  opt.filletRadius = 900.0;  // too big: the radius shrinks so T is 40 % of the shorter tangent (D-2026-11-04-i)
   warn.clear();
   REQUIRE(alignment::BuildFromSegments({l1, l2}, opt, &out, &err, &warn));
-  CHECK(out.Entities().size() == 2);
-  CHECK(warn.size() == 1);
+  REQUIRE(out.Entities().size() == 3);
+  CHECK(out.Entities()[1].radius == Approx(200.0).margin(1e-9));
+  REQUIRE(warn.size() == 1);
+  CHECK(warn[0].find("used radius 200") != std::string::npos);
 }
 
 TEST_CASE("Geometry points, bounds and display sampling", "[req490][req495][alignment]") {

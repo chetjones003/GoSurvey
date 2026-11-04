@@ -1227,15 +1227,15 @@ private Q_SLOTS:
       QVERIFY(dialog->findChild<QCheckBox*>("createAlignmentErase")->isChecked());
       QTest::qWait(50);
       QVERIFY(GrabWithTitle(dialog).save(Issue914Shot("qt-485-create-from-objects.png")));
-      // R 200 does not fit the 100-unit tangents (REQ-485.2 leaves such a corner as a PI); Civil 3D fitted R 40.
-      dialog->findChild<QLineEdit*>("createAlignmentRadius")->setText("40");
       dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
     });
     window.Submit("");  // accept the direction
     QVERIFY(objectsDialog);
     QCOMPARE(st.alignments.size(), size_t(2));
     QCOMPARE(st.alignments[1].name, std::string("Alignment - (1)"));
+    // R 200 is too big for the 100-unit tangents: like Civil 3D the curve gets R 40 (T = 40 % of 100).
     QCOMPARE(st.alignments[1].Entities().size(), size_t(4));  // tangent, R 40 curve, tangent, arc
+    QVERIFY(std::fabs(st.alignments[1].Entities()[1].radius - 40.0) < 1e-6);
     QVERIFY(st.userLinesFlat.size() < lineCount);  // Erase existing entities
     window.Submit("UNDO");
     QCOMPARE(st.alignments.size(), size_t(1));

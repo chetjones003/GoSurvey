@@ -1051,25 +1051,34 @@ bool BuildFromSegments(const std::vector<SourceSegment>& segments, const FromObj
   }
 
   if (opt.addFillets) {
-    // Fillet each line-line corner with the requested radius; a corner that does not fit stays a PI.
+    // Fillet each line-line corner with the requested radius. Like Civil 3D (D-2026-11-04-i), a curve whose tangent
+    // distance would exceed 40 % of the shorter of its two tangents gets the radius that uses exactly 40 %, so two
+    // corners never compete for one tangent; the smaller radius is reported.
+    constexpr double kMaxTangentShare = 0.4;
     const std::vector<Entity> src = out->Entities();
     std::vector<double> trimStart(src.size(), 0.0), trimEnd(src.size(), 0.0);
     std::vector<char> filleted(src.size(), 0);
-    std::vector<double> deflection(src.size(), 0.0);
+    std::vector<double> deflection(src.size(), 0.0), radius(src.size(), opt.filletRadius);
     for (size_t i = 0; i + 1 < src.size(); ++i) {
       if (src[i].kind != EntityKind::Line || src[i + 1].kind != EntityKind::Line) continue;
       double d = std::fmod(src[i + 1].startAzimuth - src[i].startAzimuth, kTwoPi);
       if (d > kPi) d -= kTwoPi;
       if (d < -kPi) d += kTwoPi;
       if (std::fabs(d) < 1e-9) continue;
-      const double t = opt.filletRadius * std::tan(std::fabs(d) * 0.5);
-      const double availA = src[i].length - trimStart[i];
-      const double availB = src[i + 1].length;
-      if (t >= availA - 1e-9 || t >= availB - 1e-9) {
-        if (warnings != nullptr)
-          warnings->push_back("corner after object " + std::to_string(chain[i].source) + " is too tight for radius " +
-                              Num(opt.filletRadius) + "; left as a PI");
+      const std::string corner = "corner after object " + std::to_string(chain[i].source);
+      if (std::fabs(d) >= kPi - 1e-9) {  // the line doubles back: no curve can join it
+        if (warnings != nullptr) warnings->push_back(corner + " turns back on itself; left as a PI");
         continue;
+      }
+      const double halfTan = std::tan(std::fabs(d) * 0.5);
+      const double tMax = kMaxTangentShare * std::min(src[i].length, src[i + 1].length);
+      double t = opt.filletRadius * halfTan;
+      if (t > tMax) {
+        t = tMax;
+        radius[i] = tMax / halfTan;
+        if (warnings != nullptr)
+          warnings->push_back(corner + " is too tight for radius " + Num(opt.filletRadius) + "; used radius " +
+                              Num(radius[i]));
       }
       trimEnd[i] = t;
       trimStart[i + 1] = t;
@@ -1086,7 +1095,7 @@ bool BuildFromSegments(const std::vector<SourceSegment>& segments, const FromObj
       if (!rebuilt.AppendRaw(e)) return fail("fillet left a zero-length segment");
       if (filleted[i]) {
         const bool right = deflection[i] > 0.0;
-        if (!rebuilt.AppendCurveByDelta(opt.filletRadius, std::fabs(deflection[i]), right))
+        if (!rebuilt.AppendCurveByDelta(radius[i], std::fabs(deflection[i]), right))
           return fail("fillet could not be created");
       }
     }

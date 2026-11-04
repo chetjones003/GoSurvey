@@ -16172,7 +16172,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
      (never a vertex approximation). Connected objects are chained; direction starts from the end nearest the click
      and `R` reverses it `[A:E03F62E7, 7A01C84A]`. Option "add curves between tangents" fillets tangent-to-tangent
      corners with a default radius (the user-entered value; Autodesk gives no default **(GoSurvey rule: 100 ft / 30 m,
-     editable)**); a corner too tight for the radius is reported and left as a PI. Layers/styles/starting station come
+     editable)**). **Decision D-2026-11-04-i:** a corner whose curve would need a tangent distance over 40 % of the
+     shorter adjacent tangent gets the radius that uses exactly 40 %, as Civil 3D does, and the smaller radius is
+     reported; a corner that turns back on itself stays a PI. Layers/styles/starting station come
      from the dialog. Source objects may optionally be erased.
   3. Disconnected selections, gaps larger than the position tolerance (default 0.001, user-editable up to 1.0 with
      auto-join), self-overlaps, zero-length segments, non-planar or vertical segments and splines yield a named

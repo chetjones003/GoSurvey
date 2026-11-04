@@ -5,6 +5,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -218,6 +219,39 @@ TEST_CASE("Create from objects refuses self-overlapping and branching objects", 
   b.b = {200, -100};
   CHECK_FALSE(alignment::BuildFromSegments({a, b, c}, {}, &out, &err));
   CHECK(err.find("branch") != std::string::npos);
+}
+
+TEST_CASE("Create from objects shrinks a fillet that is too big, as Civil 3D does", "[req485][alignment]") {
+  // Civil 3D 2026 AddFromPolyline with curves at its 200 ft default (task log §3): tangents L1, L2 meeting at the given
+  // deflection; T is capped at 40 % of the shorter tangent and the radius follows from T = R tan(delta/2).
+  struct Case {
+    double l1, l2, deflectionDeg, radius;
+  };
+  const std::array<Case, 7> cases{{{100, 300, 90, 40.0}, {100, 100, 60, 69.282}, {500, 500, 90, 200.0},
+                                   {300, 300, 30, 200.0}, {300, 300, 90, 120.0}, {250, 600, 90, 100.0},
+                                   {201, 1000, 90, 80.4}}};
+  for (const Case& c : cases) {
+    INFO(c.l1 << " / " << c.l2 << " at " << c.deflectionDeg);
+    alignment::SourceSegment a, b;
+    a.a = {0, 0};
+    a.b = {0, c.l1};
+    b.a = a.b;
+    b.b = {c.l2 * std::sin(c.deflectionDeg * kDeg), c.l1 + c.l2 * std::cos(c.deflectionDeg * kDeg)};
+    alignment::FromObjectsOptions opt;
+    opt.addFillets = true;
+    opt.filletRadius = 200.0;
+    Alignment out;
+    std::string err;
+    std::vector<std::string> warn;
+    REQUIRE(alignment::BuildFromSegments({a, b}, opt, &out, &err, &warn));
+    REQUIRE(out.Entities().size() == 3);
+    CHECK(out.Entities()[1].radius == Approx(c.radius).margin(1e-3));
+    const double t = c.radius * std::tan(c.deflectionDeg * kDeg / 2.0);
+    CHECK(out.Entities()[0].length == Approx(c.l1 - t).margin(1e-3));
+    CHECK(out.Entities()[2].length == Approx(c.l2 - t).margin(1e-3));
+    CHECK(warn.size() == (c.radius < 200.0 ? 1u : 0u));
+    CheckSmooth(out);
+  }
 }
 
 TEST_CASE("Create from objects joins gaps within the tolerance", "[req485][alignment]") {

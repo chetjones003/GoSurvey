@@ -1,7 +1,7 @@
 # TASK-alignment-create-issue121 — Create alignments: dialog, layout toolbar, from objects (REQ-485)
 
 - Type:    feature (remaining REQ-485 statements)
-- Status:  done (in review with PR #1152), except the open decision in §7
+- Status:  done (in review with PR #1152)
 - Opened:  2026-11-04
 - Owner:   chetjones003 ("Do req 485", 2026-11-04), Claude (implementation)
 - GitHub:  #121, PR #1152
@@ -77,9 +77,13 @@ vertical and spline refusals. Qt: dialog creates and opens the toolbar; toolbar 
 No new dependency. New Kinds (`AlignmentLayout`, `AlignmentFromObjects`) follow the existing Kind/phase pattern and
 are routed in `ViewportClickRouteFor`. The Qt dialogs are reached through request flags, like EDITALIGNMENT's dock.
 
-## 7. Open decision
+## 7. Decision on tight fillet corners (D-2026-11-04-i)
 Tight fillet corners: keep REQ-485.2 ("reported and left as a PI") or follow Civil 3D (shrink the radius so T is 40 %
-of the shorter tangent). Asked of the user; until answered the spec rule stands. Also observed: Civil 3D's default
+of the shorter tangent). The user chose option 2 (follow Civil 3D, report the smaller radius) for Create from Objects
+only; Tangent-Tangent layout was not checked in Civil 3D and keeps its rule. Implemented in `BuildFromSegments`
+(`kMaxTangentShare`); a corner that turns back on itself stays a PI. The test "Create from objects shrinks a fillet
+that is too big, as Civil 3D does" replays the seven Civil 3D cases; the Qt test now gets R 40 from the dialog's 200,
+as Civil 3D did. Docs updated in the in-app help, the public wiki (753bbc6) and gosurveycad.com (37c1b8a). Also observed: Civil 3D's default
 radius is 200' and its dialog checks "Add curves" and "Erase" by default; the spec's 100 ft / 30 m rule is kept, and
 the dialog checks both boxes as Civil 3D does.
 
@@ -103,7 +107,8 @@ the dialog checks both boxes as Civil 3D does.
   spiral (hand-computed clothoid T, unequal spirals), tight corners, overlap / branch refusals, auto-join; acceptance
   1, 3, 5 and 6; vertical / 3D polyline / spline refusals and the Z note; interactive picks with Reverse; layout
   picks, `U`, continuation and undo; starting direction. Updated: the gap-message test in `AlignmentTests.cpp` and
-  the selection expectation in `AlignmentCommandTests.cpp`. `[alignment]` 174 cases / 4190 assertions pass.
+  the selection expectation in `AlignmentCommandTests.cpp`. `[alignment]` 175 cases / 4262 assertions pass after
+  D-2026-11-04-i; full suite again 194/194 (`build/artifacts/ctest-485b.log`).
 - Qt: `issue121CreateAlignmentDialogsAndLayoutTools` passes (dialogs, toolbar, settings, from objects, ribbon).
 - Build: `build.bat` Release, no warnings. Full suite `ctest --preset ninja-release` 194/194
   (`build/artifacts/ctest-485.log`).
@@ -118,7 +123,8 @@ the dialog checks both boxes as Civil 3D does.
   and `docs/command-reference.html` (category block and index), site commit 94916a0, live and checked.
 
 ## 11. Follow-ups
-- The open decision in §7.
+- Check what Civil 3D's Tangent-Tangent (With curves) does at a corner too tight for the radius before deciding
+  whether the layout should also shrink it (D-2026-11-04-i covers Create from Objects only).
 - Panel non-blocking items: open the toolbar clear of new geometry and show the current tool pressed; dark-theme
   checkbox contrast; Curve and Spiral Settings A value as a read-only field; Help and style edit buttons.
 - Civil 3D's other sub-entity layout tools (fixed / floating / free lines, curves and spirals, PI insert / delete /
