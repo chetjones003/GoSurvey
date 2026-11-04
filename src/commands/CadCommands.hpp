@@ -8080,6 +8080,7 @@ void RunReverseAlignment(AppCommandState& st, const std::string& args, std::vect
 void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentReport(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunOffsetAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentDetach(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::vector<std::string>& log);

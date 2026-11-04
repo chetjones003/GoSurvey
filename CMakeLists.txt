@@ -651,6 +651,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Civil alignments (REQ-480..484, ADR-075, issue #121): exact tangent/curve geometry, stationing, queries
   src/alignment/Alignment.cpp
   src/alignment/AlignmentLabels.cpp
+  src/alignment/AlignmentReport.cpp
   src/alignment/AlignmentEdit.cpp
   src/alignment/Clothoid.cpp
   # Geometry math (util)
@@ -1220,6 +1221,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AlignmentCommandTests.cpp
     tests/AlignmentStyleTests.cpp
     tests/AlignmentLabelTests.cpp
+    tests/AlignmentReportTests.cpp
     tests/AlignmentSpiralCommandTests.cpp
     tests/AlignmentEditTests.cpp
     tests/SurfaceStatsTests.cpp

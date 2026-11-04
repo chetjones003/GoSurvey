@@ -13,6 +13,9 @@
 #include "CadCoordinateFrame.hpp"
 #include "AlignmentStyle.hpp"
 #include "AlignmentLabelSet.hpp"
+#include "alignment/AlignmentReport.hpp"
+#include "SpreadsheetIo.hpp"
+#include "WinFileDialogs.hpp"
 #include "StringUtil.hpp"
 #include "util/NumFormat.hpp"
 
@@ -20,6 +23,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <vector>
@@ -1474,4 +1478,101 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
     return;
   }
   usage();
+}
+
+// ALIGNMENTREPORT [<name>][, TXT|CSV[, <path>]]  (REQ-494)
+void RunAlignmentReport(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  std::string filterName;
+  std::string exportKind;
+  std::string path;
+  if (f.size() >= 2) {
+    const std::string verb = Lower(f[1]);
+    if (verb == "txt" || verb == "csv") {
+      exportKind = verb;
+      filterName = f[0];
+      if (f.size() >= 3) path = Trim(f[2]);
+    }
+  }
+  if (exportKind.empty() && !f.empty()) filterName = Trim(f[0]);
+
+  if (st.alignments.empty()) {
+    log.push_back("ALIGNMENTREPORT - this drawing has no alignments.");
+    return;
+  }
+
+  std::vector<const alignment::Alignment*> targets;
+  for (const alignment::Alignment& a : st.alignments) {
+    if (!filterName.empty() && Lower(a.name) != Lower(filterName)) continue;
+    targets.push_back(&a);
+  }
+  if (!filterName.empty() && targets.empty()) {
+    log.push_back("ALIGNMENTREPORT - no alignment named \"" + filterName + "\".");
+    return;
+  }
+
+  alignment::AlignmentReportFormat fmt;
+  fmt.linearPrecision = st.displayLinearPrecision;
+  fmt.angles = CadAngleDisplaySettings(st);
+
+  if (exportKind.empty()) {
+    for (size_t i = 0; i < targets.size(); ++i) {
+      std::vector<std::string> lines;
+      alignment::BuildAlignmentReportLines(*targets[i], fmt, &lines);
+      for (const std::string& line : lines) log.push_back(line);
+      if (targets.size() > 1 && i + 1 < targets.size()) log.push_back("---");
+    }
+    log.push_back("ALIGNMENTREPORT - " + std::to_string(targets.size()) + " alignment(s) reported.");
+    return;
+  }
+
+  if (path.empty()) {
+    char buf[1024] = {};
+    const char* defaultName = exportKind == "csv" ? "alignment-report.csv" : "alignment-report.txt";
+    const bool picked = exportKind == "csv" ? BrowseSaveFileCsvUtf8(buf, sizeof(buf), defaultName)
+                                              : BrowseSaveFileTxtUtf8(buf, sizeof(buf), defaultName);
+    if (!picked || buf[0] == '\0') {
+      log.push_back("ALIGNMENTREPORT - cancelled.");
+      return;
+    }
+    path = buf;
+  }
+
+  if (exportKind == "csv") {
+    SheetGrid::Grid grid;
+    bool header = false;
+    for (const alignment::Alignment* a : targets) {
+      SheetGrid::Grid part = alignment::BuildAlignmentReportCsv(*a, fmt);
+      if (part.empty()) continue;
+      if (!header) {
+        grid.push_back(part.front());
+        header = true;
+      }
+      for (size_t r = 1; r < part.size(); ++r) grid.push_back(std::move(part[r]));
+    }
+    std::string err;
+    if (!SpreadsheetIo::WriteCsv(path, grid, &err)) {
+      log.push_back("ALIGNMENTREPORT - could not write CSV \"" + path + "\": " + err + ".");
+      return;
+    }
+    log.push_back("ALIGNMENTREPORT - CSV written to \"" + path + "\" (" + std::to_string(grid.size() - 1) +
+                  " entity row(s)).");
+    return;
+  }
+
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out) {
+    log.push_back("ALIGNMENTREPORT - could not write \"" + path + "\".");
+    return;
+  }
+  for (size_t i = 0; i < targets.size(); ++i) {
+    std::vector<std::string> lines;
+    alignment::BuildAlignmentReportLines(*targets[i], fmt, &lines);
+    for (size_t li = 0; li < lines.size(); ++li) {
+      out << lines[li];
+      if (li + 1 < lines.size()) out << '\n';
+    }
+    if (targets.size() > 1 && i + 1 < targets.size()) out << "\n---\n";
+  }
+  log.push_back("ALIGNMENTREPORT - report written to \"" + path + "\".");
 }

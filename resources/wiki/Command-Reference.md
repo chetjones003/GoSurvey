@@ -182,6 +182,7 @@ for a compact list inside the program.
 | `ALIGNMENTINTERSECT` | — | Intersections: ALIGNMENTINTERSECT <a>, <b> \| <a>, LINE, ... \| <a>, CIRCLE, ... | [[Commands/alignmentintersect]] |
 | `ALIGNMENTSTYLE` | — | Alignment display styles: ALIGNMENTSTYLE LIST\|NEW\|DELETE\|ASSIGN\|SHOW\|HIDE\|COLOR, ... | [[Commands/alignmentstyle]] |
 | `EDITALIGNMENT` | — | Open the Alignment Layout table: EDITALIGNMENT [<name>] | [[Commands/editalignment]] |
+| `ALIGNMENTREPORT` | — | Report an alignment as text or CSV: ALIGNMENTREPORT [<name>][, TXT|CSV[, <path>]] | [[Commands/alignmentreport]] |
 
 ### Surfaces and volumes
 
@@ -310,6 +311,7 @@ for a compact list inside the program.
 | `ALIGNMENTLIST` | — | [[Commands/alignmentlist]] |
 | `ALIGNMENTLOCK` | — | [[Commands/alignmentlock]] |
 | `ALIGNMENTREMOVE` | — | [[Commands/alignmentremove]] |
+| `ALIGNMENTREPORT` | — | [[Commands/alignmentreport]] |
 | `ALIGNMENTSTATION` | — | [[Commands/alignmentstation]] |
 | `ALIGNMENTSTYLE` | — | [[Commands/alignmentstyle]] |
 | `ARC` | — | [[Commands/arc]] |

@@ -7207,6 +7207,7 @@ const CmdEntry kRegistry[] = {
     {"alignmentstation", "", "Starting station and station equations: ALIGNMENTSTATION <name>, START|EQ, ..."},
     {"alignmentstyle", "", "Alignment display styles: ALIGNMENTSTYLE LIST|NEW|DELETE|ASSIGN|SHOW|HIDE|COLOR, ..."},
     {"alignmentlabelset", "", "Alignment label sets: ALIGNMENTLABELSET LIST|NEW|DELETE|ASSIGN|MAJORINTERVAL|MINORINTERVAL|SHOW|HIDE, ..."},
+    {"alignmentreport", "", "Alignment report (text/CSV): ALIGNMENTREPORT [<name>][, TXT|CSV[, <path>]]"},
     {"offsetalignment", "", "Create offset alignments: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (L12 left, R12 right)"},
     {"alignmentdetach", "", "Make a linked offset independent: ALIGNMENTDETACH <name>"},
     {"alignmentintersect", "", "Intersections: ALIGNMENTINTERSECT <a>, <b> | <a>, LINE, ... | <a>, CIRCLE, ..."},
@@ -47073,6 +47074,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "alignmentstation" ||
         plotTok == "alignmentstyle" ||
         plotTok == "alignmentlabelset" ||
+        plotTok == "alignmentreport" ||
         plotTok == "offsetalignment" ||
         plotTok == "alignmentdetach" ||
         plotTok == "alignmentintersect" ||
@@ -47135,6 +47137,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunAlignmentStyle(st, rest, log);
       else if (plotTok == "alignmentlabelset")
         RunAlignmentLabelSet(st, rest, log);
+      else if (plotTok == "alignmentreport")
+        RunAlignmentReport(st, rest, log);
       else if (plotTok == "offsetalignment")
         RunOffsetAlignment(st, rest, log);
       else if (plotTok == "alignmentdetach")
