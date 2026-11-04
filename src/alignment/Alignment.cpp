@@ -307,6 +307,24 @@ struct Candidate {
   bool clampedEnd = false;
 };
 
+/// Moves `s` along the spiral to the foot of the perpendicular from (px, py), local to the spiral's start: each step
+/// adds the point's along-track distance at the current foot. Converges from a grid estimate within a few steps.
+double RefineSpiralFoot(const Entity& e, double px, double py, double s) {
+  assert(e.kind == EntityKind::Spiral);
+  assert(e.length > 0.0);
+  constexpr int kMaxSteps = 12;
+  for (int k = 0; k < kMaxSteps; ++k) {
+    const Point2 f = LocalDisplacement(e, s);
+    const double az = e.startAzimuth + SpiralHeadingDelta(e, s);
+    const double along = (px - f.x) * std::sin(az) + (py - f.y) * std::cos(az);
+    const double next = std::clamp(s + along, 0.0, e.length);
+    const bool settled = std::fabs(next - s) <= 1e-14 * std::max(1.0, e.length);
+    s = next;
+    if (settled) break;
+  }
+  return s;
+}
+
 }  // namespace
 
 StationOffset Alignment::GetStationOffset(double x, double y) const {
@@ -410,6 +428,14 @@ StationOffset Alignment::GetStationOffset(double x, double y) const {
           dBest = d;
           sBest = s;
         }
+      }
+      // The grid finds the right stretch to ~L/1000; Newton steps then find the foot of the perpendicular exactly.
+      const double sFoot = RefineSpiralFoot(e, px, py, sBest);
+      const Point2 fFoot = LocalDisplacement(e, sFoot);
+      const double dFoot = std::hypot(px - fFoot.x, py - fFoot.y);
+      if (dFoot <= dBest) {
+        dBest = dFoot;
+        sBest = sFoot;
       }
       constexpr double kEnd = 1e-9;
       if (sBest <= kEnd) c.clampedStart = true;

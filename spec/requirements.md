@@ -16518,7 +16518,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   2. For AutoCAD compatibility GoSurvey also writes **ordinary entities** (LINE, ARC, and a LWPOLYLINE/POLYLINE
      only for spirals, sampled to the REQ-495 tolerance) on the alignment layer with the alignment name in XDATA. This
      is display/interchange only: on re-import the trailer is authoritative; when the trailer is absent (a foreign
-     DWG) the ordinary entities are re-read as a REQ-485 conversion.
+     DWG) the ordinary entities are re-read as a REQ-485 conversion. **Decision D-2026-11-04-l:** spirals are one
+     LWPOLYLINE each within a 0.001-unit chord height; the first entity also carries the start point and starting
+     station; the alignment layer is created when missing; only entities tagged with an alignment name are re-read,
+     spirals come back as tangents (reported), and a group the conversion refuses stays lines and arcs (reported).
   3. Civil 3D alignment objects decoded under REQ-479 (alignment geometry, stationing, station equations, and
      labels where decodable) map into GoSurvey alignments; undecodable parts are named in the log (REQ-201).
   4. Legacy drawings without alignments load unchanged. Alignment references from other objects (offset links,

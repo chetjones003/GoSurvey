@@ -88,8 +88,13 @@ offset and a curve's radius are always exact.
   independent alignment named `<name> (2)`.
 - **Constraints.** A new tangent or curve is *Float (prev)*: it stays tangent to what precedes it. *Fixed* keeps its
   own values. *Free* is a curve that re-fits between two tangents.
-- Alignments are saved with the drawing as exact numbers. A saved DWG also contains ordinary
-  AutoCAD lines and arcs (and short line segments approximating **spirals** for display) on the alignment's layer so other software can draw it.
+- Alignments are saved with the drawing as exact numbers: geometry, station equations, type, style, label set,
+  design criteria, constraints, locks, labels and links survive save and reopen unchanged.
+- A saved DWG also contains ordinary AutoCAD lines and arcs, and one polyline per **spiral** (within 0.001 drawing
+  units of the true curve), on the alignment's layer, so AutoCAD and other software draw it. They carry the
+  alignment's name. If the drawing is saved again by AutoCAD, GoSurvey's exact data is lost; on opening it GoSurvey
+  rebuilds each alignment from those named lines and arcs (as Create Alignment from Objects would), with its name,
+  layer and starting station. Spirals then come back as short tangents, and the command line says so.
 
 ## Design criteria
 

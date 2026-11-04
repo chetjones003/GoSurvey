@@ -207,9 +207,12 @@ TEST_CASE("Alignments survive a document save and reload exactly", "[req496][ali
   CHECK(b.id == a.id);
   CHECK(b.startingStation == a.startingStation);
   REQUIRE(b.Entities().size() == a.Entities().size());
+  // State-plane geometry: the reload may move the document origin to the drawing's middle, so compare on the ground.
   for (size_t i = 0; i < a.Entities().size(); ++i) {
-    CHECK(b.Entities()[i].start.x == a.Entities()[i].start.x);  // bit-exact: doubles round-trip losslessly
-    CHECK(b.Entities()[i].start.y == a.Entities()[i].start.y);
+    CHECK(std::fabs(b.Entities()[i].start.x + back.worldDocumentOriginX - a.Entities()[i].start.x -
+                    st.worldDocumentOriginX) <= 1e-9);
+    CHECK(std::fabs(b.Entities()[i].start.y + back.worldDocumentOriginY - a.Entities()[i].start.y -
+                    st.worldDocumentOriginY) <= 1e-9);
     CHECK(b.Entities()[i].startAzimuth == a.Entities()[i].startAzimuth);
     CHECK(b.Entities()[i].length == a.Entities()[i].length);
     CHECK(b.Entities()[i].radius == a.Entities()[i].radius);
