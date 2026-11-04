@@ -5174,6 +5174,48 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   and fail if required files are absent. GoSurvey becomes responsible for refreshing and validating
   those DLLs as part of each release. The Store submission continues to carry the shared redist.
 
+### ADR-075 — Extend existing grading metadata and shared commands for the staged toolkit (2026-11-02)
+
+- Status: accepted for Stage 1 under D-2026-11-02-a; later stage details reviewed before coding.
+- Context/decision: REQ-456–458 and [grading-toolkit.md](grading-toolkit.md) define the approved
+  target and infill representation: extend CadGradingDefinition; retain infill/baked polygon
+  members on ordinary CadSurface. Extend additive DWG payload fields, preserving legacy defaults.
+  Use existing constrained TIN construction and volume comparison. Qt adapts shared commands;
+  it does not own numerical rules, and no new geometry entity, group store or live graph is added.
+- Consequences: explicit rebuilds preserve source-edit behavior; infill is an explicit additional
+  bounded face, never an automatic convex hull. Member deletion updates groups in the entity's
+  undo transaction. This extends ADR-070's quadrilateral-only implementation to bounded infill
+  polygons without altering its surface ownership, baked-update or volume-engine decisions.
+
+### ADR-076 — Drawing-owned grading presets and Qt reuse/elevation editing (2026-11-03, accepted)
+
+- Status: accepted by the user for Stage 2 under D-2026-11-03-a.
+- Context: REQ-459 requires named grading presets that copy values into results, DWG persistence,
+  independent Copy Create, and Qt FLELEV editing. Presets are drawing-local by user decision.
+- Decision:
+  (a) A value-owned `CadGradingPreset` collection belongs to each drawing. The active
+      `AppCommandState`, per-tab `DrawingDocument`, and drawing undo snapshot carry the collection
+      using the existing per-document state pattern.
+  (b) A preset stores criteria only: target kind, optional stable target-surface id, cut/fill runs,
+      open-baseline side, target value and distance grade. It stores no baseline/result id. Applying
+      the preset copies criteria into a newly created `CadGradingDefinition`; results do not retain
+      a preset reference.
+  (c) Preset create, explicit update and delete each make one undo step. The collection is an
+      additive optional field in the existing ADR-044 JSON trailer. Missing fields in older
+      drawings mean no presets; malformed preset data is rejected before replacing the open drawing.
+      A deleted target surface is reported on apply, never replaced with a different surface.
+  (d) Copy Create copies criteria from one existing grading into a new result on a selected baseline;
+      it preserves the source and gives the new result an independent stable identity.
+  (e) Qt displays the existing REQ-088 derived elevation table and routes edits through the existing
+      FLELEV services. Grading/group property and membership UI reads and edits the shared drawing
+      state and commands. No automatic grading or preset propagation is added.
+- Alternatives: (1) App-wide/user preferences — rejected because presets are drawing-local by user
+  choice. (2) Link each result to a preset — rejected because changing presets must not change old
+  results. (3) Store preset inputs on a baseline/result entity — rejected because a preset is a
+  reusable named drawing setting, not geometry or a relationship.
+- Consequences: the existing document snapshot, undo snapshot and ADR-044 serializer gain the preset
+  value collection and validation. No new entity kind, global store, third-party dependency, or live
+  dependency graph is introduced.
 ### ADR-074 — Version rolling beta builds from the stable baseline   (2026-11-02, accepted)
 - Context: ADR-029 made all releases manual and used one `project(VERSION)` value for beta and
   stable. The user wants beta to publish automatically when its source changes, with ordinary

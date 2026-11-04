@@ -32,7 +32,6 @@
 #include <catch2/generators/catch_generators.hpp>
 #include <nlohmann/json.hpp>
 
-
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -64,6 +63,7 @@ extern "C" {
 #include <dwg.h>
 #include <dwg_api.h>
 
+void dwg_free_eed(Dwg_Object* obj);
 extern "C" void dwg_resolve_objectrefs_silent(Dwg_Data* dwg);
 }
 
@@ -141,6 +141,13 @@ void StripGosurveyAnnotativeEed(Dwg_Data& dwg) {
       ent->eed[i - 1] = ent->eed[i];
     ent->num_eed -= 1;
   }
+}
+
+void StripEntityEed(Dwg_Object* obj) {
+  if (obj == nullptr || obj->supertype != DWG_SUPERTYPE_ENTITY || obj->tio.entity == nullptr ||
+      obj->tio.entity->eed == nullptr)
+    return;
+  dwg_free_eed(obj);
 }
 
 bool DwgHasAcadAnnotativeDataEed(const Dwg_Data& dwg) {
@@ -1040,6 +1047,10 @@ TEST_CASE("CadMultileader round-trips through native MULTILEADER DWG export (iss
   ml.label.insX = 12.f;
   ml.label.insY = 2.f;
   ml.label.text = "Monument A";
+  ml.label.rotationRad = 0.35f;
+  ml.label.mtextAttach = 6;
+  ml.labelWidthWorld = 8.f;
+  ml.labelHeightWorld = 0.18f;
   ml.label.boxMinX = 12.f;
   ml.label.boxMinY = 1.f;
   ml.label.boxMaxX = 20.f;
@@ -1056,6 +1067,57 @@ TEST_CASE("CadMultileader round-trips through native MULTILEADER DWG export (iss
   REQUIRE(in.cadMultileaders.size() == 1);
   CHECK(in.cadMultileaders[0].pathXyz.size() == 9);
   CHECK(in.cadMultileaders[0].label.text.find("Monument") != std::string::npos);
+  CHECK(in.cadMultileaders[0].label.mtextAttach == 6);
+  CHECK(in.cadMultileaders[0].label.rotationRad == Catch::Approx(0.35f).margin(0.02f));
+}
+
+TEST_CASE("DWG import applies block scale to leader arrow sizes (REQ-367)", "[dwg][libredwg][req367]") {
+  ScratchDir dir("dwg-scaled-leader-arrows");
+  const auto path = (dir.path / "scaled-leaders.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* model = dwg_model_space_object(dwg);
+  REQUIRE(model != nullptr);
+  Dwg_Object_BLOCK_HEADER* modelHeader = model->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(modelHeader != nullptr);
+
+  Dwg_Object_BLOCK_HEADER* mleaderHeader = dwg_add_BLOCK_HEADER(dwg, "*DML1");
+  REQUIRE(mleaderHeader != nullptr);
+  dwg_add_BLOCK(mleaderHeader, "*DML1");
+  const dwg_point_3d mleaderPoints[] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}};
+  const dwg_point_3d mleaderText{10.0, 0.0, 0.0};
+  const dwg_point_3d mleaderDirection{1.0, 0.0, 0.0};
+  Dwg_Entity_MULTILEADER* mleader = dwg_add_MULTILEADER(mleaderHeader, 2, mleaderPoints, "MLeader",
+                                                         &mleaderText, &mleaderDirection, 0.2, 8.0);
+  REQUIRE(mleader != nullptr);
+  dwg_add_ENDBLK(mleaderHeader);
+
+  Dwg_Object_BLOCK_HEADER* leaderHeader = dwg_add_BLOCK_HEADER(dwg, "*DLD1");
+  REQUIRE(leaderHeader != nullptr);
+  dwg_add_BLOCK(leaderHeader, "*DLD1");
+  const dwg_point_3d labelPoint{10.0, 0.0, 0.0};
+  Dwg_Entity_MTEXT* label = dwg_add_MTEXT(leaderHeader, &labelPoint, 4.0, "LEADER");
+  REQUIRE(label != nullptr);
+  const dwg_point_3d leaderPoints[] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}};
+  Dwg_Entity_LEADER* leader = dwg_add_LEADER(leaderHeader, 2, leaderPoints, label, 0);
+  REQUIRE(leader != nullptr);
+  leader->dimasz = 0.2;
+  dwg_add_ENDBLK(leaderHeader);
+
+  const dwg_point_3d insertPoint{20.0, 30.0, 0.0};
+  REQUIRE(dwg_add_INSERT(modelHeader, &insertPoint, "*DML1", 2.0, 2.0, 1.0, 0.0) != nullptr);
+  REQUIRE(dwg_add_INSERT(modelHeader, &insertPoint, "*DLD1", 2.0, 2.0, 1.0, 0.0) != nullptr);
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(path.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState imported;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.cadMultileaders.size() == 2);
+  CHECK(imported.cadMultileaders[0].arrowSizeWorld == Catch::Approx(0.36f));
+  CHECK(imported.cadMultileaders[1].arrowSizeWorld == Catch::Approx(0.36f));
 }
 
 TEST_CASE("Block-content MULTILEADER import logs skip reason (REQ-367, issue #619)",
@@ -1461,21 +1523,360 @@ TEST_CASE("GOSURVEY CANNOSCALE EED round-trips on model space (issue #622)", "[d
   s.paperUnits = 1.f;
   s.drawingUnits = 50.f;
   st.annotationScales.push_back(std::move(s));
+  st.annotationScales.push_back({"1:100", 1.f, 100.f});
   st.currentAnnotationScaleIndex = 0;
   std::vector<std::string> log;
   REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
   AppCommandState in;
   in.modelUnitsPerPlottedInch = 10.f;
   REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
-  REQUIRE(in.annotationScales.size() == 1);
+  REQUIRE(in.annotationScales.size() == 2);
   CHECK(in.currentAnnotationScaleIndex == 0);
   CHECK(in.annotationScales[0].name == "1:50");
+}
+
+TEST_CASE("Native CANNOSCALE round-trips between GoSurvey and DWG (issue #622)", "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-native-cannoscale-roundtrip");
+  const auto p = (dir.path / "native-cannoscale.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  st.annotationScales = {{"1:50", 1.f, 50.f}, {"1:100", 1.f, 100.f}};
+  st.currentAnnotationScaleIndex = 1;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  const char* nativeScale = dwg_variable_dict(&dwg, "CANNOSCALE");
+  REQUIRE(nativeScale != nullptr);
+  CHECK(libredwgcad_detail::DecodeDwgString(nativeScale, dwg.header.version >= R_2007) == "1:100");
+  dwg_free(&dwg);
+
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.annotationScales.size() == 2);
+  CHECK(imported.currentAnnotationScaleIndex == 1);
+  CHECK(imported.annotationScales[static_cast<size_t>(imported.currentAnnotationScaleIndex)].name == "1:100");
+}
+
+TEST_CASE("DWG import restores the saved model viewport center, height, and twist (REQ-055)",
+          "[dwg][libredwg][req055]") {
+  ScratchDir dir("dwg-saved-model-view");
+  const auto basePath = (dir.path / "base.dwg").string();
+  const auto path = (dir.path / "saved-view.dwg").string();
+  AppCommandState source;
+  OneLine(source);
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(source, basePath.c_str(), log, /*asDxf=*/false));
+
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(basePath.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  const BITCODE_H ref = dwg_find_tablehandle(&dwg, "*Active", "VPORT");
+  REQUIRE(ref != nullptr);
+  Dwg_Object* object = dwg_resolve_handle_silent(&dwg, ref->absolute_ref);
+  REQUIRE(object != nullptr);
+  REQUIRE(object->tio.object != nullptr);
+  REQUIRE(object->tio.object->tio.VPORT != nullptr);
+  Dwg_Object_VPORT* viewport = object->tio.object->tio.VPORT;
+  viewport->VIEWSIZE = 80.0;
+  viewport->view_width = 120.0;
+  viewport->aspect_ratio = 1.5;
+  viewport->VIEWCTR.x = -10.0;
+  viewport->VIEWCTR.y = 20.0;
+  viewport->view_target = {100.0, 200.0, 5.0};
+  viewport->VIEWDIR = {0.0, 0.0, 1.0};
+  viewport->VIEWTWIST = 3.0 * 3.14159265358979323846 / 2.0;
+  REQUIRE((dwg_write_file(path.c_str(), &dwg) & DWG_ERR_CRITICAL) == 0);
+  dwg_free(&dwg);
+
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, /*asDxf=*/false));
+  CHECK(imported.viewportPanX == Catch::Approx(80.0));
+  CHECK(imported.viewportPanY == Catch::Approx(190.0));
+  CHECK(imported.viewportPanZ == Catch::Approx(5.0));
+  CHECK(imported.viewportZoom == Catch::Approx(1.25f));
+  CHECK(imported.viewportRollDeg == Catch::Approx(90.0f));
+}
+
+TEST_CASE("Legacy LEADER arrow size includes the saved CANNOSCALE model factor (REQ-367)",
+          "[dwg][libredwg][issue619]") {
+  // AutoCAD reports MESSER's DIMASZ 0.2 with ScaleFactor 16: header DIMSCALE 192 divided
+  // by the active architectural scale's drawing-units value 12.
+  CHECK(libredwgcad_detail::LegacyLeaderEffectiveDimScale(1.0, 192.0, 0.0625, 12.0) ==
+        Catch::Approx(192.0));
+  CHECK(libredwgcad_detail::LegacyLeaderEffectiveDimScale(1.0, 50.0, 1.0, 50.0) ==
+        Catch::Approx(1.0));
+  CHECK(libredwgcad_detail::LegacyLeaderEffectiveDimScale(50.0, 1.0, 0.0, 0.0) ==
+        Catch::Approx(50.0));
+  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(192.0, 0.0625, 12.0) == Catch::Approx(16.0));
+  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(50.0, 1.0, 50.0) == Catch::Approx(50.0));
+  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(1.0, 1.0, 50.0) == Catch::Approx(1.0));
+  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(4.0, 1.0, 50.0) == Catch::Approx(4.0));
+}
+
+TEST_CASE("Legacy LEADER uses its referenced DIMSTYLE scale (REQ-367)",
+          "[dwg][libredwg][issue619]") {
+  ScratchDir dir("dwg-leader-style-dimscale");
+  const auto path = (dir.path / "leader-style-dimscale.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  dwg->header_vars.DIMSCALE = 1.0;
+  Dwg_Object* model = dwg_model_space_object(dwg);
+  REQUIRE(model != nullptr);
+  Dwg_Object_BLOCK_HEADER* header = model->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(header != nullptr);
+  Dwg_Object_DIMSTYLE* style = dwg_add_DIMSTYLE(dwg, "Scaled Leader");
+  REQUIRE(style != nullptr);
+  style->DIMASZ = 0.2;
+  style->DIMSCALE = 50.0;
+  const dwg_point_3d textAt{6.0, 4.0, 0.0};
+  Dwg_Entity_MTEXT* text = dwg_add_MTEXT(header, &textAt, 4.0, "Style scale");
+  REQUIRE(text != nullptr);
+  text->text_height = 1.0;
+  const dwg_point_3d points[2] = {{0.0, 0.0, 0.0}, {6.0, 4.0, 0.0}};
+  Dwg_Entity_LEADER* leader = dwg_add_LEADER(header, 2, points, text, 0);
+  REQUIRE(leader != nullptr);
+  BITCODE_H styleRef = dwg_find_tablehandle(dwg, "Scaled Leader", "DIMSTYLE");
+  REQUIRE(styleRef != nullptr);
+  leader->dimstyle = dwg_add_handleref(dwg, 5, styleRef->absolute_ref, nullptr);
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(path.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState imported;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.cadMultileaders.size() == 1);
+  CHECK(imported.cadMultileaders.front().arrowSizeWorld == Catch::Approx(10.0f));
+}
+
+TEST_CASE("Legacy LEADER honors a unity DIMSTYLE scale over the drawing scale (REQ-367)",
+          "[dwg][libredwg][issue619]") {
+  ScratchDir dir("dwg-leader-unity-dimscale");
+  const auto path = (dir.path / "leader-unity-dimscale.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  dwg->header_vars.DIMSCALE = 50.0;
+  Dwg_Object* model = dwg_model_space_object(dwg);
+  REQUIRE(model != nullptr);
+  Dwg_Object_BLOCK_HEADER* header = model->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(header != nullptr);
+  Dwg_Object_DIMSTYLE* style = dwg_add_DIMSTYLE(dwg, "Unity Leader");
+  REQUIRE(style != nullptr);
+  style->DIMASZ = 0.36;
+  style->DIMSCALE = 1.0;
+  const dwg_point_3d textAt{6.0, 4.0, 0.0};
+  Dwg_Entity_MTEXT* text = dwg_add_MTEXT(header, &textAt, 4.0, "Unity style");
+  REQUIRE(text != nullptr);
+  text->text_height = 1.0;
+  const dwg_point_3d points[2] = {{0.0, 0.0, 0.0}, {6.0, 4.0, 0.0}};
+  Dwg_Entity_LEADER* leader = dwg_add_LEADER(header, 2, points, text, 0);
+  REQUIRE(leader != nullptr);
+  BITCODE_H styleRef = dwg_find_tablehandle(dwg, "Unity Leader", "DIMSTYLE");
+  REQUIRE(styleRef != nullptr);
+  leader->dimstyle = dwg_add_handleref(dwg, 5, styleRef->absolute_ref, nullptr);
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(path.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState imported;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.cadMultileaders.size() == 1);
+  CHECK(imported.cadMultileaders.front().arrowSizeWorld == Catch::Approx(0.36f));
+}
+
+TEST_CASE("R2004 LEADER fallback keeps each multileader arrow size (REQ-367)",
+          "[dwg][libredwg][issue619]") {
+  ScratchDir dir("dwg-r2004-multileader-arrow-size");
+  const auto path = (dir.path / "leader-arrow-size.dwg").string();
+  AppCommandState source;
+  source.dwgExportVersion = DwgSaveVersion::R2004;
+  source.modelUnitsPerPlottedInch = 1.f;
+  CadMultileader multileader;
+  multileader.arrowSizeWorld = 0.36f;
+  multileader.labelHeightWorld = 1.f;
+  multileader.labelWidthWorld = 4.f;
+  multileader.pathXyz = {0.f, 0.f, 0.f, 6.f, 0.f, 0.f};
+  multileader.label.kind = CadAnnotation::Kind::Mtext;
+  multileader.label.text = "Fallback arrow";
+  multileader.label.insX = 6.f;
+  source.cadMultileaders.push_back(multileader);
+  source.cadMultileaderAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(source, path.c_str(), log, /*asDxf=*/false));
+
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(path.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  Dwg_Entity_LEADER* leader = nullptr;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    Dwg_Object& object = dwg.object[i];
+    if (object.fixedtype == DWG_TYPE_LEADER && object.tio.entity != nullptr) {
+      leader = object.tio.entity->tio.LEADER;
+      break;
+    }
+  }
+  REQUIRE(leader != nullptr);
+  REQUIRE(leader->dimstyle != nullptr);
+  Dwg_Object* styleObject = dwg_resolve_handle_silent(&dwg, leader->dimstyle->absolute_ref);
+  REQUIRE(styleObject != nullptr);
+  REQUIRE(styleObject->fixedtype == DWG_TYPE_DIMSTYLE);
+  REQUIRE(styleObject->tio.object != nullptr);
+  REQUIRE(styleObject->tio.object->tio.DIMSTYLE != nullptr);
+  CHECK(styleObject->tio.object->tio.DIMSTYLE->DIMASZ == Catch::Approx(0.36));
+  dwg_free(&dwg);
+
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.cadMultileaders.size() == 1);
+  CHECK(imported.cadMultileaders.front().arrowSizeWorld == Catch::Approx(0.36f));
+}
+
+TEST_CASE("Legacy LEADER MTEXT keeps glyph height and orders hookline before text landing (REQ-367)",
+          "[dwg][libredwg][req367]") {
+  ScratchDir dir("dwg-legacy-leader-mtext-height");
+  const auto path = (dir.path / "legacy-leader-height.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* model = dwg_model_space_object(dwg);
+  REQUIRE(model != nullptr);
+  Dwg_Object_BLOCK_HEADER* header = model->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(header != nullptr);
+  const dwg_point_3d insertion{20.0, 10.0, 0.0};
+  Dwg_Entity_MTEXT* text = dwg_add_MTEXT(header, &insertion, 5.4, "LRP 31");
+  REQUIRE(text != nullptr);
+  text->text_height = 1.0;
+  text->attachment = 6;
+  text->x_axis_dir = {0.0, 1.0, 0.0};
+  text->rect_height = 1.0;
+  text->extents_height = 6.91745;
+  const dwg_point_3d points[2] = {{24.0, 25.0, 0.0}, {20.0, 11.44, 0.0}};
+  Dwg_Entity_LEADER* leader = dwg_add_LEADER(header, 2, points, text, 0);
+  REQUIRE(leader != nullptr);
+  leader->hookline_on = 1;
+  leader->hookline_dir = 1;
+  leader->annot_type = 0;
+  leader->x_direction = {0.0, 1.0, 0.0};
+  leader->dimasz = 0.2;
+
+  const dwg_point_3d leftInsertion{40.0, 12.88, 0.0};
+  Dwg_Entity_MTEXT* leftText = dwg_add_MTEXT(header, &leftInsertion, 5.4, "LRP 32");
+  REQUIRE(leftText != nullptr);
+  leftText->text_height = 1.0;
+  leftText->attachment = 4;
+  leftText->x_axis_dir = {0.0, 1.0, 0.0};
+  leftText->rect_height = 1.0;
+  const dwg_point_3d leftPoints[2] = {{40.0, 0.0, 0.0}, {40.0, 11.44, 0.0}};
+  Dwg_Entity_LEADER* leftLeader = dwg_add_LEADER(header, 2, leftPoints, leftText, 0);
+  REQUIRE(leftLeader != nullptr);
+  leftLeader->hookline_on = 1;
+  leftLeader->hookline_dir = 1;
+  leftLeader->annot_type = 0;
+  leftLeader->x_direction = {0.0, 1.0, 0.0};
+  leftLeader->dimasz = 0.2;
+
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(path.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState imported;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.cadMultileaders.size() == 2);
+  const auto findCallout = [&](const char* text) -> const CadMultileader* {
+    const auto found = std::find_if(imported.cadMultileaders.begin(), imported.cadMultileaders.end(),
+                                    [&](const CadMultileader& callout) {
+                                      return callout.label.text.find(text) != std::string::npos;
+                                    });
+    return found == imported.cadMultileaders.end() ? nullptr : &*found;
+  };
+  const CadMultileader* rightText = findCallout("LRP 31");
+  const CadMultileader* leftCallout = findCallout("LRP 32");
+  REQUIRE(rightText != nullptr);
+  REQUIRE(leftCallout != nullptr);
+  CHECK(rightText->label.mtextAttach == 6);
+  CHECK(leftCallout->label.mtextAttach == 4);
+  for (const CadMultileader* callout : {rightText, leftCallout}) {
+    REQUIRE(callout->pathXyz.size() == 9);
+    const size_t outer = callout->pathXyz.size() - 6;
+    const size_t landing = callout->pathXyz.size() - 3;
+    const double hookX = callout->pathXyz[outer] - callout->pathXyz[landing];
+    const double hookY = callout->pathXyz[outer + 1] - callout->pathXyz[landing + 1];
+    const double towardArrowX = callout->pathXyz[outer - 3] - callout->pathXyz[landing];
+    const double towardArrowY = callout->pathXyz[outer - 2] - callout->pathXyz[landing + 1];
+    CHECK(hookX * towardArrowX + hookY * towardArrowY > 0.0);
+  }
+}
+
+TEST_CASE("Native MULTILEADER scale contexts restore GoSurvey scale visibility (REQ-384)",
+          "[dwg][libredwg][req384]") {
+  ScratchDir dir("dwg-native-mleader-scales");
+  const auto p = (dir.path / "native-mleader-scales.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  st.annotationScales = {{"1:10", 1.f, 10.f}, {"1:50", 1.f, 50.f}};
+  st.currentAnnotationScaleIndex = 0;
+  CadMultileader ml{};
+  ml.annotative = true;
+  ml.arrowSizeWorld = 0.06f;
+  ml.labelWidthWorld = 16.f;
+  ml.labelHeightWorld = 2.f;
+  ml.annotativeVisibleScaleNames = {"1:50"};
+  ml.pathXyz = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f};
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.mtextAttach = 3;
+  ml.label.insX = 10.f;
+  ml.label.text = "Scale-specific callout";
+  ml.label.boxMinX = 10.f;
+  ml.label.boxMinY = -1.f;
+  ml.label.boxMaxX = 26.f;
+  ml.label.boxMaxY = 1.f;
+  st.cadMultileaders.push_back(std::move(ml));
+  st.cadMultileaderAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  Dwg_Object* mleaderObject = nullptr;
+  Dwg_Object_Entity* mleader = nullptr;
+  for (unsigned oi = 0; oi < dwg.num_objects; ++oi) {
+    Dwg_Object& obj = dwg.object[oi];
+    if (obj.fixedtype == DWG_TYPE_MULTILEADER && obj.tio.entity != nullptr) {
+      mleaderObject = &obj;
+      mleader = obj.tio.entity;
+      break;
+    }
+  }
+  REQUIRE(mleader != nullptr);
+  REQUIRE(mleader->tio.MULTILEADER != nullptr);
+  CHECK(mleader->tio.MULTILEADER->ctx.content.txt.width == Catch::Approx(16.f));
+  CHECK(mleader->tio.MULTILEADER->ctx.text_height == Catch::Approx(2.f));
+  StripEntityEed(mleaderObject);
+  REQUIRE((dwg_write_file(p.c_str(), &dwg) & DWG_ERR_CRITICAL) == 0);
+  dwg_free(&dwg);
+
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.cadMultileaders.size() == 1);
+  CHECK(imported.cadMultileaders[0].annotative);
+  CHECK(imported.cadMultileaders[0].arrowSizeWorld == Catch::Approx(0.06f));
+  CHECK(imported.cadMultileaders[0].labelWidthWorld == Catch::Approx(16.f));
+  CHECK(imported.cadMultileaders[0].labelHeightWorld == Catch::Approx(2.f));
+  CHECK(imported.cadMultileaders[0].label.mtextAttach == 3);
+  CHECK(imported.cadMultileaders[0].annotativeVisibleScaleNames == std::vector<std::string>{"1:50"});
 }
 
 TEST_CASE("Multileader annotative flag persists through GsIo (issue #622)", "[issue622][gsio]") {
   AppCommandState src;
   CadMultileader ml{};
   ml.annotative = true;
+  ml.arrowSizeWorld = 0.06f;
+  ml.labelWidthWorld = 5.f;
+  ml.labelHeightWorld = 1.f;
   ml.pathXyz = {0.f, 0.f, 0.f, 5.f, 0.f, 0.f};
   ml.label.kind = CadAnnotation::Kind::Mtext;
   ml.label.text = "A";
@@ -1486,6 +1887,15 @@ TEST_CASE("Multileader annotative flag persists through GsIo (issue #622)", "[is
   REQUIRE(LoadGoSurveyFromJsonUtf8(back, SerializeGoSurveyJson(src), log));
   REQUIRE(back.cadMultileaders.size() == 1);
   CHECK(back.cadMultileaders[0].annotative);
+  CHECK(back.cadMultileaders[0].arrowSizeWorld == Catch::Approx(0.06f));
+  CHECK(back.cadMultileaders[0].labelWidthWorld == Catch::Approx(5.f));
+  CHECK(back.cadMultileaders[0].labelHeightWorld == Catch::Approx(1.f));
+}
+
+TEST_CASE("Multileader without an imported arrow override inherits its style size (REQ-367)",
+          "[dwg][issue619]") {
+  const CadMultileader multileader{};
+  CHECK(multileader.arrowSizeWorld == 0.f);
 }
 
 TEST_CASE("annotativeVisibleScaleNames persist through GsIo for block, hatch, and multileader (issue #622)",
@@ -6836,10 +7246,21 @@ TEST_CASE("DWG import maps POINT LEADER SOLID 3DFACE and mesh (REQ-170, issue #6
   REQUIRE(dwg_add_POINT(hdr, &pt) != nullptr);
 
   const dwg_point_3d mtextPt{8.0, 8.0, 0.0};
-  Dwg_Entity_MTEXT* mt = dwg_add_MTEXT(hdr, &mtextPt, 12.0, "Leader note");
+  Dwg_Entity_MTEXT* mt = dwg_add_MTEXT(hdr, &mtextPt, 3.0, "Leader note");
   REQUIRE(mt != nullptr);
+  mt->attachment = 6;  // middle-right insertion point, as used by the MESSER callouts
+  mt->text_height = 0.25;
+  mt->rect_width = 3.0;
+  mt->x_axis_dir = {0.0, 1.0, 0.0};
+  Dwg_Object_DIMSTYLE* dimStyle = dwg_add_DIMSTYLE(dwg, "Standard");
+  REQUIRE(dimStyle != nullptr);
+  dimStyle->DIMASZ = 0.25;
   const dwg_point_3d lpts[2] = {{0.0, 0.0, 0.0}, {8.0, 8.0, 0.0}};
-  REQUIRE(dwg_add_LEADER(hdr, 2, lpts, mt, 0) != nullptr);
+  Dwg_Entity_LEADER* leader = dwg_add_LEADER(hdr, 2, lpts, mt, 0);
+  REQUIRE(leader != nullptr);
+  BITCODE_H dimStyleRef = dwg_find_tablehandle(dwg, "Standard", "DIMSTYLE");
+  REQUIRE(dimStyleRef != nullptr);
+  leader->dimstyle = dwg_add_handleref(dwg, 5, dimStyleRef->absolute_ref, nullptr);
 
   const dwg_point_3d s1{10.0, 0.0, 0.0};
   const dwg_point_2d s2{15.0, 0.0};
@@ -6871,6 +7292,15 @@ TEST_CASE("DWG import maps POINT LEADER SOLID 3DFACE and mesh (REQ-170, issue #6
   REQUIRE(st.cadMultileaders.size() >= 1);
   CHECK(st.cadMultileaders[0].label.text.find("Leader note") != std::string::npos);
   CHECK(st.cadMultileaders[0].pathXyz.size() >= 6);
+  CHECK(st.cadMultileaders[0].label.mtextAttach == 6);
+  CHECK_FALSE(st.cadMultileaders[0].label.fontFamily.empty());
+  CHECK(st.cadMultileaders[0].arrowSizeWorld == Catch::Approx(0.25f));
+  CHECK(st.cadMultileaders[0].labelWidthWorld == Catch::Approx(3.0f));
+  CHECK(st.cadMultileaders[0].labelHeightWorld == Catch::Approx(0.25f));
+  CHECK(st.cadMultileaders[0].label.boxMinX == Catch::Approx(7.875f));
+  CHECK(st.cadMultileaders[0].label.boxMinY == Catch::Approx(5.0f));
+  CHECK(st.cadMultileaders[0].label.boxMaxX == Catch::Approx(8.125f));
+  CHECK(st.cadMultileaders[0].label.boxMaxY == Catch::Approx(8.0f));
 }
 
 TEST_CASE("DWG import maps POLYLINE_PFACE to CadMesh (REQ-170, issue #613)",

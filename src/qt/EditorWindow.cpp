@@ -830,7 +830,6 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   viewportZoom->setStyleSheet(PopupComboStyleSheet());
   statusBar()->addWidget(viewportZoom);
   connect(viewportZoom, QOverload<int>::of(&QComboBox::activated), this, [this, viewportZoom](int index) {
-    if (viewportZoom->itemData(index).toString() == QLatin1String("__live__")) return;
     if (viewportZoom->itemData(index).toString() == QLatin1String("__add__")) {
       bool ok = false;
       const QString text = QInputDialog::getText(this, "Viewport zoom scale", "Enter ratio (e.g. 1:75):",
@@ -849,19 +848,13 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
       }
       AddViewportZoomScale(m_State, std::string(utf8.constData(), static_cast<std::size_t>(utf8.size())), paperUnits,
                            drawingUnits);
-      const float dpi = screen() != nullptr ? static_cast<float>(screen()->logicalDotsPerInchY()) : 96.f;
-      ApplyViewportZoomScaleIndex(m_State, m_State.currentViewportZoomScaleIndex,
-                                  static_cast<float>(m_Viewport->height()), dpi);
       Refresh();
-      m_Viewport->update();
       return;
     }
     if (index < 0 || index >= static_cast<int>(m_State.viewportZoomScales.size()) ||
         index == m_State.currentViewportZoomScaleIndex)
       return;
-    const float dpi = screen() != nullptr ? static_cast<float>(screen()->logicalDotsPerInchY()) : 96.f;
-    ApplyViewportZoomScaleIndex(m_State, index, static_cast<float>(m_Viewport->height()), dpi);
-    m_Viewport->update();
+    SetCurrentViewportZoomScaleIndex(m_State, index);
     Refresh();
   });
   auto* multiSelect = new QToolButton(this);
@@ -1146,6 +1139,7 @@ void EditorWindow::BuildDocks() {
   auto* propertiesDock = makeDock("Properties", "propertiesDock", Qt::LeftDockWidgetArea, m_PropertiesScroll);
   propertiesDock->raise();
   m_CommandBar = new FloatingCommandBar(m_Viewport);
+  m_CommandBar->refreshViewportCursor = [this] { m_Viewport->RefreshCommandCursor(); };
   m_CommandBar->optionSelected = [this](const QString& shortcut) { Submit(shortcut); m_Command->setFocus(); };
   m_Transcript = m_CommandBar->Transcript();
   m_Command = m_CommandBar->Input();
@@ -1914,6 +1908,7 @@ void EditorWindow::EndInteractiveResize() {
 }
 
 void EditorWindow::SwitchDrawing(int index) {
+  ++m_DocumentGeneration;
   if (index < 0 || index >= static_cast<int>(m_State.drawingTabs.size()) || index == m_State.activeDrawingIdx) return;
   CancelActiveCommand(m_State, m_Log);
   RefreshProjects();
@@ -1948,6 +1943,7 @@ void EditorWindow::NewDrawing(std::uint32_t projectUid) {
 }
 
 void EditorWindow::CreateDrawingFromTemplate(std::uint32_t projectUid, const QString& templatePath) {
+  ++m_DocumentGeneration;
   RefreshProjects();
   const int previous = m_State.activeDrawingIdx;
   SaveDocumentToSnapshot(m_State, m_State.activeDrawingIdx);
@@ -1990,6 +1986,7 @@ void EditorWindow::CreateDrawingFromTemplate(std::uint32_t projectUid, const QSt
 }
 
 void EditorWindow::OpenDrawing(const QString& path) {
+  ++m_DocumentGeneration;
   const auto found = gsproj::FindProjectFor(std::filesystem::path(path.toStdWString()));
   std::uint32_t uid = 0;
   if (found.state == gsproj::FindState::Damaged) {
@@ -2524,6 +2521,7 @@ void EditorWindow::RefreshToolspace() {
 void EditorWindow::Refresh() {
   if (m_Refreshing) return;
   m_Refreshing = true;
+  const bool modelSpace = m_State.activeSpaceIndex == kModelSpaceIndex && !InFloatingModelSpace(m_State);
   if (auto* annotationScale = findChild<QComboBox*>("statusAnnotationScale")) {
     const QSignalBlocker block(annotationScale);
     annotationScale->clear();
@@ -2537,30 +2535,20 @@ void EditorWindow::Refresh() {
       annotationScale->setCurrentIndex(m_State.currentAnnotationScaleIndex);
     }
     annotationScale->setEnabled(!m_State.annotationScales.empty());
+    annotationScale->setVisible(!modelSpace);
   }
   if (auto* viewportZoom = findChild<QComboBox*>("statusViewportZoom")) {
     EnsureDefaultViewportZoomScales(m_State.viewportZoomScales);
-    const float dpi = screen() != nullptr ? static_cast<float>(screen()->logicalDotsPerInchY()) : 96.f;
-    const float heightPx = m_Viewport != nullptr ? static_cast<float>(m_Viewport->height()) : 800.f;
-    SyncCurrentViewportZoomScaleIndex(m_State, heightPx, dpi);
+    EnsureViewportZoomScaleIndexForDisplay(m_State);
     const QSignalBlocker block(viewportZoom);
     viewportZoom->clear();
     for (const CadAnnotationScale& scale : m_State.viewportZoomScales)
       viewportZoom->addItem(QString::fromUtf8(CadViewportZoomScaleStatusLabel(scale).c_str()));
     viewportZoom->addItem(tr("Add custom scale…"), QStringLiteral("__add__"));
-    if (m_State.currentViewportZoomScaleIndex >= 0) {
+    if (m_State.currentViewportZoomScaleIndex >= 0)
       viewportZoom->setCurrentIndex(m_State.currentViewportZoomScaleIndex);
-    } else {
-      // Between presets (after a wheel zoom): show the actual ratio rather than an empty box.
-      const float screenInches = std::max(heightPx / dpi, 1.e-3f);
-      const float modelUnitsPerInch = 100.f / (std::max(m_State.viewportZoom, 1.e-9f) * screenInches);
-      char buf[48];
-      std::snprintf(buf, sizeof(buf), "1:%.4g", modelUnitsPerInch);
-      viewportZoom->addItem(QString::fromLatin1(buf), QStringLiteral("__live__"));
-      viewportZoom->setCurrentIndex(viewportZoom->count() - 1);
-    }
-    const bool modelSpace = m_State.activeSpaceIndex == kModelSpaceIndex && !InFloatingModelSpace(m_State);
     viewportZoom->setEnabled(modelSpace && !m_State.viewportZoomScales.empty());
+    viewportZoom->setVisible(modelSpace);
   }
   RefreshProjects();
   const QSignalBlocker tabBlock(m_Tabs);

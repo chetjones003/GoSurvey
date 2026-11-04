@@ -66,7 +66,7 @@
 namespace {
 QString Text(const char* text) { return QString::fromUtf8(text); }
 bool NeedsNativeDialog(const QString& command) {
-  static const QSet<QString> pending = {"@editElevations", "@pointGroups", "@volumes",
+  static const QSet<QString> pending = {"@pointGroups", "@volumes",
       "@connectionModes", "@blockPalettes", "@createBlock", "@batchPlot", "@pageSetup", "BEDIT", "INSERT"};
   return pending.contains(command);
 }
@@ -1806,6 +1806,9 @@ void EditorWindow::RunRibbonAction(const QString& id) {
   } else if (command == "PLOT") {
     const auto path = QFileDialog::getSaveFileName(this, "Plot layout", {}, "PDF (*.pdf)");
     if (!path.isEmpty()) PlotLayoutsToPdf(m_State, {std::max(0, m_State.activeSpaceIndex)}, path.toUtf8().constData(), m_Log);
+  } else if (command == "GRADING") {
+    CancelActiveCommand(m_State, m_Log);
+    ShowGradingTools();
   } else if (!command.startsWith('@')) {
     CancelActiveCommand(m_State, m_Log); Submit(command);
   }

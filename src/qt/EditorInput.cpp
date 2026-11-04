@@ -206,7 +206,11 @@ void EditorWindow::RefreshDraftingInput(const QString& hint) {
   m_DynamicGroup.showZ = prompt.showZ;
   const bool active = m_State.activeDrawingIdx > 0 && m_State.active != AppCommandState::Kind::None &&
       m_State.active != AppCommandState::Kind::Pan && m_State.active != AppCommandState::Kind::Orbit;
-  m_DynamicInput->setVisible(active);
+  const bool bearingPickAwaitingCommand =
+      (m_State.active == AppCommandState::Kind::Line || m_State.active == AppCommandState::Kind::Polyline) &&
+      m_State.segmentAnglePickPhase == AppCommandState::SegmentAnglePickPhase::WaitAdjustOrCommit;
+  if (bearingPickAwaitingCommand && m_DynamicInput->isVisible()) m_Command->clear();
+  m_DynamicInput->setVisible(active && !bearingPickAwaitingCommand);
   if (!active) return;
   m_DynamicPrompt->setText(m_DynamicHint);
   const bool hintOnly = !prompt.pointEntry;
@@ -298,6 +302,13 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
     if (focus->isWindow()) break;
   }
   const bool ctrl = key->modifiers().testFlag(Qt::ControlModifier);
+  if (event->type() == QEvent::KeyPress && ctrl && key->key() == Qt::Key_Z &&
+      widget == m_Command && m_Command->text().isEmpty()) {
+    DoUndo(m_State, m_Log);
+    ResetDraftingInput();
+    Refresh();
+    return true;
+  }
   if ((widget == m_Command || suggestionPopupWidget) &&
       (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
       event->type() == QEvent::ShortcutOverride) {

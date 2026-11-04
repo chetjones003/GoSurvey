@@ -930,6 +930,33 @@ const Dwg_Object* DwgImportResolveDefaultContextObject(const Dwg_Data* dwg, cons
   return ResolveDefaultContextFromManager(dwg, mgrShell);
 }
 
+void DwgImportAnnotativeScaleNames(const Dwg_Data* dwg, const Dwg_Object_Entity* ent,
+                                   std::vector<std::string>* names) {
+  if (dwg == nullptr || ent == nullptr || names == nullptr)
+    return;
+  const Dwg_Object* shell = ResolveContextManagerObject(dwg, ent);
+  if (shell == nullptr || shell->fixedtype != DWG_TYPE_CONTEXTDATAMANAGER || shell->tio.object == nullptr)
+    return;
+  const Dwg_Object_CONTEXTDATAMANAGER* mgr = shell->tio.object->tio.CONTEXTDATAMANAGER;
+  if (mgr == nullptr || mgr->submgrs == nullptr)
+    return;
+  for (BITCODE_BL si = 0; si < mgr->num_submgrs; ++si) {
+    const Dwg_CONTEXTDATA_submgr& sub = mgr->submgrs[si];
+    if (sub.entries == nullptr)
+      continue;
+    for (BITCODE_BL ei = 0; ei < sub.num_entries; ++ei) {
+      BITCODE_T text = sub.entries[ei].text;
+      if (text == nullptr)
+        continue;
+      // Annotation scale names are conventionally ASCII identifiers. LibreDWG stores the
+      // context manager key in BITCODE_T; its narrow representation is already UTF-8.
+      std::string name(reinterpret_cast<const char*>(text));
+      if (!name.empty() && std::find(names->begin(), names->end(), name) == names->end())
+        names->push_back(std::move(name));
+    }
+  }
+}
+
 int DwgImportDefaultContextMergeCount() {
   return gStats.defaultContextMerged;
 }

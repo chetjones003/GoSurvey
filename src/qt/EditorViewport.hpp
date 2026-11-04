@@ -77,6 +77,7 @@ private:
   bool WorldPoint(QPointF point, ray3d::Vec3& world) const;
   bool DrawPaperViewportClipMask(const QPainterPath& path, int framebufferWidth, int framebufferHeight);
   bool ViewPoint(QPointF point, ray3d::Vec3& world) const;
+  void CommitPendingIdleSelectionClick(Qt::KeyboardModifiers modifiers);
   void ClearTransientInput();
   void RightPress(const QPoint& globalPosition);
   void PerformRightClick(RightClickAction action, const QPoint& globalPosition);
@@ -92,6 +93,7 @@ private:
   PartThumbnailImages m_PartThumbs;
   QTimer m_MapTimer;
   QTimer m_ViewAnimTimer;
+  QTimer m_GripMenuTimer;
   QElapsedTimer m_ViewAnimClock;
   bool m_CubePressed = false;  ///< The press in progress was consumed by the ViewCube.
   std::size_t m_LastMapLogSize = 0;
@@ -108,9 +110,15 @@ private:
   bool m_PointerInside = false;
   bool m_Grid = true;
   bool m_LeftDragSelection = false;
+  bool m_PendingIdleSelectionClick = false;
+  bool m_IdleBoxFirstClickPending = false;
   bool m_HasSelectionBoxSnapshot = false;
   std::vector<SelectedEntity> m_SelectionBeforeBox;
   std::vector<int> m_SurveySelectionBeforeBox;
+  std::vector<SelectedEntity> m_SelectionBeforePendingClick;
+  std::vector<int> m_SurveySelectionBeforePendingClick;
+  std::vector<SelectedSubObject> m_SubObjectSelectionBeforePendingClick;
+  ViewportPickResult m_PendingIdlePick{};
   bool m_GripMovedWithButton = false;
   QPointF m_SelectionPress;
   std::uint32_t m_RenderRevision = 0;
