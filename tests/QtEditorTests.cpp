@@ -844,6 +844,53 @@ private Q_SLOTS:
     QCOMPARE(window.State().alignments[0].stationLabels[0].fixedPoint.x, start.x);
   }
 
+  void issue121StyleTicksMarkersAndArrowsDraw() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1200, 800);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    for (const char* line : {"ALIGNMENT STY1, , 0+00", "ALIGNMENTADD STY1, TANGENT, 0, 0, 90, 300",
+                             "ALIGNMENTADD STY1, CURVE, 120, 60, RIGHT", "ALIGNMENTADD STY1, TANGENT, 150",
+                             "ALIGNMENTLABELSET NEW, Dense", "ALIGNMENTLABELSET MAJORINTERVAL, Dense, 50",
+                             "ALIGNMENTLABELSET MINORINTERVAL, Dense, 25", "ALIGNMENTLABELSET ASSIGN, STY1, Dense",
+                             "ALIGNMENTSTYLE NEW, Show", "ALIGNMENTSTYLE SET, Show, ARROWS, ON",
+                             "ALIGNMENTSTYLE SET, Show, MAJORTICK, 10", "ALIGNMENTSTYLE SET, Show, MINORTICK, 5",
+                             "ALIGNMENTSTYLE SET, Show, TICKSIDE, BOTH", "ALIGNMENTSTYLE ASSIGN, STY1, Show"})
+      window.Submit(line);
+    QCOMPARE(window.State().alignments.size(), size_t(1));
+    window.Submit("ZOOMEXTENTS");
+    QTRY_VERIFY_WITH_TIMEOUT(!window.State().pendingZoomExtents, 10000);
+    window.Refresh();
+    window.m_Viewport->update();
+    QTest::qWait(250);
+    QVERIFY(window.grab().save(Issue914Shot("qt-491-style-ticks-markers-arrows.png")));
+
+    // The overlay (ticks, markers, arrows, labels) is painted on top of the GL scene, so window.grab() does not show it.
+    // Paint the overlay alone onto an image and check the style switches change what reaches the picture.
+    const auto overlayPixels = [&](const QString& file) {
+      QImage image(1200, 800, QImage::Format_ARGB32_Premultiplied);
+      image.fill(Qt::transparent);
+      {
+        QPainter painter(&image);
+        DrawQtModelAnnotations(painter, window.State(), 1200.f, 800.f);
+      }
+      if (!file.isEmpty()) image.save(Issue914Shot(file.toUtf8().constData()));
+      int painted = 0;
+      for (int y = 0; y < image.height(); ++y)
+        for (int x = 0; x < image.width(); ++x)
+          if (qAlpha(image.pixel(x, y)) > 0) ++painted;
+      return painted;
+    };
+    const int withStyle = overlayPixels("qt-491-overlay-ticks-markers-arrows.png");
+    QVERIFY2(withStyle > 0, "the overlay paints ticks, markers and arrows");
+    for (const char* line : {"ALIGNMENTSTYLE SET, Show, ARROWS, OFF", "ALIGNMENTSTYLE SET, Show, TICKS, OFF",
+                             "ALIGNMENTSTYLE SET, Show, MARKERS, OFF", "ALIGNMENTSTYLE SET, Show, LABELS, OFF"})
+      window.Submit(line);
+    const int withoutStyle = overlayPixels("qt-491-overlay-off.png");
+    QVERIFY2(withoutStyle < withStyle, "switching the style items off removes what they draw");
+  }
+
   void blockEditorPickerUsesQtDialog() {
     EditorWindow window;
     window.CreateDrawingFromTemplate();

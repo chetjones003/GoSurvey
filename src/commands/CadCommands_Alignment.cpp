@@ -1355,7 +1355,9 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
   const auto usage = [&]() {
     log.push_back(
         "ALIGNMENTSTYLE - usage: ALIGNMENTSTYLE LIST | NEW <style> | DELETE <style> | ASSIGN <alignment>, <style> | "
-        "SHOW|HIDE <style>, <tangent|curve|spiral> | COLOR <style>, <tangent|curve|spiral>, <color>.");
+        "SHOW|HIDE <style>, <tangent|curve|spiral> | COLOR <style>, <tangent|curve|spiral>, <color> | "
+        "SET <style>, TICKS|MARKERS|ARROWS|LABELS ON|OFF | SET <style>, TICKSIDE BOTH|LEFT|RIGHT | "
+        "SET <style>, MAJORTICK|MINORTICK|MARKERSIZE|ARROWLENGTH <n>.");
   };
   const std::string trimmed = Trim(args);
   if (trimmed.empty()) {
@@ -1419,6 +1421,54 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
     st.alignmentStyles.erase(it);
     BumpCadGpuCache(st);
     log.push_back("ALIGNMENTSTYLE - deleted style \"" + name + "\".");
+    return;
+  }
+  if (verb == "set") {  // REQ-491: the appearance items the Markers, Display and Design tabs edit
+    if (f.size() != 4) {
+      usage();
+      return;
+    }
+    const AlignmentStyle* current = AlignmentStyles::Find(st.alignmentStyles, f[1]);
+    if (current == nullptr) {
+      log.push_back("ALIGNMENTSTYLE - no style named \"" + f[1] + "\".");
+      return;
+    }
+    AlignmentStyle edited = *current;  // validate on a copy, so a refused item changes nothing and takes no undo step
+    const std::string item = Lower(f[2]), value = Lower(f[3]);
+    double v = 0.0;
+    const bool numberOk = ParseNum(f[3], &v) && v >= 0.0;
+    bool ok = false;
+    const auto setOnOff = [&](bool* target) {
+      if (value != "on" && value != "off") return false;
+      *target = value == "on";
+      return true;
+    };
+    if (item == "ticks") ok = setOnOff(&edited.ticks.visible);
+    else if (item == "markers") ok = setOnOff(&edited.markers.visible);
+    else if (item == "arrows") ok = setOnOff(&edited.arrows.visible);
+    else if (item == "labels") ok = setOnOff(&edited.labelsVisible);
+    else if (item == "tickside") {
+      ok = true;
+      if (value == "both") edited.tickSide = 0;
+      else if (value == "left") edited.tickSide = 1;
+      else if (value == "right") edited.tickSide = 2;
+      else ok = false;
+    } else if (item == "majortick" && numberOk) { edited.majorTickLength = v; ok = true; }
+    else if (item == "minortick" && numberOk) { edited.minorTickLength = v; ok = true; }
+    else if (item == "markersize" && numberOk) { edited.markerHalfSize = v; ok = true; }
+    else if (item == "arrowlength" && numberOk) { edited.arrowLength = v; ok = true; }
+    if (!ok) {
+      log.push_back("ALIGNMENTSTYLE - SET item \"" + f[2] + "\" with value \"" + f[3] + "\" is not valid.");
+      return;
+    }
+    if (edited == *current) {
+      log.push_back("ALIGNMENTSTYLE - \"" + edited.name + "\" already has " + f[2] + " set to " + f[3] + ".");
+      return;
+    }
+    PushUndoSnapshot(st, "Alignment style");
+    *AlignmentStyles::Find(st.alignmentStyles, f[1]) = std::move(edited);
+    BumpCadGpuCache(st);
+    log.push_back("ALIGNMENTSTYLE - style \"" + f[1] + "\": " + f[2] + " set to " + f[3] + ".");
     return;
   }
   if (verb == "assign") {

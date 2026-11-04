@@ -350,9 +350,25 @@ struct AlignmentStyle {
   SurfaceComponentStyle tangent;
   SurfaceComponentStyle curve;
   SurfaceComponentStyle spiral;
+  /// REQ-491: station tick marks across the alignment at its label-set stations. Length in drawing units (major, minor).
+  SurfaceComponentStyle ticks;
+  double majorTickLength = 8.0;
+  double minorTickLength = 4.0;
+  int tickSide = 0;  ///< 0 = both sides of the alignment, 1 = left, 2 = right (REQ-491 "offset side").
+  /// REQ-491: small crosses at the geometry points (TS, SC, PC, PT, PI and so on), half-size in drawing units.
+  SurfaceComponentStyle markers;
+  double markerHalfSize = 1.5;
+  /// REQ-491: an arrow at the middle of the alignment showing its direction. Off by default.
+  SurfaceComponentStyle arrows;
+  double arrowLength = 10.0;
+  /// REQ-491 "label visibility": station, equation and station/offset labels draw only when this is on.
+  bool labelsVisible = true;
 
   bool operator==(const AlignmentStyle& o) const {
-    return name == o.name && tangent == o.tangent && curve == o.curve && spiral == o.spiral;
+    return name == o.name && tangent == o.tangent && curve == o.curve && spiral == o.spiral && ticks == o.ticks &&
+           majorTickLength == o.majorTickLength && minorTickLength == o.minorTickLength && tickSide == o.tickSide &&
+           markers == o.markers && markerHalfSize == o.markerHalfSize && arrows == o.arrows &&
+           arrowLength == o.arrowLength && labelsVisible == o.labelsVisible;
   }
   bool operator!=(const AlignmentStyle& o) const { return !(*this == o); }
 };

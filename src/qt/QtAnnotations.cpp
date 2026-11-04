@@ -7,6 +7,7 @@
 #include "CadCoordinateFrame.hpp"
 #include "TextStyle.hpp"
 #include "AlignmentLabelSet.hpp"
+#include "AlignmentStyle.hpp"
 #include "alignment/AlignmentLabels.hpp"
 #include "font/CadFontName.hpp"
 #include "font/ShxFont.hpp"
@@ -805,6 +806,95 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       painter.drawText(tip + direction * 8.0 + QPointF(-4, 4), "N");
     }
   }
+
+  if (!state.alignments.empty()) {
+    painter.setPen(QColor("#20252a"));
+    QFont stationFont(QStringLiteral("Segoe UI"), 9);
+    painter.setFont(stationFont);
+    const double textOffset = 3.0;
+    for (const alignment::Alignment& al : state.alignments) {
+      if (al.Empty()) continue;
+      // The label set decides the station and equation TEXT; the style's ticks, markers and arrows draw without one.
+      const AlignmentLabelSet* ls = AlignmentLabelSets::Resolve(state.alignmentLabelSets, al.labelSet);
+      const std::vector<alignment::StationTickLabel> ticks =
+          ls != nullptr ? alignment::CollectMajorMinorStationTicks(al, ls->majorInterval, ls->minorInterval,
+                                                                   ls->majorStationsOn, ls->minorStationsOn)
+                        : std::vector<alignment::StationTickLabel>{};
+      // REQ-491: the style decides what is drawn for this alignment. A missing style (already logged at load) reads as Standard.
+      const AlignmentStyle* sty = AlignmentStyles::Resolve(state.alignmentStyles, al.style);
+      const bool showLabels = sty == nullptr || sty->labelsVisible;
+      const auto styleColor = [&](const SurfaceComponentStyle* comp, QColor fallback) {
+        if (comp != nullptr && comp->color.size() == 7 && comp->color[0] == '#') return QColor(QString::fromStdString(comp->color));
+        return fallback;
+      };
+      if (showLabels && ls != nullptr) for (const alignment::StationTickLabel& tick : ticks) {
+        const alignment::Point2 p = al.GetPointAtStation(tick.rawStation);
+        const double az = al.GetBearingAtStation(tick.rawStation);
+        const double lx = p.x + textOffset * std::cos(az);
+        const double ly = p.y - textOffset * std::sin(az);
+        const std::string text = alignment::FormatStation(tick.displayedStation);
+        painter.drawText(project(lx, ly, 0.0), QString::fromStdString(text));
+      }
+      // REQ-492.1 / .2: an equation label at each station equation, showing the back and ahead displayed values.
+      if (ls != nullptr && ls->equationsOn && showLabels) {
+        for (const alignment::EquationLabel& eq : alignment::CollectEquationLabels(al)) {
+          const alignment::Point2 p = al.GetPointAtStation(eq.rawStation);
+          const double az = al.GetBearingAtStation(eq.rawStation);
+          const std::string text = "EQ " + alignment::FormatStation(eq.backDisplayed) + " = " + alignment::FormatStation(eq.aheadDisplayed);
+          painter.drawText(project(p.x + textOffset * std::cos(az), p.y - textOffset * std::sin(az), 0.0), QString::fromStdString(text));
+        }
+      }
+      // REQ-492.4: station/offset labels, fixed or relative, drawn where they resolve on the current geometry.
+      for (const alignment::StationOffsetLabel& sl : al.stationLabels) {
+        if (!showLabels) break;
+        const alignment::StationOffsetLabelPlacement placed = alignment::PlaceStationOffsetLabel(al, sl, state.displayLinearPrecision);
+        if (!placed.onAlignment) continue;
+        painter.drawText(project(placed.point.x, placed.point.y, 0.0), QString::fromStdString(placed.text));
+      }
+      if (sty != nullptr && sty->ticks.visible) {  // REQ-491 station ticks, across the alignment at its label-set stations
+        painter.setPen(QPen(styleColor(&sty->ticks, QColor("#20252a")), 1));
+        for (const alignment::StationTickLabel& tick : ticks) {
+          const alignment::Point2 p = al.GetPointAtStation(tick.rawStation);
+          const double az = al.GetBearingAtStation(tick.rawStation);
+          const double nx = std::cos(az), ny = -std::sin(az);  // right of travel
+          const double len = tick.major ? sty->majorTickLength : sty->minorTickLength;
+          double a0 = -0.5, a1 = 0.5;  // side 0: both sides of the line
+          if (sty->tickSide == 1) { a0 = 0.0; a1 = -1.0; }  // left
+          if (sty->tickSide == 2) { a0 = 0.0; a1 = 1.0; }   // right
+          painter.drawLine(project(p.x + a0 * len * nx, p.y + a0 * len * ny, 0.0),
+                           project(p.x + a1 * len * nx, p.y + a1 * len * ny, 0.0));
+        }
+      }
+      if (sty != nullptr && sty->markers.visible) {  // REQ-491 geometry point markers: a cross per point, by code
+        painter.setPen(QPen(styleColor(&sty->markers, QColor("#20252a")), 1));
+        const double h = sty->markerHalfSize;
+        for (const alignment::GeometryPoint& gp : al.GeometryPoints()) {
+          using GC = alignment::GeometryPointCode;
+          if (gp.code == GC::LineMidPt || gp.code == GC::CurveMidPt || gp.code == GC::CurveCenter) continue;
+          const alignment::Point2 q = gp.point;
+          painter.drawLine(project(q.x - h, q.y, 0.0), project(q.x + h, q.y, 0.0));
+          painter.drawLine(project(q.x, q.y - h, 0.0), project(q.x, q.y + h, 0.0));
+        }
+      }
+      if (sty != nullptr && sty->arrows.visible && !al.Empty()) {  // REQ-491 direction arrow at the middle of the alignment
+        painter.setPen(QPen(styleColor(&sty->arrows, QColor("#20252a")), 1));
+        const double mid = 0.5 * (al.StartStation() + al.EndStation());
+        const alignment::Point2 p = al.GetPointAtStation(mid);
+        const double az = al.GetBearingAtStation(mid);
+        const double tx = std::sin(az), ty = std::cos(az);
+        const double L = sty->arrowLength;
+        const alignment::Point2 tail{p.x - 0.5 * L * tx, p.y - 0.5 * L * ty};
+        const alignment::Point2 tip{p.x + 0.5 * L * tx, p.y + 0.5 * L * ty};
+        painter.drawLine(project(tail.x, tail.y, 0.0), project(tip.x, tip.y, 0.0));
+        for (const double turn : {0.5236, -0.5236}) {  // the two barbs, 30 degrees either side of the back-pointing direction
+          const double c = std::cos(turn), sn = std::sin(turn);
+          const double bx = -tx * c + ty * sn;  // (-tx, -ty) rotated by turn
+          const double by = -tx * sn - ty * c;
+          painter.drawLine(project(tip.x, tip.y, 0.0), project(tip.x + 0.25 * L * bx, tip.y + 0.25 * L * by, 0.0));
+        }
+      }
+    }
+  }
   painter.restore();
 }
 
@@ -869,42 +959,6 @@ void DrawQtTransformAnnotationPreviews(QPainter& painter, const AppCommandState&
     }
     document.drawContents(&painter);
     painter.restore();
-  }
-  if (!state.alignments.empty()) {
-    painter.setPen(QColor("#20252a"));
-    QFont stationFont(QStringLiteral("Segoe UI"), 9);
-    painter.setFont(stationFont);
-    const double textOffset = 3.0;
-    for (const alignment::Alignment& al : state.alignments) {
-      if (al.Empty()) continue;
-      const AlignmentLabelSet* ls = AlignmentLabelSets::Resolve(state.alignmentLabelSets, al.labelSet);
-      if (ls == nullptr) continue;
-      const std::vector<alignment::StationTickLabel> ticks = alignment::CollectMajorMinorStationTicks(
-          al, ls->majorInterval, ls->minorInterval, ls->majorStationsOn, ls->minorStationsOn);
-      for (const alignment::StationTickLabel& tick : ticks) {
-        const alignment::Point2 p = al.GetPointAtStation(tick.rawStation);
-        const double az = al.GetBearingAtStation(tick.rawStation);
-        const double lx = p.x + textOffset * std::cos(az);
-        const double ly = p.y - textOffset * std::sin(az);
-        const std::string text = alignment::FormatStation(tick.displayedStation);
-        painter.drawText(project(lx, ly, 0.0), QString::fromStdString(text));
-      }
-      // REQ-492.1 / .2: an equation label at each station equation, showing the back and ahead displayed values.
-      if (ls->equationsOn) {
-        for (const alignment::EquationLabel& eq : alignment::CollectEquationLabels(al)) {
-          const alignment::Point2 p = al.GetPointAtStation(eq.rawStation);
-          const double az = al.GetBearingAtStation(eq.rawStation);
-          const std::string text = "EQ " + alignment::FormatStation(eq.backDisplayed) + " = " + alignment::FormatStation(eq.aheadDisplayed);
-          painter.drawText(project(p.x + textOffset * std::cos(az), p.y - textOffset * std::sin(az), 0.0), QString::fromStdString(text));
-        }
-      }
-      // REQ-492.4: station/offset labels, fixed or relative, drawn where they resolve on the current geometry.
-      for (const alignment::StationOffsetLabel& sl : al.stationLabels) {
-        const alignment::StationOffsetLabelPlacement placed = alignment::PlaceStationOffsetLabel(al, sl, state.displayLinearPrecision);
-        if (!placed.onAlignment) continue;
-        painter.drawText(project(placed.point.x, placed.point.y, 0.0), QString::fromStdString(placed.text));
-      }
-    }
   }
   painter.restore();
 }

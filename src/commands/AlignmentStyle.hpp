@@ -27,6 +27,7 @@ inline AlignmentStyle* Find(std::vector<AlignmentStyle>& styles, const std::stri
 inline AlignmentStyle StandardAlignmentStyle() {
   AlignmentStyle s;
   s.name = kStandardName;
+  s.arrows.visible = false;  // direction arrows are opt-in (REQ-491)
   return s;
 }
 

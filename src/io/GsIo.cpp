@@ -1288,6 +1288,15 @@ json BuildRoot(const AppCommandState& st) {
         o["tangent"] = componentToJson(s.tangent);
         o["curve"] = componentToJson(s.curve);
         o["spiral"] = componentToJson(s.spiral);
+        o["ticks"] = componentToJson(s.ticks);  // REQ-491
+        o["majorTickLength"] = s.majorTickLength;
+        o["minorTickLength"] = s.minorTickLength;
+        o["tickSide"] = s.tickSide;
+        o["markers"] = componentToJson(s.markers);
+        o["markerHalfSize"] = s.markerHalfSize;
+        o["arrows"] = componentToJson(s.arrows);
+        o["arrowLength"] = s.arrowLength;
+        o["labelsVisible"] = s.labelsVisible;
         styles.push_back(std::move(o));
       }
       doc["alignmentStyles"] = std::move(styles);
@@ -3391,6 +3400,16 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (o.contains("tangent")) componentFromJson(o["tangent"], &s.tangent);
       if (o.contains("curve")) componentFromJson(o["curve"], &s.curve);
       if (o.contains("spiral")) componentFromJson(o["spiral"], &s.spiral);
+      if (o.contains("ticks")) componentFromJson(o["ticks"], &s.ticks);  // REQ-491; a style saved before these read as defaults
+      if (o.contains("majorTickLength") && o["majorTickLength"].is_number()) s.majorTickLength = o["majorTickLength"].get<double>();
+      if (o.contains("minorTickLength") && o["minorTickLength"].is_number()) s.minorTickLength = o["minorTickLength"].get<double>();
+      if (o.contains("tickSide") && o["tickSide"].is_number_integer()) s.tickSide = std::clamp(o["tickSide"].get<int>(), 0, 2);
+      if (o.contains("markers")) componentFromJson(o["markers"], &s.markers);
+      if (o.contains("markerHalfSize") && o["markerHalfSize"].is_number()) s.markerHalfSize = o["markerHalfSize"].get<double>();
+      s.arrows.visible = false;  // a style saved before arrows existed has none (REQ-491)
+      if (o.contains("arrows")) componentFromJson(o["arrows"], &s.arrows);
+      if (o.contains("arrowLength") && o["arrowLength"].is_number()) s.arrowLength = o["arrowLength"].get<double>();
+      if (o.contains("labelsVisible") && o["labelsVisible"].is_boolean()) s.labelsVisible = o["labelsVisible"].get<bool>();
       st.alignmentStyles.push_back(std::move(s));
     }
   }

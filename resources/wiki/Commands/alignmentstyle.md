@@ -29,3 +29,14 @@ See [[Alignments]] for creation and editing commands.
 
 - [[Alignments]]
 - [[Command Reference]]
+
+## Appearance items (SET)
+
+`ALIGNMENTSTYLE SET, <style>, TICKS|MARKERS|ARROWS|LABELS, ON|OFF` turns an item on or off.
+`ALIGNMENTSTYLE SET, <style>, TICKSIDE, BOTH|LEFT|RIGHT` picks the side the station ticks sit on.
+`ALIGNMENTSTYLE SET, <style>, MAJORTICK|MINORTICK|MARKERSIZE|ARROWLENGTH, <n>` sets a length or size in drawing units.
+
+Station ticks cross the alignment at the stations of its label set. Geometry markers are small crosses at the TS, SC, PC,
+PT and PI points. A direction arrow sits at the middle of the alignment and is off by default. LABELS hides the station,
+equation and station/offset labels while leaving the lines and ticks in place. A style that an alignment uses cannot be
+deleted; if a saved alignment names a style that is missing, it uses Standard and the load log says so.

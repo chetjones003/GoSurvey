@@ -1227,6 +1227,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AlignmentGroundTests.cpp
     tests/AlignmentTableTests.cpp
     tests/AlignmentLabelOffsetTests.cpp
+    tests/AlignmentStyleFieldTests.cpp
     tests/AlignmentSpiralCommandTests.cpp
     tests/AlignmentEditTests.cpp
     tests/SurfaceStatsTests.cpp
