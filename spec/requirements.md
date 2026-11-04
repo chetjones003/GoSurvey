@@ -16382,6 +16382,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
   5. Labels are drawing-owned objects: movable (drag), stackable text, text style, height and orientation from the
      label style; formatting (precision, units, angle format, prefix/suffix) is configurable and survives save.
   6. Label placement is dynamic: editing the alignment moves labels; deleting the alignment removes them.
+  7. **Decision D-2026-11-04-c:** label text, and ByLayer ticks, markers and arrows, draw in the alignment layer's
+     colour. Minor stations draw a tick only. Geometry-point labels read `<code>: <station>` (BP, EP, PI, PC, PT, PCC,
+     PRC, TS, ST, SC, CS, SS, Mid); design-speed labels read `STA <station> DESIGN SPEED = <speed> mi/h` (km/h in a
+     metric drawing). Geometry Points and Design Speeds are on in the `Standard` label set. Labels are drawing text
+     0.1" high at the plot scale, and ZOOM EXTENTS includes them.
 - Acceptance:
   1. A 0+00–3+82 alignment with major=100/minor=20 shows 3 major and 15 minor ticks with correct labels.
   2. Station equations change the labels to the displayed values and add an equation label.

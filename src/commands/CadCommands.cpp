@@ -22870,10 +22870,11 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     }
   }
   // REQ-480 alignments: the exact geometry's bounds (arcs bounded by their extreme points), so ZOOM EXTENTS
-  // frames a drawing that holds only an alignment.
+  // frames a drawing that holds only an alignment, grown to take in its labels (D-2026-11-04-c).
   for (const alignment::Alignment& al : st.alignments) {
     alignment::Point2 mn{}, mx{};
-    if (!al.Bounds(&mn, &mx))
+    if (!AlignmentLabelSets::LabelledBounds(al, st.alignmentLabelSets, st.alignmentStyles, st.drawingInsUnits,
+                                            st.modelUnitsPerPlottedInch, &mn, &mx))
       continue;
     consider(mn.x, mn.y);
     consider(mx.x, mx.y);
@@ -23266,9 +23267,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       out.push_back(b);
     }
   }
-  for (const alignment::Alignment& al : st.alignments) {  // REQ-480
+  for (const alignment::Alignment& al : st.alignments) {  // REQ-480, with its labels (D-2026-11-04-c)
     alignment::Point2 mn{}, mx{};
-    if (!al.Bounds(&mn, &mx))
+    if (!AlignmentLabelSets::LabelledBounds(al, st.alignmentLabelSets, st.alignmentStyles, st.drawingInsUnits,
+                                            st.modelUnitsPerPlottedInch, &mn, &mx))
       continue;
     EntityBox b{};
     EntityBoxGrowZ(b, 0.0, true);

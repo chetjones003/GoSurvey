@@ -101,11 +101,17 @@ bool BuildAlignmentTableText(const Alignment& a, AlignmentTableKind kind, int li
   return fail("unknown table kind");
 }
 
-std::string CurveLabelText(const CurveData& c, int linearPrecision, const AngleDisplaySettings& angles) {
+std::vector<std::string> CurveLabelLines(const CurveData& c, int linearPrecision, const AngleDisplaySettings& angles) {
   // \xCE\x94 is the Greek capital delta in UTF-8, as the spec writes it. Feet, as the spec example reads (REQ-492.3);
   // metric label units are a later format setting, not this slice.
-  return "R = " + Lin(linearPrecision, c.radius) + "' \xCE\x94 = " + FormatSweptAngle(c.delta / kDegToRad, angles) +
-         " L = " + Lin(linearPrecision, c.arcLength) + "' T = " + Lin(linearPrecision, c.tangentLength) + "'";
+  return {"R = " + Lin(linearPrecision, c.radius) + "'", "\xCE\x94 = " + FormatSweptAngle(c.delta / kDegToRad, angles),
+          "L = " + Lin(linearPrecision, c.arcLength) + "'", "T = " + Lin(linearPrecision, c.tangentLength) + "'"};
+}
+
+std::string CurveLabelText(const CurveData& c, int linearPrecision, const AngleDisplaySettings& angles) {
+  std::string text;
+  for (const std::string& line : CurveLabelLines(c, linearPrecision, angles)) text += (text.empty() ? "" : " ") + line;
+  return text;
 }
 
 }  // namespace alignment

@@ -805,6 +805,29 @@ private Q_SLOTS:
     });
     window.Submit("EDITALIGNMENTSTYLE Wide");
     QVERIFY(styleChecked);
+
+    // REQ-492 / D-2026-11-04-c: the geometry-point labels are drawn, so hiding them changes the picture.
+    const auto viewportShot = [&] {
+      window.Refresh();
+      window.m_Viewport->update();
+      QTest::qWait(150);
+      return window.m_Viewport->grabFramebuffer();
+    };
+    const QImage withGeometry = viewportShot();
+    run("ALIGNMENTLABELSET HIDE, Standard, GEOMETRY");
+    QVERIFY(!window.State().alignmentLabelSets.front().geometryPointsOn);
+    const QImage withoutGeometry = viewportShot();
+    QVERIFY(withGeometry != withoutGeometry);
+    run("ALIGNMENTLABELSET SHOW, Standard, GEOMETRY");
+    // Civil 3D's Imperial template shows quadrant bearings and two decimals; match them for the paired capture.
+    window.State().angleDisplayType = 2;
+    window.State().angleDisplayPrecision = 2;
+    window.State().displayLinearPrecision = 2;
+    run("ALIGNMENTLABEL Main Road, SEGMENTS");
+    QVERIFY(window.State().alignments[0].segmentLabels);
+    const QImage withSegments = viewportShot();
+    QVERIFY(withSegments != withGeometry);
+    QVERIFY(withSegments.save(Issue914Shot("qt-492-viewport-segment-labels.png")));
   }
 
   void issue121AlignmentPhase1Screenshots() {

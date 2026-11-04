@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Alignment.hpp"
+#include "util/AngleFormat.hpp"
 
 #include <string>
 #include <vector>
@@ -44,6 +45,55 @@ struct StationOffsetLabelPlacement {
 };
 [[nodiscard]] StationOffsetLabelPlacement PlaceStationOffsetLabel(const Alignment& al, const StationOffsetLabel& label,
                                                                   int linearPrecision);
+
+/// The abbreviation a geometry-point label shows for a code (D-2026-11-04-c), or "" when the code is not labelled
+/// (line midpoint, curve centre, curve PI).
+[[nodiscard]] const char* GeometryPointAbbreviation(GeometryPointCode code);
+
+/// One geometry-point label (REQ-492.1 Geometry Points item): where it sits and its text, e.g. "PC: 5+90.00".
+struct GeometryPointLabel {
+  Point2 point;
+  double internalStation = 0.0;
+  GeometryPointCode code = GeometryPointCode::Begin;
+  std::string text;
+};
+[[nodiscard]] std::vector<GeometryPointLabel> CollectGeometryPointLabels(const Alignment& al);
+
+/// One design-speed label (REQ-492.1 Design Speeds item), e.g. "STA 5+00.00 DESIGN SPEED = 30 mi/h".
+struct DesignSpeedLabel {
+  double internalStation = 0.0;
+  std::string text;
+};
+[[nodiscard]] std::vector<DesignSpeedLabel> CollectDesignSpeedLabels(const Alignment& al, bool metric);
+
+/// Segment label lines (REQ-492.3, stacked per REQ-492.5). Line: bearing, then length. Spiral: A, Ls, then the start and
+/// end radius (∞ = tangent). Curves use CurveLabelLines (AlignmentTables.hpp).
+[[nodiscard]] std::vector<std::string> LineLabelLines(const Entity& line, int linearPrecision,
+                                                      const AngleDisplaySettings& angles);
+[[nodiscard]] std::vector<std::string> SpiralLabelLines(const SpiralData& spiral, int linearPrecision);
+
+/// Alignment label layout (REQ-492.5, D-2026-11-04-c). Labels are drawing text of a plotted height, as Civil 3D's
+/// annotative labels are; every distance below is in text heights so the viewport and ZOOM EXTENTS agree on where a
+/// label reaches.
+inline constexpr double kLabelPlottedHeightInches = 0.1;
+inline constexpr double kLeaderGapHeights = 0.5;        ///< From the point to the start of the leader line.
+inline constexpr double kLeaderTextStartHeights = 1.0;  ///< From the point to the first character.
+inline constexpr double kLeaderOvershootHeights = 0.5;  ///< Leader line past the last character.
+inline constexpr double kLabelCharWidthHeights = 0.7;   ///< Generous mean glyph advance: extents only, never drawing.
+
+/// How far a leader label (geometry point, design speed) reaches from its point, in drawing units.
+[[nodiscard]] double LeaderLabelReach(const std::string& text, double textHeight);
+
+/// What the label set asks an alignment to label, for its labelled bounds.
+struct AlignmentLabelItems {
+  bool geometryPoints = false;
+  bool designSpeeds = false;
+  bool metric = false;
+};
+/// The plan box of an alignment and its labels: the geometry grown by two text heights (station, segment and
+/// equation text sit beside the line) and each leader label's far end. False for an empty alignment.
+[[nodiscard]] bool LabelledBounds(const Alignment& al, const AlignmentLabelItems& items, double textHeight, Point2* mn,
+                                  Point2* mx);
 
 /// Moves a label to a plan point (REQ-492.5, drag). A fixed label takes the point as it is; a relative label takes the
 /// station and offset of the nearest point on the alignment. False when the point has no meaning (empty alignment).

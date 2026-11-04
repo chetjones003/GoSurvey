@@ -385,10 +385,13 @@ struct AlignmentLabelSet {
   double majorInterval = 100.0;
   double minorInterval = 20.0;
   bool equationsOn = true;  ///< REQ-492.1 Station Equations item: an equation label at each equation.
+  bool geometryPointsOn = true;  ///< REQ-492.1 Geometry Points item (D-2026-11-04-c).
+  bool designSpeedsOn = true;    ///< REQ-492.1 Design Speeds item (D-2026-11-04-c).
 
   bool operator==(const AlignmentLabelSet& o) const {
     return name == o.name && majorStationsOn == o.majorStationsOn && minorStationsOn == o.minorStationsOn &&
-           majorInterval == o.majorInterval && minorInterval == o.minorInterval && equationsOn == o.equationsOn;
+           majorInterval == o.majorInterval && minorInterval == o.minorInterval && equationsOn == o.equationsOn &&
+           geometryPointsOn == o.geometryPointsOn && designSpeedsOn == o.designSpeedsOn;
   }
   bool operator!=(const AlignmentLabelSet& o) const { return !(*this == o); }
 };

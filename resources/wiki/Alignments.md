@@ -44,7 +44,7 @@ offset and a curve's radius are always exact.
 | `ALIGNMENTDETACH <name>` | Makes a linked offset independent so it can be edited. |
 | `ALIGNMENTINTERSECT <a>, <b>` / `<a>, LINE, x1, y1, x2, y2` / `<a>, CIRCLE, cx, cy, r` | Every intersection with station and crossing angle; coincident tangents are reported as a range. |
 | `ALIGNMENTSTYLE LIST` / `NEW` / `DELETE` / `ASSIGN` / `SHOW\|HIDE` / `COLOR` | Drawing-wide **display styles** for tangent, curve and spiral components (color, visibility). Each alignment uses a style name (default **Standard**). |
-| `ALIGNMENTLABELSET LIST` / `NEW` / `ASSIGN` / `MAJORINTERVAL` / `MINORINTERVAL` / `SHOW\|HIDE` | Drawing-wide **label sets** (major/minor station intervals). Each alignment uses a label set name (default **Standard**). Station labels draw in the viewport. |
+| `ALIGNMENTLABELSET LIST` / `NEW` / `ASSIGN` / `MAJORINTERVAL` / `MINORINTERVAL` / `SHOW\|HIDE <set>, MAJOR\|MINOR\|EQUATIONS\|GEOMETRY\|SPEEDS` | Drawing-wide **label sets**. Each alignment uses a label set name (default **Standard**, with every item on). In the viewport, major stations get their station text and minor stations a tick. **GEOMETRY** labels the geometry points (`BP: 5+00.00`, `PC`, `Mid`, `PT`, `PI`, `TS`, `SC`, `EP` and so on) on a leader to the left of travel. **SPEEDS** labels each design speed (`STA 5+00.00 DESIGN SPEED = 40 mi/h`, km/h in a metric drawing) on a leader to the right. Labels are drawing text 0.1" high at the plot scale, in the alignment layer's colour, so ZOOM EXTENTS takes them in. |
 
 ## Selecting, editing and saving
 

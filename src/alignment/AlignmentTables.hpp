@@ -22,5 +22,8 @@ struct AlignmentTableText {
 /// The label text of a circular curve in the layout the spec gives (REQ-492.3): `R = 500.00' Δ = 15°00'00" L = 130.90' T = 65.83'`.
 /// Precision and angle format follow the drawing's settings; the curve's true arc length is used, not the chord.
 [[nodiscard]] std::string CurveLabelText(const CurveData& curve, int linearPrecision, const AngleDisplaySettings& angles);
+/// The same label as separate lines (R, Δ, L, T), for a stacked label in the drawing (REQ-492.5).
+[[nodiscard]] std::vector<std::string> CurveLabelLines(const CurveData& curve, int linearPrecision,
+                                                       const AngleDisplaySettings& angles);
 
 }  // namespace alignment

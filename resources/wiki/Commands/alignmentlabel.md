@@ -7,6 +7,10 @@ Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMEN
 
 Labels the segments of an alignment. Line, curve and segment tables need the segments labelled first: until then ALIGNMENTTABLE refuses and names this command. CLEAR removes the labels; existing dynamic tables then stop updating and say so.
 
+Labelled segments show their values at their middle. A tangent shows its bearing on one side and its length on the
+other. A curve stacks `R`, `Δ`, `L` and `T` on the inside of the turn. A spiral stacks `A`, `Ls` and its start and end
+radius (`∞` for a tangent end). Bearings, angles and lengths follow the drawing's unit and precision settings.
+
 ---
 
 ## Related

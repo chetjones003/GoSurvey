@@ -1314,6 +1314,8 @@ json BuildRoot(const AppCommandState& st) {
         o["majorStationsOn"] = s.majorStationsOn;
         o["minorStationsOn"] = s.minorStationsOn;
         o["equationsOn"] = s.equationsOn;  // REQ-492.1
+        o["geometryPointsOn"] = s.geometryPointsOn;  // D-2026-11-04-c
+        o["designSpeedsOn"] = s.designSpeedsOn;
         o["majorInterval"] = s.majorInterval;
         o["minorInterval"] = s.minorInterval;
         sets.push_back(std::move(o));
@@ -3466,6 +3468,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       s.name = o["name"].get<std::string>();
       if (o.contains("equationsOn") && o["equationsOn"].is_boolean())
         s.equationsOn = o["equationsOn"].get<bool>();
+      if (o.contains("geometryPointsOn") && o["geometryPointsOn"].is_boolean())
+        s.geometryPointsOn = o["geometryPointsOn"].get<bool>();
+      if (o.contains("designSpeedsOn") && o["designSpeedsOn"].is_boolean())
+        s.designSpeedsOn = o["designSpeedsOn"].get<bool>();
       if (o.contains("majorStationsOn") && o["majorStationsOn"].is_boolean())
         s.majorStationsOn = o["majorStationsOn"].get<bool>();
       if (o.contains("minorStationsOn") && o["minorStationsOn"].is_boolean())

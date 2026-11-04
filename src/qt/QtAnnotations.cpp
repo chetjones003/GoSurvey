@@ -10,6 +10,7 @@
 #include "AlignmentStyle.hpp"
 #include "alignment/AlignmentLabels.hpp"
 #include "alignment/AlignmentDesign.hpp"
+#include "alignment/AlignmentTables.hpp"
 #include "font/CadFontName.hpp"
 #include "font/ShxFont.hpp"
 #include "MtextRichFormat.hpp"
@@ -257,6 +258,283 @@ void DrawQtSurveyPoints(QPainter& painter, const AppCommandState& state, float w
   }
   painter.restore();
 }
+
+namespace {
+
+// REQ-492 / REQ-495.2: the alignment overlay (ticks, markers, arrows, labels, design flags) is placed in screen space.
+struct AlignmentView {
+  const Camera& camera;
+  float width = 0.f;
+  float height = 0.f;
+  double textPx = 0.0;  ///< Label text height on screen (REQ-492.5: a plotted height, so it follows the zoom).
+  [[nodiscard]] QPointF Project(alignment::Point2 p) const {
+    float sx = 0.f, sy = 0.f;
+    camera.WorldToScreen(p.x, p.y, 0.0, width, height, &sx, &sy);
+    return QPointF(sx, sy);
+  }
+};
+
+// An alignment station on screen: the point, unit screen vectors along travel and to its left, and the screen pixels
+// per drawing unit there.
+struct AlignmentScreenFrame {
+  QPointF point;
+  QPointF along{1.0, 0.0};
+  QPointF left{0.0, -1.0};
+  double pixelsPerUnit = 0.0;
+};
+
+AlignmentScreenFrame FrameAt(const AlignmentView& view, const alignment::Alignment& al, double rawStation) {
+  const alignment::Point2 p = al.GetPointAtStation(rawStation);
+  const double az = al.GetBearingAtStation(rawStation);
+  AlignmentScreenFrame f;
+  f.point = view.Project(p);
+  // Bearings run clockwise from north: travel is (sin, cos) and its left is (-cos, sin), one drawing unit long.
+  const QPointF along = view.Project({p.x + std::sin(az), p.y + std::cos(az)}) - f.point;
+  const QPointF left = view.Project({p.x - std::cos(az), p.y + std::sin(az)}) - f.point;
+  const double alongLength = std::hypot(along.x(), along.y());
+  const double leftLength = std::hypot(left.x(), left.y());
+  assert(std::isfinite(alongLength));
+  assert(std::isfinite(leftLength));
+  if (alongLength > 1.e-9) f.along = along / alongLength;
+  if (leftLength > 1.e-9) f.left = left / leftLength;
+  f.pixelsPerUnit = leftLength;
+  return f;
+}
+
+// Draws `text` along the screen direction `along`, turned so it never reads upside down. `start` is where the text
+// begins, or its middle when `centered`. `lift` moves the baseline off the anchor, in pixels, towards the text's top.
+void DrawTextAlong(QPainter& painter, QPointF start, QPointF along, const QString& text, bool centered, double lift) {
+  assert(std::isfinite(start.x()) && std::isfinite(start.y()));
+  assert(std::isfinite(along.x()) && std::isfinite(along.y()));
+  const double textWidth = QFontMetricsF(painter.font()).horizontalAdvance(text);
+  double angle = std::atan2(along.y(), along.x()) * 180.0 / alignment::kPi;
+  double x = centered ? -0.5 * textWidth : 0.0;
+  if (angle > 90.0 || angle < -90.0) {
+    angle += 180.0;
+    if (!centered) x = -textWidth;
+  }
+  painter.save();
+  painter.translate(start);
+  painter.rotate(angle);
+  painter.drawText(QPointF(x, -lift), text);
+  painter.restore();
+}
+
+// Text centred `offset` pixels beside the alignment and parallel to it (stations, segments, equations). `side` is +1
+// for the left of travel, -1 for the right.
+void DrawTextBeside(QPainter& painter, const AlignmentScreenFrame& f, double offset, const QString& text,
+                    double side = 1.0) {
+  assert(offset >= 0.0);
+  assert(side == 1.0 || side == -1.0);
+  if (text.isEmpty()) return;
+  const double ascent = QFontMetricsF(painter.font()).ascent();
+  DrawTextAlong(painter, f.point + f.left * side * (offset + 0.5 * ascent), f.along, text, true, -0.4 * ascent);
+}
+
+// A leader across the alignment with the text written along it, as Civil 3D draws geometry-point and design-speed
+// labels. `side` is +1 for the left of travel, -1 for the right.
+void DrawLeaderLabel(QPainter& painter, const AlignmentScreenFrame& f, double textPx, double side, const QString& text) {
+  assert(side == 1.0 || side == -1.0);
+  assert(textPx > 0.0);
+  if (text.isEmpty()) return;
+  const QPointF out = f.left * side;
+  const double textStart = alignment::kLeaderTextStartHeights * textPx;
+  const double textWidth = QFontMetricsF(painter.font()).horizontalAdvance(text);
+  painter.drawLine(f.point + out * (alignment::kLeaderGapHeights * textPx),
+                   f.point + out * (textStart + textWidth + alignment::kLeaderOvershootHeights * textPx));
+  DrawTextAlong(painter, f.point + out * textStart, out, text, false, 0.25 * textPx);
+}
+
+QColor ResolvedColor(const std::string& storage, const std::string& layerColor) {
+  float rgb[3]{1.f, 1.f, 1.f};
+  CadColorResolveRgb(CadColorEffectiveStorage(storage.empty() ? std::string("ByLayer") : storage, layerColor), 1.f, 1.f,
+                     1.f, rgb);
+  return QColor::fromRgbF(rgb[0], rgb[1], rgb[2]);
+}
+
+// REQ-492.1/.2 major station text (minor stations are ticks only, D-2026-11-04-c) and equation labels.
+void DrawAlignmentStationText(QPainter& painter, const AlignmentView& view, const alignment::Alignment& al,
+                              const std::vector<alignment::StationTickLabel>& ticks, const AlignmentLabelSet& ls,
+                              double majorTickLength) {
+  assert(ls.majorInterval > 0.0);
+  assert(majorTickLength >= 0.0);
+  for (const alignment::StationTickLabel& tick : ticks) {
+    if (!tick.major) continue;
+    const AlignmentScreenFrame f = FrameAt(view, al, tick.rawStation);
+    DrawTextBeside(painter, f, 0.5 * majorTickLength * f.pixelsPerUnit + 0.3 * view.textPx,
+                   QString::fromStdString(alignment::FormatStation(tick.displayedStation)));
+  }
+  if (!ls.equationsOn) return;
+  for (const alignment::EquationLabel& eq : alignment::CollectEquationLabels(al)) {
+    const std::string text = "EQ " + alignment::FormatStation(eq.backDisplayed) + " = " + alignment::FormatStation(eq.aheadDisplayed);
+    const AlignmentScreenFrame f = FrameAt(view, al, eq.rawStation);
+    DrawTextBeside(painter, f, 0.5 * majorTickLength * f.pixelsPerUnit + 1.6 * view.textPx, QString::fromStdString(text));
+  }
+}
+
+// REQ-492.3/.5: a label at the middle of each segment once the alignment's segments are labelled. As Civil 3D draws
+// them, a line has its bearing on one side and its length on the other; a curve or spiral stacks its values on the
+// inside of the turn.
+void DrawAlignmentSegmentText(QPainter& painter, const AppCommandState& state, const AlignmentView& view,
+                              const alignment::Alignment& al) {
+  assert(!al.Empty());
+  assert(state.displayLinearPrecision >= 0);
+  const AngleDisplaySettings angles = CadAngleDisplaySettings(state);
+  const double lineHeight = QFontMetricsF(painter.font()).lineSpacing();
+  const int n = static_cast<int>(al.Entities().size());
+  for (int i = 0; i < n; ++i) {
+    const alignment::Entity& e = al.Entities()[static_cast<size_t>(i)];
+    const AlignmentScreenFrame f = FrameAt(view, al, 0.5 * (al.EntityStartStation(i) + al.EntityEndStation(i)));
+    alignment::CurveData cd;
+    alignment::SpiralData sd;
+    std::vector<std::string> lines;
+    if (e.kind == alignment::EntityKind::Line) {
+      lines = alignment::LineLabelLines(e, state.displayLinearPrecision, angles);
+      DrawTextBeside(painter, f, 0.4 * view.textPx, QString::fromUtf8(lines[0].c_str()), 1.0);
+      DrawTextBeside(painter, f, 0.4 * view.textPx, QString::fromUtf8(lines[1].c_str()), -1.0);
+      continue;
+    }
+    if (e.kind == alignment::EntityKind::Arc && al.CurveDataFor(i, &cd))
+      lines = alignment::CurveLabelLines(cd, state.displayLinearPrecision, angles);
+    else if (e.kind == alignment::EntityKind::Spiral && alignment::SpiralDataFor(i, al, &sd))
+      lines = alignment::SpiralLabelLines(sd, state.displayLinearPrecision);
+    const double inside = e.right ? -1.0 : 1.0;
+    for (size_t k = 0; k < lines.size(); ++k)
+      DrawTextBeside(painter, f, 0.6 * view.textPx + static_cast<double>(k) * lineHeight,
+                     QString::fromUtf8(lines[k].c_str()), inside);
+  }
+}
+
+// REQ-492: every label an alignment's label set and segment flag ask for, in the alignment layer's colour.
+void DrawAlignmentLabels(QPainter& painter, const AppCommandState& state, const AlignmentView& view,
+                         const alignment::Alignment& al, const std::vector<alignment::StationTickLabel>& ticks,
+                         const AlignmentLabelSet* ls, const AlignmentStyle* sty) {
+  assert(!al.Empty());
+  assert(view.width > 0.f && view.height > 0.f);
+  if (ls != nullptr) DrawAlignmentStationText(painter, view, al, ticks, *ls, sty != nullptr ? sty->majorTickLength : 0.0);
+  if (ls != nullptr && ls->geometryPointsOn)
+    for (const alignment::GeometryPointLabel& gp : alignment::CollectGeometryPointLabels(al))
+      DrawLeaderLabel(painter, FrameAt(view, al, gp.internalStation), view.textPx, 1.0, QString::fromStdString(gp.text));
+  if (ls != nullptr && ls->designSpeedsOn) {
+    const bool metric = state.drawingInsUnits == 4 || state.drawingInsUnits == 6;
+    for (const alignment::DesignSpeedLabel& d : alignment::CollectDesignSpeedLabels(al, metric))
+      DrawLeaderLabel(painter, FrameAt(view, al, d.internalStation), view.textPx, -1.0, QString::fromStdString(d.text));
+  }
+  if (al.segmentLabels) DrawAlignmentSegmentText(painter, state, view, al);
+  // REQ-492.4: station/offset labels, fixed or relative, drawn where they resolve on the current geometry.
+  for (const alignment::StationOffsetLabel& sl : al.stationLabels) {
+    const alignment::StationOffsetLabelPlacement placed = alignment::PlaceStationOffsetLabel(al, sl, state.displayLinearPrecision);
+    if (placed.onAlignment) painter.drawText(view.Project(placed.point), QString::fromStdString(placed.text));
+  }
+}
+
+// REQ-491 station ticks across the alignment at its label-set stations, and geometry point crosses.
+void DrawAlignmentTicksAndMarkers(QPainter& painter, const AlignmentView& view, const alignment::Alignment& al,
+                                  const std::vector<alignment::StationTickLabel>& ticks, const AlignmentStyle& sty,
+                                  const std::string& layerColor) {
+  assert(sty.majorTickLength >= 0.0 && sty.minorTickLength >= 0.0);
+  assert(sty.markerHalfSize >= 0.0);
+  if (sty.ticks.visible) {
+    painter.setPen(QPen(ResolvedColor(sty.ticks.color, layerColor), 1));
+    double a0 = -0.5, a1 = 0.5;  // side 0: both sides of the line
+    if (sty.tickSide == 1) { a0 = 0.0; a1 = -1.0; }  // left
+    if (sty.tickSide == 2) { a0 = 0.0; a1 = 1.0; }   // right
+    for (const alignment::StationTickLabel& tick : ticks) {
+      const alignment::Point2 p = al.GetPointAtStation(tick.rawStation);
+      const double az = al.GetBearingAtStation(tick.rawStation);
+      const double nx = std::cos(az), ny = -std::sin(az);  // right of travel
+      const double len = tick.major ? sty.majorTickLength : sty.minorTickLength;
+      painter.drawLine(view.Project({p.x + a0 * len * nx, p.y + a0 * len * ny}),
+                       view.Project({p.x + a1 * len * nx, p.y + a1 * len * ny}));
+    }
+  }
+  if (!sty.markers.visible) return;
+  painter.setPen(QPen(ResolvedColor(sty.markers.color, layerColor), 1));
+  const double h = sty.markerHalfSize;
+  for (const alignment::GeometryPoint& gp : al.GeometryPoints()) {
+    using GC = alignment::GeometryPointCode;
+    if (gp.code == GC::LineMidPt || gp.code == GC::CurveMidPt || gp.code == GC::CurveCenter) continue;
+    const alignment::Point2 q = gp.point;
+    painter.drawLine(view.Project({q.x - h, q.y}), view.Project({q.x + h, q.y}));
+    painter.drawLine(view.Project({q.x, q.y - h}), view.Project({q.x, q.y + h}));
+  }
+}
+
+// REQ-491 direction arrow at the middle of the alignment.
+void DrawAlignmentArrow(QPainter& painter, const AlignmentView& view, const alignment::Alignment& al,
+                        const AlignmentStyle& sty, const std::string& layerColor) {
+  assert(!al.Empty());
+  assert(sty.arrowLength >= 0.0);
+  painter.setPen(QPen(ResolvedColor(sty.arrows.color, layerColor), 1));
+  const double mid = 0.5 * (al.StartStation() + al.EndStation());
+  const alignment::Point2 p = al.GetPointAtStation(mid);
+  const double az = al.GetBearingAtStation(mid);
+  const double tx = std::sin(az), ty = std::cos(az);
+  const double L = sty.arrowLength;
+  const alignment::Point2 tip{p.x + 0.5 * L * tx, p.y + 0.5 * L * ty};
+  painter.drawLine(view.Project({p.x - 0.5 * L * tx, p.y - 0.5 * L * ty}), view.Project(tip));
+  for (const double turn : {0.5236, -0.5236}) {  // the two barbs, 30 degrees either side of the back-pointing direction
+    const double c = std::cos(turn), sn = std::sin(turn);
+    const double bx = -tx * c + ty * sn;  // (-tx, -ty) rotated by turn
+    const double by = -tx * sn - ty * c;
+    painter.drawLine(view.Project(tip), view.Project({tip.x + 0.25 * L * bx, tip.y + 0.25 * L * by}));
+  }
+}
+
+// REQ-502: a red flag stands on each entity that fails its design check, whatever the style shows.
+void DrawAlignmentDesignFlags(QPainter& painter, const AppCommandState& state, const AlignmentView& view,
+                              const alignment::Alignment& al) {
+  assert(!al.Empty());
+  assert(view.width > 0.f && view.height > 0.f);
+  const alignment::AlignmentCheckSet* checkSet =
+      alignment::FindCheckSet(state.alignmentCheckSets, AlignmentStyles::EffectiveCheckSetName(state.alignmentStyles, al));
+  if (checkSet == nullptr) return;
+  painter.setPen(QPen(QColor("#c0392b"), 1.5));
+  painter.setBrush(QColor("#c0392b"));
+  for (const alignment::DesignFinding& fd : alignment::CheckDesign(al, *checkSet, state.displayLinearPrecision)) {
+    const int idx = fd.entity - 1;
+    const double mid = 0.5 * (al.EntityStartStation(idx) + al.EntityEndStation(idx));
+    const alignment::Point2 p = al.GetPointAtStation(mid);
+    const double h = 4.0;  // flag height, in drawing units
+    painter.drawLine(view.Project(p), view.Project({p.x, p.y + h}));
+    painter.drawPolygon(QPolygonF({view.Project({p.x, p.y + h}), view.Project({p.x + 0.7 * h, p.y + 0.8 * h}),
+                                   view.Project({p.x, p.y + 0.6 * h})}));
+  }
+  painter.setBrush(Qt::NoBrush);
+}
+
+void DrawQtAlignmentOverlay(QPainter& painter, const AppCommandState& state, AlignmentView view,
+                            const alignment::Alignment& al) {
+  assert(view.width > 0.f && view.height > 0.f);
+  assert(std::isfinite(view.width) && std::isfinite(view.height));
+  if (al.Empty() || CadEntityIdHidden(&state.hiddenEntityIds, al.id)) return;
+  view.textPx = AlignmentLabelSets::LabelTextHeight(state.modelUnitsPerPlottedInch) *
+                FrameAt(view, al, al.StartStation()).pixelsPerUnit;
+  const CadLayerRow* layer = FindDrawingLayerRowCi(state, al.layer.empty() ? std::string("0") : al.layer);
+  if (layer != nullptr && (!layer->on || layer->frozen)) return;  // REQ-495.4
+  const std::string layerColor = layer != nullptr ? layer->color : "White";
+  // The label set decides the station TEXT and where ticks sit; the style decides what is drawn (REQ-491). A missing
+  // style or label set (already logged at load) reads as Standard.
+  const AlignmentLabelSet* ls = AlignmentLabelSets::Resolve(state.alignmentLabelSets, al.labelSet);
+  const AlignmentStyle* sty = AlignmentStyles::Resolve(state.alignmentStyles, al.style);
+  const std::vector<alignment::StationTickLabel> ticks =
+      ls != nullptr ? alignment::CollectMajorMinorStationTicks(al, ls->majorInterval, ls->minorInterval,
+                                                               ls->majorStationsOn, ls->minorStationsOn)
+                    : std::vector<alignment::StationTickLabel>{};
+  // Text under two pixels cannot be read; it is skipped, as other drawing text is when zoomed far out.
+  if ((sty == nullptr || sty->labelsVisible) && view.textPx >= 2.0 && std::isfinite(view.textPx)) {
+    painter.setPen(ResolvedColor("ByLayer", layerColor));
+    QFont font(QStringLiteral("Segoe UI"));
+    font.setPixelSize(std::clamp(qRound(view.textPx), 2, 4096));
+    painter.setFont(font);
+    DrawAlignmentLabels(painter, state, view, al, ticks, ls, sty);
+  }
+  if (sty != nullptr) DrawAlignmentTicksAndMarkers(painter, view, al, ticks, *sty, layerColor);
+  if (sty != nullptr && sty->arrows.visible) DrawAlignmentArrow(painter, view, al, *sty, layerColor);
+  DrawAlignmentDesignFlags(painter, state, view, al);
+}
+
+}  // namespace
 
 void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, float width, float height) {
   const auto camera = CadViewCamera(state);
@@ -808,110 +1086,7 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     }
   }
 
-  if (!state.alignments.empty()) {
-    painter.setPen(QColor("#20252a"));
-    QFont stationFont(QStringLiteral("Segoe UI"), 9);
-    painter.setFont(stationFont);
-    const double textOffset = 3.0;
-    for (const alignment::Alignment& al : state.alignments) {
-      if (al.Empty()) continue;
-      // The label set decides the station and equation TEXT; the style's ticks, markers and arrows draw without one.
-      const AlignmentLabelSet* ls = AlignmentLabelSets::Resolve(state.alignmentLabelSets, al.labelSet);
-      const std::vector<alignment::StationTickLabel> ticks =
-          ls != nullptr ? alignment::CollectMajorMinorStationTicks(al, ls->majorInterval, ls->minorInterval,
-                                                                   ls->majorStationsOn, ls->minorStationsOn)
-                        : std::vector<alignment::StationTickLabel>{};
-      // REQ-491: the style decides what is drawn for this alignment. A missing style (already logged at load) reads as Standard.
-      const AlignmentStyle* sty = AlignmentStyles::Resolve(state.alignmentStyles, al.style);
-      const bool showLabels = sty == nullptr || sty->labelsVisible;
-      const auto styleColor = [&](const SurfaceComponentStyle* comp, QColor fallback) {
-        if (comp != nullptr && comp->color.size() == 7 && comp->color[0] == '#') return QColor(QString::fromStdString(comp->color));
-        return fallback;
-      };
-      if (showLabels && ls != nullptr) for (const alignment::StationTickLabel& tick : ticks) {
-        const alignment::Point2 p = al.GetPointAtStation(tick.rawStation);
-        const double az = al.GetBearingAtStation(tick.rawStation);
-        const double lx = p.x + textOffset * std::cos(az);
-        const double ly = p.y - textOffset * std::sin(az);
-        const std::string text = alignment::FormatStation(tick.displayedStation);
-        painter.drawText(project(lx, ly, 0.0), QString::fromStdString(text));
-      }
-      // REQ-492.1 / .2: an equation label at each station equation, showing the back and ahead displayed values.
-      if (ls != nullptr && ls->equationsOn && showLabels) {
-        for (const alignment::EquationLabel& eq : alignment::CollectEquationLabels(al)) {
-          const alignment::Point2 p = al.GetPointAtStation(eq.rawStation);
-          const double az = al.GetBearingAtStation(eq.rawStation);
-          const std::string text = "EQ " + alignment::FormatStation(eq.backDisplayed) + " = " + alignment::FormatStation(eq.aheadDisplayed);
-          painter.drawText(project(p.x + textOffset * std::cos(az), p.y - textOffset * std::sin(az), 0.0), QString::fromStdString(text));
-        }
-      }
-      // REQ-492.4: station/offset labels, fixed or relative, drawn where they resolve on the current geometry.
-      for (const alignment::StationOffsetLabel& sl : al.stationLabels) {
-        if (!showLabels) break;
-        const alignment::StationOffsetLabelPlacement placed = alignment::PlaceStationOffsetLabel(al, sl, state.displayLinearPrecision);
-        if (!placed.onAlignment) continue;
-        painter.drawText(project(placed.point.x, placed.point.y, 0.0), QString::fromStdString(placed.text));
-      }
-      if (sty != nullptr && sty->ticks.visible) {  // REQ-491 station ticks, across the alignment at its label-set stations
-        painter.setPen(QPen(styleColor(&sty->ticks, QColor("#20252a")), 1));
-        for (const alignment::StationTickLabel& tick : ticks) {
-          const alignment::Point2 p = al.GetPointAtStation(tick.rawStation);
-          const double az = al.GetBearingAtStation(tick.rawStation);
-          const double nx = std::cos(az), ny = -std::sin(az);  // right of travel
-          const double len = tick.major ? sty->majorTickLength : sty->minorTickLength;
-          double a0 = -0.5, a1 = 0.5;  // side 0: both sides of the line
-          if (sty->tickSide == 1) { a0 = 0.0; a1 = -1.0; }  // left
-          if (sty->tickSide == 2) { a0 = 0.0; a1 = 1.0; }   // right
-          painter.drawLine(project(p.x + a0 * len * nx, p.y + a0 * len * ny, 0.0),
-                           project(p.x + a1 * len * nx, p.y + a1 * len * ny, 0.0));
-        }
-      }
-      if (sty != nullptr && sty->markers.visible) {  // REQ-491 geometry point markers: a cross per point, by code
-        painter.setPen(QPen(styleColor(&sty->markers, QColor("#20252a")), 1));
-        const double h = sty->markerHalfSize;
-        for (const alignment::GeometryPoint& gp : al.GeometryPoints()) {
-          using GC = alignment::GeometryPointCode;
-          if (gp.code == GC::LineMidPt || gp.code == GC::CurveMidPt || gp.code == GC::CurveCenter) continue;
-          const alignment::Point2 q = gp.point;
-          painter.drawLine(project(q.x - h, q.y, 0.0), project(q.x + h, q.y, 0.0));
-          painter.drawLine(project(q.x, q.y - h, 0.0), project(q.x, q.y + h, 0.0));
-        }
-      }
-      if (sty != nullptr && sty->arrows.visible && !al.Empty()) {  // REQ-491 direction arrow at the middle of the alignment
-        painter.setPen(QPen(styleColor(&sty->arrows, QColor("#20252a")), 1));
-        const double mid = 0.5 * (al.StartStation() + al.EndStation());
-        const alignment::Point2 p = al.GetPointAtStation(mid);
-        const double az = al.GetBearingAtStation(mid);
-        const double tx = std::sin(az), ty = std::cos(az);
-        const double L = sty->arrowLength;
-        const alignment::Point2 tail{p.x - 0.5 * L * tx, p.y - 0.5 * L * ty};
-        const alignment::Point2 tip{p.x + 0.5 * L * tx, p.y + 0.5 * L * ty};
-        painter.drawLine(project(tail.x, tail.y, 0.0), project(tip.x, tip.y, 0.0));
-        for (const double turn : {0.5236, -0.5236}) {  // the two barbs, 30 degrees either side of the back-pointing direction
-          const double c = std::cos(turn), sn = std::sin(turn);
-          const double bx = -tx * c + ty * sn;  // (-tx, -ty) rotated by turn
-          const double by = -tx * sn - ty * c;
-          painter.drawLine(project(tip.x, tip.y, 0.0), project(tip.x + 0.25 * L * bx, tip.y + 0.25 * L * by, 0.0));
-        }
-      }
-      if (const alignment::AlignmentCheckSet* checkSet =
-            alignment::FindCheckSet(state.alignmentCheckSets, AlignmentStyles::EffectiveCheckSetName(state.alignmentStyles, al))) {
-        // REQ-502: a red flag stands on each entity that fails its design check, whatever the style shows.
-        painter.setPen(QPen(QColor("#c0392b"), 1.5));
-        painter.setBrush(QColor("#c0392b"));
-        for (const alignment::DesignFinding& fd : alignment::CheckDesign(al, *checkSet, state.displayLinearPrecision)) {
-          const int idx = fd.entity - 1;
-          const double mid = 0.5 * (al.EntityStartStation(idx) + al.EntityEndStation(idx));
-          const alignment::Point2 p = al.GetPointAtStation(mid);
-          const double h = 4.0;  // flag height, in drawing units
-          painter.drawLine(project(p.x, p.y, 0.0), project(p.x, p.y + h, 0.0));
-          painter.drawPolygon(QPolygonF({project(p.x, p.y + h, 0.0), project(p.x + 0.7 * h, p.y + 0.8 * h, 0.0),
-                                         project(p.x, p.y + 0.6 * h, 0.0)}));
-        }
-        painter.setBrush(Qt::NoBrush);
-      }
-    }
-  }
+  for (const alignment::Alignment& al : state.alignments) DrawQtAlignmentOverlay(painter, state, AlignmentView{camera, width, height}, al);
   painter.restore();
 }
 

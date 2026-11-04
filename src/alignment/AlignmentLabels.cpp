@@ -2,7 +2,9 @@
 
 #include "util/NumFormat.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <string>
 
 namespace alignment {
@@ -86,6 +88,98 @@ StationOffsetLabelPlacement PlaceStationOffsetLabel(const Alignment& al, const S
 }  // namespace alignment
 
 namespace alignment {
+
+const char* GeometryPointAbbreviation(GeometryPointCode code) {
+  switch (code) {
+    case GeometryPointCode::Begin: return "BP";
+    case GeometryPointCode::End: return "EP";
+    case GeometryPointCode::TanTan: return "PI";
+    case GeometryPointCode::TanCurve: return "PC";
+    case GeometryPointCode::CurveTan: return "PT";
+    case GeometryPointCode::CompCurveCurve: return "PCC";
+    case GeometryPointCode::RevCurveCurve: return "PRC";
+    case GeometryPointCode::TanSpiral: return "TS";
+    case GeometryPointCode::SpiralTan: return "ST";
+    case GeometryPointCode::CurveSpiral: return "CS";
+    case GeometryPointCode::SpiralCurve: return "SC";
+    case GeometryPointCode::SpiralSpiral: return "SS";
+    case GeometryPointCode::CurveMidPt: return "Mid";
+    case GeometryPointCode::CurvePI:
+    case GeometryPointCode::CurveCenter:
+    case GeometryPointCode::LineMidPt: return "";
+  }
+  return "";
+}
+
+std::vector<GeometryPointLabel> CollectGeometryPointLabels(const Alignment& al) {
+  std::vector<GeometryPointLabel> out;
+  if (al.Empty()) return out;
+  for (const GeometryPoint& gp : al.GeometryPoints()) {
+    const std::string abbreviation = GeometryPointAbbreviation(gp.code);
+    if (abbreviation.empty()) continue;
+    // The ahead value at an equation point, like the station labels (REQ-492.2).
+    const std::string station = FormatStation(al.DisplayedStation(gp.internalStation, true));
+    out.push_back(GeometryPointLabel{gp.point, gp.internalStation, gp.code, abbreviation + ": " + station});
+  }
+  return out;
+}
+
+std::vector<DesignSpeedLabel> CollectDesignSpeedLabels(const Alignment& al, bool metric) {
+  std::vector<DesignSpeedLabel> out;
+  if (al.Empty()) return out;
+  for (const DesignSpeed& d : al.designSpeeds) {
+    if (!(d.speed > 0.0)) continue;
+    const bool whole = std::fabs(d.speed - std::round(d.speed)) < 1e-9;
+    const std::string speed = FormatLinear(d.speed, whole ? 0 : 2);
+    out.push_back(DesignSpeedLabel{d.internalStation, "STA " + FormatStation(al.DisplayedStation(d.internalStation, true)) +
+                                                          " DESIGN SPEED = " + speed + (metric ? " km/h" : " mi/h")});
+  }
+  return out;
+}
+
+std::vector<std::string> LineLabelLines(const Entity& line, int linearPrecision, const AngleDisplaySettings& angles) {
+  return {FormatBearing(line.startAzimuth * 180.0 / kPi, angles), FormatLinear(line.length, linearPrecision) + "'"};
+}
+
+std::vector<std::string> SpiralLabelLines(const SpiralData& spiral, int linearPrecision) {
+  // \xE2\x88\x9E is the infinity sign in UTF-8: a zero radius is a tangent end (Alignment.hpp).
+  const auto radius = [&](double r) { return r > 0.0 ? FormatLinear(r, linearPrecision) + "'" : std::string("\xE2\x88\x9E"); };
+  return {"A = " + FormatLinear(spiral.parameterA, linearPrecision), "Ls = " + FormatLinear(spiral.length, linearPrecision) + "'",
+          "R1 = " + radius(spiral.startRadius), "R2 = " + radius(spiral.endRadius)};
+}
+
+double LeaderLabelReach(const std::string& text, double textHeight) {
+  std::size_t codePoints = 0;
+  for (const char c : text)
+    if ((static_cast<unsigned char>(c) & 0xC0u) != 0x80u) ++codePoints;  // count UTF-8 lead bytes, not continuations
+  return textHeight * (kLeaderTextStartHeights + kLabelCharWidthHeights * static_cast<double>(codePoints) +
+                       kLeaderOvershootHeights);
+}
+
+bool LabelledBounds(const Alignment& al, const AlignmentLabelItems& items, double textHeight, Point2* mn, Point2* mx) {
+  if (mn == nullptr || mx == nullptr || !al.Bounds(mn, mx)) return false;
+  const double h = std::isfinite(textHeight) && textHeight > 0.0 ? textHeight : 0.0;
+  mn->x -= 2.0 * h;
+  mn->y -= 2.0 * h;
+  mx->x += 2.0 * h;
+  mx->y += 2.0 * h;
+  // A leader label runs across the alignment: to the left of travel for a geometry point, to the right for a speed.
+  const auto grow = [&](double station, const std::string& text, double side) {
+    const Point2 p = al.GetPointAtStation(station);
+    const double az = al.GetBearingAtStation(station);
+    const double reach = side * LeaderLabelReach(text, h);
+    const Point2 end{p.x - reach * std::cos(az), p.y + reach * std::sin(az)};
+    mn->x = std::min(mn->x, end.x);
+    mn->y = std::min(mn->y, end.y);
+    mx->x = std::max(mx->x, end.x);
+    mx->y = std::max(mx->y, end.y);
+  };
+  if (items.geometryPoints)
+    for (const GeometryPointLabel& g : CollectGeometryPointLabels(al)) grow(g.internalStation, g.text, 1.0);
+  if (items.designSpeeds)
+    for (const DesignSpeedLabel& d : CollectDesignSpeedLabels(al, items.metric)) grow(d.internalStation, d.text, -1.0);
+  return true;
+}
 
 bool MoveStationOffsetLabelTo(const Alignment& al, StationOffsetLabel* label, Point2 point) {
   if (label == nullptr || al.Empty()) return false;

@@ -1592,7 +1592,8 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
   const auto usage = [&]() {
     log.push_back(
         "ALIGNMENTLABELSET - usage: ALIGNMENTLABELSET LIST | NEW <set> | DELETE <set> | ASSIGN <alignment>, <set> | "
-        "MAJORINTERVAL <set>, <interval> | MINORINTERVAL <set>, <interval> | SHOW|HIDE <set>, MAJOR|MINOR.");
+        "MAJORINTERVAL <set>, <interval> | MINORINTERVAL <set>, <interval> | "
+        "SHOW|HIDE <set>, MAJOR|MINOR|EQUATIONS|GEOMETRY|SPEEDS.");
   };
   const std::string trimmed = Trim(args);
   if (trimmed.empty()) {
@@ -1743,8 +1744,12 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
       s->minorStationsOn = show;
     else if (which == "equations" || which == "equation")  // REQ-492.1 Station Equations item
       s->equationsOn = show;
+    else if (which == "geometry")  // REQ-492.1 Geometry Points item (D-2026-11-04-c)
+      s->geometryPointsOn = show;
+    else if (which == "speeds" || which == "speed")  // REQ-492.1 Design Speeds item
+      s->designSpeedsOn = show;
     else {
-      log.push_back("ALIGNMENTLABELSET - component must be MAJOR, MINOR or EQUATIONS, not \"" + f[2] + "\".");
+      log.push_back("ALIGNMENTLABELSET - component must be MAJOR, MINOR, EQUATIONS, GEOMETRY or SPEEDS, not \"" + f[2] + "\".");
       return;
     }
     BumpCadGpuCache(st);
