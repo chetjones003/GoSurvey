@@ -6064,6 +6064,10 @@ void RunCatchmentCommand(AppCommandState& st, const std::string& args, std::vect
 
 } // namespace
 
+std::unique_ptr<ISurfaceQuery> MakeSurfaceQueryForCommands(const AppCommandState& st, const CadSurface& surf) {
+  return MakeSurfaceQuery(st, surf);  // REQ-497: alignment commands read the same ground the QUICKPROFILE command does
+}
+
 void EnsureEntityIds(AppCommandState& st) {
   // Geometry has not changed since the last sweep, so nothing can be missing an id. This is what
   // lets callers invoke it unconditionally — including once a frame — without paying for a walk.
@@ -7212,6 +7216,7 @@ const CmdEntry kRegistry[] = {
     {"alignmentdetach", "", "Make a linked offset independent: ALIGNMENTDETACH <name>"},
     {"alignmentintersect", "", "Intersections: ALIGNMENTINTERSECT <a>, <b> | <a>, LINE, ... | <a>, CIRCLE, ..."},
     {"editalignment", "", "Open the Alignment Layout table: EDITALIGNMENT [<name>]"},
+    {"alignmentsurface", "", "Ground elevation along an alignment: ALIGNMENTSURFACE <alignment>, <surface>, STATION=<sta>[, OFFSET=<off>] | INTERVAL=<n>"},
     {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT [TABLE]"},
     {"voltable", "", "Insert a TABLE of the last volume report: VOLTABLE"},
     {"volcsv", "", "Write CSV of volume results: VOLCSV [<path>]"},
@@ -47078,7 +47083,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "offsetalignment" ||
         plotTok == "alignmentdetach" ||
         plotTok == "alignmentintersect" ||
-        plotTok == "editalignment" ||
+        plotTok == "editalignment" || plotTok == "alignmentsurface" ||
         plotTok == "volreport" || plotTok == "voltable" || plotTok == "volcsv") {
       std::string rest;
       std::getline(issIdle, rest);
@@ -47147,6 +47152,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunAlignmentIntersect(st, rest, log);
       else if (plotTok == "editalignment")
         RunEditAlignment(st, rest, log);
+      else if (plotTok == "alignmentsurface")
+        RunAlignmentSurface(st, rest, log);
       else if (plotTok == "volreport")
         RunVolReport(st, rest, log);
       else if (plotTok == "voltable")

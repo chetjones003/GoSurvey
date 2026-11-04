@@ -4,6 +4,7 @@
 #include <limits>
 
 #include "CadEntities.hpp"
+#include "util/surfacequery.hpp"  // ISurfaceQuery, for MakeSurfaceQueryForCommands (REQ-497)
 #include "alignment/Alignment.hpp"  // REQ-480 / ADR-075: per-drawing alignment store
 #include "CadDimGeom.hpp"
 #include "EntityId.hpp"
@@ -6814,6 +6815,8 @@ void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
 /// across time (an in-flight rebuild, a cross-object link), use \ref FindSurfaceIndexById: a name
 /// can be changed, and an erased name can be taken by a different surface.
 [[nodiscard]] int FindSurfaceIndex(const AppCommandState& st, const std::string& name);
+/// REQ-497: the elevation reader for a built surface, in drawing-local coordinates; null when the surface is not built.
+[[nodiscard]] std::unique_ptr<ISurfaceQuery> MakeSurfaceQueryForCommands(const AppCommandState& st, const CadSurface& surf);
 
 /// Index of the surface whose stable entity id is \p id, or -1 when it does not resolve — erased, or
 /// never assigned (REQ-076 / ADR-036 (a)). `id == 0` always returns -1: 0 means "unassigned", so
@@ -8085,6 +8088,7 @@ void RunOffsetAlignment(AppCommandState& st, const std::string& args, std::vecto
 void RunAlignmentDetach(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunEditAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentSurface(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// REQ-501.2: "STA 25+42.35  OFF -12.40  N 45d12'30" E" for the alignment nearest the LOCAL point (lx, ly), or an
 /// empty string when no alignment lies within \p maxOffset (drawing units). Read-only; used by the status bar.
 [[nodiscard]] std::string AlignmentCursorReadout(const AppCommandState& st, double lx, double ly, double maxOffset);

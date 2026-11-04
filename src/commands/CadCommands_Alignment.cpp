@@ -14,6 +14,7 @@
 #include "AlignmentStyle.hpp"
 #include "AlignmentLabelSet.hpp"
 #include "alignment/AlignmentReport.hpp"
+#include "alignment/AlignmentGround.hpp"
 #include "SpreadsheetIo.hpp"
 #include "WinFileDialogs.hpp"
 #include "StringUtil.hpp"
@@ -1575,4 +1576,94 @@ void RunAlignmentReport(AppCommandState& st, const std::string& args, std::vecto
     if (targets.size() > 1 && i + 1 < targets.size()) out << "\n---\n";
   }
   log.push_back("ALIGNMENTREPORT - report written to \"" + path + "\".");
+}
+
+// ALIGNMENTSURFACE <alignment>, <surface>, STATION=<station>[, OFFSET=<offset>]   one point      - REQ-497.2
+//                  <alignment>, <surface>, INTERVAL=<interval>                    sampled table   - REQ-497.3
+// The ground is read from the named surface. Elevations are session data: nothing is stored on the alignment.
+void RunAlignmentSurface(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  const char* usage =
+      "ALIGNMENTSURFACE - usage: ALIGNMENTSURFACE <alignment>, <surface>, STATION=<station>[, OFFSET=<offset>] | "
+      "<alignment>, <surface>, INTERVAL=<interval>.";
+  if (f.size() < 3) {
+    log.push_back(usage);
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTSURFACE", f[0], log);
+  if (a == nullptr) return;
+  const int si = FindSurfaceIndex(st, f[1]);
+  if (si < 0) {
+    log.push_back("ALIGNMENTSURFACE - no surface named \"" + f[1] + "\".");
+    return;
+  }
+  std::unique_ptr<ISurfaceQuery> ground = MakeSurfaceQueryForCommands(st, st.cadSurfaces[static_cast<size_t>(si)]);
+  if (!ground) {
+    log.push_back("ALIGNMENTSURFACE - \"" + f[1] + "\" is not a built surface.");
+    return;
+  }
+  std::string station, offsetText, intervalText;
+  for (size_t i = 2; i < f.size(); ++i) {
+    const std::string key = Lower(f[i].substr(0, f[i].find('=')));
+    const std::string value = f[i].find('=') == std::string::npos ? "" : Trim(f[i].substr(f[i].find('=') + 1));
+    if (key == "station") station = value;
+    else if (key == "offset") offsetText = value;
+    else if (key == "interval") intervalText = value;
+    else {
+      log.push_back(usage);
+      return;
+    }
+  }
+  const std::string unit = " (surface \"" + f[1] + "\")";
+  if (!intervalText.empty()) {
+    double interval = 0.0;
+    if (!ParseNum(intervalText, &interval) || !(interval > 0.0)) {
+      log.push_back("ALIGNMENTSURFACE - the interval must be a positive number.");
+      return;
+    }
+    std::vector<alignment::GroundPoint> samples;
+    std::string err;
+    if (!alignment::SampleGround(*a, *ground, interval, 100000, &samples, &err)) {
+      log.push_back("ALIGNMENTSURFACE - " + err + ".");
+      return;
+    }
+    int withGround = 0;
+    for (const alignment::GroundPoint& g : samples) {
+      if (g.hasGround) ++withGround;
+    }
+    log.push_back("ALIGNMENTSURFACE - \"" + a->name + "\": " + std::to_string(samples.size()) + " sample(s), " +
+                  std::to_string(withGround) + " with ground" + unit + ".");
+    for (const alignment::GroundPoint& g : samples) {
+      const std::string sta = Sta(*a, g.internalStation);
+      log.push_back("  STA " + sta + "  " + (g.hasGround ? "EG = " + Lin(st, g.ground) : std::string("no ground")));
+    }
+    return;
+  }
+  if (station.empty()) {
+    log.push_back(usage);
+    return;
+  }
+  double displayed = 0.0, offset = 0.0;
+  if (!alignment::ParseStation(station, &displayed)) {
+    log.push_back("ALIGNMENTSURFACE - \"" + station + "\" is not a station.");
+    return;
+  }
+  if (!offsetText.empty() && !ParseNum(offsetText, &offset)) {
+    log.push_back("ALIGNMENTSURFACE - the offset must be a number.");
+    return;
+  }
+  const std::vector<double> raws = a->RawStationsForDisplayed(displayed);
+  if (raws.empty()) {
+    log.push_back("ALIGNMENTSURFACE - station " + alignment::FormatStation(displayed) + " is outside \"" + a->name + "\".");
+    return;
+  }
+  for (const double raw : raws) {
+    const alignment::GroundPoint g = alignment::GroundAt(*a, *ground, raw, offset);
+    const std::string head = "ALIGNMENTSURFACE - STA " + alignment::FormatStation(displayed) + "  OFF " + Lin(st, offset);
+    if (g.hasGround) {
+      log.push_back(head + "  EG = " + Lin(st, g.ground) + unit + ".");
+    } else {
+      log.push_back(head + "  no ground: the point is off the surface" + unit + ".");
+    }
+  }
 }

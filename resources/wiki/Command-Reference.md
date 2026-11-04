@@ -183,6 +183,7 @@ for a compact list inside the program.
 | `ALIGNMENTSTYLE` | — | Alignment display styles: ALIGNMENTSTYLE LIST\|NEW\|DELETE\|ASSIGN\|SHOW\|HIDE\|COLOR, ... | [[Commands/alignmentstyle]] |
 | `EDITALIGNMENT` | — | Open the Alignment Layout table: EDITALIGNMENT [<name>] | [[Commands/editalignment]] |
 | `ALIGNMENTREPORT` | — | Report an alignment as text or CSV: ALIGNMENTREPORT [<name>][, TXT|CSV[, <path>]] | [[Commands/alignmentreport]] |
+| `ALIGNMENTSURFACE` | — | Ground elevation along an alignment from a surface: ALIGNMENTSURFACE <alignment>, <surface>, STATION=<sta>[, OFFSET=<off>] \| INTERVAL=<n> | [[Commands/alignmentsurface]] |
 
 ### Surfaces and volumes
 
@@ -314,6 +315,7 @@ for a compact list inside the program.
 | `ALIGNMENTREPORT` | — | [[Commands/alignmentreport]] |
 | `ALIGNMENTSTATION` | — | [[Commands/alignmentstation]] |
 | `ALIGNMENTSTYLE` | — | [[Commands/alignmentstyle]] |
+| `ALIGNMENTSURFACE` | — | [[Commands/alignmentsurface]] |
 | `ARC` | — | [[Commands/arc]] |
 | `AREA` | `AA` | [[Commands/area]] |
 | `ARRAY` | `AR` | [[Commands/array]] |
