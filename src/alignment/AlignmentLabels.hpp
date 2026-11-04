@@ -72,28 +72,27 @@ struct DesignSpeedLabel {
                                                       const AngleDisplaySettings& angles);
 [[nodiscard]] std::vector<std::string> SpiralLabelLines(const SpiralData& spiral, int linearPrecision);
 
-/// Alignment label layout (REQ-492.5, D-2026-11-04-c). Labels are drawing text of a plotted height, as Civil 3D's
-/// annotative labels are; every distance below is in text heights so the viewport and ZOOM EXTENTS agree on where a
-/// label reaches.
-inline constexpr double kLabelPlottedHeightInches = 0.1;
+/// Alignment label layout (REQ-492.5, D-2026-11-04-c). Labels are drawing text of their label style's plotted height,
+/// as Civil 3D's annotative labels are; every distance below is in text heights so the viewport and ZOOM EXTENTS agree
+/// on where a label reaches.
 inline constexpr double kLeaderGapHeights = 0.5;        ///< From the point to the start of the leader line.
 inline constexpr double kLeaderTextStartHeights = 1.0;  ///< From the point to the first character.
 inline constexpr double kLeaderOvershootHeights = 0.5;  ///< Leader line past the last character.
-inline constexpr double kLabelCharWidthHeights = 0.7;   ///< Generous mean glyph advance: extents only, never drawing.
+inline constexpr double kLabelCharWidthHeights = 1.0;   ///< Generous mean glyph advance (romans.shx is about 0.95): extents only.
 
 /// How far a leader label (geometry point, design speed) reaches from its point, in drawing units.
 [[nodiscard]] double LeaderLabelReach(const std::string& text, double textHeight);
 
-/// What the label set asks an alignment to label, for its labelled bounds.
+/// What an alignment's labels need for its labelled bounds: each item's text height in drawing units (0 = not drawn).
 struct AlignmentLabelItems {
-  bool geometryPoints = false;
-  bool designSpeeds = false;
+  double besideHeight = 0.0;    ///< Tallest text written beside the line: stations, equations, segments.
+  double geometryHeight = 0.0;  ///< Geometry-point labels.
+  double speedHeight = 0.0;     ///< Design-speed labels.
   bool metric = false;
 };
-/// The plan box of an alignment and its labels: the geometry grown by two text heights (station, segment and
-/// equation text sit beside the line) and each leader label's far end. False for an empty alignment.
-[[nodiscard]] bool LabelledBounds(const Alignment& al, const AlignmentLabelItems& items, double textHeight, Point2* mn,
-                                  Point2* mx);
+/// The plan box of an alignment and its labels: the geometry grown by nine beside-text heights (a two-line stack beside
+/// the line may move up to four rows out to clear other labels) and each leader label's far end. False when empty.
+[[nodiscard]] bool LabelledBounds(const Alignment& al, const AlignmentLabelItems& items, Point2* mn, Point2* mx);
 
 /// Moves a label to a plan point (REQ-492.5, drag). A fixed label takes the point as it is; a relative label takes the
 /// station and offset of the nearest point on the alignment. False when the point has no meaning (empty alignment).

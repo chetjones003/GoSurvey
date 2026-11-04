@@ -377,6 +377,19 @@ struct AlignmentStyle {
   bool operator!=(const AlignmentStyle& o) const { return !(*this == o); }
 };
 
+/// Named alignment label style (REQ-492.5): how one kind of alignment label is written. Built-in "Standard".
+struct AlignmentLabelStyle {
+  std::string name;
+  std::string textStyle = "Standard";  ///< A drawing text style (REQ-044) giving the font. Missing reads as Standard.
+  double heightInches = 0.1;           ///< Plotted text height; drawing units = this × the plot scale.
+  std::string color = "ByLayer";       ///< CAD colour storage. ByLayer = the alignment's layer colour.
+
+  bool operator==(const AlignmentLabelStyle& o) const {
+    return name == o.name && textStyle == o.textStyle && heightInches == o.heightInches && color == o.color;
+  }
+  bool operator!=(const AlignmentLabelStyle& o) const { return !(*this == o); }
+};
+
 /// Named alignment label set (REQ-492): station tick intervals and visibility (first slice).
 struct AlignmentLabelSet {
   std::string name;
@@ -387,11 +400,21 @@ struct AlignmentLabelSet {
   bool equationsOn = true;  ///< REQ-492.1 Station Equations item: an equation label at each equation.
   bool geometryPointsOn = true;  ///< REQ-492.1 Geometry Points item (D-2026-11-04-c).
   bool designSpeedsOn = true;    ///< REQ-492.1 Design Speeds item (D-2026-11-04-c).
+  /// REQ-492.5: the label style of each item. Segment and station/offset labels belong to the alignment but take their
+  /// style from its label set (GoSurvey rule, D-2026-11-04-e).
+  std::string majorStyle = "Standard";
+  std::string geometryStyle = "Standard";
+  std::string speedStyle = "Standard";
+  std::string equationStyle = "Standard";
+  std::string segmentStyle = "Standard";
+  std::string offsetStyle = "Standard";
 
   bool operator==(const AlignmentLabelSet& o) const {
     return name == o.name && majorStationsOn == o.majorStationsOn && minorStationsOn == o.minorStationsOn &&
            majorInterval == o.majorInterval && minorInterval == o.minorInterval && equationsOn == o.equationsOn &&
-           geometryPointsOn == o.geometryPointsOn && designSpeedsOn == o.designSpeedsOn;
+           geometryPointsOn == o.geometryPointsOn && designSpeedsOn == o.designSpeedsOn && majorStyle == o.majorStyle &&
+           geometryStyle == o.geometryStyle && speedStyle == o.speedStyle && equationStyle == o.equationStyle &&
+           segmentStyle == o.segmentStyle && offsetStyle == o.offsetStyle;
   }
   bool operator!=(const AlignmentLabelSet& o) const { return !(*this == o); }
 };

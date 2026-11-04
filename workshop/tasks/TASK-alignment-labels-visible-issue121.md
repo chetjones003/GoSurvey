@@ -73,9 +73,42 @@
   `README.md`, `PRIVACY.md` no change needed; public GitHub wiki has no alignment pages (still pending for the whole
   epic, as recorded on PR #1152).
 
-## 8. Follow-ups and technical debt
-1. Overprinting where a major station is close to a geometry point (6+00 by PC, 7+00 by PT); no collision avoidance.
-2. Label styles (per-label height, colour, font, prefix) are not modelled; one plotted height and the layer colour.
-3. No station-only labels at the begin and end stations.
-4. Zero-padded DMS in the drawing-wide angle format (`70°0'0.00"`).
-5. `LabelledBounds` estimates text width at 0.7 text heights per character; a wide font could still clip slightly.
+## 8. Follow-up increment (2026-11-04, user choices "2 b and d", "3a", "4a only if all phases are done")
+Authority: REQ-502 (marker), REQ-492.5 (label styles); decisions D-2026-11-04-d and D-2026-11-04-e.
+- **Marker (D-2026-11-04-d):** amber warning triangle with "!" centred on each failing entity, one label text height on
+  paper, never under 10 px; replaces the 4-unit red flag.
+- **Label styles (D-2026-11-04-e):** `AlignmentLabelStyle` (text style, plotted height, colour), built-in Standard,
+  `ALIGNMENTLABELSTYLE LIST|NEW|DELETE|SET`, `ALIGNMENTLABELSET STYLE, <set>, <item>, <style>` for MAJOR, GEOMETRY,
+  SPEEDS, EQUATIONS, SEGMENTS and OFFSETS; saved in the drawing JSON; missing references fall back to Standard with a
+  log line; undo snapshots and per-tab documents carry the table. SHX text styles are stroked (`romans.shx` by
+  default); characters the font lacks use a TrueType face of the same cap height.
+- **Placement (D-2026-11-04-e):** screen boxes (`LabelBoxes`); leaders first, then segment labels, then station text,
+  each at its first free side and row; labels avoid the warning marker; the off-line curve PI cross is no longer drawn.
+  `alignment::LabelledBounds` now takes per-item heights and a nine-height margin for moved stacks.
+- Tests: `[alignment]` 151 cases / 3898 assertions (label-style command refusals, delete-in-use, undo, save/reload,
+  orphaned style, labelled bounds by style). Qt capture case adds a red 0.12" label-style capture.
+- Evidence: Release build exit 0, no warnings; full `ctest --preset ninja-release` 194/194
+  (`build/artifacts/ctest-labelstyles.log`); panel `build/artifacts/panel-492b/` round 1 FAIL (bearing over station text,
+  3 of 3), round 2 PASS (all medians 1–2, one uncorroborated blocker).
+- Documentation (REQ-453): `resources/wiki/Alignments.md`, `Command-Reference.md`, `Commands/alignmentlabel.md`, new
+  `Commands/alignmentlabelstyle.md`; public GitHub wiki: new Alignments page, Command Reference rows, sidebar and Home
+  (wiki commit `9f609b5`); gosurveycad.com: new `docs/alignments.html`, sidebar on every docs page, Command Reference
+  rows, docs home and sitemap (site commit `fc54314`, live via the Pages production deploy). `README.md`, `PRIVACY.md`:
+  no change. `tools/docsgen/generate.js` lists Alignments; its page template is older than the live site's (the site's
+  pages were edited by hand after generation), so the site was updated by targeted edits, not a full regeneration.
+- Phase audit (4A gate): REQ-480..503 audited against code and tests on 2026-11-04 — 2 DONE (497, 500), 22 PARTIAL. The
+  issue's phases are **not** complete, so the beta conflicts were left unresolved and the PR stays out of review, as
+  the user asked. Main blockers: Create Alignment dialog and layout toolbar (485), dockable layout editor with
+  definition-dependent and Constraint columns (486), dynamic-cursor readout (501.2), foreign-DWG re-read and Civil 3D
+  decode (496), PI/PC/PT/centre grips (487), reference point and metadata (480, 483), 100 000-entity timing tests (484,
+  499, 503), display cache and layer visibility of the geometry (495), and the REQ-486 AC2/AC3 contradiction.
+
+## 9. Follow-ups and technical debt
+1. Dense spots still overlap a little (6+00 by the PC, 7+00 by the PT in the segment-label view); no free box exists at
+   that scale.
+2. Curve-label stacks crowd at larger heights; the SHX space advance is wide.
+3. Label styles have no prefix/suffix, precision, orientation or per-code geometry styles (rest of REQ-492.5 and .1).
+4. Ticks and markers keep the alignment style's colour when a label style recolours the text.
+5. No station-only labels at the begin and end stations; DMS not zero-padded in the drawing angle format.
+6. `LabelledBounds` estimates text width (1.0 text height per character) and a fixed margin.
+7. `tools/docsgen/generate.js` template lags the live site (header, nav.js, Studies link, WebP images).

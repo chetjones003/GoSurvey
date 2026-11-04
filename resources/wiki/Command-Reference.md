@@ -185,6 +185,8 @@ for a compact list inside the program.
 | `ALIGNMENTREPORT` | — | Report an alignment as text or CSV: ALIGNMENTREPORT [<name>][, TXT|CSV[, <path>]] | [[Commands/alignmentreport]] |
 | `ALIGNMENTSURFACE` | — | Ground elevation along an alignment from a surface: ALIGNMENTSURFACE <alignment>, <surface>, STATION=<sta>[, OFFSET=<off>] \| INTERVAL=<n> | [[Commands/alignmentsurface]] |
 | `ALIGNMENTLABEL` | — | Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS \| CLEAR | [[Commands/alignmentlabel]] |
+| `ALIGNMENTLABELSET` | — | Alignment label sets: ALIGNMENTLABELSET LIST\|NEW\|DELETE\|ASSIGN\|MAJORINTERVAL\|MINORINTERVAL\|SHOW\|HIDE\|STYLE, ... | [[Alignments]] |
+| `ALIGNMENTLABELSTYLE` | — | Alignment label styles (text style, height, colour): ALIGNMENTLABELSTYLE LIST\|NEW\|DELETE\|SET, ... | [[Commands/alignmentlabelstyle]] |
 | `ALIGNMENTTABLE` | — | Insert a line, curve, segment or equation table: ALIGNMENTTABLE <name>, LINE\|CURVE\|SEGMENT\|EQUATIONS[, STATIC\|DYNAMIC][, <x>, <y>] | [[Commands/alignmenttable]] |
 | `FEATURELINEFROMALIGNMENT` | — | Feature line from an alignment: FEATURELINEFROMALIGNMENT <alignment>[, INTERVAL=<n>][, TOL=<n>][, SURFACE=<name> \| Z=<value>] | [[Commands/featurelinefromalignment]] |
 | `ALIGNMENTPROPS` | — | Alignment properties: ALIGNMENTPROPS <alignment>, NAME|DESCRIPTION|STYLE|LAYER|START, <value> | [[Commands/alignmentprops]] |
@@ -328,6 +330,8 @@ for a compact list inside the program.
 | `ALIGNMENTINTERSECT` | — | [[Commands/alignmentintersect]] |
 | `ALIGNMENTINVERSE` | — | [[Commands/alignmentinverse]] |
 | `ALIGNMENTLABEL` | — | [[Commands/alignmentlabel]] |
+| `ALIGNMENTLABELSET` | — | [[Alignments]] |
+| `ALIGNMENTLABELSTYLE` | — | [[Commands/alignmentlabelstyle]] |
 | `ALIGNMENTLIST` | — | [[Commands/alignmentlist]] |
 | `ALIGNMENTLOCK` | — | [[Commands/alignmentlock]] |
 | `ALIGNMENTPROPS` | — | [[Commands/alignmentprops]] |

@@ -6,6 +6,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -131,26 +132,120 @@ TEST_CASE("Labelled bounds take in the leader labels, so ZOOM EXTENTS frames the
   const alignment::Alignment& a = st.alignments[0];
   alignment::Point2 gmn{}, gmx{};
   REQUIRE(a.Bounds(&gmn, &gmx));
-  const double h = AlignmentLabelSets::LabelTextHeight(50.0);
+  st.modelUnitsPerPlottedInch = 50.f;
+  const double h = AlignmentLabelStyles::TextHeight(AlignmentLabelStyles::Resolve(st.alignmentLabelStyles, "Standard"), 50.0);
   CHECK(h == Catch::Approx(5.0));
   alignment::Point2 mn{}, mx{};
-  REQUIRE(AlignmentLabelSets::LabelledBounds(a, st.alignmentLabelSets, st.alignmentStyles, 2, 50.0, &mn, &mx));
+  REQUIRE(AlignmentLabelSets::LabelledBounds(a, CadAlignmentLabelContext(st), &mn, &mx));
   // EP leads off to the north-east (left of travel at S35E): the box reaches the end of "EP: 7+54.72".
   const double reach = alignment::LeaderLabelReach("EP: 7+54.72", h);
-  CHECK(reach == Catch::Approx(h * (1.0 + 0.7 * 11 + 0.5)));
+  CHECK(reach == Catch::Approx(h * (alignment::kLeaderTextStartHeights + alignment::kLabelCharWidthHeights * 11 +
+                                    alignment::kLeaderOvershootHeights)));
   CHECK(mx.x >= gmx.x + 0.8 * reach);
   CHECK(mn.x < gmn.x);
   CHECK(mn.y < gmn.y);
+
+  // REQ-492.5: a taller geometry-point style reaches further.
+  Submit(st, "ALIGNMENTLABELSTYLE NEW, Big", log);
+  Submit(st, "ALIGNMENTLABELSTYLE SET, Big, HEIGHT, 0.2", log);
+  Submit(st, "ALIGNMENTLABELSET STYLE, Standard, GEOMETRY, Big", log);
+  alignment::Point2 bigMn{}, bigMx{};
+  REQUIRE(AlignmentLabelSets::LabelledBounds(st.alignments[0], CadAlignmentLabelContext(st), &bigMn, &bigMx));
+  CHECK(bigMx.x > mx.x + 0.5 * reach);
 
   Submit(st, "ALIGNMENTSTYLE NEW, Bare", log);
   Submit(st, "ALIGNMENTSTYLE SET, Bare, LABELS, OFF", log);
   REQUIRE(!AlignmentStyles::Find(st.alignmentStyles, "Bare")->labelsVisible);
   Submit(st, "ALIGNMENTSTYLE ASSIGN, Main Road, Bare", log);
   REQUIRE(st.alignments[0].style == "Bare");
-  REQUIRE(AlignmentLabelSets::LabelledBounds(st.alignments[0], st.alignmentLabelSets, st.alignmentStyles, 2, 50.0, &mn, &mx));
+  REQUIRE(AlignmentLabelSets::LabelledBounds(st.alignments[0], CadAlignmentLabelContext(st), &mn, &mx));
   CHECK(mx.x == Catch::Approx(gmx.x));
   CHECK(mn.y == Catch::Approx(gmn.y));
-  CHECK_FALSE(alignment::LabelledBounds(alignment::Alignment{}, {}, h, &mn, &mx));
+  CHECK_FALSE(alignment::LabelledBounds(alignment::Alignment{}, alignment::AlignmentLabelItems{}, &mn, &mx));
+}
+
+TEST_CASE("ALIGNMENTLABELSTYLE: create, edit, refuse bad values, delete (REQ-492.5)", "[req492][alignment]") {
+  std::vector<std::string> log;
+  AppCommandState st = MainRoad(log);
+  REQUIRE(st.alignmentLabelStyles.size() == 1);
+  CHECK(st.alignmentLabelStyles[0] == AlignmentLabelStyles::StandardLabelStyle());
+  CHECK(st.alignmentLabelStyles[0].textStyle == "Standard");
+  CHECK(st.alignmentLabelStyles[0].heightInches == Catch::Approx(0.1));
+  CHECK(st.alignmentLabelStyles[0].color == "ByLayer");
+
+  Submit(st, "ALIGNMENTLABELSTYLE NEW, Red Text", log);
+  Submit(st, "ALIGNMENTLABELSTYLE SET, Red Text, HEIGHT, 0.08", log);
+  Submit(st, "ALIGNMENTLABELSTYLE SET, Red Text, COLOR, red", log);
+  Submit(st, "ALIGNMENTLABELSTYLE SET, Red Text, TEXTSTYLE, Standard", log);
+  const AlignmentLabelStyle* red = AlignmentLabelStyles::Find(st.alignmentLabelStyles, "Red Text");
+  REQUIRE(red != nullptr);
+  CHECK(red->heightInches == Catch::Approx(0.08));
+  CHECK(red->color != "ByLayer");
+
+  const auto refused = [&](const std::string& cmd, const std::string& why) {
+    log.clear();
+    const AlignmentLabelStyle before = *AlignmentLabelStyles::Find(st.alignmentLabelStyles, "Red Text");
+    Submit(st, cmd, log);
+    REQUIRE(!log.empty());
+    CHECK(log.back().find(why) != std::string::npos);
+    CHECK(*AlignmentLabelStyles::Find(st.alignmentLabelStyles, "Red Text") == before);
+  };
+  refused("ALIGNMENTLABELSTYLE SET, Red Text, HEIGHT, -1", "positive plotted height");
+  refused("ALIGNMENTLABELSTYLE SET, Red Text, COLOR, chartreuse-ish", "is not a colour");
+  refused("ALIGNMENTLABELSTYLE SET, Red Text, TEXTSTYLE, NoSuchStyle", "no text style named");
+  refused("ALIGNMENTLABELSTYLE SET, Red Text, WEIGHT, 2", "HEIGHT, COLOR or TEXTSTYLE");
+  refused("ALIGNMENTLABELSTYLE NEW, Red Text", "already exists");
+
+  Submit(st, "ALIGNMENTLABELSET STYLE, Standard, SPEEDS, Red Text", log);
+  CHECK(st.alignmentLabelSets.front().speedStyle == "Red Text");
+  log.clear();
+  Submit(st, "ALIGNMENTLABELSET STYLE, Standard, CURVES, Red Text", log);
+  CHECK(log.back().find("item must be MAJOR") != std::string::npos);
+  Submit(st, "ALIGNMENTLABELSET STYLE, Standard, MAJOR, Missing", log);
+  CHECK(log.back().find("no alignment label style named") != std::string::npos);
+  CHECK(st.alignmentLabelSets.front().majorStyle == "Standard");
+
+  log.clear();
+  Submit(st, "ALIGNMENTLABELSTYLE DELETE, Red Text", log);
+  CHECK(log.back().find("used by 1 label set") != std::string::npos);
+  Submit(st, "ALIGNMENTLABELSTYLE DELETE, Standard", log);
+  CHECK(log.back().find("cannot be deleted") != std::string::npos);
+  Submit(st, "ALIGNMENTLABELSET STYLE, Standard, SPEEDS, Standard", log);
+  Submit(st, "ALIGNMENTLABELSTYLE DELETE, Red Text", log);
+  CHECK(AlignmentLabelStyles::Find(st.alignmentLabelStyles, "Red Text") == nullptr);
+  Submit(st, "UNDO", log);
+  CHECK(AlignmentLabelStyles::Find(st.alignmentLabelStyles, "Red Text") != nullptr);
+}
+
+TEST_CASE("Alignment label styles and item assignments are saved; a missing style reads as Standard (REQ-492.5)",
+          "[req492][alignment]") {
+  std::vector<std::string> log;
+  AppCommandState st = MainRoad(log);
+  Submit(st, "ALIGNMENTLABELSTYLE NEW, Big", log);
+  Submit(st, "ALIGNMENTLABELSTYLE SET, Big, HEIGHT, 0.15", log);
+  Submit(st, "ALIGNMENTLABELSTYLE SET, Big, COLOR, 1", log);
+  Submit(st, "ALIGNMENTLABELSET STYLE, Standard, GEOMETRY, Big", log);
+  Submit(st, "ALIGNMENTLABELSET STYLE, Standard, SEGMENTS, Big", log);
+  const std::string json = SerializeGoSurveyJson(st);
+  AppCommandState loaded = Drawing();
+  std::vector<std::string> loadLog;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(loaded, json, loadLog));
+  CHECK(loaded.alignmentLabelStyles == st.alignmentLabelStyles);
+  CHECK(loaded.alignmentLabelSets.front() == st.alignmentLabelSets.front());
+
+  // Rename the first "Big": either a label-set reference or the style itself, so one reference no longer resolves.
+  std::string orphaned = json;
+  const size_t at = orphaned.find("\"Big\"");
+  REQUIRE(at != std::string::npos);
+  orphaned.replace(at, 5, "\"Gone\"");
+  AppCommandState loadedOrphan = Drawing();
+  loadLog.clear();
+  REQUIRE(LoadGoSurveyFromJsonUtf8(loadedOrphan, orphaned, loadLog));
+  const AlignmentLabelSet& set = loadedOrphan.alignmentLabelSets.front();
+  const bool fellBack = set.geometryStyle == "Standard" || set.segmentStyle == "Standard";
+  CHECK(fellBack);
+  CHECK(std::any_of(loadLog.begin(), loadLog.end(),
+                    [](const std::string& l) { return l.find("references missing label style") != std::string::npos; }));
 }
 
 TEST_CASE("Line and spiral segment label text (REQ-492.3)", "[req492][alignment]") {

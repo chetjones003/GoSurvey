@@ -828,6 +828,23 @@ private Q_SLOTS:
     const QImage withSegments = viewportShot();
     QVERIFY(withSegments != withGeometry);
     QVERIFY(withSegments.save(Issue914Shot("qt-492-viewport-segment-labels.png")));
+
+    // REQ-492.5: a label style recolours and resizes the items it is assigned to.
+    run("ALIGNMENTLABELSTYLE NEW, Civil");
+    run("ALIGNMENTLABELSTYLE SET, Civil, COLOR, red");
+    run("ALIGNMENTLABELSTYLE SET, Civil, HEIGHT, 0.12");
+    for (const char* item : {"MAJOR", "GEOMETRY", "SPEEDS", "SEGMENTS"}) {
+      char cmd[128];
+      std::snprintf(cmd, sizeof cmd, "ALIGNMENTLABELSET STYLE, Standard, %s, Civil", item);
+      run(cmd);
+    }
+    QCOMPARE(QString::fromStdString(window.State().alignmentLabelSets.front().geometryStyle), QString("Civil"));
+    run("ZOOMEXTENTS");
+    window.m_Viewport->update();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.State().pendingZoomExtents, 10000);
+    const QImage styled = viewportShot();
+    QVERIFY(styled != withSegments);
+    QVERIFY(styled.save(Issue914Shot("qt-492-viewport-label-style.png")));
   }
 
   void issue121AlignmentPhase1Screenshots() {

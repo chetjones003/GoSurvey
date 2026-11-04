@@ -184,6 +184,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.alignmentStyles        = cmd.alignmentStyles;
   doc.alignmentCheckSets     = cmd.alignmentCheckSets;  // REQ-502
   doc.alignmentLabelSets     = cmd.alignmentLabelSets;
+  doc.alignmentLabelStyles   = cmd.alignmentLabelStyles;  // REQ-492.5
   doc.dimensionStyle         = cmd.activeDimensionStyle;
   doc.dimensionStyles        = cmd.dimensionStyles;
   doc.multileaderStyle       = cmd.activeMultileaderStyle;
@@ -318,6 +319,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
                                                                : doc.alignmentStyles;
   cmd.alignmentLabelSets         = doc.alignmentLabelSets.empty() ? AlignmentLabelSets::DefaultAlignmentLabelSets()
                                                                   : doc.alignmentLabelSets;
+  cmd.alignmentLabelStyles       = doc.alignmentLabelStyles.empty() ? AlignmentLabelStyles::DefaultAlignmentLabelStyles()
+                                                                    : doc.alignmentLabelStyles;  // REQ-492.5
   cmd.activeDimensionStyle       = doc.dimensionStyle;
   cmd.dimensionStyles            = doc.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : doc.dimensionStyles;
   cmd.activeMultileaderStyle     = doc.multileaderStyle;
@@ -2006,6 +2009,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.alignmentStyles      = st.alignmentStyles;  // REQ-491
   snap.alignmentCheckSets   = st.alignmentCheckSets;  // REQ-502
   snap.alignmentLabelSets   = st.alignmentLabelSets;
+  snap.alignmentLabelStyles = st.alignmentLabelStyles;  // REQ-492.5
   snap.dimensionStyle       = st.activeDimensionStyle;  // dimension-style edits are undoable (issue #99)
   snap.dimensionStyles      = st.dimensionStyles;
   snap.multileaderStyle     = st.activeMultileaderStyle;
@@ -2106,6 +2110,8 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.alignmentCheckSets   = snap.alignmentCheckSets;  // REQ-502
   st.alignmentLabelSets   = snap.alignmentLabelSets.empty() ? AlignmentLabelSets::DefaultAlignmentLabelSets()
                                                             : snap.alignmentLabelSets;
+  st.alignmentLabelStyles = snap.alignmentLabelStyles.empty() ? AlignmentLabelStyles::DefaultAlignmentLabelStyles()
+                                                              : snap.alignmentLabelStyles;  // REQ-492.5
   st.activeDimensionStyle = snap.dimensionStyle;
   st.dimensionStyles = snap.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : snap.dimensionStyles;
   st.activeMultileaderStyle = snap.multileaderStyle;
@@ -7216,7 +7222,8 @@ const CmdEntry kRegistry[] = {
     {"reversealignment", "", "Reverse alignment direction and stationing: REVERSEALIGNMENT <name>"},
     {"alignmentstation", "", "Starting station and station equations: ALIGNMENTSTATION <name>, START|EQ, ..."},
     {"alignmentstyle", "", "Alignment display styles: ALIGNMENTSTYLE LIST|NEW|DELETE|ASSIGN|SHOW|HIDE|COLOR, ..."},
-    {"alignmentlabelset", "", "Alignment label sets: ALIGNMENTLABELSET LIST|NEW|DELETE|ASSIGN|MAJORINTERVAL|MINORINTERVAL|SHOW|HIDE, ..."},
+    {"alignmentlabelset", "", "Alignment label sets: ALIGNMENTLABELSET LIST|NEW|DELETE|ASSIGN|MAJORINTERVAL|MINORINTERVAL|SHOW|HIDE|STYLE, ..."},
+    {"alignmentlabelstyle", "", "Alignment label styles (text style, height, colour): ALIGNMENTLABELSTYLE LIST|NEW|DELETE|SET, ..."},
     {"alignmentreport", "", "Alignment report (text/CSV): ALIGNMENTREPORT [<name>][, TXT|CSV[, <path>]]"},
     {"offsetalignment", "", "Create offset alignments: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (L12 left, R12 right)"},
     {"alignmentdetach", "", "Make a linked offset independent: ALIGNMENTDETACH <name>"},
@@ -22873,8 +22880,7 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   // frames a drawing that holds only an alignment, grown to take in its labels (D-2026-11-04-c).
   for (const alignment::Alignment& al : st.alignments) {
     alignment::Point2 mn{}, mx{};
-    if (!AlignmentLabelSets::LabelledBounds(al, st.alignmentLabelSets, st.alignmentStyles, st.drawingInsUnits,
-                                            st.modelUnitsPerPlottedInch, &mn, &mx))
+    if (!AlignmentLabelSets::LabelledBounds(al, CadAlignmentLabelContext(st), &mn, &mx))
       continue;
     consider(mn.x, mn.y);
     consider(mx.x, mx.y);
@@ -23269,8 +23275,7 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
   }
   for (const alignment::Alignment& al : st.alignments) {  // REQ-480, with its labels (D-2026-11-04-c)
     alignment::Point2 mn{}, mx{};
-    if (!AlignmentLabelSets::LabelledBounds(al, st.alignmentLabelSets, st.alignmentStyles, st.drawingInsUnits,
-                                            st.modelUnitsPerPlottedInch, &mn, &mx))
+    if (!AlignmentLabelSets::LabelledBounds(al, CadAlignmentLabelContext(st), &mn, &mx))
       continue;
     EntityBox b{};
     EntityBoxGrowZ(b, 0.0, true);
@@ -47100,6 +47105,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "alignmentstation" ||
         plotTok == "alignmentstyle" ||
         plotTok == "alignmentlabelset" ||
+        plotTok == "alignmentlabelstyle" ||
         plotTok == "alignmentreport" ||
         plotTok == "offsetalignment" ||
         plotTok == "alignmentdetach" ||
@@ -47168,6 +47174,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunAlignmentStyle(st, rest, log);
       else if (plotTok == "alignmentlabelset")
         RunAlignmentLabelSet(st, rest, log);
+      else if (plotTok == "alignmentlabelstyle")
+        RunAlignmentLabelStyle(st, rest, log);
       else if (plotTok == "alignmentreport")
         RunAlignmentReport(st, rest, log);
       else if (plotTok == "offsetalignment")

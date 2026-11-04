@@ -15,6 +15,8 @@
 #include "BrepJson.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -1318,9 +1320,33 @@ json BuildRoot(const AppCommandState& st) {
         o["designSpeedsOn"] = s.designSpeedsOn;
         o["majorInterval"] = s.majorInterval;
         o["minorInterval"] = s.minorInterval;
+        json styles;  // REQ-492.5: the label style of each item
+        styles["major"] = s.majorStyle;
+        styles["geometry"] = s.geometryStyle;
+        styles["speeds"] = s.speedStyle;
+        styles["equations"] = s.equationStyle;
+        styles["segments"] = s.segmentStyle;
+        styles["offsets"] = s.offsetStyle;
+        o["styles"] = std::move(styles);
         sets.push_back(std::move(o));
       }
       doc["alignmentLabelSets"] = std::move(sets);
+    }
+  }
+  {  // REQ-492.5: alignment label styles (omitted while only an untouched Standard exists)
+    const bool onlyUntouchedStandard = st.alignmentLabelStyles.size() == 1 &&
+                                       st.alignmentLabelStyles[0] == AlignmentLabelStyles::StandardLabelStyle();
+    if (!st.alignmentLabelStyles.empty() && !onlyUntouchedStandard) {
+      json styles = json::array();
+      for (const AlignmentLabelStyle& s : st.alignmentLabelStyles) {
+        json o;
+        o["name"] = s.name;
+        o["textStyle"] = s.textStyle;
+        o["heightInches"] = s.heightInches;
+        o["color"] = s.color;
+        styles.push_back(std::move(o));
+      }
+      doc["alignmentLabelStyles"] = std::move(styles);
     }
   }
   {  // REQ-502: drawing-owned check sets (omitted when there are none)
@@ -3480,10 +3506,41 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         s.majorInterval = o["majorInterval"].get<double>();
       if (o.contains("minorInterval") && o["minorInterval"].is_number())
         s.minorInterval = o["minorInterval"].get<double>();
+      if (o.contains("styles") && o["styles"].is_object()) {  // REQ-492.5
+        const json& styles = o["styles"];
+        const std::array<std::pair<const char*, std::string*>, 6> items{{
+            {"major", &s.majorStyle},       {"geometry", &s.geometryStyle}, {"speeds", &s.speedStyle},
+            {"equations", &s.equationStyle}, {"segments", &s.segmentStyle},  {"offsets", &s.offsetStyle}}};
+        for (const auto& [key, field] : items)
+          if (styles.contains(key) && styles[key].is_string()) *field = styles[key].get<std::string>();
+      }
       st.alignmentLabelSets.push_back(std::move(s));
     }
   }
   AlignmentLabelSets::EnsureStandard(st.alignmentLabelSets);
+
+  st.alignmentLabelStyles.clear();  // REQ-492.5
+  if (doc.contains("alignmentLabelStyles") && doc["alignmentLabelStyles"].is_array()) {
+    for (const auto& o : doc["alignmentLabelStyles"]) {
+      if (!o.is_object() || !o.contains("name") || !o["name"].is_string()) continue;
+      AlignmentLabelStyle s;
+      s.name = o["name"].get<std::string>();
+      if (o.contains("textStyle") && o["textStyle"].is_string()) s.textStyle = o["textStyle"].get<std::string>();
+      if (o.contains("heightInches") && o["heightInches"].is_number()) s.heightInches = o["heightInches"].get<double>();
+      if (o.contains("color") && o["color"].is_string()) s.color = o["color"].get<std::string>();
+      if (!(s.heightInches > 0.0) || !std::isfinite(s.heightInches)) s.heightInches = AlignmentLabelStyle{}.heightInches;
+      st.alignmentLabelStyles.push_back(std::move(s));
+    }
+  }
+  AlignmentLabelStyles::EnsureStandard(st.alignmentLabelStyles);
+  for (AlignmentLabelSet& set : st.alignmentLabelSets) {  // REQ-492.5: a label set's styles must exist
+    for (std::string* ref : AlignmentLabelStyles::References(set)) {
+      if (AlignmentLabelStyles::Find(st.alignmentLabelStyles, *ref) != nullptr) continue;
+      log.push_back("ALIGNMENTLABELSET — label set \"" + set.name + "\" references missing label style \"" + *ref +
+                    "\"; using Standard.");
+      *ref = AlignmentLabelStyles::kStandardName;
+    }
+  }
 
   st.alignmentCheckSets.clear();  // REQ-502
   if (doc.contains("alignmentCheckSets") && doc["alignmentCheckSets"].is_array()) {

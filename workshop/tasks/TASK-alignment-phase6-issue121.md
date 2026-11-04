@@ -71,7 +71,8 @@ Still open:
    column still shows the tangency constraint only.
 2. **Per-entity meets/violates marking in the report (REQ-494).** The report lists findings but does not mark each entity as
    meeting or violating. CSV is unchanged (adding a column would change the 18-column contract).
-3. **Flag size.** Fixed at 4 drawing units; it does not scale with the style's marker size.
+3. ~~**Flag size.**~~ Closed 2026-11-04: the marker is now an amber warning triangle at label text height
+   (D-2026-11-04-d, `TASK-alignment-labels-visible-issue121.md` §8).
 4. **Panel follow-ups (non-blocking, cited by two or more reviewers).** The layout table's Design check text is cut
    off before the required minimum, and Civil 3D shows the minimum in its own column; the red flag reads less clearly
    than Civil 3D's amber "!" triangle; the style Design tab is mostly empty below its one combo box.

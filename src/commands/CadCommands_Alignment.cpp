@@ -13,6 +13,8 @@
 #include "CadCoordinateFrame.hpp"
 #include "AlignmentStyle.hpp"
 #include "AlignmentLabelSet.hpp"
+#include "CadColor.hpp"
+#include "TextStyle.hpp"
 #include "alignment/AlignmentReport.hpp"
 #include "alignment/AlignmentGround.hpp"
 #include "alignment/AlignmentFeatureLine.hpp"
@@ -27,6 +29,7 @@
 #include "util/NumFormat.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
@@ -1587,13 +1590,61 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
   usage();
 }
 
+namespace {
+
+// The label-set field an item name selects (REQ-492.5), or nullptr for an unknown item.
+std::string* LabelSetItemStyle(AlignmentLabelSet& s, const std::string& item) {
+  const std::string which = Lower(item);
+  if (which == "major") return &s.majorStyle;
+  if (which == "geometry") return &s.geometryStyle;
+  if (which == "speeds" || which == "speed") return &s.speedStyle;
+  if (which == "equations" || which == "equation") return &s.equationStyle;
+  if (which == "segments" || which == "segment") return &s.segmentStyle;
+  if (which == "offsets" || which == "offset") return &s.offsetStyle;
+  return nullptr;
+}
+
+// ALIGNMENTLABELSET STYLE, <set>, MAJOR|GEOMETRY|SPEEDS|EQUATIONS|SEGMENTS|OFFSETS, <label style>
+void RunAlignmentLabelSetStyle(AppCommandState& st, const std::vector<std::string>& f, std::vector<std::string>& log) {
+  assert(!f.empty());
+  assert(!st.alignmentLabelSets.empty());
+  if (f.size() < 4 || f[1].empty() || f[2].empty() || f[3].empty()) {
+    log.push_back("ALIGNMENTLABELSET - usage: ALIGNMENTLABELSET STYLE, <set>, "
+                  "MAJOR|GEOMETRY|SPEEDS|EQUATIONS|SEGMENTS|OFFSETS, <label style>.");
+    return;
+  }
+  AlignmentLabelSet* s = AlignmentLabelSets::Find(st.alignmentLabelSets, f[1]);
+  if (s == nullptr) {
+    log.push_back("ALIGNMENTLABELSET - no label set named \"" + f[1] + "\".");
+    return;
+  }
+  if (LabelSetItemStyle(*s, f[2]) == nullptr) {
+    log.push_back("ALIGNMENTLABELSET - item must be MAJOR, GEOMETRY, SPEEDS, EQUATIONS, SEGMENTS or OFFSETS, not \"" +
+                  f[2] + "\".");
+    return;
+  }
+  if (AlignmentLabelStyles::Find(st.alignmentLabelStyles, f[3]) == nullptr) {
+    log.push_back("ALIGNMENTLABELSET - no alignment label style named \"" + f[3] + "\" (see ALIGNMENTLABELSTYLE LIST).");
+    return;
+  }
+  PushUndoSnapshot(st, "Alignment label set");
+  s = AlignmentLabelSets::Find(st.alignmentLabelSets, f[1]);
+  *LabelSetItemStyle(*s, f[2]) = f[3];
+  BumpCadGpuCache(st);
+  log.push_back("ALIGNMENTLABELSET - \"" + s->name + "\" " + f[2] + " labels now use label style \"" + f[3] + "\".");
+}
+
+}  // namespace
+
 void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   AlignmentLabelSets::EnsureStandard(st.alignmentLabelSets);
+  AlignmentLabelStyles::EnsureStandard(st.alignmentLabelStyles);
   const auto usage = [&]() {
     log.push_back(
         "ALIGNMENTLABELSET - usage: ALIGNMENTLABELSET LIST | NEW <set> | DELETE <set> | ASSIGN <alignment>, <set> | "
         "MAJORINTERVAL <set>, <interval> | MINORINTERVAL <set>, <interval> | "
-        "SHOW|HIDE <set>, MAJOR|MINOR|EQUATIONS|GEOMETRY|SPEEDS.");
+        "SHOW|HIDE <set>, MAJOR|MINOR|EQUATIONS|GEOMETRY|SPEEDS | "
+        "STYLE <set>, MAJOR|GEOMETRY|SPEEDS|EQUATIONS|SEGMENTS|OFFSETS, <label style>.");
   };
   const std::string trimmed = Trim(args);
   if (trimmed.empty()) {
@@ -1754,6 +1805,131 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
     }
     BumpCadGpuCache(st);
     log.push_back("ALIGNMENTLABELSET - \"" + s->name + "\" " + f[2] + " " + (verb == "show" ? "shown." : "hidden."));
+    return;
+  }
+  if (verb == "style") {
+    RunAlignmentLabelSetStyle(st, f, log);
+    return;
+  }
+  usage();
+}
+
+namespace {
+
+// ALIGNMENTLABELSTYLE SET, <style>, HEIGHT|COLOR|TEXTSTYLE, <value> (REQ-492.5). Returns false with the reason logged.
+bool EditAlignmentLabelStyle(const AppCommandState& st, AlignmentLabelStyle& s, const std::string& item,
+                             const std::string& value, std::vector<std::string>& log) {
+  assert(!item.empty());
+  assert(!s.name.empty());
+  const std::string which = Lower(item);
+  if (which == "height") {
+    const double v = std::strtod(value.c_str(), nullptr);
+    if (!(v > 0.0) || !std::isfinite(v)) {
+      log.push_back("ALIGNMENTLABELSTYLE - height must be a positive plotted height in inches, not \"" + value + "\".");
+      return false;
+    }
+    s.heightInches = v;
+    return true;
+  }
+  if (which == "color" || which == "colour") {
+    std::string storage;
+    if (!CadColorStorageFromTyped(value, &storage)) {
+      log.push_back("ALIGNMENTLABELSTYLE - \"" + value + "\" is not a colour (ByLayer, an index 1-255, a name such as "
+                    "red, or #RRGGBB).");
+      return false;
+    }
+    s.color = storage;
+    return true;
+  }
+  if (which == "textstyle") {
+    if (TextStyles::Find(st.textStyles, value) == nullptr) {
+      log.push_back("ALIGNMENTLABELSTYLE - no text style named \"" + value + "\" (see STYLE).");
+      return false;
+    }
+    s.textStyle = value;
+    return true;
+  }
+  log.push_back("ALIGNMENTLABELSTYLE - property must be HEIGHT, COLOR or TEXTSTYLE, not \"" + item + "\".");
+  return false;
+}
+
+// REQ-478 pattern: Standard and a style a label set still uses cannot be deleted.
+void RunAlignmentLabelStyleDelete(AppCommandState& st, const std::string& name, std::vector<std::string>& log) {
+  assert(!name.empty());
+  assert(!st.alignmentLabelStyles.empty());
+  if (name == AlignmentLabelStyles::kStandardName) {
+    log.push_back("ALIGNMENTLABELSTYLE - \"Standard\" cannot be deleted.");
+    return;
+  }
+  const auto it = std::find_if(st.alignmentLabelStyles.begin(), st.alignmentLabelStyles.end(),
+                               [&](const AlignmentLabelStyle& s) { return s.name == name; });
+  if (it == st.alignmentLabelStyles.end()) {
+    log.push_back("ALIGNMENTLABELSTYLE - no label style named \"" + name + "\".");
+    return;
+  }
+  const int users = AlignmentLabelStyles::CountLabelSetsUsing(st.alignmentLabelSets, name);
+  if (users > 0) {
+    log.push_back("ALIGNMENTLABELSTYLE - \"" + name + "\" is used by " + std::to_string(users) +
+                  " label set(s) and cannot be deleted; assign another style first (ALIGNMENTLABELSET STYLE).");
+    return;
+  }
+  PushUndoSnapshot(st, "Alignment label style");
+  st.alignmentLabelStyles.erase(std::find_if(st.alignmentLabelStyles.begin(), st.alignmentLabelStyles.end(),
+                                             [&](const AlignmentLabelStyle& s) { return s.name == name; }));
+  log.push_back("ALIGNMENTLABELSTYLE - deleted label style \"" + name + "\".");
+}
+
+}  // namespace
+
+// ALIGNMENTLABELSTYLE LIST | NEW <style> | DELETE <style> | SET <style>, HEIGHT|COLOR|TEXTSTYLE, <value>  (REQ-492.5)
+void RunAlignmentLabelStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  AlignmentLabelStyles::EnsureStandard(st.alignmentLabelStyles);
+  const std::vector<std::string> f = SplitFields(Trim(args));
+  const std::string verb = f.empty() ? std::string{} : Lower(f[0]);
+  const auto usage = [&] {
+    log.push_back("ALIGNMENTLABELSTYLE - usage: ALIGNMENTLABELSTYLE LIST | NEW, <style> | DELETE, <style> | "
+                  "SET, <style>, HEIGHT|COLOR|TEXTSTYLE, <value>.");
+  };
+  if (verb == "list") {
+    for (const AlignmentLabelStyle& s : st.alignmentLabelStyles)
+      log.push_back("  LABEL STYLE \"" + s.name + "\"  height=" + FormatLinear(s.heightInches, 3) + "in  colour=" +
+                    CadColorDisplayLabel(s.color) + "  text style=" + s.textStyle + "  (used by " +
+                    std::to_string(AlignmentLabelStyles::CountLabelSetsUsing(st.alignmentLabelSets, s.name)) +
+                    " label set(s))");
+    return;
+  }
+  if (f.size() < 2 || f[1].empty()) {
+    usage();
+    return;
+  }
+  if (verb == "new") {
+    if (AlignmentLabelStyles::Find(st.alignmentLabelStyles, f[1]) != nullptr) {
+      log.push_back("ALIGNMENTLABELSTYLE - a label style named \"" + f[1] + "\" already exists.");
+      return;
+    }
+    PushUndoSnapshot(st, "Alignment label style");
+    AlignmentLabelStyle s = AlignmentLabelStyles::StandardLabelStyle();
+    s.name = f[1];
+    st.alignmentLabelStyles.push_back(std::move(s));
+    log.push_back("ALIGNMENTLABELSTYLE - created label style \"" + f[1] + "\" (copied from Standard).");
+    return;
+  }
+  if (verb == "delete") {
+    RunAlignmentLabelStyleDelete(st, f[1], log);
+    return;
+  }
+  if (verb == "set" && f.size() >= 4) {
+    const AlignmentLabelStyle* current = AlignmentLabelStyles::Find(st.alignmentLabelStyles, f[1]);
+    if (current == nullptr) {
+      log.push_back("ALIGNMENTLABELSTYLE - no label style named \"" + f[1] + "\".");
+      return;
+    }
+    AlignmentLabelStyle edited = *current;
+    if (!EditAlignmentLabelStyle(st, edited, f[2], Trim(f[3]), log)) return;
+    PushUndoSnapshot(st, "Alignment label style");
+    *AlignmentLabelStyles::Find(st.alignmentLabelStyles, f[1]) = std::move(edited);
+    BumpCadGpuCache(st);
+    log.push_back("ALIGNMENTLABELSTYLE - \"" + f[1] + "\" " + f[2] + " set to " + Trim(f[3]) + ".");
     return;
   }
   usage();

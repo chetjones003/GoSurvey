@@ -16387,6 +16387,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
      PRC, TS, ST, SC, CS, SS, Mid); design-speed labels read `STA <station> DESIGN SPEED = <speed> mi/h` (km/h in a
      metric drawing). Geometry Points and Design Speeds are on in the `Standard` label set. Labels are drawing text
      0.1" high at the plot scale, and ZOOM EXTENTS includes them.
+  8. **Decision D-2026-11-04-e (label styles and placement):** an **alignment label style** (named, drawing-owned,
+     built-in `Standard`) holds a drawing text style (its font), a plotted text height (0.1" in `Standard`) and a colour
+     (ByLayer in `Standard`). A label set assigns a label style to each of its items: major stations, geometry points,
+     design speeds, equations, and (GoSurvey rule) the alignment's segment and station/offset labels. A style used by a
+     label set cannot be deleted; a missing reference reads as `Standard` with a REQ-201 log entry. Leader labels keep
+     their Civil 3D side; text beside the line steps to the other side or an outer row when another label is in the way.
 - Acceptance:
   1. A 0+00–3+82 alignment with major=100/minor=20 shows 3 major and 15 minor ticks with correct labels.
   2. Station equations change the labels to the displayed values and add an equation label.
@@ -16611,6 +16617,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   6. **Decision D-2026-11-04-b:** an alignment's effective criteria are its own check set when it has one,
      otherwise the check set of its style (REQ-491). A criteria set on the alignment is local and overrides
      the style, as REQ-491 requires for per-object overrides.
+  7. **Decision D-2026-11-04-d:** the drawing marker is an amber warning triangle with "!" centred on the failing
+     entity's midpoint, one label text height on paper (never under 10 pixels), as Civil 3D marks a violation.
 - Owner-layer: Domain.
 - Status: accepted (2026-11-02, user approval)
 

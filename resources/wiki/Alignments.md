@@ -5,12 +5,11 @@ An **alignment** is the horizontal path of a road, pipe, utility or baseline: st
 GoSurvey stores the exact tangent and curve numbers — never a many-sided polyline — so a station, an
 offset and a curve's radius are always exact.
 
-> **Status (Phases 1 and 2 of 6).** Tangents, circular curves, stationing with station equations,
-> station/offset queries, creation from typed input or selected objects, display, selection,
-> properties, object snaps, undo and save/reopen (Phase 1); editing with constraints, the Alignment
-> Layout table, grips, move/copy/rotate/scale/mirror, reverse, offset alignments and intersections
-> (Phase 2). **Clothoid spirals** and C2 continuity checks arrive in Phase 3 (issue #121). Labels, tables, reports, surface and feature-line links and design checks arrive
-> in later phases. See `spec/requirements.md` REQ-480 to REQ-503.
+> **What alignments can do.** Tangents, circular curves and clothoid spirals; stationing with station equations;
+> station/offset queries; creation from typed input or selected objects; editing with constraints, the Alignment
+> Layout table and grips; move, copy, rotate, scale, mirror and reverse; offset alignments and intersections;
+> continuity checks; styles, labels, label styles and tables; reports; ground elevations from a surface and feature
+> lines; COGO commands; and design criteria with design-check warnings.
 
 ## Station format
 
@@ -44,7 +43,9 @@ offset and a curve's radius are always exact.
 | `ALIGNMENTDETACH <name>` | Makes a linked offset independent so it can be edited. |
 | `ALIGNMENTINTERSECT <a>, <b>` / `<a>, LINE, x1, y1, x2, y2` / `<a>, CIRCLE, cx, cy, r` | Every intersection with station and crossing angle; coincident tangents are reported as a range. |
 | `ALIGNMENTSTYLE LIST` / `NEW` / `DELETE` / `ASSIGN` / `SHOW\|HIDE` / `COLOR` | Drawing-wide **display styles** for tangent, curve and spiral components (color, visibility). Each alignment uses a style name (default **Standard**). |
-| `ALIGNMENTLABELSET LIST` / `NEW` / `ASSIGN` / `MAJORINTERVAL` / `MINORINTERVAL` / `SHOW\|HIDE <set>, MAJOR\|MINOR\|EQUATIONS\|GEOMETRY\|SPEEDS` | Drawing-wide **label sets**. Each alignment uses a label set name (default **Standard**, with every item on). In the viewport, major stations get their station text and minor stations a tick. **GEOMETRY** labels the geometry points (`BP: 5+00.00`, `PC`, `Mid`, `PT`, `PI`, `TS`, `SC`, `EP` and so on) on a leader to the left of travel. **SPEEDS** labels each design speed (`STA 5+00.00 DESIGN SPEED = 40 mi/h`, km/h in a metric drawing) on a leader to the right. Labels are drawing text 0.1" high at the plot scale, in the alignment layer's colour, so ZOOM EXTENTS takes them in. |
+| `ALIGNMENTLABELSET LIST` / `NEW` / `ASSIGN` / `MAJORINTERVAL` / `MINORINTERVAL` / `SHOW\|HIDE <set>, MAJOR\|MINOR\|EQUATIONS\|GEOMETRY\|SPEEDS` | Drawing-wide **label sets**. Each alignment uses a label set name (default **Standard**, with every item on). In the viewport, major stations get their station text and minor stations a tick. **GEOMETRY** labels the geometry points (`BP: 5+00.00`, `PC`, `Mid`, `PT`, `PI`, `TS`, `SC`, `EP` and so on) on a leader to the left of travel. **SPEEDS** labels each design speed (`STA 5+00.00 DESIGN SPEED = 40 mi/h`, km/h in a metric drawing) on a leader to the right. Labels are drawing text, so ZOOM EXTENTS takes them in. **STYLE** gives an item its label style. |
+| `ALIGNMENTLABELSTYLE LIST` / `NEW` / `DELETE` / `SET <style>, HEIGHT\|COLOR\|TEXTSTYLE, <value>` | Drawing-wide **label styles**: the text style (font), plotted height and colour labels are written in. **Standard** is 0.1", the Standard text style, in the alignment layer's colour. See [[Commands/alignmentlabelstyle]]. |
+| Design check marker | An alignment that fails its design check shows an amber warning triangle with "!" at the middle of each failing entity, as Civil 3D does. |
 
 ## Selecting, editing and saving
 

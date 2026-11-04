@@ -156,15 +156,16 @@ double LeaderLabelReach(const std::string& text, double textHeight) {
                        kLeaderOvershootHeights);
 }
 
-bool LabelledBounds(const Alignment& al, const AlignmentLabelItems& items, double textHeight, Point2* mn, Point2* mx) {
+bool LabelledBounds(const Alignment& al, const AlignmentLabelItems& items, Point2* mn, Point2* mx) {
   if (mn == nullptr || mx == nullptr || !al.Bounds(mn, mx)) return false;
-  const double h = std::isfinite(textHeight) && textHeight > 0.0 ? textHeight : 0.0;
-  mn->x -= 2.0 * h;
-  mn->y -= 2.0 * h;
-  mx->x += 2.0 * h;
-  mx->y += 2.0 * h;
+  const auto usable = [](double h) { return std::isfinite(h) && h > 0.0 ? h : 0.0; };
+  const double beside = 9.0 * usable(items.besideHeight);  // a two-line stack moved up to four rows out from the line
+  mn->x -= beside;
+  mn->y -= beside;
+  mx->x += beside;
+  mx->y += beside;
   // A leader label runs across the alignment: to the left of travel for a geometry point, to the right for a speed.
-  const auto grow = [&](double station, const std::string& text, double side) {
+  const auto grow = [&](double station, const std::string& text, double side, double h) {
     const Point2 p = al.GetPointAtStation(station);
     const double az = al.GetBearingAtStation(station);
     const double reach = side * LeaderLabelReach(text, h);
@@ -174,10 +175,10 @@ bool LabelledBounds(const Alignment& al, const AlignmentLabelItems& items, doubl
     mx->x = std::max(mx->x, end.x);
     mx->y = std::max(mx->y, end.y);
   };
-  if (items.geometryPoints)
-    for (const GeometryPointLabel& g : CollectGeometryPointLabels(al)) grow(g.internalStation, g.text, 1.0);
-  if (items.designSpeeds)
-    for (const DesignSpeedLabel& d : CollectDesignSpeedLabels(al, items.metric)) grow(d.internalStation, d.text, -1.0);
+  if (const double h = usable(items.geometryHeight); h > 0.0)
+    for (const GeometryPointLabel& g : CollectGeometryPointLabels(al)) grow(g.internalStation, g.text, 1.0, h);
+  if (const double h = usable(items.speedHeight); h > 0.0)
+    for (const DesignSpeedLabel& d : CollectDesignSpeedLabels(al, items.metric)) grow(d.internalStation, d.text, -1.0, h);
   return true;
 }
 

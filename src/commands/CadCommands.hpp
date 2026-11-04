@@ -1412,6 +1412,7 @@ struct DrawingGeometrySnapshot {
   std::vector<AlignmentStyle>   alignmentStyles;
   std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502: drawing-owned check sets
   std::vector<AlignmentLabelSet> alignmentLabelSets;
+  std::vector<AlignmentLabelStyle> alignmentLabelStyles;  ///< REQ-492.5
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
   std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
@@ -1606,7 +1607,8 @@ struct DrawingDocument {
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
   std::vector<AlignmentStyle>   alignmentStyles;
   std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502: drawing-owned check sets
-  std::vector<AlignmentLabelSet> alignmentLabelSets;        ///< Named alignment styles (REQ-491).
+  std::vector<AlignmentLabelSet> alignmentLabelSets;        ///< Named alignment label sets (REQ-492).
+  std::vector<AlignmentLabelStyle> alignmentLabelStyles;    ///< Named alignment label styles (REQ-492.5).
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
   std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
@@ -4935,6 +4937,7 @@ struct AppCommandState {
   std::vector<AlignmentStyle> alignmentStyles = AlignmentStyles::DefaultAlignmentStyles();
   std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502
   std::vector<AlignmentLabelSet> alignmentLabelSets = AlignmentLabelSets::DefaultAlignmentLabelSets();
+  std::vector<AlignmentLabelStyle> alignmentLabelStyles = AlignmentLabelStyles::DefaultAlignmentLabelStyles();  ///< REQ-492.5
   /// Active text style for new TEXT/MTEXT (the STYLE dropdown). Empty resolves to "Standard".
   std::string activeTextStyleName = "Standard";
   /// Centralized dimension style (issue #99) — single active style used by DIMALIGNED/DIMLINEAR/DIMANGULAR.
@@ -7381,6 +7384,12 @@ float RotateDeltaFromReferenceAndNewSegment(float refX1, float refY1, float refX
 
 
 /// Build the angle-display settings (REQ-021) from the live UNITS state.
+/// The style tables and plot scale an alignment's labels are placed with (REQ-492.5).
+[[nodiscard]] inline AlignmentLabelSets::LabelContext CadAlignmentLabelContext(const AppCommandState& st) {
+  return AlignmentLabelSets::LabelContext{st.alignmentLabelSets, st.alignmentStyles, st.alignmentLabelStyles,
+                                          st.drawingInsUnits, static_cast<double>(st.modelUnitsPerPlottedInch)};
+}
+
 [[nodiscard]] inline AngleDisplaySettings CadAngleDisplaySettings(const AppCommandState& st) {
   return AngleDisplaySettings{static_cast<AngleDisplayType>(st.angleDisplayType), st.angleDisplayPrecision,
                               st.angleDisplayClockwise, st.angleDisplayBaseDeg};
@@ -8097,6 +8106,7 @@ void RunReverseAlignment(AppCommandState& st, const std::string& args, std::vect
 void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentLabelStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-492.5
 void RunAlignmentReport(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunOffsetAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentDetach(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
