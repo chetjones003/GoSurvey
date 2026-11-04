@@ -363,12 +363,16 @@ struct AlignmentStyle {
   double arrowLength = 10.0;
   /// REQ-491 "label visibility": station, equation and station/offset labels draw only when this is on.
   bool labelsVisible = true;
+  /// REQ-502 / D-2026-11-04-b: the design-check set this style applies to its alignments. Empty = none.
+  /// An alignment's own check set overrides it.
+  std::string checkSetName;
 
   bool operator==(const AlignmentStyle& o) const {
     return name == o.name && tangent == o.tangent && curve == o.curve && spiral == o.spiral && ticks == o.ticks &&
            majorTickLength == o.majorTickLength && minorTickLength == o.minorTickLength && tickSide == o.tickSide &&
            markers == o.markers && markerHalfSize == o.markerHalfSize && arrows == o.arrows &&
-           arrowLength == o.arrowLength && labelsVisible == o.labelsVisible;
+           arrowLength == o.arrowLength && labelsVisible == o.labelsVisible &&
+           checkSetName == o.checkSetName;
   }
   bool operator!=(const AlignmentStyle& o) const { return !(*this == o); }
 };

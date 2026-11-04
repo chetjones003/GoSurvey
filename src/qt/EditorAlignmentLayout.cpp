@@ -2,6 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "alignment/AlignmentDesign.hpp"
+#include "AlignmentStyle.hpp"
 #include "util/NumFormat.hpp"
 
 #include <QColor>
@@ -125,7 +126,8 @@ void ShowAlignmentLayoutDialog(QWidget* parent, AppCommandState& state, std::vec
     const std::vector<alignment::ContinuityIssue> issues = a->CheckContinuity();
     // REQ-502: the failed checks, computed once for the table
     std::vector<alignment::DesignFinding> designFindings;
-    if (const alignment::AlignmentCheckSet* checkSet = alignment::FindCheckSet(state.alignmentCheckSets, a->checkSetName))
+    if (const alignment::AlignmentCheckSet* checkSet =
+            alignment::FindCheckSet(state.alignmentCheckSets, AlignmentStyles::EffectiveCheckSetName(state.alignmentStyles, *a)))
       designFindings = alignment::CheckDesign(*a, *checkSet, prec);
     table->setRowCount(static_cast<int>(a->Entities().size()));
     for (size_t i = 0; i < a->Entities().size(); ++i) {

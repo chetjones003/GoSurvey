@@ -30,11 +30,12 @@ struct AlignmentCheckSet {
   double maxA = 0.0;             ///< Largest spiral A parameter.
   double maxSuperelevation = 0.0;  ///< Stub (REQ-502): stored and reported, not checked in this epic.
   double minSightDistance = 0.0;   ///< Stub (REQ-502): stored and reported, not checked in this epic.
+  double minLineLength = 0.0;      ///< Shortest tangent (Line entity) allowed. Decision 2026-11-04 (user).
 
   bool operator==(const AlignmentCheckSet& o) const {
     return name == o.name && kind == o.kind && minTangent == o.minTangent && minSpiralLength == o.minSpiralLength &&
            minA == o.minA && maxA == o.maxA && maxSuperelevation == o.maxSuperelevation &&
-           minSightDistance == o.minSightDistance && radiusTable.size() == o.radiusTable.size() &&
+           minSightDistance == o.minSightDistance && minLineLength == o.minLineLength && radiusTable.size() == o.radiusTable.size() &&
            std::equal(radiusTable.begin(), radiusTable.end(), o.radiusTable.begin(),
                       [](const RadiusRequirement& x, const RadiusRequirement& y) {
                         return x.speed == y.speed && x.minRadius == y.minRadius;

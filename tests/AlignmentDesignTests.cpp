@@ -213,3 +213,72 @@ TEST_CASE("ALIGNMENTLIST warns about design failures and the report shows the st
   REQUIRE(back.alignmentCheckSets.size() == 1);
   CHECK(back.alignmentCheckSets[0] == st.alignmentCheckSets[0]);
 }
+
+TEST_CASE("A style's check set applies unless the alignment has its own (REQ-502 / D-2026-11-04-b)", "[req502][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  MakeRoadWithCurve(st, log);
+  Submit(st, "ALIGNMENTCHECKSET NEW, Rural", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, RADIUS, 40, 400", log);
+  Submit(st, "ALIGNMENTCHECKSET NEW, Lenient", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Lenient, RADIUS, 40, 100", log);
+  Submit(st, "ALIGNMENTSPEED CR1, 0+00, 40", log);
+  Submit(st, "ALIGNMENTSTYLE NEW, Wide", log);
+  Submit(st, "ALIGNMENTSTYLE SET, Wide, CHECKSET, Rural", log);
+  Submit(st, "ALIGNMENTSTYLE ASSIGN, CR1, Wide", log);
+
+  log.clear();
+  Submit(st, "ALIGNMENTCHECK CR1", log);
+  CHECK(LogHas(log, "minimum design radius of 400.00'"));
+
+  // The alignment's own set overrides its style.
+  Submit(st, "ALIGNMENTCRITERIA CR1, Lenient", log);
+  log.clear();
+  Submit(st, "ALIGNMENTCHECK CR1", log);
+  CHECK(LogHas(log, "meets \"Lenient\""));
+
+  // A style can only name a set that exists.
+  log.clear();
+  Submit(st, "ALIGNMENTSTYLE SET, Wide, CHECKSET, Nope", log);
+  CHECK(LogHas(log, "is not valid"));
+}
+
+TEST_CASE("A minimum line length flags short tangents, and zero switches it off (REQ-502 line check)", "[req502][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  MakeRoadWithCurve(st, log);
+  Submit(st, "ALIGNMENTCHECKSET NEW, Rural", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, MINLINE, 150", log);
+  Submit(st, "ALIGNMENTCRITERIA CR1, Rural", log);
+  log.clear();
+  Submit(st, "ALIGNMENTCHECK CR1", log);
+  CHECK(LogHas(log, "Entity 1: Line 100.00' is shorter than the minimum line length of 150.00'."));
+
+  log.clear();
+  Submit(st, "ALIGNMENTLIST CR1", log);
+  CHECK(LogHas(log, "WARNING: design check, entity 1: Line 100.00'"));
+
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, MINLINE, 0", log);
+  log.clear();
+  Submit(st, "ALIGNMENTCHECK CR1", log);
+  CHECK(LogHas(log, "meets \"Rural\""));
+}
+
+TEST_CASE("A style's missing check set is reported and cleared on load (REQ-502)", "[req502][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  MakeRoadWithCurve(st, log);
+  Submit(st, "ALIGNMENTCHECKSET NEW, Rural", log);
+  Submit(st, "ALIGNMENTSTYLE NEW, Wide", log);
+  Submit(st, "ALIGNMENTSTYLE SET, Wide, CHECKSET, Rural", log);
+  REQUIRE(st.alignmentStyles.back().checkSetName == "Rural");
+  st.alignmentCheckSets.clear();  // the set goes, the style's reference stays
+  const std::string json = SerializeGoSurveyJson(st);
+  AppCommandState back = Drawing();
+  std::vector<std::string> loadLog;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, json, loadLog));
+  CHECK(LogHas(loadLog, "style \"Wide\" references missing check set \"Rural\""));
+  for (const AlignmentStyle& s : back.alignmentStyles) {
+    if (s.name == "Wide") CHECK(s.checkSetName.empty());
+  }
+}

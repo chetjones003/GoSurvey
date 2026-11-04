@@ -16599,6 +16599,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
      radius of 400'.` and still saves.
   2. A station with two speeds uses the higher for validation.
   3. A Miscellaneous alignment refuses a road criteria file; a Rail alignment refuses a road file.
+  4. **Decision D-2026-11-04-a:** numbers in the warning are written at the drawing's display precision
+     (REQ-494), so R=250 with precision 2 reads `250.00'`. Acceptance 1 is shorthand for that text.
+  5. **Line check (user decision, 2026-11-04):** a set may hold a minimum line length. Every tangent (Line
+     entity) shorter than it produces a finding; zero switches the check off.
+  6. **Decision D-2026-11-04-b:** an alignment's effective criteria are its own check set when it has one,
+     otherwise the check set of its style (REQ-491). A criteria set on the alignment is local and overrides
+     the style, as REQ-491 requires for per-object overrides.
 - Owner-layer: Domain.
 - Status: accepted (2026-11-02, user approval)
 

@@ -92,6 +92,10 @@ std::vector<DesignFinding> CheckDesign(const Alignment& a, const AlignmentCheckS
         }
       }
     } else if (e.kind == EntityKind::Line) {
+      if (set.minLineLength > 0.0 && e.length < set.minLineLength - 1e-9) {
+        out.push_back({number, "Line " + Lin(linearPrecision, e.length) + " is shorter than the minimum line length of " +
+                                   Lin(linearPrecision, set.minLineLength) + "."});
+      }
       // A tangent between two curves is the one the tangent-length check governs (the tangent intersection of REQ-502).
       const bool betweenCurves = i > 0 && i + 1 < n && a.Entities()[static_cast<size_t>(i) - 1].kind == EntityKind::Arc &&
                                  a.Entities()[static_cast<size_t>(i) + 1].kind == EntityKind::Arc;

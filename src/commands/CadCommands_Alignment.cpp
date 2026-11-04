@@ -290,6 +290,7 @@ void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<
   }
   for (const alignment::Alignment& a : st.alignments) {
     if (!name.empty() && Lower(a.name) != Lower(name)) continue;
+    const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.alignmentStyles, a);
     log.push_back("ALIGNMENT: " + a.name + "  [" + TypeName(a.type) + ", layer " + a.layer + ", style " + a.style + "]");
     if (!a.description.empty()) log.push_back("  Description:   " + a.description);
     if (a.Empty()) {
@@ -331,8 +332,8 @@ void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<
       }
       log.push_back(row);
     }
-    if (!a.checkSetName.empty()) {  // REQ-502: design warnings in the list, as the spec asks
-      if (const alignment::AlignmentCheckSet* checkSet = alignment::FindCheckSet(st.alignmentCheckSets, a.checkSetName)) {
+    if (!criteriaName.empty()) {  // REQ-502: design warnings in the list, as the spec asks
+      if (const alignment::AlignmentCheckSet* checkSet = alignment::FindCheckSet(st.alignmentCheckSets, criteriaName)) {
         for (const alignment::DesignFinding& fd : alignment::CheckDesign(a, *checkSet, st.displayLinearPrecision))
           log.push_back("  WARNING: design check, entity " + std::to_string(fd.entity) + ": " + fd.text);
       }
@@ -1398,7 +1399,7 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
         "ALIGNMENTSTYLE - usage: ALIGNMENTSTYLE LIST | NEW <style> | DELETE <style> | ASSIGN <alignment>, <style> | "
         "SHOW|HIDE <style>, <tangent|curve|spiral> | COLOR <style>, <tangent|curve|spiral>, <color> | "
         "SET <style>, TICKS|MARKERS|ARROWS|LABELS ON|OFF | SET <style>, TICKSIDE BOTH|LEFT|RIGHT | "
-        "SET <style>, MAJORTICK|MINORTICK|MARKERSIZE|ARROWLENGTH <n>.");
+        "SET <style>, MAJORTICK|MINORTICK|MARKERSIZE|ARROWLENGTH <n> | SET <style>, CHECKSET <set>|NONE.");
   };
   const std::string trimmed = Trim(args);
   if (trimmed.empty()) {
@@ -1484,7 +1485,16 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
       *target = value == "on";
       return true;
     };
-    if (item == "ticks") ok = setOnOff(&edited.ticks.visible);
+    if (item == "checkset") {  // REQ-502 / D-2026-11-04-b: the design-check set the style applies by default
+      const std::string want = Trim(f[3]);
+      if (Lower(want) == "none") {
+        edited.checkSetName.clear();
+        ok = true;
+      } else if (const alignment::AlignmentCheckSet* set = alignment::FindCheckSet(st.alignmentCheckSets, want)) {
+        edited.checkSetName = set->name;
+        ok = true;
+      }
+    } else if (item == "ticks") ok = setOnOff(&edited.ticks.visible);
     else if (item == "markers") ok = setOnOff(&edited.markers.visible);
     else if (item == "arrows") ok = setOnOff(&edited.arrows.visible);
     else if (item == "labels") ok = setOnOff(&edited.labelsVisible);
@@ -1750,8 +1760,9 @@ namespace {
 // REQ-502: the report names the alignment's own check set and its findings.
 alignment::AlignmentReportFormat ReportFormatFor(const AppCommandState& st, const alignment::Alignment& a,
                                                  alignment::AlignmentReportFormat fmt) {
+  const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.alignmentStyles, a);
   for (const alignment::AlignmentCheckSet& set : st.alignmentCheckSets) {
-    if (!a.checkSetName.empty() && set.name == a.checkSetName) fmt.checkSet = &set;
+    if (!criteriaName.empty() && set.name == criteriaName) fmt.checkSet = &set;
   }
   return fmt;
 }
@@ -2446,12 +2457,12 @@ int FindCheckSetIndex(const AppCommandState& st, const std::string& name) {
 // ALIGNMENTCHECKSET DELETE, <name>
 // ALIGNMENTCHECKSET LIST
 // ALIGNMENTCHECKSET SET, <name>, RADIUS, <speed>, <minRadius>   (minRadius 0 removes the row for that speed)
-// ALIGNMENTCHECKSET SET, <name>, MINTANGENT|MINSPIRAL|MINA|MAXA|SUPERELEVATION|SIGHT, <value>   (0 switches the check off)
+// ALIGNMENTCHECKSET SET, <name>, MINTANGENT|MINSPIRAL|MINA|MAXA|MINLINE|SUPERELEVATION|SIGHT, <value>   (0 switches the check off)
 void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
   const char* usage =
       "ALIGNMENTCHECKSET - usage: ALIGNMENTCHECKSET NEW, <name>[, ROAD|RAIL] | DELETE, <name> | LIST | "
-      "SET, <name>, RADIUS, <speed>, <minRadius> | SET, <name>, MINTANGENT|MINSPIRAL|MINA|MAXA|SUPERELEVATION|SIGHT, <value>.";
+      "SET, <name>, RADIUS, <speed>, <minRadius> | SET, <name>, MINTANGENT|MINSPIRAL|MINA|MAXA|MINLINE|SUPERELEVATION|SIGHT, <value>.";
   if (f.empty()) {
     log.push_back(usage);
     return;
@@ -2513,6 +2524,9 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
     PushUndoSnapshot(st, "Delete check set");
     st.alignmentCheckSets.erase(st.alignmentCheckSets.begin() + idx);
     int cleared = 0;
+    for (AlignmentStyle& style : st.alignmentStyles) {
+      if (Lower(style.checkSetName) == Lower(name)) style.checkSetName.clear();
+    }
     for (alignment::Alignment& a : st.alignments) {
       if (Lower(a.checkSetName) == Lower(name)) {
         a.checkSetName.clear();
@@ -2549,7 +2563,7 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
       std::sort(table.begin(), table.end(),
                 [](const alignment::RadiusRequirement& x, const alignment::RadiusRequirement& y) { return x.speed < y.speed; });
     } else if (what == "mintangent" || what == "minspiral" || what == "mina" || what == "maxa" ||
-               what == "superelevation" || what == "sight") {
+               what == "minline" || what == "superelevation" || what == "sight") {
       double value = 0.0;
       if (f.size() != 4 || !ParseNum(f[3], &value) || value < 0.0) {
         log.push_back("ALIGNMENTCHECKSET - " + what + " takes one value, zero or more.");
@@ -2559,6 +2573,7 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
       else if (what == "minspiral") edited.minSpiralLength = value;
       else if (what == "mina") edited.minA = value;
       else if (what == "maxa") edited.maxA = value;
+      else if (what == "minline") edited.minLineLength = value;
       else if (what == "superelevation") edited.maxSuperelevation = value;  // REQ-502 stub
       else edited.minSightDistance = value;  // REQ-502 stub
     } else {
@@ -2686,13 +2701,14 @@ void RunAlignmentCheck(AppCommandState& st, const std::string& args, std::vector
   }
   const alignment::Alignment* a = Resolve(st, "ALIGNMENTCHECK", f[0], log);
   if (a == nullptr) return;
-  if (a->checkSetName.empty()) {
+  const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.alignmentStyles, *a);
+  if (criteriaName.empty()) {
     log.push_back("ALIGNMENTCHECK - \"" + a->name + "\" has no design criteria. Apply a set with ALIGNMENTCRITERIA.");
     return;
   }
-  const int idx = FindCheckSetIndex(st, a->checkSetName);
+  const int idx = FindCheckSetIndex(st, criteriaName);
   if (idx < 0) {
-    log.push_back("ALIGNMENTCHECK - the check set \"" + a->checkSetName + "\" is missing.");
+    log.push_back("ALIGNMENTCHECK - the check set \"" + criteriaName + "\" is missing.");
     return;
   }
   const alignment::AlignmentCheckSet& set = st.alignmentCheckSets[static_cast<size_t>(idx)];

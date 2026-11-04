@@ -1297,6 +1297,7 @@ json BuildRoot(const AppCommandState& st) {
         o["arrows"] = componentToJson(s.arrows);
         o["arrowLength"] = s.arrowLength;
         o["labelsVisible"] = s.labelsVisible;
+        if (!s.checkSetName.empty()) o["checkSet"] = s.checkSetName;  // REQ-502 / D-2026-11-04-b
         styles.push_back(std::move(o));
       }
       doc["alignmentStyles"] = std::move(styles);
@@ -1336,6 +1337,7 @@ json BuildRoot(const AppCommandState& st) {
         o["minA"] = s.minA;
         o["maxA"] = s.maxA;
         o["maxSuperelevation"] = s.maxSuperelevation;  // REQ-502 stub
+        o["minLineLength"] = s.minLineLength;
         o["minSightDistance"] = s.minSightDistance;    // REQ-502 stub
         sets.push_back(std::move(o));
       }
@@ -3450,6 +3452,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (o.contains("arrows")) componentFromJson(o["arrows"], &s.arrows);
       if (o.contains("arrowLength") && o["arrowLength"].is_number()) s.arrowLength = o["arrowLength"].get<double>();
       if (o.contains("labelsVisible") && o["labelsVisible"].is_boolean()) s.labelsVisible = o["labelsVisible"].get<bool>();
+      if (o.contains("checkSet") && o["checkSet"].is_string()) s.checkSetName = o["checkSet"].get<std::string>();
       st.alignmentStyles.push_back(std::move(s));
     }
   }
@@ -3499,6 +3502,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (o.contains("maxA") && o["maxA"].is_number()) s.maxA = o["maxA"].get<double>();
       if (o.contains("maxSuperelevation") && o["maxSuperelevation"].is_number())
         s.maxSuperelevation = o["maxSuperelevation"].get<double>();
+      if (o.contains("minLineLength") && o["minLineLength"].is_number())
+        s.minLineLength = o["minLineLength"].get<double>();
       if (o.contains("minSightDistance") && o["minSightDistance"].is_number())
         s.minSightDistance = o["minSightDistance"].get<double>();
       st.alignmentCheckSets.push_back(std::move(s));
@@ -4252,6 +4257,15 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     log.push_back("ALIGNMENT — alignment \"" + a.name + "\" references missing label set \"" + a.labelSet +
                   "\"; using Standard.");
     a.labelSet = AlignmentLabelSets::kStandardName;
+  }
+  for (AlignmentStyle& s : st.alignmentStyles) {  // REQ-502: a style's check set must exist
+    if (s.checkSetName.empty()) continue;
+    bool found = false;
+    for (const alignment::AlignmentCheckSet& cs : st.alignmentCheckSets) found = found || cs.name == s.checkSetName;
+    if (found) continue;
+    log.push_back("ALIGNMENT — style \"" + s.name + "\" references missing check set \"" + s.checkSetName +
+                  "\"; no criteria applied.");
+    s.checkSetName.clear();
   }
   for (alignment::Alignment& a : st.alignments) {  // REQ-502
     if (a.checkSetName.empty()) continue;

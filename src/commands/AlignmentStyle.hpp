@@ -50,6 +50,13 @@ inline const AlignmentStyle* Resolve(const std::vector<AlignmentStyle>& styles, 
   return styles.empty() ? nullptr : &styles.front();
 }
 
+// REQ-502 / D-2026-11-04-b: the check set an alignment is checked against: its own, else its style's, else none.
+inline std::string EffectiveCheckSetName(const std::vector<AlignmentStyle>& styles, const alignment::Alignment& a) {
+  if (!a.checkSetName.empty()) return a.checkSetName;
+  if (const AlignmentStyle* s = Resolve(styles, a.style)) return s->checkSetName;
+  return {};
+}
+
 inline int CountAlignmentsResolvingTo(const std::vector<alignment::Alignment>& alignments,
                                       const std::vector<AlignmentStyle>& styles, const std::string& styleName) {
   int n = 0;

@@ -894,7 +894,8 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
           painter.drawLine(project(tip.x, tip.y, 0.0), project(tip.x + 0.25 * L * bx, tip.y + 0.25 * L * by, 0.0));
         }
       }
-      if (const alignment::AlignmentCheckSet* checkSet = alignment::FindCheckSet(state.alignmentCheckSets, al.checkSetName)) {
+      if (const alignment::AlignmentCheckSet* checkSet =
+            alignment::FindCheckSet(state.alignmentCheckSets, AlignmentStyles::EffectiveCheckSetName(state.alignmentStyles, al))) {
         // REQ-502: a red flag stands on each entity that fails its design check, whatever the style shows.
         painter.setPen(QPen(QColor("#c0392b"), 1.5));
         painter.setBrush(QColor("#c0392b"));

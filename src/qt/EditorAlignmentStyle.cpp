@@ -1,10 +1,12 @@
 #include "EditorAlignmentStyle.hpp"
 
 #include "AlignmentStyle.hpp"
+#include "alignment/AlignmentDesign.hpp"
 #include "CadCommands.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QSignalBlocker>
 #include <QDialog>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
@@ -79,13 +81,15 @@ void ShowAlignmentStyleDialog(QWidget* parent, AppCommandState& state, std::vect
   infoForm->addRow(new QLabel("Changes apply to every alignment that uses this style. Per-alignment overrides stay local.", info));
   tabs->addTab(info, "Information");
 
-  // Design: placeholder until REQ-502.
+  // Design: the check set this style applies to its alignments by default (REQ-502 / D-2026-11-04-b).
   auto* design = new QWidget(&dialog);
-  auto* designLayout = new QVBoxLayout(design);
-  auto* designNote = new QLabel("Design checks are set with ALIGNMENTCHECKSET and ALIGNMENTCRITERIA. This tab does not edit them yet.", design);
+  auto* designForm = new QFormLayout(design);
+  auto* checkSet = new QComboBox(design);
+  checkSet->setObjectName("alignmentStyleCheckSet");
+  designForm->addRow("Design check set", checkSet);
+  auto* designNote = new QLabel("Alignments that use this style are checked against this set, unless they have their own (ALIGNMENTCRITERIA). Sets are made with ALIGNMENTCHECKSET.", design);
   designNote->setWordWrap(true);
-  designLayout->addWidget(designNote);
-  designLayout->addStretch(1);
+  designForm->addRow(designNote);
   tabs->addTab(design, "Design");
 
   // Markers: geometry point markers, station ticks.
@@ -203,6 +207,16 @@ void ShowAlignmentStyleDialog(QWidget* parent, AppCommandState& state, std::vect
     const AlignmentStyle* s = current();
     const bool any = s != nullptr;
     for (QWidget* w : {static_cast<QWidget*>(markers), static_cast<QWidget*>(display)}) w->setEnabled(any);
+    {  // REQ-502: the Design tab lists the drawing's check sets and shows this style's choice
+      QSignalBlocker block(checkSet);
+      checkSet->clear();
+      checkSet->addItem("(none)");
+      for (const alignment::AlignmentCheckSet& cs : state.alignmentCheckSets)
+        checkSet->addItem(QString::fromStdString(cs.name));
+      const int at = s != nullptr ? checkSet->findText(QString::fromStdString(s->checkSetName)) : -1;
+      checkSet->setCurrentIndex(at > 0 ? at : 0);
+      checkSet->setEnabled(any);
+    }
     if (!any) {
       infoName->setText("(no style)");
       infoUsers->setText("0");
@@ -270,6 +284,9 @@ void ShowAlignmentStyleDialog(QWidget* parent, AppCommandState& state, std::vect
   QObject::connect(majorTick, &QDoubleSpinBox::editingFinished, &dialog, [=]() { setItem("MAJORTICK", QString::number(majorTick->value(), 'f', 4)); });
   QObject::connect(minorTick, &QDoubleSpinBox::editingFinished, &dialog, [=]() { setItem("MINORTICK", QString::number(minorTick->value(), 'f', 4)); });
   QObject::connect(arrowLength, &QDoubleSpinBox::editingFinished, &dialog, [=]() { setItem("ARROWLENGTH", QString::number(arrowLength->value(), 'f', 4)); });
+  QObject::connect(checkSet, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [=](int ix) {
+    setItem("CHECKSET", ix <= 0 ? QStringLiteral("NONE") : checkSet->currentText());
+  });
   QObject::connect(tickSide, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [=](int ix) {
     setItem("TICKSIDE", ix == 0 ? "BOTH" : ix == 1 ? "LEFT" : "RIGHT");
   });

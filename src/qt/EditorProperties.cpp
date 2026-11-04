@@ -9,6 +9,7 @@
 #include <QApplication>
 #include <QPainter>
 
+#include "AlignmentStyle.hpp"
 #include "CadColor.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadLinetype.hpp"
@@ -647,7 +648,8 @@ void EditorWindow::RefreshProperties() {
         }
       }
       readOnly(rows, "Parent alignment", parentName, "propAlignmentParent");
-      readOnly(rows, "Design criteria", al.checkSetName.empty() ? QStringLiteral("none") : Text(al.checkSetName),
+      const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.alignmentStyles, al);
+      readOnly(rows, "Design criteria", criteriaName.empty() ? QStringLiteral("none") : Text(criteriaName),
                "propAlignmentDesignCriteria");
       if (!al.Empty()) {
         const double ox = CadCoord::WorldOriginX(st), oy = CadCoord::WorldOriginY(st);

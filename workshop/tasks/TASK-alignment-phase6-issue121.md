@@ -56,23 +56,24 @@
 - Build: `build.bat` Release exit 0 (Qt app and test binaries built, including the layout and viewport changes).
 - Full suite: see the completion record below.
 
-## 6. Open items and gaps (not done in this increment)
-1. **Style design-check set (REQ-491).** The spec says a style defines "design (design-check set, REQ-502)". Styles have no
-   check-set field yet; the style editor's Design tab is still a placeholder that points at the commands. Needs a model field,
-   persistence and a dialog control.
-2. **Layout Constraint column (REQ-485).** The spec says the Constraint column shows the value required by the criteria. The
-   column still shows the tangency constraint only.
-3. **Per-entity meets/violates marking in the report (REQ-494).** The report lists findings but does not mark each entity as
-   meeting or violating. CSV is unchanged (adding a column would change the 18-column contract).
-4. **Line check type.** The spec lists a Line check (API `Line` in `[M]`), but its acceptance does not define one. Not built;
-   needs a spec clarification before code.
-5. **Civil 3D visual comparison (CLAUDE.md §3.6).** The flag and the layout column are visible Qt surfaces. The three-reviewer
-   panel was not run; the result is **not** recorded as a pass.
-6. **Flag size.** Fixed at 4 drawing units; it does not scale with the style's marker size. Chosen for simplicity; confirm visually.
-7. **Acceptance wording.** REQ-502 acceptance 1 writes the warning as `250'` and `400'`. The implementation writes two decimals
-   (`250.00'`) because the drawing's display precision governs the report, following REQ-494. Confirm which is intended before
-   the acceptance text is treated as literal.
+## 6. Open items and gaps
 
+Closed in the 2026-11-04 follow-up (decisions D-2026-11-04-a/b, user choices for the line check):
+- Style design-check set (REQ-491): `AlignmentStyle.checkSetName`, `ALIGNMENTSTYLE SET, <style>, CHECKSET, <set>|NONE`,
+  and the Design tab combo (`alignmentStyleCheckSet`). Effective criteria = the alignment's own set, else its style's
+  (D-2026-11-04-b). Deleting a set clears style references; a missing style reference is reported and cleared on load.
+- Line check: `minLineLength` on the check set, `ALIGNMENTCHECKSET SET, <name>, MINLINE, <n>`; every tangent shorter than
+  it is a finding. Zero switches it off.
+- Acceptance wording: warnings print at display precision (D-2026-11-04-a).
+
+Still open:
+1. **Layout Constraint column (REQ-485).** The spec says the Constraint column shows the value required by the criteria. The
+   column still shows the tangency constraint only.
+2. **Per-entity meets/violates marking in the report (REQ-494).** The report lists findings but does not mark each entity as
+   meeting or violating. CSV is unchanged (adding a column would change the 18-column contract).
+3. **Civil 3D visual comparison (CLAUDE.md §3.6).** The flag, the layout column and the Design tab combo are visible Qt surfaces.
+   The three-reviewer panel was not run; the result is **not** recorded as a pass.
+4. **Flag size.** Fixed at 4 drawing units; it does not scale with the style's marker size.
 ## 7. Completion record
 - Requirements: REQ-502 statement items, except §6 items 1–4.
 - Tests: `[req502]` and `[alignment]` pass (Release). Full ctest: pending the run recorded below.
