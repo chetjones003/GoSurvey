@@ -78,4 +78,5 @@ vendored-library change.
 ## 7. Product documentation review (REQ-453)
 - `README.md`, `PRIVACY.md`: reviewed; no change needed (no new data or feature summary).
 - `resources/wiki/Alignments.md`: what a saved DWG contains, and what happens after AutoCAD saves it.
-- Public wiki `Alignments.md` and gosurveycad.com `docs/alignments.html`: the same paragraph.
+- Public wiki `Alignments.md` (commit ee1978c) and gosurveycad.com `docs/alignments.html` (site commit ec41979): the
+  same paragraph.
