@@ -159,6 +159,15 @@ enum class AlignmentTableKind : unsigned char { Line = 0, Curve = 1, Segment = 2
 
 /// A drawing TABLE made from this alignment (REQ-493). `tableId` is the table's stable entity id; a dynamic table is
 /// rebuilt whenever the alignment changes (REQ-493.2), a static one is a frozen snapshot.
+/// A station/offset label (REQ-492.4). A *fixed* label keeps its plan point and reports whatever station and offset that
+/// point now has on the alignment; a *relative* label keeps its station and offset and moves with the alignment.
+struct StationOffsetLabel {
+  bool fixed = false;
+  double internalStation = 0.0;  ///< Relative labels: the internal station they sit at.
+  double offset = 0.0;           ///< Relative labels: the offset they sit at (right positive).
+  Point2 fixedPoint;             ///< Fixed labels: the plan point they stay on, drawing-local.
+};
+
 struct AlignmentTableLink {
   std::uint64_t tableId = 0;
   AlignmentTableKind kind = AlignmentTableKind::Line;
@@ -230,6 +239,9 @@ class Alignment {
   // --- REQ-492.3 / REQ-493.3: segments must be labelled before a line or curve table can be made ---
   bool segmentLabels = false;
   std::vector<AlignmentTableLink> tables;
+
+  // --- REQ-492.4: station/offset labels, owned by the alignment and removed with it (REQ-492.6) ---
+  std::vector<StationOffsetLabel> stationLabels;
 
   /// Reverses direction and stationing of a continuous alignment (REQ-487.2). The physical geometry
   /// is unchanged. Refuses (returns false) when a C0 gap exists. Reversing twice restores it.

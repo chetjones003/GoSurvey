@@ -16,6 +16,7 @@
 #include "alignment/AlignmentReport.hpp"
 #include "alignment/AlignmentGround.hpp"
 #include "alignment/AlignmentTables.hpp"
+#include "alignment/AlignmentLabels.hpp"
 #include "util/cadtable.hpp"
 #include "SpreadsheetIo.hpp"
 #include "WinFileDialogs.hpp"
@@ -752,8 +753,14 @@ void RefreshDynamicTables(AppCommandState& st, std::vector<std::string>& log) {
 }  // namespace
 
 // ALIGNMENTLABEL <name>, SEGMENTS | CLEAR   (REQ-492.3: segment labels; REQ-493.3: a line or curve table needs them)
+void RunAlignmentStationLabel(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+
 void RunAlignmentLabel(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
+  if (f.size() >= 2 && Lower(f[1]) == "stationlabel") {  // REQ-492.4
+    RunAlignmentStationLabel(st, args, log);
+    return;
+  }
   if (f.size() != 2) {
     log.push_back("ALIGNMENTLABEL - usage: ALIGNMENTLABEL <name>, SEGMENTS | CLEAR.");
     return;
@@ -1618,13 +1625,25 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
       return;
     }
     const std::string which = Lower(f[2]);
+    const bool show = verb == "show";
+    // REQ-492.2 / Civil 3D: minor stations are placed from major stations, so the two cannot be split apart.
+    if (which == "major" && !show && s->minorStationsOn) {
+      log.push_back("ALIGNMENTLABELSET - refused: \"" + s->name + "\" has minor stations shown, and they need the major stations. Hide MINOR first.");
+      return;
+    }
+    if (which == "minor" && show && !s->majorStationsOn) {
+      log.push_back("ALIGNMENTLABELSET - refused: minor stations need the major stations. Show MAJOR first.");
+      return;
+    }
     PushUndoSnapshot(st, "Alignment label set");
     if (which == "major")
-      s->majorStationsOn = (verb == "show");
+      s->majorStationsOn = show;
     else if (which == "minor")
-      s->minorStationsOn = (verb == "show");
+      s->minorStationsOn = show;
+    else if (which == "equations" || which == "equation")  // REQ-492.1 Station Equations item
+      s->equationsOn = show;
     else {
-      log.push_back("ALIGNMENTLABELSET - component must be MAJOR or MINOR, not \"" + f[2] + "\".");
+      log.push_back("ALIGNMENTLABELSET - component must be MAJOR, MINOR or EQUATIONS, not \"" + f[2] + "\".");
       return;
     }
     BumpCadGpuCache(st);
@@ -1819,4 +1838,57 @@ void RunAlignmentSurface(AppCommandState& st, const std::string& args, std::vect
       log.push_back(head + "  no ground: the point is off the surface" + unit + ".");
     }
   }
+}
+
+// ALIGNMENTLABEL <name>, STATIONLABEL, FIXED, <x>, <y>        a point that stays put (REQ-492.4)
+//                  <name>, STATIONLABEL, RELATIVE, <station>, <offset>   a station/offset that moves with the alignment
+// The new label's text is reported straight away. Labels belong to the alignment: deleting it removes them (REQ-492.6).
+void RunAlignmentStationLabel(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  const char* usage = "ALIGNMENTLABEL - usage: ALIGNMENTLABEL <name>, STATIONLABEL, FIXED, <x>, <y> | <name>, STATIONLABEL, RELATIVE, <station>, <offset>.";
+  if (f.size() != 5) {
+    log.push_back(usage);
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTLABEL", f[0], log);
+  if (a == nullptr) return;
+  if (a->Empty()) {
+    log.push_back("ALIGNMENTLABEL - \"" + a->name + "\" has no geometry to label.");
+    return;
+  }
+  alignment::StationOffsetLabel label;
+  const std::string mode = Lower(f[2]);
+  if (mode == "fixed") {
+    double x = 0.0, y = 0.0;
+    if (!ParseNum(f[3], &x) || !ParseNum(f[4], &y)) {
+      log.push_back("ALIGNMENTLABEL - the point must be two numbers.");
+      return;
+    }
+    label.fixed = true;
+    double lx = 0.0, ly = 0.0;
+    CadCoord::LocalFromWorld(st, x, y, &lx, &ly);
+    label.fixedPoint = {lx, ly};
+  } else if (mode == "relative") {
+    double station = 0.0, offset = 0.0;
+    if (!alignment::ParseStation(f[3], &station) || !ParseNum(f[4], &offset)) {
+      log.push_back("ALIGNMENTLABEL - the station must be a station (12+45.32) and the offset a number.");
+      return;
+    }
+    const std::vector<double> raws = a->RawStationsForDisplayed(station);
+    if (raws.empty()) {
+      log.push_back("ALIGNMENTLABEL - station " + alignment::FormatStation(station) + " is outside \"" + a->name + "\".");
+      return;
+    }
+    label.internalStation = raws.front();  // a station that occurs twice (REQ-483.3) takes the first place
+    label.offset = offset;
+  } else {
+    log.push_back(usage);
+    return;
+  }
+  PushUndoSnapshot(st, "Add alignment station label");
+  a = Resolve(st, "ALIGNMENTLABEL", f[0], log);
+  a->stationLabels.push_back(label);
+  const alignment::StationOffsetLabelPlacement p = alignment::PlaceStationOffsetLabel(*a, label, st.displayLinearPrecision);
+  log.push_back("ALIGNMENTLABEL - " + std::string(label.fixed ? "fixed" : "relative") + " station label on \"" + a->name + "\": " + p.text +
+                (p.onAlignment ? "" : " (off the alignment)") + ".");
 }

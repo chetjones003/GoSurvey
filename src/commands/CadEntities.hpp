@@ -364,10 +364,11 @@ struct AlignmentLabelSet {
   bool minorStationsOn = true;
   double majorInterval = 100.0;
   double minorInterval = 20.0;
+  bool equationsOn = true;  ///< REQ-492.1 Station Equations item: an equation label at each equation.
 
   bool operator==(const AlignmentLabelSet& o) const {
     return name == o.name && majorStationsOn == o.majorStationsOn && minorStationsOn == o.minorStationsOn &&
-           majorInterval == o.majorInterval && minorInterval == o.minorInterval;
+           majorInterval == o.majorInterval && minorInterval == o.minorInterval && equationsOn == o.equationsOn;
   }
   bool operator!=(const AlignmentLabelSet& o) const { return !(*this == o); }
 };

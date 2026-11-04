@@ -1303,6 +1303,7 @@ json BuildRoot(const AppCommandState& st) {
         o["name"] = s.name;
         o["majorStationsOn"] = s.majorStationsOn;
         o["minorStationsOn"] = s.minorStationsOn;
+        o["equationsOn"] = s.equationsOn;  // REQ-492.1
         o["majorInterval"] = s.majorInterval;
         o["minorInterval"] = s.minorInterval;
         sets.push_back(std::move(o));
@@ -2212,6 +2213,13 @@ json BuildRoot(const AppCommandState& st) {
         o["offsetDistance"] = a.offsetDistance;
       }
       if (a.segmentLabels) o["segmentLabels"] = true;  // REQ-492.3 / REQ-493.3
+      if (!a.stationLabels.empty()) {  // REQ-492.4: station/offset labels, owned by the alignment
+        json labels = json::array();
+        for (const alignment::StationOffsetLabel& l : a.stationLabels)
+          labels.push_back({{"fixed", l.fixed}, {"station", l.internalStation}, {"offset", l.offset},
+                            {"x", l.fixedPoint.x}, {"y", l.fixedPoint.y}});
+        o["stationLabels"] = std::move(labels);
+      }
       if (!a.tables.empty()) {  // REQ-493: the table links, so dynamic tables keep following their alignment
         json links = json::array();
         for (const alignment::AlignmentTableLink& t : a.tables)
@@ -3394,6 +3402,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (!o.is_object() || !o.contains("name") || !o["name"].is_string()) continue;
       AlignmentLabelSet s;
       s.name = o["name"].get<std::string>();
+      if (o.contains("equationsOn") && o["equationsOn"].is_boolean())
+        s.equationsOn = o["equationsOn"].get<bool>();
       if (o.contains("majorStationsOn") && o["majorStationsOn"].is_boolean())
         s.majorStationsOn = o["majorStationsOn"].get<bool>();
       if (o.contains("minorStationsOn") && o["minorStationsOn"].is_boolean())
@@ -4056,6 +4066,17 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         if (cr >= 0 && cr <= 2) a.continuityRequirement = static_cast<alignment::ContinuityRequirement>(cr);
       }
       if (el.contains("segmentLabels") && el["segmentLabels"].is_boolean()) a.segmentLabels = el["segmentLabels"].get<bool>();
+      if (el.contains("stationLabels") && el["stationLabels"].is_array()) {
+        for (const auto& l : el["stationLabels"]) {
+          alignment::StationOffsetLabel sl;
+          if (l.contains("fixed") && l["fixed"].is_boolean()) sl.fixed = l["fixed"].get<bool>();
+          if (l.contains("station") && l["station"].is_number()) sl.internalStation = l["station"].get<double>();
+          if (l.contains("offset") && l["offset"].is_number()) sl.offset = l["offset"].get<double>();
+          if (l.contains("x") && l["x"].is_number()) sl.fixedPoint.x = l["x"].get<double>();
+          if (l.contains("y") && l["y"].is_number()) sl.fixedPoint.y = l["y"].get<double>();
+          a.stationLabels.push_back(sl);
+        }
+      }
       if (el.contains("tables") && el["tables"].is_array()) {
         for (const auto& t : el["tables"]) {
           alignment::AlignmentTableLink link;

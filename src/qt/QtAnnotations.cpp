@@ -889,6 +889,21 @@ void DrawQtTransformAnnotationPreviews(QPainter& painter, const AppCommandState&
         const std::string text = alignment::FormatStation(tick.displayedStation);
         painter.drawText(project(lx, ly, 0.0), QString::fromStdString(text));
       }
+      // REQ-492.1 / .2: an equation label at each station equation, showing the back and ahead displayed values.
+      if (ls->equationsOn) {
+        for (const alignment::EquationLabel& eq : alignment::CollectEquationLabels(al)) {
+          const alignment::Point2 p = al.GetPointAtStation(eq.rawStation);
+          const double az = al.GetBearingAtStation(eq.rawStation);
+          const std::string text = "EQ " + alignment::FormatStation(eq.backDisplayed) + " = " + alignment::FormatStation(eq.aheadDisplayed);
+          painter.drawText(project(p.x + textOffset * std::cos(az), p.y - textOffset * std::sin(az), 0.0), QString::fromStdString(text));
+        }
+      }
+      // REQ-492.4: station/offset labels, fixed or relative, drawn where they resolve on the current geometry.
+      for (const alignment::StationOffsetLabel& sl : al.stationLabels) {
+        const alignment::StationOffsetLabelPlacement placed = alignment::PlaceStationOffsetLabel(al, sl, state.displayLinearPrecision);
+        if (!placed.onAlignment) continue;
+        painter.drawText(project(placed.point.x, placed.point.y, 0.0), QString::fromStdString(placed.text));
+      }
     }
   }
   painter.restore();

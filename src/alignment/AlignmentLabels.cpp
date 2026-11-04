@@ -1,6 +1,9 @@
 #include "AlignmentLabels.hpp"
 
+#include "util/NumFormat.hpp"
+
 #include <cmath>
+#include <string>
 
 namespace alignment {
 
@@ -36,6 +39,48 @@ std::vector<StationTickLabel> CollectMajorMinorStationTicks(const Alignment& al,
     out.push_back(StationTickLabel{raws.front(), displayed, isMajor});
   }
   return out;
+}
+
+}  // namespace alignment
+
+namespace alignment {
+
+std::vector<EquationLabel> CollectEquationLabels(const Alignment& al) {
+  std::vector<EquationLabel> out;
+  for (const StationEquation& q : al.equations) {
+    EquationLabel e;
+    e.rawStation = q.rawBack;
+    e.backDisplayed = al.DisplayedStation(q.rawBack, false);
+    e.aheadDisplayed = al.DisplayedStation(q.rawBack, true);
+    e.increasing = q.increasing;
+    out.push_back(e);
+  }
+  return out;
+}
+
+StationOffsetLabelPlacement PlaceStationOffsetLabel(const Alignment& al, const StationOffsetLabel& label,
+                                                    int linearPrecision) {
+  StationOffsetLabelPlacement r;
+  if (al.Empty()) {
+    r.onAlignment = false;
+    return r;
+  }
+  if (label.fixed) {
+    // The stored point stays put; what it reads as on the alignment now is what changes (REQ-492.4).
+    const StationOffset so = al.GetStationOffset(label.fixedPoint.x, label.fixedPoint.y);
+    r.point = label.fixedPoint;
+    r.internalStation = so.internalStation;
+    r.offset = so.offset;
+    r.onAlignment = !so.outOfRange;
+  } else {
+    // The stored station and offset stay; the plan point follows the geometry (REQ-492.4).
+    r.internalStation = label.internalStation;
+    r.offset = label.offset;
+    r.onAlignment = label.internalStation >= al.StartStation() - 1e-9 && label.internalStation <= al.EndStation() + 1e-9;
+    r.point = al.GetPointFromStationOffset(label.internalStation, label.offset);
+  }
+  r.text = FormatStation(al.DisplayedStation(r.internalStation, true)) + "  OFF " + FormatLinear(r.offset, linearPrecision);
+  return r;
 }
 
 }  // namespace alignment
