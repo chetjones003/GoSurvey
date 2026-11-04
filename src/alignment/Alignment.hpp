@@ -154,6 +154,17 @@ struct ContinuityTolerance {
   double curvature = 1e-9;
 };
 
+/// What a table in the drawing shows (REQ-493.1). Equation tables need no segment labels; the rest do.
+enum class AlignmentTableKind : unsigned char { Line = 0, Curve = 1, Segment = 2, StationEquation = 3 };
+
+/// A drawing TABLE made from this alignment (REQ-493). `tableId` is the table's stable entity id; a dynamic table is
+/// rebuilt whenever the alignment changes (REQ-493.2), a static one is a frozen snapshot.
+struct AlignmentTableLink {
+  std::uint64_t tableId = 0;
+  AlignmentTableKind kind = AlignmentTableKind::Line;
+  bool dynamic = false;
+};
+
 class Alignment {
  public:
   // --- identity and metadata (REQ-480.1) ---
@@ -215,6 +226,10 @@ class Alignment {
   // --- REQ-488: an Offset alignment is real geometry linked to its parent by id. `parentId` 0 = independent. ---
   std::uint64_t parentId = 0;
   double offsetDistance = 0.0;  ///< Signed, right of the parent positive.
+
+  // --- REQ-492.3 / REQ-493.3: segments must be labelled before a line or curve table can be made ---
+  bool segmentLabels = false;
+  std::vector<AlignmentTableLink> tables;
 
   /// Reverses direction and stationing of a continuous alignment (REQ-487.2). The physical geometry
   /// is unchanged. Refuses (returns false) when a C0 gap exists. Reversing twice restores it.

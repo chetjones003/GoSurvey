@@ -2211,6 +2211,13 @@ json BuildRoot(const AppCommandState& st) {
         o["parentId"] = a.parentId;
         o["offsetDistance"] = a.offsetDistance;
       }
+      if (a.segmentLabels) o["segmentLabels"] = true;  // REQ-492.3 / REQ-493.3
+      if (!a.tables.empty()) {  // REQ-493: the table links, so dynamic tables keep following their alignment
+        json links = json::array();
+        for (const alignment::AlignmentTableLink& t : a.tables)
+          links.push_back({{"id", t.tableId}, {"kind", static_cast<int>(t.kind)}, {"dynamic", t.dynamic}});
+        o["tables"] = std::move(links);
+      }
       json ents = json::array();
       for (const alignment::Entity& e : a.Entities()) {
         json q;
@@ -4047,6 +4054,19 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (el.contains("continuityRequirement") && el["continuityRequirement"].is_number_integer()) {
         const int cr = el["continuityRequirement"].get<int>();
         if (cr >= 0 && cr <= 2) a.continuityRequirement = static_cast<alignment::ContinuityRequirement>(cr);
+      }
+      if (el.contains("segmentLabels") && el["segmentLabels"].is_boolean()) a.segmentLabels = el["segmentLabels"].get<bool>();
+      if (el.contains("tables") && el["tables"].is_array()) {
+        for (const auto& t : el["tables"]) {
+          alignment::AlignmentTableLink link;
+          if (t.contains("id") && t["id"].is_number_unsigned()) link.tableId = t["id"].get<std::uint64_t>();
+          if (t.contains("kind") && t["kind"].is_number_integer()) {
+            const int k = t["kind"].get<int>();
+            if (k >= 0 && k <= 3) link.kind = static_cast<alignment::AlignmentTableKind>(k);
+          }
+          if (t.contains("dynamic") && t["dynamic"].is_boolean()) link.dynamic = t["dynamic"].get<bool>();
+          if (link.tableId != 0) a.tables.push_back(link);
+        }
       }
       if (el.contains("parentId") && el["parentId"].is_number_unsigned()) a.parentId = el["parentId"].get<std::uint64_t>();
       if (el.contains("offsetDistance") && el["offsetDistance"].is_number()) a.offsetDistance = el["offsetDistance"].get<double>();

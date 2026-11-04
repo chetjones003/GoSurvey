@@ -654,6 +654,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/alignment/AlignmentReport.cpp
   src/alignment/AlignmentEdit.cpp
   src/alignment/AlignmentGround.cpp
+  src/alignment/AlignmentTables.cpp
   src/alignment/Clothoid.cpp
   # Geometry math (util)
   src/util/geom2d.cpp
@@ -1224,6 +1225,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AlignmentLabelTests.cpp
     tests/AlignmentReportTests.cpp
     tests/AlignmentGroundTests.cpp
+    tests/AlignmentTableTests.cpp
     tests/AlignmentSpiralCommandTests.cpp
     tests/AlignmentEditTests.cpp
     tests/SurfaceStatsTests.cpp

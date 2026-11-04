@@ -15,6 +15,8 @@
 #include "AlignmentLabelSet.hpp"
 #include "alignment/AlignmentReport.hpp"
 #include "alignment/AlignmentGround.hpp"
+#include "alignment/AlignmentTables.hpp"
+#include "util/cadtable.hpp"
 #include "SpreadsheetIo.hpp"
 #include "WinFileDialogs.hpp"
 #include "StringUtil.hpp"
@@ -697,7 +699,158 @@ void ReportContinuity(const AppCommandState& st, const alignment::Alignment& r, 
 
 }  // namespace
 
-void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log) { RefreshLinkedOffsetsImpl(st, log); }
+// ======================================================================================================
+// Phase 4 (REQ-492.3, REQ-493): segment labelling and drawing tables.
+// ======================================================================================================
+
+namespace {
+
+const char* TableKindLabel(alignment::AlignmentTableKind k) {
+  switch (k) {
+    case alignment::AlignmentTableKind::Line: return "Line";
+    case alignment::AlignmentTableKind::Curve: return "Curve";
+    case alignment::AlignmentTableKind::Segment: return "Segment";
+    case alignment::AlignmentTableKind::StationEquation: return "Station equation";
+  }
+  return "?";
+}
+
+bool ParseTableKind(const std::string& word, alignment::AlignmentTableKind* k) {
+  if (word == "line") *k = alignment::AlignmentTableKind::Line;
+  else if (word == "curve") *k = alignment::AlignmentTableKind::Curve;
+  else if (word == "segment" || word == "segments") *k = alignment::AlignmentTableKind::Segment;
+  else if (word == "equation" || word == "equations") *k = alignment::AlignmentTableKind::StationEquation;
+  else return false;
+  return true;
+}
+
+/// REQ-493.2: rewrites every DYNAMIC table from its alignment's current geometry. A static table is a frozen snapshot and
+/// is never touched. A table whose alignment can no longer be tabulated (labels removed) keeps its last text and says so.
+void RefreshDynamicTables(AppCommandState& st, std::vector<std::string>& log) {
+  bool any = false;
+  for (const alignment::Alignment& a : st.alignments) {
+    for (const alignment::AlignmentTableLink& link : a.tables) {
+      if (!link.dynamic) continue;
+      const int ti = FindEntityIndexById(st.cadTableAttrs, link.tableId);
+      if (ti < 0 || static_cast<size_t>(ti) >= st.cadTables.size()) continue;
+      alignment::AlignmentTableText text;
+      std::string why;
+      if (!alignment::BuildAlignmentTableText(a, link.kind, st.displayLinearPrecision, CadAngleDisplaySettings(st), &text, &why)) {
+        log.push_back("  Table for \"" + a.name + "\" was not updated: " + why + ".");
+        continue;
+      }
+      CadTable& tbl = st.cadTables[static_cast<size_t>(ti)];
+      tbl.cols = text.cols;
+      tbl.cells = text.cells;
+      CadTableFitToContent(&tbl, st.modelUnitsPerPlottedInch);
+      any = true;
+    }
+  }
+  if (any) BumpCadGpuCache(st);
+}
+
+}  // namespace
+
+// ALIGNMENTLABEL <name>, SEGMENTS | CLEAR   (REQ-492.3: segment labels; REQ-493.3: a line or curve table needs them)
+void RunAlignmentLabel(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() != 2) {
+    log.push_back("ALIGNMENTLABEL - usage: ALIGNMENTLABEL <name>, SEGMENTS | CLEAR.");
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTLABEL", f[0], log);
+  if (a == nullptr) return;
+  const std::string what = Lower(f[1]);
+  if (what != "segments" && what != "clear") {
+    log.push_back("ALIGNMENTLABEL - usage: ALIGNMENTLABEL <name>, SEGMENTS | CLEAR.");
+    return;
+  }
+  const bool on = what == "segments";
+  if (on && a->Empty()) {
+    log.push_back("ALIGNMENTLABEL - \"" + a->name + "\" has no geometry to label.");
+    return;
+  }
+  if (a->segmentLabels == on) {
+    log.push_back("ALIGNMENTLABEL - the segments of \"" + a->name + "\" are already " + (on ? "labelled." : "unlabelled."));
+    return;
+  }
+  PushUndoSnapshot(st, on ? "Label alignment segments" : "Clear alignment segment labels");
+  a = Resolve(st, "ALIGNMENTLABEL", f[0], log);
+  a->segmentLabels = on;
+  log.push_back(on ? "ALIGNMENTLABEL - segments of \"" + a->name + "\" labelled; line, curve and segment tables can now be made."
+                   : "ALIGNMENTLABEL - segment labels of \"" + a->name + "\" cleared. Existing line and curve tables stop updating.");
+}
+
+// ALIGNMENTTABLE <name>, LINE|CURVE|SEGMENT|EQUATIONS[, STATIC|DYNAMIC][, <x>, <y>]   (REQ-493.1 / .2)
+// Inserts a drawing TABLE at the world point (top-left), default the drawing origin. DYNAMIC (the default) rebuilds the
+// table whenever the alignment changes; STATIC is a frozen snapshot.
+void RunAlignmentTable(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  const char* usage =
+      "ALIGNMENTTABLE - usage: ALIGNMENTTABLE <name>, LINE|CURVE|SEGMENT|EQUATIONS[, STATIC|DYNAMIC][, <x>, <y>].";
+  if (f.size() < 2) {
+    log.push_back(usage);
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTTABLE", f[0], log);
+  if (a == nullptr) return;
+  alignment::AlignmentTableKind kind{};
+  if (!ParseTableKind(Lower(f[1]), &kind)) {
+    log.push_back(usage);
+    return;
+  }
+  size_t next = 2;
+  bool dynamic = true;
+  if (f.size() > next && (Lower(f[next]) == "static" || Lower(f[next]) == "dynamic")) {
+    dynamic = Lower(f[next]) == "dynamic";
+    ++next;
+  }
+  bool hasPoint = false;
+  double wx = 0.0, wy = 0.0;
+  if (f.size() == next + 2) {
+    if (!ParseNum(f[next], &wx) || !ParseNum(f[next + 1], &wy)) {
+      log.push_back("ALIGNMENTTABLE - the insertion point must be two numbers.");
+      return;
+    }
+    hasPoint = true;
+  } else if (f.size() != next) {
+    log.push_back(usage);
+    return;
+  }
+  alignment::AlignmentTableText text;
+  std::string why;
+  if (!alignment::BuildAlignmentTableText(*a, kind, st.displayLinearPrecision, CadAngleDisplaySettings(st), &text, &why)) {
+    log.push_back("ALIGNMENTTABLE - " + why + ". No table was made.");
+    return;
+  }
+  PushUndoSnapshot(st, "Insert alignment table");
+  a = Resolve(st, "ALIGNMENTTABLE", f[0], log);
+  CadTable tbl;
+  tbl.cols = text.cols;
+  tbl.cells = text.cells;
+  if (const TextStyle* ts = ActiveTextStyle(st)) tbl.fontFamily = ts->fontFamily;
+  tbl.plottedHeightInches = st.defaultPlottedTextHeightInches;
+  CadTableFitToContent(&tbl, st.modelUnitsPerPlottedInch);
+  double lx = 0.0, ly = 0.0;
+  if (hasPoint) CadCoord::LocalFromWorld(st, wx, wy, &lx, &ly);
+  tbl.insX = static_cast<float>(lx);
+  tbl.insY = static_cast<float>(ly) + tbl.height;  // top-left, body below it, as VOLTABLE places its table
+  tbl.insZ = CadCommitElevation(st);
+  st.cadTables.push_back(std::move(tbl));
+  AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
+  EnsureAttrCounts(st);
+  st.cadTableAttrs.back().id = st.nextEntityId++;  // the link needs a stable id now, not at the next sweep (REQ-076)
+  a->tables.push_back({st.cadTableAttrs.back().id, kind, dynamic});
+  BumpCadGpuCache(st);
+  log.push_back("ALIGNMENTTABLE - " + std::string(TableKindLabel(kind)) + " table for \"" + a->name + "\" inserted (" +
+                (dynamic ? "dynamic" : "static") + ", " + std::to_string(text.cells.empty() ? 0 : text.cells.size() / static_cast<size_t>(text.cols) - 1) +
+                " row(s)).");
+}
+
+void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log) {
+  RefreshLinkedOffsetsImpl(st, log);
+  RefreshDynamicTables(st, log);  // REQ-493.2: dynamic tables follow the geometry
+}
 
 // ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|DELTA|DIRECTION|CONSTRAINT, <value>
 void RunAlignmentEdit(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {

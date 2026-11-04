@@ -184,6 +184,8 @@ for a compact list inside the program.
 | `EDITALIGNMENT` | — | Open the Alignment Layout table: EDITALIGNMENT [<name>] | [[Commands/editalignment]] |
 | `ALIGNMENTREPORT` | — | Report an alignment as text or CSV: ALIGNMENTREPORT [<name>][, TXT|CSV[, <path>]] | [[Commands/alignmentreport]] |
 | `ALIGNMENTSURFACE` | — | Ground elevation along an alignment from a surface: ALIGNMENTSURFACE <alignment>, <surface>, STATION=<sta>[, OFFSET=<off>] \| INTERVAL=<n> | [[Commands/alignmentsurface]] |
+| `ALIGNMENTLABEL` | — | Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS \| CLEAR | [[Commands/alignmentlabel]] |
+| `ALIGNMENTTABLE` | — | Insert a line, curve, segment or equation table: ALIGNMENTTABLE <name>, LINE\|CURVE\|SEGMENT\|EQUATIONS[, STATIC\|DYNAMIC][, <x>, <y>] | [[Commands/alignmenttable]] |
 
 ### Surfaces and volumes
 
@@ -309,6 +311,7 @@ for a compact list inside the program.
 | `ALIGNMENTEDIT` | — | [[Commands/alignmentedit]] |
 | `ALIGNMENTINSERT` | — | [[Commands/alignmentinsert]] |
 | `ALIGNMENTINTERSECT` | — | [[Commands/alignmentintersect]] |
+| `ALIGNMENTLABEL` | — | [[Commands/alignmentlabel]] |
 | `ALIGNMENTLIST` | — | [[Commands/alignmentlist]] |
 | `ALIGNMENTLOCK` | — | [[Commands/alignmentlock]] |
 | `ALIGNMENTREMOVE` | — | [[Commands/alignmentremove]] |
@@ -316,6 +319,7 @@ for a compact list inside the program.
 | `ALIGNMENTSTATION` | — | [[Commands/alignmentstation]] |
 | `ALIGNMENTSTYLE` | — | [[Commands/alignmentstyle]] |
 | `ALIGNMENTSURFACE` | — | [[Commands/alignmentsurface]] |
+| `ALIGNMENTTABLE` | — | [[Commands/alignmenttable]] |
 | `ARC` | — | [[Commands/arc]] |
 | `AREA` | `AA` | [[Commands/area]] |
 | `ARRAY` | `AR` | [[Commands/array]] |

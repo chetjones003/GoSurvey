@@ -8089,6 +8089,8 @@ void RunAlignmentDetach(AppCommandState& st, const std::string& args, std::vecto
 void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunEditAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentSurface(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentLabel(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentTable(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// REQ-501.2: "STA 25+42.35  OFF -12.40  N 45d12'30" E" for the alignment nearest the LOCAL point (lx, ly), or an
 /// empty string when no alignment lies within \p maxOffset (drawing units). Read-only; used by the status bar.
 [[nodiscard]] std::string AlignmentCursorReadout(const AppCommandState& st, double lx, double ly, double maxOffset);

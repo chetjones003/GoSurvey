@@ -7217,6 +7217,8 @@ const CmdEntry kRegistry[] = {
     {"alignmentintersect", "", "Intersections: ALIGNMENTINTERSECT <a>, <b> | <a>, LINE, ... | <a>, CIRCLE, ..."},
     {"editalignment", "", "Open the Alignment Layout table: EDITALIGNMENT [<name>]"},
     {"alignmentsurface", "", "Ground elevation along an alignment: ALIGNMENTSURFACE <alignment>, <surface>, STATION=<sta>[, OFFSET=<off>] | INTERVAL=<n>"},
+    {"alignmentlabel", "", "Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS | CLEAR"},
+    {"alignmenttable", "", "Insert a line, curve, segment or equation table: ALIGNMENTTABLE <name>, LINE|CURVE|SEGMENT|EQUATIONS[, STATIC|DYNAMIC][, <x>, <y>]"},
     {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT [TABLE]"},
     {"voltable", "", "Insert a TABLE of the last volume report: VOLTABLE"},
     {"volcsv", "", "Write CSV of volume results: VOLCSV [<path>]"},
@@ -47083,7 +47085,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "offsetalignment" ||
         plotTok == "alignmentdetach" ||
         plotTok == "alignmentintersect" ||
-        plotTok == "editalignment" || plotTok == "alignmentsurface" ||
+        plotTok == "editalignment" || plotTok == "alignmentsurface" || plotTok == "alignmentlabel" ||
+        plotTok == "alignmenttable" ||
         plotTok == "volreport" || plotTok == "voltable" || plotTok == "volcsv") {
       std::string rest;
       std::getline(issIdle, rest);
@@ -47154,6 +47157,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunEditAlignment(st, rest, log);
       else if (plotTok == "alignmentsurface")
         RunAlignmentSurface(st, rest, log);
+      else if (plotTok == "alignmentlabel")
+        RunAlignmentLabel(st, rest, log);
+      else if (plotTok == "alignmenttable")
+        RunAlignmentTable(st, rest, log);
       else if (plotTok == "volreport")
         RunVolReport(st, rest, log);
       else if (plotTok == "voltable")
