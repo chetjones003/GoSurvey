@@ -32,7 +32,6 @@
 #include <catch2/generators/catch_generators.hpp>
 #include <nlohmann/json.hpp>
 
-
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -63,6 +62,7 @@ extern "C" {
 #include <dwg.h>
 #include <dwg_api.h>
 
+void dwg_free_eed(Dwg_Object* obj);
 extern "C" void dwg_resolve_objectrefs_silent(Dwg_Data* dwg);
 }
 
@@ -142,14 +142,11 @@ void StripGosurveyAnnotativeEed(Dwg_Data& dwg) {
   }
 }
 
-void StripEntityEed(Dwg_Object_Entity* ent) {
-  if (ent == nullptr || ent->eed == nullptr)
+void StripEntityEed(Dwg_Object* obj) {
+  if (obj == nullptr || obj->supertype != DWG_SUPERTYPE_ENTITY || obj->tio.entity == nullptr ||
+      obj->tio.entity->eed == nullptr)
     return;
-  for (BITCODE_BL i = 0; i < ent->num_eed; ++i)
-    free(ent->eed[i].data);
-  free(ent->eed);
-  ent->eed = nullptr;
-  ent->num_eed = 0;
+  dwg_free_eed(obj);
 }
 
 bool DwgHasAcadAnnotativeDataEed(const Dwg_Data& dwg) {
@@ -943,6 +940,55 @@ TEST_CASE("CadMultileader round-trips through native MULTILEADER DWG export (iss
   CHECK(in.cadMultileaders[0].label.rotationRad == Catch::Approx(0.35f).margin(0.02f));
 }
 
+TEST_CASE("DWG import applies block scale to leader arrow sizes (REQ-367)", "[dwg][libredwg][req367]") {
+  ScratchDir dir("dwg-scaled-leader-arrows");
+  const auto path = (dir.path / "scaled-leaders.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* model = dwg_model_space_object(dwg);
+  REQUIRE(model != nullptr);
+  Dwg_Object_BLOCK_HEADER* modelHeader = model->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(modelHeader != nullptr);
+
+  Dwg_Object_BLOCK_HEADER* mleaderHeader = dwg_add_BLOCK_HEADER(dwg, "*DML1");
+  REQUIRE(mleaderHeader != nullptr);
+  dwg_add_BLOCK(mleaderHeader, "*DML1");
+  const dwg_point_3d mleaderPoints[] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}};
+  const dwg_point_3d mleaderText{10.0, 0.0, 0.0};
+  const dwg_point_3d mleaderDirection{1.0, 0.0, 0.0};
+  Dwg_Entity_MULTILEADER* mleader = dwg_add_MULTILEADER(mleaderHeader, 2, mleaderPoints, "MLeader",
+                                                         &mleaderText, &mleaderDirection, 0.2, 8.0);
+  REQUIRE(mleader != nullptr);
+  dwg_add_ENDBLK(mleaderHeader);
+
+  Dwg_Object_BLOCK_HEADER* leaderHeader = dwg_add_BLOCK_HEADER(dwg, "*DLD1");
+  REQUIRE(leaderHeader != nullptr);
+  dwg_add_BLOCK(leaderHeader, "*DLD1");
+  const dwg_point_3d labelPoint{10.0, 0.0, 0.0};
+  Dwg_Entity_MTEXT* label = dwg_add_MTEXT(leaderHeader, &labelPoint, 4.0, "LEADER");
+  REQUIRE(label != nullptr);
+  const dwg_point_3d leaderPoints[] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}};
+  Dwg_Entity_LEADER* leader = dwg_add_LEADER(leaderHeader, 2, leaderPoints, label, 0);
+  REQUIRE(leader != nullptr);
+  leader->dimasz = 0.2;
+  dwg_add_ENDBLK(leaderHeader);
+
+  const dwg_point_3d insertPoint{20.0, 30.0, 0.0};
+  REQUIRE(dwg_add_INSERT(modelHeader, &insertPoint, "*DML1", 2.0, 2.0, 1.0, 0.0) != nullptr);
+  REQUIRE(dwg_add_INSERT(modelHeader, &insertPoint, "*DLD1", 2.0, 2.0, 1.0, 0.0) != nullptr);
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(path.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState imported;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.cadMultileaders.size() == 2);
+  CHECK(imported.cadMultileaders[0].arrowSizeWorld == Catch::Approx(0.36f));
+  CHECK(imported.cadMultileaders[1].arrowSizeWorld == Catch::Approx(0.36f));
+}
+
 TEST_CASE("Block-content MULTILEADER import logs skip reason (REQ-367, issue #619)",
           "[dwg][libredwg][issue619]") {
   ScratchDir dir("dwg-mleader-block-skip");
@@ -1537,10 +1583,12 @@ TEST_CASE("Native MULTILEADER scale contexts restore GoSurvey scale visibility (
 
   Dwg_Data dwg{};
   REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  Dwg_Object* mleaderObject = nullptr;
   Dwg_Object_Entity* mleader = nullptr;
   for (unsigned oi = 0; oi < dwg.num_objects; ++oi) {
     Dwg_Object& obj = dwg.object[oi];
     if (obj.fixedtype == DWG_TYPE_MULTILEADER && obj.tio.entity != nullptr) {
+      mleaderObject = &obj;
       mleader = obj.tio.entity;
       break;
     }
@@ -1549,7 +1597,7 @@ TEST_CASE("Native MULTILEADER scale contexts restore GoSurvey scale visibility (
   REQUIRE(mleader->tio.MULTILEADER != nullptr);
   CHECK(mleader->tio.MULTILEADER->ctx.content.txt.width == Catch::Approx(16.f));
   CHECK(mleader->tio.MULTILEADER->ctx.text_height == Catch::Approx(2.f));
-  StripEntityEed(mleader);
+  StripEntityEed(mleaderObject);
   REQUIRE((dwg_write_file(p.c_str(), &dwg) & DWG_ERR_CRITICAL) == 0);
   dwg_free(&dwg);
 

@@ -21,6 +21,7 @@
 #include <QTimer>
 #include <cstdio>
 #include <string>
+#include <vector>
 #ifdef _WIN32
 #include <windows.h>
 #include <algorithm>
@@ -69,12 +70,12 @@ BOOL CALLBACK FindGoSurveyWindow(HWND hwnd, LPARAM parameter) {
 // Claims the per-executable-path mutex. alreadyRunning reports whether another GoSurvey from this exact
 // executable path holds it; the caller keeps the handle either way for the process lifetime.
 HANDLE CreateInstanceMutex(bool& alreadyRunning) {
-  wchar_t path[32768]{};
-  const DWORD length = GetModuleFileNameW(nullptr, path, static_cast<DWORD>(std::size(path)));
+  std::vector<wchar_t> path(32768, L'\0');
+  const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
   alreadyRunning = false;
-  if (length == 0 || length >= std::size(path))
+  if (length == 0 || length >= path.size())
     return nullptr;
-  const std::wstring canonical = LowerPath(std::wstring(path, length));
+  const std::wstring canonical = LowerPath(std::wstring(path.data(), length));
   // FNV-1a gives a stable per-executable-path mutex name across GoSurvey instances.
   unsigned long long hash = 14695981039346656037ull;
   for (wchar_t ch : canonical) {
@@ -89,11 +90,11 @@ HANDLE CreateInstanceMutex(bool& alreadyRunning) {
 }
 
 bool ForwardDrawingToExistingInstance(const QString& drawingPath) {
-  wchar_t module[32768]{};
-  const DWORD length = GetModuleFileNameW(nullptr, module, static_cast<DWORD>(std::size(module)));
-  if (length == 0 || length >= std::size(module))
+  std::vector<wchar_t> module(32768, L'\0');
+  const DWORD length = GetModuleFileNameW(nullptr, module.data(), static_cast<DWORD>(module.size()));
+  if (length == 0 || length >= module.size())
     return false;
-  WindowSearch search{LowerPath(std::wstring(module, length)), nullptr};
+  WindowSearch search{LowerPath(std::wstring(module.data(), length)), nullptr};
   const ULONGLONG deadline = GetTickCount64() + 30000;
   while (GetTickCount64() < deadline) {
     EnumWindows(FindGoSurveyWindow, reinterpret_cast<LPARAM>(&search));

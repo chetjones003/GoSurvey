@@ -214,6 +214,12 @@ struct Xf2 {
     *oxOut = ox + c * xr - s * yr;
     *oyOut = oy + s * xr + c * yr;
   }
+  [[nodiscard]] double scaleAlong(double x, double y) const {
+    const double length = std::hypot(x, y);
+    if (!(length > 1e-12) || !std::isfinite(length))
+      return 1.0;
+    return std::hypot(sx * x, sy * y) / length;
+  }
   [[nodiscard]] bool isIdentity() const {
     return std::fabs(ox) < 1e-9 && std::fabs(oy) < 1e-9 && std::fabs(ang) < 1e-9 &&
            std::fabs(sx - 1.0) < 1e-9 && std::fabs(sy - 1.0) < 1e-9;
@@ -1124,7 +1130,9 @@ static bool ImportLeaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Ent
                            std::max(1e-9, static_cast<double>(st.modelUnitsPerPlottedInch)));
     an.text = FromT(dwg, mt->text);
     an.fontFamily = ImportTextStyleFontFamily(dwg, mt->style);
-    m.arrowSizeWorld = static_cast<float>(LeaderArrowSizeWorld(dwg, ld));
+    const double leaderDx = ld->points[1].x - ld->points[0].x;
+    const double leaderDy = ld->points[1].y - ld->points[0].y;
+    m.arrowSizeWorld = static_cast<float>(LeaderArrowSizeWorld(dwg, ld) * xf.scaleAlong(leaderDx, leaderDy));
     // The path is stored from arrow tip to the text-side landing. AutoCAD draws the hookline
     // outward from that landing, so its outer endpoint must precede the original landing in this
     // path order. See Autodesk's LEADER DXF groups 74/75/211 and DIMASZ behavior.
@@ -1325,7 +1333,12 @@ static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dw
   an.fontFamily = ImportTextStyleFontFamily(dwg, textStyle);
   if (an.text.empty())
     an.text = " ";
-  m.arrowSizeWorld = static_cast<float>(ml->ctx.arrow_size > 1e-9 ? ml->ctx.arrow_size : ml->arrow_size);
+  const Dwg_LEADER_Line& firstLine = node.lines[0];
+  const BITCODE_3BD& nextPoint = firstLine.num_points > 1 ? firstLine.points[1] : node.lastleaderlinepoint;
+  const double leaderDx = nextPoint.x - firstLine.points[0].x;
+  const double leaderDy = nextPoint.y - firstLine.points[0].y;
+  m.arrowSizeWorld = static_cast<float>((ml->ctx.arrow_size > 1e-9 ? ml->ctx.arrow_size : ml->arrow_size) *
+                                        xf.scaleAlong(leaderDx, leaderDy));
   double dirX0 = 0.0, dirY0 = 0.0, dirX1 = 0.0, dirY1 = 0.0;
   xf.apply(0.0, 0.0, &dirX0, &dirY0);
   xf.apply(txt.direction.x, txt.direction.y, &dirX1, &dirY1);
