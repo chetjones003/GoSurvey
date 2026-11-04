@@ -52,6 +52,9 @@ struct Entity {
   static constexpr unsigned char kLockLength = 2;   ///< Line length or arc length.
   static constexpr unsigned char kLockBearing = 4;  ///< Line start azimuth.
   unsigned char locks = 0;
+  /// Arc only (D-2026-11-04-f): entered by radius and length, so a radius edit keeps the length. False = entered by
+  /// radius and delta (also curves from objects and from older files), so a radius edit keeps the delta.
+  bool definedByLength = false;
 };
 
 /// Which stored parameter an edit changes (REQ-486.1). Derived values (delta, chord, ...) are edited by
@@ -208,7 +211,9 @@ class Alignment {
   bool AppendTangentTo(Point2 end);
   /// Appends a circular curve continuing from the previous end (tangent-continuous). `arcLength`
   /// and `radius` must be positive; a sweep >= 2*pi is refused (REQ-499).
+  /// A curve entered by radius and length (D-2026-11-04-f: a radius edit keeps its length).
   bool AppendCurve(double radius, double arcLength, bool right);
+  /// A curve entered by radius and delta (a radius edit keeps its delta).
   bool AppendCurveByDelta(double radius, double delta, bool right);
   /// Clothoid spiral continuing from the previous end. `startRadius` / `radius` use 0 for infinite (tangent).
   bool AppendSpiral(double length, double startRadius, double endRadius, bool right);
@@ -219,8 +224,9 @@ class Alignment {
   // --- REQ-486 / 487: constraint-aware editing. Each call works on a copy and commits only if the whole chain
   //     re-solves, so a refused edit changes nothing. `whyNot` names the row and the reason. ---
   /// Edits one parameter of entity `i` and re-solves the chain: FloatOnPrev entities after it follow, FloatOnNext
-  /// entities before it follow, Free arcs re-fit between their tangents. Editing a radius keeps the arc length;
-  /// editing a delta keeps the radius (GoSurvey rules). Derived (floating) azimuths cannot be edited directly.
+  /// entities before it follow, Free arcs re-fit between their tangents. Editing a radius keeps what the curve was
+  /// defined by (D-2026-11-04-f): its delta, or its length when `definedByLength`; editing a delta or a length keeps the
+  /// radius. Derived (floating) azimuths cannot be edited directly.
   bool EditEntity(int i, EditParam param, double value, std::string* whyNot = nullptr);
   /// Inserts a tangent / curve after entity `i` (continuing tangent-continuously, FloatOnPrev) and shifts what follows.
   bool InsertTangentAfter(int i, double length, std::string* whyNot = nullptr);

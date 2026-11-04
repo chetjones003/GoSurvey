@@ -175,6 +175,13 @@ bool Alignment::EditEntity(int i, EditParam param, double value, std::string* wh
       if ((e.locks & Entity::kLockRadius) != 0) return fail(row + " has a fixed radius");
       if (value < 0.0 || !std::isfinite(value)) return fail("the radius must be zero (tangent) or positive");
       if (arc && !(value > 0.0)) return fail("the radius must be positive");
+      // D-2026-11-04-f: a curve keeps what it was defined by. A radius-and-delta curve keeps its delta, so its length
+      // follows the radius; a radius-and-length curve keeps its length; a Free curve takes its delta from its tangents.
+      if (arc && !e.definedByLength && e.constraint != Entity::Constraint::Free) {
+        if ((e.locks & Entity::kLockLength) != 0)
+          return fail(row + " has a fixed length, and keeping its delta would change it; unlock the length first");
+        e.length = value * (e.length / e.radius);
+      }
       e.radius = value;
       break;
     case EditParam::CurveLength:
@@ -259,6 +266,7 @@ bool Alignment::InsertCurveAfter(int i, double radius, double arcLength, bool ri
   e.length = arcLength;
   e.right = right;
   e.constraint = Entity::Constraint::FloatOnPrev;
+  e.definedByLength = false;  // ALIGNMENTINSERT enters a curve by radius and delta (D-2026-11-04-f)
   work.entities_.insert(work.entities_.begin() + i + 1, e);
   std::string why;
   if (!work.Resolve(&why)) return fail(why.c_str());

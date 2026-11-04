@@ -16212,12 +16212,20 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. Insert, append, delete entity; delete re-closes the chain when possible, otherwise marks the gap (REQ-482).
   5. With design criteria (REQ-502) a **Constraint** column shows the value required by the criteria
      `[A:89F8043A]`.
+  6. **Decision D-2026-11-04-f (what a radius edit keeps):** a curve keeps the parameters it was defined by, as Civil 3D
+     does ("after an element is created, you can only edit the parameters that affect the specified constraints"). A
+     curve entered by radius and Δ (`ALIGNMENTADD … CURVE`, `ALIGNMENTINSERT … CURVE`, created from objects, or from a
+     file that predates this rule) keeps its Δ when its radius changes, so its length and every later station change.
+     A curve entered by radius and length (`ALIGNMENTADD … CURVELEN`) keeps its length. A Free curve keeps the
+     intersection of its two tangents, so its Δ comes from them. A Δ edit keeps the radius; a length edit keeps the
+     radius. Each curve stores how it was defined.
 - Acceptance:
   1. The issue's example (tangent 250.00', curve R 500 ~132.14', tangent) is reproduced from entered parameters and
      the displayed rows match the table values to display precision.
   2. Changing curve radius from 500 to 400 with both tangents Floating keeps C1 and updates later stations.
   3. With the radius locked, a radius edit is refused with the row named; with the length locked, a Δ edit is refused (a Δ
-     edit keeps the radius and changes the length, a radius edit keeps the length - GoSurvey rules). A refused edit changes nothing.
+     edit keeps the radius and changes the length). A radius edit keeps what the curve was defined by
+     (D-2026-11-04-f): Δ for a radius-and-Δ curve, length for a radius-and-length curve. A refused edit changes nothing.
   4. Editing the first tangent's bearing with a Free curve between recomputes the curve; bearing/radius round trip.
   5. Undo/redo restores table and geometry in one step per edit.
 - Owner-layer: Domain, Qt UI.

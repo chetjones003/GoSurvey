@@ -68,21 +68,75 @@ TEST_CASE("Continuing entities float on what precedes them", "[req486][alignment
   CHECK(a.Entities()[2].constraint == Entity::Constraint::FloatOnPrev);
 }
 
-TEST_CASE("Editing a curve radius keeps its length, C1, and the followers", "[req486][req503][alignment]") {
+TEST_CASE("A radius-and-delta curve keeps its delta on a radius edit; later stations move (REQ-486 AC2, D-2026-11-04-f)",
+          "[req486][req503][alignment]") {
   Alignment a = Chain();
+  REQUIRE_FALSE(a.Entities()[1].definedByLength);
   const double len = a.Length();
+  const double lastStart = a.EntityStartStation(2);
   std::string why;
   REQUIRE(a.EditEntity(1, EditParam::CurveRadius, 400.0, &why));
-  CHECK(a.Length() == Approx(len).margin(1e-9));  // arc length kept: all stations after it are unchanged
   CHECK(a.Entities()[1].radius == Approx(400.0));
+  CHECK(a.Entities()[1].length == Approx(400.0 * 15.0 * kDeg).margin(1e-9));  // delta kept at 15 degrees
+  CHECK(a.Length() == Approx(len - 500.0 * 15.0 * kDeg + 400.0 * 15.0 * kDeg).margin(1e-9));
+  CHECK(a.EntityStartStation(2) < lastStart - 20.0);  // later stations moved back by the 26.18' the curve lost
+  CHECK(a.EndAzimuth() == Approx(60.0 * kDeg).margin(1e-9));  // the turn is unchanged
   CheckTangentContinuous(a);
-  // The sweep grew (130.9 / 400 = 18.75 deg), so the last tangent now points further round.
-  CHECK(a.EndAzimuth() == Approx(45.0 * kDeg + 130.8996938995747 / 400.0).margin(1e-9));
-  // The last tangent starts exactly where the curve ends.
   alignment::CurveData cd;
   REQUIRE(a.CurveDataFor(1, &cd));
   CHECK(a.Entities()[2].start.x == Approx(cd.pt.x).margin(kEps));
   CHECK(a.Entities()[2].start.y == Approx(cd.pt.y).margin(kEps));
+}
+
+TEST_CASE("A radius-and-length curve keeps its length on a radius edit (D-2026-11-04-f)", "[req486][alignment]") {
+  Alignment a;
+  REQUIRE(a.AppendTangent({1000.0, 2000.0}, 45.0 * kDeg, 500.0));
+  REQUIRE(a.AppendCurve(500.0, 130.8996938995747, true));  // CURVELEN: radius and length
+  REQUIRE(a.AppendTangent(200.0));
+  REQUIRE(a.Entities()[1].definedByLength);
+  const double len = a.Length();
+  REQUIRE(a.EditEntity(1, EditParam::CurveRadius, 400.0));
+  CHECK(a.Length() == Approx(len).margin(1e-9));  // stations after it are unchanged
+  CHECK(a.EndAzimuth() == Approx(45.0 * kDeg + 130.8996938995747 / 400.0).margin(1e-9));  // the sweep grew
+  CheckTangentContinuous(a);
+}
+
+TEST_CASE("How a curve was defined is saved; older files read as radius-and-delta (D-2026-11-04-f)", "[req486][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT D", log);
+  Submit(st, "ALIGNMENTADD D, TANGENT, 0, 0, 0, 200", log);
+  Submit(st, "ALIGNMENTADD D, CURVELEN, 300, 100, RIGHT", log);
+  Submit(st, "ALIGNMENTADD D, TANGENT, 100", log);
+  Submit(st, "ALIGNMENTADD D, CURVE, 300, 20, LEFT", log);
+  REQUIRE(st.alignments.size() == 1);
+  REQUIRE(st.alignments[0].Entities().size() == 4);
+  CHECK(st.alignments[0].Entities()[1].definedByLength);
+  CHECK_FALSE(st.alignments[0].Entities()[3].definedByLength);
+  const std::string json = SerializeGoSurveyJson(st);
+  AppCommandState loaded = Drawing();
+  std::vector<std::string> loadLog;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(loaded, json, loadLog));
+  REQUIRE(loaded.alignments.size() == 1);
+  CHECK(loaded.alignments[0].Entities()[1].definedByLength);
+  CHECK_FALSE(loaded.alignments[0].Entities()[3].definedByLength);
+  std::string older = json;
+  for (size_t at = older.find("\"dl\""); at != std::string::npos; at = older.find("\"dl\"")) older.replace(at, 4, "\"zz\"");
+  AppCommandState loadedOlder = Drawing();
+  REQUIRE(LoadGoSurveyFromJsonUtf8(loadedOlder, older, loadLog));
+  CHECK_FALSE(loadedOlder.alignments[0].Entities()[1].definedByLength);
+}
+
+TEST_CASE("Keeping the delta of a length-locked curve is refused (D-2026-11-04-f)", "[req486][alignment]") {
+  Alignment a = Chain();
+  const double len = a.Length();
+  std::string why;
+  REQUIRE(a.EditEntity(1, EditParam::Locks, Entity::kLockLength));
+  CHECK_FALSE(a.EditEntity(1, EditParam::CurveRadius, 400.0, &why));
+  CHECK(why.find("entity 2") != std::string::npos);
+  CHECK(why.find("fixed length") != std::string::npos);
+  CHECK(a.Entities()[1].radius == Approx(500.0));
+  CHECK(a.Length() == Approx(len).margin(1e-12));
 }
 
 TEST_CASE("Editing a curve length or delta moves later stations", "[req486][alignment]") {

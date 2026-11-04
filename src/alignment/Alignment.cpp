@@ -147,11 +147,14 @@ bool Alignment::AppendCurve(double radius, double arcLength, bool right) {
   e.length = arcLength;
   e.right = right;
   e.constraint = Entity::Constraint::FloatOnPrev;
+  e.definedByLength = true;
   return AppendRaw(e);
 }
 
 bool Alignment::AppendCurveByDelta(double radius, double delta, bool right) {
-  return AppendCurve(radius, radius * delta, right);
+  if (!AppendCurve(radius, radius * delta, right)) return false;
+  entities_.back().definedByLength = false;
+  return true;
 }
 
 bool Alignment::AppendSpiral(double length, double startRadius, double endRadius, bool right) {
@@ -1017,7 +1020,7 @@ bool BuildFromSegments(const std::vector<SourceSegment>& segments, const FromObj
       if (!rebuilt.AppendRaw(e)) return fail("fillet left a zero-length segment");
       if (filleted[i]) {
         const bool right = deflection[i] > 0.0;
-        if (!rebuilt.AppendCurve(opt.filletRadius, opt.filletRadius * std::fabs(deflection[i]), right))
+        if (!rebuilt.AppendCurveByDelta(opt.filletRadius, std::fabs(deflection[i]), right))
           return fail("fillet could not be created");
       }
     }
