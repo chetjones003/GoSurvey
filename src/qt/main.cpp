@@ -9,6 +9,7 @@
 #include <QApplication>
 #include <QGuiApplication>
 #include <QFile>
+#include <QFileInfo>
 #include <QElapsedTimer>
 #include <QImage>
 #include <QPalette>
@@ -162,9 +163,14 @@ int main(int argc, char** argv) {
       for (const QString& argument : app.arguments().mid(1)) {
         if (argument.startsWith('-'))
           continue;
-        if (argument.endsWith(".dwg", Qt::CaseInsensitive) && ForwardDrawingToExistingInstance(argument)) {
-          CloseHandle(instanceMutex);
-          return 0;
+        if (argument.endsWith(".dwg", Qt::CaseInsensitive)) {
+          // Resolve relative file-association/command-line arguments in the launching process;
+          // the existing editor can have a different current working directory.
+          const QString absolutePath = QFileInfo(argument).absoluteFilePath();
+          if (ForwardDrawingToExistingInstance(absolutePath)) {
+            CloseHandle(instanceMutex);
+            return 0;
+          }
         }
         break;
       }
