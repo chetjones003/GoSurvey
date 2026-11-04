@@ -45,7 +45,7 @@ step per edit (statement 4) already held: `ALIGNMENTSTATION EQ ADD|REMOVE|LIST`,
   grip tests in `AlignmentEditTests.cpp` and `AlignmentSpiralCommandTests.cpp` to find grips by kind. `[alignment]` 181
   cases / 4385 assertions pass.
 - Qt: `issue121AlignmentGripsShowAndDrag` (grips, Properties heading, PI drag, readout, captures).
-- Build: `build.bat` Release, no warnings. Full suite: `build/artifacts/ctest-487.log`.
+- Build: `build.bat` Release, no warnings. Full suite 194/194 (`build/artifacts/ctest-487.log`).
 - Visual panel `build/artifacts/panel-487/`: round 1 **PASS**; `RESULT.md`.
 
 ## 6. Product documentation review (REQ-453)
