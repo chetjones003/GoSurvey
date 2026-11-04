@@ -27,10 +27,11 @@ std::string DecodeDwgString(const void* raw, bool utf16le);
 /// Dwg_Color) to the stored colour string: "ByLayer", "ByBlock", or "#RRGGBB".
 std::string ColorToStorage(int index, unsigned method, unsigned rgb);
 
-/// Scale a legacy LEADER's DIMASZ using the current DWG CANNOSCALE record when the header
-/// DIMSCALE matches that scale's drawing/paper ratio. This is the model-space factor AutoCAD
-/// exposes through AcadLeader.ScaleFactor (MESSER: 192 / 12 = 16).
-double LegacyLeaderScaleFactor(double dimScale, double paperUnits, double drawingUnits);
+/// Scale a legacy LEADER's DIMASZ using DIMSCALE. AutoCAD's feet/inches architectural scale stores
+/// twelve drawing inches per foot; when that exact scale ratio matches, return the model-space
+/// factor exposed by AcadLeader.ScaleFactor (MESSER: 192 / 12 = 16).
+double LegacyLeaderScaleFactor(double dimScale, double paperUnits, double drawingUnits,
+                               bool drawingUnitsAreFeet);
 
 /// True when the drawing's class table carries any `AECC_*` custom class — the signature of a
 /// Civil 3D parts-catalog file (pressure pipes, fittings, structures) whose 3D geometry is

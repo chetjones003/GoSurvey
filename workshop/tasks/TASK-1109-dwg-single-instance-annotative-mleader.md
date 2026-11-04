@@ -76,3 +76,13 @@
 - Tests added: saved DWG viewport, legacy leader text/hookline, raw MLeader export dimensions, context round trip, and Windows handoff coverage
 - Docs updated: requirements, project decision log, and this task log
 - Done: pending
+
+## 12. PR review follow-up (2026-11-04)
+- Authority: existing REQ-367 legacy LEADER + MTEXT round-trip fidelity; no scope change.
+- Findings: PR Agent identified scale normalization applied to ordinary metric leaders and missing arrow-size persistence for pre-native MULTILEADER fallback exports.
+- Evidence: Autodesk documents DIMSCALE as the overall multiplier for dimension/leader size variables and DIMASZ as the leader arrow size. LibreDWG's LEADER record encodes `dimasz` only through R14; R2000+ uses the referenced DIMSTYLE. The existing MESSER fixture records the distinct imperial case (`DIMSCALE=192`, `CANNOSCALE` paper/drawing units `.0625/12`, AutoCAD `ScaleFactor=16`) which must remain supported.
+- Plan: add tests asserting ordinary 1:50 metric scale keeps factor 50 while the MESSER feet/inches scale keeps 16; add an R2004 LEADER+MTEXT export/import regression which proves the persisted arrow size does not fall back to Standard DIMSTYLE's default. Derive the minimal correction from those failures and the format-specific LEADER fields.
+- Root cause confirmed: `LegacyLeaderScaleFactor` treated ratio equality alone as evidence to divide DIMSCALE by drawing units. The R2004 export test read back Standard DIMSTYLE's default `DIMASZ=0.18` and imported that value instead of the callout's explicit `0.36`; that file version does not encode per-entity LEADER `dimasz`.
+- Implementation: the legacy import special case now requires feet drawing units plus the 12-inches-per-foot architectural scale record; normal metric DIMSCALE remains intact. The old-format fallback writes its explicit arrow size in a dedicated referenced DIMSTYLE (and in the per-entity field for formats that encode it), preserving independent callout sizes without mutating Standard.
+- Regression evidence: both new tests failed before the code change (`1 != 50`, and exported/imported arrow `0.18 != 0.36`) and pass after it.
+- Verification: `build.bat` passed; focused LEADER tests passed (16 assertions); full Release CTest passed (194/194), including all six hidden-desktop Qt shards. Existing PR-head CI before these final changes passed, including `full / msvc-analyze`; fresh CI will run after the follow-up commit is pushed.

@@ -143,7 +143,8 @@ std::string ColorToStorage(int index, unsigned method, unsigned rgb) {
   return std::string(buf);
 }
 
-double LegacyLeaderScaleFactor(double dimScale, double paperUnits, double drawingUnits) {
+double LegacyLeaderScaleFactor(double dimScale, double paperUnits, double drawingUnits,
+                               bool drawingUnitsAreFeet) {
   if (!(dimScale > 0.0) || !std::isfinite(dimScale))
     return 1.0;
   if (!(paperUnits > 0.0) || !(drawingUnits > 0.0) ||
@@ -151,7 +152,8 @@ double LegacyLeaderScaleFactor(double dimScale, double paperUnits, double drawin
     return dimScale;
   const double scaleRatio = drawingUnits / paperUnits;
   const double tolerance = std::max(1.0, std::fabs(scaleRatio)) * 1e-6;
-  if (std::fabs(dimScale - scaleRatio) <= tolerance)
+  if (drawingUnitsAreFeet && std::fabs(drawingUnits - 12.0) <= 1e-6 &&
+      std::fabs(dimScale - scaleRatio) <= tolerance)
     return dimScale / drawingUnits;
   return dimScale;
 }
@@ -999,7 +1001,8 @@ static double LeaderArrowSizeWorld(Dwg_Data* dwg, const Dwg_Entity_LEADER* leade
         if (FromT(dwg, scale->name) != scaleName)
           continue;
         const double factor = libredwgcad_detail::LegacyLeaderScaleFactor(
-            dimScale, scale->paper_units, scale->drawing_units);
+            dimScale, scale->paper_units, scale->drawing_units,
+            dwg->header_vars.INSUNITS == 2 /* feet */);
         return arrow * factor;
       }
     }
@@ -6293,10 +6296,27 @@ static void WriteMultileaderEntity(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr, 
     for (size_t j = 0; j < nPt; ++j) {
       world(ml.pathXyz[j * 3], ml.pathXyz[j * 3 + 1], ml.pathXyz[j * 3 + 2], &pts[j]);
     }
+    BITCODE_H arrowDimStyleRef = nullptr;
+    if (ml.arrowSizeWorld > 0.f) {
+      // R2000+ LEADER records do not encode per-entity DIMASZ. Give this fallback leader a
+      // dedicated referenced DIMSTYLE so its explicit world-size override survives old-format DWG.
+      std::string name = "GoSurvey_LeaderArrow_" + std::to_string(dwg->num_objects);
+      while (dwg_find_tablehandle(dwg, name.c_str(), "DIMSTYLE") != nullptr)
+        name += "_";
+      if (Dwg_Object_DIMSTYLE* style = dwg_add_DIMSTYLE(dwg, name.c_str())) {
+        style->DIMASZ = ml.arrowSizeWorld;
+        style->DIMSCALE = 1.0;
+        if (style->parent != nullptr)
+          arrowDimStyleRef = dwg_add_handleref(
+              dwg, 5, dwg_obj_generic_handlevalue(style), nullptr);
+      }
+    }
     Dwg_Entity_LEADER* ld =
         dwg_add_LEADER(hdr, static_cast<unsigned>(nPt), pts.data(), mt, 0);
     if (ld != nullptr) {
       ld->arrowhead_on = 1;
+      if (ml.arrowSizeWorld > 0.f) ld->dimasz = ml.arrowSizeWorld;
+      if (arrowDimStyleRef != nullptr) ld->dimstyle = arrowDimStyleRef;
       apply(ld->parent, at);
     } else {
       for (size_t j = 0; j + 1 < nPt; ++j) {

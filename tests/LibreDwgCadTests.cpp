@@ -1471,9 +1471,56 @@ TEST_CASE("Legacy LEADER arrow size includes the saved CANNOSCALE model factor (
           "[dwg][libredwg][issue619]") {
   // AutoCAD reports MESSER's DIMASZ 0.2 with ScaleFactor 16: header DIMSCALE 192 divided
   // by the active architectural scale's drawing-units value 12.
-  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(192.0, 0.0625, 12.0) == Catch::Approx(16.0));
-  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(1.0, 1.0, 50.0) == Catch::Approx(1.0));
-  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(4.0, 1.0, 50.0) == Catch::Approx(4.0));
+  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(192.0, 0.0625, 12.0, true) == Catch::Approx(16.0));
+  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(50.0, 1.0, 50.0, false) == Catch::Approx(50.0));
+  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(1.0, 1.0, 50.0, false) == Catch::Approx(1.0));
+  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(4.0, 1.0, 50.0, false) == Catch::Approx(4.0));
+}
+
+TEST_CASE("R2004 LEADER fallback keeps each multileader arrow size (REQ-367)",
+          "[dwg][libredwg][issue619]") {
+  ScratchDir dir("dwg-r2004-multileader-arrow-size");
+  const auto path = (dir.path / "leader-arrow-size.dwg").string();
+  AppCommandState source;
+  source.dwgExportVersion = DwgSaveVersion::R2004;
+  source.modelUnitsPerPlottedInch = 1.f;
+  CadMultileader multileader;
+  multileader.arrowSizeWorld = 0.36f;
+  multileader.labelHeightWorld = 1.f;
+  multileader.labelWidthWorld = 4.f;
+  multileader.pathXyz = {0.f, 0.f, 0.f, 6.f, 0.f, 0.f};
+  multileader.label.kind = CadAnnotation::Kind::Mtext;
+  multileader.label.text = "Fallback arrow";
+  multileader.label.insX = 6.f;
+  source.cadMultileaders.push_back(multileader);
+  source.cadMultileaderAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(source, path.c_str(), log, /*asDxf=*/false));
+
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(path.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  Dwg_Entity_LEADER* leader = nullptr;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    Dwg_Object& object = dwg.object[i];
+    if (object.fixedtype == DWG_TYPE_LEADER && object.tio.entity != nullptr) {
+      leader = object.tio.entity->tio.LEADER;
+      break;
+    }
+  }
+  REQUIRE(leader != nullptr);
+  REQUIRE(leader->dimstyle != nullptr);
+  Dwg_Object* styleObject = dwg_resolve_handle_silent(&dwg, leader->dimstyle->absolute_ref);
+  REQUIRE(styleObject != nullptr);
+  REQUIRE(styleObject->fixedtype == DWG_TYPE_DIMSTYLE);
+  REQUIRE(styleObject->tio.object != nullptr);
+  REQUIRE(styleObject->tio.object->tio.DIMSTYLE != nullptr);
+  CHECK(styleObject->tio.object->tio.DIMSTYLE->DIMASZ == Catch::Approx(0.36));
+  dwg_free(&dwg);
+
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.cadMultileaders.size() == 1);
+  CHECK(imported.cadMultileaders.front().arrowSizeWorld == Catch::Approx(0.36f));
 }
 
 TEST_CASE("Legacy LEADER MTEXT keeps glyph height and orders hookline before text landing (REQ-367)",
