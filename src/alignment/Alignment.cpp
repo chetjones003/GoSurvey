@@ -1076,3 +1076,27 @@ bool ParseContinuityRequirement(const std::string_view text, ContinuityRequireme
 }
 
 }  // namespace alignment
+
+namespace alignment {
+
+// REQ-500: no profile feature exists yet, so every vertical query answers "no profile" and returns no value. The
+// profile-id list is the seam a profile feature will fill in later.
+Alignment::VerticalResult Alignment::GetElevationAtStation(double) const {
+  VerticalResult r;
+  r.reason = profileIds.empty() ? "no profile" : "profile reading is not built yet";
+  return r;
+}
+
+Alignment::VerticalResult Alignment::GetProfilePoint(double) const {
+  VerticalResult r;
+  r.reason = profileIds.empty() ? "no profile" : "profile reading is not built yet";
+  return r;
+}
+
+Alignment::VerticalResult Alignment::GetVerticalGrade(double) const {
+  VerticalResult r;
+  r.reason = profileIds.empty() ? "no profile" : "profile reading is not built yet";
+  return r;
+}
+
+}  // namespace alignment

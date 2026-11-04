@@ -1230,6 +1230,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AlignmentLabelOffsetTests.cpp
     tests/AlignmentStyleFieldTests.cpp
     tests/AlignmentFeatureLineTests.cpp
+    tests/AlignmentProfileSeamTests.cpp
     tests/AlignmentSpiralCommandTests.cpp
     tests/AlignmentEditTests.cpp
     tests/SurfaceStatsTests.cpp

@@ -2248,3 +2248,78 @@ void RunFeatureLineFromAlignment(AppCommandState& st, const std::string& args, s
   log.push_back("FEATURELINEFROMALIGNMENT - feature line \"" + a->name + "\" made from the alignment: " +
                 std::to_string(count) + " vertices, " + zText + ".");
 }
+
+// ======================================================================================================
+// REQ-500: the profile seam, and QUICKPROFILE along an alignment (issue #121 Phase 5).
+// ======================================================================================================
+
+// QUICKPROFILE <surface>, <alignment>   (REQ-500 AC3). Samples the surface along the alignment from its start to its end,
+// one foot at a time (REQ-497.3), and stores the result in the same session graph the two-point command uses. Returns false
+// only when no alignment has that name, so the caller can report its usage line instead.
+bool RunQuickProfileAlongAlignment(AppCommandState& st, const std::string& surfaceName, const std::string& alignmentName,
+                                   std::vector<std::string>& log) {
+  const int ai = [&]() {
+    const std::string want = Lower(alignmentName);
+    for (size_t i = 0; i < st.alignments.size(); ++i) {
+      if (Lower(st.alignments[i].name) == want) return static_cast<int>(i);
+    }
+    return -1;
+  }();
+  if (ai < 0) return false;
+  const alignment::Alignment& a = st.alignments[static_cast<size_t>(ai)];
+  const int si = FindSurfaceIndex(st, surfaceName);
+  if (si < 0) {
+    log.push_back("QUICKPROFILE - no surface named \"" + surfaceName + "\".");
+    return true;
+  }
+  if (a.Empty()) {
+    log.push_back("QUICKPROFILE - \"" + a.name + "\" has no geometry to sample.");
+    return true;
+  }
+  std::unique_ptr<ISurfaceQuery> ground = MakeSurfaceQueryForCommands(st, st.cadSurfaces[static_cast<size_t>(si)]);
+  if (!ground) {
+    log.push_back("QUICKPROFILE - \"" + surfaceName + "\" is not a built surface.");
+    return true;
+  }
+  std::vector<alignment::GroundPoint> groundSamples;
+  std::string err;
+  if (!alignment::SampleGround(a, *ground, kQuickProfileStepFt, kQuickProfileMaxSamples, &groundSamples, &err)) {
+    log.push_back("QUICKPROFILE - " + err + ".");
+    return true;
+  }
+  std::vector<SurfaceProfileSample> samples;
+  samples.reserve(groundSamples.size());
+  int hits = 0;
+  double minZ = 0.0, maxZ = 0.0;
+  for (const alignment::GroundPoint& g : groundSamples) {
+    SurfaceProfileSample p;
+    p.station = g.internalStation - a.StartStation();
+    p.x = g.point.x;
+    p.y = g.point.y;
+    p.z = g.ground;
+    p.onSurface = g.hasGround;
+    if (p.onSurface) {
+      minZ = hits == 0 ? p.z : std::min(minZ, p.z);
+      maxZ = hits == 0 ? p.z : std::max(maxZ, p.z);
+      ++hits;
+    }
+    samples.push_back(p);
+  }
+  if (hits == 0) {
+    log.push_back("QUICKPROFILE - no samples on the surface (outside).");
+    return true;
+  }
+  const int p = st.displayLinearPrecision;
+  st.quickProfile.open = true;
+  st.quickProfile.hasResult = true;
+  st.quickProfile.surfaceName = surfaceName;
+  st.quickProfile.length = samples.back().station;
+  st.quickProfile.onSurfaceCount = hits;
+  st.quickProfile.minZ = minZ;
+  st.quickProfile.maxZ = maxZ;
+  st.quickProfile.samples = std::move(samples);
+  log.push_back("QUICKPROFILE - \"" + surfaceName + "\" along \"" + a.name + "\": length " + FormatLinear(st.quickProfile.length, p) +
+                ", " + std::to_string(st.quickProfile.samples.size()) + " sample(s), " + std::to_string(hits) +
+                " on surface, elev " + FormatLinear(minZ, p) + " to " + FormatLinear(maxZ, p) + ".");
+  return true;
+}

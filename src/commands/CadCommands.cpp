@@ -4582,6 +4582,8 @@ void RunQuickProfile(AppCommandState& st, const std::string& args, std::vector<s
     StartQuickProfileCommand(st, f[0], log);
     return;
   }
+  if (f.size() == 2 && !f[0].empty() && RunQuickProfileAlongAlignment(st, f[0], f[1], log))  // REQ-500 AC3
+    return;
   if (f.size() != 5 || f[0].empty()) {
     log.push_back("QUICKPROFILE — usage: QUICKPROFILE <surface>[, <x1>, <y1>, <x2>, <y2>].");
     return;

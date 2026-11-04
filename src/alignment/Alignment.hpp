@@ -243,6 +243,10 @@ class Alignment {
   // --- REQ-492.4: station/offset labels, owned by the alignment and removed with it (REQ-492.6) ---
   std::vector<StationOffsetLabel> stationLabels;
 
+  // --- REQ-500: the profile seam. Profiles are a later feature; an alignment holds only their ids, and the vertical
+  //     queries below answer "no profile" until one is attached. Geometry never stores a Z (REQ-480.3). ---
+  std::vector<std::uint64_t> profileIds;
+
   /// Reverses direction and stationing of a continuous alignment (REQ-487.2). The physical geometry
   /// is unchanged. Refuses (returns false) when a C0 gap exists. Reversing twice restores it.
   /// Station equations cannot be mirrored unambiguously (open question, REQ-503), so they are CLEARED
@@ -296,6 +300,16 @@ class Alignment {
   [[nodiscard]] std::vector<ContinuityIssue> CheckContinuity(ContinuityTolerance tol = {}) const;
   [[nodiscard]] int CurveCount() const;
   [[nodiscard]] int SpiralCount() const;
+  /// REQ-500: a vertical query's answer. With no profile there is no value; `reason` says why.
+  struct VerticalResult {
+    bool hasValue = false;
+    double value = 0.0;
+    std::string reason;
+  };
+  [[nodiscard]] VerticalResult GetElevationAtStation(double internalStation) const;
+  [[nodiscard]] VerticalResult GetProfilePoint(double internalStation) const;
+  [[nodiscard]] VerticalResult GetVerticalGrade(double internalStation) const;
+
   /// Axis-aligned bounds of the true geometry (arcs bounded by their extreme points). False when empty.
   [[nodiscard]] bool Bounds(Point2* mn, Point2* mx) const;
 

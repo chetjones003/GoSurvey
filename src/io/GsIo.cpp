@@ -2232,6 +2232,7 @@ json BuildRoot(const AppCommandState& st) {
         o["offsetDistance"] = a.offsetDistance;
       }
       if (a.segmentLabels) o["segmentLabels"] = true;  // REQ-492.3 / REQ-493.3
+      if (!a.profileIds.empty()) o["profiles"] = a.profileIds;  // REQ-500: profile references, ids only
       if (!a.stationLabels.empty()) {  // REQ-492.4: station/offset labels, owned by the alignment
         json labels = json::array();
         for (const alignment::StationOffsetLabel& l : a.stationLabels)
@@ -4105,6 +4106,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         if (cr >= 0 && cr <= 2) a.continuityRequirement = static_cast<alignment::ContinuityRequirement>(cr);
       }
       if (el.contains("segmentLabels") && el["segmentLabels"].is_boolean()) a.segmentLabels = el["segmentLabels"].get<bool>();
+      if (el.contains("profiles") && el["profiles"].is_array())
+        for (const auto& pid : el["profiles"])
+          if (pid.is_number_unsigned()) a.profileIds.push_back(pid.get<std::uint64_t>());
       if (el.contains("stationLabels") && el["stationLabels"].is_array()) {
         for (const auto& l : el["stationLabels"]) {
           alignment::StationOffsetLabel sl;
