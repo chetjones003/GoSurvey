@@ -1293,11 +1293,9 @@ void EditorWindow::ServiceUiRequests() {
     ShowAlignmentStyleDialog(this, m_State, m_Log, m_State.alignmentStyleEditorName);
     m_ModalOpen = false;
     Refresh();
-  } else if (m_State.alignmentLayoutRequested) {  // REQ-486.1
+  } else if (m_State.alignmentLayoutRequested) {  // REQ-486.1: a dock, so the drawing stays live while it is open
     m_State.alignmentLayoutRequested = false;
-    m_ModalOpen = true;
-    ShowAlignmentLayoutDialog(this, m_State, m_Log, m_State.alignmentLayoutName);
-    m_ModalOpen = false;
+    ShowAlignmentLayout(m_State.alignmentLayoutName);
     Refresh();
   } else if (m_State.addPointTableDialogRequested) {
     m_State.addPointTableDialogRequested = false;

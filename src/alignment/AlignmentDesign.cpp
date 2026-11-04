@@ -126,4 +126,30 @@ std::vector<DesignFinding> CheckDesign(const Alignment& a, const AlignmentCheckS
   return out;
 }
 
+std::string CriteriaRequirementText(const Alignment& a, const AlignmentCheckSet& set, int i, int linearPrecision) {
+  const int n = static_cast<int>(a.Entities().size());
+  if (i < 0 || i >= n) return {};
+  const Entity& e = a.Entities()[static_cast<size_t>(i)];
+  // \xE2\x89\xA5 is the "greater than or equal" sign in UTF-8.
+  const auto atLeast = [&](const char* what, double v) { return std::string(what) + " \xE2\x89\xA5 " + Lin(linearPrecision, v); };
+  if (e.kind == EntityKind::Arc) {
+    const double required = set.radiusTable.empty() ? -1.0 : MinRadiusForSpeed(set, DesignSpeedOverEntity(a, i));
+    return required > 0.0 ? atLeast("R", required) : std::string{};
+  }
+  if (e.kind == EntityKind::Line) {
+    // The same two limits CheckDesign applies: every line, and a tangent between two curves.
+    const bool betweenCurves = i > 0 && i + 1 < n && a.Entities()[static_cast<size_t>(i) - 1].kind == EntityKind::Arc &&
+                               a.Entities()[static_cast<size_t>(i) + 1].kind == EntityKind::Arc;
+    const double required = std::max(set.minLineLength, betweenCurves ? set.minTangent : 0.0);
+    return required > 0.0 ? atLeast("L", required) : std::string{};
+  }
+  std::string text;
+  const bool compound = (i > 0 && a.Entities()[static_cast<size_t>(i) - 1].kind == EntityKind::Spiral) ||
+                        (i + 1 < n && a.Entities()[static_cast<size_t>(i) + 1].kind == EntityKind::Spiral);
+  if (set.minSpiralLength > 0.0 && !compound) text = atLeast("Ls", set.minSpiralLength);
+  if (set.minA > 0.0) text += (text.empty() ? "" : ", ") + atLeast("A", set.minA);
+  if (set.maxA > 0.0) text += (text.empty() ? "" : ", ") + std::string("A \xE2\x89\xA4 ") + Lin(linearPrecision, set.maxA);
+  return text;
+}
+
 }  // namespace alignment

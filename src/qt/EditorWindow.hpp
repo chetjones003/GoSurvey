@@ -136,6 +136,10 @@ private:
   void ShowProjectPointWarning();
   void ShowPointTransfer(bool importing);
   void ShowSurveyReports();
+  /// REQ-486: the Alignment Layout table, docked like Civil 3D's Panorama, showing `name` (empty: keep the current one).
+  void ShowAlignmentLayout(const std::string& name);
+  /// Refills the docked Alignment Layout table when the drawing changed (called from Refresh).
+  void SyncAlignmentLayout();
   // Issue #893: surface and surface-style dialogs (EditorSurfaces / EditorSurfaceManager / EditorSurfaceStyles).
   void ShowCreateSurface();
   void ShowSurfaceProperties(int surfaceIndex);

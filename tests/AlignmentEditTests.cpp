@@ -12,6 +12,8 @@
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
 #include "alignment/Alignment.hpp"
+#include "alignment/AlignmentDesign.hpp"
+#include "util/NumFormat.hpp"
 
 using alignment::Alignment;
 using alignment::Entity;
@@ -687,4 +689,173 @@ TEST_CASE("Dragging an alignment grip edits it live, cancels back, and linked of
   RestoreEntityGripOriginal(st);  // Esc
   CHECK(st.alignments[0].Entities()[0].length == Approx(500.0).margin(kEps));
   CHECK(st.alignments[1].Entities()[0].length == Approx(500.0).margin(kEps));
+}
+
+namespace {
+
+/// North 200 to the PI (0,200), a Free R50 curve, then east 250: the Free-curve fixture of REQ-486 AC4.
+Alignment FreeCorner() {
+  Alignment a;
+  Entity l1;
+  l1.start = {0, 0};
+  l1.length = 200.0;
+  REQUIRE(a.AppendRaw(l1));
+  Entity arc;
+  arc.kind = alignment::EntityKind::Arc;
+  arc.start = {0, 150};
+  arc.radius = 50.0;
+  arc.length = 50.0 * alignment::kPi / 2.0;
+  arc.right = true;
+  REQUIRE(a.AppendRaw(arc));
+  Entity l2;
+  l2.start = {50, 200};
+  l2.startAzimuth = 90.0 * kDeg;
+  l2.length = 250.0;
+  REQUIRE(a.AppendRaw(l2));
+  REQUIRE(a.EditEntity(1, EditParam::Constraint, 3.0));  // Free
+  return a;
+}
+
+}  // namespace
+
+TEST_CASE("The issue's example is reproduced from entered parameters (REQ-486 AC1)", "[req486][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT EX", log);
+  Submit(st, "ALIGNMENTADD EX, TANGENT, 0, 0, 0, 250", log);
+  Submit(st, "ALIGNMENTADD EX, CURVELEN, 500, 132.14, RIGHT", log);
+  Submit(st, "ALIGNMENTADD EX, TANGENT, 100", log);
+  REQUIRE(st.alignments.size() == 1);
+  const Alignment& a = st.alignments[0];
+  REQUIRE(a.Entities().size() == 3);
+  CHECK(FormatLinear(a.Entities()[0].length, 2) == "250.00");
+  CHECK(FormatLinear(a.Entities()[1].radius, 2) == "500.00");
+  CHECK(FormatLinear(a.Entities()[1].length, 2) == "132.14");
+  CHECK(alignment::FormatStation(a.EntityStartStation(1)) == "2+50.00");
+  CHECK(alignment::FormatStation(a.EntityEndStation(1)) == "3+82.14");
+  CHECK(alignment::FormatStation(a.EndStation()) == "4+82.14");
+  CHECK(std::string(alignment::ParameterConstraintName(a.Entities()[1])) == "Radius, length");
+  CheckTangentContinuous(a);
+}
+
+TEST_CASE("Only defining parameters are editable in the layout table (REQ-486.1)", "[req486][alignment]") {
+  const Alignment chain = Chain();
+  const Entity& fixedLine = chain.Entities()[0];
+  const Entity& curve = chain.Entities()[1];
+  const Entity& floatingLine = chain.Entities()[2];
+  CHECK(alignment::ParameterEditable(fixedLine, EditParam::LineAzimuth));
+  CHECK_FALSE(alignment::ParameterEditable(floatingLine, EditParam::LineAzimuth));
+  CHECK(alignment::ParameterEditable(floatingLine, EditParam::LineLength));
+  CHECK(alignment::ParameterEditable(curve, EditParam::CurveRadius));
+  CHECK(alignment::ParameterEditable(curve, EditParam::CurveDelta));
+  CHECK_FALSE(alignment::ParameterEditable(curve, EditParam::CurveLength));  // radius-and-delta: the length is derived
+  CHECK(std::string(alignment::ParameterConstraintName(curve)) == "Radius, delta");
+  const Alignment corner = FreeCorner();
+  const Entity& free = corner.Entities()[1];
+  CHECK(alignment::ParameterEditable(free, EditParam::CurveRadius));
+  CHECK_FALSE(alignment::ParameterEditable(free, EditParam::CurveDelta));
+  CHECK_FALSE(alignment::ParameterEditable(free, EditParam::CurveLength));
+  CHECK_FALSE(alignment::ParameterEditable(free, EditParam::CurveDirection));
+  CHECK(std::string(alignment::ParameterConstraintName(free)) == "Radius (between tangents)");
+}
+
+TEST_CASE("A Free curve's derived values are refused; a length or delta edit redefines a curve (D-2026-11-04-g)",
+          "[req486][alignment]") {
+  Alignment corner = FreeCorner();
+  const Alignment before = corner;
+  std::string why;
+  CHECK_FALSE(corner.EditEntity(1, EditParam::CurveLength, 100.0, &why));
+  CHECK(why.find("Free curve") != std::string::npos);
+  CHECK_FALSE(corner.EditEntity(1, EditParam::CurveDelta, 60.0 * kDeg, &why));
+  CHECK_FALSE(corner.EditEntity(1, EditParam::CurveDirection, 0.0, &why));
+  CHECK(corner.Length() == Approx(before.Length()).margin(1e-12));
+
+  Alignment chain = Chain();
+  REQUIRE(chain.EditEntity(1, EditParam::CurveLength, 150.0));
+  CHECK(chain.Entities()[1].definedByLength);
+  REQUIRE(chain.EditEntity(1, EditParam::CurveRadius, 300.0));
+  CHECK(chain.Entities()[1].length == Approx(150.0).margin(1e-9));  // now defined by its length
+  REQUIRE(chain.EditEntity(1, EditParam::CurveDelta, 20.0 * kDeg));
+  CHECK_FALSE(chain.Entities()[1].definedByLength);
+  REQUIRE(chain.EditEntity(1, EditParam::CurveRadius, 600.0));
+  CHECK(chain.Entities()[1].length == Approx(600.0 * 20.0 * kDeg).margin(1e-9));  // and again by its delta
+}
+
+TEST_CASE("Editing the first bearing re-solves a Free curve and round-trips (REQ-486 AC4)", "[req486][alignment]") {
+  Alignment a = FreeCorner();
+  const Alignment original = a;
+  std::string why;
+  // Turn the first tangent 10 degrees right (N10E): the Free curve now turns 80 degrees, not 90.
+  REQUIRE(a.EditEntity(0, EditParam::LineAzimuth, 10.0 * kDeg, &why));
+  alignment::CurveData cd;
+  REQUIRE(a.CurveDataFor(1, &cd));
+  CHECK(cd.delta == Approx(80.0 * kDeg).margin(1e-9));
+  CheckTangentContinuous(a);
+  CHECK(a.EndPoint().x == Approx(original.EndPoint().x).margin(kEps));  // the second tangent keeps its end
+  CHECK(a.EndPoint().y == Approx(original.EndPoint().y).margin(kEps));
+  // Back to north and a radius out and back: the original geometry returns.
+  REQUIRE(a.EditEntity(0, EditParam::LineAzimuth, 0.0, &why));
+  REQUIRE(a.EditEntity(1, EditParam::CurveRadius, 80.0, &why));
+  REQUIRE(a.EditEntity(1, EditParam::CurveRadius, 50.0, &why));
+  for (size_t i = 0; i < a.Entities().size(); ++i) {
+    CHECK(a.Entities()[i].start.x == Approx(original.Entities()[i].start.x).margin(1e-9));
+    CHECK(a.Entities()[i].start.y == Approx(original.Entities()[i].start.y).margin(1e-9));
+    CHECK(a.Entities()[i].length == Approx(original.Entities()[i].length).margin(1e-9));
+  }
+}
+
+TEST_CASE("A fixed station refuses edits that would move it, naming every row (REQ-486.3)", "[req486][alignment]") {
+  Alignment a = Chain();
+  std::string why;
+  REQUIRE(a.EditEntity(2, EditParam::Locks, Entity::kLockStation));
+  const double lockedAt = a.EntityStartStation(2);
+  CHECK_FALSE(a.EditEntity(1, EditParam::CurveRadius, 400.0, &why));  // the curve would shorten and move entity 3
+  CHECK(why.find("entity 3 would move") != std::string::npos);
+  CHECK(a.EntityStartStation(2) == Approx(lockedAt).margin(1e-12));
+  CHECK_FALSE(a.EditEntity(0, EditParam::LineLength, 450.0, &why));
+  CHECK_FALSE(a.InsertTangentAfter(0, 25.0, &why));
+  CHECK(why.find("fixed station") != std::string::npos);
+  CHECK_FALSE(a.DeleteEntity(2, &why));
+  CHECK(why.find("cannot be removed") != std::string::npos);
+  REQUIRE(a.EditEntity(2, EditParam::LineLength, 300.0));  // its own length does not move its start
+  REQUIRE(a.EditEntity(0, EditParam::Locks, Entity::kLockStation));
+  CHECK_FALSE(a.EditEntity(0, EditParam::LineLength, 450.0, &why));
+  CHECK(why.find("entity 3") != std::string::npos);  // only entity 3 moves: entity 1 starts at the beginning
+  CHECK(why.find("entity 1 would move") == std::string::npos);
+}
+
+TEST_CASE("ALIGNMENTLOCK STATION, refusal wording and one undo step per edit (REQ-486 AC3, AC5)", "[req486][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT L", log);
+  Submit(st, "ALIGNMENTADD L, TANGENT, 0, 0, 45, 500", log);
+  Submit(st, "ALIGNMENTADD L, CURVE, 500, 15, RIGHT", log);
+  Submit(st, "ALIGNMENTADD L, TANGENT, 200", log);
+  Submit(st, "ALIGNMENTLOCK L, 3, STATION, ON", log);
+  REQUIRE((st.alignments[0].Entities()[2].locks & Entity::kLockStation) != 0);
+  log.clear();
+  Submit(st, "ALIGNMENTEDIT L, 2, RADIUS, 400", log);
+  CHECK(LogHas(log, "refused"));
+  CHECK(LogHas(log, "entity 3 would move"));
+  CHECK(st.alignments[0].Entities()[1].radius == Approx(500.0));
+  Submit(st, "ALIGNMENTLOCK L, 3, STATION, OFF", log);
+  Submit(st, "ALIGNMENTEDIT L, 2, RADIUS, 400", log);
+  REQUIRE(st.alignments[0].Entities()[1].radius == Approx(400.0));
+  Submit(st, "UNDO", log);
+  CHECK(st.alignments[0].Entities()[1].radius == Approx(500.0));
+  Submit(st, "REDO", log);
+  CHECK(st.alignments[0].Entities()[1].radius == Approx(400.0));
+}
+
+TEST_CASE("The criteria column states what the check set requires (REQ-486.5)", "[req486][req502][alignment]") {
+  Alignment a = Chain();
+  a.designSpeeds.push_back({0.0, 50.0});
+  alignment::AlignmentCheckSet set;
+  set.radiusTable = {{40.0, 300.0}, {50.0, 450.0}};
+  set.minLineLength = 100.0;
+  CHECK(alignment::CriteriaRequirementText(a, set, 1, 2) == "R \xE2\x89\xA5 450.00'");
+  CHECK(alignment::CriteriaRequirementText(a, set, 0, 2) == "L \xE2\x89\xA5 100.00'");
+  set.minLineLength = 0.0;
+  CHECK(alignment::CriteriaRequirementText(a, set, 0, 2).empty());
+  CHECK(alignment::CriteriaRequirementText(a, set, 9, 2).empty());
 }

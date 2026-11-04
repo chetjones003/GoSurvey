@@ -111,12 +111,14 @@ bool Alignment::Resolve(std::string* whyNot) {
     Entity& l2 = entities_[static_cast<size_t>(j) + 1];
     if (l1.constraint == Entity::Constraint::FloatOnNext || l1.constraint == Entity::Constraint::Free ||
         l2.constraint == Entity::Constraint::FloatOnPrev || l2.constraint == Entity::Constraint::Free)
-      return fail(Row(j) + ": a Free curve needs a Fixed or following tangent before it and a Fixed or leading tangent after it");
+      return fail(Row(j) + ", " + Row(j - 1) + " and " + Row(j + 1) +
+                  ": a Free curve needs a Fixed or following tangent before it and a Fixed or leading tangent after it");
     const double az1 = l1.startAzimuth, az2 = l2.startAzimuth;
     const double d1x = std::sin(az1), d1y = std::cos(az1), d2x = std::sin(az2), d2y = std::cos(az2);
     const Point2 e2 = EndOf(l2);  // the second tangent keeps its end
     const double cross = d1x * d2y - d1y * d2x;
-    if (std::fabs(cross) < 1e-12) return fail(Row(j) + ": the tangents are parallel, so no curve fits between them");
+    if (std::fabs(cross) < 1e-12)
+      return fail(Row(j) + ": its tangents (" + Row(j - 1) + " and " + Row(j + 1) + ") are parallel, so no curve fits between them");
     // start1 + t*d1 = e2 - u*d2
     const double rx = e2.x - l1.start.x, ry = e2.y - l1.start.y;
     const double t = (rx * d2y - ry * d2x) / cross;
@@ -126,7 +128,8 @@ bool Alignment::Resolve(std::string* whyNot) {
     if (defl < -kPi) defl += kTwoPi;
     const double T = arc.radius * std::tan(std::fabs(defl) * 0.5);
     if (!(t > 0.0) || !(u > 0.0) || !(t - T > 1e-9) || !(u - T > 1e-9))
-      return fail(Row(j) + ": the curve (tangent length " + std::to_string(T) + ") does not fit between its tangents");
+      return fail(Row(j) + ": the curve (tangent length " + std::to_string(T) + ") does not fit between its tangents, " +
+                  Row(j - 1) + " and " + Row(j + 1));
     const Point2 pi{l1.start.x + t * d1x, l1.start.y + t * d1y};
     l1.length = t - T;
     arc.start = {pi.x - T * d1x, pi.y - T * d1y};
@@ -186,18 +189,26 @@ bool Alignment::EditEntity(int i, EditParam param, double value, std::string* wh
       break;
     case EditParam::CurveLength:
       if (!arc && !spiral) return fail(row + " is a tangent, not a curve or spiral");
+      if (arc && e.constraint == Entity::Constraint::Free)
+        return fail(row + " is a Free curve: its length comes from its radius and its two tangents; edit the radius");
       if ((e.locks & Entity::kLockLength) != 0) return fail(row + " has a fixed length");
       if (!(value > 0.0)) return fail("the length must be positive");
       e.length = value;
+      if (arc) e.definedByLength = true;  // D-2026-11-04-g: the curve is now defined by radius and this length
       break;
     case EditParam::CurveDelta:
       if (!arc) return fail(row + " is not a circular curve");
+      if (e.constraint == Entity::Constraint::Free)
+        return fail(row + " is a Free curve: its delta comes from its two tangents; edit a tangent's bearing");
       if ((e.locks & Entity::kLockLength) != 0) return fail(row + " has a fixed length, so its delta cannot change");
       if (!(value > 0.0) || value >= kTwoPi) return fail("the delta must be between 0 and 360 degrees");
       e.length = e.radius * value;  // the radius is kept
+      e.definedByLength = false;    // D-2026-11-04-g: the curve is now defined by radius and this delta
       break;
     case EditParam::CurveDirection:
       if (!arc && !spiral) return fail(row + " is a tangent, not a curve or spiral");
+      if (arc && e.constraint == Entity::Constraint::Free)
+        return fail(row + " is a Free curve: it turns the way its two tangents turn");
       e.right = value != 0.0;
       break;
     case EditParam::SpiralStartRadius:
@@ -218,7 +229,7 @@ bool Alignment::EditEntity(int i, EditParam param, double value, std::string* wh
       break;
     }
     case EditParam::Locks:
-      e.locks = static_cast<unsigned char>(static_cast<int>(value) & 7);
+      e.locks = static_cast<unsigned char>(static_cast<int>(value) & Entity::kLockMask);
       work.entities_[static_cast<size_t>(i)] = e;
       *this = std::move(work);  // locks never move geometry
       return true;
@@ -226,9 +237,62 @@ bool Alignment::EditEntity(int i, EditParam param, double value, std::string* wh
   std::string why;
   if (!work.Resolve(&why)) return fail(why);
   work.Rebuild();
+  if (!work.StationLocksHold(*this, -1, -1, &why)) return fail(why);
   *this = std::move(work);
   PruneOrphanEquations();
   return true;
+}
+
+bool ParameterEditable(const Entity& e, EditParam param) {
+  if (param == EditParam::Constraint || param == EditParam::Locks) return true;
+  const bool free = e.constraint == Entity::Constraint::Free;
+  switch (e.kind) {
+    case EntityKind::Line:
+      return param == EditParam::LineLength || (param == EditParam::LineAzimuth && e.constraint == Entity::Constraint::Fixed);
+    case EntityKind::Arc:
+      if (param == EditParam::CurveRadius) return true;
+      if (free) return false;  // its length, delta and direction come from its two tangents
+      return param == EditParam::CurveDirection || (param == EditParam::CurveLength && e.definedByLength) ||
+             (param == EditParam::CurveDelta && !e.definedByLength);
+    case EntityKind::Spiral:
+      return param == EditParam::CurveLength || param == EditParam::CurveRadius || param == EditParam::SpiralStartRadius;
+  }
+  return false;
+}
+
+const char* ParameterConstraintName(const Entity& e) {
+  switch (e.kind) {
+    case EntityKind::Line: return e.constraint == Entity::Constraint::Fixed ? "Length, bearing" : "Length";
+    case EntityKind::Arc:
+      if (e.constraint == Entity::Constraint::Free) return "Radius (between tangents)";
+      return e.definedByLength ? "Radius, length" : "Radius, delta";
+    case EntityKind::Spiral: return "Length, radii";
+  }
+  return "";
+}
+
+bool Alignment::StationLocksHold(const Alignment& before, int inserted, int removed, std::string* whyNot) const {
+  assert(inserted < 0 || removed < 0);
+  assert(inserted <= static_cast<int>(entities_.size()));
+  std::string moved;
+  const int n = static_cast<int>(before.entities_.size());
+  for (int j = 0; j < n; ++j) {
+    if ((before.entities_[static_cast<size_t>(j)].locks & Entity::kLockStation) == 0) continue;
+    if (j == removed) {
+      if (whyNot != nullptr) *whyNot = Row(j) + " has a fixed station and cannot be removed; unlock its station first";
+      return false;
+    }
+    const int k = (inserted >= 0 && j >= inserted) ? j + 1 : (removed >= 0 && j > removed) ? j - 1 : j;
+    if (k < 0 || k >= static_cast<int>(entities_.size())) continue;
+    const double was = before.EntityStartStation(j);
+    const double now = EntityStartStation(k);
+    if (std::fabs(now - was) <= 1e-9) continue;
+    moved += (moved.empty() ? "" : "; ") + Row(j) + " would move from " + FormatStation(before.DisplayedStation(was, true)) +
+             " to " + FormatStation(DisplayedStation(now, true));
+  }
+  if (moved.empty()) return true;
+  if (whyNot != nullptr) *whyNot = "a fixed station would move (" + moved + ")";
+  return false;
 }
 
 bool Alignment::InsertTangentAfter(int i, double length, std::string* whyNot) {
@@ -247,6 +311,7 @@ bool Alignment::InsertTangentAfter(int i, double length, std::string* whyNot) {
   std::string why;
   if (!work.Resolve(&why)) return fail(why.c_str());
   work.Rebuild();
+  if (!work.StationLocksHold(*this, i + 1, -1, &why)) return fail(why.c_str());
   *this = std::move(work);
   PruneOrphanEquations();
   return true;
@@ -271,6 +336,7 @@ bool Alignment::InsertCurveAfter(int i, double radius, double arcLength, bool ri
   std::string why;
   if (!work.Resolve(&why)) return fail(why.c_str());
   work.Rebuild();
+  if (!work.StationLocksHold(*this, i + 1, -1, &why)) return fail(why.c_str());
   *this = std::move(work);
   PruneOrphanEquations();
   return true;
@@ -295,6 +361,7 @@ bool Alignment::InsertSpiralAfter(int i, double length, double startRadius, doub
   std::string why;
   if (!work.Resolve(&why)) return fail(why.c_str());
   work.Rebuild();
+  if (!work.StationLocksHold(*this, i + 1, -1, &why)) return fail(why.c_str());
   *this = std::move(work);
   PruneOrphanEquations();
   return true;
@@ -320,6 +387,10 @@ bool Alignment::DeleteEntity(int i, std::string* whyNot) {
     return false;
   }
   work.Rebuild();
+  if (!work.StationLocksHold(*this, -1, i, &why)) {
+    if (whyNot != nullptr) *whyNot = why;
+    return false;
+  }
   *this = std::move(work);
   PruneOrphanEquations();
   return true;

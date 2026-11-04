@@ -1,4 +1,4 @@
-﻿// CadCommands_Alignment.cpp - the alignment commands (REQ-480, 484, 485, 501; issue #121 Phase 1).
+// CadCommands_Alignment.cpp - the alignment commands (REQ-480, 484, 485, 501; issue #121 Phase 1).
 //
 // Same TU conventions as CadCommands_Geo.cpp: entry points are declared in CadCommands.hpp and the
 // geometry itself lives in alignment/Alignment.cpp (pure, no session state). This file only parses
@@ -977,11 +977,11 @@ void RunAlignmentEdit(AppCommandState& st, const std::string& args, std::vector<
   RefreshAlignmentOffsets(st, log);
 }
 
-// ALIGNMENTLOCK <name>, <entity#>, RADIUS|LENGTH|BEARING, ON|OFF
+// ALIGNMENTLOCK <name>, <entity#>, RADIUS|LENGTH|BEARING|STATION, ON|OFF
 void RunAlignmentLock(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
   if (f.size() != 4) {
-    log.push_back("ALIGNMENTLOCK - usage: ALIGNMENTLOCK <name>, <entity#>, RADIUS|LENGTH|BEARING, ON|OFF.");
+    log.push_back("ALIGNMENTLOCK - usage: ALIGNMENTLOCK <name>, <entity#>, RADIUS|LENGTH|BEARING|STATION, ON|OFF.");
     return;
   }
   alignment::Alignment* a = Resolve(st, "ALIGNMENTLOCK", f[0], log);
@@ -993,8 +993,9 @@ void RunAlignmentLock(AppCommandState& st, const std::string& args, std::vector<
   if (what == "radius") bit = alignment::Entity::kLockRadius;
   else if (what == "length") bit = alignment::Entity::kLockLength;
   else if (what == "bearing") bit = alignment::Entity::kLockBearing;
+  else if (what == "station") bit = alignment::Entity::kLockStation;  // REQ-486.3: its start station stays put
   if (bit == 0 || (onoff != "on" && onoff != "off")) {
-    log.push_back("ALIGNMENTLOCK - usage: ALIGNMENTLOCK <name>, <entity#>, RADIUS|LENGTH|BEARING, ON|OFF.");
+    log.push_back("ALIGNMENTLOCK - usage: ALIGNMENTLOCK <name>, <entity#>, RADIUS|LENGTH|BEARING|STATION, ON|OFF.");
     return;
   }
   unsigned char mask = a->Entities()[static_cast<size_t>(idx)].locks;

@@ -171,7 +171,7 @@ for a compact list inside the program.
 | `GETPOINTFROMSTATIONOFFSET` | — | Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset> | [[Commands/getpointfromstationoffset]] |
 | `CREATEALIGNMENTFROMOBJECTS` | — | Convert selected lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS <name>[, START=][, FILLET=][, REVERSE] | [[Commands/createalignmentfromobjects]] |
 | `ALIGNMENTEDIT` | — | Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING\|LENGTH\|RADIUS\|STARTRADIUS\|DELTA\|DIRECTION\|CONSTRAINT, <value> | [[Commands/alignmentedit]] |
-| `ALIGNMENTLOCK` | — | Lock a parameter: ALIGNMENTLOCK <name>, <entity#>, RADIUS\|LENGTH\|BEARING, ON\|OFF | [[Commands/alignmentlock]] |
+| `ALIGNMENTLOCK` | — | Lock a parameter: ALIGNMENTLOCK <name>, <entity#>, RADIUS\|LENGTH\|BEARING\|STATION, ON\|OFF | [[Commands/alignmentlock]] |
 | `ALIGNMENTINSERT` | — | Insert tangent, curve or spiral: ALIGNMENTINSERT <name>, <after#>, TANGENT\|CURVE\|SPIRAL, ... | [[Commands/alignmentinsert]] |
 | `ALIGNMENTREMOVE` | — | Remove an entity: ALIGNMENTREMOVE <name>, <entity#> | [[Commands/alignmentremove]] |
 | `ALIGNMENTCONTINUITY` | — | Continuity check level: ALIGNMENTCONTINUITY <name>, C0\|C1\|C2 \| LIST | [[Commands/alignmentcontinuity]] |
@@ -182,15 +182,15 @@ for a compact list inside the program.
 | `ALIGNMENTINTERSECT` | — | Intersections: ALIGNMENTINTERSECT <a>, <b> \| <a>, LINE, ... \| <a>, CIRCLE, ... | [[Commands/alignmentintersect]] |
 | `ALIGNMENTSTYLE` | — | Alignment display styles: ALIGNMENTSTYLE LIST\|NEW\|DELETE\|ASSIGN\|SHOW\|HIDE\|COLOR, ... | [[Commands/alignmentstyle]] |
 | `EDITALIGNMENT` | — | Open the Alignment Layout table: EDITALIGNMENT [<name>] | [[Commands/editalignment]] |
-| `ALIGNMENTREPORT` | — | Report an alignment as text or CSV: ALIGNMENTREPORT [<name>][, TXT|CSV[, <path>]] | [[Commands/alignmentreport]] |
+| `ALIGNMENTREPORT` | — | Report an alignment as text or CSV: ALIGNMENTREPORT [<name>][, TXT\|CSV[, <path>]] | [[Commands/alignmentreport]] |
 | `ALIGNMENTSURFACE` | — | Ground elevation along an alignment from a surface: ALIGNMENTSURFACE <alignment>, <surface>, STATION=<sta>[, OFFSET=<off>] \| INTERVAL=<n> | [[Commands/alignmentsurface]] |
 | `ALIGNMENTLABEL` | — | Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS \| CLEAR | [[Commands/alignmentlabel]] |
 | `ALIGNMENTLABELSET` | — | Alignment label sets: ALIGNMENTLABELSET LIST\|NEW\|DELETE\|ASSIGN\|MAJORINTERVAL\|MINORINTERVAL\|SHOW\|HIDE\|STYLE, ... | [[Alignments]] |
 | `ALIGNMENTLABELSTYLE` | — | Alignment label styles (text style, height, colour): ALIGNMENTLABELSTYLE LIST\|NEW\|DELETE\|SET, ... | [[Commands/alignmentlabelstyle]] |
 | `ALIGNMENTTABLE` | — | Insert a line, curve, segment or equation table: ALIGNMENTTABLE <name>, LINE\|CURVE\|SEGMENT\|EQUATIONS[, STATIC\|DYNAMIC][, <x>, <y>] | [[Commands/alignmenttable]] |
 | `FEATURELINEFROMALIGNMENT` | — | Feature line from an alignment: FEATURELINEFROMALIGNMENT <alignment>[, INTERVAL=<n>][, TOL=<n>][, SURFACE=<name> \| Z=<value>] | [[Commands/featurelinefromalignment]] |
-| `ALIGNMENTPROPS` | — | Alignment properties: ALIGNMENTPROPS <alignment>, NAME|DESCRIPTION|STYLE|LAYER|START, <value> | [[Commands/alignmentprops]] |
-| `ALIGNMENTINVERSE` | — | Distance along an alignment: ALIGNMENTINVERSE <alignment>, STA|PT, ... [, CHORD] | [[Commands/alignmentinverse]] |
+| `ALIGNMENTPROPS` | — | Alignment properties: ALIGNMENTPROPS <alignment>, NAME\|DESCRIPTION\|STYLE\|LAYER\|START, <value> | [[Commands/alignmentprops]] |
+| `ALIGNMENTINVERSE` | — | Distance along an alignment: ALIGNMENTINVERSE <alignment>, STA\|PT, ... [, CHORD] | [[Commands/alignmentinverse]] |
 | `ALIGNMENTBEARING` | — | Bearing at a station: ALIGNMENTBEARING <alignment>, <station> | [[Commands/alignmentbearing]] |
 | `ALIGNMENTDISTANCE` | — | Distance along an alignment to a point: ALIGNMENTDISTANCE <alignment>, <x>, <y> | [[Commands/alignmentdistance]] |
 | `ALIGNMENTCHECKSET` | — | Design check sets: ALIGNMENTCHECKSET NEW\|DELETE\|LIST\|SET, ... | [[Commands/alignmentcheckset]] |

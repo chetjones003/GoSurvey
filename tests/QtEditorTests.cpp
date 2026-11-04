@@ -767,23 +767,31 @@ private Q_SLOTS:
     // The viewport is a GL widget: the framebuffer holds the painter overlay (the flag), a plain window grab does not.
     QVERIFY(window.m_Viewport->grabFramebuffer().save(Issue914Shot("qt-502-viewport-flag.png")));
 
-    bool layoutChecked = false;
-    QTimer::singleShot(0, &window, [&] {
-      auto* dialog = window.findChild<QDialog*>("alignmentLayoutDialog");
-      QVERIFY(dialog);
-      QTimer::singleShot(20000, dialog, &QDialog::reject);
-      auto* table = dialog->findChild<QTableWidget*>("alignmentLayoutTable");
-      QVERIFY(table);
-      // The Design check column names the failing curve (entity 2) and nothing else.
-      QCOMPARE(table->columnCount(), 12);
-      QVERIFY(table->item(1, 11)->text().contains("below the selected minimum design radius"));
-      QVERIFY(table->item(0, 11)->text().isEmpty());
-      QVERIFY(dialog->grab().save(Issue914Shot("qt-502-layout-design-check.png")));
-      layoutChecked = true;
-      dialog->reject();
-    });
+    // Civil 3D makes this road's curve Free between Fixed tangents (from a polyline); match it for the panel. The
+    // geometry does not change.
+    run("ALIGNMENTEDIT Main Road, 3, CONSTRAINT, FIXED");
+    run("ALIGNMENTEDIT Main Road, 2, CONSTRAINT, FREE");
+    QCOMPARE(window.State().alignments[0].Entities()[1].constraint, alignment::Entity::Constraint::Free);
     window.Submit("EDITALIGNMENT Main Road");
-    QVERIFY(layoutChecked);
+    {
+      auto* dock = window.findChild<QDockWidget*>("alignmentLayoutDock");
+      QVERIFY(dock != nullptr && !dock->isHidden());
+      auto* table = dock->findChild<QTableWidget*>("alignmentLayoutTable");
+      QVERIFY(table);
+      QCOMPARE(table->item(1, 12)->text(), QString("Radius (between tangents)"));
+      QVERIFY(!table->item(1, 0)->icon().isNull());  // the failing row is marked
+      // The Design check column names the failing curve (entity 2) and nothing else; the Criteria column shows the
+      // radius the set requires there (REQ-486.5).
+      QCOMPARE(table->columnCount(), 17);
+      QVERIFY(table->item(1, 16)->text().contains("below the selected minimum design radius"));
+      QVERIFY(table->item(0, 16)->text().isEmpty());
+      QVERIFY(table->item(1, 15)->text().startsWith(QString::fromUtf8("R \xE2\x89\xA5 120.")));
+      QVERIFY(table->item(0, 15)->text().isEmpty());
+      QTest::qWait(150);
+      QVERIFY(dock->grab().save(Issue914Shot("qt-502-layout-design-check.png")));
+      QVERIFY(window.grab().save(Issue914Shot("qt-486-window-with-layout.png")));
+      dock->close();
+    }
 
     bool styleChecked = false;
     QTimer::singleShot(0, &window, [&] {
@@ -899,41 +907,47 @@ private Q_SLOTS:
                              "ALIGNMENTADD Main Road, CURVE, 60, 50, LEFT", "ALIGNMENTADD Main Road, TANGENT, 50"})
       window.Submit(line);
     QCOMPARE(window.State().alignments.size(), size_t(1));
-    bool opened = false;
-    QTimer::singleShot(0, &window, [&] {
-      auto* dialog = window.findChild<QDialog*>("alignmentLayoutDialog");
-      QVERIFY(dialog);
-      opened = true;
-      QTimer::singleShot(20000, dialog, &QDialog::reject);
-      auto* table = dialog->findChild<QTableWidget*>("alignmentLayoutTable");
-      auto* status = dialog->findChild<QLabel*>("alignmentLayoutStatus");
-      QVERIFY(table);
-      QVERIFY(status);
-      QCOMPARE(table->rowCount(), 5);
-      QCOMPARE(table->item(1, 1)->text(), QString("Curve"));
-      QVERIFY(dialog->grab().save(Issue914Shot("qt-121-layout-table.png")));
-
-      // Editing a radius runs ALIGNMENTEDIT: the solver keeps the chain tangent and the table shows the new values.
-      table->item(1, 5)->setText("100");
-      QTest::qWait(150);
-      QCOMPARE(window.State().alignments[0].Entities()[1].radius, 100.0);
-      QCOMPARE(table->item(1, 5)->text(), QString("100.0000"));
-      QVERIFY(status->text().contains("updated"));
-      QVERIFY(dialog->grab().save(Issue914Shot("qt-121-layout-edited.png")));
-
-      // A derived (floating) bearing is refused with the reason, and the table shows the real value again.
-      const double before = window.State().alignments[0].Entities()[2].startAzimuth;
-      table->item(2, 7)->setText("10");
-      QTest::qWait(150);
-      QVERIFY(status->text().contains("refused"));
-      QCOMPARE(window.State().alignments[0].Entities()[2].startAzimuth, before);
-      QVERIFY(dialog->grab().save(Issue914Shot("qt-121-layout-refused.png")));
-      dialog->accept();
-    });
     window.Submit("EDITALIGNMENT Main Road");
-    QVERIFY(opened);
+    auto* dock = window.findChild<QDockWidget*>("alignmentLayoutDock");
+    QVERIFY(dock != nullptr && !dock->isHidden());
+    auto* table = dock->findChild<QTableWidget*>("alignmentLayoutTable");
+    auto* status = dock->findChild<QLabel*>("alignmentLayoutStatus");
+    QVERIFY(table);
+    QVERIFY(status);
+    QCOMPARE(table->rowCount(), 5);
+    QCOMPARE(table->item(1, 1)->text(), QString("Curve"));
+    // REQ-486.1: only what an entity was defined by can be edited. The curve was entered by radius and delta.
+    QCOMPARE(table->item(1, 12)->text(), QString("Radius, delta"));
+    QVERIFY((table->item(1, 5)->flags() & Qt::ItemIsEditable) != 0);  // radius
+    QVERIFY((table->item(1, 7)->flags() & Qt::ItemIsEditable) != 0);  // delta
+    QVERIFY((table->item(1, 4)->flags() & Qt::ItemIsEditable) == 0);  // length is derived
+    QVERIFY((table->item(2, 9)->flags() & Qt::ItemIsEditable) == 0);  // a floating tangent's bearing is derived
+    QTest::qWait(150);
+    QVERIFY(dock->grab().save(Issue914Shot("qt-121-layout-table.png")));
+    QVERIFY(window.grab().save(Issue914Shot("qt-486-layout-docked.png")));
+
+    // Editing a radius runs ALIGNMENTEDIT: the curve keeps its delta (D-2026-11-04-f) and the table shows the new values.
+    table->item(1, 5)->setText("100");
+    QTest::qWait(150);
+    QCOMPARE(window.State().alignments[0].Entities()[1].radius, 100.0);
+    QCOMPARE(table->item(1, 5)->text(), QString("100.0000"));
+    QVERIFY(status->text().contains("updated"));
+    QVERIFY(dock->grab().save(Issue914Shot("qt-121-layout-edited.png")));
+
+    // A derived (floating) bearing typed in anyway is refused with the reason, and the table shows the real value.
+    const double before = window.State().alignments[0].Entities()[2].startAzimuth;
+    table->item(2, 9)->setText("10");
+    QTest::qWait(150);
+    QVERIFY(status->text().contains("refused"));
+    QCOMPARE(window.State().alignments[0].Entities()[2].startAzimuth, before);
+    QVERIFY(dock->grab().save(Issue914Shot("qt-121-layout-refused.png")));
+
+    // The dock stays open and follows the drawing: UNDO puts the radius back in one step and the table refills.
     window.Submit("UNDO");
-    QCOMPARE(window.State().alignments[0].Entities()[1].radius, 80.0);  // the edit was one undo step
+    QCOMPARE(window.State().alignments[0].Entities()[1].radius, 80.0);
+    window.Refresh();
+    QCOMPARE(table->item(1, 5)->text(), QString("80.0000"));
+    QVERIFY(!dock->isHidden());
   }
 
   void issue121StationLabelDragsInTheViewport() {

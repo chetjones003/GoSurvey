@@ -4288,7 +4288,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
             const int c = q["c"].get<int>();
             if (c >= 0 && c <= 3) e.constraint = static_cast<alignment::Entity::Constraint>(c);
           }
-          if (q.contains("lk") && q["lk"].is_number_integer()) e.locks = static_cast<unsigned char>(q["lk"].get<int>() & 7);
+          if (q.contains("lk") && q["lk"].is_number_integer()) e.locks = static_cast<unsigned char>(q["lk"].get<int>() & alignment::Entity::kLockMask);
           // D-2026-11-04-f: absent in older files, which read as radius-and-delta curves.
           e.definedByLength = e.kind == alignment::EntityKind::Arc && q.contains("dl") && q["dl"].is_boolean() &&
                               q["dl"].get<bool>();

@@ -2464,6 +2464,7 @@ void EditorWindow::Refresh() {
     viewportZoom->setEnabled(modelSpace && !m_State.viewportZoomScales.empty());
   }
   RefreshProjects();
+  SyncAlignmentLayout();  // REQ-486: the docked layout table follows undo, grips, commands and tab switches
   const QSignalBlocker tabBlock(m_Tabs);
   while (m_Tabs->count() > static_cast<int>(m_State.drawingTabs.size())) m_Tabs->removeTab(m_Tabs->count() - 1);
   for (int i = 0; i < static_cast<int>(m_State.drawingTabs.size()); ++i) {

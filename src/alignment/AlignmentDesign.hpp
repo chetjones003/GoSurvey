@@ -68,4 +68,9 @@ struct DesignFinding {
 /// Every failed check on the alignment, in travel order (REQ-502). Empty when the alignment meets the set, or when it has none.
 [[nodiscard]] std::vector<DesignFinding> CheckDesign(const Alignment& a, const AlignmentCheckSet& set, int linearPrecision);
 
+/// REQ-486.5: what the check set requires of entity `i` (0-based), for the layout table's criteria column, e.g.
+/// "R ≥ 120.00'" for a curve at its design speed, "L ≥ 50.00'" for a tangent, "Ls ≥ …, A ≥ …" for a spiral. Empty when
+/// the set requires nothing of it.
+[[nodiscard]] std::string CriteriaRequirementText(const Alignment& a, const AlignmentCheckSet& set, int i, int linearPrecision);
+
 }  // namespace alignment

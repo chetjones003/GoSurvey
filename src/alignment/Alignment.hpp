@@ -51,6 +51,8 @@ struct Entity {
   static constexpr unsigned char kLockRadius = 1;   ///< Arc radius.
   static constexpr unsigned char kLockLength = 2;   ///< Line length or arc length.
   static constexpr unsigned char kLockBearing = 4;  ///< Line start azimuth.
+  static constexpr unsigned char kLockStation = 8;  ///< Start distance along the alignment (geometry edits only).
+  static constexpr unsigned char kLockMask = 15;
   unsigned char locks = 0;
   /// Arc only (D-2026-11-04-f): entered by radius and length, so a radius edit keeps the length. False = entered by
   /// radius and delta (also curves from objects and from older files), so a radius edit keeps the delta.
@@ -70,6 +72,12 @@ enum class EditParam {
   Constraint,
   Locks
 };
+
+/// REQ-486.1: whether `param` took part in how entity `e` is defined, so the layout table offers it for editing; a
+/// derived value is shown read-only. Constraint and locks are always editable.
+[[nodiscard]] bool ParameterEditable(const Entity& e, EditParam param);
+/// How entity `e` is defined, worded like Civil 3D's "Parameter Constraint" column (e.g. "Radius, delta").
+[[nodiscard]] const char* ParameterConstraintName(const Entity& e);
 
 /// Everything the issue asks to report about a circular curve (REQ-481.2). Derived, never stored.
 struct CurveData {
@@ -339,6 +347,10 @@ class Alignment {
   void Rebuild();
   /// Re-solves every floating / free relationship in the chain (REQ-486.2). False names the failing row.
   bool Resolve(std::string* whyNot);
+  /// REQ-486.3 fixed station: true when every station-locked entity of `before` still starts at the same distance along
+  /// the alignment here. `inserted` / `removed` are the index an entity was inserted at or removed from (-1 = none).
+  /// False names every row that would move.
+  [[nodiscard]] bool StationLocksHold(const Alignment& before, int inserted, int removed, std::string* whyNot) const;
   [[nodiscard]] Point2 PointInEntity(int i, double s) const;      ///< s = distance from entity start.
   [[nodiscard]] double AzimuthInEntity(int i, double s) const;
   [[nodiscard]] double SignedCurvature(const Entity& e) const;

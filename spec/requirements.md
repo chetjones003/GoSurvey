@@ -16219,6 +16219,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
      A curve entered by radius and length (`ALIGNMENTADD … CURVELEN`) keeps its length. A Free curve keeps the
      intersection of its two tangents, so its Δ comes from them. A Δ edit keeps the radius; a length edit keeps the
      radius. Each curve stores how it was defined.
+  7. **Decision D-2026-11-04-g (layout table and constraints):** the Alignment Layout table is a dock (like Civil 3D's
+     Panorama) that refills whenever the drawing changes. Its columns add start radius and A (spirals), the tangency
+     constraint, the parameter constraint (how the entity is defined), locks, and a **Criteria** column with the value
+     the check set requires (REQ-486.5). The table greys and refuses derived values; from the command line, a length or
+     Δ edit on a non-Free curve makes that value part of its definition (Civil 3D's unlocked parameter constraint), and
+     a Free curve refuses length, Δ and direction edits because its tangents decide them. **Fixed station** locks an
+     entity's start distance along the alignment: any geometry edit, insert or delete that would move it is refused,
+     naming every row that would move; relabelling the starting station is not a geometry edit. Refusals of a Free
+     curve name the curve and both tangents.
 - Acceptance:
   1. The issue's example (tangent 250.00', curve R 500 ~132.14', tangent) is reproduced from entered parameters and
      the displayed rows match the table values to display precision.
