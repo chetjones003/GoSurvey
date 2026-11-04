@@ -72,7 +72,7 @@ See `verification/reviews/TASK-810-export-current-layout-pdf-plan-review.md`.
 - Assumptions: none.
 - Architectural decisions made by Workshop: none; D-2026-11-04-d is the accepted authority.
 - Technical debt: none identified in this slice. DWF, Display-area export, Plotter Manager/device configuration, and Display/Current controls remain explicitly excluded; #810 stays open for the other controls.
-- Product docs: updated the in-app Plotting guide. README and PRIVACY have no affected content. Public manual wiki and remaining product-documentation review are reserved for the combined PR preflight.
+- Product docs: updated the in-app Plotting guide. README and PRIVACY have no affected content. The public manual update and remaining documentation review are recorded in `TASK-paper-space-issue-batch-pr.md`.
 
 ## 9. Self-verification
 

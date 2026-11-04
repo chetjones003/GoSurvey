@@ -1,7 +1,7 @@
 # TASK-1009 — Plot styles and non-PDF output (issue #1009)
 
 - Type: feature
-- Status: SPEC accepted; plan review approved; ready for Workshop implementation
+- Status: implementation complete; ready for combined PR review
 - GitHub: #1009
 
 ## 1. Confirmed feature request
@@ -102,4 +102,4 @@ Likely areas: `src/commands/PaperSpace.hpp`, drawing/entity/layer values in `src
 
 ### Status
 
-Implementation and code verification are complete. The Page Setup screenshot is available, but Civil 3D comparison is inconclusive because Civil 3D is not installed; this limitation must remain visible in the completion record. Keep #1009 open while the paper-space batch is assembled. Complete the README, PRIVACY, and public manual wiki preflight before opening the combined PR.
+Implementation and code verification are complete. The Page Setup screenshot is available, but Civil 3D comparison is inconclusive because Civil 3D is not installed; this limitation remains visible in the completion record. README and PRIVACY were reviewed and did not require changes. In-app and public manual wiki pages were updated for the combined PR.

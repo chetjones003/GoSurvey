@@ -70,4 +70,4 @@ See `verification/reviews/TASK-810-view-details-plan-review.md`.
 - Assumptions: none.
 - Architectural decisions made by Workshop: none; D-2026-11-04-c is the accepted authority.
 - Technical debt: none identified within this slice. #810 remains open for the combined paper-space PR as directed.
-- Product docs: reviewed the in-app Paper Space and Layouts guide and added the View Details behavior. README and PRIVACY have no affected content; public wiki review/update is deferred to the pre-PR documentation pass.
+- Product docs: reviewed the in-app Paper Space and Layouts guide and added the View Details behavior. README and PRIVACY have no affected content; the public manual update is recorded in `TASK-paper-space-issue-batch-pr.md`.

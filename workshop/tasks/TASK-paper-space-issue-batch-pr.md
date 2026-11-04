@@ -1,7 +1,7 @@
 # TASK — Paper-space issue batch PR
 
 - Type: combined feature and DXF interoperability batch
-- Status: preparing PR; final build and full suite pending
+- Status: verification passed; ready to publish the PR
 - Branch: `feat/paper-space-issues-batch`
 - Base: `beta`
 
@@ -23,9 +23,9 @@
 - #1000 is not included: its view-frame prerequisite (#999) is blocked by #121, and the repository
   has no view-frame model or workflow yet.
 - #810 remains open because its other Output controls have not been specified or implemented.
-- #1016 remains open pending the AutoCAD UI visible-clipping check. AutoCAD Core Console audited
-  the DWG data and round-tripped the DXF clip reference, and GoSurvey's render/plot tests pass;
-  Civil 3D is not installed, so the paired product comparison is inconclusive.
+- #1016 is implemented and linked in this PR. GoSurvey render/plot tests and screenshots, plus
+  AutoCAD Core Console DWG audits and DWG-to-DXF clip-boundary round-trip, pass. Civil 3D is not
+  installed, so the paired product comparison is inconclusive; no product-parity pass is claimed.
 
 ## Product documentation pre-PR review — 2026-11-04
 
@@ -35,7 +35,8 @@
 - Public GoSurvey manual wiki: reviewed `Paper-Space-and-Layouts.md`, `Plotting.md`, and
   `Import-and-Export.md`; updated these pages for layout duplication, paper viewport controls and
   MVIEW, scale matching, PDF preview/export and plot styles, plus DXF blocks and INSERTs. Published
-  wiki commit `0980578650781c39dd74161ff20268d278b42d1f`.
+  commits `0980578650781c39dd74161ff20268d278b42d1f` and
+  `579cbc5b5cd4a04e6be258e691985d702a2a5fd4`.
 
 ## PR evidence
 
@@ -57,6 +58,9 @@
 ## Verification
 
 - Focused checks and per-feature verification are recorded in the linked `TASK-*.md` files.
-- Final current-`beta` Release build and CTest result: pending.
-- `git diff --check`: previously passed before PR assembly; rerun after base update.
-- PR review state, issue close state, branch SHA, and final acceptance matrix: pending PR creation.
+- `.\build.bat`: PASS on the merged current-`beta` tree (Release; both frontends and all test/helpers).
+- `ctest --preset ninja-release --output-on-failure`: PASS, 194/194.
+- `git diff --check`: PASS after the merge and again before push.
+- Issues requested for closure after PR creation: #780, #781, #1005, #1007, #1009, #1015, #1016,
+  and #1017. #810 remains open for its remaining Output controls.
+- PR URL, final head SHA, and resulting issue states: pending PR creation.

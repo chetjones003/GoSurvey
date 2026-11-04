@@ -1,7 +1,7 @@
 # TASK-1016 — Add MVIEW fit, presets, and closed-polyline viewports (issue #1016)
 
 - Type: feature
-- Status: plan
+- Status: implementation complete; ready for combined PR review (Civil 3D comparison inconclusive)
 - Opened: 2026-11-03
 - GitHub issue: #1016
 
@@ -58,7 +58,7 @@ None. Full sheet means the active layout's stored paper width and height; printa
 - [x] Add command, undo/redo, and invalid-input regression coverage; update MVIEW help.
 - [x] Run final focused tests/build.
 - [x] AutoCAD interoperability check: accoreconsole AUDIT reports zero errors/repairs for clipped R2000/R2010/R2018 DWGs; AutoCAD 2025 DXFOUT preserves the clip-boundary reference and bulged polyline. Full UI render verification remains outstanding; paired comparison is inconclusive because Civil 3D is unavailable.
-- [ ] Pre-PR documentation review (reserved for combined PR preflight).
+- [x] Pre-PR documentation review; see `TASK-paper-space-issue-batch-pr.md`.
 
 ## 7. Workflow-specific notes
 
@@ -93,7 +93,7 @@ None. Full sheet means the active layout's stored paper width and height; printa
 - Requirements satisfied: implementation and focused regression coverage complete; external validation gates remain.
 - Tests added: MVIEW arrangements, two-click workflow, Object creation/refusals, undo/redo, PDF stroke clipping, and GS/DXF/DWG clip round-trips.
 - Refactors: none.
-- Docs updated: SPEC and task/verification records; MVIEW in-app wiki and ribbon help updated. README, PRIVACY, and public wiki review is reserved for the combined PR preflight.
+- Docs updated: SPEC and task/verification records; MVIEW in-app wiki and ribbon help updated. README, PRIVACY, in-app wiki, and public manual wiki were reviewed; outcomes are in `TASK-paper-space-issue-batch-pr.md`.
 - Visual evidence: `build/artifacts/Release/req480-paper-viewport-clipping.png`; the Qt test confirms a point inside the outline shows viewport rendering and a point outside it but inside its bounding box shows the sheet.
 - External limits: Civil 3D is unavailable, so paired screenshot review is **inconclusive**. AutoCAD 2025 accepted and rewrote the clip data, but full UI render verification remains outstanding. PDF model strokes are geometrically clipped; model text anchors outside the polygon are omitted, while glyphs anchored inside may extend beyond the edge because PDFium exposes no arbitrary per-object clip-path setter in the bundled API.
-- Done: implementation meets the accepted PDF text behavior; AutoCAD DWG audit and DWG→DXF clip-data round-trip passed. Issue remains open pending full AutoCAD UI clipping verification and the required paired Civil 3D visual review.
+- Completion: implementation, GoSurvey render/plot coverage, AutoCAD DWG audit, and DWG→DXF clip-data round-trip are complete. Full AutoCAD UI visual clipping was not directly checked. Civil 3D is unavailable, so the paired product comparison is inconclusive and no parity pass is claimed. The user requested closure of issues included in the combined PR; retain this validation limitation in the PR and issue closure note.

@@ -56,6 +56,6 @@
 
 - Requirements satisfied: REQ-483 acceptance criteria 1–5 have focused coverage and pass.
 - Tests: Release build passed; combined `[req483],[req305]` run passed (41 assertions in 4 cases). The full combined suite remains part of final PR validation.
-- Documentation: updated `resources/wiki/Commands/array.md`, `resources/wiki/Commands/overkill.md`, and `resources/wiki/Paper-Space-and-Layouts.md`. Combined PR documentation review remains pending.
+- Documentation: updated `resources/wiki/Commands/array.md`, `resources/wiki/Commands/overkill.md`, and `resources/wiki/Paper-Space-and-Layouts.md`. Combined PR documentation review is recorded in `TASK-paper-space-issue-batch-pr.md`.
 - Verification: focused plan accepted before implementation; no new dependency, data format, public API, or layer was added.
 - Done: ready for closure with the combined PR.

@@ -52,5 +52,5 @@ The importer fills existing `PaperLayout` entity stores. No new data owner, DXF 
 - `.\build.bat`: PASS (Release build).
 - `GoSurveyTests.exe '[issue781]'`: PASS (43 assertions, 1 test case).
 - `git diff --check`: PASS.
-- No user-visible UI change and no product documentation update is required for this IO-only regression/fix. The combined PR documentation review remains pending before PR creation.
+- No user-visible UI change or issue-specific product-doc change was needed for this IO-only update. The combined PR documentation review is recorded in `TASK-paper-space-issue-batch-pr.md`.
 - 2026-11-04 re-review after TASK-780: `GoSurveyTests.exe '[issue781]'` passed again (43 assertions, 1 test case); the stale #780 failure note is resolved. #781 remains ready for the combined PR review.
