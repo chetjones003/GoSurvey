@@ -1845,6 +1845,9 @@ json BuildRoot(const AppCommandState& st) {
   for (const CadMultileader& ml : st.cadMultileaders) {
     json o;
     o["path"] = ml.pathXyz;
+    o["arrowSizeWorld"] = ml.arrowSizeWorld;
+    o["labelWidthWorld"] = ml.labelWidthWorld;
+    o["labelHeightWorld"] = ml.labelHeightWorld;
     if (ml.annotative)
       o["annotative"] = true;
     if (ml.splinePath)
@@ -3778,6 +3781,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (!o.is_object())
         continue;
       CadMultileader ml;
+      ml.arrowSizeWorld = o.value("arrowSizeWorld", ml.arrowSizeWorld);
+      ml.labelWidthWorld = o.value("labelWidthWorld", ml.labelWidthWorld);
+      ml.labelHeightWorld = o.value("labelHeightWorld", ml.labelHeightWorld);
       if (o.contains("path") && o["path"].is_array()) {
         for (const auto& v : o["path"])
           if (v.is_number())

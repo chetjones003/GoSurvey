@@ -30,6 +30,22 @@
 #ifdef small
 #undef small
 #endif
+#include "PdfViewerCore.hpp"
+#include "QtAnnotations.hpp"
+#include "QtText.hpp"
+#include "util/gizmooverlay.hpp"
+#include "GsIo.hpp"
+#include "ProjectPoints.hpp"
+#include "ProjectFiles.hpp"
+#include "ProjectPack.hpp"
+#include "ProjectTurnover.hpp"
+#include "ProjectSettings.hpp"
+#include "geo/CoordinateSystems.hpp"
+#include "SurveyCsv.hpp"
+#include "io/ProjectPointDb.hpp"
+#include "io/Project.hpp"
+#include "GsMigrate.hpp"
+
 #include "AppPaths.hpp"
 #include "CadSurfaceEdit.hpp"
 #include "CrashReporter.hpp"
@@ -134,6 +150,8 @@
 #include <QTemporaryFile>
 #include <QDir>
 #include <QFileInfo>
+#include <QFontMetricsF>
+#include <QTextDocument>
 #include <QFileDialog>
 #include <QTimer>
 #include <QUrl>
@@ -3824,6 +3842,57 @@ private Q_SLOTS:
     QCOMPARE(openedTab.projectUid, std::uint32_t(0));
     QCOMPARE(QString::fromStdString(window.State().activeDocFilePath), drawingPath);
   }
+
+  void windowsOpenDrawingMessageUsesExistingEditorWindow() {
+#ifdef _WIN32
+    EditorWindow window;
+    const auto previousTabCount = window.State().drawingTabs.size();
+    const QString drawingPath = QString::fromUtf8(GOSURVEY_SOURCE_DIR) + "/samples/surface-demo.dwg";
+    const std::wstring widePath = drawingPath.toStdWString();
+    COPYDATASTRUCT data{};
+    data.dwData = 0x47534457; // "GSDW", the file-open handoff message.
+    data.cbData = static_cast<DWORD>((widePath.size() + 1) * sizeof(wchar_t));
+    data.lpData = const_cast<wchar_t*>(widePath.c_str());
+    MSG msg{};
+    msg.message = WM_COPYDATA;
+    msg.lParam = reinterpret_cast<LPARAM>(&data);
+    qintptr result = 0;
+    bool chooserShown = false;
+    QTimer dialogPoll(&window);
+    dialogPoll.setInterval(10);
+    connect(&dialogPoll, &QTimer::timeout, &window, [&] {
+      if (auto* chooser = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+          chooser && chooser->objectName() == "drawingTemplateDialog") {
+        chooserShown = true;
+        chooser->reject();
+      } else if (auto* message = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) message->accept();
+    });
+    dialogPoll.start();
+
+    QVERIFY(window.nativeEvent("windows_generic_MSG", &msg, &result));
+    QCOMPARE(result, qintptr(TRUE));
+    QCoreApplication::processEvents();
+    dialogPoll.stop();
+
+    QVERIFY2(!chooserShown, "A handed-over existing drawing must not show the New Drawing chooser");
+    QCOMPARE(window.State().drawingTabs.size(), previousTabCount + 1);
+    QCOMPARE(QString::fromStdString(window.State().activeDocFilePath), drawingPath);
+#endif
+  }
+
+  void cadTrueTypeFileNamesResolveToInstalledQtFamilies() {
+    QCOMPARE(QtFontFamilyForCadFont("arial.ttf"), QStringLiteral("Arial"));
+    QCOMPARE(QtFontFamilyForCadFont("C:/Fonts/Arial.ttf"), QStringLiteral("Arial"));
+    QCOMPARE(QtFontFamilyForCadFont("romans.shx"), QStringLiteral("romans.shx"));
+  }
+
+  void cadTrueTypeNominalHeightMapsToRenderedCapitalHeight() {
+    QTextDocument document;
+    PopulateQtText(document, 40.0f, "HH", "arial.ttf");
+    const QFontMetricsF metrics(document.defaultFont());
+    QVERIFY(std::abs(metrics.capHeight() - 40.0) <= 1.0);
+  }
+
 
   void issue1079FailedOpenKeepsPreviousDrawingAndTab() {
     EditorWindow window;

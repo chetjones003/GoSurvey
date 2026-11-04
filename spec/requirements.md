@@ -1346,15 +1346,21 @@ requirements is a planning failure, not a sign of rigor.
   coordinates: loading may rebase the document origin (large-coordinate rebase), and a local pan would
   silently point somewhere else in the drawing after that. The saved view is an **additive** `.gs` key —
   older files still load, and fall back to framing the drawing.
+  **DWG saved model view.** Opening a DWG restores its saved active model-space VPORT camera (center, height,
+  view direction and twist) and its saved `CANNOSCALE`. The annotation scale selects annotative contexts and
+  remains independent from the model viewport's zoom.
 - Acceptance:
   - File > New shows the new empty drawing immediately, with its tab selected;
   - File > Open shows the opened drawing immediately, with its tab selected, with two or more tabs open;
   - pan and zoom somewhere specific, save, close, reopen — the drawing is at that same pan and zoom;
   - the same holds for a drawing on state-plane coordinates, where opening rebases the document origin;
-  - a `.gs` saved before this requirement still opens, framed to its drawing rather than at a stale view.
+  - a `.gs` saved before this requirement still opens, framed to its drawing rather than at a stale view;
+  - opening a DWG restores the saved active model-space VPORT view and `CANNOSCALE`, while an absent or invalid
+    record falls back to the ordinary framing and annotation-scale defaults.
 - Owner-layer: UI (tab bar selection) / IO (`GsIo` view key)
 - Status: accepted
-- Revisions: 2026-08-11 — initial. Root causes: the tab loop assigned `activeDrawingIdx` and consumed
+- Revisions: 2026-08-11 — initial. 2026-11-03 — DWG open also restores the saved active model-space VPORT and
+  CANNOSCALE, independently of zoom (D-2026-11-03-d). Root causes: the tab loop assigned `activeDrawingIdx` and consumed
   `pendingDrawingTabSwitch` from whichever tab ImGui reported selected, and tabs are submitted in index
   order — so the still-selected old tab always won before the new tab was reached. The `.gs` writer had
   no view state at all.
@@ -10885,22 +10891,32 @@ capability that does not exist. They are recorded here rather than quietly dropp
      (`Kind::Mtext`) for the landing text. Parallel `cadMultileaderAttrs` like other entity stores.
   2. **Persistence:** `.gs` / ADR-044 trailer arrays `multileaders` / `multileaderAttrs` (additive).
   3. **Open:** a decoded `MULTILEADER` with **mtext** content imports into `CadMultileader`. Block-content
-     multileaders are named once in the REQ-201 log, not silently dropped. Legacy `LEADER` import unchanged.
+     multileaders are named once in the REQ-201 log, not silently dropped. A legacy `LEADER` with associated
+     `MTEXT` retains the MTEXT attachment point, rotation, text style and rectangle, plus the arrow size from
+     its entity or DIMSTYLE, when imported into the same domain representation.
   4. **Save:** when the chosen DWG version is **R2010 or newer**, each multileader writes as a native
      `MULTILEADER` linked to a **Standard** `MLEADERSTYLE` (vendored `dwg_add_MULTILEADER` /
      `dwg_add_MLEADERSTYLE`). Older saves still use associated `LEADER` + `MTEXT` (or segment `LINE`s
      if `dwg_add_LEADER` fails). Custom multileader styles in the UI are not editable yet.
-  5. **Display (v1):** leader segments and label render in the viewport like other model annotations.
+  5. **Display (v1):** leader segments and label render in the viewport like other model annotations. The
+     text anchor/rotation and arrow size follow the stored DWG values so zooming and opening in AutoCAD keep
+     the same relationship between the label and its leader.
 - Acceptance:
   - a synthetic multileader with two path points and text survives Export DWG (R2018) → Import via
     `ImportLibreCadFile` with the same path point count and text; the saved R2018 file contains a
     `MULTILEADER` object (not only `LEADER` + `MTEXT`);
   - a DWG containing only block-content multileaders logs the skip reason;
+  - an associated LEADER + rotated middle-right MTEXT imports with that attachment, rotation, text rectangle
+    and DIMSTYLE arrow size; when DXF groups 74/75 mark a hookline, import draws it in group 211's horizontal
+    direction at the scaled DIMASZ length, and its computed bounds contain the transformed text rectangle;
   - multileaders persist through `.gs` save/load when present.
 - Owner-layer: Domain, IO, UI (command later)
 - Status: accepted
 - Revisions: 2026-10-01 — initial (issue #619; D-2026-10-01-g). 2026-10-01 — R2010+ native
-  `MULTILEADER` export (D-2026-10-01-h).
+  `MULTILEADER` export (D-2026-10-01-h). 2026-11-03 — associated legacy `LEADER` + `MTEXT` callouts
+  preserve their stored label attachment, rotation, text rectangle, DIMSTYLE arrow size, and flagged hookline;
+  model-space rendering and DWG export use the stored label rotation and attachment (D-2026-11-03-c,
+  amended 2026-11-03).
 
 ### REQ-368 — Live fields on TEXT/MTEXT and DWG field codes (GitHub issue #617)
 
@@ -14950,7 +14966,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: UI, Commands. REQ-081 appearance and CLAUDE.md screenshot review apply.
 
 ### REQ-459 — Grading reuse and Qt elevation editing
-- Status: accepted (2026-11-03, D-2026-11-03-a; ADR-076).
+- Status: accepted (2026-11-03, D-2026-11-03-c; ADR-076).
 - Statement and acceptance: [grading-toolkit.md, Stage 2](grading-toolkit.md). Drawing-local copied presets,
   independent Copy Create, Qt FLELEV table, grading/group properties and explicit membership transfer.
 - Owner-layer: Domain, Commands, IO, UI.
@@ -15016,6 +15032,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-450 | Qt UI/Commands/IO | `QtEditorTests` `issue1033CursorSettingsPreviewAndCancel`, `issue1033StoredCursorValuesAreClamped`, `ViewportPickPolicyTests` REQ-450 cursor shape | accepted |
 | REQ-455 | Qt UI/PDF | `GoSurveyQtTests` `issue1037*`: command tabs and side panel (including narrow-width overflow actions), continuous layout and page sync, wheel/Ctrl+wheel pointer-anchored zoom, middle-button and Browse pan, fit/typed zoom, keyboard pages, tools on later pages, tool hotkeys, Callout and Revision cloud save/read-back, box select, previews, compare panel and detail failure, cache bound and render cancellation, top-level ownership | accepted |
 | REQ-456 | Repository governance/CI | Run PR-Agent reviews automatically for pull requests originating in GoSurvey; do not run automatically for fork-originated pull requests. Allow the repository owner to trigger PR-Agent manually on a fork PR with a `/review` pull request comment, without using `pull_request_target` or checking out fork code in a job with secrets. | accepted |
+| REQ-481 | Application / Platform / Qt UI | `GoSurveyQtTests` or Windows process integration: matching executable reuses its editor window, opens the forwarded DWG and activates its tab; a fresh executable opens normally; different worktree paths coexist; helper/test/crash modes remain separate | accepted |
 | REQ-451 | Qt UI | `QtEditorTests` `issue1036LayerManager*` (sort-then-edit, viewport columns, swatches, current layer) + screenshots | accepted |
 | REQ-473 | Application/Qt UI/Build docs | `GoSurveyQtTests` `[req453]` branch label in native/custom titles and retained after title refresh; launcher branch propagation; docs review of worktree-local build/launch rule | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
@@ -15254,6 +15271,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Application / Qt UI / Build documentation
 - Status: accepted (2026-10-23, user approved scope)
 
+### REQ-481 — Windows DWG file-open reuses the matching GoSurvey process
+- Purpose: opening a DWG from Windows while GoSurvey is already running should continue the current editing session instead of creating a second window and process.
+- Priority: should
+- Type: functional (application lifecycle / Windows integration)
+- Decision: D-2026-11-03-e.
+- Depends on: REQ-052 (DWG open), REQ-055 (opened drawing becomes active), REQ-453 (separate worktree executables remain distinguishable).
+- Statement: In a normal desktop launch, when Windows starts GoSurvey with a DWG path and the same executable path already has a running GoSurvey process, the running process receives the path, opens it through the normal drawing-open flow, becomes the foreground window, and activates the opened drawing. When no matching process is running, the new process opens the path normally. Matching is scoped to the executable path, so separately built worktree executables can run side by side. Test, crash-report, and helper-process launch modes keep their own existing behavior.
+- Acceptance:
+  1. With GoSurvey running, opening a DWG from Windows results in the existing process opening the drawing and becoming foreground; no second main GoSurvey process remains.
+  2. The opened drawing becomes the active tab and uses the same load/error behavior as the ordinary File > Open path.
+  3. With no GoSurvey process for that executable path, launching with a DWG path opens it in the new process.
+  4. Running executables from two different worktree paths can each remain open, preserving REQ-453's worktree isolation.
+  5. Test, crash-report, and helper-process modes continue to run without being redirected to the editor process.
+- Owner-layer: Application / Platform / Qt UI
+- Status: accepted (2026-11-02, user approved scope)
 ---
 
 ### REQ-456 — Paper-space command parity for LEADER, SPLINE, POINT, PEDIT, MEASURE, DIVIDE, AREA, LIST (GitHub issue #1019)

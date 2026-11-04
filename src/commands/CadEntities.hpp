@@ -492,6 +492,12 @@ struct CadMultileader {
   std::vector<float> pathXyz; ///< tip → … → landing, local storage (Z absolute like CadAnnotation::insZ).
   /// Additional arrow branches sharing the same landing / label (Add Leader).
   std::vector<std::vector<float>> extraLeaderPaths;
+  /// Arrowhead length in drawing units, read from the active DWG MLeader context.
+  float arrowSizeWorld = 0.f;
+  /// Associated MTEXT reference rectangle, measured in its text coordinate system (before rotation).
+  /// Zero means derive the dimensions from the embedded annotation's existing world-space bounds.
+  float labelWidthWorld = 0.f;
+  float labelHeightWorld = 0.f;
   /// When true, label height follows viewport/paper scale (issue #622); otherwise model plot scale only.
   bool annotative = false;
   /// When non-empty, draw only at these SCALE dictionary names; empty = every scale (issue #622).
