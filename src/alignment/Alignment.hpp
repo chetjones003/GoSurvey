@@ -168,6 +168,12 @@ struct StationOffsetLabel {
   Point2 fixedPoint;             ///< Fixed labels: the plan point they stay on, drawing-local.
 };
 
+/// A design speed set at a station (REQ-502.1). Only one speed can sit at a station; each applies from its station onward.
+struct DesignSpeed {
+  double internalStation = 0.0;
+  double speed = 0.0;
+};
+
 struct AlignmentTableLink {
   std::uint64_t tableId = 0;
   AlignmentTableKind kind = AlignmentTableKind::Line;
@@ -246,6 +252,10 @@ class Alignment {
   // --- REQ-500: the profile seam. Profiles are a later feature; an alignment holds only their ids, and the vertical
   //     queries below answer "no profile" until one is attached. Geometry never stores a Z (REQ-480.3). ---
   std::vector<std::uint64_t> profileIds;
+
+  // --- REQ-502: design speeds along the alignment, and the name of the check set it is designed against ---
+  std::vector<DesignSpeed> designSpeeds;  ///< Sorted by internal station, one per station.
+  std::string checkSetName;               ///< Empty: no criteria.
 
   /// Reverses direction and stationing of a continuous alignment (REQ-487.2). The physical geometry
   /// is unchanged. Refuses (returns false) when a C0 gap exists. Reversing twice restores it.

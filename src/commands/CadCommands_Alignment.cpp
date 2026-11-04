@@ -19,6 +19,7 @@
 #include <memory>
 #include "alignment/AlignmentTables.hpp"
 #include "alignment/AlignmentLabels.hpp"
+#include "alignment/AlignmentDesign.hpp"  // REQ-502
 #include "util/cadtable.hpp"
 #include "SpreadsheetIo.hpp"
 #include "WinFileDialogs.hpp"
@@ -1738,6 +1739,19 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
 }
 
 // ALIGNMENTREPORT [<name>][, TXT|CSV[, <path>]]  (REQ-494)
+namespace {
+
+// REQ-502: the report names the alignment's own check set and its findings.
+alignment::AlignmentReportFormat ReportFormatFor(const AppCommandState& st, const alignment::Alignment& a,
+                                                 alignment::AlignmentReportFormat fmt) {
+  for (const alignment::AlignmentCheckSet& set : st.alignmentCheckSets) {
+    if (!a.checkSetName.empty() && set.name == a.checkSetName) fmt.checkSet = &set;
+  }
+  return fmt;
+}
+
+}  // namespace
+
 void RunAlignmentReport(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
   std::string filterName;
@@ -1775,7 +1789,7 @@ void RunAlignmentReport(AppCommandState& st, const std::string& args, std::vecto
   if (exportKind.empty()) {
     for (size_t i = 0; i < targets.size(); ++i) {
       std::vector<std::string> lines;
-      alignment::BuildAlignmentReportLines(*targets[i], fmt, &lines);
+      alignment::BuildAlignmentReportLines(*targets[i], ReportFormatFor(st, *targets[i], fmt), &lines);
       for (const std::string& line : lines) log.push_back(line);
       if (targets.size() > 1 && i + 1 < targets.size()) log.push_back("---");
     }
@@ -1824,7 +1838,7 @@ void RunAlignmentReport(AppCommandState& st, const std::string& args, std::vecto
   }
   for (size_t i = 0; i < targets.size(); ++i) {
     std::vector<std::string> lines;
-    alignment::BuildAlignmentReportLines(*targets[i], fmt, &lines);
+    alignment::BuildAlignmentReportLines(*targets[i], ReportFormatFor(st, *targets[i], fmt), &lines);
     for (size_t li = 0; li < lines.size(); ++li) {
       out << lines[li];
       if (li + 1 < lines.size()) out << '\n';
@@ -2407,6 +2421,282 @@ void RunAlignmentProps(AppCommandState& st, const std::string& args, std::vector
   *Resolve(st, "ALIGNMENTPROPS", f[0], log) = std::move(edited);
   BumpCadGpuCache(st);
   log.push_back("ALIGNMENTPROPS - \"" + value + "\" set as the " + f[1] + ".");
+}
+
+// REQ-502: design criteria. ALIGNMENTCHECKSET NEW|DELETE|LIST|SET manages drawing-owned check sets; ALIGNMENTCRITERIA applies
+// one to an alignment; ALIGNMENTSPEED sets the design speed from a station; ALIGNMENTCHECK lists the failed checks.
+namespace {
+
+int FindCheckSetIndex(const AppCommandState& st, const std::string& name) {
+  for (size_t i = 0; i < st.alignmentCheckSets.size(); ++i) {
+    if (Lower(st.alignmentCheckSets[i].name) == Lower(name)) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+}  // namespace
+
+// ALIGNMENTCHECKSET NEW, <name>[, ROAD|RAIL]
+// ALIGNMENTCHECKSET DELETE, <name>
+// ALIGNMENTCHECKSET LIST
+// ALIGNMENTCHECKSET SET, <name>, RADIUS, <speed>, <minRadius>   (minRadius 0 removes the row for that speed)
+// ALIGNMENTCHECKSET SET, <name>, MINTANGENT|MINSPIRAL|MINA|MAXA, <value>   (0 switches the check off)
+void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  const char* usage =
+      "ALIGNMENTCHECKSET - usage: ALIGNMENTCHECKSET NEW, <name>[, ROAD|RAIL] | DELETE, <name> | LIST | "
+      "SET, <name>, RADIUS, <speed>, <minRadius> | SET, <name>, MINTANGENT|MINSPIRAL|MINA|MAXA, <value>.";
+  if (f.empty()) {
+    log.push_back(usage);
+    return;
+  }
+  const std::string verb = Lower(f[0]);
+  if (verb == "list") {
+    if (st.alignmentCheckSets.empty()) {
+      log.push_back("ALIGNMENTCHECKSET - no check sets. Make one with ALIGNMENTCHECKSET NEW, <name>.");
+      return;
+    }
+    for (const alignment::AlignmentCheckSet& s : st.alignmentCheckSets) {
+      log.push_back("ALIGNMENTCHECKSET: " + s.name + "  [" + (s.kind == alignment::CheckSetKind::Rail ? "rail" : "road") +
+                    ", " + std::to_string(s.radiusTable.size()) + " radius row(s), min tangent " +
+                    FormatLinear(s.minTangent, st.displayLinearPrecision) + ", min spiral " +
+                    FormatLinear(s.minSpiralLength, st.displayLinearPrecision) + ", A " +
+                    FormatLinear(s.minA, st.displayLinearPrecision) + " to " +
+                    FormatLinear(s.maxA, st.displayLinearPrecision) + "]");
+    }
+    return;
+  }
+  if (verb == "new") {
+    if (f.size() < 2 || Trim(f[1]).empty()) {
+      log.push_back("ALIGNMENTCHECKSET - the new set needs a name.");
+      return;
+    }
+    const std::string name = Trim(f[1]);
+    if (FindCheckSetIndex(st, name) >= 0) {
+      log.push_back("ALIGNMENTCHECKSET - a check set named \"" + name + "\" already exists.");
+      return;
+    }
+    alignment::AlignmentCheckSet made;
+    made.name = name;
+    if (f.size() >= 3) {
+      const std::string kind = Lower(Trim(f[2]));
+      if (kind == "rail") {
+        made.kind = alignment::CheckSetKind::Rail;
+      } else if (kind != "road") {
+        log.push_back("ALIGNMENTCHECKSET - kind must be ROAD or RAIL, not \"" + Trim(f[2]) + "\".");
+        return;
+      }
+    }
+    PushUndoSnapshot(st, "New check set");
+    st.alignmentCheckSets.push_back(made);
+    log.push_back("ALIGNMENTCHECKSET - created \"" + name + "\" (" +
+                  (made.kind == alignment::CheckSetKind::Rail ? "rail" : "road") + ").");
+    return;
+  }
+  if (verb == "delete") {
+    if (f.size() != 2) {
+      log.push_back("ALIGNMENTCHECKSET - usage: ALIGNMENTCHECKSET DELETE, <name>.");
+      return;
+    }
+    const int idx = FindCheckSetIndex(st, f[1]);
+    if (idx < 0) {
+      log.push_back("ALIGNMENTCHECKSET - no check set named \"" + Trim(f[1]) + "\".");
+      return;
+    }
+    const std::string name = st.alignmentCheckSets[static_cast<size_t>(idx)].name;
+    PushUndoSnapshot(st, "Delete check set");
+    st.alignmentCheckSets.erase(st.alignmentCheckSets.begin() + idx);
+    int cleared = 0;
+    for (alignment::Alignment& a : st.alignments) {
+      if (Lower(a.checkSetName) == Lower(name)) {
+        a.checkSetName.clear();
+        ++cleared;
+      }
+    }
+    log.push_back("ALIGNMENTCHECKSET - deleted \"" + name + "\"" +
+                  (cleared > 0 ? "; " + std::to_string(cleared) + " alignment(s) no longer have criteria." : "."));
+    return;
+  }
+  if (verb == "set") {
+    if (f.size() < 4) {
+      log.push_back(usage);
+      return;
+    }
+    const int idx = FindCheckSetIndex(st, f[1]);
+    if (idx < 0) {
+      log.push_back("ALIGNMENTCHECKSET - no check set named \"" + Trim(f[1]) + "\".");
+      return;
+    }
+    alignment::AlignmentCheckSet edited = st.alignmentCheckSets[static_cast<size_t>(idx)];
+    const std::string what = Lower(Trim(f[2]));
+    if (what == "radius") {
+      double speed = 0.0, minRadius = 0.0;
+      if (f.size() != 5 || !ParseNum(f[3], &speed) || !ParseNum(f[4], &minRadius) || speed < 0.0 || minRadius < 0.0) {
+        log.push_back("ALIGNMENTCHECKSET - usage: SET, <name>, RADIUS, <speed>, <minRadius> (both zero or more).");
+        return;
+      }
+      auto& table = edited.radiusTable;
+      table.erase(std::remove_if(table.begin(), table.end(),
+                                 [speed](const alignment::RadiusRequirement& r) { return std::fabs(r.speed - speed) < 1e-9; }),
+                  table.end());
+      if (minRadius > 0.0) table.push_back({speed, minRadius});
+      std::sort(table.begin(), table.end(),
+                [](const alignment::RadiusRequirement& x, const alignment::RadiusRequirement& y) { return x.speed < y.speed; });
+    } else if (what == "mintangent" || what == "minspiral" || what == "mina" || what == "maxa") {
+      double value = 0.0;
+      if (f.size() != 4 || !ParseNum(f[3], &value) || value < 0.0) {
+        log.push_back("ALIGNMENTCHECKSET - " + what + " takes one value, zero or more.");
+        return;
+      }
+      if (what == "mintangent") edited.minTangent = value;
+      else if (what == "minspiral") edited.minSpiralLength = value;
+      else if (what == "mina") edited.minA = value;
+      else edited.maxA = value;
+    } else {
+      log.push_back(usage);
+      return;
+    }
+    if (edited == st.alignmentCheckSets[static_cast<size_t>(idx)]) {
+      log.push_back("ALIGNMENTCHECKSET - nothing changed.");
+      return;
+    }
+    PushUndoSnapshot(st, "Edit check set");
+    st.alignmentCheckSets[static_cast<size_t>(idx)] = std::move(edited);
+    log.push_back("ALIGNMENTCHECKSET - \"" + st.alignmentCheckSets[static_cast<size_t>(idx)].name + "\" updated.");
+    return;
+  }
+  log.push_back(usage);
+}
+
+// ALIGNMENTCRITERIA <alignment>, <set>|NONE
+void RunAlignmentCriteria(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() != 2) {
+    log.push_back("ALIGNMENTCRITERIA - usage: ALIGNMENTCRITERIA <alignment>, <set>|NONE.");
+    return;
+  }
+  const alignment::Alignment* a = Resolve(st, "ALIGNMENTCRITERIA", f[0], log);
+  if (a == nullptr) return;
+  const size_t ai = static_cast<size_t>(FindAlignment(st, a->name));
+  const std::string want = Trim(f[1]);
+  std::string setName;
+  if (Lower(want) != "none") {
+    const int idx = FindCheckSetIndex(st, want);
+    if (idx < 0) {
+      log.push_back("ALIGNMENTCRITERIA - no check set named \"" + want + "\".");
+      return;
+    }
+    const alignment::AlignmentCheckSet& set = st.alignmentCheckSets[static_cast<size_t>(idx)];
+    std::string why;
+    if (!alignment::CriteriaAllowed(a->type, set.kind, &why)) {
+      log.push_back("ALIGNMENTCRITERIA - " + why + ".");
+      return;
+    }
+    setName = set.name;
+  }
+  if (setName == st.alignments[ai].checkSetName) {
+    log.push_back("ALIGNMENTCRITERIA - \"" + a->name + "\" already uses " +
+                  (setName.empty() ? std::string("no criteria.") : "\"" + setName + "\"."));
+    return;
+  }
+  PushUndoSnapshot(st, "Alignment criteria");
+  st.alignments[ai].checkSetName = setName;
+  log.push_back("ALIGNMENTCRITERIA - \"" + st.alignments[ai].name + "\" " +
+                (setName.empty() ? std::string("has no design criteria.") : "is checked against \"" + setName + "\"."));
+}
+
+// ALIGNMENTSPEED <alignment>, <station>, <speed>|CLEAR
+void RunAlignmentSpeed(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() != 3) {
+    log.push_back("ALIGNMENTSPEED - usage: ALIGNMENTSPEED <alignment>, <station>, <speed>|CLEAR.");
+    return;
+  }
+  const alignment::Alignment* a = Resolve(st, "ALIGNMENTSPEED", f[0], log);
+  if (a == nullptr) return;
+  double displayed = 0.0;
+  if (!alignment::ParseStation(f[1], &displayed)) {
+    log.push_back("ALIGNMENTSPEED - \"" + f[1] + "\" is not a station.");
+    return;
+  }
+  const std::string value = Trim(f[2]);
+  const bool clear = Lower(value) == "clear";
+  double speed = 0.0;
+  if (!clear && (!ParseNum(value, &speed) || speed <= 0.0)) {
+    log.push_back("ALIGNMENTSPEED - the speed must be a number above zero, or CLEAR.");
+    return;
+  }
+  // Design speeds are stored at internal stations, like every other station on the alignment.
+  const std::vector<double> raws = a->RawStationsForDisplayed(displayed);
+  if (raws.empty()) {
+    log.push_back("ALIGNMENTSPEED - station " + alignment::FormatStation(displayed) + " is outside \"" + a->name + "\".");
+    return;
+  }
+  const double internal = raws.front();
+  const size_t ai = static_cast<size_t>(FindAlignment(st, a->name));
+  const auto sameStation = [internal](const alignment::DesignSpeed& d) { return std::fabs(d.internalStation - internal) < 1e-6; };
+  const auto& current = st.alignments[ai].designSpeeds;
+  const auto found = std::find_if(current.begin(), current.end(), sameStation);
+  if (clear) {
+    if (found == current.end()) {
+      log.push_back("ALIGNMENTSPEED - no design speed is set at " + alignment::FormatStation(displayed) + ".");
+      return;
+    }
+    PushUndoSnapshot(st, "Clear design speed");
+    auto& after = st.alignments[ai].designSpeeds;
+    after.erase(std::remove_if(after.begin(), after.end(), sameStation), after.end());
+    log.push_back("ALIGNMENTSPEED - design speed cleared at " + alignment::FormatStation(displayed) + ".");
+    return;
+  }
+  if (found != current.end() && found->speed == speed) {
+    log.push_back("ALIGNMENTSPEED - the design speed at " + alignment::FormatStation(displayed) + " is already " +
+                  FormatLinear(speed, 2) + ".");
+    return;
+  }
+  PushUndoSnapshot(st, "Set design speed");
+  auto& after = st.alignments[ai].designSpeeds;
+  const auto again = std::find_if(after.begin(), after.end(), sameStation);
+  if (again != after.end()) {
+    again->speed = speed;
+  } else {
+    after.push_back({internal, speed});
+  }
+  std::sort(after.begin(), after.end(), [](const alignment::DesignSpeed& x, const alignment::DesignSpeed& y) {
+    return x.internalStation < y.internalStation;
+  });
+  log.push_back("ALIGNMENTSPEED - design speed " + FormatLinear(speed, 2) + " from station " +
+                alignment::FormatStation(displayed) + ".");
+}
+
+// ALIGNMENTCHECK <alignment>: every failed check against the alignment's criteria, in travel order.
+void RunAlignmentCheck(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() != 1) {
+    log.push_back("ALIGNMENTCHECK - usage: ALIGNMENTCHECK <alignment>.");
+    return;
+  }
+  const alignment::Alignment* a = Resolve(st, "ALIGNMENTCHECK", f[0], log);
+  if (a == nullptr) return;
+  if (a->checkSetName.empty()) {
+    log.push_back("ALIGNMENTCHECK - \"" + a->name + "\" has no design criteria. Apply a set with ALIGNMENTCRITERIA.");
+    return;
+  }
+  const int idx = FindCheckSetIndex(st, a->checkSetName);
+  if (idx < 0) {
+    log.push_back("ALIGNMENTCHECK - the check set \"" + a->checkSetName + "\" is missing.");
+    return;
+  }
+  const alignment::AlignmentCheckSet& set = st.alignmentCheckSets[static_cast<size_t>(idx)];
+  const std::vector<alignment::DesignFinding> findings = alignment::CheckDesign(*a, set, st.displayLinearPrecision);
+  if (findings.empty()) {
+    log.push_back("ALIGNMENTCHECK - \"" + a->name + "\" meets \"" + set.name + "\".");
+    return;
+  }
+  log.push_back("ALIGNMENTCHECK - " + std::to_string(findings.size()) + " finding(s) for \"" + a->name + "\" against \"" +
+                set.name + "\":");
+  for (const alignment::DesignFinding& fd : findings) {
+    log.push_back("  Entity " + std::to_string(fd.entity) + ": " + fd.text);
+  }
 }
 
 // ALIGNMENTINVERSE <alignment>, STA, <station1>, <station2>[, CHORD]     stations as displayed (12+45.32)

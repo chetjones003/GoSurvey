@@ -9,11 +9,14 @@
 namespace alignment {
 
 class Alignment;
+struct AlignmentCheckSet;
 
 /// Display settings for alignment text/CSV reports (REQ-494). Pure values — no session state.
 struct AlignmentReportFormat {
   int linearPrecision = 2;
   AngleDisplaySettings angles{};
+  /// REQ-502: the check set the alignment is designed against, or null for none. Owned by the caller.
+  const AlignmentCheckSet* checkSet = nullptr;
 };
 
 /// Builds the multi-line ALIGNMENTREPORT text (on-screen and `.txt` export).

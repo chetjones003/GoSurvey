@@ -6,6 +6,7 @@
 #include "CadEntities.hpp"
 #include "util/surfacequery.hpp"  // ISurfaceQuery, for MakeSurfaceQueryForCommands (REQ-497)
 #include "alignment/Alignment.hpp"  // REQ-480 / ADR-075: per-drawing alignment store
+#include "alignment/AlignmentDesign.hpp"  // REQ-502: check sets
 #include "CadDimGeom.hpp"
 #include "EntityId.hpp"
 // TextStyles::DefaultTextStyles, for the textStyles member's initializer (issue #57). Pure and
@@ -1409,6 +1410,7 @@ struct DrawingGeometrySnapshot {
   /// what lets a style edit be undoable without a single contour entering the undo stack.
   std::vector<SurfaceStyle>     surfaceStyles;
   std::vector<AlignmentStyle>   alignmentStyles;
+  std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502: drawing-owned check sets
   std::vector<AlignmentLabelSet> alignmentLabelSets;
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
   std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
@@ -1603,6 +1605,7 @@ struct DrawingDocument {
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
   std::vector<AlignmentStyle>   alignmentStyles;
+  std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502: drawing-owned check sets
   std::vector<AlignmentLabelSet> alignmentLabelSets;        ///< Named alignment styles (REQ-491).
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
   std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
@@ -4930,6 +4933,7 @@ struct AppCommandState {
   /// the code is entitled to assume cannot happen.
   std::vector<SurfaceStyle> surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
   std::vector<AlignmentStyle> alignmentStyles = AlignmentStyles::DefaultAlignmentStyles();
+  std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502
   std::vector<AlignmentLabelSet> alignmentLabelSets = AlignmentLabelSets::DefaultAlignmentLabelSets();
   /// Active text style for new TEXT/MTEXT (the STYLE dropdown). Empty resolves to "Standard".
   std::string activeTextStyleName = "Standard";
@@ -8104,6 +8108,10 @@ void RunAlignmentProps(AppCommandState& st, const std::string& args, std::vector
 void RunAlignmentInverse(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentBearing(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentDistance(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-502
+void RunAlignmentCriteria(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentSpeed(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentCheck(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// REQ-500: QUICKPROFILE <surface>, <alignment>. False only when no alignment has that name.
 bool RunQuickProfileAlongAlignment(AppCommandState& st, const std::string& surfaceName, const std::string& alignmentName,
                                    std::vector<std::string>& log);

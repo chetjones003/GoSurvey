@@ -1320,6 +1320,26 @@ json BuildRoot(const AppCommandState& st) {
       doc["alignmentLabelSets"] = std::move(sets);
     }
   }
+  {  // REQ-502: drawing-owned check sets (omitted when there are none)
+    if (!st.alignmentCheckSets.empty()) {
+      json sets = json::array();
+      for (const alignment::AlignmentCheckSet& s : st.alignmentCheckSets) {
+        json o;
+        o["name"] = s.name;
+        o["kind"] = static_cast<int>(s.kind);
+        json table = json::array();
+        for (const alignment::RadiusRequirement& r : s.radiusTable)
+          table.push_back({{"speed", r.speed}, {"minRadius", r.minRadius}});
+        o["radiusTable"] = std::move(table);
+        o["minTangent"] = s.minTangent;
+        o["minSpiralLength"] = s.minSpiralLength;
+        o["minA"] = s.minA;
+        o["maxA"] = s.maxA;
+        sets.push_back(std::move(o));
+      }
+      doc["alignmentCheckSets"] = std::move(sets);
+    }
+  }
   // Dimension style (issue #99). Single active style, additive, no version bump.
   {
     const DimensionStyle& ds = st.activeDimensionStyle;
@@ -2232,6 +2252,13 @@ json BuildRoot(const AppCommandState& st) {
         o["offsetDistance"] = a.offsetDistance;
       }
       if (a.segmentLabels) o["segmentLabels"] = true;  // REQ-492.3 / REQ-493.3
+      if (!a.checkSetName.empty()) o["checkSet"] = a.checkSetName;  // REQ-502: criteria applied to this alignment
+      if (!a.designSpeeds.empty()) {  // REQ-502: design speed by internal station
+        json speeds = json::array();
+        for (const alignment::DesignSpeed& d : a.designSpeeds)
+          speeds.push_back({{"station", d.internalStation}, {"speed", d.speed}});
+        o["designSpeeds"] = std::move(speeds);
+      }
       if (!a.profileIds.empty()) o["profiles"] = a.profileIds;  // REQ-500: profile references, ids only
       if (!a.stationLabels.empty()) {  // REQ-492.4: station/offset labels, owned by the alignment
         json labels = json::array();
@@ -3447,6 +3474,31 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   }
   AlignmentLabelSets::EnsureStandard(st.alignmentLabelSets);
 
+  st.alignmentCheckSets.clear();  // REQ-502
+  if (doc.contains("alignmentCheckSets") && doc["alignmentCheckSets"].is_array()) {
+    for (const auto& o : doc["alignmentCheckSets"]) {
+      if (!o.is_object() || !o.contains("name") || !o["name"].is_string()) continue;
+      alignment::AlignmentCheckSet s;
+      s.name = o["name"].get<std::string>();
+      if (o.contains("kind") && o["kind"].is_number_integer() && o["kind"].get<int>() == 1)
+        s.kind = alignment::CheckSetKind::Rail;
+      if (o.contains("radiusTable") && o["radiusTable"].is_array()) {
+        for (const auto& r : o["radiusTable"]) {
+          if (!r.is_object() || !r.contains("speed") || !r.contains("minRadius")) continue;
+          if (!r["speed"].is_number() || !r["minRadius"].is_number()) continue;
+          s.radiusTable.push_back({r["speed"].get<double>(), r["minRadius"].get<double>()});
+        }
+        std::sort(s.radiusTable.begin(), s.radiusTable.end(),
+                  [](const alignment::RadiusRequirement& x, const alignment::RadiusRequirement& y) { return x.speed < y.speed; });
+      }
+      if (o.contains("minTangent") && o["minTangent"].is_number()) s.minTangent = o["minTangent"].get<double>();
+      if (o.contains("minSpiralLength") && o["minSpiralLength"].is_number()) s.minSpiralLength = o["minSpiralLength"].get<double>();
+      if (o.contains("minA") && o["minA"].is_number()) s.minA = o["minA"].get<double>();
+      if (o.contains("maxA") && o["maxA"].is_number()) s.maxA = o["maxA"].get<double>();
+      st.alignmentCheckSets.push_back(std::move(s));
+    }
+  }
+
   // Dimension style (issue #99). Missing section -> default.
   {
     DimensionStyle ds = DimensionStyles::Default();
@@ -4106,6 +4158,14 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         if (cr >= 0 && cr <= 2) a.continuityRequirement = static_cast<alignment::ContinuityRequirement>(cr);
       }
       if (el.contains("segmentLabels") && el["segmentLabels"].is_boolean()) a.segmentLabels = el["segmentLabels"].get<bool>();
+      if (el.contains("checkSet") && el["checkSet"].is_string()) a.checkSetName = el["checkSet"].get<std::string>();
+      if (el.contains("designSpeeds") && el["designSpeeds"].is_array()) {
+        for (const auto& d : el["designSpeeds"]) {
+          if (!d.is_object() || !d.contains("station") || !d.contains("speed")) continue;
+          if (!d["station"].is_number() || !d["speed"].is_number()) continue;
+          a.designSpeeds.push_back({d["station"].get<double>(), d["speed"].get<double>()});
+        }
+      }
       if (el.contains("profiles") && el["profiles"].is_array())
         for (const auto& pid : el["profiles"])
           if (pid.is_number_unsigned()) a.profileIds.push_back(pid.get<std::uint64_t>());
@@ -4186,6 +4246,15 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     log.push_back("ALIGNMENT — alignment \"" + a.name + "\" references missing label set \"" + a.labelSet +
                   "\"; using Standard.");
     a.labelSet = AlignmentLabelSets::kStandardName;
+  }
+  for (alignment::Alignment& a : st.alignments) {  // REQ-502
+    if (a.checkSetName.empty()) continue;
+    bool found = false;
+    for (const alignment::AlignmentCheckSet& cs : st.alignmentCheckSets) found = found || cs.name == a.checkSetName;
+    if (found) continue;
+    log.push_back("ALIGNMENT — alignment \"" + a.name + "\" references missing check set \"" + a.checkSetName +
+                  "\"; no criteria applied.");
+    a.checkSetName.clear();
   }
 
   // Piping networks (issue #486 increment B3 / REQ-345). Guarded, so a drawing written before them

@@ -647,7 +647,8 @@ void EditorWindow::RefreshProperties() {
         }
       }
       readOnly(rows, "Parent alignment", parentName, "propAlignmentParent");
-      readOnly(rows, "Design criteria", QStringLiteral("not configured (REQ-502)"), "propAlignmentDesignCriteria");
+      readOnly(rows, "Design criteria", al.checkSetName.empty() ? QStringLiteral("none") : Text(al.checkSetName),
+               "propAlignmentDesignCriteria");
       if (!al.Empty()) {
         const double ox = CadCoord::WorldOriginX(st), oy = CadCoord::WorldOriginY(st);
         const AngleDisplaySettings angles = CadAngleDisplaySettings(st);

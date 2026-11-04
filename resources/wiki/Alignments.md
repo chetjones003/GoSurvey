@@ -66,10 +66,19 @@ offset and a curve's radius are always exact.
 - Alignments are saved with the drawing as exact numbers. A saved DWG also contains ordinary
   AutoCAD lines and arcs (and short line segments approximating **spirals** for display) on the alignment's layer so other software can draw it.
 
+## Design criteria
+
+- A **check set** is a named list of limits kept in the drawing: a minimum curve radius for each design speed, a minimum tangent length, and the minimum and maximum spiral A and length. Make one with `ALIGNMENTCHECKSET NEW`, and enter its values with `ALIGNMENTCHECKSET SET`.
+- Apply a set with `ALIGNMENTCRITERIA <alignment>, <set>`. Set the design speed from a station with `ALIGNMENTSPEED`. The speed that applies to a curve is the highest one set anywhere across it.
+- `ALIGNMENTCHECK <alignment>` lists what fails. The same findings appear in `ALIGNMENTREPORT`. A failure is reported; it does not stop the alignment being saved or used.
+- Road sets apply to centreline, offset and curb-return alignments. Rail sets apply only to rail alignments. Miscellaneous alignments take no criteria.
+- GoSurvey does not ship a regional standard. The numbers are the ones you enter.
+- Not yet built: superelevation and sight-distance checks, and a check of a compound spiral's length.
+
 ## Limits so far
 
 - Geometry is built from typed commands, the layout table, grips or selected objects; there is no on-screen layout toolbar yet.
-- No station labels, tables, reports, widening, profiles or surface elevations yet.
+- No widening yet.
 - Offsets are not built at a corner where the parent changes direction without a curve, and not when the parent has spirals.
 
 See also [[Command Reference]], [[Object Snaps]] and [[Properties]].

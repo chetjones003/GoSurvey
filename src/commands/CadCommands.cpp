@@ -182,6 +182,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.textStyles             = cmd.textStyles;
   doc.surfaceStyles          = cmd.surfaceStyles;
   doc.alignmentStyles        = cmd.alignmentStyles;
+  doc.alignmentCheckSets     = cmd.alignmentCheckSets;  // REQ-502
   doc.alignmentLabelSets     = cmd.alignmentLabelSets;
   doc.dimensionStyle         = cmd.activeDimensionStyle;
   doc.dimensionStyles        = cmd.dimensionStyles;
@@ -312,6 +313,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.pointVisibility            = doc.pointVisibility;
   cmd.textStyles                 = doc.textStyles;
   cmd.surfaceStyles              = doc.surfaceStyles;
+  cmd.alignmentCheckSets         = doc.alignmentCheckSets;  // REQ-502
   cmd.alignmentStyles            = doc.alignmentStyles.empty() ? AlignmentStyles::DefaultAlignmentStyles()
                                                                : doc.alignmentStyles;
   cmd.alignmentLabelSets         = doc.alignmentLabelSets.empty() ? AlignmentLabelSets::DefaultAlignmentLabelSets()
@@ -2002,6 +2004,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.textStyles           = st.textStyles;  // style edits are undoable (REQ-044)
   snap.surfaceStyles        = st.surfaceStyles;  // and surface-style edits (REQ-070)
   snap.alignmentStyles      = st.alignmentStyles;  // REQ-491
+  snap.alignmentCheckSets   = st.alignmentCheckSets;  // REQ-502
   snap.alignmentLabelSets   = st.alignmentLabelSets;
   snap.dimensionStyle       = st.activeDimensionStyle;  // dimension-style edits are undoable (issue #99)
   snap.dimensionStyles      = st.dimensionStyles;
@@ -2100,6 +2103,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.textStyles           = snap.textStyles;
   st.surfaceStyles        = snap.surfaceStyles;
   st.alignmentStyles      = snap.alignmentStyles;
+  st.alignmentCheckSets   = snap.alignmentCheckSets;  // REQ-502
   st.alignmentLabelSets   = snap.alignmentLabelSets.empty() ? AlignmentLabelSets::DefaultAlignmentLabelSets()
                                                             : snap.alignmentLabelSets;
   st.activeDimensionStyle = snap.dimensionStyle;
@@ -7225,6 +7229,10 @@ const CmdEntry kRegistry[] = {
     {"alignmentinverse", "", "Distance along an alignment: ALIGNMENTINVERSE <alignment>, STA|PT, ... [, CHORD]"},
     {"alignmentbearing", "", "Bearing at a station: ALIGNMENTBEARING <alignment>, <station>"},
     {"alignmentdistance", "", "Distance along an alignment to a point: ALIGNMENTDISTANCE <alignment>, <x>, <y>"},
+    {"alignmentcheckset", "", "Design check sets: ALIGNMENTCHECKSET NEW|DELETE|LIST|SET, ..."},
+    {"alignmentcriteria", "", "Apply a check set to an alignment: ALIGNMENTCRITERIA <alignment>, <set>|NONE"},
+    {"alignmentspeed", "", "Design speed from a station: ALIGNMENTSPEED <alignment>, <station>, <speed>|CLEAR"},
+    {"alignmentcheck", "", "Check an alignment against its design criteria: ALIGNMENTCHECK <alignment>"},
     {"editalignmentstyle", "", "Open the Alignment Style editor: EDITALIGNMENTSTYLE [<style>]"},
     {"alignmenttable", "", "Insert a line, curve, segment or equation table: ALIGNMENTTABLE <name>, LINE|CURVE|SEGMENT|EQUATIONS[, STATIC|DYNAMIC][, <x>, <y>]"},
     {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT [TABLE]"},
@@ -47098,6 +47106,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "alignmenttable" || plotTok == "editalignmentstyle" || plotTok == "featurelinefromalignment" ||
         plotTok == "alignmentprops" || plotTok == "alignmentinverse" || plotTok == "alignmentbearing" ||
         plotTok == "alignmentdistance" ||
+        plotTok == "alignmentcheckset" || plotTok == "alignmentcriteria" || plotTok == "alignmentspeed" ||
+        plotTok == "alignmentcheck" ||
         plotTok == "volreport" || plotTok == "voltable" || plotTok == "volcsv") {
       std::string rest;
       std::getline(issIdle, rest);
@@ -47184,6 +47194,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunAlignmentBearing(st, rest, log);
       else if (plotTok == "alignmentdistance")
         RunAlignmentDistance(st, rest, log);
+      else if (plotTok == "alignmentcheckset")
+        RunAlignmentCheckSet(st, rest, log);
+      else if (plotTok == "alignmentcriteria")
+        RunAlignmentCriteria(st, rest, log);
+      else if (plotTok == "alignmentspeed")
+        RunAlignmentSpeed(st, rest, log);
+      else if (plotTok == "alignmentcheck")
+        RunAlignmentCheck(st, rest, log);
       else if (plotTok == "volreport")
         RunVolReport(st, rest, log);
       else if (plotTok == "voltable")

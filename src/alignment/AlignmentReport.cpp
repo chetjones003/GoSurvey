@@ -1,6 +1,7 @@
 #include "AlignmentReport.hpp"
 
 #include "Alignment.hpp"
+#include "AlignmentDesign.hpp"  // REQ-502
 
 #include "util/NumFormat.hpp"
 
@@ -165,7 +166,16 @@ void BuildAlignmentReportLines(const Alignment& a, const AlignmentReportFormat& 
     AppendContinuityFindings(a, format, lines);
   }
   lines->push_back("");
-  lines->push_back("Design criteria: (not configured — REQ-502 pending)");
+  if (format.checkSet == nullptr) {
+    lines->push_back("Design criteria: none");
+  } else {
+    lines->push_back("Design criteria: " + format.checkSet->name +
+                     (format.checkSet->kind == CheckSetKind::Rail ? " (rail)" : " (road)"));
+    const std::vector<DesignFinding> findings = CheckDesign(a, *format.checkSet, format.linearPrecision);
+    if (findings.empty()) lines->push_back("  No design check findings.");
+    for (const DesignFinding& f : findings)
+      lines->push_back("  Entity " + std::to_string(f.entity) + ": " + f.text);
+  }
   if (a.Empty()) {
     lines->push_back("");
     lines->push_back("(no entities)");

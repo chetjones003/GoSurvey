@@ -191,6 +191,10 @@ for a compact list inside the program.
 | `ALIGNMENTINVERSE` | — | Distance along an alignment: ALIGNMENTINVERSE <alignment>, STA|PT, ... [, CHORD] | [[Commands/alignmentinverse]] |
 | `ALIGNMENTBEARING` | — | Bearing at a station: ALIGNMENTBEARING <alignment>, <station> | [[Commands/alignmentbearing]] |
 | `ALIGNMENTDISTANCE` | — | Distance along an alignment to a point: ALIGNMENTDISTANCE <alignment>, <x>, <y> | [[Commands/alignmentdistance]] |
+| `ALIGNMENTCHECKSET` | — | Design check sets: ALIGNMENTCHECKSET NEW\|DELETE\|LIST\|SET, ... | [[Commands/alignmentcheckset]] |
+| `ALIGNMENTCRITERIA` | — | Apply a check set to an alignment: ALIGNMENTCRITERIA <alignment>, <set>\|NONE | [[Commands/alignmentcriteria]] |
+| `ALIGNMENTSPEED` | — | Design speed from a station: ALIGNMENTSPEED <alignment>, <station>, <speed>\|CLEAR | [[Commands/alignmentspeed]] |
+| `ALIGNMENTCHECK` | — | Check an alignment against its design criteria: ALIGNMENTCHECK <alignment> | [[Commands/alignmentcheck]] |
 
 ### Surfaces and volumes
 
@@ -315,6 +319,10 @@ for a compact list inside the program.
 | `ALIGNMENTDELETE` | — | [[Commands/alignmentdelete]] |
 | `ALIGNMENTDETACH` | — | [[Commands/alignmentdetach]] |
 | `ALIGNMENTDISTANCE` | — | [[Commands/alignmentdistance]] |
+| `ALIGNMENTCHECKSET` | — | [[Commands/alignmentcheckset]] |
+| `ALIGNMENTCRITERIA` | — | [[Commands/alignmentcriteria]] |
+| `ALIGNMENTSPEED` | — | [[Commands/alignmentspeed]] |
+| `ALIGNMENTCHECK` | — | [[Commands/alignmentcheck]] |
 | `ALIGNMENTEDIT` | — | [[Commands/alignmentedit]] |
 | `ALIGNMENTINSERT` | — | [[Commands/alignmentinsert]] |
 | `ALIGNMENTINTERSECT` | — | [[Commands/alignmentintersect]] |
