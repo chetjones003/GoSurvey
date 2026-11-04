@@ -1471,10 +1471,47 @@ TEST_CASE("Legacy LEADER arrow size includes the saved CANNOSCALE model factor (
           "[dwg][libredwg][issue619]") {
   // AutoCAD reports MESSER's DIMASZ 0.2 with ScaleFactor 16: header DIMSCALE 192 divided
   // by the active architectural scale's drawing-units value 12.
-  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(192.0, 0.0625, 12.0, true) == Catch::Approx(16.0));
-  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(50.0, 1.0, 50.0, false) == Catch::Approx(50.0));
-  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(1.0, 1.0, 50.0, false) == Catch::Approx(1.0));
-  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(4.0, 1.0, 50.0, false) == Catch::Approx(4.0));
+  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(192.0, 0.0625, 12.0) == Catch::Approx(16.0));
+  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(50.0, 1.0, 50.0) == Catch::Approx(50.0));
+  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(1.0, 1.0, 50.0) == Catch::Approx(1.0));
+  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(4.0, 1.0, 50.0) == Catch::Approx(4.0));
+}
+
+TEST_CASE("Legacy LEADER uses its referenced DIMSTYLE scale (REQ-367)",
+          "[dwg][libredwg][issue619]") {
+  ScratchDir dir("dwg-leader-style-dimscale");
+  const auto path = (dir.path / "leader-style-dimscale.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  dwg->header_vars.DIMSCALE = 1.0;
+  Dwg_Object* model = dwg_model_space_object(dwg);
+  REQUIRE(model != nullptr);
+  Dwg_Object_BLOCK_HEADER* header = model->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(header != nullptr);
+  Dwg_Object_DIMSTYLE* style = dwg_add_DIMSTYLE(dwg, "Scaled Leader");
+  REQUIRE(style != nullptr);
+  style->DIMASZ = 0.2;
+  style->DIMSCALE = 50.0;
+  const dwg_point_3d textAt{6.0, 4.0, 0.0};
+  Dwg_Entity_MTEXT* text = dwg_add_MTEXT(header, &textAt, 4.0, "Style scale");
+  REQUIRE(text != nullptr);
+  text->text_height = 1.0;
+  const dwg_point_3d points[2] = {{0.0, 0.0, 0.0}, {6.0, 4.0, 0.0}};
+  Dwg_Entity_LEADER* leader = dwg_add_LEADER(header, 2, points, text, 0);
+  REQUIRE(leader != nullptr);
+  BITCODE_H styleRef = dwg_find_tablehandle(dwg, "Scaled Leader", "DIMSTYLE");
+  REQUIRE(styleRef != nullptr);
+  leader->dimstyle = dwg_add_handleref(dwg, 5, styleRef->absolute_ref, nullptr);
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(path.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState imported;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.cadMultileaders.size() == 1);
+  CHECK(imported.cadMultileaders.front().arrowSizeWorld == Catch::Approx(10.0f));
 }
 
 TEST_CASE("R2004 LEADER fallback keeps each multileader arrow size (REQ-367)",

@@ -143,8 +143,7 @@ std::string ColorToStorage(int index, unsigned method, unsigned rgb) {
   return std::string(buf);
 }
 
-double LegacyLeaderScaleFactor(double dimScale, double paperUnits, double drawingUnits,
-                               bool drawingUnitsAreFeet) {
+double LegacyLeaderScaleFactor(double dimScale, double paperUnits, double drawingUnits) {
   if (!(dimScale > 0.0) || !std::isfinite(dimScale))
     return 1.0;
   if (!(paperUnits > 0.0) || !(drawingUnits > 0.0) ||
@@ -152,7 +151,7 @@ double LegacyLeaderScaleFactor(double dimScale, double paperUnits, double drawin
     return dimScale;
   const double scaleRatio = drawingUnits / paperUnits;
   const double tolerance = std::max(1.0, std::fabs(scaleRatio)) * 1e-6;
-  if (drawingUnitsAreFeet && std::fabs(drawingUnits - 12.0) <= 1e-6 &&
+  if (paperUnits < 1.0 && std::fabs(drawingUnits - 12.0) <= 1e-6 &&
       std::fabs(dimScale - scaleRatio) <= tolerance)
     return dimScale / drawingUnits;
   return dimScale;
@@ -191,6 +190,36 @@ std::string CivilLabelFontFamily(const AppCommandState& st, const SurveyPointLab
 }  // namespace libredwgcad_detail
 
 namespace {
+
+std::string FromT(const Dwg_Data* dwg, BITCODE_T t);
+
+struct LegacyLeaderScaleContext {
+  double paperUnits = 0.0;
+  double drawingUnits = 0.0;
+};
+
+LegacyLeaderScaleContext ReadLegacyLeaderScaleContext(Dwg_Data* dwg) {
+  LegacyLeaderScaleContext context;
+  if (dwg == nullptr)
+    return context;
+  const char* currentScale = dwg_variable_dict(dwg, "CANNOSCALE");
+  if (currentScale == nullptr)
+    return context;
+  const std::string scaleName = FromT(dwg, reinterpret_cast<BITCODE_T>(const_cast<char*>(currentScale)));
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object* object = &dwg->object[i];
+    if (object->fixedtype != DWG_TYPE_SCALE || object->tio.object == nullptr ||
+        object->tio.object->tio.SCALE == nullptr)
+      continue;
+    const Dwg_Object_SCALE* scale = object->tio.object->tio.SCALE;
+    if (FromT(dwg, scale->name) != scaleName)
+      continue;
+    context.paperUnits = scale->paper_units;
+    context.drawingUnits = scale->drawing_units;
+    return context;
+  }
+  return context;
+}
 
 constexpr double kPi = 3.14159265358979323846;
 // Native AcCmColor CMC tags, verified against the source drawing's Civil API values.
@@ -982,40 +1011,32 @@ static std::string ImportTextStyleFontFamily(Dwg_Data* dwg, BITCODE_H styleRef) 
   return FromT(dwg, styleObj->tio.object->tio.STYLE->font_file);
 }
 
-static double LeaderArrowSizeWorld(Dwg_Data* dwg, const Dwg_Entity_LEADER* leader) {
+static double LeaderArrowSizeWorld(Dwg_Data* dwg, const Dwg_Entity_LEADER* leader,
+                                   const LegacyLeaderScaleContext& scaleContext) {
   if (dwg == nullptr || leader == nullptr)
     return 0.18;
-  auto scaleArrow = [dwg](double arrow) {
-    const double dimScale = dwg->header_vars.DIMSCALE;
+  const Dwg_Object_DIMSTYLE* dimStyle = nullptr;
+  if (leader->dimstyle != nullptr && leader->dimstyle->absolute_ref != 0) {
+    Dwg_Object* styleObject = dwg_resolve_handle_silent(dwg, leader->dimstyle->absolute_ref);
+    if (styleObject != nullptr && styleObject->fixedtype == DWG_TYPE_DIMSTYLE &&
+        styleObject->tio.object != nullptr && styleObject->tio.object->tio.DIMSTYLE != nullptr)
+      dimStyle = styleObject->tio.object->tio.DIMSTYLE;
+  }
+  double dimScale = dwg->header_vars.DIMSCALE;
+  if (dimStyle != nullptr && dimStyle->DIMSCALE > 0.0 &&
+      std::fabs(dimStyle->DIMSCALE - 1.0) > 1e-9)
+    dimScale = dimStyle->DIMSCALE;
+  auto scaleArrow = [dimScale, &scaleContext](double arrow) {
     if (!(dimScale > 0.0))
       return arrow;
-    const char* currentScale = dwg_variable_dict(dwg, "CANNOSCALE");
-    if (currentScale != nullptr) {
-      const std::string scaleName = FromT(dwg, reinterpret_cast<BITCODE_T>(const_cast<char*>(currentScale)));
-      for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
-        const Dwg_Object* object = &dwg->object[i];
-        if (object->fixedtype != DWG_TYPE_SCALE || object->tio.object == nullptr ||
-            object->tio.object->tio.SCALE == nullptr)
-          continue;
-        const Dwg_Object_SCALE* scale = object->tio.object->tio.SCALE;
-        if (FromT(dwg, scale->name) != scaleName)
-          continue;
-        const double factor = libredwgcad_detail::LegacyLeaderScaleFactor(
-            dimScale, scale->paper_units, scale->drawing_units,
-            dwg->header_vars.INSUNITS == 2 /* feet */);
-        return arrow * factor;
-      }
-    }
-    return arrow * dimScale;
+    const double factor = libredwgcad_detail::LegacyLeaderScaleFactor(
+        dimScale, scaleContext.paperUnits, scaleContext.drawingUnits);
+    return arrow * factor;
   };
   if (leader->dimasz > 1e-9)
     return scaleArrow(leader->dimasz);
-  if (leader->dimstyle != nullptr && leader->dimstyle->absolute_ref != 0) {
-    Dwg_Object* styleObj = dwg_resolve_handle_silent(dwg, leader->dimstyle->absolute_ref);
-    if (styleObj != nullptr && styleObj->fixedtype == DWG_TYPE_DIMSTYLE && styleObj->tio.object != nullptr &&
-        styleObj->tio.object->tio.DIMSTYLE != nullptr && styleObj->tio.object->tio.DIMSTYLE->DIMASZ > 1e-9)
-      return scaleArrow(styleObj->tio.object->tio.DIMSTYLE->DIMASZ);
-  }
+  if (dimStyle != nullptr && dimStyle->DIMASZ > 1e-9)
+    return scaleArrow(dimStyle->DIMASZ);
   return scaleArrow(dwg->header_vars.DIMASZ > 1e-9 ? dwg->header_vars.DIMASZ : 0.18);
 }
 
@@ -1100,7 +1121,7 @@ static bool ApplySavedModelViewport(AppCommandState& st, const SavedModelViewpor
 }
 
 static bool ImportLeaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_LEADER* ld, const Xf2& xf,
-                               const EntityAttributes& at) {
+                               const EntityAttributes& at, const LegacyLeaderScaleContext& scaleContext) {
   if (ld == nullptr || ld->num_points < 2 || ld->points == nullptr)
     return false;
   Dwg_Object* ann = nullptr;
@@ -1135,7 +1156,8 @@ static bool ImportLeaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Ent
     an.fontFamily = ImportTextStyleFontFamily(dwg, mt->style);
     const double leaderDx = ld->points[1].x - ld->points[0].x;
     const double leaderDy = ld->points[1].y - ld->points[0].y;
-    m.arrowSizeWorld = static_cast<float>(LeaderArrowSizeWorld(dwg, ld) * xf.scaleAlong(leaderDx, leaderDy));
+    m.arrowSizeWorld = static_cast<float>(
+        LeaderArrowSizeWorld(dwg, ld, scaleContext) * xf.scaleAlong(leaderDx, leaderDy));
     // The path is stored from arrow tip to the text-side landing. AutoCAD draws the hookline
     // outward from that landing, so its outer endpoint must precede the original landing in this
     // path order. See Autodesk's LEADER DXF groups 74/75/211 and DIMASZ behavior.
@@ -1367,7 +1389,7 @@ static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dw
 
 void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
                   std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
-                  AppCommandState* blockDefCatalog);
+                  AppCommandState* blockDefCatalog, const LegacyLeaderScaleContext& scaleContext);
 
 /// REQ-320 / ADR-051 (GitHub issue #299, increment 2 TASK-734): a `3DSOLID` entity's geometry is an
 /// ACIS record stream, not lines/circles LibreDWG can hand back directly. `acis_data` is SAT (v1) or
@@ -1610,7 +1632,8 @@ void ImportAttdefIntoDefinition(const Dwg_Data* dwg, const Dwg_Entity_ATTDEF* ad
 
 bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* blkHeaderObj,
                                       std::unordered_map<std::string, int>* skipHist,
-                                      int* degenerateExtrusions) {
+                                      int* degenerateExtrusions,
+                                      const LegacyLeaderScaleContext& scaleContext) {
   const std::string name = BlockHeaderDwgName(dwg, blkHeaderObj);
   if (!DwgBlockDefNameIsImportable(name))
     return false;
@@ -1631,7 +1654,7 @@ bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Ob
        e = get_next_owned_entity(blkHeaderObj, e)) {
     if (e->fixedtype == DWG_TYPE_ATTDEF && e->tio.entity != nullptr && e->tio.entity->tio.ATTDEF != nullptr)
       continue;  // collected below
-    ImportObject(scratch, dwg, e, id, 1, skipHist, degenerateExtrusions, &st);
+    ImportObject(scratch, dwg, e, id, 1, skipHist, degenerateExtrusions, &st, scaleContext);
   }
   if (!ScratchHasBlockGeometry(scratch))
     return false;
@@ -1883,7 +1906,8 @@ static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_
                                         std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
                                         double originSubtractX, double originSubtractY,
                                         std::vector<CadBlockRef>& outRefs, std::vector<EntityAttributes>& outAttrs,
-                                        AppCommandState* blockDefCatalog) {
+                                        AppCommandState* blockDefCatalog,
+                                        const LegacyLeaderScaleContext& scaleContext) {
   if (ent == nullptr || ent->tio.INSERT == nullptr)
     return false;
   const Dwg_Entity_INSERT* ins = ent->tio.INSERT;
@@ -1896,7 +1920,7 @@ static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_
   if (!DwgBlockDefNameIsImportable(name))
     return false;
   AppCommandState& catalog = blockDefCatalog != nullptr ? *blockDefCatalog : st;
-  if (!EnsureDwgBlockDefinitionImported(catalog, dwg, blk, skipHist, degenerateExtrusions))
+  if (!EnsureDwgBlockDefinitionImported(catalog, dwg, blk, skipHist, degenerateExtrusions, scaleContext))
     return false;
   if (CadBlockFindDef(catalog.blockDefs, name) < 0)
     return false;
@@ -1930,7 +1954,8 @@ static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_
 
 static bool ImportNestedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, const Xf2& xf,
                                          std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
-                                         AppCommandState* blockDefCatalog) {
+                                         AppCommandState* blockDefCatalog,
+                                         const LegacyLeaderScaleContext& scaleContext) {
   if (ent == nullptr || ent->tio.INSERT == nullptr)
     return false;
   const Dwg_Entity_INSERT* ins = ent->tio.INSERT;
@@ -1943,7 +1968,7 @@ static bool ImportNestedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg
   if (!DwgBlockDefNameIsImportable(name))
     return false;
   AppCommandState& catalog = blockDefCatalog != nullptr ? *blockDefCatalog : st;
-  if (!EnsureDwgBlockDefinitionImported(catalog, dwg, blk, skipHist, degenerateExtrusions))
+  if (!EnsureDwgBlockDefinitionImported(catalog, dwg, blk, skipHist, degenerateExtrusions, scaleContext))
     return false;
   if (CadBlockFindDef(catalog.blockDefs, name) < 0)
     return false;
@@ -1981,16 +2006,18 @@ static bool ImportNestedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg
 
 bool TryImportInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, int depth,
                                const EntityAttributes& at, std::unordered_map<std::string, int>* skipHist,
-                               int* degenerateExtrusions) {
+                               int* degenerateExtrusions,
+                               const LegacyLeaderScaleContext& scaleContext) {
   if (depth != 0)
     return false;
   return ImportNamedInsertAsBlockRef(st, dwg, ent, at, skipHist, degenerateExtrusions, st.worldDocumentOriginX,
-                                     st.worldDocumentOriginY, st.cadBlockRefs, st.cadBlockRefAttrs, nullptr);
+                                     st.worldDocumentOriginY, st.cadBlockRefs, st.cadBlockRefAttrs, nullptr,
+                                     scaleContext);
 }
 
 void ExplodeInsert(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, int depth,
                    std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
-                   AppCommandState* blockDefCatalog) {
+                   AppCommandState* blockDefCatalog, const LegacyLeaderScaleContext& scaleContext) {
   if (depth > 8 || ent == nullptr || ent->tio.INSERT == nullptr)
     return;
   const Dwg_Entity_INSERT* ins = ent->tio.INSERT;
@@ -2006,7 +2033,8 @@ void ExplodeInsert(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, i
   child.sx = ins->scale.x != 0.0 ? ins->scale.x : 1.0;
   child.sy = ins->scale.y != 0.0 ? ins->scale.y : 1.0;
   for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr; e = get_next_owned_entity(blk, e))
-    ImportObject(st, dwg, e, child, depth + 1, skipHist, degenerateExtrusions, blockDefCatalog);
+    ImportObject(st, dwg, e, child, depth + 1, skipHist, degenerateExtrusions, blockDefCatalog,
+                 scaleContext);
 }
 
 // REQ-366, issue #607: imports a DIMENSION's anonymous "*D" block content as plain entities —
@@ -2015,7 +2043,8 @@ void ExplodeInsert(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, i
 // dimension block's content at the dimension's actual WCS location (see WriteDimAnonymousBlock's
 // comment on the save side), so the block's own entities are imported with the identity transform.
 void ExplodeDimensionBlock(AppCommandState& st, Dwg_Data* dwg, const Dwg_DIMENSION_common* common, int depth,
-                           std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions) {
+                           std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+                           const LegacyLeaderScaleContext& scaleContext) {
   if (depth > 8 || common == nullptr || common->block == nullptr)
     return;
   Dwg_Object* blk = dwg_resolve_handle_silent(dwg, common->block->absolute_ref);
@@ -2023,7 +2052,8 @@ void ExplodeDimensionBlock(AppCommandState& st, Dwg_Data* dwg, const Dwg_DIMENSI
     return;
   const Xf2 identity{};
   for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr; e = get_next_owned_entity(blk, e))
-    ImportObject(st, dwg, e, identity, depth + 1, skipHist, degenerateExtrusions, nullptr);
+    ImportObject(st, dwg, e, identity, depth + 1, skipHist, degenerateExtrusions, nullptr,
+                 scaleContext);
 }
 
 // REQ-366 statement 3: Aligned / Linear (rotated or orthogonal) / 3-point Angular read back into
@@ -2840,7 +2870,7 @@ bool ImportCivilPointTable(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object&
 
 void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
                   std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
-                  AppCommandState* blockDefCatalog) {
+                  AppCommandState* blockDefCatalog, const LegacyLeaderScaleContext& scaleContext) {
   if (obj == nullptr || obj->supertype != DWG_SUPERTYPE_ENTITY || obj->tio.entity == nullptr)
     return;
   Dwg_Object_Entity* ent = obj->tio.entity;
@@ -3033,7 +3063,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     return;
   }
   if (ty == DWG_TYPE_LEADER && ent->tio.LEADER != nullptr) {
-    if (ImportLeaderEntity(st, dwg, ent->tio.LEADER, xf, at))
+    if (ImportLeaderEntity(st, dwg, ent->tio.LEADER, xf, at, scaleContext))
       return;
     NoteSkip(skipHist, "LEADER(degenerate or unsupported)");
     return;
@@ -3158,7 +3188,8 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
         AppCommandState& catalog = blockDefCatalog != nullptr ? *blockDefCatalog : st;
         bool canEval = false;
         if (insBlk != nullptr &&
-            EnsureDwgBlockDefinitionImported(catalog, dwg, insBlk, skipHist, degenerateExtrusions)) {
+            EnsureDwgBlockDefinitionImported(catalog, dwg, insBlk, skipHist, degenerateExtrusions,
+                                             scaleContext)) {
           const std::string bname = BlockHeaderDwgName(dwg, insBlk);
           const int di = CadBlockFindDef(catalog.blockDefs, bname);
           canEval = di >= 0 && !catalog.blockDefs[static_cast<size_t>(di)].parameters.empty();
@@ -3170,12 +3201,14 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
       }
     }
     if (depth == 0) {
-      if (TryImportInsertAsBlockRef(st, dwg, ent, depth, at, skipHist, degenerateExtrusions))
+      if (TryImportInsertAsBlockRef(st, dwg, ent, depth, at, skipHist, degenerateExtrusions,
+                                    scaleContext))
         return;
-    } else if (ImportNestedInsertAsBlockRef(st, dwg, ent, xf, skipHist, degenerateExtrusions, blockDefCatalog)) {
+    } else if (ImportNestedInsertAsBlockRef(st, dwg, ent, xf, skipHist, degenerateExtrusions,
+                                            blockDefCatalog, scaleContext)) {
       return;
     }
-    ExplodeInsert(st, dwg, ent, depth, skipHist, degenerateExtrusions, blockDefCatalog);
+    ExplodeInsert(st, dwg, ent, depth, skipHist, degenerateExtrusions, blockDefCatalog, scaleContext);
     return;
   }
   // REQ-366, issue #607: Aligned / Linear / 3-point Angular DIMENSION entities read back into
@@ -3204,7 +3237,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
       centerOrDef = &ent->tio.DIMENSION_ANG3PT->center_pt;
     }
     if (!ImportSupportedDimension(st, dwg, xf, ty, common, xline1, xline2, centerOrDef, rot, at, ent))
-      ExplodeDimensionBlock(st, dwg, common, depth, skipHist, degenerateExtrusions);
+      ExplodeDimensionBlock(st, dwg, common, depth, skipHist, degenerateExtrusions, scaleContext);
     return;
   }
   if ((ty == DWG_TYPE_DIMENSION_RADIUS || ty == DWG_TYPE_DIMENSION_DIAMETER ||
@@ -3219,7 +3252,8 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
                           : ty == DWG_TYPE_DIMENSION_ORDINATE  ? "DIMENSION(Ordinate, unsupported subtype)"
                                                                 : "DIMENSION(2-line Angular, unsupported subtype)";
     NoteSkip(skipHist, subtype);
-    ExplodeDimensionBlock(st, dwg, ent->tio.DIMENSION_common, depth, skipHist, degenerateExtrusions);
+    ExplodeDimensionBlock(st, dwg, ent->tio.DIMENSION_common, depth, skipHist, degenerateExtrusions,
+                          scaleContext);
     return;
   }
   if (ty == DWG_TYPE__3DSOLID && ent->tio._3DSOLID != nullptr) {
@@ -3854,7 +3888,8 @@ void ImportCivilSurfaceStyles(AppCommandState& st, Dwg_Data* dwg, std::vector<st
 
 std::unordered_map<uint64_t, std::string> ImportCivilPointStyles(
     AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& log,
-    std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions) {
+    std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+    const LegacyLeaderScaleContext& scaleContext) {
   std::unordered_map<uint64_t, std::string> names;
   for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
     Dwg_Object& object = dwg->object[i];
@@ -3918,7 +3953,7 @@ std::unordered_map<uint64_t, std::string> ImportCivilPointStyles(
     Dwg_Object* symbol = dwg_resolve_handle_silent(dwg, (*handles)[commonHandles + 18]);
     if (symbol != nullptr && symbol->fixedtype == DWG_TYPE_BLOCK_HEADER) {
       style.markerBlockName = BlockHeaderDwgName(dwg, symbol);
-      if (!EnsureDwgBlockDefinitionImported(st, dwg, symbol, skipHist, degenerateExtrusions))
+      if (!EnsureDwgBlockDefinitionImported(st, dwg, symbol, skipHist, degenerateExtrusions, scaleContext))
         NoteSkip(skipHist, "AECC_POINT_STYLE(marker block geometry unsupported)");
     }
     names.emplace(object.handle.value, style.name);
@@ -6885,7 +6920,8 @@ static bool IsPaperLayoutEntity(const Dwg_Data* dwg, const Dwg_Object* entityObj
 }
 
 static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj,
-                              std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions) {
+                              std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+                              const LegacyLeaderScaleContext& scaleContext) {
   if (obj == nullptr || obj->supertype != DWG_SUPERTYPE_ENTITY || obj->tio.entity == nullptr)
     return;
   Dwg_Object_Entity* ent = obj->tio.entity;
@@ -7015,7 +7051,7 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
   }
   if (ty == DWG_TYPE_INSERT && ent->tio.INSERT != nullptr) {
     if (ImportNamedInsertAsBlockRef(st, dwg, ent, at, skipHist, degenerateExtrusions, 0.0, 0.0, L.paperBlockRefs,
-                                    L.paperBlockRefAttrs, nullptr))
+                                    L.paperBlockRefAttrs, nullptr, scaleContext))
       return;
   }
   // REQ-457 / issue #1010: an IMAGE on a sheet, placed from its IMAGEDEF path and pixel size. A file that is no
@@ -7064,7 +7100,7 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     // The model-space reader drops paper-space entities (entmode 1); this IS the sheet, so read it as model.
     const auto savedEntMode = ent->entmode;
     ent->entmode = 2;
-    ImportObject(scratch, dwg, obj, Xf2{}, 0, skipHist, degenerateExtrusions, nullptr);
+    ImportObject(scratch, dwg, obj, Xf2{}, 0, skipHist, degenerateExtrusions, nullptr, scaleContext);
     ent->entmode = savedEntMode;
     AppendScratchToPaperLayout(L, scratch);
     return;
@@ -7075,7 +7111,8 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
 }
 
 static void ImportPaperLayoutsFromDwg(AppCommandState& st, Dwg_Data* dwg,
-                                      std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions) {
+                                      std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+                                      const LegacyLeaderScaleContext& scaleContext) {
   st.paperLayouts.clear();
   struct LayoutRow {
     int tab = 0;
@@ -7124,7 +7161,7 @@ static void ImportPaperLayoutsFromDwg(AppCommandState& st, Dwg_Data* dwg,
     Dwg_Object* blk = LayoutPaperBlockObject(dwg, lo);
     if (blk != nullptr) {
       for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr; e = get_next_owned_entity(blk, e)) {
-        ImportPaperEntity(pl, st, dwg, e, skipHist, degenerateExtrusions);
+        ImportPaperEntity(pl, st, dwg, e, skipHist, degenerateExtrusions, scaleContext);
       }
     }
     st.paperLayouts.push_back(std::move(pl));
@@ -8379,6 +8416,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   if (!LoadDwgData(pathUtf8, asDxf, &dwg, log))
     return false;
   dwg_resolve_objectrefs_silent(&dwg);
+  const LegacyLeaderScaleContext legacyLeaderScale = ReadLegacyLeaderScaleContext(&dwg);
   SavedModelViewport savedModelViewport;
   const bool hasSavedModelViewport = !asDxf && ReadSavedModelViewport(&dwg, &savedModelViewport);
   DwgMaterialImportBegin();
@@ -8429,7 +8467,8 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   ImportStyles(st, &dwg);
   std::unordered_map<std::string, int> skipHist;
   int degenerateExtrusions = 0;
-  const auto civilPointStyles = ImportCivilPointStyles(st, &dwg, log, &skipHist, &degenerateExtrusions);
+  const auto civilPointStyles = ImportCivilPointStyles(st, &dwg, log, &skipHist, &degenerateExtrusions,
+                                                       legacyLeaderScale);
   std::unordered_set<int> explicitCivilPointStyles;
   ImportCivilSurfaceStyles(st, &dwg, log);
   // The Civil point node owns coordinates even when a point's display style hides its proxy.
@@ -8513,7 +8552,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   if (mspace != nullptr) {
     for (Dwg_Object* e = get_first_owned_entity(mspace); e != nullptr; e = get_next_owned_entity(mspace, e)) {
       if (!IsPaperLayoutEntity(&dwg, e))
-        ImportObject(st, &dwg, e, id, 0, &skipHist, &degenerateExtrusions, nullptr);
+        ImportObject(st, &dwg, e, id, 0, &skipHist, &degenerateExtrusions, nullptr, legacyLeaderScale);
     }
     ImportPlantParts(st, &dwg, mspace, &skipHist);
   }
@@ -8537,7 +8576,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
         continue;
       if (ty == DWG_TYPE_POLYLINE_PFACE || ty == DWG_TYPE_POLYLINE_MESH || ty == DWG_TYPE__3DFACE)
         continue;
-      ImportObject(st, &dwg, o, id, 0, &skipHist, &degenerateExtrusions, nullptr);
+      ImportObject(st, &dwg, o, id, 0, &skipHist, &degenerateExtrusions, nullptr, legacyLeaderScale);
     }
   }
   if (st.cadMeshes.empty()) {
@@ -8550,11 +8589,11 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
       const Dwg_Object_Type ty = o->fixedtype;
       if (ty != DWG_TYPE_POLYLINE_PFACE && ty != DWG_TYPE_POLYLINE_MESH && ty != DWG_TYPE__3DFACE)
         continue;
-      ImportObject(st, &dwg, o, id, 0, &skipHist, &degenerateExtrusions, nullptr);
+      ImportObject(st, &dwg, o, id, 0, &skipHist, &degenerateExtrusions, nullptr, legacyLeaderScale);
     }
   }
 
-  ImportPaperLayoutsFromDwg(st, &dwg, &skipHist, &degenerateExtrusions);
+  ImportPaperLayoutsFromDwg(st, &dwg, &skipHist, &degenerateExtrusions, legacyLeaderScale);
   if (dwg.header.version >= R_2007)
     st.viewportVisualStyle = DwgImportModelVisualStyle(&dwg);
   ImportAnnotationScales(st, &dwg);
