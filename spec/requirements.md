@@ -16185,7 +16185,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
      are Tangent-Tangent (No curves / With curves), Curve and Spiral Settings (clothoid spiral in/out lengths and the
      radius), Delete Sub-entity, Alignment Grid View, Undo and Redo; Tangent-Tangent starts without curves and keeps
      the last mode, every PI rebuilds the layout (Fixed tangents; Free curves, or spiral-curve-spiral), and a layout
-     session is one undo step. From Objects picks the first object, then more, then Enter or Reverse; its dialog
+     session is one undo step. **Decision D-2026-11-04-k:** with curves and no spirals, a corner whose curve does not
+     fit between its PIs gets the radius whose tangent distance is 40 % of the shorter adjacent tangent, as Civil 3D
+     does, and the smaller radius is reported; a spiral-curve-spiral that does not fit stays a PI, with the reason.
+     From Objects picks the first object, then more, then Enter or Reverse; its dialog
      checks "Add curves between tangents" and "Erase existing entities" by default, and erase plus creation is one
      undo step. Commands: `CREATEALIGNMENT`, `ALIGNMENTLAYOUT`, `ALIGNMENTCURVESETTINGS`,
      `CREATEALIGNMENTFROMOBJECTS` (`CREATEALIGNMENTENTITIES`).

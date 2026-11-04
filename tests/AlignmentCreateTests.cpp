@@ -160,17 +160,27 @@ TEST_CASE("Layout with spirals builds spiral-curve-spiral that lands on the next
   CheckSmooth(a);
 }
 
-TEST_CASE("Layout leaves a corner too tight for the radius as a PI and says so", "[req485][alignment]") {
+TEST_CASE("Layout shrinks a curve that does not fit, as Civil 3D does, and says so (D-2026-11-04-k)", "[req485][alignment]") {
+  // Civil 3D 2026 Tangent-Tangent (With curves) at R 200: two 100' tangents at 90 deg -> tangents 60 and 60, R 40 (T is
+  // 40 % of the shorter tangent); two 300' tangents -> R 200 kept, because it fits.
   alignment::CurveSettings s;
-  s.radius = 200.0;  // T = 200 at 90 deg, but the tangents are 100 long
+  s.radius = 200.0;
   Alignment a;
   std::string err;
   std::vector<std::string> warn;
   REQUIRE(alignment::BuildFromPis({{0, 0}, {0, 100}, {100, 100}}, s, &a, &err, &warn));
-  CHECK(a.Entities().size() == 2);
+  REQUIRE(a.Entities().size() == 3);
+  CHECK(a.Entities()[0].length == Approx(60.0).margin(1e-6));
+  CHECK(a.Entities()[1].radius == Approx(40.0).margin(1e-6));
+  CHECK(a.Entities()[2].length == Approx(60.0).margin(1e-6));
   REQUIRE(warn.size() == 1);
   CHECK(warn[0].find("PI 2") != std::string::npos);
-  CHECK(warn[0].find("too tight") != std::string::npos);
+  CHECK(warn[0].find("used radius 40") != std::string::npos);
+  warn.clear();
+  REQUIRE(alignment::BuildFromPis({{1000, 0}, {1000, 300}, {1300, 300}}, s, &a, &err, &warn));
+  CHECK(a.Entities()[1].radius == Approx(200.0));
+  CHECK(a.Entities()[0].length == Approx(100.0).margin(1e-6));
+  CHECK(warn.empty());
 
   s.spiralInLength = 700.0;  // theta = Ls / 2R = 1.75 rad uses more than the 90 deg deflection: no curve
   REQUIRE(alignment::BuildFromPis({{0, 0}, {0, 2000}, {2000, 2000}}, s, &a, &err, &warn));
@@ -435,9 +445,13 @@ TEST_CASE("CREATEALIGNMENTFROMOBJECTS picks objects, then Reverse at the prompt 
   REQUIRE(SubmitAlignmentCommandPoint(st, 0.0, 10.0, log));  // the first line, near its (0,0) end
   REQUIRE(SubmitAlignmentCommandPoint(st, 50.0, 100.0, log));
   CHECK_FALSE(SubmitAlignmentCommandPoint(st, 50.0, 100.0, log));  // already selected
+  alignment::Alignment preview;
+  CHECK_FALSE(AlignmentFromObjectsPreview(st, &preview));  // no arrows before the direction prompt
   Submit(st, "", log);  // done picking: the direction prompt
   INFO(Joined(log));
   CHECK(LogHas(log, "starts at 0.0000, 0.0000"));
+  REQUIRE(AlignmentFromObjectsPreview(st, &preview));  // the arrows follow the alignment that would be made
+  CHECK(preview.StartPoint().y == Approx(0.0));
   Submit(st, "R", log);
   CHECK(LogHas(log, "starts at 100.0000, 100.0000"));
   Submit(st, "", log);  // headless: created with the next default name

@@ -441,8 +441,9 @@ struct CurveSettings {
 
 /// Builds Fixed tangents between consecutive PIs (repeated points are dropped). With curves, each interior PI becomes a
 /// curve of `s.radius` - Free between its tangents, or spiral-curve-spiral when a spiral length is set - so the chain is
-/// C0 and C1. A corner whose curve does not fit between its tangents is reported in `warnings` and left as a PI
-/// (REQ-485.2). False, with `out` cleared, for fewer than two distinct points or an invalid setting.
+/// C0 and C1. A curve that does not fit between its tangents gets the radius whose tangent distance is 40 % of the
+/// shorter tangent, as Civil 3D does (D-2026-11-04-k); a spiral-curve-spiral that does not fit stays a PI. Both are
+/// reported in `warnings`. False, with `out` cleared, for fewer than two distinct points or an invalid setting.
 [[nodiscard]] bool BuildFromPis(const std::vector<Point2>& pis, const CurveSettings& s, Alignment* out,
                                 std::string* error, std::vector<std::string>* warnings = nullptr);
 

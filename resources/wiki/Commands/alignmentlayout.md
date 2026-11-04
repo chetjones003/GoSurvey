@@ -21,7 +21,8 @@ already has geometry is continued from its end.
 
 With curves, each corner gets the settings radius. Tangents are Fixed and curves are Free between them, so grips and
 the layout table keep the curve tangent to both. A corner too tight for the radius (its tangent distance does not fit
-on the tangents) stays a PI and is reported.
+on the tangents) gets a smaller curve, as in Civil 3D: the radius whose tangent distance is 40 % of the shorter
+tangent, and the radius used is reported. With spirals, a corner they do not fit stays a PI and is reported.
 
 `ALIGNMENTLAYOUT <name>[, CURVES|NOCURVES][, FROM=<x> <y>][, DIRECTION=<azimuth°>]`
 

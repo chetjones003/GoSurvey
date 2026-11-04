@@ -108,11 +108,9 @@ void EditorWindow::BuildDraftingInput() {
   // REQ-501.2: the alignment readout is a line of the same dynamic input, not a second cursor UI.
   m_DynamicAlignment = new QLabel(m_DynamicInput);
   m_DynamicAlignment->setObjectName("dynamicAlignmentReadout");
-  // Its own backing, like a tooltip, so the drawing's grid does not run through the numbers.
-  const bool darkReadout = palette().color(QPalette::Window).lightness() < 128;
-  m_DynamicAlignment->setStyleSheet(darkReadout
-      ? "QLabel { color:#f1f4f5; background:rgba(48,55,60,235); border:1px solid #4c575d; border-radius:3px; padding:2px 6px; }"
-      : "QLabel { color:#1f2428; background:rgba(245,247,248,240); border:1px solid #b8c0c6; border-radius:3px; padding:2px 6px; }");
+  // A light tooltip in both themes, as Civil 3D's alignment tooltip is, so it stands out from the drawing and its grid.
+  m_DynamicAlignment->setStyleSheet(
+      "QLabel { color:#1f2428; background:#f3f5f6; border:1px solid #b8c0c6; border-radius:3px; padding:3px 8px; }");
   m_DynamicAlignment->hide();
   layout->addWidget(m_DynamicAlignment);
   m_DynamicInput->hide();
@@ -522,7 +520,7 @@ void EditorWindow::ShowPolarSettings() {
   dialog.exec(); Refresh();
 }
 
-void EditorWindow::ShowContextualHelp() {
+void EditorWindow::ShowContextualHelp(const QString& topicCommand) {
   if (!m_WikiLoaded) {
     m_WikiBundle = LoadWikiBundle();
     WikiHelpBuildIndex(m_WikiBundle);
@@ -574,9 +572,11 @@ void EditorWindow::ShowContextualHelp() {
     }
     showPage(slug);
   });
-  QString command;
-  if (m_State.active != AppCommandState::Kind::None) command = QString::fromUtf8(AppCommandState::KindName(m_State.active));
-  else if (m_State.lastCommand != AppCommandState::Kind::None) command = QString::fromUtf8(AppCommandState::KindName(m_State.lastCommand));
+  QString command = topicCommand;
+  if (command.isEmpty() && m_State.active != AppCommandState::Kind::None)
+    command = QString::fromUtf8(AppCommandState::KindName(m_State.active));
+  else if (command.isEmpty() && m_State.lastCommand != AppCommandState::Kind::None)
+    command = QString::fromUtf8(AppCommandState::KindName(m_State.lastCommand));
   const auto target = WikiHelpLookupCommand(command.toLower().toUtf8().toStdString());
   const QString initial = target.pageSlug.empty() ? QStringLiteral("Home") : QString::fromUtf8(target.pageSlug.c_str());
   bool selected = false;

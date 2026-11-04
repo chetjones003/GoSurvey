@@ -796,6 +796,11 @@ private Q_SLOTS:
       QVERIFY(table);
       QCOMPARE(table->item(1, 12)->text(), QString("Radius (between tangents)"));
       QVERIFY(!table->item(1, 0)->icon().isNull());  // the failing row is marked
+      QVERIFY(!table->item(1, 5)->icon().isNull());  // and so is the failing value, the radius
+      QVERIFY(table->item(0, 5)->icon().isNull());
+      // Opening the table selects the alignment, as Civil 3D does.
+      QCOMPARE(window.State().selection.size(), size_t(1));
+      QCOMPARE(window.State().selection[0].type, SelectedEntity::Type::Alignment);
       // The Design check column names the failing curve (entity 2) and nothing else; the Criteria column shows the
       // radius the set requires there (REQ-486.5).
       QCOMPARE(table->columnCount(), 17);
@@ -1126,6 +1131,7 @@ private Q_SLOTS:
       layoutDialog = true;
       QTimer::singleShot(20000, dialog, &QDialog::reject);
       QCOMPARE(dialog->windowTitle(), QString("Create Alignment - Layout"));
+      QVERIFY(dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Help));
       auto* name = dialog->findChild<QLineEdit*>("createAlignmentName");
       QCOMPARE(name->text(), QString("Alignment - (1)"));
       name->setText("Main Road");
@@ -1157,6 +1163,9 @@ private Q_SLOTS:
     QVERIFY(st.alignmentCurveSettings.addCurves);
     for (const char* point : {"0,0", "0,500", "400,800", "900,800"}) window.Submit(point);
     QCOMPARE(st.alignments[0].Entities().size(), size_t(5));
+    window.Refresh();
+    QVERIFY(tools->findChild<QToolButton*>("layoutToolsTangents")->isChecked());  // the running tool shows pressed
+    QVERIFY(GrabWithTitle(tools).save(Issue914Shot("qt-485-layout-toolbar-active.png")));
     tools->findChild<QToolButton*>("layoutToolsUndo")->click();  // during the layout: takes back one PI
     QCOMPARE(st.alignments[0].Entities().size(), size_t(3));
     window.Submit("900,800");
@@ -1165,6 +1174,7 @@ private Q_SLOTS:
     QCOMPARE(st.alignments[0].Entities().size(), size_t(5));
     QCOMPARE(st.alignments[0].Entities()[0].length, 400.0);
     QCOMPARE(status->text(), QString("Tan-Tan (With curves)"));
+    QVERIFY(!tools->findChild<QToolButton*>("layoutToolsTangents")->isChecked());
     window.Submit("ZOOMEXTENTS");
     window.Refresh();
     window.m_Viewport->update();
@@ -1188,6 +1198,9 @@ private Q_SLOTS:
       auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
       QVERIFY(dialog && dialog->objectName() == "curveSpiralSettingsDialog");
       settingsDialog = true;
+      QVERIFY(dialog->findChild<QLineEdit*>("curveSettingsSpiralInA"));  // A is a read-only field, as in Civil 3D
+      QVERIFY(dialog->findChild<QLineEdit*>("curveSettingsSpiralInA")->isReadOnly());
+      QVERIFY(dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Help));
       QVERIFY(GrabWithTitle(dialog).save(Issue914Shot("qt-485-curve-spiral-settings.png")));
       dialog->findChild<QLineEdit*>("curveSettingsRadius")->setText("150");
       dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
@@ -1217,7 +1230,22 @@ private Q_SLOTS:
     QVERIFY(SubmitAlignmentCommandPoint(st, 2050.0, 100.0, pickLog));
     QVERIFY(SubmitAlignmentCommandPoint(st, 2100.0 + 50.0 * std::cos(alignment::kPi / 4.0),
                                         50.0 + 50.0 * std::sin(alignment::kPi / 4.0), pickLog));
-    window.Submit("");  // done picking: the direction prompt
+    window.Submit("");  // done picking: the direction prompt, with an arrow along each piece
+    {
+      alignment::Alignment preview;
+      QVERIFY(AlignmentFromObjectsPreview(st, &preview));
+      QCOMPARE(preview.StartPoint().y, 0.0);  // from the end nearest the first pick
+      st.pendingZoomMnX = 1900.f;  // the three picked objects, framed like the Civil 3D capture
+      st.pendingZoomMxX = 2250.f;
+      st.pendingZoomMnY = -40.f;
+      st.pendingZoomMxY = 160.f;
+      st.pendingZoomWindow = true;
+      window.Refresh();
+      window.m_Viewport->update();
+      QTRY_VERIFY_WITH_TIMEOUT(!st.pendingZoomWindow, 10000);
+      QTest::qWait(200);
+      QVERIFY(window.m_Viewport->grabFramebuffer().save(Issue914Shot("qt-485-fromobj-direction.png")));
+    }
     bool objectsDialog = false;
     QTimer::singleShot(0, &window, [&] {
       auto* dialog = window.findChild<QDialog*>("createAlignmentFromObjectsDialog");
@@ -1271,7 +1299,24 @@ private Q_SLOTS:
     QTest::qWait(250);
     QCOMPARE(alignment::GripPoints(st.alignments[0]).size(), size_t(15));
     QCOMPARE(window.findChild<QLabel*>("propertiesSummary")->text(), QString("Selected: 1 object — Alignment"));
+    {  // the Alignment contextual tab opens for the selected alignment, as in Civil 3D
+      auto* ribbon = window.findChild<QTabWidget*>("ribbon");
+      QVERIFY(ribbon && ribbon->currentWidget());
+      QCOMPARE(ribbon->currentWidget()->property("ribbonTab").toString(), QString("AlignmentCtx"));
+      QCOMPARE(ribbon->tabText(ribbon->currentIndex()), QString("Alignment: Main Road"));
+      auto* grid = window.findChild<QAction*>("ribbon_AlGridView");
+      QVERIFY(grid && grid->isEnabled());
+    }
     QVERIFY(window.findChild<QLabel*>("propertiesAlignmentGeometryNote"));
+    {  // General > Layer shows the alignment's own layer and sets it
+      auto* layer = window.findChild<QComboBox*>("propLayer");
+      QVERIFY(layer && layer->isEnabled());
+      QCOMPARE(layer->currentText(), QString::fromStdString(st.alignments[0].layer));
+      layer->textActivated("C-ROAD-MAIN");
+      QTRY_COMPARE_WITH_TIMEOUT(st.alignments[0].layer, std::string("C-ROAD-MAIN"), 5000);
+      st.selection = {{SelectedEntity::Type::Alignment, 0}};
+      window.Refresh();
+    }
     QVERIFY(window.m_Viewport->grabFramebuffer().save(Issue914Shot("qt-487-grips.png")));
 
     // Drag PI 1 west: the curves keep R 200, and the status bar reads station / offset / bearing on the road.
@@ -8046,7 +8091,8 @@ private Q_SLOTS:
       }
       ++buttons;
     }
-    QCOMPARE(buttons, 282);  // Issue #811 removed five palettes; PDF options add clipping and snap controls.
+    // Issue #811 removed five palettes; PDF options add clipping and snap controls; the Alignment tab adds 14 (#121).
+    QCOMPARE(buttons, 296);
     window.resize(850, 650); QTest::qWait(100);
     QVERIFY(ribbon->width() > 500); QVERIFY(ribbon->width() <= window.width());
     auto* page = window.findChild<QWidget*>("ribbonPage_Home"); QVERIFY(page);

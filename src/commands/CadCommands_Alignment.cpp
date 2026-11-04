@@ -1262,6 +1262,8 @@ void RunEditAlignment(AppCommandState& st, const std::string& args, std::vector<
   }
   st.alignmentLayoutRequested = true;
   st.alignmentLayoutName = name;
+  // As in Civil 3D, the alignment being edited is the selection, so Properties and the Alignment ribbon tab show it.
+  st.selection = {{SelectedEntity::Type::Alignment, FindAlignment(st, name)}};
   RunAlignmentList(st, name, log);  // the same rows, for a window-less run
 }
 
@@ -3629,6 +3631,17 @@ bool SubmitFromObjectsPick(AppCommandState& st, double lx, double ly, std::vecto
 }
 
 }  // namespace
+
+bool AlignmentFromObjectsPreview(const AppCommandState& st, alignment::Alignment* out) {
+  assert(out != nullptr);
+  if (st.active != AppCommandState::Kind::AlignmentFromObjects ||
+      st.alignmentFromObjects.phase != AppCommandState::AlignmentFromObjectsPick::Phase::WaitDirection)
+    return false;
+  std::string why;
+  const bool ok = PreviewFromObjects(st, out, &why);
+  assert(!ok || !out->Empty());
+  return ok;
+}
 
 std::string AlignmentFromObjectsPickArgs(const AppCommandState& st) {
   const AppCommandState::AlignmentFromObjectsPick& p = st.alignmentFromObjects;

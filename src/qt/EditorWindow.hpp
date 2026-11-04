@@ -96,7 +96,8 @@ private:
   void CancelDraftingInput();
   void ShowPolarSettings();
   void ShowSnapOverride(const QPoint& position);
-  void ShowContextualHelp();
+  /// The user manual, open at `topicCommand`'s page (empty: the running or last command's).
+  void ShowContextualHelp(const QString& topicCommand = {});
   void BuildPropertiesPanel();
   void RefreshProperties();
   void Refresh();

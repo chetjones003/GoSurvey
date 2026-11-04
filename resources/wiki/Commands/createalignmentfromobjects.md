@@ -8,7 +8,8 @@ Create Alignment from Objects):
 
 1. **Select the first line/arc/polyline.** The alignment starts at the end nearest where you click.
 2. **Select the rest**, then press Enter. If objects were already selected, the command uses them.
-3. GoSurvey reports where the alignment starts and which way it heads. Press Enter to accept, or `R` to reverse it.
+3. GoSurvey reports where the alignment starts and which way it heads, and an arrow on each picked object shows that
+   direction. Press Enter to accept, or `R` to reverse it.
 4. The **Create Alignment from Objects** dialog asks for the name, type, description, starting station, style, layer,
    label set and design criteria, and the conversion options:
    - **Add curves between tangents** with a **Default radius** (100 ft, or 30 m in a metric drawing): each corner

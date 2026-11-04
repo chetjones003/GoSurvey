@@ -13,6 +13,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFrame>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QInputDialog>
@@ -279,7 +280,8 @@ void BuildHeader(QDialog* dialog, QVBoxLayout* column, DialogFields* f, const Ap
 
 }  // namespace
 
-CreateAlignmentCommands RunCreateAlignmentDialog(QWidget* parent, const AppCommandState& state, bool fromObjects) {
+CreateAlignmentCommands RunCreateAlignmentDialog(QWidget* parent, const AppCommandState& state, bool fromObjects,
+                                                 std::function<void()> help) {
   assert(state.alignments.size() < state.alignments.max_size());
   QDialog dialog(parent);
   dialog.setObjectName(fromObjects ? "createAlignmentFromObjectsDialog" : "createAlignmentLayoutDialog");
@@ -298,8 +300,11 @@ CreateAlignmentCommands RunCreateAlignmentDialog(QWidget* parent, const AppComma
   f.error->setStyleSheet("color: #d9534f;");
   f.error->setWordWrap(true);
   column->addWidget(f.error);
-  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel |
+                                           (help ? QDialogButtonBox::Help : QDialogButtonBox::NoButton),
+                                       &dialog);
   column->addWidget(buttons);
+  if (help) QObject::connect(buttons, &QDialogButtonBox::helpRequested, &dialog, help);
   QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
   QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]() {
     const QString problem = Validate(state, f, fromObjects);
@@ -318,10 +323,10 @@ struct SpiralRow {
   QLineEdit* length = nullptr;
 };
 
-/// One "Spiral in" / "Spiral out" row: the checkbox, the length and the A value √(R·Ls) it gives.
-SpiralRow AddSpiralRow(QDialog* dialog, QVBoxLayout* column, QLineEdit* radiusEdit, const QString& label,
+/// One "Spiral in" / "Spiral out" row of the grid: the checkbox, the length and the A value √(R·Ls) it gives.
+SpiralRow AddSpiralRow(QDialog* dialog, QGridLayout* grid, int row, QLineEdit* radiusEdit, const QString& label,
                        double length, double radius, const char* objectName) {
-  assert(dialog != nullptr && column != nullptr && radiusEdit != nullptr);
+  assert(dialog != nullptr && grid != nullptr && radiusEdit != nullptr);
   assert(radius > 0.0);
   SpiralRow r;
   r.check = new QCheckBox(label, dialog);
@@ -329,26 +334,27 @@ SpiralRow AddSpiralRow(QDialog* dialog, QVBoxLayout* column, QLineEdit* radiusEd
   r.length = new QLineEdit(Number(length > 0.0 ? length : radius), dialog);
   r.length->setObjectName(objectName);
   r.length->setEnabled(length > 0.0);
-  auto* aValue = new QLabel(dialog);
+  auto* aValue = new QLineEdit(dialog);  // derived, so read-only, as Civil 3D shows it
+  aValue->setReadOnly(true);
+  aValue->setEnabled(false);
+  aValue->setObjectName(QString(objectName) + "A");
   auto refresh = [aValue, edit = r.length, radiusEdit]() {
     const double a = std::sqrt(std::max(0.0, edit->text().toDouble() * radiusEdit->text().toDouble()));
-    aValue->setText("A value: " + QString::number(a, 'f', 3));
+    aValue->setText(QString::number(a, 'f', 3));
   };
   QObject::connect(r.check, &QCheckBox::toggled, r.length, &QWidget::setEnabled);
   QObject::connect(r.length, &QLineEdit::textChanged, aValue, refresh);
   QObject::connect(radiusEdit, &QLineEdit::textChanged, aValue, refresh);
   refresh();
-  auto* row = new QHBoxLayout;
-  row->addWidget(r.check);
-  row->addWidget(Captioned("Length:", r.length, dialog));
-  row->addWidget(aValue);
-  column->addLayout(row);
+  grid->addWidget(r.check, row, 0, Qt::AlignBottom);
+  grid->addWidget(Captioned("Length:", r.length, dialog), row, 1);
+  grid->addWidget(Captioned("A value:", aValue, dialog), row, 2);
   return r;
 }
 
 }  // namespace
 
-QString RunCurveSpiralSettingsDialog(QWidget* parent, const AppCommandState& state) {
+QString RunCurveSpiralSettingsDialog(QWidget* parent, const AppCommandState& state, std::function<void()> help) {
   const alignment::CurveSettings& cs = state.alignmentCurveSettings;
   const double radius = EffectiveAlignmentCurveRadius(state);
   assert(radius > 0.0);
@@ -360,20 +366,30 @@ QString RunCurveSpiralSettingsDialog(QWidget* parent, const AppCommandState& sta
   type->addItem("Clothoid");
   type->setEnabled(false);  // the only spiral GoSurvey builds (REQ-481.3)
   column->addWidget(Captioned("Type:", type, &dialog));
+  // One grid, so the spiral lengths and A values line up in columns as Civil 3D's do.
+  auto* grid = new QGridLayout;
+  grid->setColumnStretch(1, 1);
+  grid->setColumnStretch(2, 1);
+  column->addLayout(grid);
   auto* radiusEdit = new QLineEdit(Number(radius), &dialog);
   radiusEdit->setObjectName("curveSettingsRadius");
-  const SpiralRow in = AddSpiralRow(&dialog, column, radiusEdit, "Spiral in", cs.spiralInLength, radius,
+  const SpiralRow in = AddSpiralRow(&dialog, grid, 0, radiusEdit, "Spiral in", cs.spiralInLength, radius,
                                     "curveSettingsSpiralIn");
   auto* curve = new QCheckBox("Curve", &dialog);
   curve->setChecked(true);
   curve->setEnabled(false);  // a spiral-spiral without a curve is not built
-  auto* curveRow = new QHBoxLayout;
-  curveRow->addWidget(curve);
-  curveRow->addWidget(Captioned("Default radius (applies to curve and spirals)", radiusEdit, &dialog));
-  column->addLayout(curveRow);
-  const SpiralRow out = AddSpiralRow(&dialog, column, radiusEdit, "Spiral out", cs.spiralOutLength, radius,
+  grid->addWidget(curve, 1, 0, Qt::AlignBottom);
+  grid->addWidget(Captioned("Default radius (applies to curve and spirals)", radiusEdit, &dialog), 1, 1, 1, 2);
+  const SpiralRow out = AddSpiralRow(&dialog, grid, 2, radiusEdit, "Spiral out", cs.spiralOutLength, radius,
                                      "curveSettingsSpiralOut");
-  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  auto* rule = new QFrame(&dialog);
+  rule->setFrameShape(QFrame::HLine);
+  rule->setFrameShadow(QFrame::Sunken);
+  column->addWidget(rule);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel |
+                                           (help ? QDialogButtonBox::Help : QDialogButtonBox::NoButton),
+                                       &dialog);
+  if (help) QObject::connect(buttons, &QDialogButtonBox::helpRequested, &dialog, help);
   column->addWidget(buttons);
   QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
   QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
@@ -459,6 +475,7 @@ AlignmentLayoutTools::AlignmentLayoutTools(AppCommandState& state, std::vector<s
   auto* row = new QHBoxLayout;
   tangents_ = ToolButton(this, "layoutToolsTangents", ToolIcon(0), "Tangent-Tangent (No curves)");
   tangents_->setPopupMode(QToolButton::MenuButtonPopup);
+  tangents_->setCheckable(true);
   auto* menu = new QMenu(tangents_);
   QAction* noCurves = menu->addAction(ToolIcon(0), "Tangent-Tangent (No curves)");
   QAction* withCurves = menu->addAction(ToolIcon(1), "Tangent-Tangent (With curves)");
@@ -521,7 +538,7 @@ void AlignmentLayoutTools::StartLayout(bool curves) {
 }
 
 void AlignmentLayoutTools::EditSettings() {
-  const QString command = RunCurveSpiralSettingsDialog(this, state_);
+  const QString command = RunCurveSpiralSettingsDialog(this, state_, help_);
   assert(command.isEmpty() || command.startsWith("ALIGNMENTCURVESETTINGS"));
   if (command.isEmpty()) return;
   submit_(command);  // a settings change does not interrupt the layout; the next PI uses it
@@ -554,6 +571,7 @@ void AlignmentLayoutTools::Sync() {
   const bool curves = state_.alignmentCurveSettings.addCurves;
   tangents_->setIcon(ToolIcon(curves ? 1 : 0));
   tangents_->setToolTip(curves ? "Tangent-Tangent (With curves)" : "Tangent-Tangent (No curves)");
+  tangents_->setChecked(laying);  // the current tool shows pressed, as in Civil 3D
   status_->setText(!used_ ? QString("Select a command from the layout tools")
                           : curves ? QString("Tan-Tan (With curves)") : QString("Tan-Tan (No curves)"));
   redo_->setEnabled(!laying);
@@ -570,7 +588,9 @@ void AlignmentLayoutTools::closeEvent(QCloseEvent* event) {
 
 void EditorWindow::ShowCreateAlignmentDialog(bool fromObjects) {
   m_ModalOpen = true;
-  const CreateAlignmentCommands commands = RunCreateAlignmentDialog(this, m_State, fromObjects);
+  const CreateAlignmentCommands commands = RunCreateAlignmentDialog(this, m_State, fromObjects, [this, fromObjects] {
+    ShowContextualHelp(fromObjects ? "createalignmentfromobjects" : "alignment");
+  });
   m_ModalOpen = false;
   assert(commands.create.isEmpty() || !commands.create.contains('\n'));
   if (commands.create.isEmpty()) {  // cancelled: the picked objects are let go, as Civil 3D does
@@ -595,6 +615,7 @@ void EditorWindow::SyncAlignmentLayoutTools() {
   if (tools == nullptr) {
     if (m_State.alignmentLayoutToolsName.empty()) return;
     tools = new AlignmentLayoutTools(m_State, m_Log, [this](const QString& command) { Submit(command); }, this);
+    tools->SetHelp([this] { ShowContextualHelp("alignmentcurvesettings"); });
     tools->adjustSize();
     // Civil 3D opens the toolbar at the top left of the drawing, clear of the view label.
     QWidget* drawing = m_Viewport != nullptr ? static_cast<QWidget*>(m_Viewport) : static_cast<QWidget*>(this);

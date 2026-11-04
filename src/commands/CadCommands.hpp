@@ -8145,6 +8145,9 @@ void CancelAlignmentCommand(AppCommandState& st, std::vector<std::string>& log);
 const char* AlignmentCommandPrompt(const AppCommandState& st);
 /// "Alignment - (n)" with the first n not already used, like Civil 3D's default name.
 std::string NextAlignmentName(const AppCommandState& st);
+/// At the Reverse prompt of CREATEALIGNMENTFROMOBJECTS, the alignment the picks would make (for the direction arrows).
+/// False at other times or when the picks cannot make one.
+bool AlignmentFromObjectsPreview(const AppCommandState& st, alignment::Alignment* out);
 /// The picked start and Reverse answer as CREATEALIGNMENTFROMOBJECTS fields (", PICK=<x> <y>[, REVERSE]"), for the
 /// Create Alignment from Objects dialog to submit with its own fields.
 std::string AlignmentFromObjectsPickArgs(const AppCommandState& st);

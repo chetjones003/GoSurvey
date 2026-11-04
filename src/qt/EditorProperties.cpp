@@ -286,9 +286,22 @@ void EditorWindow::RefreshProperties() {
     layer->addItems(layers);
     layer->setCurrentText(none ? QString::fromUtf8("\xE2\x80\x94") : general.layerMixed ? "(varies)" : Text(general.layer));
     layer->setEnabled(!none && general.count > 0);
-    connect(layer, &QComboBox::textActivated, layer, [this, finish](const QString& value) {
+    // An alignment keeps its layer on itself, not in the entity attributes: show it and set it with ALIGNMENTPROPS.
+    const bool oneAlignment = total == 1 && nAlignment == 1 && st.selection[0].index >= 0 &&
+                              static_cast<size_t>(st.selection[0].index) < st.alignments.size();
+    const std::string alignmentName = oneAlignment ? st.alignments[static_cast<size_t>(st.selection[0].index)].name : std::string();
+    if (oneAlignment) {
+      layer->setCurrentText(Text(st.alignments[static_cast<size_t>(st.selection[0].index)].layer));
+      layer->setEnabled(true);
+    }
+    connect(layer, &QComboBox::textActivated, layer, [this, finish, alignmentName](const QString& value) {
       const QString name = value.trimmed();
       if (name.isEmpty() || name == "(varies)") return;
+      if (!alignmentName.empty()) {  // the panel is rebuilt by the command, so not inside this combo's own signal
+        const QString command = Text(("ALIGNMENTPROPS " + alignmentName + ", LAYER, " + name.toUtf8().toStdString()).c_str());
+        QTimer::singleShot(0, this, [this, command] { Submit(command); });
+        return;
+      }
       const int n = CadApplyLayerToSelection(m_State, name.toUtf8().toStdString());
       if (n > 0) m_Log.push_back("LAYER — " + std::to_string(n) + " object(s) moved to layer \"" + name.toStdString() + "\".");
       finish({});

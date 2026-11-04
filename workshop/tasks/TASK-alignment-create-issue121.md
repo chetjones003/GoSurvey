@@ -122,10 +122,35 @@ the dialog checks both boxes as Civil 3D does.
 - Public wiki: `Alignments.md` and `Command-Reference.md` (commit 2d6ec9d). gosurveycad.com: `docs/alignments.html`
   and `docs/command-reference.html` (category block and index), site commit 94916a0, live and checked.
 
-## 11. Follow-ups
-- Check what Civil 3D's Tangent-Tangent (With curves) does at a corner too tight for the radius before deciding
-  whether the layout should also shrink it (D-2026-11-04-i covers Create from Objects only).
-- Panel non-blocking items: open the toolbar clear of new geometry and show the current tool pressed; dark-theme
-  checkbox contrast; Curve and Spiral Settings A value as a read-only field; Help and style edit buttons.
+## 11. Follow-ups (done 2026-11-04, the user's "Do your follow ups")
+- Civil 3D's Tangent-Tangent (With curves) at a tight corner (scratch Drawing10, closed unsaved): 100 / 100 ft at 90°
+  with R 200 gave R 40; 300 / 300 ft kept R 200. Recorded as **D-2026-11-04-k** (`spec/project.md`, REQ-485.4):
+  `BuildFromPis` shrinks a plain curve to T = 40 % of the shorter tangent and reports "used radius R"; a
+  spiral-curve-spiral that does not fit stays a PI. Tests updated (R 40 / tangents 60, and the 300 / 300 case).
+- The current Tangent-Tangent tool shows pressed while laying; the A values are read-only fields; both Create dialogs
+  and Curve and Spiral Settings have Help (opening the matching manual page); Curve and Spiral Settings is a grid
+  with a separator, so the Spiral in / out fields line up.
+- Create from Objects draws a direction arrow on each picked object at the Enter / Reverse prompt
+  (`AlignmentFromObjectsPreview`, rubber pass), and the picked objects show no grips there.
+- A selected alignment opens the **Alignment: name** contextual ribbon tab (Labels & Tables, General Tools, Modify,
+  Analyze, Launch Pad; tools outside this epic are greyed). Properties > General > Layer shows and sets the
+  alignment's own layer (`ALIGNMENTPROPS ..., LAYER, ...`).
+- The Alignment Layout table marks the failing value cell (radius, A or length) rather than only the row.
+- Panel `build/artifacts/panel-followups/` (9 pairs): round 1 PASS with three corroborated non-blocking items (blank
+  Layer, settings alignment / Help, grips at the direction prompt), fixed; round 2 on pairs 4, 6 and 8 **PASS**
+  (every median ≥ 1, no blockers); `RESULT.md`.
+- Verification: `build.bat` Release with no warnings; full suite 193/194 (`build/artifacts/ctest-followups.log`):
+  the ribbon inventory test counted the 14 new Alignment-tab buttons (296, not 282). Its expected count was updated,
+  and Qt shard 0 then passed (`build/artifacts/ctest-shard0.log`).
+- Product docs (REQ-453): `README.md` and `PRIVACY.md` reviewed, no change needed. `resources/wiki/`: `Alignments.md`,
+  `Commands/alignmentlayout.md`, `Commands/alignmentcurvesettings.md`, `Commands/createalignmentfromobjects.md`.
+  Public wiki `Alignments.md` (commit 3ba3141). gosurveycad.com `docs/alignments.html` (site commit 58d063f).
+
+## 12. Deferred (not in REQ-485..501 or a global change)
 - Civil 3D's other sub-entity layout tools (fixed / floating / free lines, curves and spirals, PI insert / delete /
-  break-apart, best fit, sub-entity editor) and the direction arrows at the Reverse prompt are not built.
+  break-apart, best fit, sub-entity editor): not in REQ-485.
+- Layout table column order and foot marks; zero-padded bearings (the drawing-wide angle formatter); the
+  contextual tab's accent colour; selection glow; dark-theme checkbox contrast; opening the toolbar clear of new
+  geometry: appearance items the panels scored usable.
+- An idle hover readout with no command running: REQ-501 covers point prompts and grip drags only.
+- How Reverse treats an alignment with no design speeds was not compared with Civil 3D (REQ-487 does not state it).

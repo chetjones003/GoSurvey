@@ -892,7 +892,10 @@ void EditorViewport::paintGL() {
     DrawQtTransformAnnotationPreviews(painter, m_State, static_cast<float>(m_Cursor.x),
         static_cast<float>(m_Cursor.y), static_cast<float>(width()), static_cast<float>(height()));
     const Camera gripCamera = CadViewCamera(m_State);
+    // Objects picked for Create Alignment from Objects are highlighted, not offered for grip editing (as Civil 3D).
+    const bool pickingSources = m_State.active == AppCommandState::Kind::AlignmentFromObjects;
     for (const SelectedEntity& selected : m_State.selection) {
+      if (pickingSources) break;
       std::vector<ray3d::Vec3> grips;
       // REQ-487.1: alignment grips carry their own id and Civil 3D's shape (0 square, 1 circle, 2 triangle).
       std::vector<int> gripIds;

@@ -273,6 +273,16 @@ void AlignmentLayoutPanel::MarkFailingRow(int row, const QStringList& found) {
   }
   table_->item(row, ColNo)->setToolTip(found.join("\n"));
   table_->item(row, ColDesign)->setToolTip(found.join("\n"));
+  // Like Panorama, the value that fails carries the warning too, with its own finding.
+  for (const QString& text : found) {
+    const int col = text.startsWith("Curve radius") ? ColRadius
+                    : text.startsWith("Spiral A")   ? ColA
+                    : (text.startsWith("Line") || text.startsWith("Tangent") || text.startsWith("Spiral length")) ? ColLength
+                                                    : -1;
+    if (col < 0 || table_->item(row, col) == nullptr) continue;
+    table_->item(row, col)->setIcon(style()->standardIcon(QStyle::SP_MessageBoxWarning));
+    table_->item(row, col)->setToolTip(text);
+  }
 }
 
 void AlignmentLayoutPanel::OnItemChanged(QTableWidgetItem* item) {

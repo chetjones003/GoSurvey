@@ -12,7 +12,8 @@ The **Curve and Spiral Settings** that Tangent-Tangent (With curves) uses ([[Com
 
 `ALIGNMENTCURVESETTINGS [RADIUS=<r>|DEFAULT][, SPIRALIN=<length>|OFF][, SPIRALOUT=<length>|OFF]`
 
-With no arguments it reports the current settings. They last for the session.
+With no arguments it reports the current settings. They last for the session. The window's **Help** button opens
+this page.
 
 ---
 
