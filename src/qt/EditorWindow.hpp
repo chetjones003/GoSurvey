@@ -204,6 +204,11 @@ private:
   FloatingCommandBar* m_CommandBar = nullptr;
   QFrame* m_DynamicInput = nullptr;
   QLabel* m_DynamicPrompt = nullptr;
+  QLabel* m_DynamicAlignment = nullptr;  ///< REQ-501.2: station / offset / bearing near an alignment
+  /// The dynamic input is showing for a command (its fields take typing and Enter). During a grip drag with no command
+  /// it may show only the alignment readout, and then takes no input.
+  bool m_DynamicInputForCommand = false;
+  [[nodiscard]] bool DynamicInputAcceptsInput() const;
   QLabel* m_DynamicLabels[3]{};
   QLineEdit* m_DynamicFields[3]{};
   dyninput::Group m_DynamicGroup;

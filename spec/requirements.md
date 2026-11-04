@@ -16626,6 +16626,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. `ALIGNMENTINVERSE` between two stations returns the arc length for a curve and the chord via an option.
 - Owner-layer: Qt UI, Commands.
 - Status: accepted (2026-11-02, user approval)
+- Revisions: 2026-11-04, statement 2 delivered as specified: a line of the existing dynamic input
+  (`<name>  STA <station>  OFF <offset>  BRG <bearing>`, on a tooltip-like backing), shown while a point is entered
+  near an alignment and on its own during an alignment grip drag, also mirrored in the status bar. Civil 3D 2026 shows
+  the same facts (name, station, offset) in a tooltip beside the cursor during LINE (`build/artifacts/panel-501/`).
 
 ### REQ-502 — Alignment design criteria and design checks
 

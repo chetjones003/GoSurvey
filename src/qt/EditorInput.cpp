@@ -105,7 +105,21 @@ void EditorWindow::BuildDraftingInput() {
     });
     connect(m_DynamicFields[i], &QLineEdit::returnPressed, this, [this] { SubmitDraftingInput(); });
   }
+  // REQ-501.2: the alignment readout is a line of the same dynamic input, not a second cursor UI.
+  m_DynamicAlignment = new QLabel(m_DynamicInput);
+  m_DynamicAlignment->setObjectName("dynamicAlignmentReadout");
+  // Its own backing, like a tooltip, so the drawing's grid does not run through the numbers.
+  const bool darkReadout = palette().color(QPalette::Window).lightness() < 128;
+  m_DynamicAlignment->setStyleSheet(darkReadout
+      ? "QLabel { color:#f1f4f5; background:rgba(48,55,60,235); border:1px solid #4c575d; border-radius:3px; padding:2px 6px; }"
+      : "QLabel { color:#1f2428; background:rgba(245,247,248,240); border:1px solid #b8c0c6; border-radius:3px; padding:2px 6px; }");
+  m_DynamicAlignment->hide();
+  layout->addWidget(m_DynamicAlignment);
   m_DynamicInput->hide();
+}
+
+bool EditorWindow::DynamicInputAcceptsInput() const {
+  return m_DynamicInput != nullptr && m_DynamicInput->isVisible() && m_DynamicInputForCommand;
 }
 
 void EditorWindow::ResetDraftingInput() {
@@ -114,7 +128,7 @@ void EditorWindow::ResetDraftingInput() {
 }
 
 void EditorWindow::UpdateDraftingInputFromCommandLine(const QString& text) {
-  if (!m_DynamicInput || !m_DynamicInput->isVisible()) return;
+  if (!DynamicInputAcceptsInput()) return;
   if (m_DynamicGeometry.pointEntry) {
     // Rebuild from the complete value so cumulative edits do not append duplicate mode transitions.
     dyninput::Reset(m_DynamicGroup, m_DynamicGeometry.initialMode, m_DynamicGeometry.showZ);
@@ -178,7 +192,7 @@ QString EditorWindow::DraftingInputDisplayText() const {
 }
 
 void EditorWindow::UpdateCommandLineFromDraftingInput() {
-  if (!m_DynamicInput || !m_DynamicInput->isVisible()) return;
+  if (!DynamicInputAcceptsInput()) return;
   const QString text = DraftingInputDisplayText();
   if (m_Command->text() == text) return;
   m_Command->setText(text);
@@ -206,8 +220,28 @@ void EditorWindow::RefreshDraftingInput(const QString& hint) {
   m_DynamicGroup.showZ = prompt.showZ;
   const bool active = m_State.activeDrawingIdx > 0 && m_State.active != AppCommandState::Kind::None &&
       m_State.active != AppCommandState::Kind::Pan && m_State.active != AppCommandState::Kind::Orbit;
-  m_DynamicInput->setVisible(active);
-  if (!active) return;
+  // REQ-501.2: near an alignment, a point being entered or a grip being dragged reads its station, offset and bearing.
+  const QString readout = QString::fromUtf8(m_State.alignmentCursorReadout.c_str());
+  const bool gripDrag = m_State.activeDrawingIdx > 0 && m_State.entityGripMoveActive;
+  const bool showReadout = !readout.isEmpty() && ((active && prompt.pointEntry) || gripDrag);
+  m_DynamicInputForCommand = active;
+  m_DynamicInput->setVisible(active || showReadout);
+  m_DynamicAlignment->setVisible(showReadout);
+  if (showReadout && m_DynamicAlignment->text() != readout) m_DynamicAlignment->setText(readout);
+  if (!active && !showReadout) return;
+  m_DynamicPrompt->setVisible(active);
+  if (!active) {  // a grip drag with no command: the readout alone, beside the cursor
+    for (int i = 0; i < 3; ++i) {
+      m_DynamicFields[i]->hide();
+      m_DynamicLabels[i]->hide();
+    }
+    m_DynamicInput->adjustSize();
+    const QPoint at = m_Viewport->CursorPosition();
+    m_DynamicInput->move(std::clamp(at.x() + 20, 0, std::max(0, m_Viewport->width() - m_DynamicInput->width())),
+        std::clamp(at.y() + 24, 0, std::max(0, m_Viewport->height() - m_DynamicInput->height() - 85)));
+    m_DynamicInput->raise();
+    return;
+  }
   m_DynamicPrompt->setText(m_DynamicHint);
   const bool hintOnly = !prompt.pointEntry;
   const int count = hintOnly ? 0 : dyninput::FieldCount(m_DynamicGroup);
@@ -251,7 +285,7 @@ void EditorWindow::RefreshDraftingInput(const QString& hint) {
 }
 
 bool EditorWindow::SubmitDraftingInput(bool click) {
-  if (!m_DynamicInput || !m_DynamicInput->isVisible()) return false;
+  if (!DynamicInputAcceptsInput()) return false;
   const bool locked = std::any_of(m_DynamicGroup.f.begin(), m_DynamicGroup.f.end(),
       [](const dyninput::Field& f) { return f.locked; });
   if (click && (!m_DynamicGeometry.pointEntry || !locked)) { ResetDraftingInput(); return false; }
@@ -306,7 +340,7 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
   }
   if ((widget == m_Command || suggestionPopupWidget) &&
       (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter)) {
-    if (widget == m_Command && m_DynamicInput && m_DynamicInput->isVisible()) return SubmitDraftingInput();
+    if (widget == m_Command && DynamicInputAcceptsInput()) return SubmitDraftingInput();
     if (m_CommandSuggestions && m_CommandSuggestions->isVisible() &&
         m_CommandSuggestionModel && m_CommandSuggestionModel->rowCount() > 0) {
       QModelIndex selected = m_CommandSuggestions->currentIndex();
@@ -397,7 +431,7 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
     if (key->key() == Qt::Key_Backspace && !m_DynamicGroup.f[i].locked &&
         dyninput::BackspaceAtEmpty(m_DynamicGroup, i)) { RefreshDraftingInput(); return true; }
   }
-  if (widget == m_Viewport && m_DynamicInput->isVisible() &&
+  if (widget == m_Viewport && DynamicInputAcceptsInput() &&
       !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {
     if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) return SubmitDraftingInput();
     if (key->key() == Qt::Key_Tab || (!key->text().isEmpty() && key->text()[0].isPrint())) {

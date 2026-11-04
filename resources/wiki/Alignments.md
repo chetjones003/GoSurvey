@@ -56,6 +56,9 @@ offset and a curve's radius are always exact.
 - Click an alignment, window-select it, or choose it in the Prospector tree (**Alignments**). The
   Properties panel shows its name, type, stations, length, start/end coordinates and bearings, and
   entity, curve and station-equation counts. `LIST` and `ERASE` work; `UNDO` restores it.
+- **Station, offset and bearing at the cursor.** While you pick a point near an alignment (or drag one of its grips),
+  the dynamic input beside the cursor and the status bar show `<name>  STA  OFF  BRG` — the same values as
+  `GETSTATIONOFFSET` at that point. See [[Drafting Aids]].
 - Object snaps work on the exact geometry: **Endpoint** snaps to the beginning, end, PC, PT, PI and
   spiral junctions (TS, SC, CS, ST, SS), **Midpoint** to the middle of each tangent and curve,
   **Center** to a curve's centre, **Quadrant** on cardinal tangents and spirals (not on circular
@@ -74,8 +77,8 @@ offset and a curve's radius are always exact.
     tangents next to it and curves re-fit.
   - **Squares at the ends:** the start moves the whole alignment; the end of a tangent sets its length (and bearing,
     if Fixed). Spirals have grips at the end (length) and middle (end radius).
-  - While you drag, the status bar shows the cursor's station, offset and bearing on the alignment as it was when
-    you picked the grip.
+  - While you drag, the dynamic input beside the cursor and the status bar show the cursor's station, offset and
+    bearing on the alignment as it was when you picked the grip.
 - **MOVE, COPY, ROTATE, SCALE, MIRROR, ERASE** work on alignments (rotation and mirroring in plan). A copy is a new
   independent alignment named `<name> (2)`.
 - **Constraints.** A new tangent or curve is *Float (prev)*: it stays tangent to what precedes it. *Fixed* keeps its

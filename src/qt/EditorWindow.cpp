@@ -1212,7 +1212,7 @@ void EditorWindow::BuildDocks() {
       {"BSAVE", "Save.png"}, {"BSAVEAS", "Save_As.png"}};
   connect(m_Command, &QLineEdit::textEdited, this,
           [this, commandIcons, semanticIconNames](const QString& text) mutable {
-    if (m_DynamicInput && m_DynamicInput->isVisible()) {
+    if (DynamicInputAcceptsInput()) {
       m_CommandSuggestions->hide();
       UpdateDraftingInputFromCommandLine(text);
       return;
@@ -1257,7 +1257,7 @@ void EditorWindow::BuildDocks() {
     m_CommandSuggestions->raise();
   });
   connect(m_CommandSuggestions, &QListView::clicked, this, [this](const QModelIndex& index) {
-    if (!index.isValid() || (m_DynamicInput && m_DynamicInput->isVisible())) return;
+    if (!index.isValid() || (DynamicInputAcceptsInput())) return;
     const QString command = index.data(Qt::DisplayRole).toString();
     m_CommandSuggestions->hide();
     m_Command->clear();

@@ -410,15 +410,25 @@ void RunGetPointFromStationOffset(AppCommandState& st, const std::string& args, 
   }
 }
 
+namespace {
+
+/// "<name>  STA 25+42.35  OFF -12.40  BRG <bearing>": the cursor's place on one alignment (REQ-501.2).
+std::string ReadoutText(const AppCommandState& st, const alignment::Alignment& a, const alignment::StationOffset& so) {
+  assert(!a.Empty());
+  assert(std::isfinite(so.internalStation));
+  return a.name + "  STA " + alignment::FormatStation(a.DisplayedStation(so.internalStation, true)) + "  OFF " +
+         FormatLinear(so.offset, st.displayLinearPrecision) + "  BRG " + Brg(st, so.azimuth);
+}
+
+}  // namespace
+
 std::string AlignmentCursorReadout(const AppCommandState& st, double lx, double ly, double maxOffset) {
   // REQ-487.1: while a grip drags an alignment, the readout follows the cursor on that alignment as it was grabbed,
   // however far away, so the station, offset and bearing say where the grip is being taken.
   if (st.entityGripMoveActive && st.entityGripType == SelectedEntity::Type::Alignment &&
       !st.entityGripOrigAlignment.Empty()) {
     const alignment::Alignment& g = st.entityGripOrigAlignment;
-    const alignment::StationOffset so = g.GetStationOffset(lx, ly);
-    return g.name + "  STA " + alignment::FormatStation(g.DisplayedStation(so.internalStation, true)) + "  OFF " +
-           FormatLinear(so.offset, st.displayLinearPrecision) + "  " + Brg(st, so.azimuth);
+    return ReadoutText(st, g, g.GetStationOffset(lx, ly));
   }
   const alignment::Alignment* best = nullptr;
   alignment::StationOffset bestSo;
@@ -433,8 +443,7 @@ std::string AlignmentCursorReadout(const AppCommandState& st, double lx, double 
     }
   }
   if (best == nullptr) return {};
-  return "STA " + alignment::FormatStation(best->DisplayedStation(bestSo.internalStation, true)) + "  OFF " +
-         FormatLinear(bestSo.offset, st.displayLinearPrecision) + "  " + Brg(st, bestSo.azimuth);
+  return ReadoutText(st, *best, bestSo);
 }
 
 bool ResolveAlignmentStationSnapPoint(const AppCommandState& st, double displayed, float preferLocalX,

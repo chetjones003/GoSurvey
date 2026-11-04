@@ -1,5 +1,6 @@
 #include "AlignmentStyle.hpp"
 #include "alignment/AlignmentDesign.hpp"
+#include "util/NumFormat.hpp"
 #include "AdjustmentWindow.hpp"
 #include "EditorWindow.hpp"
 #include "DrawingDocumentTabBar.hpp"
@@ -1293,6 +1294,71 @@ private Q_SLOTS:
     QVERIFY(shot.save(Issue914Shot("qt-487-window-drag-pi.png")));
     RestoreEntityGripOriginal(st);
     QCOMPARE(st.alignments[0].Entities()[0].length, 400.0);
+  }
+
+  /// REQ-501.2: near an alignment, the dynamic input beside the cursor reads station, offset and bearing - while a point
+  /// is being entered and while a grip is dragged - and it equals GetStationOffset at the cursor (acceptance 2).
+  void issue121DynamicCursorReadsStationOffsetBearing() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 850);
+    window.show();
+    window.activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    AppCommandState& st = window.State();
+    for (const char* line : {"ALIGNMENT Main Road", "ALIGNMENTADD Main Road, TANGENT, 0, 0, 90, 500", "ZOOMEXTENTS"})
+      window.Submit(line);
+    QTRY_VERIFY_WITH_TIMEOUT(!st.pendingZoomExtents, 10000);
+    st.objectSnapEnabled = false;  // the readout must follow the cursor itself, not a snap
+    const auto moveTo = [&](QPoint p) {
+      QMouseEvent move(QEvent::MouseMove, p, window.m_Viewport->mapToGlobal(p), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+      QApplication::sendEvent(window.m_Viewport, &move);
+      window.RefreshDraftingInput();
+      QTest::qWait(60);
+    };
+    auto* readout = window.findChild<QLabel*>("dynamicAlignmentReadout");
+    QVERIFY(readout);
+
+    window.Submit("LINE");  // a point is being entered
+    const QPoint nearRoad(window.m_Viewport->width() / 2 + 37, window.m_Viewport->height() / 2 + 18);
+    moveTo(nearRoad);
+    QVERIFY(window.m_DynamicInput->isVisible());
+    QVERIFY(window.findChild<QLineEdit*>("dynamicField0")->isVisible());  // the same dynamic input, not a second UI
+    QVERIFY(readout->isVisible());
+    const alignment::Alignment& road = st.alignments[0];
+    const alignment::StationOffset so = road.GetStationOffset(st.viewportSnapPickLocalX, st.viewportSnapPickLocalY);
+    const QString station = QString::fromStdString(alignment::FormatStation(road.DisplayedStation(so.internalStation, true)));
+    const QString offset = QString::fromStdString(FormatLinear(so.offset, st.displayLinearPrecision));
+    QVERIFY2(readout->text().startsWith("Main Road  STA " + station + "  OFF " + offset + "  BRG "), qPrintable(readout->text()));
+    QVERIFY(std::fabs(so.offset) > 0.0);
+    const QRect crop = window.m_DynamicInput->geometry().adjusted(-140, -90, 40, 30).intersected(window.m_Viewport->rect());
+    QImage frame = window.m_Viewport->grabFramebuffer();
+    {
+      QPainter painter(&frame);  // the dynamic input is a child widget: paint it where it sits over the drawing
+      painter.drawPixmap(window.m_DynamicInput->geometry().topLeft(), window.m_DynamicInput->grab());
+    }
+    QVERIFY(frame.copy(QRect(crop.topLeft() * frame.devicePixelRatio(), crop.size() * frame.devicePixelRatio()))
+                .save(Issue914Shot("qt-501-line-near-alignment.png")));
+
+    moveTo(QPoint(12, 12));  // far from the road: no readout, the fields stay
+    QVERIFY(!readout->isVisible());
+    QVERIFY(window.m_DynamicInput->isVisible());
+    window.CancelDraftingInput();
+    QCOMPARE(st.active, AppCommandState::Kind::None);
+
+    // A grip drag with no command shows the readout alone; typing does not go to the dynamic input.
+    st.selection = {{SelectedEntity::Type::Alignment, 0}};
+    QVERIFY(TryBeginEntityGripAtLocal(st, 500.0f, 0.0f, 3.0f));  // the end of the tangent
+    moveTo(nearRoad);
+    QVERIFY(window.m_DynamicInput->isVisible());
+    QVERIFY(readout->isVisible());
+    QVERIFY(readout->text().startsWith("Main Road  STA "));
+    QVERIFY(!window.findChild<QLineEdit*>("dynamicField0")->isVisible());
+    QVERIFY(!window.DynamicInputAcceptsInput());
+    window.CancelDraftingInput();  // Esc ends the drag, and the readout with it
+    QVERIFY(!st.entityGripMoveActive);
+    QVERIFY(!window.m_DynamicInput->isVisible());
   }
 
   void blockEditorPickerUsesQtDialog() {
