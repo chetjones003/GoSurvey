@@ -27,9 +27,12 @@ std::string DecodeDwgString(const void* raw, bool utf16le);
 /// Dwg_Color) to the stored colour string: "ByLayer", "ByBlock", or "#RRGGBB".
 std::string ColorToStorage(int index, unsigned method, unsigned rgb);
 
-/// Scale a legacy LEADER's DIMASZ using DIMSCALE. For an inch-fraction-to-foot scale record
-/// (paperUnits < 1, drawingUnits = 12), matching DIMSCALE includes the inches-per-foot conversion;
-/// remove it to produce the model-space factor exposed by AcadLeader.ScaleFactor (MESSER: 192 / 12 = 16).
+/// Select a legacy LEADER's effective DIMSCALE from its referenced style and drawing header.
+/// Keep the header value for the verified MESSER architectural-scale representation.
+double LegacyLeaderEffectiveDimScale(double styleDimScale, double headerDimScale, double paperUnits,
+                                     double drawingUnits);
+/// Apply legacy LEADER DIMSCALE, correcting the verified inch-fraction-to-foot representation
+/// (MESSER: header DIMSCALE 192 / 12 drawing units = AcadLeader.ScaleFactor 16).
 double LegacyLeaderScaleFactor(double dimScale, double paperUnits, double drawingUnits);
 
 /// True when the drawing's class table carries any `AECC_*` custom class — the signature of a

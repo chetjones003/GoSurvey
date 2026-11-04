@@ -143,6 +143,24 @@ std::string ColorToStorage(int index, unsigned method, unsigned rgb) {
   return std::string(buf);
 }
 
+double LegacyLeaderEffectiveDimScale(double styleDimScale, double headerDimScale, double paperUnits,
+                                     double drawingUnits) {
+  if (!(styleDimScale > 0.0) || !std::isfinite(styleDimScale))
+    return headerDimScale;
+  // In some architectural DWGs (including MESSER), the style's default 1 is accompanied by a
+  // header DIMSCALE equal to the active inch-fraction-to-foot scale ratio. AutoCAD exposes that
+  // header value divided by twelve as the legacy LEADER scale factor. Otherwise the referenced
+  // DIMSTYLE is authoritative, including when its scale is exactly 1.
+  if (std::fabs(styleDimScale - 1.0) <= 1e-9 && headerDimScale > 0.0 && std::isfinite(headerDimScale) &&
+      paperUnits > 0.0 && paperUnits < 1.0 && std::fabs(drawingUnits - 12.0) <= 1e-6) {
+    const double scaleRatio = drawingUnits / paperUnits;
+    const double tolerance = std::max(1.0, std::fabs(scaleRatio)) * 1e-6;
+    if (std::fabs(headerDimScale - scaleRatio) <= tolerance)
+      return headerDimScale;
+  }
+  return styleDimScale;
+}
+
 double LegacyLeaderScaleFactor(double dimScale, double paperUnits, double drawingUnits) {
   if (!(dimScale > 0.0) || !std::isfinite(dimScale))
     return 1.0;
@@ -1022,10 +1040,9 @@ static double LeaderArrowSizeWorld(Dwg_Data* dwg, const Dwg_Entity_LEADER* leade
         styleObject->tio.object != nullptr && styleObject->tio.object->tio.DIMSTYLE != nullptr)
       dimStyle = styleObject->tio.object->tio.DIMSTYLE;
   }
-  double dimScale = dwg->header_vars.DIMSCALE;
-  if (dimStyle != nullptr && dimStyle->DIMSCALE > 0.0 &&
-      std::fabs(dimStyle->DIMSCALE - 1.0) > 1e-9)
-    dimScale = dimStyle->DIMSCALE;
+  const double dimScale = libredwgcad_detail::LegacyLeaderEffectiveDimScale(
+      dimStyle != nullptr ? dimStyle->DIMSCALE : 0.0, dwg->header_vars.DIMSCALE,
+      scaleContext.paperUnits, scaleContext.drawingUnits);
   auto scaleArrow = [dimScale, &scaleContext](double arrow) {
     if (!(dimScale > 0.0))
       return arrow;
