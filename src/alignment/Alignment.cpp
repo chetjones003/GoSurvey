@@ -586,6 +586,17 @@ bool Alignment::AddStationEquation(const StationEquation& eq, std::string* whyNo
   if (!eq.increasing && eq.ahead > back) return fail("a decreasing equation must have ahead <= back");
   const auto it = std::lower_bound(equations.begin(), equations.end(), eq.rawBack,
                                    [](const StationEquation& q, double v) { return q.rawBack < v; });
+  const size_t insertionIndex = static_cast<size_t>(it - equations.begin());
+  double offset = 0.0;
+  for (size_t i = 0; i <= equations.size(); ++i) {
+    const StationEquation& candidate = i == insertionIndex ? eq : equations[i < insertionIndex ? i : i - 1];
+    const double candidateBack = candidate.rawBack + offset;
+    if (candidate.increasing && candidate.ahead < candidateBack)
+      return fail("inserting the equation would make a later increasing equation decrease");
+    if (!candidate.increasing && candidate.ahead > candidateBack)
+      return fail("inserting the equation would make a later decreasing equation increase");
+    offset += candidate.ahead - candidateBack;
+  }
   equations.insert(it, eq);
   return true;
 }

@@ -300,6 +300,18 @@ TEST_CASE("Invalid station equations are refused with a reason", "[req483][align
   CHECK_FALSE(a.AddStationEquation({500.0, 700.0, true}, &why));   // duplicate location
 }
 
+TEST_CASE("Inserting an earlier equation cannot reverse a later equation's direction", "[req483][alignment][regression]") {
+  Alignment a;
+  REQUIRE(a.AppendTangent({0, 0}, 0.0, 1000.0));
+  REQUIRE(a.AddStationEquation({500.0, 600.0, true}));
+  std::string why;
+  CHECK_FALSE(a.AddStationEquation({250.0, 1000.0, true}, &why));
+  CHECK_FALSE(why.empty());
+  REQUIRE(a.equations.size() == 1);
+  CHECK(a.equations[0].rawBack == 500.0);
+  CHECK(a.equations[0].ahead == 600.0);
+}
+
 TEST_CASE("Station formatting and parsing round trip", "[req483][alignment]") {
   using alignment::FormatStation;
   using alignment::ParseStation;
