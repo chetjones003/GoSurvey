@@ -14,6 +14,7 @@ public:
   void Append(const QString& line);
   void ToggleConsole();
   void ToggleVisible();
+  void SetAdaptiveFullWidth(bool enabled);
   void SetHint(const QString& hint);
   std::function<void(const QString&)> optionSelected;
 protected:
@@ -31,6 +32,7 @@ private:
   int m_PreferredWidth = 680;
   double m_Anchor = 0.5;
   bool m_Dragging = false;
+  bool m_AdaptiveFullWidth = false;
   QPoint m_DragStart;
   int m_StartX = 0;
   int m_StartWidth = 0;

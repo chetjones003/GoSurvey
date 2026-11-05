@@ -358,7 +358,7 @@ ExtractResult ExtractCoordinatesImpl(const std::vector<DimText>& texts, float rx
   if (runs.empty()) {
     result.status = ExtractStatus::NoText;
     result.message = "This region has no selectable text. It is likely a scanned image, and "
-                      "GoSurvey does not yet have OCR text recognition.";
+                     "GoSurvey does not yet have OCR text recognition. Try a region with selectable PDF text.";
     return result;
   }
 
@@ -379,7 +379,8 @@ ExtractResult ExtractCoordinatesImpl(const std::vector<DimText>& texts, float rx
   }
 
   result.status = ExtractStatus::Unparsed;
-  result.message = "No recognizable northing/easting text was found in this region.";
+  result.message = "No coordinates were found here. Select a region with a monument block, coordinate "
+                   "table, or northing/easting pair, then try again.";
   return result;
 }
 
@@ -393,7 +394,7 @@ ExtractResult ExtractCoordinates(const std::vector<DimText>& texts, float rx0, f
   } catch (const std::exception&) {
     ExtractResult result;
     result.status = ExtractStatus::Unparsed;
-    result.message = "This region's text could not be read.";
+    result.message = "This region's text could not be read. Select another region and try again.";
     return result;
   }
 }

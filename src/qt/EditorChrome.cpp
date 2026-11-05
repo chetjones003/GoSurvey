@@ -15,6 +15,7 @@
 #include <QPainterPath>
 #include <QEvent>
 #include <QSettings>
+#include <QScrollBar>
 #include <QShortcut>
 #include <QTimer>
 #include <QToolButton>
@@ -188,11 +189,13 @@ titleHitTest:
 FloatingCommandBar::FloatingCommandBar(QWidget* viewport) : QFrame(viewport) {
   setObjectName("floatingCommandBar"); setAttribute(Qt::WA_StyledBackground);
   if (!qApp->property("defaultQtStyle").toBool()) setStyleSheet("#floatingCommandBar { background:transparent; border:0; } #commandRow { background:#343b45; border:1px solid #596572; border-radius:4px; } #commandInput { background:#f4f5f6; color:#20262d; border:0; border-radius:2px; padding:6px; } #commandRecent { color:#cdd7e2; background:#29313b; padding:5px 9px; border-radius:3px; } QToolButton { border:0; padding:3px; }");
-  auto* layout = new QVBoxLayout(this); layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(5);
+  auto* layout = new QVBoxLayout(this); layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(8);
   m_Transcript = new QPlainTextEdit(this); m_Transcript->setObjectName("commandConsole");
-  m_Transcript->setReadOnly(true); m_Transcript->setMaximumBlockCount(5000); m_Transcript->setFixedHeight(200);
+  m_Transcript->setReadOnly(true); m_Transcript->setMaximumBlockCount(5000); m_Transcript->setLineWrapMode(QPlainTextEdit::WidgetWidth); m_Transcript->setFixedHeight(200);
   m_Transcript->setFont(QFont("Consolas", 10)); m_Transcript->hide(); layout->addWidget(m_Transcript);
   m_Recent = new QLabel(this); m_Recent->setObjectName("commandRecent"); m_Recent->setTextFormat(Qt::PlainText);
+  m_Recent->setWordWrap(true);
+  m_Recent->setToolTip("Recent command message. Expand command history or press F2 to view the full transcript.");
   m_Recent->setAutoFillBackground(true);
   m_Recent->setMaximumHeight(70); m_Recent->hide(); layout->addWidget(m_Recent);
   auto* opacity = new QGraphicsOpacityEffect(m_Recent); opacity->setOpacity(1); m_Recent->setGraphicsEffect(opacity);
@@ -229,23 +232,57 @@ FloatingCommandBar::FloatingCommandBar(QWidget* viewport) : QFrame(viewport) {
 }
 
 void FloatingCommandBar::Place() {
-  const int width = std::clamp(m_PreferredWidth, std::min(320, std::max(1, parentWidget()->width() - 24)), std::max(1, parentWidget()->width() - 24));
+  const int availableWidth = std::max(1, parentWidget()->width() - 24);
+  const bool compactHistory = m_AdaptiveFullWidth && m_Transcript->isVisible();
+  const int width = compactHistory ? std::min(380, availableWidth) : m_AdaptiveFullWidth ? availableWidth :
+      std::clamp(m_PreferredWidth, std::min(320, availableWidth), availableWidth);
   setFixedWidth(width); layout()->activate();
   const int height = sizeHint().height(); resize(width, height);
-  move(12 + qRound(std::clamp(m_Anchor, 0.0, 1.0) * std::max(0, parentWidget()->width() - width - 24)), std::max(0, parentWidget()->height() - height - 12)); raise();
+  if (compactHistory) {
+    // Keep expanded history in the upper-left so drawing geometry and the ViewCube stay visible.
+    move(12, 12);
+  } else {
+    move(12 + qRound(std::clamp(m_Anchor, 0.0, 1.0) * std::max(0, parentWidget()->width() - width - 24)),
+         std::max(0, parentWidget()->height() - height - 12));
+  }
+  raise();
+}
+void FloatingCommandBar::SetAdaptiveFullWidth(bool enabled) {
+  if (m_AdaptiveFullWidth == enabled) return;
+  m_AdaptiveFullWidth = enabled;
+  m_Transcript->setFixedHeight(enabled ? 96 : 200);
+  m_Grip->setVisible(!enabled);
+  m_SizeGrip->setVisible(!enabled);
+  if (!m_Recent->isHidden() && !m_Lines.isEmpty())
+    m_Recent->setText(enabled ? m_Lines.constLast() : m_Lines.join('\n'));
+  Place();
 }
 void FloatingCommandBar::Append(const QString& line) {
+  if (line.startsWith("Block library — loaded ") && m_Transcript->toPlainText().contains(line))
+    return;
+  const bool backgroundInfo = line.startsWith("Block library — loaded ");
   m_Fade->stop(); m_Fade->targetObject()->setProperty("opacity", 1.0);
   m_Transcript->appendPlainText(line);
+  if (backgroundInfo) {
+    m_Recent->hide();
+    Place();
+    return;
+  }
   m_Lines.append(line); while (m_Lines.size() > 3) m_Lines.removeFirst();
-  m_Recent->setText(m_Lines.join('\n')); m_Recent->setVisible(!m_Transcript->isVisible());
+  m_Recent->setText(m_AdaptiveFullWidth ? m_Lines.constLast() : m_Lines.join('\n'));
+  m_Recent->setVisible(!m_Transcript->isVisible());
   findChild<QTimer*>("recentCommandTimer")->start(); Place();
 }
 void FloatingCommandBar::ToggleConsole() {
   if (isHidden()) show();
   m_Transcript->setVisible(m_Transcript->isHidden()); m_Recent->hide(); Place();
   findChild<QToolButton*>("commandHistoryToggle")->setArrowType(m_Transcript->isHidden() ? Qt::UpArrow : Qt::DownArrow);
-  if (m_Transcript->isVisible()) m_Transcript->ensureCursorVisible();
+  if (m_Transcript->isVisible()) {
+    m_Transcript->ensureCursorVisible();
+    QTimer::singleShot(0, m_Transcript, [this] {
+      m_Transcript->verticalScrollBar()->setValue(m_Transcript->verticalScrollBar()->maximum());
+    });
+  }
 }
 void FloatingCommandBar::ToggleVisible() { setVisible(isHidden()); if (isVisible()) { Place(); m_Input->setFocus(); } }
 void FloatingCommandBar::SetHint(const QString& hint) {

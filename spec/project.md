@@ -42,6 +42,10 @@
 | `<Surveyor>` | `<Compute a closed traverse>` | `<Import FBK → review → adjust → export>` |
 | `<…>` | `<…>` | `<…>` |
 
+### Product goal
+
+- **GOAL-001 — Make the Qt workspaces easy to navigate and visually clear.** A surveyor can find controls for the current task, keep the drawing area usable at supported window sizes, and read the interface across the Start page, editor, and principal Qt windows in both Dark and Light appearances. Existing commands and context-specific access remain dependable.
+
 ## 4. Scope
 
 State scope as two explicit lists. The **out-of-scope** list is the more
@@ -152,6 +156,8 @@ library and a handful of vetted libraries over a deep dependency graph.
 
 | Date | Decision | Rationale | Status |
 |------|----------|-----------|--------|
+| 2026-11-03 | **D-2026-11-03-b — Select the Adaptive Canvas Qt direction for TASK-1109 / REQ-456.** At narrow widths the side docks collapse to labeled controls; the full command ribbon remains, and command/message content uses the available drawing width. Start and principal dialogs follow the same hierarchy while preserving distinct command routes. | The user selected this direction after reviewing the Round 1 narrow editor and Start page captures alongside the three layout alternatives. It prioritizes the requested drawing-area comfort while retaining the familiar ribbon. | accepted |
+| 2026-11-03 | **D-2026-11-03-a — Extend Qt UI usability and visual consistency to both appearances and major Qt surfaces (GOAL-001, REQ-456); amend REQ-081 and REQ-436.** The Light appearance may be refined while retaining its nanoCAD classic identity. The Start page, main editor/ribbon/panels/command/status areas, and principal Qt windows/dialogs are in scope. Existing commands and workflows remain reachable; only exact duplicate controls for the same action may be removed, and context-specific routes remain. | The user approved the SPEC amendment after the baseline council found dense controls, cramped narrow-window layout, inconsistent styling, and unhelpful empty states. They selected both usability and visual consistency, allowed exact duplicates to be removed, and chose Qt to match the Round 1 evidence. | accepted |
 | 2026-10-25 | **D-2026-10-25-c — Export DXF as R2018 for #1013 viewport-state parity.** DXF export uses LibreDWG's R2018 DXF output regardless of the selected DWG save version, so AutoCAD's native annotation scale list and the viewport's XRECORD reference remain available. | User chose always-R2018 DXF after learning that older DXF versions cannot carry the native annotation scale independently from viewport zoom. | accepted |
 | 2026-10-25 | **D-2026-10-25-b — Carry #1013's full viewport state through DXF as well as DWG.** Camera orientation/projection, per-viewport layer colors, active UCS, and independent annotative scale round-trip through both file formats using native CAD viewport and layer records. | User confirmed that the requested round-trip covers DXF too, noting AutoCAD supports it. | accepted |
 | 2026-10-25 | **D-2026-10-25-a — Extend REQ-113 DWG paper-viewport persistence to camera/projection, per-viewport layer colors, UCS, and an independent per-viewport annotative scale (GitHub issue #1013 / audit #751 I7).** Each viewport's annotative scale is a choice from the drawing's annotation scale list, separate from viewport zoom. New viewports start at the drawing's current annotation scale. The viewport controls let users choose the per-viewport annotation scale. DWG export/import round-trip it in AutoCAD-readable viewport data. | User selected all four missing DWG states, then clarified that annotative scale is independent of zoom and approved storing a scale-list choice per viewport, initialized from the drawing's current annotation scale. | accepted |

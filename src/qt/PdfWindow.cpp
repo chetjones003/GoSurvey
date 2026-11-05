@@ -18,6 +18,7 @@
 #include <QToolButton>
 #include <QMenu>
 #include <QGridLayout>
+#include <QGroupBox>
 #include <QStackedWidget>
 #include <QButtonGroup>
 #include <QWheelEvent>
@@ -59,6 +60,7 @@
 #include <QKeyEvent>
 #include <QStyledItemDelegate>
 #include <QTableWidget>
+#include <QTextDocument>
 #include <QSlider>
 #include <QHeaderView>
 #include <QVBoxLayout>
@@ -68,6 +70,7 @@
 #include <map>
 #include <set>
 #include <cmath>
+#include <utility>
 
 namespace {
 // Input tolerances are in the canvas's device-independent pixel coordinates.
@@ -76,6 +79,43 @@ constexpr double kMarkPickDip = 5.0;
 constexpr double kMinDragDip = 4.0;
 constexpr int kPdfToolCallout = static_cast<int>(pdfview::Annot::Kind::Leader);
 constexpr int kPdfToolRevisionCloud = static_cast<int>(pdfview::Annot::Kind::RevCloud);
+
+class PdfAuditProgressBar final : public QProgressBar {
+public:
+  using QProgressBar::QProgressBar;
+
+protected:
+  void paintEvent(QPaintEvent*) override {
+    const bool dark = !qApp->property("cadLightTheme").toBool();
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QRect track = rect().adjusted(0, 0, -1, -1);
+    painter.setPen(QColor(dark ? "#424b51" : "#aebbc8"));
+    painter.setBrush(QColor(dark ? "#15191c" : "#ffffff"));
+    painter.drawRoundedRect(track, 3, 3);
+    const int chunkWidth = std::min(64, std::max(28, width() / 8));
+    const QRect chunk((width() - chunkWidth) / 2, 1, chunkWidth, std::max(1, height() - 2));
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(QtAccentFor(dark).fill));
+    painter.drawRoundedRect(chunk, 3, 3);
+  }
+};
+
+QColor PdfVerdictTextColor(pdfview::Verdict verdict, bool dark) {
+  if (dark) {
+    switch (verdict) {
+      case pdfview::Verdict::Good: return QColor("#5fe08a");
+      case pdfview::Verdict::Check: return QColor("#f5b73a");
+      case pdfview::Verdict::Blunder: return QColor("#ff7b72");
+    }
+  }
+  switch (verdict) {
+    case pdfview::Verdict::Good: return QColor("#1e7d32");
+    case pdfview::Verdict::Check: return QColor("#7a5800");
+    case pdfview::Verdict::Blunder: return QColor("#b42318");
+  }
+  return dark ? QColor("#f4f7f8") : QColor("#30353b");
+}
 }
 
 // Navigation icons that say what they do: page arrows (with end bars for first/last), magnifiers, fit marks.
@@ -84,7 +124,7 @@ QIcon NavIcon(const QString& kind) {
   pixmap.fill(Qt::transparent);
   QPainter p(&pixmap);
   p.setRenderHint(QPainter::Antialiasing);
-  const QColor ink("#e8eef9");
+  const QColor ink(qApp->property("cadLightTheme").toBool() ? "#414b54" : "#e8eef9");
   p.setPen(Qt::NoPen);
   p.setBrush(ink);
   const auto triangle = [&](bool left, double x) {
@@ -293,7 +333,7 @@ constexpr const char* kPdfWindowStyle = // scoped to the window's own chrome so 
     "QToolBar QLabel,QToolBar QCheckBox{color:#e8eef9;} QMainWindow > QScrollArea{background:#171b1e;}"
     "#pdfCommandBar{background:#191d20;border-top:1px solid #30373c;border-bottom:1px solid #333b40;}"
     "#pdfRibbon::pane{border:1px solid #363e43;background:#202529;}"
-    "#pdfRibbon QTabBar::tab{background:#1b2023;color:#dce2e5;border:1px solid #353d42;padding:6px 14px;margin-right:2px;}"
+    "#pdfRibbon QTabBar::tab{background:#1b2023;color:#dce2e5;border:1px solid #353d42;border-bottom:2px solid transparent;padding:6px 14px;margin-right:2px;}"
     "#pdfRibbon QTabBar::tab:selected{background:#2a3035;color:#f4f7f8;border-bottom:2px solid @strong@;}"
     "#pdfRibbon QTabBar::tab:hover:!selected{background:#30373c;}"
     "#pdfRibbon QToolButton{padding:2px 5px;border-radius:4px;color:#e8eef9;border:1px solid transparent;}"
@@ -321,43 +361,122 @@ constexpr const char* kPdfWindowStyle = // scoped to the window's own chrome so 
     "#pdfScaleLabel{background:#30373c;border:1px solid #41494e;border-radius:10px;padding:2px 12px;color:#d8e3e4;font-weight:600;}"
     "#pdfSnapStatus{color:#f5b73a;}";
 
-constexpr const char* kPdfExtractReviewStyle =
-    "QDialog{background:#22272b;color:#eef2ff;} QLabel{color:#eef2ff;font-size:13px;}"
-    "QTableWidget{background:#202529;color:#eef2ff;gridline-color:#41494e;}"
-    "QPushButton{background:#2a3035;color:#eef2ff;border:1px solid #41494e;border-radius:4px;padding:6px 12px;}";
+QString PdfWindowStyle(bool dark) {
+  QString style = QString::fromLatin1(kPdfWindowStyle);
+  const QString icons = QCoreApplication::applicationDirPath() + "/resources/icons/";
+  style += QString(
+      "QSpinBox::up-button,QDoubleSpinBox::up-button{ subcontrol-origin:border; subcontrol-position:top right; width:24px; height:16px; border-left:1px solid %1; border-bottom:1px solid %1; background:transparent; }"
+      "QSpinBox::down-button,QDoubleSpinBox::down-button{ subcontrol-origin:border; subcontrol-position:bottom right; width:24px; height:16px; border-left:1px solid %1; background:transparent; }"
+      "QSpinBox::up-arrow,QDoubleSpinBox::up-arrow{ width:12px; height:12px; image:url(%2spin_up_%3.svg); }"
+      "QSpinBox::down-arrow,QDoubleSpinBox::down-arrow{ width:12px; height:12px; image:url(%2spin_down_%3.svg); }").arg(dark ? "#424b51" : "#aebbc8", icons, dark ? "dark" : "light");
+  if (!dark) {
+    const std::pair<const char*, const char*> colors[] = {
+        {"#1c2024", "#f0f3f6"}, {"#242a2f", "#e4e8ec"}, {"#e8eef9", "#202b36"},
+        {"#343c41", "#d3dde7"}, {"#292f34", "#e1e8ee"}, {"#202529", "#ffffff"},
+        {"#cfd8da", "#303f4e"}, {"#15191c", "#ffffff"}, {"#171b1e", "#f0f3f6"},
+        {"#191d20", "#e0e3e7"}, {"#30373c", "#c5d0da"}, {"#363e43", "#bdc8d3"},
+        {"#1b2023", "#e4eaf0"}, {"#dce2e5", "#202b36"}, {"#2a3035", "#eef1f4"},
+        {"#f4f7f8", "#202b36"}, {"#78858a", "#656d75"}, {"#3a4247", "#bdc8d3"},
+        {"#b5c0c5", "#536273"}, {"#424b51", "#aebbc8"}, {"#41494e", "#c5d0da"},
+        {"#89979a", "#687786"}, {"#d8e3e4", "#273746"}, {"#fff;", "#202b36;"},
+    };
+    for (const auto& [from, to] : colors) style.replace(QString::fromLatin1(from), QString::fromLatin1(to));
+  }
+  return QtApplyAccent(style, dark);
+}
 
 // PDF workflow dialogs follow the Qt Dark graphite appearance.
 constexpr const char* kPdfWorkflowDialogStyle =
-    "QDialog{background:#1c2024;color:#e8eef9;} QLabel{color:#e8eef9;} QLabel:disabled{color:#89979a;}"
+    "QDialog{background:#1c2024;color:#e8eef9;} QDialog#pdfCoordinateReview{background:@reviewSurface@;border:1px solid @dialogLine@;border-radius:8px;}"
+    "QLabel{color:#e8eef9;} QLabel:disabled{color:#89979a;}"
     "QCheckBox{color:#e8eef9;} QCheckBox::indicator{width:15px;height:15px;border:2px solid #576469;border-radius:3px;background:#15191c;}"
-    "QCheckBox::indicator:checked{background:@fill@;border-color:@fill@;}"
+    "QCheckBox::indicator:checked{background:@fill@;border-color:@fill@;image:url(@checkmark@);}"
     "QPushButton{background:#2a3035;border:1px solid #41494e;border-radius:5px;padding:6px 12px;color:#e8eef9;}"
     "QPushButton:hover{background:#343c41;} QPushButton:disabled{color:#89979a;background:#242a2f;}"
-    "QLineEdit,QDoubleSpinBox,QSpinBox,QComboBox{background:#15191c;border:1px solid #424b51;border-radius:4px;padding:3px 6px;color:#fff;}"
+    "QLineEdit,QDoubleSpinBox,QSpinBox,QComboBox{background:#15191c;border:1px solid #424b51;border-radius:4px;padding:3px 6px;color:#fff;selection-background-color:@fill@;selection-color:white;}"
+    "QLineEdit:focus,QDoubleSpinBox:focus,QSpinBox:focus,QComboBox:focus{border:1px solid @strong@;}"
     "QComboBox QAbstractItemView{background:#15191c;color:#fff;selection-background-color:@fill@;}"
     "QTableWidget{background:#202529;alternate-background-color:#242a2f;border:1px solid #41494e;color:#cfd8da;selection-background-color:@tint@;selection-color:white;}"
     "QHeaderView::section{background:#292f34;color:#e8eef9;padding:5px 8px;border:0;border-right:1px solid #41494e;font-weight:600;}"
     "QProgressBar{background:#15191c;border:1px solid #424b51;border-radius:4px;color:#e8eef9;text-align:center;}"
+    "QProgressBar#pdfAuditProgress{min-height:8px;max-height:8px;}"
+    "QLabel#pdfAuditSummary[pdfAuditRunning=\"true\"]{background:@tint@;border:1px solid @strong@;border-left:4px solid @strong@;border-radius:4px;}"
     "QProgressBar::chunk{background:@fill@;border-radius:3px;}";
+
+QString PdfWorkflowDialogStyle(bool dark) {
+  QString style = QString::fromLatin1(kPdfWorkflowDialogStyle);
+  style.replace("@dialogLine@", dark ? "#59636a" : "#c3ccd5");
+  style.replace("@reviewSurface@", dark ? "#202529" : "#e4eaf0");
+  style += "QPushButton[pdfPrimaryAction=\"true\"]{background:@fill@;border-color:@strong@;color:white;font-weight:600;}"
+           "QPushButton[pdfPrimaryAction=\"true\"]:hover{background:@fillHover@;}"
+           "QPushButton[pdfPrimaryAction=\"true\"]:disabled{background:#242a2f;border-color:#41494e;color:#89979a;}";
+  style.replace("@checkmark@", QCoreApplication::applicationDirPath() + "/resources/icons/checkmark_white.svg");
+  const QString icons = QCoreApplication::applicationDirPath() + "/resources/icons/";
+  style += QString(
+      "QSpinBox::up-button,QDoubleSpinBox::up-button{ subcontrol-origin:border; subcontrol-position:top right; width:24px; height:16px; border-left:1px solid %1; border-bottom:1px solid %1; background:transparent; }"
+      "QSpinBox::down-button,QDoubleSpinBox::down-button{ subcontrol-origin:border; subcontrol-position:bottom right; width:24px; height:16px; border-left:1px solid %1; background:transparent; }"
+      "QSpinBox::up-arrow,QDoubleSpinBox::up-arrow{ width:12px; height:12px; image:url(%2spin_up_%3.svg); }"
+      "QSpinBox::down-arrow,QDoubleSpinBox::down-arrow{ width:12px; height:12px; image:url(%2spin_down_%3.svg); }").arg(dark ? "#424b51" : "#aebbc8", icons, dark ? "dark" : "light");
+  if (!dark) {
+    const std::pair<const char*, const char*> colors[] = {
+        {"#1c2024", "#f0f3f6"}, {"#e8eef9", "#202b36"}, {"#89979a", "#687786"},
+        {"#576469", "#aebbc8"}, {"#15191c", "#ffffff"}, {"#2a3035", "#ffffff"},
+        {"#41494e", "#c5d0da"}, {"#343c41", "#d3dde7"}, {"#242a2f", "#e7ebef"},
+        {"#424b51", "#aebbc8"}, {"#fff;", "#202b36;"}, {"#202529", "#ffffff"},
+        {"#cfd8da", "#303f4e"}, {"#292f34", "#e1e8ee"}, {"#4a3213", "#f5d5ae"},
+    };
+    for (const auto& [from, to] : colors) style.replace(QString::fromLatin1(from), QString::fromLatin1(to));
+  }
+  return QtApplyAccent(style, dark);
+}
+
+void PdfWindow::ApplyAppearance() {
+  const bool darkAppearance = !qApp->property("cadLightTheme").toBool();
+  QString appearance = PdfWindowStyle(darkAppearance);
+  // The revision-cloud split button uses a thin divider and a drawn chevron instead of the platform arrow.
+  const QString chevron = QtAsset("icons/chevron_down.png").replace(QChar(92), QChar('/'));
+  const QString cloudDivider = darkAppearance ? "#41494e" : "#bdc8d3";
+  const QString cloudHover = darkAppearance ? "#343c41" : "#d3dde7";
+  appearance += QString(
+      "#pdfCloudButton{padding-right:0;}"
+      "#pdfCloudButton::menu-button{border:none;border-left:1px solid %1;width:18px;border-top-right-radius:4px;border-bottom-right-radius:4px;}"
+      "#pdfCloudButton::menu-button:hover{background:%2;}"
+      "#pdfCloudButton::menu-arrow{image:url(%3);width:14px;height:14px;}").arg(cloudDivider, cloudHover, chevron);
+  if (styleSheet() != appearance) setStyleSheet(appearance);
+  if (m_AuditDialog) m_AuditDialog->setStyleSheet(PdfWorkflowDialogStyle(darkAppearance));
+  if (m_ComparePanel) {
+    QString compareStyle = PdfWorkflowDialogStyle(darkAppearance);
+    compareStyle.replace("QDialog{", "#pdfComparePanel{");
+    m_ComparePanel->setStyleSheet(compareStyle);
+  }
+  if (m_ExtractReview) m_ExtractReview->setStyleSheet(PdfWorkflowDialogStyle(darkAppearance));
+  if (m_AuditReady) RefreshScaleAudit();
+  RefreshAppearanceIcons();
+}
+
+void PdfWindow::RefreshAppearanceIcons() {
+  for (auto* action : findChildren<QAction*>()) {
+    if (action->property("cadIcon").isValid())
+      action->setIcon(CadCommandIcon(action->property("cadIcon").toString()));
+    if (action->property("pdfNavIcon").isValid())
+      action->setIcon(NavIcon(action->property("pdfNavIcon").toString()));
+  }
+  for (auto* button : findChildren<QAbstractButton*>())
+    if (button->property("cadIcon").isValid())
+      button->setIcon(CadCommandIcon(button->property("cadIcon").toString()));
+}
 
 PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   setObjectName("pdfViewerWindow");
   setAttribute(Qt::WA_DeleteOnClose);
   setWindowTitle("GoSurvey | PDF viewer");
-  setStyleSheet(QtApplyAccent(QString::fromLatin1(kPdfWindowStyle), true));
-  { // the revision-cloud split button: a thin divider and a drawn chevron instead of the platform arrow
-    const QString chevron = QtAsset("icons/chevron_down.png").replace(QChar(92), QChar('/'));
-    setStyleSheet(styleSheet() + QString(
-        "#pdfCloudButton{padding-right:0;}"
-        "#pdfCloudButton::menu-button{border:none;border-left:1px solid #41494e;width:18px;border-top-right-radius:4px;border-bottom-right-radius:4px;}"
-        "#pdfCloudButton::menu-button:hover{background:#343c41;}"
-        "#pdfCloudButton::menu-arrow{image:url(%1);width:14px;height:14px;}").arg(chevron));
-  }
+  ApplyAppearance();
   resize(1000, 800);
   // REQ-455: the commands live in a menu bar, one row of icon tools and a side panel (Bluebeam-style). First every
   // control is made here; they are placed once the side panel exists (it contributes a toggle action).
   const auto makeAction = [this](const char* name, const QString& text, const char* icon, const QString& tip, const auto& run) {
     auto* made = new QAction(CadCommandIcon(icon), text, this);
+    made->setProperty("cadIcon", icon);
     if (name && *name) made->setObjectName(name);
     made->setToolTip(tip.isEmpty() ? text : tip);
     connect(made, &QAction::triggered, this, run);
@@ -388,7 +507,9 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   auto* previousAction = makeAction("pdfPreviousPage", "Previous", "Back.png", "Previous page (Page Up)", [this] { m_PageNumber->setValue(m_PageNumber->value() - 1); });
   auto* nextAction = makeAction("pdfNextPage", "Next", "Front.png", "Next page (Page Down)", [this] { m_PageNumber->setValue(m_PageNumber->value() + 1); });
   previousAction->setIcon(NavIcon("previous"));
+  previousAction->setProperty("pdfNavIcon", "previous");
   nextAction->setIcon(NavIcon("next"));
+  nextAction->setProperty("pdfNavIcon", "next");
   m_LayoutBox = new QComboBox(this);
   m_LayoutBox->setObjectName("pdfLayoutBox");
   m_LayoutBox->setAccessibleName("Layout");
@@ -414,9 +535,13 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   auto* fitWidth = makeAction("pdfFitWidth", "Fit width", "Zoom_Extensis.png", "Make the page as wide as the window", [this] { FitWidth(); });
   auto* fitPage = makeAction("pdfFitPage", "Fit page", "Zoom_Extensis.png", "Show the whole page", [this] { FitPage(); });
   zoomOutAction->setIcon(NavIcon("zoomout"));
+  zoomOutAction->setProperty("pdfNavIcon", "zoomout");
   zoomInAction->setIcon(NavIcon("zoomin"));
+  zoomInAction->setProperty("pdfNavIcon", "zoomin");
   fitWidth->setIcon(NavIcon("fitwidth"));
+  fitWidth->setProperty("pdfNavIcon", "fitwidth");
   fitPage->setIcon(NavIcon("fitpage"));
+  fitPage->setProperty("pdfNavIcon", "fitpage");
   m_ToolGroup = new QActionGroup(this);
   struct ToolKind { const char* label; int id; const char* icon; const char* key; };
   const ToolKind kinds[] = {{"Select", kToolSelect, "Select.png", "S"}, {"Browse", kToolBrowse, "Pan.png", "B"},
@@ -434,6 +559,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   std::map<int, QAction*> toolActions;
   for (const auto& kind : kinds) {
     auto* tool = new QAction(CadCommandIcon(kind.icon), kind.label, this);
+    tool->setProperty("cadIcon", kind.icon);
     tool->setCheckable(true); m_ToolGroup->addAction(tool);
     tool->setData(kind.id);
     tool->setShortcut(QKeySequence(QString::fromLatin1(kind.key))); // single-letter tool hotkeys; Esc returns to Browse
@@ -509,7 +635,9 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   auto* extract = makeAction("pdfExtractCoordinates", "Extract coordinates", "Extract_Data.png", "Drag a rectangle around coordinate text", [this] {
     if (!m_Document) { statusBar()->showMessage("Open a PDF page before extracting coordinates."); return; }
     SetTool(kToolBrowse, QString()); // leave any scale pick in progress
-    m_ExtractMode = true; m_ExtractDragging = false; m_ExtractBox = false; m_ExtractResult.reset(); UpdateToolStatus(); m_Page->update();
+    if (m_ExtractReview) m_ExtractReview->hide();
+    m_ExtractMode = true; m_ExtractDragging = false; m_ExtractBox = false; m_ExtractResult.reset();
+    m_ExtractAccepted = 0; m_ExtractDenied = 0; UpdateToolStatus(); m_Page->update();
     statusBar()->showMessage("Drag a rectangle around selectable coordinate text. Esc cancels.");
     m_Page->setCursor(Qt::CrossCursor);
   });
@@ -657,7 +785,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
     auto* button = new QToolButton(sideStrip);
     button->setObjectName(QString("pdfSideButton_") + QString(name).remove(' '));
     button->setText(name); button->setToolTip(QString("Show the ") + QString(name).toLower());
-    button->setIcon(CadCommandIcon(icon)); button->setIconSize(QSize(24, 24));
+    button->setIcon(CadCommandIcon(icon)); button->setProperty("cadIcon", icon); button->setIconSize(QSize(24, 24));
     button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon); button->setCheckable(true); button->setAutoRaise(true);
     button->setFixedSize(76, 62); button->setChecked(index == 0);
     sideGroup->addButton(button, index); stripLayout->addWidget(button);
@@ -676,6 +804,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   auto* thumbnailsAction = m_ThumbDock->toggleViewAction();
   thumbnailsAction->setObjectName("pdfThumbnailsAction");
   thumbnailsAction->setIcon(CadCommandIcon("Sheet.png"));
+  thumbnailsAction->setProperty("cadIcon", "Sheet.png");
   thumbnailsAction->setText("Side panel");
   thumbnailsAction->setToolTip("Show or hide the side panel (thumbnails, tool chest, properties)");
 
@@ -764,7 +893,9 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   auto* firstAction = makeAction("pdfFirstPage", "First page", "Back.png", "First page (Home)", [this] { m_PageNumber->setValue(1); });
   auto* lastAction = makeAction("pdfLastPage", "Last page", "Front.png", "Last page (End)", [this] { m_PageNumber->setValue(m_PageNumber->maximum()); });
   firstAction->setIcon(NavIcon("first"));
+  firstAction->setProperty("pdfNavIcon", "first");
   lastAction->setIcon(NavIcon("last"));
+  lastAction->setProperty("pdfNavIcon", "last");
   m_PageNumber->setObjectName("pdfPageNumber");
   m_PageNumber->setKeyboardTracking(false);
   m_PageNumber->setToolTip("Go to a page");
@@ -792,6 +923,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   m_StatusMore->setObjectName("pdfStatusMore");
   m_StatusMore->setToolTip("More page and zoom commands");
   m_StatusMore->setIcon(CadCommandIcon("layers.png"));
+  m_StatusMore->setProperty("cadIcon", "layers.png");
   m_StatusMore->setIconSize(QSize(22, 22));
   m_StatusMore->setFixedSize(34, 32);
   m_StatusMore->setAutoRaise(true);
@@ -873,13 +1005,24 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   m_AuditDialog = new QDialog(this);
   m_AuditDialog->setObjectName("pdfScaleAuditDialog");
   m_AuditDialog->setWindowTitle("Audit scale");
-  m_AuditDialog->setStyleSheet(QtApplyAccent(QString::fromLatin1(kPdfWorkflowDialogStyle), true));
+  m_AuditDialog->setStyleSheet(PdfWorkflowDialogStyle(!qApp->property("cadLightTheme").toBool()));
   m_AuditDialog->resize(920, 560);
   auto* auditLayout = new QVBoxLayout(m_AuditDialog);
-  m_AuditSummary = new QLabel("Audit reads dimension text and line work on one page. It never changes the scale unless you apply the consensus.", m_AuditDialog);
+  m_AuditSummary = new QLabel("Reads one page's dimension text and line work. Scale changes only if you apply the consensus.", m_AuditDialog);
   m_AuditSummary->setWordWrap(true);
+  m_AuditSummary->setTextFormat(Qt::RichText);
   m_AuditSummary->setObjectName("pdfAuditSummary");
   auditLayout->addWidget(m_AuditSummary);
+  m_AuditSummary->setAccessibleDescription("Audit status and results. While an audit is running, Cancel audit stops it without keeping a partial result.");
+  m_AuditProgress = new PdfAuditProgressBar(m_AuditDialog);
+  m_AuditProgress->setObjectName("pdfAuditProgress");
+  m_AuditProgress->setRange(0, 0);
+  m_AuditProgress->setTextVisible(false);
+  m_AuditProgress->setFixedHeight(8);
+  m_AuditProgress->setAccessibleName("Scale audit in progress");
+  m_AuditProgress->setAccessibleDescription("Indeterminate progress while GoSurvey reads this page's dimensions.");
+  m_AuditProgress->hide();
+  auditLayout->addWidget(m_AuditProgress);
   m_AuditAllRows = new QCheckBox("List every matched dimension", m_AuditDialog);
   m_AuditAllRows->setObjectName("pdfAuditAllRows");
   auditLayout->addWidget(m_AuditAllRows);
@@ -893,14 +1036,28 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   m_AuditTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
   m_AuditTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_AuditTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+  m_AuditTableStatus = new QLabel("Reading dimensions…", m_AuditTable->viewport());
+  m_AuditTableStatus->setObjectName("pdfAuditTableStatus");
+  m_AuditTableStatus->setAlignment(Qt::AlignCenter);
+  m_AuditTableStatus->setAttribute(Qt::WA_TransparentForMouseEvents);
+  m_AuditTableStatus->setStyleSheet("background:transparent; color:palette(text); font-weight:600;");
+  m_AuditTableStatus->setGeometry(m_AuditTable->viewport()->rect());
+  m_AuditTableStatus->hide();
+  m_AuditTable->viewport()->installEventFilter(this);
   auditLayout->addWidget(m_AuditTable, 1);
   auto* auditButtons = new QHBoxLayout;
   auto* runAudit = new QPushButton("Run audit", m_AuditDialog);
   runAudit->setObjectName("pdfAuditRun");
   auto* cancelAudit = new QPushButton("Cancel audit", m_AuditDialog);
   cancelAudit->setObjectName("pdfAuditCancel");
+  cancelAudit->hide();
+  cancelAudit->setEnabled(false);
   auto* useConsensus = new QPushButton("Use consensus scale", m_AuditDialog);
   useConsensus->setObjectName("pdfAuditUseConsensus");
+  useConsensus->setProperty("pdfPrimaryAction", true);
+  useConsensus->setEnabled(false);
+  useConsensus->style()->unpolish(useConsensus);
+  useConsensus->style()->polish(useConsensus);
   auto* closeAudit = new QPushButton("Close", m_AuditDialog);
   closeAudit->setObjectName("pdfAuditClose");
   auditButtons->addWidget(runAudit);
@@ -910,7 +1067,11 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   auditButtons->addWidget(closeAudit);
   auditLayout->addLayout(auditButtons);
   connect(runAudit, &QPushButton::clicked, this, [this] { StartScaleAudit(); });
-  connect(cancelAudit, &QPushButton::clicked, this, [this] { m_AuditCancel = true; m_AuditSummary->setText("Cancelling audit… no partial result will be kept."); });
+  connect(cancelAudit, &QPushButton::clicked, this, [this] {
+    m_AuditCancel = true;
+    if (auto* cancel = findChild<QPushButton*>("pdfAuditCancel")) cancel->setEnabled(false);
+    m_AuditSummary->setText("Cancelling audit… no partial result will be kept.");
+  });
   connect(closeAudit, &QPushButton::clicked, m_AuditDialog, &QDialog::hide);
   connect(m_AuditAllRows, &QCheckBox::toggled, this, [this] { RefreshScaleAudit(); });
   connect(m_AuditShowSheet, &QCheckBox::toggled, this, [this] { m_Page->update(); });
@@ -938,7 +1099,17 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   // Compare revisions is a page of the side panel (beside Thumbnails, Tool Chest and Properties), not a window.
   m_ComparePanel = new QWidget(this);
   m_ComparePanel->setObjectName("pdfComparePanel");
-  m_ComparePanel->setStyleSheet(QtApplyAccent(QString::fromLatin1(kPdfWorkflowDialogStyle).replace("QDialog{", "#pdfComparePanel{"), true));
+  {
+    QString compareStyle = PdfWorkflowDialogStyle(!qApp->property("cadLightTheme").toBool());
+    compareStyle.replace("QDialog{", "#pdfComparePanel{");
+    m_ComparePanel->setStyleSheet(compareStyle);
+  }
+  m_CompareScroll = new QScrollArea(this);
+  m_CompareScroll->setObjectName("pdfCompareScroll");
+  m_CompareScroll->setWidgetResizable(true);
+  m_CompareScroll->setFrameShape(QFrame::NoFrame);
+  m_CompareScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  m_CompareScroll->setWidget(m_ComparePanel);
   auto* compareLayout = new QVBoxLayout(m_ComparePanel);
   compareLayout->setContentsMargins(8, 8, 8, 8);
   compareLayout->addWidget(new QLabel("Compare revisions", m_ComparePanel));
@@ -950,8 +1121,12 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   m_CompareProgress->setRange(0, 0); m_CompareProgress->hide(); compareLayout->addWidget(m_CompareProgress);
   auto* pageControls = new QHBoxLayout;
   m_CompareBasePage = new QSpinBox(m_ComparePanel); m_CompareBasePage->setObjectName("pdfCompareBasePage");
+  m_CompareBasePage->setMinimumHeight(28);
+  m_CompareBasePage->setKeyboardTracking(false);
   m_CompareBasePage->setPrefix("Base page "); m_CompareBasePage->setRange(1, 1);
   m_CompareRevisionPage = new QSpinBox(m_ComparePanel); m_CompareRevisionPage->setObjectName("pdfCompareRevisionPage");
+  m_CompareRevisionPage->setMinimumHeight(28);
+  m_CompareRevisionPage->setKeyboardTracking(false);
   m_CompareRevisionPage->setPrefix("Revision page "); m_CompareRevisionPage->setRange(1, 1);
   pageControls->addWidget(m_CompareBasePage); pageControls->addWidget(m_CompareRevisionPage); pageControls->addStretch();
   compareLayout->addLayout(pageControls);
@@ -967,26 +1142,53 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   m_CompareOpacity = new QSlider(Qt::Horizontal, m_ComparePanel);
   m_CompareOpacity->setObjectName("pdfCompareOpacity"); m_CompareOpacity->setRange(0, 100); m_CompareOpacity->setValue(50);
   viewControls->addWidget(new QLabel("Revision opacity", m_ComparePanel)); viewControls->addWidget(m_CompareOpacity, 1);
+  auto* opacityValue = new QLabel("50%", m_ComparePanel);
+  opacityValue->setObjectName("pdfCompareOpacityValue");
+  opacityValue->setMinimumWidth(36);
+  opacityValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+  viewControls->addWidget(opacityValue);
   compareLayout->addLayout(viewControls);
   auto* diffControls = new QHBoxLayout;
   m_CompareTolerance = new QDoubleSpinBox(m_ComparePanel); m_CompareTolerance->setObjectName("pdfCompareTolerance");
-  m_CompareTolerance->setRange(0.0, 25.0); m_CompareTolerance->setSingleStep(0.25); m_CompareTolerance->setSuffix(" mm tolerance");
+  m_CompareTolerance->setMinimumHeight(28);
+  m_CompareTolerance->setKeyboardTracking(false);
+  m_CompareTolerance->setRange(0.0, 25.0); m_CompareTolerance->setSingleStep(0.25); m_CompareTolerance->setSuffix(" mm");
   m_CompareTolerance->setValue(pdfdiff::Settings{}.toleranceMm);
   m_CompareMinRegion = new QDoubleSpinBox(m_ComparePanel); m_CompareMinRegion->setObjectName("pdfCompareMinRegion");
-  m_CompareMinRegion->setRange(0.0, 100.0); m_CompareMinRegion->setSingleStep(0.5); m_CompareMinRegion->setSuffix(" mm minimum region");
+  m_CompareMinRegion->setMinimumHeight(28);
+  m_CompareMinRegion->setKeyboardTracking(false);
+  m_CompareMinRegion->setRange(0.0, 100.0); m_CompareMinRegion->setSingleStep(0.5); m_CompareMinRegion->setSuffix(" mm");
   m_CompareMinRegion->setValue(pdfdiff::Settings{}.minSizeMm);
-  diffControls->addWidget(m_CompareTolerance); diffControls->addWidget(m_CompareMinRegion);
+  auto* toleranceGroup = new QVBoxLayout;
+  auto* toleranceLabel = new QLabel("Tolerance (mm)", m_ComparePanel);
+  toleranceLabel->setObjectName("pdfCompareToleranceLabel");
+  toleranceGroup->addWidget(toleranceLabel);
+  toleranceGroup->addWidget(m_CompareTolerance);
+  diffControls->addLayout(toleranceGroup);
+  auto* minimumGroup = new QVBoxLayout;
+  auto* minimumLabel = new QLabel("Minimum region (mm)", m_ComparePanel);
+  minimumLabel->setObjectName("pdfCompareMinimumRegionLabel");
+  minimumGroup->addWidget(minimumLabel);
+  minimumGroup->addWidget(m_CompareMinRegion);
+  diffControls->addLayout(minimumGroup);
   compareLayout->addLayout(diffControls);
   m_CompareShowHighlights = new QCheckBox("Show change boxes", m_ComparePanel);
   m_CompareShowHighlights->setObjectName("pdfCompareShowHighlights"); m_CompareShowHighlights->setChecked(true);
   compareLayout->addWidget(m_CompareShowHighlights);
+  auto* compareResultCount = new QLabel("Change list will appear after comparison.", m_ComparePanel);
+  compareResultCount->setObjectName("pdfCompareResultCount");
+  compareLayout->addWidget(compareResultCount);
   m_CompareTable = new QTableWidget(m_ComparePanel);
   m_CompareTable->setObjectName("pdfCompareChanges"); m_CompareTable->setColumnCount(4);
-  m_CompareTable->setHorizontalHeaderLabels({"Kind", "X", "Y", "Size"});
+  m_CompareTable->setHorizontalHeaderLabels({"Kind", "X (pt)", "Y (pt)", "W × H (pt)"});
   m_CompareTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
   m_CompareTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  m_CompareTable->setMinimumHeight(380);
+  // The shared QTableWidget rule sets a smaller min-height; keep this results
+  // table tall enough to review several changes before scrolling.
+  m_CompareTable->setStyleSheet("#pdfCompareChanges{min-height:380px;}");
+  m_CompareTable->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
   compareLayout->addWidget(m_CompareTable, 1);
-  auto* compareButtons = new QGridLayout; // two columns: the panel is narrow
   auto* chooseRevision = new QPushButton("Choose revision PDF…", m_ComparePanel);
   chooseRevision->setObjectName("pdfCompareChoose");
   auto* alignAuto = new QPushButton("Align automatically", m_ComparePanel);
@@ -1000,20 +1202,52 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   auto* cancelCompare = new QPushButton("Cancel work", m_ComparePanel);
   auto* closeCompare = new QPushButton("Close compare", m_ComparePanel);
   closeCompare->setObjectName("pdfCompareClose");
+  findChanges->setProperty("pdfPrimaryAction", true);
+  findChanges->style()->unpolish(findChanges); findChanges->style()->polish(findChanges);
   alignAuto->setObjectName("pdfCompareAlignAuto"); pickOne->setObjectName("pdfComparePickOne");
   pickTwo->setObjectName("pdfComparePickTwo"); findChanges->setObjectName("pdfCompareFindChanges");
   saveChanges->setObjectName("pdfCompareSaveChanges"); cancelCompare->setObjectName("pdfCompareCancel");
-  int buttonIndex = 0;
-  for (auto* b : {chooseRevision, findChanges, previousChange, nextChange, alignAuto, resetAlign, pickOne, pickTwo, saveChanges, cancelCompare, closeCompare}) {
-    b->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed); // never widens the panel; the text may shorten to fit
-    compareButtons->addWidget(b, buttonIndex / 2, buttonIndex % 2); ++buttonIndex;
+  for (auto* button : {chooseRevision, alignAuto, pickOne, pickTwo, resetAlign, findChanges,
+                       previousChange, nextChange, saveChanges, cancelCompare, closeCompare}) {
+    button->setMinimumHeight(28);
+    button->setMaximumHeight(30);
   }
-  compareLayout->addLayout(compareButtons);
+  cancelCompare->hide();
+  chooseRevision->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  compareLayout->addWidget(chooseRevision);
+  auto* alignGroup = new QGroupBox("Alignment", m_ComparePanel);
+  auto* alignButtons = new QGridLayout(alignGroup);
+  alignButtons->setContentsMargins(4, 4, 4, 4);
+  alignButtons->setHorizontalSpacing(4);
+  alignButtons->setVerticalSpacing(2);
+  alignButtons->addWidget(alignAuto, 0, 0);
+  alignButtons->addWidget(resetAlign, 0, 1);
+  alignButtons->addWidget(pickOne, 1, 0);
+  alignButtons->addWidget(pickTwo, 1, 1);
+  compareLayout->addWidget(alignGroup);
+  auto* resultGroup = new QGroupBox("Changes", m_ComparePanel);
+  auto* resultButtons = new QGridLayout(resultGroup);
+  resultButtons->setContentsMargins(4, 4, 4, 4);
+  resultButtons->setHorizontalSpacing(4);
+  resultButtons->setVerticalSpacing(2);
+  resultButtons->addWidget(findChanges, 0, 0, 1, 2);
+  resultButtons->addWidget(previousChange, 1, 0);
+  resultButtons->addWidget(nextChange, 1, 1);
+  resultButtons->addWidget(saveChanges, 2, 0, 1, 2);
+  compareLayout->addWidget(resultGroup);
+  auto* compareFooter = new QHBoxLayout;
+  compareFooter->addWidget(cancelCompare);
+  compareFooter->addStretch(1);
+  compareFooter->addWidget(closeCompare);
+  compareLayout->addLayout(compareFooter);
   connect(chooseRevision, &QPushButton::clicked, this, [this] { BeginCompare(); });
   connect(m_CompareMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
     if (m_Compare) { m_Compare->mode = static_cast<CompareMode>(m_CompareMode->currentData().toInt()); UpdateCompareOverlay(); }
   });
-  connect(m_CompareOpacity, &QSlider::valueChanged, this, [this](int value) { if (m_Compare) { m_Compare->opacity = value; m_Page->update(); } });
+  connect(m_CompareOpacity, &QSlider::valueChanged, this, [this, opacityValue](int value) {
+    opacityValue->setText(QString("%1%").arg(value));
+    if (m_Compare) { m_Compare->opacity = value; m_Page->update(); }
+  });
   connect(m_CompareShowHighlights, &QCheckBox::toggled, this, [this] { m_Page->update(); });
   connect(alignAuto, &QPushButton::clicked, this, [this] { if (m_Compare) { m_Compare->aligned = false; m_Compare->manualAlignment = false; StartCompare(false); } });
   connect(pickOne, &QPushButton::clicked, this, [this] { if (m_Compare) { m_ComparePicking = true; m_ComparePickCount = 0; m_ComparePickTarget = ComparePickCount::OnePair; m_CompareMode->setCurrentIndex(m_CompareMode->findData(static_cast<int>(CompareMode::Base))); m_CompareStatus->setText("Pick a point on the Base view, switch to Revision, then pick its match. Esc cancels."); } });
@@ -1066,13 +1300,14 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   m_ComparePoll = new QTimer(this); m_ComparePoll->setInterval(30);
   connect(m_ComparePoll, &QTimer::timeout, this, [this] { PollCompare(); });
   { // the side panel's fourth tab
-    const int index = m_SidePages->addWidget(m_ComparePanel);
+    const int index = m_SidePages->addWidget(m_CompareScroll);
     auto* group = findChild<QButtonGroup*>("pdfSideGroup");
     auto* strip = findChild<QWidget*>("pdfSideStrip");
     auto* button = new QToolButton(strip);
     button->setObjectName("pdfSideButton_Compare");
     button->setText("Compare"); button->setToolTip("Show the revision comparison");
     button->setIcon(CadCommandIcon("DWG_Compare.png"));
+    button->setProperty("cadIcon", "DWG_Compare.png");
     button->setIconSize(QSize(24, 24)); button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     button->setCheckable(true); button->setAutoRaise(true); button->setFixedSize(76, 62);
     auto* layout = static_cast<QVBoxLayout*>(strip->layout());
@@ -1578,7 +1813,9 @@ void PdfWindow::ExtractRegion() {
   std::vector<pdfview::DimText> texts;
   std::vector<pdfview::DimSeg> segments;
   if (!m_Document->AuditPageData(ActivePage(), texts, segments, [] { return false; })) {
-    QMessageBox::warning(this, "Extract Coordinates", "Could not read selectable text from this PDF page."); return;
+    QMessageBox::warning(this, "Extract Coordinates",
+        "Could not read selectable text from this PDF page. Try another page or a PDF with selectable text.");
+    return;
   }
   const auto size = m_Document->Sizes()[static_cast<std::size_t>(ActivePage())];
   const QRectF box = QRectF(m_ExtractStart, m_ExtractEnd).normalized();
@@ -1596,26 +1833,66 @@ void PdfWindow::ExtractRegion() {
 
 void PdfWindow::ShowExtractReview() {
   if (!m_ExtractResult) return;
+  if (m_ExtractResult->candidates.empty() && m_ExtractAccepted == 0 && m_ExtractDenied == 0) {
+    const QString message = m_ExtractResult->message.empty()
+        ? QString("No coordinates were found here. Select a region with a monument block, coordinate table, or northing/easting pair, then try again.")
+        : QString::fromUtf8(m_ExtractResult->message.c_str());
+    QMessageBox::information(this, "Extract Coordinates", message);
+    m_ExtractResult.reset();
+    return;
+  }
+  const bool wasVisible = m_ExtractReview && m_ExtractReview->isVisible();
+  const QRect previousGeometry = wasVisible ? m_ExtractReview->geometry() : QRect{};
+  const QPoint previousPosition = wasVisible ? m_ExtractReview->pos() : QPoint{};
   if (!m_ExtractReview) {
     m_ExtractReview = new QDialog(this, Qt::Window);
     m_ExtractReview->setObjectName("pdfCoordinateReview");
-    m_ExtractReview->setStyleSheet(QString::fromLatin1(kPdfExtractReviewStyle));
+    m_ExtractReview->setStyleSheet(PdfWorkflowDialogStyle(!qApp->property("cadLightTheme").toBool()));
     m_ExtractReview->setWindowTitle("Review extracted coordinates");
-    m_ExtractReview->resize(1040, 380);
     auto* layout = new QVBoxLayout(m_ExtractReview);
-    auto* intro = new QLabel("Review each candidate against its source text. Accept creates drawing geometry; Deny discards it.", m_ExtractReview);
+    auto* heading = new QLabel("Review extracted coordinates", m_ExtractReview);
+    heading->setObjectName("pdfCoordinateReviewHeading");
+    QFont headingFont = heading->font(); headingFont.setBold(true); headingFont.setPointSize(headingFont.pointSize() + 1);
+    heading->setFont(headingFont);
+    layout->addWidget(heading);
+    auto* intro = new QLabel("Compare each candidate with the highlighted text on the PDF. Accept creates drawing geometry; Deny leaves the drawing unchanged.", m_ExtractReview);
+    intro->setObjectName("pdfCoordinateReviewIntro");
+    QFont introFont = intro->font(); introFont.setPointSize(introFont.pointSize() + 1); intro->setFont(introFont);
     intro->setWordWrap(true); layout->addWidget(intro);
-    auto* table = new QTableWidget(0, 8, m_ExtractReview); table->setObjectName("pdfCoordinateCandidates");
-    table->setHorizontalHeaderLabels({"Source text", "Northing", "Easting", "Elevation", "Description", "Point #", "Creates", "Decision"});
+    auto* completionPanel = new QWidget(m_ExtractReview);
+    completionPanel->setObjectName("pdfCoordinateReviewCompletion");
+    auto* completionLayout = new QVBoxLayout(completionPanel);
+    completionLayout->setContentsMargins(0, 0, 0, 0);
+    completionLayout->setSpacing(6);
+    completionLayout->addStretch(1);
+    auto* outcome = new QLabel(completionPanel);
+    outcome->setObjectName("pdfCoordinateReviewOutcome");
+    outcome->setAlignment(Qt::AlignCenter);
+    QFont outcomeFont = outcome->font(); outcomeFont.setBold(true); outcomeFont.setPointSize(outcomeFont.pointSize() + 2); outcome->setFont(outcomeFont);
+    completionLayout->addWidget(outcome);
+    auto* emptyState = new QLabel("Close this window to return to the PDF.", completionPanel);
+    emptyState->setObjectName("pdfCoordinateReviewEmptyState");
+    emptyState->setAlignment(Qt::AlignCenter);
+    emptyState->setWordWrap(true);
+    QFont emptyStateFont = emptyState->font(); emptyStateFont.setPointSize(emptyStateFont.pointSize() + 1);
+    emptyState->setFont(emptyStateFont);
+    completionLayout->addWidget(emptyState);
+    completionLayout->addStretch(1);
+    layout->addWidget(completionPanel);
+    layout->setStretch(layout->indexOf(completionPanel), 1);
+    auto* table = new QTableWidget(0, 2, m_ExtractReview); table->setObjectName("pdfCoordinateCandidates");
+    table->setHorizontalHeaderLabels({"Candidate details", "Decision"});
     table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
-    table->horizontalHeader()->setSectionResizeMode(7, QHeaderView::Fixed);
-    table->setColumnWidth(7, 220); // room for the Accept and Deny buttons whole
-    table->setWordWrap(true); table->setEditTriggers(QAbstractItemView::NoEditTriggers); layout->addWidget(table);
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
+    table->setColumnWidth(1, 126); // Room for full-height decisions while keeping source details readable.
+    table->verticalHeader()->hide();
+    table->setSelectionMode(QAbstractItemView::NoSelection);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers); layout->addWidget(table);
     auto* close = new QPushButton("Close", m_ExtractReview); close->setObjectName("pdfCoordinateReviewClose");
     connect(close, &QPushButton::clicked, m_ExtractReview, &QDialog::reject);
     connect(m_ExtractReview, &QDialog::rejected, this, [this] { m_ExtractBox = false; m_Page->update(); }); // review closed: the box goes
     auto* acceptAll = new QPushButton("Accept all", m_ExtractReview); acceptAll->setObjectName("pdfCoordinateAcceptAll");
+    acceptAll->setProperty("pdfPrimaryAction", true);
     auto* denyAll = new QPushButton("Deny all", m_ExtractReview); denyAll->setObjectName("pdfCoordinateDenyAll");
     // Accept all walks the list top to bottom through the same per-candidate path (so an id conflict still asks);
     // it stops at the first candidate that could not be created, leaving that one and the rest for review.
@@ -1624,12 +1901,14 @@ void PdfWindow::ShowExtractReview() {
       if (!m_Editor) { QMessageBox::information(this, "Extract Coordinates", "Open the PDF from an active drawing to accept coordinates."); return; }
       auto& list = m_ExtractResult->candidates;
       const std::size_t created = m_Editor->CommitPdfCoordinates(list);
+      m_ExtractAccepted += static_cast<int>(created);
       list.erase(list.begin(), list.begin() + static_cast<std::ptrdiff_t>(created));
       ShowExtractReview();
       statusBar()->showMessage(list.empty() ? "Extracted coordinates accepted." : QString("%1 accepted; the rest need review.").arg(created));
     });
     connect(denyAll, &QPushButton::clicked, this, [this] {
       if (!m_ExtractResult) return;
+      m_ExtractDenied += static_cast<int>(m_ExtractResult->candidates.size());
       m_ExtractResult->candidates.clear();
       ShowExtractReview();
       statusBar()->showMessage("Candidates denied; drawing unchanged.");
@@ -1639,25 +1918,146 @@ void PdfWindow::ShowExtractReview() {
     layout->addLayout(buttons);
   }
   auto* table = m_ExtractReview->findChild<QTableWidget*>("pdfCoordinateCandidates");
+  auto* completionPanel = m_ExtractReview->findChild<QWidget*>("pdfCoordinateReviewCompletion");
+  auto* outcome = m_ExtractReview->findChild<QLabel*>("pdfCoordinateReviewOutcome");
+  auto* intro = m_ExtractReview->findChild<QLabel*>("pdfCoordinateReviewIntro");
+  const bool hasCandidates = !m_ExtractResult->candidates.empty();
+  outcome->setText(QString("%1 accepted, %2 denied.").arg(m_ExtractAccepted).arg(m_ExtractDenied));
+  const int availableWidth = std::max(360, width() - 32);
+  const int dockWidth = m_ThumbDock ? m_ThumbDock->width() : width() / 3;
+  int dialogWidth = wasVisible ? m_ExtractReview->width() : std::min({640, availableWidth, std::max(640, dockWidth)});
+  if (!wasVisible && hasCandidates && m_Page && m_Page->width() > 0) {
+    // Fit the sheet before sizing the candidate details. The dialog's eventual width
+    // controls where source lines wrap, so determine it before measuring the table rows.
+    const int oldPageWidth = m_Page->width();
+    FitWidth();
+    const double pageScale = static_cast<double>(m_Page->width()) / oldPageWidth;
+    m_ExtractStart *= pageScale;
+    m_ExtractEnd *= pageScale;
+  }
+  if (!wasVisible && hasCandidates && m_Scroll && m_Page) {
+    const QRect highlight = QRectF(m_ExtractStart, m_ExtractEnd).normalized().toAlignedRect();
+    const QRect sourceInViewport(m_Page->mapTo(m_Scroll->viewport(), highlight.topLeft()), highlight.size());
+    constexpr int reviewGap = 28;
+    const int leftSpace = sourceInViewport.left() - reviewGap;
+    const int rightSpace = m_Scroll->viewport()->width() - sourceInViewport.right() - reviewGap;
+    dialogWidth = std::clamp(std::max(leftSpace, rightSpace), 360, dialogWidth);
+  }
+  if (!wasVisible) {
+    m_ExtractReview->resize(dialogWidth, hasCandidates ? 280 : 156);
+    if (m_ExtractReview->layout()) m_ExtractReview->layout()->activate();
+  }
+  table->setVisible(hasCandidates);
+  completionPanel->setVisible(!hasCandidates);
+  intro->setVisible(hasCandidates);
   table->setRowCount(static_cast<int>(m_ExtractResult->candidates.size()));
   for (int row = 0; row < table->rowCount(); ++row) {
     const auto& c = m_ExtractResult->candidates[static_cast<std::size_t>(row)];
-    const QString cells[] = {QString::fromUtf8(c.sourceText.c_str()), QString::number(c.northing, 'f', 3),
-      QString::number(c.easting, 'f', 3), c.elevation ? QString::number(*c.elevation, 'f', 3) : "—",
-      c.description.empty() ? "—" : QString::fromUtf8(c.description.c_str()),
-      c.pointNumber ? QString::number(*c.pointNumber) : "Auto", c.IsSurveyPoint() ? "Survey point" : "Circle", {}};
-    for (int col = 0; col < 7; ++col) table->setItem(row, col, new QTableWidgetItem(cells[col]));
-    auto* decisions = new QWidget(table); auto* buttons = new QHBoxLayout(decisions); buttons->setContentsMargins(2, 2, 2, 2);
+    QString sourceDisplay = QString::fromUtf8(c.sourceText.c_str());
+    sourceDisplay.replace('\n', "  | ");
+    const QString elevation = c.elevation ? QString::number(*c.elevation, 'f', 3) : "—";
+    const QString description = c.description.empty() ? "—" : QString::fromUtf8(c.description.c_str());
+    const QString pointNumber = c.pointNumber ? QString::number(*c.pointNumber) : "Auto";
+    const QString creates = c.IsSurveyPoint() ? "Survey point" : "Circle";
+    auto* details = new QLabel(table);
+    details->setObjectName(QString("pdfCoordinateCandidateDetails_%1").arg(row));
+    details->setWordWrap(true);
+    details->setMargin(7);
+    QFont detailsFont = details->font();
+    detailsFont.setPointSize(detailsFont.pointSize() + 2);
+    details->setFont(detailsFont);
+    details->setText(QString("<b>Candidate %1 of %2 · %3</b><br><b>Source text:</b> %4<br>"
+                             "<b>N:</b> %5　 <b>E:</b> %6　 <b>Elevation:</b> %7<br>"
+                             "<b>Description:</b> %8 · <b>Point #:</b> %9")
+        .arg(row + 1).arg(table->rowCount()).arg(creates).arg(sourceDisplay.toHtmlEscaped())
+        .arg(QString::number(c.northing, 'f', 3)).arg(QString::number(c.easting, 'f', 3)).arg(elevation)
+        .arg(description.toHtmlEscaped()).arg(pointNumber));
+    details->setToolTip(QString::fromUtf8(c.sourceText.c_str()));
+    table->setCellWidget(row, 0, details);
+    auto* decisions = new QWidget(table); auto* buttons = new QVBoxLayout(decisions); buttons->setContentsMargins(2, 2, 2, 2);
+    buttons->setSpacing(4);
     auto* accept = new QPushButton("Accept", decisions); auto* deny = new QPushButton("Deny", decisions);
-    accept->setMinimumWidth(90); deny->setMinimumWidth(90);
+    accept->setMinimumSize(108, 32); deny->setMinimumSize(108, 32);
     accept->setObjectName(QString("pdfCoordinateAccept_%1").arg(row)); deny->setObjectName(QString("pdfCoordinateDeny_%1").arg(row));
-    buttons->addWidget(accept); buttons->addWidget(deny); table->setCellWidget(row, 7, decisions);
+    accept->setProperty("pdfPrimaryAction", true);
+    buttons->addWidget(accept); buttons->addWidget(deny); table->setCellWidget(row, 1, decisions);
+    QTextDocument detailDocument;
+    detailDocument.setDefaultFont(details->font());
+    detailDocument.setDocumentMargin(0);
+    detailDocument.setHtml(details->text());
+    detailDocument.setTextWidth(std::max(220, dialogWidth - 126 - 54));
+    table->setRowHeight(row, std::clamp(static_cast<int>(std::ceil(detailDocument.size().height()) + 30), 100, 240));
     connect(accept, &QPushButton::clicked, this, [this, row] { DecideExtractCandidate(row, true); });
     connect(deny, &QPushButton::clicked, this, [this, row] { DecideExtractCandidate(row, false); });
   }
-  table->resizeRowsToContents();
-  m_ExtractBox = !m_ExtractResult->candidates.empty(); m_Page->update();
+  if (auto* acceptAll = m_ExtractReview->findChild<QPushButton*>("pdfCoordinateAcceptAll")) {
+    acceptAll->setVisible(hasCandidates); acceptAll->setEnabled(hasCandidates);
+  }
+  if (auto* denyAll = m_ExtractReview->findChild<QPushButton*>("pdfCoordinateDenyAll")) {
+    denyAll->setVisible(hasCandidates); denyAll->setEnabled(hasCandidates);
+  }
+  if (auto* close = m_ExtractReview->findChild<QPushButton*>("pdfCoordinateReviewClose"))
+  {
+    close->setProperty("pdfPrimaryAction", !hasCandidates);
+    close->style()->unpolish(close); close->style()->polish(close); close->update();
+  }
+  table->clearSelection(); table->setCurrentCell(-1, -1);
+  m_ExtractBox = hasCandidates;
+  m_Page->update();
+  if (wasVisible) {
+    // A decision refreshes the candidate rows but must not undo a user's move or resize.
+    m_ExtractReview->setGeometry(previousGeometry);
+    if (!hasCandidates) {
+      // The completion state needs only its heading, message and footer. Keep the
+      // user's chosen position and width while removing the empty table's dead space.
+      m_ExtractReview->resize(previousGeometry.width(), 156);
+      m_ExtractReview->move(previousPosition);
+    }
+  } else {
+    int rowsHeight = 0;
+    for (int row = 0; row < table->rowCount(); ++row) rowsHeight += table->rowHeight(row);
+    const int desiredHeight = hasCandidates ? std::clamp(174 + rowsHeight, 280, 620) : 156;
+    m_ExtractReview->resize(dialogWidth, desiredHeight);
+    if (hasCandidates && m_Scroll && m_Page) {
+      const QRect highlight = QRectF(m_ExtractStart, m_ExtractEnd).normalized().toAlignedRect();
+      const QRect sourceInViewport(m_Page->mapTo(m_Scroll->viewport(), highlight.topLeft()), highlight.size());
+      const int leftSpace = sourceInViewport.left() - 16;
+      const int rightSpace = m_Scroll->viewport()->width() - sourceInViewport.right() - 16;
+      const bool useLeft = leftSpace >= rightSpace;
+      constexpr int reviewGap = 28;
+      const int viewportX = useLeft ? std::max(8, sourceInViewport.left() - dialogWidth - reviewGap)
+                                    : sourceInViewport.right() + reviewGap;
+      const int maxX = std::max(8, m_Scroll->viewport()->width() - dialogWidth - 8);
+      const int viewportY = std::clamp(sourceInViewport.top() - desiredHeight - 12, 8,
+                                        std::max(8, m_Scroll->viewport()->height() - desiredHeight - 8));
+      m_ExtractReview->move(m_Scroll->viewport()->mapToGlobal(QPoint(std::min(viewportX, maxX), viewportY)));
+    } else {
+      const int y = std::min(170, std::max(12, height() / 4));
+      m_ExtractReview->move(mapToGlobal(QPoint(8, y)));
+    }
+  }
   m_ExtractReview->show(); m_ExtractReview->raise();
+  if (wasVisible) m_ExtractReview->move(previousPosition);
+  // Keep the selected source box in the unobscured part of the page. The review
+  // card occupies the left panel; when horizontal panning is available, center the
+  // selected region in the page area that remains visible beside the card.
+  if (m_ExtractBox && m_Scroll && m_Page) {
+    const QRect highlight = QRectF(m_ExtractStart, m_ExtractEnd).normalized().toAlignedRect();
+    const QPoint boxLeft = m_Page->mapTo(m_Scroll->viewport(), highlight.topLeft());
+    const QPoint boxRight = m_Page->mapTo(m_Scroll->viewport(), highlight.bottomRight());
+    const int cardRight = m_Scroll->viewport()->mapFromGlobal(
+        m_ExtractReview->mapToGlobal(QPoint(m_ExtractReview->width(), 0))).x();
+    constexpr int reviewGap = 28;
+    const int visibleLeft = cardRight + reviewGap;
+    const int visibleRight = m_Scroll->viewport()->width() - reviewGap;
+    const double visibleCenter = (visibleLeft + visibleRight) / 2.0;
+    const double boxCenter = (boxLeft.x() + boxRight.x()) / 2.0;
+    const int scrollDelta = qRound(boxCenter - visibleCenter);
+    if (scrollDelta != 0) {
+      auto* horizontal = m_Scroll->horizontalScrollBar();
+      horizontal->setValue(horizontal->value() + scrollDelta);
+    }
+  }
 }
 
 void PdfWindow::DecideExtractCandidate(int row, bool accept) {
@@ -1665,11 +2065,13 @@ void PdfWindow::DecideExtractCandidate(int row, bool accept) {
   if (accept) {
     if (!m_Editor) { QMessageBox::information(this, "Extract Coordinates", "Open the PDF from an active drawing to accept coordinates."); return; }
     if (!m_Editor->CommitPdfCoordinate(m_ExtractResult->candidates[static_cast<std::size_t>(row)])) return;
+    ++m_ExtractAccepted;
+  } else {
+    ++m_ExtractDenied;
   }
   m_ExtractResult->candidates.erase(m_ExtractResult->candidates.begin() + row);
   if (m_ExtractResult->candidates.empty()) {
-    if (auto* table = m_ExtractReview->findChild<QTableWidget*>("pdfCoordinateCandidates")) table->setRowCount(0);
-    m_ExtractBox = false; m_Page->update();
+    ShowExtractReview();
     statusBar()->showMessage(accept ? "Extracted coordinates accepted." : "Candidate denied; drawing unchanged.");
   } else ShowExtractReview();
 }
@@ -2340,6 +2742,12 @@ void PdfWindow::PollStrip() {
   }
 }
 
+void PdfWindow::changeEvent(QEvent* event) {
+  QMainWindow::changeEvent(event);
+  if (event->type() == QEvent::ApplicationPaletteChange || event->type() == QEvent::StyleChange)
+    ApplyAppearance();
+}
+
 void PdfWindow::resizeEvent(QResizeEvent* event) {
   QMainWindow::resizeEvent(event);
   UpdateStatusBarLayout();
@@ -2369,6 +2777,8 @@ void PdfWindow::RefreshSnap() {
 }
 
 bool PdfWindow::eventFilter(QObject* watched, QEvent* event) {
+  if (m_AuditTable && watched == m_AuditTable->viewport() && event->type() == QEvent::Resize && m_AuditTableStatus)
+    m_AuditTableStatus->setGeometry(m_AuditTable->viewport()->rect());
   if ((watched == m_Page || (m_Scroll && watched == m_Scroll->viewport())) && HandleViewportEvent(watched, event)) return true;
   return QMainWindow::eventFilter(watched, event);
 }
@@ -2602,6 +3012,12 @@ void PdfWindow::ShowScaleAudit() {
 void PdfWindow::StartScaleAudit() {
   if (!m_Document) { m_AuditSummary->setText("Open a PDF before auditing a page."); return; }
   if (m_AuditWork.valid()) { m_AuditSummary->setText("An audit is already running. Cancel it before starting another."); return; }
+  if (auto* run = findChild<QPushButton*>("pdfAuditRun")) run->setEnabled(false);
+  if (auto* cancel = findChild<QPushButton*>("pdfAuditCancel")) {
+    cancel->setEnabled(true);
+    cancel->show();
+  }
+  if (auto* use = findChild<QPushButton*>("pdfAuditUseConsensus")) use->setEnabled(false);
   const int page = m_PageNumber->value() - 1;
   m_AuditPage = page;
   m_AuditReady = false;
@@ -2609,7 +3025,14 @@ void PdfWindow::StartScaleAudit() {
   m_AuditResult = {};
   m_AuditCancel = false;
   m_AuditTable->setRowCount(0);
-  m_AuditSummary->setText(QString("Reading dimension text and line work on page %1…").arg(page + 1));
+  m_AuditProgress->show();
+  m_AuditTableStatus->show();
+  m_AuditTableStatus->raise();
+  m_AuditSummary->setText(QString("Audit running · reading dimension text and line work on page %1…").arg(page + 1));
+  m_AuditSummary->setContentsMargins(12, 8, 8, 8);
+  m_AuditSummary->setProperty("pdfAuditRunning", true);
+  m_AuditSummary->style()->unpolish(m_AuditSummary);
+  m_AuditSummary->style()->polish(m_AuditSummary);
   auto* document = m_Document.get();
   m_AuditWork = std::async(std::launch::async, [this, document, page] {
     AuditOutcome outcome;
@@ -2629,9 +3052,21 @@ void PdfWindow::StartScaleAudit() {
 void PdfWindow::PollScaleAudit() {
   if (!m_AuditWork.valid() || m_AuditWork.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
   m_AuditPoll->stop();
+  m_AuditProgress->hide();
+  m_AuditTableStatus->hide();
+  m_AuditSummary->setProperty("pdfAuditRunning", false);
+  m_AuditSummary->setContentsMargins(0, 0, 0, 0);
+  m_AuditSummary->style()->unpolish(m_AuditSummary);
+  m_AuditSummary->style()->polish(m_AuditSummary);
   AuditOutcome outcome;
   try { outcome = m_AuditWork.get(); }
   catch (const std::exception& error) { qWarning() << "PDF scale audit failed:" << error.what(); }
+  if (auto* run = findChild<QPushButton*>("pdfAuditRun")) run->setEnabled(true);
+  if (auto* cancel = findChild<QPushButton*>("pdfAuditCancel")) {
+    cancel->setEnabled(false);
+    cancel->hide();
+  }
+  m_AuditTable->setRowCount(0);
   if (m_AuditCancel) {
     m_AuditMatches = {};
     m_AuditResult = {};
@@ -2640,7 +3075,7 @@ void PdfWindow::PollScaleAudit() {
     return;
   }
   if (!outcome.ok) {
-    m_AuditSummary->setText("This page could not be read. No result was kept.");
+    m_AuditSummary->setText("This page could not be read. No result was kept. Try another page or PDF, then run the audit again.");
     return;
   }
   m_AuditMatches = std::move(outcome.matches);
@@ -2655,18 +3090,23 @@ void PdfWindow::PollScaleAudit() {
 
 void PdfWindow::RefreshScaleAudit() {
   if (!m_AuditReady || !m_Document || m_AuditPage < 0) return;
+  const bool dark = !qApp->property("cadLightTheme").toBool();
   const auto* scale = EffectiveScale(m_AuditPage);
   const auto& matches = m_AuditMatches.matches;
-  QString summary = QString("Page %1: %2 dimension(s) matched; %3 text run(s) had no dimension line; %4 dimension line(s) had no text.")
+  QString summary = QString("<b>Page %1 · %2 dimensions matched</b> · %3 unmatched text runs · %4 unmatched dimension lines")
       .arg(m_AuditPage + 1).arg(matches.size()).arg(m_AuditMatches.unmatchedText).arg(m_AuditMatches.unmatchedLines);
-  if (scale) summary += " Current scale: " + QString::fromUtf8(scale->RatioText().c_str()) + ".";
-  else summary += " This page has no scale to judge; set one to see Good / Check / Blunder verdicts.";
-  if (!m_AuditResult.message.empty()) summary += " " + QString::fromUtf8(m_AuditResult.message.c_str());
-  if (scale) summary += QString(" Verdicts: %1 Good, %2 Check, %3 Blunder.").arg(m_AuditResult.good).arg(m_AuditResult.check).arg(m_AuditResult.blunder);
+  if (scale) summary += "<br>Current scale: " + QString::fromUtf8(scale->RatioText().c_str());
+  else summary += "<br>This page has no scale to judge. Set one to see Good / Check / Blunder verdicts.";
+  if (!m_AuditResult.message.empty()) summary += "<br>" + QString::fromUtf8(m_AuditResult.message.c_str()).toHtmlEscaped();
+  if (scale) {
+    const QString blunderColor = PdfVerdictTextColor(pdfview::Verdict::Blunder, dark).name();
+    summary += QString(" · Verdicts: %1 Good · %2 Check · <span style=\"color:%3\"><b>%4 Blunder</b></span>")
+        .arg(m_AuditResult.good).arg(m_AuditResult.check).arg(blunderColor).arg(m_AuditResult.blunder);
+  }
   if (m_AuditResult.consensusValid) {
     const auto consensus = pdfview::ScaleFromConsensus(m_AuditResult.consensusMetresPerPt,
         static_cast<int>(matches.size()), scale ? *scale : pdfview::PageScale{});
-    summary += " Consensus: " + QString::fromUtf8(consensus.RatioText().c_str()) + ".";
+    summary += "<br>Consensus scale: " + QString::fromUtf8(consensus.RatioText().c_str());
   }
   m_AuditSummary->setText(summary);
 
@@ -2690,11 +3130,7 @@ void PdfWindow::RefreshScaleAudit() {
       QString("(%1, %2)").arg(match.tx, 0, 'f', 1).arg(match.ty, 0, 'f', 1)};
     for (int column = 0; column < cells.size(); ++column) {
       auto* item = new QTableWidgetItem(cells[column]);
-      if (column == 4) {
-        const auto color = result.verdict == pdfview::Verdict::Good ? QColor("#48b878") :
-          result.verdict == pdfview::Verdict::Check ? QColor("#e5a83b") : QColor("#e05b5b");
-        item->setForeground(color);
-      }
+      if (column == 4) item->setForeground(PdfVerdictTextColor(result.verdict, dark));
       m_AuditTable->setItem(row, column, item);
     }
   }
@@ -2718,7 +3154,35 @@ void PdfWindow::DrawAuditOverlay(QPainter& painter) {
   painter.setPen(QPen(color, 3)); painter.setBrush(QColor(color.red(), color.green(), color.blue(), 65));
   painter.drawLine(first, last);
   painter.drawEllipse(first, 6, 6); painter.drawEllipse(last, 6, 6);
-  painter.drawText(QRectF((first.x() + last.x()) / 2 - 50, (first.y() + last.y()) / 2 - 24, 100, 20),
-      Qt::AlignCenter, QString("%1: %2%%").arg(QString::fromUtf8(pdfview::VerdictName(result.verdict))).arg(result.pct, 0, 'f', 2));
+  const QPointF midpoint((first.x() + last.x()) / 2, (first.y() + last.y()) / 2);
+  const QPointF delta = last - first;
+  const double length = std::max(1.0, std::hypot(delta.x(), delta.y()));
+  const QPointF tangent(delta.x() / length, delta.y() / length);
+  const QPointF normal(-delta.y() / length, delta.x() / length);
+  const QSizeF labelSize(108, 24);
+  const QRectF pageRect(0, 0, size.wPt * factor, size.hPt * factor);
+  auto labelAt = [&](QPointF center) {
+    return QRectF(center.x() - labelSize.width() / 2, center.y() - labelSize.height() / 2,
+                  labelSize.width(), labelSize.height());
+  };
+  const double beyondEndpoint = labelSize.width() / 2 + 18.0;
+  QRectF label = labelAt(last + tangent * beyondEndpoint);
+  if (!pageRect.adjusted(4, 4, -4, -4).contains(label))
+    label = labelAt(first - tangent * beyondEndpoint);
+  if (!pageRect.adjusted(4, 4, -4, -4).contains(label)) {
+    const QPointF normalCenter = midpoint + normal * 34.0;
+    label = labelAt(pageRect.adjusted(labelSize.width() / 2 + 4, labelSize.height() / 2 + 4,
+                                     -labelSize.width() / 2 - 4, -labelSize.height() / 2 - 4).contains(normalCenter)
+                        ? normalCenter : midpoint - normal * 34.0);
+    label.moveLeft(std::clamp(label.left(), pageRect.left() + 4, pageRect.right() - label.width() - 4));
+    label.moveTop(std::clamp(label.top(), pageRect.top() + 4, pageRect.bottom() - label.height() - 4));
+  }
+  const bool light = qApp->property("cadLightTheme").toBool();
+  painter.setPen(QPen(color.darker(135), 1));
+  painter.setBrush(light ? QColor(250, 252, 254, 242) : QColor(24, 29, 34, 232));
+  painter.drawRoundedRect(label, 5, 5);
+  painter.setPen(light ? QColor("#20262d") : Qt::white);
+  painter.drawText(label, Qt::AlignCenter,
+      QString("%1: %2%").arg(QString::fromUtf8(pdfview::VerdictName(result.verdict))).arg(result.pct, 0, 'f', 2));
   painter.restore();
 }

@@ -20,6 +20,7 @@ class QDoubleSpinBox;
 class QSpinBox;
 class QEvent;
 class QTabWidget;
+class QSyntaxHighlighter;
 class AdjustmentPlanView;
 
 class AdjustmentWindow final : public QMainWindow {
@@ -54,6 +55,8 @@ private:
   void ExportReportAs(const QString& extension);
   void ApplySettingsDraft();
   void ResetSettingsDraft();
+  bool SettingsDraftIsDirty() const;
+  void UpdateSettingsDraftActions();
   void ShowSettings();
   void SetBusy(bool busy);
   void RefreshImportedFiles();
@@ -70,17 +73,19 @@ private:
   AppCommandState& m_State;
   std::vector<std::string>& m_Log;
   AdjustmentCodeEdit* m_Editor;
-  AdjustmentPlanView* m_Plan;
   QLabel* m_Files;
   QLabel* m_Summary;
-  QLabel* m_TextStatus;
+  QLabel* m_TextStatus = nullptr;
+  bool m_TextStatusIsError = false;
   QTimer* m_ValidateTimer;
   TraverseData m_PreviewData;  ///< the text as last read without error, solved for the plan only
   QPlainTextEdit* m_Output;
+  QSyntaxHighlighter* m_ReportHighlighter = nullptr;
   QTableWidget* m_Coordinates;
   QTableWidget* m_Residuals;
   AdjustmentPlanView* m_ResultPlan = nullptr;
   QTabWidget* m_ContextTabs = nullptr;
+  QTabWidget* m_WorkspaceTabs = nullptr;
   std::vector<QDoubleSpinBox*> m_SettingsWeightEditors;
   QComboBox* m_SettingsAdjustmentType = nullptr;
   QSpinBox* m_SettingsMaxIterations = nullptr;

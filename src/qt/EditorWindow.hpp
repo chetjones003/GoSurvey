@@ -32,6 +32,8 @@ class QDialog;
 class FloatingCommandBar;
 class QFrame;
 class QTimer;
+class QDockWidget;
+class QToolBar;
 
 class EditorWindow final : public QMainWindow {
 public:
@@ -78,6 +80,7 @@ private:
   void BuildTitleBar(QMenu* applicationMenu);
   void UpdateChromeIcons();
   void BuildDocks();
+  void UpdateAdaptiveDocks();
   void BuildDraftingInput();
   void RefreshDraftingInput(const QString& hint = {});
   void ResetDraftingInput();
@@ -198,11 +201,22 @@ private:
   bool m_DynamicReset = true;
   QLabel* m_WindowTitle = nullptr;
   QTreeWidget* m_Toolspace = nullptr;
+  QDockWidget* m_PropertiesDock = nullptr;
+  QDockWidget* m_ToolspaceDock = nullptr;
+  QToolBar* m_PropertiesRail = nullptr;
+  QToolBar* m_ToolspaceRail = nullptr;
+  bool m_PropertiesRailInstalled = false;
+  bool m_ToolspaceRailInstalled = false;
   QScrollArea* m_PropertiesScroll = nullptr;
   std::uint64_t m_PropertiesFingerprint = ~0ull;
   QString m_PropertiesNote;
   QLabel* m_Coordinates = nullptr;
   bool m_Refreshing = false;
+  bool m_UpdatingAdaptiveDocks = false;
+  bool m_PropertiesDockWanted = true;
+  bool m_ToolspaceDockWanted = true;
+  bool m_PropertiesDockExpandedCompact = false;
+  bool m_ToolspaceDockExpandedCompact = false;
   bool m_TextDialogOpen = false;
   bool m_StartupInitialized = false;
   bool m_WhatsNewAutoOpened = false;
