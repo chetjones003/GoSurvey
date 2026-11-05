@@ -4,6 +4,8 @@
 // `propedit` services (and CadApplyLayer/Color/Linetype/Lineweight/TransparencyToSelection), which
 // This file contains the Qt widgets around those shared services.
 #include "EditorWindow.hpp"
+#include "EditorChrome.hpp"
+#include "EditorViewport.hpp"
 #include "QtAccent.hpp"
 #include "TopographicArtwork.hpp"
 #include <QApplication>
@@ -32,7 +34,10 @@
 #include <QLineEdit>
 #include <QPixmap>
 #include <QPlainTextEdit>
+#include <QPushButton>
 #include <QScrollArea>
+#include <QResizeEvent>
+#include <QStatusBar>
 #include <QSignalBlocker>
 #include <QStandardItemModel>
 #include <QVBoxLayout>
@@ -51,6 +56,24 @@ class TerrainPropertiesBody final : public QWidget {
     QPainter painter(this);
     const qreal artHeight = width() * 220.0 / 300.0;
     qtArtwork::DrawTerrainContours(painter, QRectF(0, height() - artHeight, width(), artHeight));
+  }
+};
+
+class AdaptivePropertiesScrollArea final : public QScrollArea {
+public:
+  using QScrollArea::QScrollArea;
+  void UpdateRowWidths() {
+    // Let Qt show the thumb only when this content actually overflows. Always-on created a
+    // full-track thumb in wide palettes with only a few rows, which looked like a broken control.
+    setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    const int labelWidth = std::clamp(viewport()->width() - 140, 70, 124);
+    for (auto* label : findChildren<QLabel*>("propertiesRowLabel"))
+      label->setFixedWidth(labelWidth);
+  }
+protected:
+  void resizeEvent(QResizeEvent* event) override {
+    QScrollArea::resizeEvent(event);
+    UpdateRowWidths();
   }
 };
 
@@ -87,7 +110,8 @@ QString Merge(const QStringList& values) {
 }  // namespace
 
 void EditorWindow::BuildPropertiesPanel() {
-  m_PropertiesScroll = new QScrollArea(this);
+  auto* propertiesScroll = new AdaptivePropertiesScrollArea(this);
+  m_PropertiesScroll = propertiesScroll;
   m_PropertiesScroll->setObjectName("propertiesPanel");
   m_PropertiesScroll->setWidgetResizable(true);
   m_PropertiesScroll->setFrameShape(QFrame::NoFrame);
@@ -104,6 +128,7 @@ void EditorWindow::RefreshProperties() {
   for (const auto& e : st.selection) { mix(static_cast<std::uint64_t>(e.type)); mix(static_cast<std::uint64_t>(e.index)); }
   for (int i : st.selectedSurveyPointIndices) mix(static_cast<std::uint64_t>(i) + 977);
   mix(st.cadGpuRevision); mix(static_cast<std::uint64_t>(st.displayLinearPrecision));
+  mix(qApp->property("cadLightTheme").toBool() ? 1u : 0u);
   mix(static_cast<std::uint64_t>(std::llround(st.worldDocumentOriginX * 1000))); mix(static_cast<std::uint64_t>(std::llround(st.worldDocumentOriginY * 1000)));
   mix(st.annotationScales.size());
   mix(st.drawingLayerTable.size()); mix(static_cast<std::uint64_t>(st.activeDrawingIdx));
@@ -125,9 +150,18 @@ void EditorWindow::RefreshProperties() {
   auto* body = new TerrainPropertiesBody;
   body->setAutoFillBackground(false);
   body->setObjectName("propertiesBody");
+  const bool darkTheme = !qApp->property("cadLightTheme").toBool();
+  body->setStyleSheet(QtApplyAccent(QString::fromLatin1(R"(
+    #propertiesBody QLineEdit, #propertiesBody QComboBox, #propertiesBody QAbstractSpinBox {
+      min-height:18px; padding:1px 4px; border-radius:2px;
+    }
+    #propertiesBody QLineEdit:focus, #propertiesBody QComboBox:focus, #propertiesBody QAbstractSpinBox:focus {
+      border:1px solid @strong@;
+    }
+  )"), darkTheme));
   auto* root = new QVBoxLayout(body);
-  root->setContentsMargins(6, 6, 6, 6);
-  root->setSpacing(4);
+  root->setContentsMargins(4, 4, 4, 4);
+  root->setSpacing(3);
   const int precision = st.displayLinearPrecision;
   auto fmt = [precision](double v) { return QString::fromStdString(FormatLinear(v, precision)); };
 
@@ -144,6 +178,7 @@ void EditorWindow::RefreshProperties() {
     }
   }
   const int total = static_cast<int>(st.selection.size());
+  body->setProperty("propertiesPopulated", total > 0);
   QString summary;
   if (total == 0) summary = "No selection";
   else {
@@ -173,9 +208,34 @@ void EditorWindow::RefreshProperties() {
   auto* note = new QLabel(m_PropertiesNote, body);
   note->setObjectName("propertiesNote");
   note->setWordWrap(true);
-  note->setStyleSheet("color:#c54646;");
+  const bool darkAppearance = !qApp->property("cadLightTheme").toBool();
+  note->setStyleSheet(QString("color:%1;").arg(darkAppearance ? "#ff7b72" : "#b42318"));
   note->setVisible(!m_PropertiesNote.isEmpty());
   root->addWidget(note);
+
+  if (total == 0 && st.selectedSurveyPointIndices.empty()) {
+    auto* emptyState = new QLabel("Select an object in the drawing area to view its properties.", body);
+    emptyState->setObjectName("propertiesEmptyState");
+    emptyState->setWordWrap(true);
+    emptyState->setMargin(8);
+    emptyState->setStyleSheet("color:palette(text); background:palette(alternate-base); border:1px solid palette(mid); border-radius:4px;");
+    root->addWidget(emptyState);
+    auto* selectInDrawing = new QPushButton("Select in drawing area", body);
+    selectInDrawing->setObjectName("propertiesSelectInDrawingAction");
+    selectInDrawing->setToolTip("Move focus to the drawing area, then click an object to view its properties.");
+    connect(selectInDrawing, &QPushButton::clicked, this, [this] {
+      if (!m_Viewport) return;
+      m_Viewport->setFocus(Qt::OtherFocusReason);
+      if (m_CommandBar)
+        m_CommandBar->Append("Click an object in the drawing area to view its properties.");
+    });
+    root->addWidget(selectInDrawing);
+    root->addStretch(1);
+    if (auto* old = m_PropertiesScroll->takeWidget()) old->deleteLater();
+    m_PropertiesScroll->setWidget(body);
+    static_cast<AdaptivePropertiesScrollArea*>(m_PropertiesScroll)->UpdateRowWidths();
+    return;
+  }
 
   // --- section / row builders -------------------------------------------------------------------
   auto section = [&](const QString& title, const char* name) {
@@ -187,14 +247,12 @@ void EditorWindow::RefreshProperties() {
     auto* heading = new QLabel(title, box);
     heading->setObjectName("propertiesSectionHeading");
     QFont f = heading->font(); f.setBold(true); heading->setFont(f);
-    heading->setStyleSheet(qApp->property("cadLightTheme").toBool()
-        ? "background:#1f3a5f; color:#ffffff; padding:3px 8px;"
-        : QtApplyAccent("background:#30373c; color:#f4f7f8; border-left:3px solid @strong@; padding:3px 8px;", true));
+    heading->setStyleSheet(QtPropertiesSectionHeadingStyle(!qApp->property("cadLightTheme").toBool()));
     layout->addWidget(heading);
     auto* rows = new QWidget(box);
     auto* grid = new QVBoxLayout(rows);
     grid->setContentsMargins(0, 0, 0, 0);
-    grid->setSpacing(3);
+    grid->setSpacing(1);
     layout->addWidget(rows);
     root->addWidget(box);
     return grid;
@@ -202,19 +260,30 @@ void EditorWindow::RefreshProperties() {
   auto addRow = [&](QVBoxLayout* grid, const QString& label, QWidget* field, char axis = 0) {
     auto* row = new QWidget(grid->parentWidget());
     auto* outer = new QHBoxLayout(row);
-    outer->setContentsMargins(6, 0, 6, 0);
-    outer->setSpacing(6);
+    outer->setContentsMargins(4, 0, 4, 0);
+    outer->setSpacing(5);
     auto* caption = new QLabel(label, row);
     caption->setObjectName("propertiesRowLabel");
-    caption->setFixedWidth(124);
+    caption->setFixedWidth(std::clamp(m_PropertiesScroll->viewport()->width() - 140, 70, 124));
+    caption->setWordWrap(true);
     outer->addWidget(caption);
     auto* fieldRow = new QHBoxLayout();
     fieldRow->setContentsMargins(0, 0, 0, 0); fieldRow->setSpacing(4);
     if (axis) {  // X/Y/Z badge on coordinate fields, as in the 0.7.4 panel (REQ-081)
       auto* badge = new QLabel(QString(QChar(axis)), row);
-      badge->setAlignment(Qt::AlignCenter); badge->setFixedWidth(18);
-      const char* color = axis == 'X' ? "#c0392b" : axis == 'Y' ? "#2e8b57" : "#2f6fc0";
-      badge->setStyleSheet(QString("background:%1; color:white; border-radius:2px; font-weight:bold;").arg(color));
+      badge->setAlignment(Qt::AlignCenter); badge->setFixedWidth(16);
+      badge->setProperty("propertiesAxisBadge", QString(QChar(axis)));
+      const char* background = axis == 'X' ? (darkTheme ? "#492d2b" : "#f6ecea")
+          : axis == 'Y' ? (darkTheme ? "#294033" : "#edf5ef")
+                        : (darkTheme ? "#29384b" : "#edf2f8");
+      const char* color = axis == 'X' ? (darkTheme ? "#ff9c91" : "#8f3b35")
+          : axis == 'Y' ? (darkTheme ? "#92d9a6" : "#356648")
+                        : (darkTheme ? "#9bc2ff" : "#3b5c83");
+      const char* edge = axis == 'X' ? (darkTheme ? "#68413e" : "#e1c6c3")
+          : axis == 'Y' ? (darkTheme ? "#3b5b45" : "#c5d8ca")
+                        : (darkTheme ? "#3b506a" : "#c4d0df");
+      badge->setStyleSheet(QString("background:%1; color:%2; border:1px solid %3; border-radius:3px; font-weight:600;")
+                               .arg(background, color, edge));
       fieldRow->addWidget(badge);
     }
     fieldRow->addWidget(field, 1);
@@ -242,7 +311,11 @@ void EditorWindow::RefreshProperties() {
   auto readOnly = [&](QVBoxLayout* grid, const QString& label, const QString& value, const char* name) {
     auto* text = new QLabel(value, body);
     text->setObjectName(name);
+    text->setProperty("propertiesReadOnly", true);
     text->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    text->setToolTip("Calculated value · read-only");
+    text->setStyleSheet(QString("color:%1; font-weight:500;")
+        .arg(darkTheme ? "#b6c0c6" : "#46515a"));
     addRow(grid, label, text);
   };
 
@@ -322,7 +395,7 @@ void EditorWindow::RefreshProperties() {
 
     QStringList colors; int colorIndex = -1;
     for (int i = 0; i < kNamedColorCount; ++i) {
-      colors.append(kNamedColors[i].storage);
+    colors.append(kNamedColors[i].storage);
       if (!general.colorMixed && CadColorStorageMatches(general.color, kNamedColors[i].storage)) colorIndex = i;
     }
     if (!general.colorMixed && colorIndex < 0 && !general.color.empty()) { colors.append(Text(general.color)); colorIndex = colors.size() - 1; }
@@ -337,6 +410,8 @@ void EditorWindow::RefreshProperties() {
       if (CadApplyColorToSelection(m_State, storage) > 0) m_Log.push_back("COLOR — set to " + storage + ".");
       finish({});
     });
+    for (int i = 0; i < kNamedColorCount; ++i)
+      color->setItemText(i + (general.colorMixed ? 1 : 0), kNamedColors[i].label);
     for (int i = 0; i < color->count(); ++i) {
       const int named = i - (general.colorMixed ? 1 : 0);
       if (named >= 0 && named < kNamedColorCount && !none) {
@@ -770,4 +845,5 @@ void EditorWindow::RefreshProperties() {
 
   if (auto* old = m_PropertiesScroll->takeWidget()) old->deleteLater();
   m_PropertiesScroll->setWidget(body);
+  static_cast<AdaptivePropertiesScrollArea*>(m_PropertiesScroll)->UpdateRowWidths();
 }

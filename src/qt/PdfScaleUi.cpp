@@ -19,6 +19,7 @@
 #include <QDebug>
 #include <QDialog>
 #include <QDoubleSpinBox>
+#include <QEvent>
 #include <QFontMetrics>
 #include <QFormLayout>
 #include <QFrame>
@@ -43,6 +44,7 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <utility>
 
 using namespace pdfview;
 
@@ -51,12 +53,15 @@ namespace {
 QString Q(const std::string& text) { return QString::fromUtf8(text.c_str()); }
 
 // Dialog text colours on the deep navy surface.
-QString BadText() { return "#ff7b72"; }
-QString WarnText() { return "#f5b73a"; }
-QString GoodText() { return "#5fe08a"; }
+QString BadText() { return qApp->property("cadLightTheme").toBool() ? "#b42318" : "#ff7b72"; }
+QString WarnText() { return qApp->property("cadLightTheme").toBool() ? "#7a5800" : "#f5b73a"; }
+QString GoodText() { return qApp->property("cadLightTheme").toBool() ? "#1e7d32" : "#5fe08a"; }
 // The colour of a verdict on the white sheet.
 QColor SheetColor(Verdict verdict) {
-  return verdict == Verdict::Good ? QColor("#2e9e4d") : verdict == Verdict::Check ? QColor("#c98a0a") : QColor("#d23a32");
+  const bool light = qApp->property("cadLightTheme").toBool();
+  return verdict == Verdict::Good ? QColor(light ? "#1e7d32" : "#2e9e4d")
+      : verdict == Verdict::Check ? QColor(light ? "#7a5800" : "#c98a0a")
+                                  : QColor(light ? "#b42318" : "#d23a32");
 }
 // The colour of a verdict in a dialog (brighter on the dark one).
 QColor VerdictColor(Verdict verdict) {
@@ -161,12 +166,13 @@ QTableWidget* MakeTable(QWidget* parent, const char* name, const QStringList& he
 
 // The look of the scale dialogs, using the application graphite palette.
 QString DialogStyle() {
-  return QtApplyAccent(QString(
+  const bool dark = !qApp->property("cadLightTheme").toBool();
+  QString style = QString(
       "QRadioButton::indicator{width:14px;height:14px;border-radius:8px;border:2px solid #59646a;background:#171b1e;}"
       "QRadioButton::indicator:checked{border:2px solid @strong@;background:qradialgradient(cx:0.5,cy:0.5,radius:0.5,fx:0.5,fy:0.5,"
       "stop:0 @strong@,stop:0.5 @strong@,stop:0.6 #171b1e,stop:1 #171b1e);}"
       "QCheckBox::indicator{width:15px;height:15px;border:2px solid #59646a;border-radius:3px;background:#171b1e;}"
-      "QCheckBox::indicator:checked{background:@strong@;border-color:@strong@;}"
+      "QCheckBox::indicator:checked{background:@strong@;border-color:@strong@;image:url(@checkmark@);}"
       "QDialog{background:#22272b;} QLabel{color:#e8eef9;} QLabel:disabled{color:#9aa5aa;} QCheckBox,QRadioButton{color:#e8eef9;}"
       "QGroupBox{background:#292f34;border:1px solid #3c444a;border-radius:8px;margin-top:14px;padding:10px;color:#e8eef9;}"
       "QGroupBox::title{subcontrol-origin:margin;left:12px;padding:0 6px;color:@strong@;font-weight:600;}"
@@ -174,17 +180,47 @@ QString DialogStyle() {
       "QPushButton:hover{background:#3a4247;} QPushButton:disabled{color:#899398;background:#242a2f;}"
       "QPushButton:default{background:@fill@;color:white;border-color:@strong@;font-weight:600;}"
       "QLineEdit,QDoubleSpinBox,QSpinBox,QComboBox{background:#171b1e;border:1px solid #41494e;border-radius:4px;padding:3px 6px;color:#fff;}"
+      "QLineEdit:focus,QDoubleSpinBox:focus,QSpinBox:focus,QComboBox:focus{border:1px solid @strong@;}"
       "QComboBox QAbstractItemView{background:#171b1e;color:#fff;selection-background-color:@fill@;}"
       "QTableWidget{background:#22272b;alternate-background-color:#292f34;border:1px solid #3c444a;color:#cfd8da;"
       "selection-background-color:@tint@;selection-color:white;}"
       "QHeaderView::section{background:#30373c;color:#e8eef9;padding:5px 8px;border:0;border-right:1px solid #41494e;font-weight:600;}"
       "QTabWidget::pane{border:1px solid #3c444a;background:#22272b;} QTabBar::tab{padding:7px 16px;background:#292f34;color:#cfd8da;"
       "border-top-left-radius:6px;border-top-right-radius:6px;margin-right:2px;}"
-      "QTabBar::tab:selected{background:#30373c;color:white;border-bottom:2px solid @strong@;font-weight:600;}"), true);
+      "QTabBar::tab:selected{background:#30373c;color:white;border-bottom:2px solid @strong@;font-weight:600;}");
+  if (!dark) {
+    const std::pair<const char*, const char*> colors[] = {
+        {"#59646a", "#aebbc8"}, {"#171b1e", "#ffffff"}, {"#22272b", "#f0f3f6"},
+        {"#e8eef9", "#202b36"}, {"#9aa5aa", "#687786"}, {"#292f34", "#e1e8ee"},
+        {"#3c444a", "#bdc8d3"}, {"#30373c", "#e1e8ee"}, {"#41494e", "#aebbc8"},
+        {"#3a4247", "#d3dde7"}, {"#899398", "#687786"}, {"#242a2f", "#e7ebef"},
+        {"#cfd8da", "#303f4e"}, {"#fff;", "#202b36;"},
+    };
+    for (const auto& [from, to] : colors) style.replace(QString::fromLatin1(from), QString::fromLatin1(to));
+  }
+  style.replace("@checkmark@", QCoreApplication::applicationDirPath() + "/resources/icons/checkmark_white.svg");
+  style += QtInputSubcontrolStyle(dark);
+  return QtApplyAccent(style, dark);
 }
 
 void StyleDialog(QDialog& dialog, QVBoxLayout* layout) {
   dialog.setStyleSheet(DialogStyle());
+  class PaletteRefreshFilter final : public QObject {
+   public:
+    explicit PaletteRefreshFilter(QObject* parent) : QObject(parent) {}
+   protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+      if (!m_Updating && (event->type() == QEvent::ApplicationPaletteChange || event->type() == QEvent::StyleChange)) {
+        m_Updating = true;
+        if (auto* dialog = qobject_cast<QDialog*>(watched)) dialog->setStyleSheet(DialogStyle());
+        m_Updating = false;
+      }
+      return QObject::eventFilter(watched, event);
+    }
+   private:
+    bool m_Updating = false;
+  };
+  dialog.installEventFilter(new PaletteRefreshFilter(&dialog));
   layout->setSpacing(10);
 }
 
@@ -630,7 +666,7 @@ void PdfScaleDialogs::SetScale(PdfWindow& w) {
   auto* layout = new QVBoxLayout(&dialog);
   StyleDialog(dialog, layout);
   const PageScale* current = w.EffectiveScale(page);
-  auto* now = new QLabel(QString("Page %1 now: %2").arg(page + 1).arg(current ? Q(current->RatioText()) : QString("unscaled")), &dialog);
+  auto* now = new QLabel(QString("Current scale (page %1): %2").arg(page + 1).arg(current ? Q(current->RatioText()) : QString("Unscaled")), &dialog);
   now->setObjectName("pdfSetScaleCurrent");
   layout->addWidget(now);
 
@@ -685,6 +721,34 @@ void PdfScaleDialogs::SetScale(PdfWindow& w) {
   typedRow->addWidget(realUnit);
   typedRow->addWidget(new QLabel("in reality", typed));
   layout->addWidget(typed);
+  auto* preview = new QLabel(&dialog);
+  preview->setObjectName("pdfScalePreview");
+  preview->setWordWrap(true);
+  layout->addWidget(preview);
+  auto updatePreview = [&] {
+    if (presetMode->isChecked()) {
+      const int index = std::clamp(presets->currentData(Qt::UserRole).toInt(), 0, static_cast<int>(list.size()) - 1);
+      preview->setText("Preview: " + Q(list[static_cast<std::size_t>(index)].label));
+    } else {
+      const auto unitLabel = [](QString unit, double amount) {
+        if (qFuzzyCompare(amount + 1.0, 2.0)) return unit;
+        if (unit == "foot") return QString("feet");
+        if (unit == "inch") return QString("inches");
+        if (unit == "meter") return QString("meters");
+        return unit;
+      };
+      preview->setText(QString("Preview: %1 %2 on sheet = %3 %4 in reality")
+          .arg(pageValue->value(), 0, 'g', 6).arg(unitLabel(pageUnit->currentText(), pageValue->value()))
+          .arg(realValue->value(), 0, 'g', 6).arg(unitLabel(realUnit->currentText(), realValue->value())));
+    }
+  };
+  QObject::connect(presetMode, &QRadioButton::toggled, &dialog, updatePreview);
+  QObject::connect(presets, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, updatePreview);
+  QObject::connect(pageValue, qOverload<double>(&QDoubleSpinBox::valueChanged), &dialog, updatePreview);
+  QObject::connect(realValue, qOverload<double>(&QDoubleSpinBox::valueChanged), &dialog, updatePreview);
+  QObject::connect(pageUnit, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, updatePreview);
+  QObject::connect(realUnit, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, updatePreview);
+  updatePreview();
   auto syncMode = [&] { presets->setVisible(presetMode->isChecked()); typed->setVisible(typedMode->isChecked()); };
   QObject::connect(presetMode, &QRadioButton::toggled, &dialog, syncMode);
   syncMode();
@@ -701,6 +765,7 @@ void PdfScaleDialogs::SetScale(PdfWindow& w) {
   calibrate->setObjectName("pdfScaleCalibrate");
   auto* clear = new QPushButton("Clear scale", &dialog);
   clear->setObjectName("pdfScaleClear");
+  clear->setEnabled(current != nullptr);
   auto* cancel = new QPushButton("Cancel", &dialog);
   cancel->setObjectName("pdfScaleCancel");
   for (auto* button : {apply, calibrate, clear, cancel}) buttons->addWidget(button);

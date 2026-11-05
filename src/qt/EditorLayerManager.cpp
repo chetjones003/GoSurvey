@@ -13,6 +13,7 @@
 #include <QCursor>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QEvent>
 #include <QFont>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -27,6 +28,7 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QStyle>
 #include <QStyledItemDelegate>
 #include <QTableWidget>
 #include <QVBoxLayout>
@@ -34,6 +36,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <numeric>
 #include <string>
@@ -48,6 +51,52 @@ constexpr const char* kHeaders[ColumnCount] = {"Name", "On", "Frozen", "Locked",
 constexpr int kColumnWidth[ColumnCount] = {200, 56, 70, 70, 130, 170, 130, 90, 130};
 constexpr int kRowHeight = 36;
 constexpr QSize kSwatch{30, 16};
+
+class PaletteRefreshFilter final : public QObject {
+ public:
+  PaletteRefreshFilter(QObject* parent, std::function<void()> refresh) : QObject(parent), m_Refresh(std::move(refresh)) {}
+ protected:
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (!m_Updating && (event->type() == QEvent::ApplicationPaletteChange || event->type() == QEvent::StyleChange)) {
+      m_Updating = true;
+      m_Refresh();
+      m_Updating = false;
+    }
+    return QObject::eventFilter(watched, event);
+  }
+ private:
+  std::function<void()> m_Refresh;
+  bool m_Updating = false;
+};
+
+QString LayerManagerStyle(bool dark) {
+  QString style = QtApplyAccent(
+      "QLabel#layerManagerTitle { font-size:17px; font-weight:600; }"
+      "QLabel#layerManagerSubtitle, QLabel#layerManagerHint { color:@quiet@; }",
+      dark) + (dark ? QString("QPushButton:disabled { color:#89979a; background:#242a2f; border:1px solid #343c41; }")
+                    : QString("QPushButton:disabled { color:#68727b; background:#edf0f2; border:1px solid #cbd2d8; }")) +
+      (dark ? QString() : QString("QLabel#layerManagerSubtitle, QLabel#layerManagerHint { color:#3f4952; }")) +
+      QtApplyAccent(
+      "QLabel#layerManagerCurrent { font-weight:600; }"
+      "QPushButton[primary=\"true\"] { background:@fill@; color:white; font-weight:600; padding:6px 16px; border:0; border-radius:4px; }"
+      "QPushButton[primary=\"true\"]:hover { background:@fillHover@; }"
+      "QPushButton:disabled { color:palette(placeholder-text); background:palette(alternate-base); border-color:palette(midlight); }"
+      "QPushButton[primary=\"true\"]:disabled { color:palette(placeholder-text); background:palette(alternate-base); }"
+      "QTableWidget { border:1px solid palette(midlight); border-radius:6px; background:palette(base); outline:0; }"
+      "QTableWidget::item { padding:0 12px; border-bottom:1px solid palette(midlight); }"
+      "QTableWidget::item:hover { background:palette(alternate-base); }"
+      "QTableWidget::item:selected { background:palette(alternate-base); color:palette(text); }"
+      "QTableWidget QLineEdit { border:1px solid palette(mid); border-radius:3px; padding:0 4px; }"
+      "QTableWidget QLineEdit:focus { border:1px solid @strong@; }"
+      "QHeaderView { background:palette(base); }"
+      "QHeaderView::section { background:palette(base); color:palette(placeholder-text); font-weight:600; padding:8px 12px; "
+      "border:0; border-bottom:1px solid palette(mid); }"
+      "QHeaderView::section:hover { color:palette(text); }", dark);
+  style += dark
+      ? "QPushButton:disabled { color:#7e898f; background:#252a2e; border:1px solid #3d454a; }"
+      : "QPushButton:disabled { color:#535f68; background:#e1e6ea; border:1px solid #aeb8c1; }";
+  return style;
+}
 
 QString FromUtf8(const std::string& value) { return QString::fromUtf8(value.c_str()); }
 std::string ToUtf8(const QString& value) { return value.toUtf8().toStdString(); }
@@ -85,15 +134,22 @@ QPixmap LinetypeSample(const std::string& linetype, qreal ratio, const QColor& i
   return pixmap;
 }
 
-/// Name cells: the current layer gets a slim accent bar on its left edge instead of a loud row fill.
+/// Name cells: the current layer gets a quiet theme-aware tint and a clear accent bar.
 class NameDelegate : public QStyledItemDelegate {
 public:
   explicit NameDelegate(QObject* parent) : QStyledItemDelegate(parent) {}
   void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
-    QStyledItemDelegate::paint(painter, option, index);
-    if (!index.data(Qt::UserRole + 1).toBool()) return;
+    const bool isCurrent = index.data(Qt::UserRole + 1).toBool();
     const bool dark = option.palette.color(QPalette::Base).lightness() < 128;
-    painter->fillRect(QRect(option.rect.left(), option.rect.top() + 6, 3, option.rect.height() - 12), QColor(QtAccentFor(dark).strong));
+    QStyleOptionViewItem styled = option;
+    if (isCurrent && !(option.state & QStyle::State_Selected)) {
+      QColor tint(QtAccentFor(dark).fill);
+      tint.setAlpha(dark ? 34 : 42);
+      styled.backgroundBrush = tint;
+    }
+    QStyledItemDelegate::paint(painter, styled, index);
+    if (isCurrent)
+      painter->fillRect(QRect(option.rect.left(), option.rect.top() + 5, 4, option.rect.height() - 10), QColor(QtAccentFor(dark).strong));
   }
 };
 
@@ -174,24 +230,10 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
   dialog.setObjectName("layerManager");
   dialog.setWindowTitle("Layer Properties Manager");
   dialog.setSizeGripEnabled(true);
-  dialog.resize(980, 580);
+  dialog.resize(1040, std::clamp(240 + static_cast<int>(state.drawingLayerTable.size()) * kRowHeight, 360, 580));
   dialog.setMinimumSize(560, 320);
-  const bool dark = dialog.palette().color(QPalette::Window).lightness() < 128;
-  dialog.setStyleSheet(QtApplyAccent(
-      "QLabel#layerManagerTitle { font-size:17px; font-weight:600; }"
-      "QLabel#layerManagerSubtitle, QLabel#layerManagerHint { color:@quiet@; }"
-      "QLabel#layerManagerCurrent { font-weight:600; }"
-      "QPushButton[primary=\"true\"] { background:@fill@; color:white; font-weight:600; padding:6px 16px; border:0; border-radius:4px; }"
-      "QPushButton[primary=\"true\"]:hover { background:@fillHover@; }"
-      "QTableWidget { border:1px solid palette(midlight); border-radius:6px; background:palette(base); outline:0; }"
-      "QTableWidget::item { padding:0 12px; border-bottom:1px solid palette(midlight); }"
-      "QTableWidget::item:hover { background:palette(alternate-base); }"
-      "QTableWidget::item:selected { background:palette(alternate-base); color:palette(text); }"
-      "QTableWidget QLineEdit { border:1px solid palette(mid); border-radius:3px; padding:0 4px; }"
-      "QHeaderView { background:palette(base); }"
-      "QHeaderView::section { background:palette(base); color:palette(placeholder-text); font-weight:600; padding:8px 12px; "
-      "border:0; border-bottom:1px solid palette(mid); }"
-      "QHeaderView::section:hover { color:palette(text); }", dark));
+  bool dark = dialog.palette().color(QPalette::Window).lightness() < 128;
+  dialog.setStyleSheet(LayerManagerStyle(dark));
 
   auto* layout = new QVBoxLayout(&dialog);
   layout->setContentsMargins(20, 16, 20, 14);
@@ -217,17 +259,39 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
   toolbar->addWidget(add); toolbar->addWidget(erase); toolbar->addWidget(current); toolbar->addStretch(); toolbar->addWidget(currentLabel);
   layout->addLayout(toolbar);
 
+  auto* filter = new QLineEdit(&dialog);
+  filter->setObjectName("layerManagerFilter");
+  filter->setPlaceholderText("Filter layers by name");
+  filter->setAccessibleName("Filter layers");
+  auto* filterIcon = filter->addAction(
+      QIcon(QtAsset(dark ? "icons/search_dark.svg" : "icons/search_light.svg")), QLineEdit::LeadingPosition);
+  filterIcon->setObjectName("layerManagerFilterIcon");
+  auto* clearFilter = filter->addAction(dialog.style()->standardIcon(QStyle::SP_LineEditClearButton), QLineEdit::TrailingPosition);
+  clearFilter->setObjectName("layerManagerFilterClear");
+  clearFilter->setVisible(false);
+  QObject::connect(clearFilter, &QAction::triggered, filter, &QLineEdit::clear);
+  QObject::connect(filter, &QLineEdit::textChanged, clearFilter, [clearFilter](const QString& text) {
+    clearFilter->setVisible(!text.isEmpty());
+  });
+  layout->addWidget(filter);
+
   auto* table = new QTableWidget(&dialog);
   table->setObjectName("layerTable");
   table->setColumnCount(ColumnCount);
   QStringList headers;
   for (const char* header : kHeaders) headers << header;
   table->setHorizontalHeaderLabels(headers);
+  for (int column = 0; column < ColumnCount; ++column) {
+    const bool dataColumn = column == Name || column == Color || column == Linetype || column == Lineweight;
+    table->horizontalHeaderItem(column)->setTextAlignment(
+        (dataColumn ? Qt::AlignLeft : Qt::AlignHCenter) | Qt::AlignVCenter);
+  }
   table->setSelectionBehavior(QAbstractItemView::SelectRows);
   table->setSelectionMode(QAbstractItemView::SingleSelection);
   table->setAlternatingRowColors(false);
   table->setItemDelegateForColumn(Name, new NameDelegate(table));
   table->setShowGrid(false);
+  table->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   table->setIconSize(QSize(56, kSwatch.height()));
   table->setItemDelegateForColumn(On, new CheckBoxDelegate(table));
   table->setItemDelegateForColumn(Frozen, new CheckBoxDelegate(table));
@@ -248,6 +312,17 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
   header->setSectionResizeMode(Name, QHeaderView::Stretch);  // the Name column takes the width the others leave
   for (int column = 0; column < ColumnCount; ++column) if (column != Name) header->resizeSection(column, kColumnWidth[column]);
   layout->addWidget(table, 1);
+  auto fitVisibleRows = [&] {
+    int visibleRows = 0;
+    for (int row = 0; row < table->rowCount(); ++row) visibleRows += table->isRowHidden(row) ? 0 : 1;
+    const int rowCount = std::min(visibleRows, 8);
+    table->setFixedHeight(header->sizeHint().height() + 4 + rowCount * kRowHeight);
+  };
+  auto* noMatches = new QLabel("No layers match this search.", &dialog);
+  noMatches->setObjectName("layerManagerNoMatches");
+  noMatches->setAlignment(Qt::AlignCenter);
+  noMatches->hide();
+  layout->addWidget(noMatches);
 
   auto* hint = new QLabel("Click a column heading to sort. Right-click a heading to show or hide columns, or drag it to reorder.", &dialog);
   hint->setObjectName("layerManagerHint");
@@ -259,10 +334,10 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
   int sortColumn = -1;
   Qt::SortOrder sortOrder = Qt::AscendingOrder;
   const qreal ratio = dialog.devicePixelRatioF();
-  const QColor outline = dialog.palette().color(QPalette::Mid);
-  const QColor ink = dialog.palette().color(QPalette::Text);
-
   auto populate = [&] {
+    dark = dialog.palette().color(QPalette::Window).lightness() < 128;
+    const QColor outline = dark ? QColor("#59636b") : QColor("#66727d");
+    const QColor ink = dark ? QColor("#e2e6ea") : QColor("#414b54");
     const QSignalBlocker blocker(table);
     std::string selected;
     if (table->currentRow() >= 0 && table->item(table->currentRow(), Name))
@@ -302,7 +377,8 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
       color->setData(Qt::DecorationRole, ColorSwatch(layer.color, ratio, outline));
       auto* linetype = put(Linetype, new QTableWidgetItem(FromUtf8(layer.linetype)));
       linetype->setData(Qt::DecorationRole, LinetypeSample(layer.linetype, ratio, ink));
-      put(Lineweight, new QTableWidgetItem(QString::number(layer.lineweightMm)));
+      put(Lineweight, new QTableWidgetItem(layer.lineweightMm < 0.f
+          ? QString("Default") : QString::number(layer.lineweightMm, 'g', 4)));
       if (viewport) {
         toggle(VpFreeze, IsLayerFrozenInViewport(*viewport, layer.name));
         const std::string* vpOverride = ViewportLayerColorOverride(*viewport, layer.name);
@@ -310,17 +386,68 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
         if (vpOverride) vpColor->setData(Qt::DecorationRole, ColorSwatch(*vpOverride, ratio, outline));
       }
     }
+    const QString filterText = filter->text().trimmed();
+    bool anyVisible = false;
+    for (int row = 0; row < table->rowCount(); ++row) {
+      table->setRowHidden(row, !filterText.isEmpty() && !table->item(row, Name)->text().contains(filterText, Qt::CaseInsensitive));
+      anyVisible |= !table->isRowHidden(row);
+    }
+    noMatches->setVisible(!filterText.isEmpty() && !anyVisible);
+    fitVisibleRows();
     if (selectedRow >= 0) table->setCurrentCell(selectedRow, Name);
-    subtitle->setText(QString("%1 layer%2").arg(state.drawingLayerTable.size()).arg(state.drawingLayerTable.size() == 1 ? "" : "s")
-                      + (viewport ? "  ·  editing the VP columns for the current viewport" : QString()));
+    int visibleCount = 0;
+    for (int row = 0; row < table->rowCount(); ++row) visibleCount += table->isRowHidden(row) ? 0 : 1;
+    const int totalCount = static_cast<int>(state.drawingLayerTable.size());
+    const QString countText = filterText.isEmpty()
+        ? QString("%1 layer%2").arg(totalCount).arg(totalCount == 1 ? "" : "s")
+        : QString("%1 of %2 layers").arg(visibleCount).arg(totalCount);
+    subtitle->setText(countText + (viewport ? "  ·  editing the VP columns for the current viewport" : QString()));
     currentLabel->setText("Current layer: " + FromUtf8(state.currentLayer));
   };
   populate();
+  auto* appearanceFilter = new PaletteRefreshFilter(&dialog, [&] {
+    dark = dialog.palette().color(QPalette::Window).lightness() < 128;
+    dialog.setStyleSheet(LayerManagerStyle(dark));
+    filterIcon->setIcon(QIcon(QtAsset(dark ? "icons/search_dark.svg" : "icons/search_light.svg")));
+    populate();
+  });
+  dialog.installEventFilter(appearanceFilter);
 
   auto selectedLayerName = [&]() -> std::string {
     const int row = table->currentRow();
     return row < 0 || !table->item(row, Name) ? std::string() : ToUtf8(table->item(row, Name)->data(Qt::UserRole).toString());
   };
+
+  auto updateSelectionActions = [&] {
+    const bool hasSelection = table->selectionModel()->hasSelection() && table->currentRow() >= 0 &&
+                              !table->isRowHidden(table->currentRow());
+    erase->setEnabled(hasSelection);
+    current->setEnabled(hasSelection && selectedLayerName() != state.currentLayer);
+  };
+  QObject::connect(table->selectionModel(), &QItemSelectionModel::currentRowChanged, &dialog,
+                   [&](const QModelIndex&, const QModelIndex&) { updateSelectionActions(); });
+  QObject::connect(filter, &QLineEdit::textChanged, &dialog, [&](const QString&) {
+    const int row = table->currentRow();
+    if (row >= 0 && table->isRowHidden(row)) table->clearSelection();
+    for (int i = 0; i < table->rowCount(); ++i)
+      table->setRowHidden(i, !filter->text().trimmed().isEmpty() &&
+                             !table->item(i, Name)->text().contains(filter->text().trimmed(), Qt::CaseInsensitive));
+    bool anyVisible = false;
+    for (int i = 0; i < table->rowCount(); ++i) anyVisible |= !table->isRowHidden(i);
+    noMatches->setVisible(!filter->text().trimmed().isEmpty() && !anyVisible);
+    fitVisibleRows();
+    layout->activate();
+    dialog.resize(dialog.width(), std::clamp(layout->sizeHint().height(), 320, 580));
+    int visibleCount = 0;
+    for (int i = 0; i < table->rowCount(); ++i) visibleCount += table->isRowHidden(i) ? 0 : 1;
+    const int totalCount = table->rowCount();
+    const QString countText = filter->text().trimmed().isEmpty()
+        ? QString("%1 layer%2").arg(totalCount).arg(totalCount == 1 ? "" : "s")
+        : QString("%1 of %2 layers").arg(visibleCount).arg(totalCount);
+    subtitle->setText(countText + (CurrentViewport(state) ? "  ·  editing the VP columns for the current viewport" : QString()));
+    updateSelectionActions();
+  });
+  updateSelectionActions();
 
   QObject::connect(header, &QHeaderView::sortIndicatorChanged, &dialog, [&](int column, Qt::SortOrder order) {
     sortColumn = column; sortOrder = order; populate();
@@ -382,9 +509,14 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
       if (column == Color) valid = CadColorStorageFromTyped(ToUtf8(item->text()), &next.color) && next.color != "ByLayer";
       if (column == Linetype) { next.linetype = ToUtf8(item->text().trimmed()); valid = !next.linetype.empty(); }
       if (column == Lineweight) {
-        const double value = item->text().toDouble(&valid);
-        valid = valid && std::isfinite(value) && value >= -1 && value <= 10;
-        next.lineweightMm = static_cast<float>(value);
+        const QString text = item->text().trimmed();
+        if (text.compare("Default", Qt::CaseInsensitive) == 0 || text == "-1") {
+          next.lineweightMm = -1.f;
+        } else {
+          const double value = text.toDouble(&valid);
+          valid = valid && std::isfinite(value) && value >= -1 && value <= 10;
+          if (valid) next.lineweightMm = static_cast<float>(value);
+        }
       }
       if (valid) { PushUndoSnapshot(state, "Layer property"); *found = std::move(next); BumpCadGpuCache(state); }
       else QMessageBox::warning(&dialog, "Layer property", "Enter a valid color, linetype, or lineweight (-1 for default).");

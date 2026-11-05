@@ -213,6 +213,11 @@ jobs:
             }
           }
 
+      - name: Prepare hosted display for Qt tests
+        if: runner.environment != 'self-hosted'
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: ./tools/prepare-qt-test-display.ps1
+
       - name: Test (CTest)
         # Hosted jobs use app-local Mesa; the laptop uses its validated native graphics driver.
         env:

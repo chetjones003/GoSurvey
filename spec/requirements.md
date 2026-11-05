@@ -12936,7 +12936,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   1. **Surfaces.** The Qt **Dark** appearance uses graphite surfaces throughout the application: the Start page, drawing workspace and canvas ground/grid, shell chrome, menus, and Qt-owned dialogs and panels.
   2. **Primary accent.** In both the **Dark** and **Light** appearances, the primary accent — the colour of active and interactive states in Qt application chrome (selected and hovered controls, pressed and checked buttons, focus rings, selected rows and tabs, links, the application-menu button, checked radio/check indicators, progress and highlight fills) — is the **topo-line amber**: the hue of the amber contours in the topographic artwork (`src/qt/TopographicArtwork.hpp`, RGB 185,100,12, hue about 30 degrees). Each appearance picks its own lightness and saturation of that hue so text on it and the control itself stay readable; the hue is the same in both. Aqua and the Light appearance's light-blue/Windows-blue accent no longer appear as a primary accent in Qt chrome.
   3. **Secondary emphasis.** Secondary emphasis (informational notes, "recommended"/tag labels, secondary cards, quiet detail) uses a calm neutral tone (soft grey-blue in Dark, grey in Light), never the primary amber, so "active" and "secondary" remain distinguishable. Warnings keep a distinct warning look that is readable in both appearances and is not mistaken for an active state.
-  4. **Unchanged.** The ImGui frontend, drawing entities, entity colors, the default crosshair colour (REQ-450), the Dark canvas ground and its grid colouring, and persisted drawing data are unchanged. Light surfaces (non-accent colours) are unchanged except for the Qt drawing-workspace chrome treatment explicitly accepted by D-2026-10-28-b / issue #1041 and the document-tab treatment in clause 5.
+  4. **Unchanged.** The ImGui frontend, drawing entities, entity colors, the default crosshair colour (REQ-450), the Dark canvas ground and its grid colouring, and persisted drawing data are unchanged. Light retains its nanoCAD classic identity; non-accent surface and control refinements are allowed under REQ-491, while the drawing-workspace chrome and document-tab behavior remain governed by D-2026-10-28-b and clause 5.
   5. **Document tabs (user direction 2026-10-30).** Start and drawing tabs have trapezoid outlines with sloping sides, visible separation from adjacent tabs and the strip behind them, and readable labels in both appearances. The active tab has a lighter fill and the existing amber indicator. Start remains unclosable; drawing close controls, the new-drawing button, keyboard navigation and overflow scrolling remain usable. Ribbon tabs retain their existing treatment.
 - Acceptance:
   - Start, drawing workspace, menus, and representative Qt dialogs render with the topo-line amber for active, hover, pressed, checked, focus and selected states in Dark and in Light; no aqua (`#55d8d0`/`#168e8a` family) or light/Windows blue (`#0078d7`/`#438fda`/`#0878c5` family) remains as a primary accent in `QtAppearance.cpp`, `EditorSurfaceUi.hpp`, the Start page, or the dialogs that carried their own accent colours.
@@ -14995,6 +14995,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | Requirement | Layer | Test(s) | Status |
 |-------------|-------|---------|--------|
 | REQ-490 | Commands/Domain/Qt Renderer/IO | `[req490]` MVIEW Fit full-sheet rectangle; 2/3/4 fixed tilings; closed-polyline clipping including cancellation/refusal, undo/redo, render/plot clipping, and DWG/DXF round-trip | accepted |
+| REQ-491 | Qt UI/Viewport | TASK-1109 all-surface Dark/Light review, responsive editor and input states, empty states, workflow preservation, and screenshot evidence | accepted |
 | REQ-489 | Commands/Domain/Qt UI/IO | `[req489]` full layout duplication from tab menu and `LAYOUT COPY`; unchanged source/current layout; name collision refusal; undo/redo and DWG/DXF round-trip | accepted |
 | REQ-482 | Commands/Domain/Qt Renderer/Plot/IO | `[req482]` viewport on/off, display lock, hide-plot, and DWG/DXF round-trip | accepted |
 | REQ-483 | Commands/Domain | `[req483]` paper-space ARRAY and active-layout-only OVERKILL with isolation and undo coverage | accepted |
@@ -16187,6 +16188,35 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Evidence: #810 identifies the DWF/PDF Export button but supplies no acceptance criteria. REQ-029/030 and ADR-007 establish the existing vector PDF plot path; REQ-445 and REQ-485 supply saved placement and CTB/STB behavior. The Output-tab Plot action already selects a PDF path and calls `PlotLayoutsToPdf`. The plotter writes directly to a destination, so this UI route will stage its result and publish it only after success to satisfy the no-partial-final-file acceptance condition. Civil 3D is unavailable, and no DWF or PC3 backend exists.
 - Status: accepted (2026-11-04, user confirmed the feature request; D-2026-11-04-h).
 
+
+### REQ-491 — Usable and visually consistent Qt UI across major surfaces
+- Purpose: GOAL-001 — help surveyors find controls, navigate the drawing workspace, and read the interface across principal Qt workflows.
+- Priority: should
+- Type: quality (usability and appearance)
+- Decision: D-2026-11-03-a. This requirement covers the Qt frontend, matching the Round 1 review scope; the ImGui frontend is unchanged.
+- Depends on: REQ-081 (Dark shell), REQ-302 (ribbon), REQ-427 (Qt minimum-width and resize behavior), and REQ-436 (Qt theme identity and accents).
+- Statement:
+  1. **Surfaces.** Apply a coherent usability and visual hierarchy to the Qt Start page; main editor and drawing-area layout (ribbon, Properties, Toolspace, command and status areas); and principal Qt windows/dialogs (application Settings, Project/Drawing Settings, Layer Manager, Adjustment, and PDF Viewer). Existing surface-specific behavior requirements remain authoritative.
+  2. **Two appearances.** Dark retains the graphite surfaces and topo-line amber accent governed by REQ-436 and the separation, elevation, and contrast rules in REQ-081. Light retains its nanoCAD classic identity and the shared topo-line amber active accent from REQ-436; non-accent surfaces and control styling may be refined for legibility and consistency. Both appearances have visibly distinct text, active, hover, focus, disabled, and selected states.
+  3. **Responsive drawing workspace.** At the supported minimum width and during resize (REQ-427), the drawing viewport remains visible and gains usable space through responsive panel/ribbon layout. The command entry and message area remain usable and their primary content is not clipped. Every existing command remains reachable; if a control cannot fit inline, it remains available through the existing overflow/collapsed-panel mechanisms. Contextual controls remain accessible while their command or selected object is active.
+  4. **Readable controls and states.** Primary and secondary text, control boundaries, and active states remain legible in both appearances and meet the applicable contrast limits in REQ-081 and REQ-436. Controls with no available action remain visibly disabled and explain why through their established tooltip behavior (REQ-084).
+  5. **Empty states and dialog content.** Empty states state what is absent and, where an action can resolve the state, how to proceed. An empty Properties view does not spend a full panel rendering disabled blank values. Principal dialogs present their controls and explanatory text without clipping, duplicated headings, raw internal enum values, or redundant repeated values that obscure the task.
+  6. **Command preservation.** Existing commands and workflows remain available. An exact duplicate control for the same action may be removed, but distinct context-specific routes are preserved. No command semantics, drawing data, entity colors, selection, snapping, or undo behavior change as part of this quality requirement.
+  7. **Visual review.** For each major affected surface, present 2–3 integrated visual options, apply the user's selected direction, and show the final meaningful states in the T3 visualizer. Capture final Qt screenshots for both appearances, normal and empty/selected states as applicable, and the supported minimum-width editor under `build/artifacts/`.
+- Acceptance:
+  - Qt captures at the same dimensions/state as the Round 1 minimum-width editor show a wider drawing viewport than the baseline; command entry and messages are usable without their primary text being truncated, and every existing ribbon/contextual action remains reachable inline or from its overflow/collapsed control.
+  - The Start page, main editor, command/status areas, and each named principal Qt window are reviewed in Dark and Light. Each preserves the appearance identity in clause 2; active, hover, focus, disabled, and selected states are distinguishable and meet the cited contrast requirements.
+  - Empty/no-selection states communicate their state without a column of disabled blank property values; applicable empty states include a clear next action.
+  - Principal Qt dialogs/windows show complete labels, values, explanatory text, and actions without clipping or duplicate headings/raw internal values that hide their meaning.
+  - No existing command or context-specific workflow is lost. A removed control is documented in the task log as an exact duplicate of the same action, with its retained access path identified.
+  - The task log lists before/after screenshot paths for every reviewed surface and records the result of each full council round.
+- Owner-layer: Qt UI / Viewport (`src/qt/`); command, drawing, renderer, persistence, and ImGui behavior remain in their existing owners and are unchanged.
+- Status: accepted (2026-11-03) — D-2026-11-03-a.
+- Revisions: 2026-11-03 — initial. The user selected both appearances and the major Qt surfaces; only exact duplicate controls may be removed, with context-specific access preserved. Round 2 council scores remain task-level completion criteria, not product behavior. D-2026-11-03-b selects Adaptive Canvas as this task's visual direction.
+
+
+- Revisions: 2026-11-05 — D-2026-11-05-a: renumbered from REQ-456 because current beta assigns that identifier to paper-space command parity; acceptance scope and behavior are unchanged.
+
 ## Anti-requirements
 
 > Optional but valuable: things the project deliberately will **not** require.
@@ -16208,7 +16238,6 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - We do **not** require point clouds as TIN data sources (REQ-068 D4 / ADR-042).
 
 ## Alignment requirements (GitHub issue #121)
-
 > **Evidence base.** Behaviour below is modelled on the Autodesk Civil 3D 2026 User's Guide
 > (`https://help.autodesk.com/cloudhelp/2026/ENU/Civil3D-UserGuide/files/`, pages cited by GUID as
 > `[A:xxxxxxxx]` = first eight hex digits). The issue's own links were not used (unverifiable). Items the
@@ -16230,16 +16259,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
 > `acad.exe` itself holds no alignment logic (alignments live in the Civil 3D `AeccLand` module). Everything
 > marked `[M]` is observed API vocabulary; numerical behaviour remains a GoSurvey rule or an open question (see
 > "Open evidence questions" under REQ-503).
->
 > **Phasing.** The issue's six phases map to requirements as: Phase 1 = REQ-480, 481 (tangent + circular
 > curve), 483, 484, 485, 490 (Endpoint, Midpoint, PI, PC, PT, Center, Nearest subset), 495, 496, 499, 501
 > (Properties and cursor readout), 503; Phase 2 = REQ-486, 487, 488, 489; Phase 3 = REQ-481 (spirals,
 > compound/reverse spiral groups), 482; Phase 4 = REQ-490 (remaining snaps), 491, 492, 493, 494; Phase 5 =
 > REQ-497, 498, 500, 501 (COGO); Phase 6 = REQ-502. Each phase is an increment. **No code for a phase until
 > this spec is accepted and a Workshop task cites the phase's REQs.**
-
 ### REQ-480 — Alignment is a first-class horizontal-geometry drawing object
-
 - Purpose: roads, centrelines, baselines, utility and pipe routes need a mathematically defined plan path with a
   station system that other features can use (issue #121). Replaces the "alignments stay out" clause of REQ-145.
 - Priority: must
@@ -16271,12 +16297,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Domain (`src/survey` or new `src/alignment`), Commands, Qt UI, DWG IO.
 - Decision: D-2026-11-02-b / ADR-075.
 - Status: accepted (2026-11-02, user approval)
-
 ### REQ-481 — Alignment geometry entities are exact tangents, circular curves and spirals
-
 - Purpose: stationing and design on true geometry, not tessellations.
 - Priority: must (tangent, circular curve, clothoid spiral, compound, reverse); may (other spiral types)
-- Type: functional
 - Depends on: REQ-480, REQ-503.
 - Statement: An alignment is an ordered chain of entities. Every entity exposes start/end station (internal),
   start/end coordinate, start/end direction (azimuth), length, and start/end curvature.
@@ -16320,7 +16343,6 @@ capability that does not exist. They are recorded here rather than quietly dropp
      the API distinguishes `FloatOnPrev` and `FloatOnNext`, i.e. which neighbour it follows `[M]`) or Free (always tangent to the entity before and after; needs at least two other entities; cannot be attached
      to a free entity as floating) `[A:3F377231]`. Lines and spirals attach only to fixed or floating entities;
      curves-with-spirals attach only to existing fixed or floating lines `[A:89C4CB22]`.
-- Acceptance:
   1. Tangent N45°E, 500 ft from (1000,2000): end = (1353.553, 2353.553) ±1e-6; length 500.
   2. R=500, Δ=15°: T=65.8262…, L=130.8997…, C=130.5262…, E=4.3145…, M=4.2776…, PC/PI/PT lie on the two tangents
      and PC–centre–PT subtend Δ, all ±1e-6.
@@ -16332,13 +16354,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      message.
 - Owner-layer: Domain.
 - Decision: D-2026-11-02-b / ADR-075 (spiral scope: clothoid only).
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-482 — Geometric continuity (C0, C1, C2) is validated and reported
-
 - Purpose: catch broken alignments before they feed profiles or corridors.
-- Priority: must
-- Type: functional
 - Depends on: REQ-481.
 - Statement: For each consecutive pair of entities GoSurvey computes and exposes:
   **C0** (end point equals next start point within the position tolerance), **C1** (end azimuth equals next start
@@ -16347,23 +16364,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
   warning, tangent→spiral and spiral→curve are C2). Defaults: position 1e-6 drawing units, angle 1e-9 rad,
   curvature 1e-9 per unit **(GoSurvey rule)**. Violations are listed in the layout editor and in `LIST`, never
   silently repaired; the selected requirement level (C0 / C1 / C2) is an alignment property, default C1.
-- Acceptance:
   1. Tangent→simple curve is C0 and C1 and not flagged at the default level; flagged C2 only if the level is C2 and
      the junction is a spiral.
   2. Tangent→spiral→curve junction is C2; a spiral whose end radius differs from its neighbour's by >1e-9 curvature
      is flagged.
   3. A 0.001-unit gap between two entities fails C0 with the gap size in the message; compound and reverse
      curves pass C1 and (reverse curve) report the curvature sign change as informational.
-- Owner-layer: Domain.
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-483 — Stationing and station equations
-
 - Purpose: every alignment has a station domain distinct from physical distance.
-- Priority: must
-- Type: functional
 - Depends on: REQ-480, REQ-481.
-- Statement:
   1. The alignment has a configurable **reference point** and **starting station**; ending station is computed.
      Changing the reference point or reference station removes all station equations and design speeds, with a
      confirmation first `[A:B7E7615D]`.
@@ -16387,7 +16396,6 @@ capability that does not exist. They are recorded here rather than quietly dropp
   5. Station equations do not move geometry. Editing geometry recomputes internal stations and re-evaluates
      displayed stations; equations stay at their physical locations unless they fall beyond the new end, in which
      case they are removed, logged, and included in the same undo step as the edit (D-2026-11-05-e).
-- Acceptance:
   1. Start 0+00 on a 1 000-unit tangent ends 10+00.00; start 1+50 ends 11+50.00.
   2. Increasing equation: back 10+00 = ahead 12+00 at internal 1000; internal 1000 → "10+00.00" back / "12+00.00"
      ahead; internal 1500 → 17+00.
@@ -16398,16 +16406,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
   5. `12+45.32` formats from 1245.32; metric `1+245.320`; parse of every format returns the value.
   6. Changing the reference point clears equations after confirmation and not otherwise.
 - Owner-layer: Domain (+ `src/util` station formatting beside `NumFormat.hpp`).
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-484 — Alignment query API (station, offset, point, tangent, curvature)
-
 - Purpose: one reusable geometry API so commands, labels, profiles, corridors and pipes never re-derive alignment
   maths.
-- Priority: must
 - Type: functional + performance
 - Depends on: REQ-481, REQ-483, REQ-503.
-- Statement:
   1. The domain exposes: `GetPointAtStation`, `GetBearingAtStation`, `GetTangentAtStation`, `GetCurvatureAtStation`,
      `GetEntityAtStation`, `GetStation(point)`, `GetOffset(point)`, `GetStationOffset(x,y)`,
      `GetPointFromStationOffset(station, offset)`, `GetClosestPoint(x,y)`, `GetDistanceAlongAlignment(point)`,
@@ -16424,7 +16427,6 @@ capability that does not exist. They are recorded here rather than quietly dropp
      prints X, Y, bearing. Both accept typed input in the displayed-station format and are listed in `HELP`.
      Both are transparent to the dynamic cursor (REQ-501).
   5. Station lookup is **indexed** (binary search over entity start stations): O(log n) in the number of entities.
-- Acceptance:
   1. For an analytic fixture (tangent, R=500 curve, tangent) station→XY→station returns the input to 1e-6 and
      station+offset→XY→(station, offset) to 1e-6, for offsets ±0.001 … ±500 on both sides.
   2. A point on the radial extension outside a curve returns that curve's PC/PT-correct station and the sign of the
@@ -16434,15 +16436,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
      and does not walk the entity list (counter test).
   5. The example in the issue (X=1000, Y=2000) prints a station and offset in the displayed station format.
 - Owner-layer: Domain, Commands.
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-485 — Create alignments: empty, by layout, and from objects
-
 - Purpose: build alignments interactively and from existing geometry.
-- Priority: must
-- Type: functional
 - Depends on: REQ-480, REQ-481, REQ-087.
-- Statement:
   1. `ALIGNMENT` and `CREATEALIGNMENT` open the Create Alignment dialog: Name, Description, Type, Layer, Style,
      Label set, Starting station, Starting point, Starting direction (optional) and Design criteria (REQ-502).
      Creation **by layout** draws the alignment in the direction drawn `[A:E03F62E7]`; the layout toolbar
@@ -16473,7 +16469,6 @@ capability that does not exist. They are recorded here rather than quietly dropp
      checks "Add curves between tangents" and "Erase existing entities" by default, and erase plus creation is one
      undo step. Commands: `CREATEALIGNMENT`, `ALIGNMENTLAYOUT`, `ALIGNMENTCURVESETTINGS`,
      `CREATEALIGNMENTFROMOBJECTS` (`CREATEALIGNMENTENTITIES`).
-- Acceptance:
   1. Create dialog creates an alignment with a custom name, description, layer, style and starting station 5+00;
      `LIST` shows them.
   2. Lines AB and BC plus arc CD (connected) → one alignment, tangent/curve/tangent-equivalent (3 entities: 2
@@ -16484,15 +16479,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   6. Reversing at the prompt yields the opposite start; undo removes the alignment (and restores erased sources) in
      one step.
 - Owner-layer: Commands, Domain, Qt UI.
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-486 — Alignment layout editor (entity table) and constraints
-
 - Purpose: precise, parameter-level editing like Civil 3D's Alignment Layout Parameters.
-- Priority: must
-- Type: functional
 - Depends on: REQ-481, REQ-482, REQ-483.
-- Statement:
   1. `EDITALIGNMENT` opens a dockable **Alignment Layout** table with one row per entity: number, type, start
      station, end station, length, radius, delta, constraint state, validity, plus parameter columns that depend on
      how the entity was created `[A:89F8043A]` (e.g. tangent bearing; curve radius/length/delta; spiral A/Ls/R).
@@ -16524,7 +16513,6 @@ capability that does not exist. They are recorded here rather than quietly dropp
      entity's start distance along the alignment: any geometry edit, insert or delete that would move it is refused,
      naming every row that would move; relabelling the starting station is not a geometry edit. Refusals of a Free
      curve name the curve and both tangents.
-- Acceptance:
   1. The issue's example (tangent 250.00', curve R 500 ~132.14', tangent) is reproduced from entered parameters and
      the displayed rows match the table values to display precision.
   2. Changing curve radius from 500 to 400 with both tangents Floating keeps C1 and updates later stations.
@@ -16534,16 +16522,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. Editing the first tangent's bearing with a Free curve between recomputes the curve; bearing/radius round trip.
   5. Undo/redo restores table and geometry in one step per edit.
 - Owner-layer: Domain, Qt UI.
-- Status: accepted (2026-11-02, user approval)
 - Revisions: Phase 2 delivered 2026-11-02: solver (Fixed/FloatOnPrev/FloatOnNext/Free), locks, insert/delete, ALIGNMENTEDIT/LOCK/INSERT/REMOVE, EDITALIGNMENT table (Qt).
-
 ### REQ-487 — Alignment editing commands, grips, reverse, move
-
 - Purpose: edit an alignment in the drawing.
-- Priority: must
-- Type: functional
 - Depends on: REQ-486.
-- Statement:
   1. Grips (REQ-076): PI, PC/PT, centre, tangent midpoint, spiral points. Dragging a grip edits through the same
      constraint solver as REQ-486 and shows a live **Station / Offset / Bearing** readout (REQ-501). Move / copy /
      rotate / scale / mirror of the whole object follow the existing commands; copy creates a new independent
@@ -16555,14 +16537,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
      stationing. A discontinuous alignment is refused.
   3. Station and station-equation editing: add (pick or type), edit, remove; changing reference point per REQ-483.
   4. Editing geometry updates stations, labels, tables and dependent offset alignments (REQ-488) in one undo step.
-- Acceptance:
   1. Reversing a tangent-curve-tangent alignment swaps start/end, flips curve left↔right, and makes each station
      S → L − S + start; points at the same physical location have the same XY.
   2. Reverse twice returns the original geometry to within 1e-9 drawing units, with the same entity kinds, directions, constraints and locks (D-2026-11-05-a).
   3. Dragging a PI grip changes the adjacent tangents and curve and keeps C1; readout shows station/offset/bearing.
   4. Copying produces a distinct id and name.
-- Owner-layer: Commands, Domain, Qt UI.
-- Status: accepted (2026-11-02, user approval)
 - Revisions: Phase 2 delivered 2026-11-02: grips (start, tangent end, curve radius), MOVE/COPY/ROTATE/SCALE/MIRROR, REVERSEALIGNMENT, ALIGNMENTSTATION. Reverse clears station equations
   (D-2026-11-04-n: as Civil 3D; reversing twice restores the geometry and the starting station, not the equations).
   2026-11-04, **Decision D-2026-11-04-j (grips and reverse):** grips follow Civil 3D's on a tangent / Free curve /
@@ -16574,14 +16553,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   the spiral's end (length) and middle (end radius). During a drag the readout reports station / offset / bearing on
   the alignment as it was grabbed. Reverse also flips station labels (station and side), design speeds and linked
   offsets (their side), so each stays on the ground.
-
 ### REQ-488 — Offset alignments
-
 - Purpose: generate left/right alignments (edge of pavement, ROW) that are real alignments.
 - Priority: must (tangents, curves); should (spirals, widening)
-- Type: functional
 - Depends on: REQ-481, REQ-486.
-- Statement:
   1. `OFFSETALIGNMENT` (Create Offset Alignment `[A:F0AEEA3A]`) takes a parent alignment, a name template, a
      station range, the number of offsets per side and an incremental distance per side. Left/right are determined
      facing the parent's end; left and right distances are specified separately `[A:F0AEEA3A]`.
@@ -16600,7 +16575,6 @@ capability that does not exist. They are recorded here rather than quietly dropp
      Automatic) with *transitions* (lines or arcs) for widening `[M]`. Widening (`[A:BBDD8C7F]`) is **not in this
      epic** and appears in `spec/roadmap.md` Later, but the offset data model reserves `nominalOffset`, `side`
      and `parentId`.
-- Acceptance:
   1. Parent tangent-curve(R=500 left)-tangent with +12 and −12 offsets: tangents offset by exactly 12 on the correct
      side, curve radii 488 (left offset toward centre) and 512, centre unchanged, ±1e-6.
   2. Offset station at an arbitrary point maps to the parent's perpendicular foot (station difference ≤ 1e-6 for
@@ -16608,36 +16582,24 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. Editing the parent radius to 600 updates the linked offset radii (588/612).
   4. A parent with a spiral is refused naming the spiral entity; no alignment is created.
   5. A curve with R=10 offset +20 toward the centre is refused.
-- Owner-layer: Domain, Commands.
-- Status: accepted (2026-11-02, user approval)
 - Revisions: Phase 2 delivered 2026-11-02: OFFSETALIGNMENT/ALIGNMENTDETACH, linked refresh; refuses kinks, collapse and (until Phase 3) spirals.
-
 ### REQ-489 — Alignment intersections
-
 - Purpose: layout and design need where alignments cross.
 - Priority: should
-- Type: functional
 - Depends on: REQ-484.
 - Statement: `ALIGNMENTINTERSECT` computes and lists, for alignment/alignment, alignment/line and alignment/arc
   (curve), every intersection with the XY, the station and offset on each alignment, and the crossing angle. It can
   place a point or marker. Tangent/tangent, tangent/curve, curve/curve, and tangential (touching) cases are all
   handled; coincident (overlapping) geometry is reported as a range, not points.
-- Acceptance:
   1. Two perpendicular tangents give one intersection at the analytic point with stations on both and 90°.
   2. A tangent through the centre of an R=500 curve gives two intersections with analytic stations.
   3. Two tangent circles give one touching intersection, flagged as tangential.
   4. Overlapping tangents report a range.
-- Owner-layer: Domain, Commands.
-- Status: accepted (2026-11-02, user approval)
 - Revisions: Phase 2 delivered 2026-11-02: ALIGNMENTINTERSECT against an alignment, a line or a circle; overlaps reported as ranges.
-
 ### REQ-490 — Geometry points and alignment-specific object snaps
-
 - Purpose: snap to civil geometry.
 - Priority: must (Phase 1 subset: Endpoint, Midpoint, PI, PC, PT, centre, Nearest); should (rest)
-- Type: functional
 - Depends on: REQ-481, REQ-076, the existing CadSnap.
-- Statement:
   1. Standard geometry points are exposed with these codes: Alignment Beginning/End; PI (tangent intersection);
      BC/EC and PC/PT (curve start/end; BC/EC are the same as PC/PT in the label vocabulary; both names accepted);
      TS, SC, CS, ST (tangent-spiral, spiral-curve, curve-spiral, spiral-tangent); SS (spiral-spiral, compound spiral
@@ -16650,20 +16612,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
      Intersection (alignment/alignment and alignment/other object), Quadrant (line and spiral segments but **not**
      circular curve segments `[A:45BACD3C]`), plus a new **Station** snap (a typed station on the alignment).
   3. Snaps participate in tracking and use the shared candidate pipeline (no second snap system).
-- Acceptance:
   1. Endpoint, PC, PT, PI, centre and Nearest snap on the Phase 1 fixture; PI snap lands at the tangent intersection
      point even though no geometry passes through it.
   2. After spirals exist, TS/SC/CS/ST snap to the right coordinates.
   3. Quadrant does not snap on a circular curve segment of an alignment; it does on a tangent.
   4. Station snap `STATION 12+45.32` lands on `GetPointAtStation`.
 - Owner-layer: Commands (CadSnap), Domain.
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-491 — Alignment styles (drawing-owned)
-
 - Purpose: control alignment appearance without per-object overrides.
-- Priority: must
-- Type: functional
 - Depends on: REQ-478 (pattern), REQ-480.
 - Statement: Alignment styles are named, drawing-owned, current-style-aware collections following the REQ-478
   pattern. A style defines, in tabs matching Civil 3D (Information, Design, Markers, Display, Summary `[A:7E731659]`):
@@ -16672,21 +16628,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
   visibility; direction arrows; and design (design-check set, REQ-502). New styles start from installation
   defaults `[A:7E731659]`. Changes apply to every alignment that uses the style `[A:7E731659]`; a used style cannot
   be deleted until references are reassigned; per-object overrides stay local. A built-in `Standard` style exists.
-- Acceptance:
   1. Creating a style, assigning it, editing it: all referencing alignments change; others do not.
   2. A style referenced by an alignment cannot be deleted; a missing reference falls back to `Standard` with a
      REQ-201 log entry.
   3. Styles round-trip through save/reopen (REQ-496).
 - Owner-layer: Domain, Qt UI, DWG IO.
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-492 — Alignment labels and label sets
-
 - Purpose: stations, geometry points and segments on the sheet.
-- Priority: must
-- Type: functional
 - Depends on: REQ-483, REQ-491.
-- Statement:
   1. A **label set** (named, drawing-owned) is a list of label items: Major Stations, Minor Stations, Geometry
      Points, Station Equations, Design Speeds, Profile Geometry Points (placeholder), Superelevation Critical Points
      (placeholder) `[A:9BD36DE7, C2CAF36B]`. A geometry-point item can occur more than once with different styles
@@ -16717,20 +16666,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
      design speeds, equations, and (GoSurvey rule) the alignment's segment and station/offset labels. A style used by a
      label set cannot be deleted; a missing reference reads as `Standard` with a REQ-201 log entry. Leader labels keep
      their Civil 3D side; text beside the line steps to the other side or an outer row when another label is in the way.
-- Acceptance:
   1. A 0+00–3+82 alignment with major=100/minor=20 shows 3 major and 15 minor ticks with correct labels.
   2. Station equations change the labels to the displayed values and add an equation label.
   3. Curve label for the fixture reads `R = 500.00' Δ = 15°00'00" L = 130.90' T = 65.83'` (per format settings).
   4. A fixed station/offset label stays put when the alignment moves and its text changes; a relative label moves.
   5. Deleting a major interval used by a minor item is refused.
 - Owner-layer: Domain, Rendering, Qt UI.
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-493 — Alignment tables in the drawing
-
 - Purpose: insert line, curve, spiral and segment tables.
-- Priority: should
-- Type: functional
 - Depends on: REQ-492, REQ-367/REQ-479 table model.
 - Statement: `ALIGNMENTTABLE` (Annotate → Add Tables → Alignment) offers Line, Curve, Spiral, Segment (all) tables,
   plus a Station Equation table. As in Civil 3D, segments must be labelled first and the labels become tags in the
@@ -16738,19 +16681,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
   repeated headers (D-2026-11-05-m). Options: Split Table and Behaviour **Static**
   (frozen) or **Dynamic** (rebuilds when the alignment changes). The table is an ordinary drawing table object so it
   exports to DWG.
-- Acceptance:
   1. A labelled 3-entity alignment yields a Line table with 2 rows and a Curve table with 1 row whose values equal the
      entity data.
   2. Dynamic table updates after a radius edit; Static does not.
   3. An unlabelled alignment is refused with a message naming the missing labels.
-- Owner-layer: Domain, Qt UI.
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-494 — Alignment reports and CSV export
-
 - Purpose: submit, check and exchange alignment data.
 - Priority: must (text report, CSV); should (drawing-table export is REQ-493)
-- Type: functional
 - Depends on: REQ-483.
 - Statement: `ALIGNMENTREPORT` produces: name, type, start and end station, total length, start/end bearing, entity
   list with per-entity data (tangent bearing/length; curve radius, delta, length, tangent length, chord; spiral
@@ -16759,20 +16696,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
   the display precision setting (`NumFormat.hpp`); CSV numeric fields use full available precision
   (D-2026-11-05-c). Design-criteria findings reuse REQ-502 and mark each entity as meeting
   or violating the criteria `[A:888F1041]`.
-- Acceptance:
   1. The issue's example report is reproduced for the fixture (header, 2 tangent entities, 1 curve).
   2. CSV re-parses to the same numbers at full available precision.
   3. A criteria violation appears in the report.
-- Owner-layer: Domain, Commands.
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-495 — Alignment rendering
-
 - Purpose: alignments look right at every zoom and in paper space.
-- Priority: must
-- Type: functional + performance
 - Depends on: REQ-481, REQ-491, REQ-492.
-- Statement:
   1. Render in model space and in paper-space viewports using the same geometry; curves and spirals are drawn as
      true curves, sampled **only for display** with a chord-height tolerance of ≤0.25 screen pixels (arc curves via
      the existing arc renderer; spirals via adaptive subdivision). The sampling never feeds a query or export of
@@ -16781,22 +16710,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
      (highlight + grips) from the style.
   3. Re-tessellation is cached per alignment and per zoom bucket; cache invalidates on geometry change only.
   4. Visibility follows layer, freeze, and viewport layer overrides.
-- Acceptance:
   1. At 1:1 and at 1000× zoom-out a 5-unit-radius arc and a 5 000-unit-radius arc remain visually round (chord
      height ≤0.25 px by test of the tessellator).
   2. A spiral renders with monotonic curvature; paper-space viewport shows the same geometry at the viewport scale.
   3. Selected alignment shows highlight and grips; unselected does not.
   4. 1 000 alignments × 100 entities pan/zoom within the REQ-100 frame budget (to be measured with `BENCH`).
 - Owner-layer: Rendering, Qt UI.
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-496 — Alignment persistence, DWG round-trip and Civil 3D mapping
-
 - Purpose: alignments survive save/reopen and open in AutoCAD.
-- Priority: must
 - Type: functional + interop
 - Depends on: REQ-478, REQ-479, ADR-044, D-2026-10-31-c.
-- Statement:
   1. DWG is the persistence target (D-2026-10-31-c). Exact alignment data — geometry (as exact parameters), station
      equations, type, style name, label set, design criteria, references, constraints — is stored in GoSurvey's
      DWG-embedded trailer (ADR-044). Stored values are double precision in drawing-local coordinates.
@@ -16811,7 +16734,6 @@ capability that does not exist. They are recorded here rather than quietly dropp
      labels where decodable) map into GoSurvey alignments; undecodable parts are named in the log (REQ-201).
   4. Legacy drawings without alignments load unchanged. Alignment references from other objects (offset links,
      feature-line references, table/label links, profile references) survive by id.
-- Acceptance:
   1. Geometry, station equations, style, label set, constraint states and references survive GoSurvey
      save→reopen with equal values (≤1e-9).
   2. The saved DWG opens in AutoCAD without Recover and shows the alignment as ordinary entities.
@@ -16823,33 +16745,20 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. Saving a drawing with no alignments adds no alignment data; saving that result again produces a byte-identical
      file (D-2026-11-05-b).
 - Owner-layer: DWG IO, Domain.
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-497 — Alignment and surface integration (ground elevation)
-
 - Purpose: ground elevation along an alignment is the foundation of profiles.
-- Priority: must
-- Type: functional
 - Depends on: REQ-484, REQ-069 / `ISurfaceQuery::elevationAt`.
 - Statement: `ALIGNMENTSURFACE` / the query API return **Station, Offset, Ground Elevation** for a chosen surface at
   an arbitrary station and station/offset, and can sample the alignment at an interval (default 10 units, at most
   100 000 samples; always includes start, end and every geometry point) producing a table the future profile
   consumes. Stations where the surface has no coverage are reported as no-data, never as zero. The result is
   session data until profiles (REQ-500) exist; it is not stored in the alignment.
-- Acceptance:
   1. On the plane Z = 0.1·X + 50 the ground at STA 10+00, offset 0 equals the plane value to REQ-101.
   2. A station outside the surface is no-data with a message.
   3. Sampling at 10 units over 2 500 units returns 251 samples including endpoints.
-- Owner-layer: Domain, Commands.
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-498 — Alignment and feature line integration
-
 - Purpose: alignment → feature line → grading.
-- Priority: should
-- Type: functional
 - Depends on: REQ-087, REQ-484.
-- Statement:
   1. `FEATURELINEFROMALIGNMENT` creates a feature line from an alignment at an interval, including every geometry
      point and sampling curves/spirals to a chord-height tolerance (default 0.01 unit); Z comes from a chosen
      surface (REQ-497) or a constant. This amends ADR-035 (f), which excluded "feature lines from an alignment".
@@ -16857,18 +16766,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
      can be **refreshed** from it, and the relationship survives save/reopen. Deleting the alignment leaves the feature
      line as an ordinary one (the link is dropped with a log entry).
   3. A feature line is a valid source for `CREATEALIGNMENTFROMOBJECTS` (REQ-485); the conversion ignores Z.
-- Acceptance:
   1. Alignment → feature line includes PC and PT vertices, plan points within 0.01 of the true curve, Z from the
      surface.
   2. Refresh after a radius edit updates the vertices.
   3. The link survives save/reopen; deleting the alignment drops it with a log line.
-- Owner-layer: Domain, Commands.
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-499 — Numerical precision and performance
-
 - Purpose: survey-grade results on state-plane coordinates and long alignments.
-- Priority: must
 - Type: quality
 - Depends on: Local-storage invariant.
 - Statement: All alignment maths use `double` in drawing-local coordinates (world = local + document origin),
@@ -16878,14 +16781,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   very small radii (0.01) and very large radii (1e7), alignments to 1e6 units and offsets down to 1e-6 are required
   to work, degenerate cases (zero length, zero radius, Δ ≥ 2π) are refused by name.
 - Acceptance: tests in REQ-503 pass; `GetPointAtStation` ≤ 20 µs median on a 100 000-entity alignment.
-- Owner-layer: Domain.
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-500 — Profile foundation and 3D path (interfaces only)
-
 - Purpose: keep horizontal, vertical, and 3D separate (issue #121; amends REQ-145 scope boundary).
 - Priority: must (interfaces); profiles themselves are a **separate issue**
-- Type: functional
 - Depends on: REQ-480.
 - Statement: The alignment exposes a profile-ready seam without implementing a Profile document type: an alignment
   holds a list of **profile references** (id only; empty in this epic), and the API declares
@@ -16893,20 +16791,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
   Alignment geometry never stores Z. A 3D design path is the pair (alignment, profile) and is a derived value,
   not stored. `QUICKPROFILE` (REQ-145) is unchanged and may take an alignment in place of two points (stations
   start..end).
-- Acceptance:
   1. An alignment reports zero profiles; `GetElevationAtStation` returns "no profile" and no value.
   2. A grep/test confirms the alignment entity structs have no Z field.
   3. `QUICKPROFILE` with an alignment samples along it (uses REQ-497) and still works with two points.
-- Owner-layer: Domain.
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-501 — Alignment COGO, dynamic cursor and Properties
-
 - Purpose: use alignments in survey calculations and see them in Properties.
 - Priority: must (Properties, cursor readout); should (COGO)
-- Type: functional
 - Depends on: REQ-484, REQ-076.
-- Statement:
   1. The **Properties** panel shows: name, description, type, style, layer, start station, end station, length,
      start and end coordinate, start and end bearing, entity count, curve count, spiral count, station-equation count,
      parent alignment (offsets), continuity status, and design criteria status. Name, description, style, layer, start
@@ -16916,22 +16807,17 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. COGO: inverse along alignment (distance between two stations or points), station/offset of a survey point,
      coordinate at station, bearing at station, and distance along alignment, available as commands and from the
      query API.
-- Acceptance:
   1. Properties values equal the entity data for the fixture; editing the name renames the object.
   2. The dynamic cursor readout equals `GetStationOffset` at the cursor position.
   3. `ALIGNMENTINVERSE` between two stations returns the arc length for a curve and the chord via an option.
 - Owner-layer: Qt UI, Commands.
-- Status: accepted (2026-11-02, user approval)
 - Revisions: 2026-11-04, statement 2 delivered as specified: a line of the existing dynamic input
   (`<name>  STA <station>  OFF <offset>  BRG <bearing>`, on a tooltip-like backing), shown while a point is entered
   near an alignment and on its own during an alignment grip drag, also mirrored in the status bar. Civil 3D 2026 shows
   the same facts (name, station, offset) in a tooltip beside the cursor during LINE (`build/artifacts/panel-501/`).
-
 ### REQ-502 — Alignment design criteria and design checks
-
 - Purpose: warn when geometry violates design rules; foundation for superelevation.
 - Priority: should (checks as warnings); may (superelevation foundation)
-- Type: functional
 - Depends on: REQ-481, REQ-491.
 - Statement: An alignment holds optional **design criteria**: any number of **design speeds**, but only one at any
   station; an entity covering multiple speeds is validated against the highest `[A:80EDB0A0]`. A **check set**
@@ -16943,7 +16829,6 @@ capability that does not exist. They are recorded here rather than quietly dropp
   user-entered or loaded from a user file; GoSurvey ships no AASHTO/regional table as authoritative, and Rail uses
   separate criteria `[A:888F1041]`. Superelevation and sight distance are **stubs** (data fields and report
   placeholders; no calculation) in this epic.
-- Acceptance:
   1. R=250 with a minimum-radius check of 400 produces `Curve radius 250' is below the selected minimum design
      radius of 400'.` and still saves.
   2. A station with two speeds uses the higher for validation.
@@ -16959,14 +16844,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      entity's midpoint, one label text height on paper (never under 10 pixels), as Civil 3D marks a violation.
   8. **Decision D-2026-11-05-h:** a tangent-intersection finding is reported when its deflection exceeds the
      maximum configured in the check set; it remains a non-blocking warning.
-- Owner-layer: Domain.
-- Status: accepted (2026-11-02, user approval)
-
 ### REQ-503 — Automated alignment test suite
-
 - Purpose: prove the maths against analytical truth.
-- Priority: must
-- Type: quality
 - Depends on: REQ-480 – REQ-502.
 - Statement: A dedicated test file group (`tests/Alignment*Tests.cpp`, tags `[req480]`..`[req502]`) covers:
   tangents (coordinates, bearing, length, stationing); circular curves against closed-form values (radius, Δ, L,
@@ -16984,4 +16863,3 @@ capability that does not exist. They are recorded here rather than quietly dropp
   equation (REQ-483); (2) default fillet radius of Create-from-Objects (REQ-485); (3) offset-spiral model (REQ-488);
   (4) exact label formats of each geometry-point and segment label (REQ-492); (5) the DWG object layout of an
   alignment for decode (REQ-496, shared with the ADR-074 decoder).
-- Status: accepted (2026-11-02, user approval)

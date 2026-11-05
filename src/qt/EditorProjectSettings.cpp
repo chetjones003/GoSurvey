@@ -35,6 +35,13 @@
 #include <filesystem>
 
 namespace {
+class ProjectScaleSpinBox final : public QDoubleSpinBox {
+ public:
+  using QDoubleSpinBox::QDoubleSpinBox;
+ protected:
+  QString textFromValue(double value) const override { return locale().toString(value, 'g', 7); }
+};
+
 constexpr std::array<const char*, 5> kUnitNames = {"Unitless", "Inches", "Feet", "Meters", "Millimeters"};
 constexpr std::array<int, 5> kUnitCodes = {0, 1, 2, 6, 4};
 constexpr std::array<const char*, 3> kAngularNames = {"Degrees", "Radians", "Grads"};
@@ -45,7 +52,8 @@ constexpr std::array<const char*, kObjectLayerKindCount> kObjectLayerNames = {
 
 QLabel* SectionTitle(const QString& text, QWidget* parent) {
   auto* label = new QLabel(text, parent);
-  label->setStyleSheet("font-size:15px;font-weight:600;");
+  label->setObjectName("projectSectionTitle");
+  label->setStyleSheet("font-size:14px;font-weight:600;");
   return label;
 }
 
@@ -54,12 +62,16 @@ void AddLabeledControl(QGridLayout* layout, QWidget* parent, int row, const QStr
   auto* label = new QLabel(labelText, parent);
   label->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
   layout->addWidget(label, row, 0);
-  layout->addWidget(control, row, 1);
+  layout->addWidget(control, row, 1, 1, statusText.isEmpty() ? 2 : 1);
   if (!statusText.isEmpty()) {
     auto* status = new QLabel(statusText, parent);
     status->setObjectName("projectSettingStatus");
     const bool dark = parent->palette().color(QPalette::Window).lightness() < 128;
-    status->setStyleSheet(QString("color:%1;font-size:11px;").arg(QtAccentFor(dark).link));
+    status->setToolTip("This value is controlled by the project and applies to every drawing in it.");
+    status->setAlignment(Qt::AlignCenter);
+    status->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
+    status->setStyleSheet(QString("color:%1;background:%2;font-size:11px;font-weight:600;padding:2px 7px;border:1px solid %3;border-radius:9px;")
+        .arg(QtAccentFor(dark).link, dark ? "#40392e" : "#fff5df", dark ? "#66502e" : "#d2b27d"));
     layout->addWidget(status, row, 2);
   }
 }
@@ -95,38 +107,45 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
   dialog.setWindowModality(Qt::WindowModal);
   dialog.resize(1080, 720);
   dialog.setMinimumSize(960, 650);
-  dialog.setStyleSheet(darkTheme ? R"(
-    QDialog#projectSettingsDialog { background:#222426; color:#edf2f7; }
-    QListWidget#projectSettingsNavigation { background:#292b2d; border:1px solid #4b4e50; border-radius:6px; padding:5px; }
+  QString projectStyle = darkTheme ? QString::fromLatin1(R"(
+    QDialog#projectSettingsDialog { background:#1c2024; color:#edf2f7; }
+    QListWidget#projectSettingsNavigation { background:#202529; border:1px solid #3a4247; border-radius:6px; padding:5px; }
     QListWidget#projectSettingsNavigation::item { min-height:30px; padding:3px 7px; border-radius:4px; }
-    QListWidget#projectSettingsNavigation::item:selected { background:#55595d; color:#ffffff; }
-    QListWidget#projectSettingsNavigation::item:hover:!selected { background:#3a3c3e; }
-    QFrame#projectSettingsImpact, QFrame#projectSettingsDefaults { background:#2d2f31; border:1px solid #4b4e50; border-radius:6px; }
-    QComboBox, QLineEdit, QDoubleSpinBox { background:#242628; color:#edf2f7; border:1px solid #55595d; border-radius:4px; padding:4px 7px; selection-background-color:#5a6065; }
-    QComboBox:hover, QLineEdit:hover, QDoubleSpinBox:hover { border-color:#a9afb3; }
-    QComboBox:focus, QLineEdit:focus, QDoubleSpinBox:focus { border:2px solid #a9afb3; }
-    QComboBox:disabled, QLineEdit:disabled, QDoubleSpinBox:disabled { background:#303234; color:#a9afb3; border-color:#484b4d; }
-    QTableWidget#projectObjectLayers { background:#252729; alternate-background-color:#2c2e30; color:#edf2f7; gridline-color:#4b4e50; border:1px solid #4b4e50; }
-    QHeaderView::section { background:#3b3d3f; color:#f2f6fa; border:0; border-right:1px solid #4b4e50; border-bottom:1px solid #55595d; padding:6px; }
+    QListWidget#projectSettingsNavigation::item:selected { background:#a95a08; color:#ffffff; }
+    QListWidget#projectSettingsNavigation::item:hover:!selected { background:#30373c; }
+    QFrame#projectSettingsImpact, QFrame#projectSettingsDefaults { background:#242a2f; border:1px solid #3a4247; border-radius:6px; }
+    QComboBox, QLineEdit, QAbstractSpinBox { background:#15191c; color:#edf2f7; border:1px solid #424b51; border-radius:4px; padding:4px 7px; selection-background-color:#343b40; selection-color:white; }
+    QComboBox:hover, QLineEdit:hover, QAbstractSpinBox:hover { border-color:#7c8a92; }
+    QComboBox:focus, QLineEdit:focus, QAbstractSpinBox:focus { border:1px solid #f29b44; }
+    QComboBox:disabled, QLineEdit:disabled, QAbstractSpinBox:disabled { background:#202529; color:#a5afb6; border-color:#353d42; }
+    QTableWidget#projectObjectLayers { background:#15191c; alternate-background-color:#202529; color:#edf2f7; gridline-color:#3a4247; border:1px solid #3a4247; }
+    QHeaderView::section { background:#292f34; color:#f2f6fa; border:0; border-right:1px solid #3a4247; border-bottom:1px solid #41494e; padding:6px; }
     QCheckBox { spacing:7px; }
     QPushButton { padding:5px 12px; }
     QWidget:disabled { color:#a9afb3; }
-  )" : QtApplyAccent(R"(
+  )") : QtApplyAccent(R"(
     QDialog#projectSettingsDialog { background:#f0f3f6; color:#202b36; }
     QListWidget#projectSettingsNavigation { background:#e4eaf0; border:1px solid #bdc8d3; border-radius:6px; padding:5px; }
     QListWidget#projectSettingsNavigation::item { min-height:30px; padding:3px 7px; border-radius:4px; }
     QListWidget#projectSettingsNavigation::item:selected { background:@fill@; color:#ffffff; }
     QListWidget#projectSettingsNavigation::item:hover:!selected { background:#d3dde7; }
     QFrame#projectSettingsImpact, QFrame#projectSettingsDefaults { background:#ffffff; border:1px solid #c5d0da; border-radius:6px; }
-    QComboBox, QLineEdit, QDoubleSpinBox { background:#ffffff; color:#202b36; border:1px solid #aebbc8; border-radius:4px; padding:4px 7px; selection-background-color:@fill@; }
-    QComboBox:hover, QLineEdit:hover, QDoubleSpinBox:hover { border-color:@edge@; }
-    QComboBox:focus, QLineEdit:focus, QDoubleSpinBox:focus { border:2px solid @strong@; }
-    QComboBox:disabled, QLineEdit:disabled, QDoubleSpinBox:disabled { background:#e7ebef; color:#697786; border-color:#c5cdd5; }
+    QComboBox, QLineEdit, QAbstractSpinBox { background:#ffffff; color:#202b36; border:1px solid #aebbc8; border-radius:4px; padding:4px 7px; selection-background-color:@fill@; selection-color:white; }
+    QComboBox:hover, QLineEdit:hover, QAbstractSpinBox:hover { border-color:@edge@; }
+    QComboBox:focus, QLineEdit:focus, QAbstractSpinBox:focus { border:1px solid @strong@; }
+    QComboBox:disabled, QLineEdit:disabled, QAbstractSpinBox:disabled { background:#e7ebef; color:#697786; border-color:#c5cdd5; }
     QTableWidget#projectObjectLayers { background:#ffffff; alternate-background-color:#f0f4f7; color:#202b36; gridline-color:#c5d0da; border:1px solid #bdc8d3; }
     QHeaderView::section { background:#e1e8ee; color:#202b36; border:0; border-right:1px solid #c5d0da; border-bottom:1px solid #bdc8d3; padding:6px; }
     QCheckBox { spacing:7px; }
     QPushButton { padding:5px 12px; }
-  )", false));
+  )", false);
+  projectStyle += QtInputSubcontrolStyle(darkTheme) + QtCheckBoxIndicatorStyle(darkTheme);
+  projectStyle += darkTheme
+      ? "QPushButton[projectPrimaryAction=\"true\"]{background:#a95a08;color:white;border:1px solid #f29b44;font-weight:600;padding:6px 14px;}"
+        "QPushButton[projectPrimaryAction=\"true\"]:hover{background:#b5600a;}"
+      : "QPushButton[projectPrimaryAction=\"true\"]{background:#a95a08;color:white;border:1px solid #9d5407;font-weight:600;padding:6px 14px;}"
+        "QPushButton[projectPrimaryAction=\"true\"]:hover{background:#8f4c06;}";
+  dialog.setStyleSheet(projectStyle);
 
   auto* outer = new QVBoxLayout(&dialog);
   outer->setContentsMargins(22, 18, 22, 16);
@@ -186,23 +205,18 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
   enforcedText->setStyleSheet(QString("color:%1;").arg(secondaryText));
   unitsLayout->addWidget(enforcedText);
 
-  auto* unitGrid = new QGridLayout();
-  unitGrid->setColumnStretch(1, 1);
-  unitGrid->setColumnMinimumWidth(0, 170);
-  unitGrid->setColumnMinimumWidth(2, 115);
+  auto* coordinateGrid = new QGridLayout();
+  coordinateGrid->setContentsMargins(12, 0, 12, 0);
+  coordinateGrid->setColumnStretch(1, 1);
+  coordinateGrid->setColumnMinimumWidth(0, 170);
+  coordinateGrid->setColumnMinimumWidth(2, 90);
   auto* units = new QComboBox(unitsPage);
   units->setObjectName("projectLinearUnits");
   for (size_t i = 0; i < kUnitNames.size(); ++i)
     units->addItem(kUnitNames[i], kUnitCodes[i]);
   const auto unitAt = std::find(kUnitCodes.begin(), kUnitCodes.end(), staged.insUnits);
   units->setCurrentIndex(unitAt == kUnitCodes.end() ? 2 : static_cast<int>(unitAt - kUnitCodes.begin()));
-  AddLabeledControl(unitGrid, unitsPage, 0, "Linear units", units, "Enforced");
-  unitsLayout->addLayout(unitGrid);
-
-  unitsLayout->addWidget(SectionTitle("Coordinate system", unitsPage));
-  auto* zoneGrid = new QGridLayout();
-  zoneGrid->setColumnStretch(1, 1);
-  zoneGrid->setColumnMinimumWidth(0, 170);
+  AddLabeledControl(coordinateGrid, unitsPage, 0, "Linear units", units, "Enforced");
   auto* category = new QComboBox(unitsPage);
   category->setObjectName("projectZoneCategory");
   category->addItem(geo::kNoZoneCategory, QString());
@@ -212,6 +226,8 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
   system->setObjectName("projectCoordinateSystem");
   auto* zoneCode = new QLineEdit(Utf8(staged.zoneCode), unitsPage);
   zoneCode->setObjectName("projectZoneCode");
+  zoneCode->setPlaceholderText("Enter a coordinate-system code");
+  zoneCode->setToolTip("Select a coordinate system above or enter its code here.");
   auto* zoneDescription = new QLabel(unitsPage);
   zoneDescription->setObjectName("projectZoneDescription");
   auto* zoneProjection = new QLabel(unitsPage);
@@ -222,14 +238,14 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
   zoneError->setObjectName("projectZoneError");
   zoneError->setStyleSheet("color:#b23b35;");
   zoneError->setWordWrap(true);
-  AddLabeledControl(zoneGrid, unitsPage, 0, "Category", category);
-  AddLabeledControl(zoneGrid, unitsPage, 1, "Available coordinate systems", system);
-  AddLabeledControl(zoneGrid, unitsPage, 2, "Selected system code", zoneCode);
-  AddLabeledControl(zoneGrid, unitsPage, 3, "Description", zoneDescription);
-  AddLabeledControl(zoneGrid, unitsPage, 4, "Projection", zoneProjection);
-  AddLabeledControl(zoneGrid, unitsPage, 5, "Datum", zoneDatum);
-  zoneGrid->addWidget(zoneError, 6, 1, 1, 2);
-  unitsLayout->addLayout(zoneGrid);
+  AddLabeledControl(coordinateGrid, unitsPage, 1, "Category", category);
+  AddLabeledControl(coordinateGrid, unitsPage, 2, "Available coordinate systems", system);
+  AddLabeledControl(coordinateGrid, unitsPage, 3, "Selected system code", zoneCode, "Enforced");
+  AddLabeledControl(coordinateGrid, unitsPage, 4, "Description", zoneDescription);
+  AddLabeledControl(coordinateGrid, unitsPage, 5, "Projection", zoneProjection);
+  AddLabeledControl(coordinateGrid, unitsPage, 6, "Datum", zoneDatum);
+  coordinateGrid->addWidget(zoneError, 7, 1, 1, 2);
+  unitsLayout->addLayout(coordinateGrid);
 
   auto* defaultsFrame = new QFrame(unitsPage);
   defaultsFrame->setObjectName("projectSettingsDefaults");
@@ -238,7 +254,11 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
   defaultsLayout->setContentsMargins(12, 10, 12, 10);
   defaultsLayout->addWidget(SectionTitle("Defaults for project drawings", defaultsFrame));
   auto* defaultsGrid = new QGridLayout();
+  defaultsGrid->setHorizontalSpacing(8);
+  defaultsGrid->setVerticalSpacing(8);
+  defaultsGrid->setColumnMinimumWidth(0, 170);
   defaultsGrid->setColumnStretch(1, 1);
+  defaultsGrid->setColumnMinimumWidth(2, 90);
   defaultsGrid->setColumnStretch(3, 1);
   auto* angular = new QComboBox(defaultsFrame);
   angular->setObjectName("projectAngularUnits");
@@ -250,11 +270,14 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
   foot->setCurrentIndex(static_cast<int>(staged.defaults.footDefinition));
   auto* plotScale = new QComboBox(defaultsFrame);
   plotScale->setObjectName("projectPlotScale");
-  auto* customScale = new QDoubleSpinBox(defaultsFrame);
+  auto* customScale = new ProjectScaleSpinBox(defaultsFrame);
   customScale->setObjectName("projectCustomScale");
   customScale->setRange(0.000001, 1.e9);
   customScale->setDecimals(6);
   customScale->setValue(staged.plotScale);
+  const int scaleControlHeight = std::max(plotScale->sizeHint().height(), customScale->sizeHint().height());
+  plotScale->setFixedHeight(scaleControlHeight);
+  customScale->setFixedHeight(scaleControlHeight);
   auto* scaleInserted = new QCheckBox("Scale objects inserted from other drawings", defaultsFrame);
   scaleInserted->setObjectName("projectScaleInsertedObjects");
   scaleInserted->setChecked(staged.defaults.scaleInsertedObjects);
@@ -262,14 +285,15 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
   setVariables->setObjectName("projectSetDrawingVariables");
   setVariables->setChecked(staged.defaults.setDrawingVariables);
   defaultsGrid->addWidget(new QLabel("Angular units", defaultsFrame), 0, 0);
-  defaultsGrid->addWidget(angular, 0, 1);
-  defaultsGrid->addWidget(new QLabel("Foot definition", defaultsFrame), 0, 2);
-  defaultsGrid->addWidget(foot, 0, 3);
-  defaultsGrid->addWidget(new QLabel("Plot scale", defaultsFrame), 1, 0);
-  defaultsGrid->addWidget(plotScale, 1, 1);
-  defaultsGrid->addWidget(customScale, 1, 2, 1, 2);
-  defaultsGrid->addWidget(scaleInserted, 2, 0, 1, 2);
-  defaultsGrid->addWidget(setVariables, 2, 2, 1, 2);
+  defaultsGrid->addWidget(angular, 0, 1, 1, 3);
+  defaultsGrid->addWidget(new QLabel("Foot definition", defaultsFrame), 1, 0);
+  defaultsGrid->addWidget(foot, 1, 1, 1, 3);
+  defaultsGrid->addWidget(new QLabel("Plot scale", defaultsFrame), 2, 0);
+  defaultsGrid->addWidget(plotScale, 2, 1);
+  defaultsGrid->addWidget(new QLabel("Custom units / in", defaultsFrame), 2, 2);
+  defaultsGrid->addWidget(customScale, 2, 3);
+  defaultsGrid->addWidget(scaleInserted, 3, 0, 1, 2);
+  defaultsGrid->addWidget(setVariables, 3, 2, 1, 2);
   defaultsLayout->addLayout(defaultsGrid);
   auto* inheritanceNote = new QLabel("Drawings inherit these defaults unless they have an override.", defaultsFrame);
   inheritanceNote->setStyleSheet(QString("color:%1;font-size:11px;").arg(secondaryText));
@@ -344,9 +368,9 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
     const auto details = value.empty() ? std::optional<geo::CoordinateSystemInfo>{}
                                        : geo::FindCoordinateSystem(value);
     zoneCode->setText(code);
-    zoneDescription->setText(details ? Utf8(details->description) : QString());
-    zoneProjection->setText(details ? Utf8(details->projection) : QString());
-    zoneDatum->setText(details ? Utf8(details->datum) : QString());
+    zoneDescription->setText(details ? Utf8(details->description) : QString("Select a coordinate system to see its description."));
+    zoneProjection->setText(details ? Utf8(details->projection) : QString::fromUtf8("\xE2\x80\x94"));
+    zoneDatum->setText(details ? Utf8(details->datum) : QString::fromUtf8("\xE2\x80\x94"));
     if (!value.empty() && !details && value != originalZone)
       zoneError->setText(geo::DictionariesLoaded() ? "Enter a coordinate-system code from the loaded dictionary."
                                                    : Utf8(geo::DictionaryError()));
@@ -488,6 +512,8 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
   applyButton->setObjectName("projectSettingsApply");
   auto* okButton = buttons->button(QDialogButtonBox::Ok);
   okButton->setObjectName("projectSettingsOk");
+  okButton->setProperty("projectPrimaryAction", true);
+  okButton->style()->unpolish(okButton); okButton->style()->polish(okButton);
   buttons->button(QDialogButtonBox::Cancel)->setObjectName("projectSettingsCancel");
   auto* footer = new QHBoxLayout();
   footer->addWidget(validation, 1);
