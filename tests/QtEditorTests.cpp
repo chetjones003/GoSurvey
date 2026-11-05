@@ -1176,7 +1176,8 @@ private Q_SLOTS:
     auto* table = review->findChild<QTableWidget*>("pdfCoordinateCandidates"); QVERIFY(table);
     QCOMPARE(table->rowCount(), 1);
     QVERIFY(review->width() <= 640);
-    QVERIFY(review->height() < 340);
+    QVERIFY2(review->height() < 340,
+        qPrintable(QString("Review height %1; candidate row height %2").arg(review->height()).arg(table->rowHeight(0))));
     QCOMPARE(table->columnCount(), 2);
     QVERIFY(table->verticalHeader()->isHidden());
     auto* heading = review->findChild<QLabel*>("pdfCoordinateReviewHeading"); QVERIFY(heading);
@@ -1442,10 +1443,13 @@ private Q_SLOTS:
     longCandidate.sourceText = "BRASS CAP CONTROL " + longCandidate.description;
     window.m_ExtractResult->candidates.push_back(longCandidate);
     ApplyQtAppearance(*qApp, false);
-    review->resize(360, 620);
+    review->resize(620, 620);
     window.ShowExtractReview();
     auto* candidateTable = review->findChild<QTableWidget*>("pdfCoordinateCandidates");
     QVERIFY(candidateTable && candidateTable->isVisible());
+    const int wideRowHeight = candidateTable->rowHeight(0);
+    review->resize(360, 620);
+    QTRY_VERIFY_WITH_TIMEOUT(candidateTable->rowHeight(0) > wideRowHeight, 1000);
     QVERIFY(candidateTable->rowHeight(0) > 240);
     auto* detailPanel = candidateTable->cellWidget(0, 0);
     QVERIFY(detailPanel);
@@ -1453,7 +1457,7 @@ private Q_SLOTS:
     QVERIFY(longDetails && longDetails->text().contains("Monument witness"));
     auto* createAs = detailPanel->findChild<QComboBox*>("pdfCoordinateCreateAs_0");
     QVERIFY(createAs);
-    QVERIFY(longDetails->heightForWidth(longDetails->width()) <= longDetails->height());
+    QTRY_VERIFY_WITH_TIMEOUT(longDetails->heightForWidth(longDetails->width()) <= longDetails->height(), 1000);
     QVERIFY(createAs->geometry().bottom() <= detailPanel->height());
     QVERIFY(review->grab().save(Issue905Shot("qt-1109-pdf-coordinate-long-candidate-dark.png")));
     ApplyQtAppearance(*qApp, true);

@@ -82,6 +82,30 @@ constexpr double kMinDragDip = 4.0;
 constexpr int kPdfToolCallout = static_cast<int>(pdfview::Annot::Kind::Leader);
 constexpr int kPdfToolRevisionCloud = static_cast<int>(pdfview::Annot::Kind::RevCloud);
 
+void ResizeCoordinateReviewRows(QTableWidget* table, int availableTextWidth = -1) {
+  if (!table) return;
+  for (int row = 0; row < table->rowCount(); ++row) {
+    auto* detailPanel = table->cellWidget(row, 0);
+    const QString detailsName = QString("pdfCoordinateCandidateDetails_%1").arg(row);
+    const QString createAsName = QString("pdfCoordinateCreateAs_%1").arg(row);
+    auto* details = detailPanel ? detailPanel->findChild<QLabel*>(detailsName) : nullptr;
+    auto* createAs = detailPanel ? detailPanel->findChild<QComboBox*>(createAsName) : nullptr;
+    auto* detailLayout = detailPanel ? qobject_cast<QVBoxLayout*>(detailPanel->layout()) : nullptr;
+    if (!details || !createAs || !detailLayout) continue;
+
+    QTextDocument document;
+    document.setDefaultFont(details->font());
+    document.setDocumentMargin(0);
+    document.setHtml(details->text());
+    const int columnTextWidth = availableTextWidth >= 0 ? availableTextWidth : table->columnWidth(0);
+    const int textWidth = std::max(120, columnTextWidth - details->margin() * 2 - 8);
+    document.setTextWidth(textWidth);
+    const int detailHeight = static_cast<int>(std::ceil(document.size().height())) + details->margin() * 2;
+    const int decisionHeight = createAs->sizeHint().height() + detailLayout->spacing() + 8;
+    table->setRowHeight(row, std::max(100, detailHeight + decisionHeight));
+  }
+}
+
 class PdfAuditProgressBar final : public QProgressBar {
 public:
   using QProgressBar::QProgressBar;
@@ -1917,6 +1941,11 @@ void PdfWindow::ShowExtractReview() {
     table->verticalHeader()->hide();
     table->setSelectionMode(QAbstractItemView::NoSelection);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers); layout->addWidget(table);
+    connect(table->horizontalHeader(), &QHeaderView::sectionResized, table,
+        [table](int logicalIndex, int, int) {
+          if (logicalIndex != 0) return;
+          QTimer::singleShot(0, table, [table] { ResizeCoordinateReviewRows(table); });
+        });
     m_ExtractSkippedIntro = new QLabel("Skipped table rows (not imported as candidates):", m_ExtractReview);
     m_ExtractSkippedIntro->setObjectName("pdfCoordinateSkippedIntro");
     m_ExtractSkippedIntro->setWordWrap(true);
@@ -2045,18 +2074,12 @@ void PdfWindow::ShowExtractReview() {
     accept->setObjectName(QString("pdfCoordinateAccept_%1").arg(row)); deny->setObjectName(QString("pdfCoordinateDeny_%1").arg(row));
     accept->setProperty("pdfPrimaryAction", true);
     buttons->addWidget(accept); buttons->addWidget(deny); table->setCellWidget(row, 1, decisions);
-    QTextDocument detailDocument;
-    detailDocument.setDefaultFont(details->font());
-    detailDocument.setDocumentMargin(0);
-    detailDocument.setHtml(details->text());
-    const int detailTextWidth = std::max(120, table->columnWidth(0) - details->margin() * 2 - 8);
-    detailDocument.setTextWidth(detailTextWidth);
-    const int detailHeight = static_cast<int>(std::ceil(detailDocument.size().height())) + details->margin() * 2;
-    const int decisionHeight = createAs->sizeHint().height() + detailLayout->spacing() + 8;
-    table->setRowHeight(row, std::max(100, detailHeight + decisionHeight));
     connect(accept, &QPushButton::clicked, this, [this, row] { DecideExtractCandidate(row, true); });
     connect(deny, &QPushButton::clicked, this, [this, row] { DecideExtractCandidate(row, false); });
   }
+  // Before first show, Qt has not assigned the Stretch section its final geometry. Estimate from
+  // the dialog width, then the sectionResized handler corrects this after the table is laid out.
+  ResizeCoordinateReviewRows(table, dialogWidth - 126 - 54);
   if (m_ExtractSkippedIntro != nullptr && m_ExtractSkippedTable != nullptr) {
     const auto& skipped = m_ExtractResult->skippedTableRows;
     m_ExtractSkippedTable->setRowCount(static_cast<int>(skipped.size()));
