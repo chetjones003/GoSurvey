@@ -95,6 +95,12 @@ offset and a curve's radius are always exact.
   alignment's name. If the drawing is saved again by AutoCAD, GoSurvey's exact data is lost; on opening it GoSurvey
   rebuilds each alignment from those named lines and arcs (as Create Alignment from Objects would), with its name,
   layer and starting station. Spirals then come back as short tangents, and the command line says so.
+- **Civil 3D drawings.** Opening a Civil 3D DWG brings in its alignments as editable GoSurvey alignments when they are
+  built from fixed tangents with free curves and free spiral-curve-spiral groups between them, which is what Civil 3D's
+  Tangent-Tangent (With curves) and Create Alignment from Objects make. The name, layer, starting station and station
+  equations come across, and the curves and spirals keep their radii and lengths. Alignments that use other
+  sub-entity kinds (fixed, floating or free-standing curves and spirals, for example) are named in the command line
+  and not imported. Civil 3D styles, label sets and labels are not read; the alignment gets the Standard ones.
 
 ## Design criteria
 

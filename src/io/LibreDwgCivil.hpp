@@ -262,4 +262,42 @@ struct LabelStyleRecord {
 [[nodiscard]] std::vector<uint64_t> DecodeHandleList(const unsigned char* bytes, std::size_t bitCount,
                                                      std::size_t start, uint64_t objectHandle);
 
+// --- REQ-496.3 Civil 3D alignments (AECC_ALIGNMENT), layout verified on Civil 3D 2026 fixtures ---
+
+/// A fixed tangent: its sub-entity id, the ids of the entities before and after it (0 = none) and the two points that
+/// define its line, drawing coordinates.
+struct AlignmentTangentRecord {
+  uint32_t id = 0, previous = 0, next = 0;
+  double ax = 0.0, ay = 0.0, bx = 0.0, by = 0.0;
+};
+
+/// A free curve, or a free spiral-curve-spiral group, between the tangents `previous` and `next`.
+struct AlignmentCornerRecord {
+  uint32_t id = 0, previous = 0, next = 0;
+  double radius = 0.0;
+  double spiralIn = 0.0, spiralOut = 0.0;  ///< Clothoid lengths; 0 for a plain curve.
+};
+
+struct AlignmentEquationRecord {
+  double rawStationBack = 0.0;
+  double stationAhead = 0.0;
+  bool increasing = true;
+};
+
+struct AlignmentRecord {
+  std::u16string name;
+  std::optional<double> startingStation;
+  std::vector<AlignmentTangentRecord> tangents;
+  std::vector<AlignmentCornerRecord> corners;
+  std::vector<AlignmentEquationRecord> equations;
+};
+
+/// Reads an AECC_ALIGNMENT's custom data: name (first string of the string stream), starting station, and the
+/// definitions of its fixed tangents (two points each), free curves (radius) and free spiral-curve-spiral groups
+/// (spiral in, radius, spiral out) with the sub-entity links between them, and its station equations. Other
+/// sub-entity kinds are not decoded; the caller finds them as links that no decoded record has. Nullopt when no
+/// tangent is found.
+[[nodiscard]] std::optional<AlignmentRecord> DecodeAlignment(const unsigned char* bytes, std::size_t bitCount,
+                                                             std::size_t stringStart, std::size_t stringBitCount);
+
 }  // namespace libredwgcivil

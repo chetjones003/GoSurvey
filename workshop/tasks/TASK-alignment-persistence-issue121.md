@@ -73,7 +73,34 @@ vendored-library change.
 - Build: `build.bat` Release, no warnings. Full suite `ctest --preset ninja-release` 194/194
   (`build/artifacts/ctest-496.log`).
 - No visible Qt UI change, so no screenshot panel.
-- Acceptance 3 (Rapides baseline alignment) is **not met**: the baseline has no alignment (§2). Waiting on the user.
+- Acceptance 3: the Rapides baseline has no alignment (§2); resolved in §8.
+
+## 8. Civil 3D alignment mapping (statement 3, acceptance 3) — the user's "Yes save a scratch drawing"
+- Fixtures (Civil 3D 2026 COM on this machine; the user's three open drawings untouched; each scratch drawing saved
+  and closed): Drawing11 → `samples/civil3d-alignment-fixture.dwg` + `-reference.json` (PIs (6500000,2100000) …
+  (6501400,2100500); spiral-curve-spiral 60 / R 237.5 / 75; free curves R 412.25 and R 180; start 5+00; equation
+  14+00 → 16+50 increasing; Civil 3D's 24 station coordinates); Drawing12 (groups in another order, other values,
+  `build/artifacts/civil3d/fixture-order.dwg`, analysis only); Drawing13 → `samples/civil3d-alignment-equations.dwg`
+  (equations 1234.5 → 1345.25 increasing, 1876.75 → 1765.5 decreasing).
+- Layout found by locating the known doubles in the AECC_ALIGNMENT record and comparing the three records bit by
+  bit (D-2026-11-04-m): BD starting station at bit 354; tangent = 12-bit marker, BL own / previous / next id, 2 × 2RD;
+  after three -1.0 sentinels a free curve (BL 29, B, ids, BD radius) or a free SCS group (BL 0, ids, BL, BD spiral
+  in, BD radius, BD spiral out); equations = BD raw, 128-bit id, BD raw again, BD ahead, B direction; the name is the
+  first non-empty string after "AeccImpAlignment" in the string stream. The geometry itself is not stored; it is
+  the definition, as Civil 3D's layout holds it.
+- Code: `libredwgcivil::DecodeAlignment` (`src/io/LibreDwgCivil.*`); `ImportCivilAlignments` / `CivilAlignmentPis` /
+  `TangentsMeet` (`src/io/LibreDwgCad.cpp`), run before the model-space pass so an imported alignment's proxy
+  preview is not also read; `alignment::BuildFromPis` with per-PI `CurveSettings` (`AlignmentLayout.cpp`).
+- Tests (`tests/AlignmentDwgTests.cpp`): the fixture imports as "GS Fixture", 9 entities, radii and spirals exact,
+  start 5+00, the equation; Civil 3D's 24 stations: exact (≤1e-6) before the spirals, ≤2e-5 after (GoSurvey's
+  clothoid places the group's ends ~7e-6 ft from Civil 3D's — REQ-503 open question 3); two equations keep their
+  direction; the decoder refuses no data / zero bits and drops a record whose sentinel is broken; per-PI
+  `BuildFromPis` and its one-setting-per-PI rule.
+- Build `build.bat` Release with no warnings; full suite 194/194 (`build/artifacts/ctest-496b.log`).
+- Docs: `resources/wiki/Alignments.md` "Civil 3D drawings" paragraph, mirrored to the public wiki and the site.
+- Not decoded (named in the log, alignment not imported): fixed / floating curves and spirals, free-standing
+  spirals, groups defined by A values; Civil 3D styles, label sets and label groups (their previews stay display
+  geometry).
 
 ## 7. Product documentation review (REQ-453)
 - `README.md`, `PRIVACY.md`: reviewed; no change needed (no new data or feature summary).

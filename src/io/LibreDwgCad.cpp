@@ -5005,6 +5005,145 @@ void ImportTaggedAlignments(AppCommandState& st, Dwg_Data* dwg, const std::vecto
   }
 }
 
+// --- REQ-496.3 Civil 3D alignments (D-2026-11-04-m) ---
+
+/// Where the lines through two tangents cross: their PI. False for parallel tangents.
+[[nodiscard]] bool TangentsMeet(const libredwgcivil::AlignmentTangentRecord& a,
+                                const libredwgcivil::AlignmentTangentRecord& b, alignment::Point2* pi) {
+  assert(pi != nullptr);
+  const double ux = a.bx - a.ax, uy = a.by - a.ay, vx = b.bx - b.ax, vy = b.by - b.ay;
+  const double cross = ux * vy - uy * vx;
+  assert(std::isfinite(cross));
+  if (std::fabs(cross) <= 1e-12 * std::hypot(ux, uy) * std::hypot(vx, vy)) return false;
+  const double t = ((b.ax - a.ax) * vy - (b.ay - a.ay) * vx) / cross;
+  *pi = {a.ax + t * ux, a.ay + t * uy};
+  return true;
+}
+
+/// The PIs (world coordinates) and per-PI curve settings of a decoded Civil 3D alignment, walking from the tangent
+/// with nothing before it through the sub-entity links. False, naming the problem, when a link leads to a sub-entity
+/// that was not decoded. A decoded record no link reaches cannot change the road and is left out.
+[[nodiscard]] bool CivilAlignmentPis(const libredwgcivil::AlignmentRecord& rec, std::vector<alignment::Point2>* pis,
+                                     std::vector<alignment::CurveSettings>* settings, std::string* why) {
+  assert(pis != nullptr && settings != nullptr && why != nullptr);
+  assert(!rec.tangents.empty());
+  auto tangentWith = [&](uint32_t id) {
+    return std::find_if(rec.tangents.begin(), rec.tangents.end(), [&](const auto& t) { return t.id == id; });
+  };
+  auto cornerWith = [&](uint32_t id) {
+    return std::find_if(rec.corners.begin(), rec.corners.end(), [&](const auto& c) { return c.id == id; });
+  };
+  const auto first = std::find_if(rec.tangents.begin(), rec.tangents.end(), [](const auto& t) { return t.previous == 0; });
+  if (first == rec.tangents.end()) {
+    *why = "it does not start with a fixed tangent";
+    return false;
+  }
+  pis->assign(1, {first->ax, first->ay});
+  settings->assign(1, alignment::CurveSettings{});
+  auto current = first;
+  const size_t limit = rec.tangents.size() + rec.corners.size();
+  for (size_t step = 0; step <= limit && current->next != 0; ++step) {
+    alignment::CurveSettings corner{false, 0.0, 0.0, 0.0};
+    uint32_t nextTangent = current->next;
+    if (const auto c = cornerWith(current->next); c != rec.corners.end()) {
+      corner = {true, c->radius, c->spiralIn, c->spiralOut};
+      nextTangent = c->next;
+    }
+    const auto next = tangentWith(nextTangent);
+    alignment::Point2 pi;
+    if (next == rec.tangents.end()) {
+      *why = "sub-entity " + std::to_string(nextTangent) +
+             " is not a fixed tangent, free curve or free spiral-curve-spiral group, which are the kinds GoSurvey reads";
+      return false;
+    }
+    if (!TangentsMeet(*current, *next, &pi)) {
+      *why = "tangents " + std::to_string(current->id) + " and " + std::to_string(next->id) + " are parallel";
+      return false;
+    }
+    pis->push_back(pi);
+    settings->push_back(corner);
+    current = next;
+  }
+  if (current->next != 0) {
+    *why = "its sub-entity links loop back on themselves";
+    return false;
+  }
+  pis->push_back({current->bx, current->by});
+  settings->push_back(alignment::CurveSettings{});
+  return true;
+}
+
+/// Imports every Civil 3D alignment GoSurvey can rebuild exactly; the others are named in the log (REQ-201). Returns
+/// the handles of the imported ones, whose proxy previews are then not also read as display geometry.
+std::unordered_set<BITCODE_RLL> ImportCivilAlignments(AppCommandState& st, Dwg_Data* dwg,
+                                                      std::vector<std::string>& log) {
+  assert(dwg != nullptr);
+  assert(st.alignments.size() < st.alignments.max_size());
+  std::unordered_set<BITCODE_RLL> imported;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object& object = dwg->object[i];
+    if (object.type < 500 || object.type - 500 >= dwg->num_classes || object.supertype != DWG_SUPERTYPE_ENTITY ||
+        object.tio.entity == nullptr)
+      continue;
+    const char* cls = dwg->dwg_class[object.type - 500].dxfname;
+    if (cls == nullptr || std::strcmp(cls, "AECC_ALIGNMENT") != 0) continue;
+    std::size_t stringStart = object.num_unknown_bits, stringBits = 0;
+    const std::size_t prefix = object.common_size + object.bitsize_pos;
+    const std::size_t trailer = object.stringstream_size >= 32768 ? 33 : 17;
+    if (object.has_strings && object.bitsize >= prefix + trailer + object.stringstream_size) {
+      stringStart = object.bitsize - prefix - trailer - object.stringstream_size;
+      stringBits = object.stringstream_size;
+    }
+    const auto rec = libredwgcivil::DecodeAlignment(object.unknown_bits, object.num_unknown_bits, stringStart, stringBits);
+    std::string name = rec && !rec->name.empty() ? libredwgcad_detail::DecodeDwgString(rec->name.c_str(), true)
+                                                 : std::string("Civil 3D alignment");
+    std::vector<alignment::Point2> pis;
+    std::vector<alignment::CurveSettings> settings;
+    std::string why = "its data could not be read";
+    std::vector<std::string> warnings;
+    alignment::Alignment made;
+    bool ok = rec.has_value() && CivilAlignmentPis(*rec, &pis, &settings, &why);
+    for (alignment::Point2& p : pis) p = {p.x - st.worldDocumentOriginX, p.y - st.worldDocumentOriginY};
+    ok = ok && alignment::BuildFromPis(pis, settings, &made, &why, &warnings);
+    if (ok && !warnings.empty()) {
+      why = warnings.front();  // a curve that does not fit as decoded would not be Civil 3D's geometry
+      ok = false;
+    }
+    if (!ok) {
+      log.push_back("DWG import — Civil 3D alignment \"" + name + "\" was not imported: " + why + ".");
+      continue;
+    }
+    const std::string base = name;
+    auto taken = [&](const std::string& candidate) {
+      return std::any_of(st.alignments.begin(), st.alignments.end(),
+                         [&](const alignment::Alignment& a) { return a.name == candidate; });
+    };
+    for (int n = 2; n < 10000 && taken(name); ++n) name = base + " (" + std::to_string(n) + ")";
+    made.name = name;
+    made.layer = AttrFromEnt(dwg, object.tio.entity).layer;
+    if (made.layer.empty()) made.layer = "0";
+    if (rec->startingStation) made.startingStation = *rec->startingStation;
+    size_t equations = 0;
+    std::string refused;
+    for (const libredwgcivil::AlignmentEquationRecord& e : rec->equations) {
+      alignment::StationEquation eq;
+      eq.rawBack = e.rawStationBack;
+      eq.ahead = e.stationAhead;
+      eq.increasing = e.increasing;
+      if (made.AddStationEquation(eq)) ++equations;
+      else refused += " " + std::to_string(e.rawStationBack) + " -> " + std::to_string(e.stationAhead);
+    }
+    made.id = st.nextEntityId++;
+    log.push_back("DWG import — Civil 3D alignment \"" + name + "\": " + std::to_string(made.Entities().size()) +
+                  " entities, " + std::to_string(equations) + " station equation(s)" +
+                  (rec->startingStation ? "" : "; its starting station was not decoded (0+00 used)") +
+                  (refused.empty() ? "" : "; station equations refused (raw station back -> ahead):" + refused) + ".");
+    st.alignments.push_back(std::move(made));
+    imported.insert(object.handle.value);
+  }
+  return imported;
+}
+
 // Issue #622: AutoCAD-native annotative marker (AcadAnnotative APPID + AnnotativeData XDATA).
 // Appends five EED records; mirrors encode.c downconvert_DIMSTYLE AnnotativeData layout.
 bool AppendAcadAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent) {
@@ -8363,10 +8502,13 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
 
   const Xf2 id{};
   std::vector<TaggedAlignment> taggedAlignments;  // REQ-496.2: GoSurvey alignment entities, rebuilt below
+  const std::unordered_set<BITCODE_RLL> civilAlignments = ImportCivilAlignments(st, &dwg, log);  // REQ-496.3
   Dwg_Object* mspace = dwg_model_space_object(&dwg);
   if (mspace != nullptr) {
     for (Dwg_Object* e = get_first_owned_entity(mspace); e != nullptr; e = get_next_owned_entity(mspace, e)) {
-      if (IsPaperLayoutEntity(&dwg, e) || CollectTaggedAlignmentEntity(st, &dwg, e, &taggedAlignments)) continue;
+      if (IsPaperLayoutEntity(&dwg, e) || civilAlignments.count(e->handle.value) != 0 ||
+          CollectTaggedAlignmentEntity(st, &dwg, e, &taggedAlignments))
+        continue;
       ImportObject(st, &dwg, e, id, 0, &skipHist, &degenerateExtrusions, nullptr);
     }
     ImportPlantParts(st, &dwg, mspace, &skipHist);
@@ -8375,7 +8517,8 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   const bool emptyGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userArcs.empty() &&
                          st.userPolylineVerts.empty() && st.cadAnnotations.empty() && st.userEllipses.empty() &&
                          st.cadMultileaders.empty() && st.cadBlockRefs.empty() && st.cadSolids.empty() &&
-                         st.cadSplines.empty() && st.cadPoints.empty() && taggedAlignments.empty();
+                         st.cadSplines.empty() && st.cadPoints.empty() && taggedAlignments.empty() &&
+                         civilAlignments.empty();
   // DXF decode often leaves BLOCK_HEADER.first_entity unset or pointing at BLOCK/ENDBLK only.
   if (emptyGeom) {
     for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {

@@ -16531,6 +16531,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
      save→reopen with equal values (≤1e-9).
   2. The saved DWG opens in AutoCAD without Recover and shows the alignment as ordinary entities.
   3. The supplied Rapides Substation baseline imports its alignment geometry as an editable alignment.
+     **Decision D-2026-11-04-m:** the Rapides samples contain no alignment, so the baseline is the Civil 3D 2026
+     fixture `samples/civil3d-alignment-fixture.dwg` (tangents, a spiral-curve-spiral, free curves, a station
+     equation) checked against Civil 3D's own station coordinates, with `civil3d-alignment-equations.dwg` for
+     decreasing equations; alignments using other sub-entity kinds are named in the log and not imported.
   4. A legacy drawing with no alignments is byte-identical on re-save apart from the format version.
 - Owner-layer: DWG IO, Domain.
 - Status: accepted (2026-11-02, user approval)
@@ -16690,7 +16694,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   none blocks Phase 1 except item 1): (1) what a displayed station means when it occurs twice under a decreasing
   equation (REQ-483); (2) default fillet radius of Create-from-Objects (REQ-485); (3) whether GoSurvey's clothoid
   positions agree with Civil 3D's for the same A and R to 1e-6 (REQ-481, phase 3: a Civil 3D-saved DWG with a
-  spiral, read through the Object Enabler API, can supply truth values); (4) offset-spiral model (REQ-488);
+  spiral, read through the Object Enabler API, can supply truth values) — evidence 2026-11-04 (D-2026-11-04-m):
+  they agree to ~1e-5 ft, not 1e-6, on the Civil 3D fixture; still open whether to match Civil 3D's formula; (4) offset-spiral model (REQ-488);
   (5) exact label formats of each geometry-point and segment label (REQ-492); (6) the DWG object layout of an
   alignment for decode (REQ-496, shared with the ADR-074 decoder).
 - Status: accepted (2026-11-02, user approval)

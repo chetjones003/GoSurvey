@@ -98,15 +98,20 @@ bool CornerTangents(double delta, const CurveSettings& s, double* tBack, double*
 /// Decides, left to right, which interior PIs get a curve. A plain curve that does not fit what is left of its tangents
 /// gets a smaller radius, as Civil 3D does; a spiral-curve-spiral that does not fit, or a corner even the smaller
 /// radius cannot take, is reported and stays a PI.
-std::vector<Corner> FitCorners(const std::vector<Point2>& pts, const CurveSettings& s,
+std::vector<Corner> FitCorners(const std::vector<Point2>& pts, const std::vector<CurveSettings>& settings,
                                std::vector<std::string>* warnings) {
   assert(pts.size() >= 2);
+  assert(settings.size() == pts.size());
   std::vector<Corner> corners(pts.size());
-  if (!s.addCurves) return corners;
-  const bool spirals = s.spiralInLength > 0.0 || s.spiralOutLength > 0.0;
   double usedAtStart = 0.0;  // of the tangent leaving the previous PI
   for (size_t i = 1; i + 1 < pts.size(); ++i) {
+    const CurveSettings& s = settings[i];
     Corner& c = corners[i];
+    if (!s.addCurves) {
+      usedAtStart = 0.0;
+      continue;
+    }
+    const bool spirals = s.spiralInLength > 0.0 || s.spiralOutLength > 0.0;
     double d = std::remainder(Azimuth(pts[i], pts[i + 1]) - Azimuth(pts[i - 1], pts[i]), kTwoPi);
     c.right = d > 0.0;
     c.delta = std::fabs(d);
@@ -153,23 +158,24 @@ bool AppendCorner(const Corner& c, const CurveSettings& s, Alignment* out) {
   return s.spiralOutLength <= 0.0 || out->AppendSpiral(s.spiralOutLength, r, 0.0, c.right);
 }
 
-}  // namespace
-
-bool BuildFromPis(const std::vector<Point2>& pis, const CurveSettings& s, Alignment* out, std::string* error,
-                  std::vector<std::string>* warnings) {
+/// Tangents PI to PI with each interior PI's own curve settings (`settings[i]` for PI i); the points are distinct.
+bool BuildFromDistinctPis(const std::vector<Point2>& pts, const std::vector<CurveSettings>& settings, Alignment* out,
+                          std::string* error, std::vector<std::string>* warnings) {
   assert(out != nullptr);
-  assert(s.spiralInLength >= 0.0 && s.spiralOutLength >= 0.0);
-  if (out == nullptr) return false;
+  assert(settings.size() == pts.size());
   out->Clear();
   auto fail = [&](const std::string& m) {
     if (error != nullptr) *error = m;
     out->Clear();
     return false;
   };
-  if (s.addCurves && !(s.radius > 0.0 && std::isfinite(s.radius))) return fail("the curve radius must be positive");
-  const std::vector<Point2> pts = DistinctPoints(pis);
   if (pts.size() < 2) return fail("an alignment needs at least two distinct points");
-  const std::vector<Corner> corners = FitCorners(pts, s, warnings);
+  for (size_t i = 1; i + 1 < pts.size(); ++i) {
+    const CurveSettings& s = settings[i];
+    if (!(s.spiralInLength >= 0.0 && s.spiralOutLength >= 0.0)) return fail("a spiral length cannot be negative");
+    if (s.addCurves && !(s.radius > 0.0 && std::isfinite(s.radius))) return fail("the curve radius must be positive");
+  }
+  const std::vector<Corner> corners = FitCorners(pts, settings, warnings);
   for (size_t j = 0; j + 1 < pts.size(); ++j) {
     const double az = Azimuth(pts[j], pts[j + 1]);
     const Point2 dir{std::sin(az), std::cos(az)};
@@ -180,10 +186,34 @@ bool BuildFromPis(const std::vector<Point2>& pis, const CurveSettings& s, Alignm
     const double length = (to.x - from.x) * dir.x + (to.y - from.y) * dir.y;
     if (!(length > kGeomEps) || !out->AppendTangent(from, az, length))
       return fail("tangent " + std::to_string(j + 1) + " has no length left");
-    if (corners[j + 1].fitted && !AppendCorner(corners[j + 1], s, out))
+    if (corners[j + 1].fitted && !AppendCorner(corners[j + 1], settings[j + 1], out))
       return fail("the curve at PI " + std::to_string(j + 2) + " could not be built");
   }
   return true;
+}
+
+}  // namespace
+
+bool BuildFromPis(const std::vector<Point2>& pis, const CurveSettings& s, Alignment* out, std::string* error,
+                  std::vector<std::string>* warnings) {
+  assert(out != nullptr);
+  assert(s.spiralInLength >= 0.0 && s.spiralOutLength >= 0.0);
+  if (out == nullptr) return false;
+  const std::vector<Point2> pts = DistinctPoints(pis);
+  return BuildFromDistinctPis(pts, std::vector<CurveSettings>(pts.size(), s), out, error, warnings);
+}
+
+bool BuildFromPis(const std::vector<Point2>& pis, const std::vector<CurveSettings>& corners, Alignment* out,
+                  std::string* error, std::vector<std::string>* warnings) {
+  assert(out != nullptr);
+  assert(corners.size() == pis.size());
+  if (out == nullptr) return false;
+  if (corners.size() != pis.size() || DistinctPoints(pis).size() != pis.size()) {
+    out->Clear();
+    if (error != nullptr) *error = "each PI needs its own curve settings and the PIs must be distinct";
+    return false;
+  }
+  return BuildFromDistinctPis(pis, corners, out, error, warnings);
 }
 
 }  // namespace alignment

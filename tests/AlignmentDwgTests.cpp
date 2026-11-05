@@ -19,7 +19,10 @@
 #include "DwgIo.hpp"
 #include "GsIo.hpp"
 #include "LibreDwgCad.hpp"
+#include "LibreDwgCivil.hpp"
 
+#include <algorithm>
+#include <string_view>
 #if defined(__cplusplus) && !defined(restrict)
 #define restrict
 #endif
@@ -402,6 +405,119 @@ TEST_CASE("A drawing saved before alignments re-saves with the same data", "[req
   const std::string path2 = (dir.path / "font-demo-2.dwg").string();
   REQUIRE(SaveDrawingDocument(again, path2.c_str(), log));
   CHECK(TrailerJson(path2) == TrailerJson(path));
+}
+
+TEST_CASE("A Civil 3D alignment imports as an editable alignment on Civil 3D's ground positions",
+          "[req496][alignment][dwg][civil3d]") {
+  const std::string base = std::string(GOSURVEY_SAMPLES_DIR) + "/civil3d-alignment-fixture";
+  std::ifstream refFile(base + "-reference.json");
+  REQUIRE(refFile);
+  const nlohmann::json ref = nlohmann::json::parse(refFile);
+  AppCommandState in = Drawing();
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(in, (base + ".dwg").c_str(), log, false));
+  INFO([&] { std::string all; for (const std::string& l : log) all += l + "\n"; return all; }());
+  REQUIRE(in.alignments.size() == 1);
+  const alignment::Alignment& a = in.alignments[0];
+  CHECK(a.name == ref["name"].get<std::string>());
+  CHECK(a.startingStation == ref["startingStation"].get<double>());
+  REQUIRE(a.Entities().size() == 9);  // T, spiral-curve-spiral, T, curve, T, curve, T
+  CHECK(a.Entities()[1].kind == alignment::EntityKind::Spiral);
+  CHECK(a.Entities()[2].radius == Catch::Approx(237.5).margin(1e-9));
+  CHECK(a.Entities()[5].radius == Catch::Approx(412.25).margin(1e-9));
+  CHECK(a.Entities()[7].radius == Catch::Approx(180.0).margin(1e-9));
+  // GoSurvey's clothoid and Civil 3D's place the spiral group's ends ~7e-6 ft apart (REQ-503 open question 3); the
+  // tangent before the group matches exactly.
+  constexpr double kClothoidAgreement = 2e-5;
+  CHECK(std::fabs(a.Length() - ref["length"].get<double>()) <= kClothoidAgreement);
+  REQUIRE(a.equations.size() == 1);
+  CHECK(a.equations[0].rawBack == 1400.0);
+  CHECK(a.equations[0].ahead == 1650.0);
+  CHECK(a.equations[0].increasing);
+  // Every 100 ft station Civil 3D reported, at its raw station: exact before the spirals, within the clothoid
+  // agreement after them.
+  double worstBefore = 0.0, worstAfter = 0.0;
+  for (const nlohmann::json& s : ref["stations"]) {
+    const alignment::Point2 p = WorldAt(in, a, s[0].get<double>());
+    const double d = std::max(std::fabs(p.x - s[1].get<double>()), std::fabs(p.y - s[2].get<double>()));
+    double& worst = s[0].get<double>() < a.EntityStartStation(1) ? worstBefore : worstAfter;
+    worst = std::max(worst, d);
+  }
+  CHECK(ref["stations"].size() == 24);
+  CHECK(worstBefore <= 1e-6);
+  CHECK(worstAfter <= kClothoidAgreement);
+  CHECK(LogHas(log, "Civil 3D alignment \"GS Fixture\": 9 entities, 1 station equation(s)"));
+  CHECK_FALSE(LogHas(log, "\"AECC_ALIGNMENT(semantic data not decoded"));  // its preview is not read as well
+}
+
+TEST_CASE("Civil 3D station equations keep their direction", "[req496][alignment][dwg][civil3d]") {
+  AppCommandState in = Drawing();
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(in, (std::string(GOSURVEY_SAMPLES_DIR) + "/civil3d-alignment-equations.dwg").c_str(),
+                             log, false));
+  REQUIRE(in.alignments.size() == 1);
+  const alignment::Alignment& a = in.alignments[0];
+  REQUIRE(a.equations.size() == 2);
+  CHECK(a.equations[0].rawBack == 1234.5);
+  CHECK(a.equations[0].ahead == 1345.25);
+  CHECK(a.equations[0].increasing);
+  CHECK(a.equations[1].rawBack == 1876.75);
+  CHECK(a.equations[1].ahead == 1765.5);
+  CHECK_FALSE(a.equations[1].increasing);
+}
+
+TEST_CASE("The Civil 3D alignment decoder refuses what it cannot read", "[req496][alignment][civil3d]") {
+  CHECK_FALSE(libredwgcivil::DecodeAlignment(nullptr, 0, 0, 0).has_value());
+  const std::vector<unsigned char> zeros(1000, 0);
+  CHECK_FALSE(libredwgcivil::DecodeAlignment(zeros.data(), zeros.size() * 8, zeros.size() * 8, 0).has_value());
+
+  // The fixture's own record, with the sentinel before the 412.25 curve broken: that curve is no longer found, so
+  // the link from its tangents leads nowhere and the importer refuses the alignment rather than guessing.
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file((std::string(GOSURVEY_SAMPLES_DIR) + "/civil3d-alignment-fixture.dwg").c_str(), &dwg) <
+          DWG_ERR_CRITICAL);
+  std::vector<unsigned char> bits;
+  size_t bitCount = 0, stringStart = 0, stringBits = 0;
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object& o = dwg.object[i];
+    if (o.type < 500 || o.type - 500 >= dwg.num_classes ||
+        std::string_view(dwg.dwg_class[o.type - 500].dxfname) != "AECC_ALIGNMENT")
+      continue;
+    bitCount = o.num_unknown_bits;
+    bits.assign(o.unknown_bits, o.unknown_bits + (bitCount + 7) / 8);
+    stringBits = o.stringstream_size;  // laid out as the importer reads it
+    stringStart = o.bitsize - (o.common_size + o.bitsize_pos) - (stringBits >= 32768 ? 33 : 17) - stringBits;
+  }
+  dwg_free(&dwg);
+  REQUIRE(bitCount > 0);
+  const auto whole = libredwgcivil::DecodeAlignment(bits.data(), bitCount, stringStart, stringBits);
+  REQUIRE(whole.has_value());
+  CHECK(whole->tangents.size() == 4);
+  REQUIRE(whole->corners.size() == 3);
+  constexpr size_t kSentinelBeforeCurve2 = 2474;  // the third -1.0 before the 412.25 curve
+  bits[kSentinelBeforeCurve2 / 8 + 2] ^= 0x10;
+  const auto broken = libredwgcivil::DecodeAlignment(bits.data(), bitCount, stringStart, stringBits);
+  REQUIRE(broken.has_value());
+  CHECK(broken->corners.size() == 2);
+  CHECK(std::none_of(broken->corners.begin(), broken->corners.end(),
+                     [](const libredwgcivil::AlignmentCornerRecord& c) { return c.radius == 412.25; }));
+}
+
+TEST_CASE("Per-PI curve settings build each corner its own way", "[req496][alignment]") {
+  const std::vector<alignment::Point2> pis = {{0, 0}, {0, 600}, {500, 900}, {1100, 900}};
+  std::vector<alignment::CurveSettings> corners(4, alignment::CurveSettings{false, 0.0, 0.0, 0.0});
+  corners[1] = {true, 237.5, 60.0, 75.0};
+  corners[2] = {true, 412.25, 0.0, 0.0};
+  alignment::Alignment a;
+  std::string why;
+  REQUIRE(alignment::BuildFromPis(pis, corners, &a, &why));
+  REQUIRE(a.Entities().size() == 7);  // T, S, C, S, T, C, T
+  CHECK(a.Entities()[1].length == Catch::Approx(60.0).margin(1e-9));
+  CHECK(a.Entities()[3].length == Catch::Approx(75.0).margin(1e-9));
+  CHECK(a.Entities()[5].radius == Catch::Approx(412.25).margin(1e-9));
+  corners.pop_back();
+  CHECK_FALSE(alignment::BuildFromPis(pis, corners, &a, &why));  // one setting per PI
+  CHECK(a.Empty());
 }
 
 // Hidden fixture writer for the AutoCAD oracle (REQ-496 acceptance 2): run with GOSURVEY_ORACLE_DIR=<dir>

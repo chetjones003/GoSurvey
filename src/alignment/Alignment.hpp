@@ -446,6 +446,11 @@ struct CurveSettings {
 /// reported in `warnings`. False, with `out` cleared, for fewer than two distinct points or an invalid setting.
 [[nodiscard]] bool BuildFromPis(const std::vector<Point2>& pis, const CurveSettings& s, Alignment* out,
                                 std::string* error, std::vector<std::string>* warnings = nullptr);
+/// The same with each interior PI's own settings (`corners[i]` for PI i; the first and last are ignored), as a Civil 3D
+/// alignment of fixed tangents with free curves and free spiral-curve-spiral groups between them is defined. The PIs
+/// must be distinct; false otherwise.
+[[nodiscard]] bool BuildFromPis(const std::vector<Point2>& pis, const std::vector<CurveSettings>& corners,
+                                Alignment* out, std::string* error, std::vector<std::string>* warnings = nullptr);
 
 // --- REQ-487.1 grips, placed and behaving like Civil 3D's ---
 enum class GripKind {
