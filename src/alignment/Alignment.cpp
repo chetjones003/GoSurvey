@@ -420,7 +420,6 @@ StationOffset Alignment::GetStationOffset(double x, double y) const {
       double s;
       if (rho == 0.0) {
         s = 0.0;  // the centre is equidistant from every point; take the start
-        c.clampedStart = true;
       } else {
         const double angPoint = std::atan2(ux, uy);
         const double angStart = std::atan2(-cx, -cy);
@@ -851,8 +850,12 @@ void Alignment::AppendDisplaySamples(int entityIndex, double maxChordHeight, std
     return;
   }
   if (e.kind == EntityKind::Arc) {
-    const double dTheta = 2.0 * std::acos(1.0 - std::min(h, e.radius * 0.5) / e.radius);
-    const int steps = std::clamp(static_cast<int>(std::ceil((e.length / e.radius) / dTheta)), 1, kMaxSteps);
+    const double sagitta = std::min(h, e.radius * 0.5);
+    const double dTheta = 4.0 * std::asin(std::sqrt(sagitta / (2.0 * e.radius)));
+    const double requiredSteps = dTheta > 0.0 ? std::ceil((e.length / e.radius) / dTheta) : kMaxSteps;
+    const int steps = !std::isfinite(requiredSteps) || requiredSteps >= kMaxSteps
+                          ? kMaxSteps
+                          : std::max(1, static_cast<int>(requiredSteps));
     for (int k = 1; k <= steps; ++k) out->push_back(PointInEntity(entityIndex, e.length * k / steps));
     return;
   }

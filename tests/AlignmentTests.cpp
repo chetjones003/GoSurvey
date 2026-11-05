@@ -134,6 +134,30 @@ TEST_CASE("Points beyond the ends clamp and are flagged", "[req484][alignment]")
   CHECK(before.offset == Approx(5.0).margin(kEps));  // 3-4-5 to the start point; right side is positive
 }
 
+TEST_CASE("Arc center projection is ambiguous but remains in range", "[req484][alignment][regression]") {
+  Alignment a;
+  REQUIRE(a.AppendTangent({0, 0}, 0.0, 10.0));
+  REQUIRE(a.AppendCurveByDelta(100.0, 90.0 * kDeg, true));
+  const Point2 center{100.0, 10.0};
+  const alignment::StationOffset projection = a.GetStationOffset(center.x, center.y);
+  CHECK(projection.internalStation == Approx(10.0));
+  CHECK(projection.offset == Approx(100.0));
+  CHECK_FALSE(projection.outOfRange);
+}
+
+TEST_CASE("Shallow large-radius arcs produce bounded display samples", "[req495][alignment][regression]") {
+  Alignment a;
+  REQUIRE(a.AppendTangent({0, 0}, 0.0, 10.0));
+  REQUIRE(a.AppendCurveByDelta(1e14, 1e-8, true));
+  std::vector<Point2> samples;
+  a.AppendDisplaySamples(1, 1e-4, &samples);
+  CHECK(samples.size() == 4);
+  for (const Point2& p : samples) {
+    CHECK(std::isfinite(p.x));
+    CHECK(std::isfinite(p.y));
+  }
+}
+
 TEST_CASE("Spiral station-offset projection converges at large offsets", "[req484][alignment][regression]") {
   Alignment a;
   Entity spiral;

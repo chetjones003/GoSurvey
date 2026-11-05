@@ -1255,9 +1255,9 @@ std::optional<AlignmentRecord> DecodeAlignment(const unsigned char* bytes, std::
       }
     }
   }
+  Cursor stationCursor(bytes, bitCount, kAlignmentStationBit);
   double station = 0.0;
-  if (FullDouble(bytes, bitCount, kAlignmentStationBit, &station) && PlausibleAlignmentValue(station))
-    record.startingStation = station;
+  if (stationCursor.Double(&station) && PlausibleAlignmentValue(station)) record.startingStation = station;
   const std::size_t dataEnd = std::min(bitCount, stringStart);
   std::size_t lastRecordEnd = 0;
   for (std::size_t at = 0; at < dataEnd; ++at) {

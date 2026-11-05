@@ -513,6 +513,34 @@ TEST_CASE("The Civil 3D alignment decoder refuses what it cannot read", "[req496
                      [](const libredwgcivil::AlignmentCornerRecord& c) { return c.radius == 412.25; }));
 }
 
+TEST_CASE("The Civil 3D alignment decoder accepts shorthand starting stations", "[req496][alignment][civil3d]") {
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file((std::string(GOSURVEY_SAMPLES_DIR) + "/civil3d-alignment-fixture.dwg").c_str(), &dwg) <
+          DWG_ERR_CRITICAL);
+  std::vector<unsigned char> bits;
+  size_t bitCount = 0, stringStart = 0, stringBits = 0;
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object& o = dwg.object[i];
+    if (o.type < 500 || o.type - 500 >= dwg.num_classes ||
+        std::string_view(dwg.dwg_class[o.type - 500].dxfname) != "AECC_ALIGNMENT") continue;
+    bitCount = o.num_unknown_bits;
+    bits.assign(o.unknown_bits, o.unknown_bits + (bitCount + 7) / 8);
+    stringBits = o.stringstream_size;
+    stringStart = o.bitsize - (o.common_size + o.bitsize_pos) - (stringBits >= 32768 ? 33 : 17) - stringBits;
+    break;
+  }
+  dwg_free(&dwg);
+  REQUIRE_FALSE(bits.empty());
+  // Bit-double code 01 encodes exactly 1.0. Bits are stored most-significant first.
+  constexpr size_t stationBit = 354;
+  bits[stationBit / 8] &= static_cast<unsigned char>(~(1u << (7 - stationBit % 8)));
+  bits[(stationBit + 1) / 8] |= static_cast<unsigned char>(1u << (7 - (stationBit + 1) % 8));
+  const auto decoded = libredwgcivil::DecodeAlignment(bits.data(), bitCount, stringStart, stringBits);
+  REQUIRE(decoded.has_value());
+  REQUIRE(decoded->startingStation.has_value());
+  CHECK(*decoded->startingStation == 1.0);
+}
+
 TEST_CASE("Per-PI curve settings build each corner its own way", "[req496][alignment]") {
   const std::vector<alignment::Point2> pis = {{0, 0}, {0, 600}, {500, 900}, {1100, 900}};
   std::vector<alignment::CurveSettings> corners(4, alignment::CurveSettings{false, 0.0, 0.0, 0.0});
