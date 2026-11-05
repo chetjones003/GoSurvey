@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+
 #include "alignment/Alignment.hpp"
 
 namespace alignment {

@@ -106,6 +106,9 @@ renderer (REQ-495.1: never a query or export). The snap re-samples near the curs
   now cover interior spiral bounds extrema, finite-to-finite spiral A, and spirals with deflection at least π. They
   failed before the fix and pass afterward: Release `[alignment]` passes 260 cases / 207,048 assertions, and Debug
   `[alignment][regression]` passes all three cases with assertions enabled.
+- CI build follow-up: a standalone include compile reproduced `std::isfinite` being unavailable from
+  `Clothoid.hpp` because it relied on the project precompiled header. Added the direct `<cmath>` include; the standalone
+  compile and full Release build pass.
 
 ## Technical debt
 
