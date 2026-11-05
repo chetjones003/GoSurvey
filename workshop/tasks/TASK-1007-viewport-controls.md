@@ -37,6 +37,7 @@
 - 2026-11-03: User selected all three controls and DWG/DXF persistence.
 - Repository evidence: `Viewport` already has `on` and `locked`; DXF group 90 and LibreDWG VIEWPORT `status_flag` carry those flags. Status group 90 also has native bit 2048 for hide-plot. GoSurvey does not consistently enforce the existing flags or currently read/write bit 2048.
 - Product evidence: AutoCAD 2025 accoreconsole exposes MVIEW ON/OFF and Lock. Civil 3D is unavailable and Autodesk Help exposed only a dynamic shell. The native status bit resolves the DWG/DXF storage representation without relying on those unavailable product surfaces.
+- PR review follow-up (2026-11-04): a reviewer claimed group 90 bit 2048 means hidden-line removal rather than plot exclusion. Checked Autodesk Help, but its dynamic shell did not return reference content; the installed accoreconsole does not offer a direct query for that bit's meaning. The DXF codec ezdxf labels `0x800` `VSF_HIDE_PLOT_MODE` in `src/ezdxf/lldxf/const.py`, and VIEWPORT status parsing in `src/ezdxf/entities/viewport.py` treats the flags as viewport status. This supports the existing 2048 hide-plot mapping, so it remains unchanged. Source: https://github.com/mozman/ezdxf/blob/master/src/ezdxf/lldxf/const.py
 
 ## 6. Verification review
 

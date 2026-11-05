@@ -8052,6 +8052,8 @@ TEST_CASE("DXF export writes block definitions and model/paper INSERT references
   def.content.texts.back().insY = 4.f;
   def.content.texts.back().plottedHeightInches = 0.25f;
   def.content.textAttrs.resize(1);
+  def.content.circles = {5.0, 6.0, 0.0, 2.0};
+  def.content.circleNormals = {0.f, 1.f, 0.f};
   st.blockDefs.push_back(def);
   CadBlockRef modelRef;
   modelRef.defName = "TitleBlock";
@@ -8088,6 +8090,7 @@ TEST_CASE("DXF export writes block definitions and model/paper INSERT references
 
   std::vector<std::string> log;
   REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  CHECK(LogContains(log, "1 unsupported block member(s)"));
   if (const char* fixturePath = std::getenv("GOSURVEY_ISSUE780_FIXTURE"); fixturePath && *fixturePath) {
     const std::filesystem::path fixture(fixturePath);
     std::error_code ec;
@@ -8112,6 +8115,13 @@ TEST_CASE("DXF export writes block definitions and model/paper INSERT references
   const auto [titleBlock, endBlock] = DxfBlockDefinitionRange(text, "TitleBlock");
   REQUIRE(titleBlock != std::string::npos);
   REQUIRE(endBlock != std::string::npos);
+  CHECK(text.substr(titleBlock, endBlock - titleBlock).find("\r\nCIRCLE\r\n") == std::string::npos);
+  const std::string linearSpline =
+      "0\r\nSPLINE\r\n100\r\nAcDbEntity\r\n8\r\n0\r\n100\r\nAcDbSpline\r\n"
+      "70\r\n0\r\n71\r\n1\r\n72\r\n4\r\n73\r\n2\r\n74\r\n0\r\n"
+      "40\r\n0\r\n40\r\n0\r\n40\r\n1\r\n40\r\n1\r\n"
+      "10\r\n0\r\n20\r\n0\r\n30\r\n0\r\n10\r\n1\r\n20\r\n1\r\n30\r\n0\r\n";
+  text.insert(endBlock, linearSpline);
   const std::string solidHatch =
       "0\r\nHATCH\r\n100\r\nAcDbEntity\r\n8\r\n0\r\n100\r\nAcDbHatch\r\n2\r\nSOLID\r\n"
       "70\r\n1\r\n71\r\n0\r\n91\r\n1\r\n92\r\n2\r\n72\r\n0\r\n73\r\n1\r\n93\r\n4\r\n"
@@ -8127,7 +8137,7 @@ TEST_CASE("DXF export writes block definitions and model/paper INSERT references
 
   AppCommandState imported;
   REQUIRE(ImportDxfFile(imported, p.c_str(), log));
-  CHECK(LogContains(log, "block definition 'TitleBlock' skipped 1 unsupported entity/entities (HATCH × 1)"));
+  CHECK(LogContains(log, "block definition 'TitleBlock' skipped 2 unsupported entity/entities (HATCH × 1, SPLINE × 1)"));
   REQUIRE(imported.blockDefs.size() == 1);
   CHECK(imported.blockDefs[0].name == "TitleBlock");
   REQUIRE(imported.cadBlockRefs.size() == 1);

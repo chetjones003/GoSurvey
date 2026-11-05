@@ -2347,6 +2347,13 @@ void ImportDxfBlockDefinitions(const std::vector<DxfPair>& t,
       }
       entity = next;
     }
+    // CadBlockContent has no spline collection yet. The general parser can decode block SPLINEs
+    // into scratch state, so account for them explicitly instead of silently dropping them.
+    if (!scratch.cadSplines.empty()) {
+      const int splineCount = static_cast<int>(scratch.cadSplines.size());
+      skUnknown += splineCount;
+      skipCounts["SPLINE"] += splineCount;
+    }
     auto& content = def.content;
     content.lines.assign(scratch.userLinesFlat.begin(), scratch.userLinesFlat.end());
     content.lineAttrs = std::move(scratch.userLineAttrs);
@@ -3663,14 +3670,17 @@ std::vector<DxfOutPair> DxfBlockDefinitionEntityPairs(const AppCommandState& st,
   toFloat(src.lines, &block.paperLines);
   block.paperLineAttrs = src.lineAttrs;
   for (size_t i = 0; i + 3 < src.circles.size(); i += 4) {
-    if (std::fabs(src.circles[i + 2]) > 1e-6) {
-      ++*unsupportedCount;  // paper-space circle codec is planar; keep 3D blocks explicit in the loss log.
+    const size_t circleIndex = i / 4;
+    float nx = 0.f, ny = 0.f, nz = 1.f;
+    CircleNormalAt(src.circleNormals, circleIndex, &nx, &ny, &nz);
+    if (std::fabs(src.circles[i + 2]) > 1e-6 || !IsFlatNormal(nx, ny, nz)) {
+      ++*unsupportedCount;  // Paper-space circle codec is planar; do not flatten elevated or tilted circles.
       continue;
     }
     block.paperCircles.insert(block.paperCircles.end(), {static_cast<float>(src.circles[i]),
                                                           static_cast<float>(src.circles[i + 1]),
                                                           static_cast<float>(src.circles[i + 3])});
-    const size_t attrIndex = i / 4;
+    const size_t attrIndex = circleIndex;
     block.paperCircleAttrs.push_back(attrIndex < src.circleAttrs.size() ? src.circleAttrs[attrIndex]
                                                                        : EntityAttributes{});
   }
