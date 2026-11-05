@@ -15,6 +15,7 @@
 #include "CadDimStroke.hpp"
 #include "render/ViewportProjection.hpp"  // REQ-061: per-viewport camera projection
 #include "util/cadtable.hpp"
+#include "AlignmentStyle.hpp"  // REQ-495.1: alignments plot in their style
 
 #include <cctype>
 
@@ -593,6 +594,27 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         for (const auto& p : points)
           w.push_back({p.x + oX, p.y + oY, p.z});
         emitModelChain(w, false);
+      }
+      // REQ-495.1: alignments plot in each viewport from the same exact geometry, sampled for display only, in the
+      // style's tangent, curve and spiral colours.
+      for (const alignment::Alignment& al : st.alignments) {
+        const std::string layer = al.layer.empty() ? std::string("0") : al.layer;
+        if (al.Empty() || CadEntityIdHidden(&st.hiddenEntityIds, al.id) || !plottable(layer) ||
+            IsLayerFrozenInViewport(vp, layer))
+          continue;
+        const AlignmentStyle* sty = AlignmentStyles::Resolve(st.alignmentStyles, al.style);
+        setLineStyle(nullptr, layer);
+        for (int ei = 0; ei < static_cast<int>(al.Entities().size()); ++ei) {
+          const SurfaceComponentStyle* comp =
+              sty != nullptr ? AlignmentStyles::ComponentForEntity(*sty, al.Entities()[static_cast<size_t>(ei)].kind) : nullptr;
+          if (comp != nullptr && !comp->visible)
+            continue;
+          curColor = resolveRgb(layer, comp != nullptr ? comp->color : std::string("ByLayer"));
+          std::vector<std::array<double, 3>> w;
+          for (const alignment::Point2& p : al.SampleEntityForDisplay(ei, kSplineSampleTolerance))
+            w.push_back({p.x + oX, p.y + oY, 0.0});
+          emitModelChain(w, false);
+        }
       }
       {
         const double viewH = std::max(1.0, static_cast<double>(vy1 - vy0));

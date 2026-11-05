@@ -690,7 +690,9 @@ void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double t
 
   // REQ-490: alignments participate in INT/APPINT with lines, arcs and other alignments (exact geometry sampled to
   // segments only for display tolerance — same chord height as the viewport uses at this aperture).
+  // An entity with a chord near the cursor is sampled again finely, so the crossing found lies on the true curve.
   const double alignChord = std::max(tol * 0.25, 1e-6);
+  constexpr double kSnapChord = 1e-4;
   for (size_t ai = 0; ai < cmd.alignments.size(); ++ai) {
     const alignment::Alignment& al = cmd.alignments[ai];
     if (al.Empty())
@@ -698,9 +700,19 @@ void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double t
     const int nEnt = static_cast<int>(al.Entities().size());
     int seq = 0;
     for (int ei = 0; ei < nEnt; ++ei) {
-      const std::vector<alignment::Point2> pts = al.SampleEntityForDisplay(ei, alignChord);
+      std::vector<alignment::Point2> pts = al.SampleEntityForDisplay(ei, alignChord);
       if (pts.size() < 2)
         continue;
+      bool near = false;
+      for (size_t k = 1; k < pts.size() && !near; ++k) {
+        const double r = 0.5 * std::hypot(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y);
+        near = NearCursor(ray, wx, wy, 0.5 * (pts[k].x + pts[k - 1].x), 0.5 * (pts[k].y + pts[k - 1].y), 0.0, r, tol);
+      }
+      if (!near) {
+        seq += static_cast<int>(pts.size()) - 1;
+        continue;
+      }
+      if (alignChord > kSnapChord) pts = al.SampleEntityForDisplay(ei, kSnapChord);
       for (size_t k = 1; k < pts.size(); ++k, ++seq) {
         IsectSeg s{pts[k - 1].x, pts[k - 1].y, 0.0, pts[k].x, pts[k].y, 0.0, static_cast<int>(ai), seq};
         const double mx = 0.5 * (s.x0 + s.x1);

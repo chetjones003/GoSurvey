@@ -384,6 +384,8 @@ class Alignment {
   [[nodiscard]] std::vector<Point2> SampleEntityForDisplay(int entityIndex, double maxChordHeight) const;
 
  private:
+  /// Appends the display samples of one entity after its start point (REQ-495.1).
+  void AppendDisplaySamples(int entityIndex, double maxChordHeight, std::vector<Point2>* out) const;
   void Rebuild();
   /// Re-solves every floating / free relationship in the chain (REQ-486.2). False names the failing row.
   bool Resolve(std::string* whyNot);

@@ -11,7 +11,11 @@
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
 #include "alignment/Alignment.hpp"
+#include "alignment/AlignmentDisplayCache.hpp"
 #include "alignment/AlignmentTables.hpp"
+
+#include <catch2/catch_approx.hpp>
+#include <cmath>
 
 using alignment::Alignment;
 
@@ -236,4 +240,110 @@ TEST_CASE("New alignments use the current alignment style, which cannot be delet
   CHECK(LogHas(log, "current style and cannot be deleted"));
   CHECK(AlignmentStyles::Find(st.alignmentStyles, "Road") != nullptr);
   CHECK(Reopened(st).alignmentStyleCurrent == "Road");
+}
+
+// --- REQ-495: display sampling, the display cache and the bench scene ---
+
+namespace {
+
+/// The largest sagitta between consecutive samples of a circular arc of radius `r`.
+double WorstArcSagitta(const std::vector<alignment::Point2>& pts, double r) {
+  double worst = 0.0;
+  for (size_t i = 1; i < pts.size(); ++i) {
+    const double c = std::hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    worst = std::max(worst, r - std::sqrt(std::max(0.0, r * r - 0.25 * c * c)));
+  }
+  return worst;
+}
+
+}  // namespace
+
+TEST_CASE("Small and large arcs stay within a quarter pixel at 1:1 and 1000x zoomed out", "[req495][alignment]") {
+  for (const double radius : {5.0, 5000.0}) {
+    Alignment a;
+    REQUIRE(a.AppendTangent({0.0, 0.0}, 0.0, 10.0));
+    REQUIRE(a.AppendCurve(radius, radius * 1.5, true));  // 86 degrees of arc
+    for (const double pixelWorld : {0.01, 10.0}) {  // drawing units per pixel at 1:1 and zoomed 1000x out
+      const double h = 0.25 * pixelWorld;
+      const std::vector<alignment::Point2> pts = a.SampleEntityForDisplay(1, h);
+      REQUIRE(pts.size() >= 2);
+      CHECK(WorstArcSagitta(pts, radius) <= h + 1e-12);
+      alignment::AlignmentDisplayCache cache;
+      const std::vector<alignment::Point2>& cached = cache.Samples(a, h)[1];
+      CHECK(WorstArcSagitta(cached, radius) <= h + 1e-12);
+    }
+  }
+}
+
+TEST_CASE("Spiral samples hug the clothoid, with curvature rising along it", "[req495][alignment]") {
+  Alignment a;
+  REQUIRE(a.AppendTangent({0.0, 0.0}, 0.0, 10.0));
+  REQUIRE(a.AppendSpiral(300.0, 0.0, 200.0, true));
+  const double h = 0.0025;  // a quarter pixel at 0.01 units per pixel
+  const std::vector<alignment::Point2> pts = a.SampleEntityForDisplay(1, h);
+  REQUIRE(pts.size() >= 3);
+  CHECK(pts.size() < 300.0 / h / 10.0);  // far fewer than a fixed step of the tolerance would make
+  double worst = 0.0;
+  for (size_t i = 1; i < pts.size(); ++i) {  // the true curve between two samples stays within h of their chord
+    const alignment::StationOffset so0 = a.GetStationOffset(pts[i - 1].x, pts[i - 1].y);
+    const alignment::StationOffset so1 = a.GetStationOffset(pts[i].x, pts[i].y);
+    const alignment::Point2 mid = a.GetPointAtStation(0.5 * (so0.internalStation + so1.internalStation));
+    const double dx = pts[i].x - pts[i - 1].x, dy = pts[i].y - pts[i - 1].y;
+    worst = std::max(worst, std::fabs((mid.x - pts[i - 1].x) * dy - (mid.y - pts[i - 1].y) * dx) / std::hypot(dx, dy));
+  }
+  CHECK(worst <= h * 1.01);
+  double last = -1.0;
+  bool rising = true;
+  for (size_t i = 2; i < pts.size(); ++i) {  // turning per unit length between successive chords never falls
+    const double a0 = std::atan2(pts[i - 1].y - pts[i - 2].y, pts[i - 1].x - pts[i - 2].x);
+    const double a1 = std::atan2(pts[i].y - pts[i - 1].y, pts[i].x - pts[i - 1].x);
+    const double len = 0.5 * (std::hypot(pts[i - 1].x - pts[i - 2].x, pts[i - 1].y - pts[i - 2].y) +
+                              std::hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+    const double k = std::fabs(std::remainder(a1 - a0, 2.0 * alignment::kPi)) / len;
+    if (k < last * (1.0 - 1e-6)) rising = false;
+    last = k;
+  }
+  CHECK(rising);
+}
+
+TEST_CASE("The display cache holds across pans and restyles and refreshes on a geometry edit or zoom bucket",
+          "[req495][alignment]") {
+  Alignment a;
+  a.id = 7;
+  REQUIRE(a.AppendTangent({0.0, 0.0}, 0.0, 100.0));
+  REQUIRE(a.AppendCurve(300.0, 200.0, true));
+  alignment::AlignmentDisplayCache cache;
+  (void)cache.Samples(a, 0.01);
+  CHECK(cache.Rebuilds() == 1);
+  (void)cache.Samples(a, 0.01);    // a pan: same zoom
+  a.style = "Other";               // a restyle: same geometry
+  (void)cache.Samples(a, 0.0105);  // the same half-octave bucket
+  CHECK(cache.Rebuilds() == 1);
+  CHECK(alignment::AlignmentDisplayCache::BucketTolerance(alignment::AlignmentDisplayCache::Bucket(0.0105)) <= 0.0105);
+  (void)cache.Samples(a, 0.1);  // zoomed out: another bucket
+  CHECK(cache.Rebuilds() == 2);
+  (void)cache.Samples(a, 0.01);  // back again: still cached
+  CHECK(cache.Rebuilds() == 2);
+  REQUIRE(a.AppendTangent(50.0));  // a geometry edit
+  CHECK(cache.Samples(a, 0.01).size() == 3);
+  CHECK(cache.Rebuilds() == 3);
+  cache.Retain({});
+  (void)cache.Samples(a, 0.01);
+  CHECK(cache.Rebuilds() == 4);  // dropped with its alignment
+}
+
+TEST_CASE("BENCH ALIGNMENT installs the alignment scene and restores the drawing", "[req495][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  ThreeEntity(st, "KEEP", log);
+  Submit(st, "BENCH ALIGNMENT 12 9 5", log);
+  REQUIRE(st.bench.active);
+  REQUIRE(st.alignments.size() == 12);
+  CHECK(st.alignments[0].Entities().size() == 9);
+  CHECK(LogHas(log, "12 alignments x 9 entities"));
+  st.bench.frameMs = {1.0, 2.0};
+  FinishFrameBudgetBench(st, log);
+  REQUIRE(st.alignments.size() == 1);
+  CHECK(st.alignments[0].name == "KEEP");
+  CHECK(LogHas(log, "BENCH (alignments)"));
 }

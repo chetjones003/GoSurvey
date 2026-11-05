@@ -862,6 +862,8 @@ struct CadExtendedGeometryInput {
   const std::vector<alignment::Alignment>* alignments = nullptr;
   /// Named alignment styles (REQ-491); read when drawing each alignment entity.
   const std::vector<AlignmentStyle>* alignmentStyles = nullptr;
+  /// Layers frozen in the paper-space viewport being drawn (REQ-028); alignments on them are not drawn (REQ-495.4).
+  const std::vector<std::string>* viewportFrozenLayers = nullptr;
   /// REQ-456 CAD POINT entities.
   const std::vector<CadPoint>* points = nullptr;
   const std::vector<EntityAttributes>* pointAttrs = nullptr;
@@ -2504,6 +2506,10 @@ struct AppCommandState {
     int solidCount = 0;
     /// Total tessellated triangles across the solid scene, filled in when the scene is built.
     int solidTriangleCount = 0;
+    /// REQ-495 acceptance 4: alignments in the alignment profile, each `alignmentEntityCount` entities long.
+    /// 0 = not the alignment profile.
+    int alignmentCount = 0;
+    int alignmentEntityCount = 0;
 
     /// REQ-100 profile (e) (TASK-270 §14): non-empty selects the point-cloud profile. Unlike every
     /// other profile, the scene is not synthesized — it is the real file at this path, imported
@@ -2537,6 +2543,7 @@ struct AppCommandState {
     std::vector<EntityAttributes> savedMeshAttrs;
     std::vector<CadSolidPtr> savedSolids;             ///< restored verbatim after a solid run
     std::vector<EntityAttributes> savedSolidAttrs;
+    std::vector<alignment::Alignment> savedAlignments;  ///< restored verbatim after an alignment run
     /// The mesh profile forces Shaded (REQ-100 (b) measures *shaded* meshes, and REQ-064's budget
     /// condition is stated in Shaded). Saved so a bench run cannot leave the user in a style they
     /// did not choose — which would also silently invalidate ADR-026 (e)'s 2D Wireframe parity.

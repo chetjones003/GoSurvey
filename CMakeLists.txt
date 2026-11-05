@@ -659,6 +659,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/alignment/AlignmentFeatureLine.cpp
   src/alignment/AlignmentDesign.cpp
   src/alignment/AlignmentTables.cpp
+  src/alignment/AlignmentDisplayCache.cpp
   src/alignment/Clothoid.cpp
   # Geometry math (util)
   src/util/geom2d.cpp

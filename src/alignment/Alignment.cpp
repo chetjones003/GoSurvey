@@ -747,39 +747,51 @@ bool Alignment::Bounds(Point2* mn, Point2* mx) const {
   return true;
 }
 
+void Alignment::AppendDisplaySamples(int entityIndex, double maxChordHeight, std::vector<Point2>* out) const {
+  assert(out != nullptr);
+  assert(entityIndex >= 0 && static_cast<size_t>(entityIndex) < entities_.size());
+  constexpr int kMaxSteps = 1 << 16;  // a display bound: past this the chords are far below a pixel anyway
+  const Entity& e = entities_[static_cast<size_t>(entityIndex)];
+  const double h = std::max(maxChordHeight, 1e-9);
+  if (e.kind == EntityKind::Line) {
+    out->push_back(PointInEntity(entityIndex, e.length));
+    return;
+  }
+  if (e.kind == EntityKind::Arc) {
+    const double dTheta = 2.0 * std::acos(1.0 - std::min(h, e.radius * 0.5) / e.radius);
+    const int steps = std::clamp(static_cast<int>(std::ceil((e.length / e.radius) / dTheta)), 1, kMaxSteps);
+    for (int k = 1; k <= steps; ++k) out->push_back(PointInEntity(entityIndex, e.length * k / steps));
+    return;
+  }
+  // REQ-495.1 adaptive subdivision: a chord of length ds where the curvature is at most k sags by about k ds^2 / 8, so
+  // each step takes the largest ds that keeps that within `h` at the higher curvature of its two ends (a clothoid's
+  // curvature is linear in length, so the larger end bounds the whole step).
+  const double k0 = e.startRadius > 0.0 ? 1.0 / e.startRadius : 0.0, k1 = e.radius > 0.0 ? 1.0 / e.radius : 0.0;
+  const auto curvature = [&](double s) { return k0 + (k1 - k0) * std::clamp(s / e.length, 0.0, 1.0); };
+  const double floorStep = e.length / kMaxSteps;
+  double s = 0.0;
+  for (int k = 0; k < kMaxSteps && s < e.length; ++k) {
+    const double trial = std::sqrt(8.0 * h / std::max(curvature(s), 1e-12));
+    const double kHi = std::max(curvature(s), curvature(s + trial));
+    s = std::min(e.length, s + std::max(floorStep, std::sqrt(8.0 * h / std::max(kHi, 1e-12))));
+    out->push_back(PointInEntity(entityIndex, s));
+  }
+  if (s < e.length) out->push_back(PointInEntity(entityIndex, e.length));
+}
+
 std::vector<Point2> Alignment::SampleForDisplay(double maxChordHeight) const {
   std::vector<Point2> out;
   if (entities_.empty()) return out;
   out.push_back(entities_.front().start);
-  for (size_t i = 0; i < entities_.size(); ++i) {
-    const Entity& e = entities_[i];
-    int steps = 1;
-    if (e.kind == EntityKind::Arc) {
-      const double h = std::clamp(maxChordHeight, 1e-9, e.radius * 0.5);
-      const double dTheta = 2.0 * std::acos(1.0 - h / e.radius);
-      steps = std::max(1, static_cast<int>(std::ceil((e.length / e.radius) / dTheta)));
-    } else if (e.kind == EntityKind::Spiral) {
-      steps = std::max(1, static_cast<int>(std::ceil(e.length / std::max(maxChordHeight, 1e-6))));
-    }
-    for (int k = 1; k <= steps; ++k) out.push_back(PointInEntity(static_cast<int>(i), e.length * k / steps));
-  }
+  for (size_t i = 0; i < entities_.size(); ++i) AppendDisplaySamples(static_cast<int>(i), maxChordHeight, &out);
   return out;
 }
 
 std::vector<Point2> Alignment::SampleEntityForDisplay(int entityIndex, double maxChordHeight) const {
   std::vector<Point2> out;
   if (entityIndex < 0 || static_cast<size_t>(entityIndex) >= entities_.size()) return out;
-  const Entity& e = entities_[static_cast<size_t>(entityIndex)];
-  out.push_back(e.start);
-  int steps = 1;
-  if (e.kind == EntityKind::Arc) {
-    const double h = std::clamp(maxChordHeight, 1e-9, e.radius * 0.5);
-    const double dTheta = 2.0 * std::acos(1.0 - h / e.radius);
-    steps = std::max(1, static_cast<int>(std::ceil((e.length / e.radius) / dTheta)));
-  } else if (e.kind == EntityKind::Spiral) {
-    steps = std::max(1, static_cast<int>(std::ceil(e.length / std::max(maxChordHeight, 1e-6))));
-  }
-  for (int k = 1; k <= steps; ++k) out.push_back(PointInEntity(entityIndex, e.length * k / steps));
+  out.push_back(entities_[static_cast<size_t>(entityIndex)].start);
+  AppendDisplaySamples(entityIndex, maxChordHeight, &out);
   return out;
 }
 

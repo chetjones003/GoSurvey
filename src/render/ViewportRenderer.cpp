@@ -2757,6 +2757,10 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         if (extended->alignments) {
           const double pixelWorld = 2.0 * static_cast<double>(halfH) / std::max(1.0, static_cast<double>(fbHeight));
           const double alignTol = std::max(1e-6, 0.25 * pixelWorld);
+          std::vector<std::uint64_t> aliveAlignments;
+          aliveAlignments.reserve(extended->alignments->size());
+          for (const alignment::Alignment& al : *extended->alignments) aliveAlignments.push_back(al.id);
+          alignmentSamples_.Retain(aliveAlignments);
           for (const alignment::Alignment& al : *extended->alignments) {
             if (al.Empty())
               continue;
@@ -2766,6 +2770,13 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             if (CadEntityIdHidden(hiddenIds, attr.id))
               continue;
             const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
+            if (lr && (!lr->on || lr->frozen))  // REQ-495.4
+              continue;
+            if (extended->viewportFrozenLayers != nullptr &&
+                std::find(extended->viewportFrozenLayers->begin(), extended->viewportFrozenLayers->end(), attr.layer) !=
+                    extended->viewportFrozenLayers->end())
+              continue;
+            const std::vector<std::vector<alignment::Point2>>& samples = alignmentSamples_.Samples(al, alignTol);
             const AlignmentStyle* sty =
                 extended->alignmentStyles != nullptr
                     ? AlignmentStyles::Resolve(*extended->alignmentStyles, al.style)
@@ -2783,7 +2794,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                 if (comp->linetype != "ByLayer") segAttr.linetype = comp->linetype;
                 if (comp->lineweightMm >= 0.f) segAttr.lineweightMm = comp->lineweightMm;
               }
-              const std::vector<alignment::Point2> pts = al.SampleEntityForDisplay(ei, alignTol);
+              const std::vector<alignment::Point2>& pts = samples[static_cast<size_t>(ei)];
               if (pts.size() < 2)
                 continue;
               const int vb = static_cast<int>(cpuVcLines_.size() / 7);

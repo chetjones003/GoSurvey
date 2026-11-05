@@ -46658,6 +46658,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       st.bench.meshTriangleCount = 0;
       st.bench.solidCount = 0;
       st.bench.solidTriangleCount = 0;
+      st.bench.alignmentCount = 0;
+      st.bench.alignmentEntityCount = 0;
 
       // `BENCH SURFACE [points] [frames]` selects the surface cost profile (REQ-100 as amended,
       // ADR-028), `BENCH MESH [triangles] [frames]` the shaded-mesh one (REQ-100 (b)). All three
@@ -46691,6 +46693,21 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           if (issIdle >> v)
             frames = v;
           st.bench.solidCount = count;
+          StartFrameBudgetBench(st, 1, frames, log);
+          return;
+        }
+        // `BENCH ALIGNMENT [count] [entities] [frames]` — REQ-495 acceptance 4: 1 000 alignments of 100 entities.
+        if (lower == "alignment" || lower == "alignments") {
+          int count = 1000, entities = 100;
+          int v = 0;
+          if (issIdle >> v)
+            count = v;
+          if (issIdle >> v)
+            entities = v;
+          if (issIdle >> v)
+            frames = v;
+          st.bench.alignmentCount = std::clamp(count, 1, 100000);
+          st.bench.alignmentEntityCount = std::clamp(entities, 1, 100000);
           StartFrameBudgetBench(st, 1, frames, log);
           return;
         }

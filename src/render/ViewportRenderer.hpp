@@ -7,6 +7,7 @@
 #include "gizmooverlay.hpp"
 #include "render/SectionClip.hpp"
 #include "util/pointcloudcache.hpp"
+#include "alignment/AlignmentDisplayCache.hpp"
 
 #include <chrono>
 #include <condition_variable>
@@ -557,6 +558,8 @@ private:
   unsigned int vboVcCircles_ = 0;
 
   std::vector<float> cpuVcLines_;
+  /// REQ-495.3: alignment display samples per alignment and zoom bucket, rebuilt only when geometry changes.
+  alignment::AlignmentDisplayCache alignmentSamples_;
   std::vector<float> cpuVcCircles_;
   struct VcLineBatch {
     int first = 0;

@@ -550,6 +550,7 @@ void EditorViewport::paintGL() {
       RenderTuning tuning;
       tuning.bgR = 0.f; tuning.bgG = 0.f; tuning.bgB = 0.f;
       tuning.visualStyle = viewport.visualStyle;
+      ext.viewportFrozenLayers = &viewport.frozenLayers;
       m_Renderer->SetSize(viewW, viewH);
       m_Renderer->RenderScene(camera, viewW, viewH, m_State.userLinesFlat, m_State.userCirclesCxCyZR,
           m_State.cadGpuRevision + m_RenderRevision, {}, nullptr, 6.f, nullptr, nullptr, nullptr, nullptr,
