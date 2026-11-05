@@ -8061,6 +8061,8 @@ TEST_CASE("DXF export writes block definitions and model/paper INSERT references
   modelRef.xf.y = 200.f;
   modelRef.xf.sx = 2.f;
   modelRef.xf.sy = 3.f;
+  modelRef.xf.rotX = 0.2f;
+  modelRef.xf.rotY = -0.35f;
   modelRef.xf.rotZ = 0.5f;
   st.cadBlockRefs.push_back(modelRef);
   EntityAttributes modelRefAttr;
@@ -8071,6 +8073,8 @@ TEST_CASE("DXF export writes block definitions and model/paper INSERT references
   paperRef.defName = "TitleBlock";
   paperRef.xf.x = 5.f;
   paperRef.xf.y = 6.f;
+  paperRef.xf.rotX = -0.15f;
+  paperRef.xf.rotY = 0.27f;
   first.paperBlockRefs.push_back(paperRef);
   EntityAttributes paperRefAttr;
   paperRefAttr.layer = "SHEET_INSERTS";
@@ -8146,6 +8150,9 @@ TEST_CASE("DXF export writes block definitions and model/paper INSERT references
   CHECK(imported.cadBlockRefs[0].xf.y == Catch::Approx(200.f).margin(0.001f));
   CHECK(imported.cadBlockRefs[0].xf.sx == Catch::Approx(2.f).margin(0.001f));
   CHECK(imported.cadBlockRefs[0].xf.sy == Catch::Approx(3.f).margin(0.001f));
+  CHECK((imported.cadBlockRefs[0].xf.rotX == Catch::Approx(0.2f).margin(0.001f) &&
+         imported.cadBlockRefs[0].xf.rotY == Catch::Approx(-0.35f).margin(0.001f) &&
+         imported.cadBlockRefs[0].xf.rotZ == Catch::Approx(0.5f).margin(0.001f)));
   REQUIRE(imported.cadBlockRefAttrs.size() == 1);
   CHECK(imported.cadBlockRefAttrs[0].layer == "MODEL_INSERTS");
   REQUIRE(imported.paperLayouts.size() == 2);
@@ -8154,6 +8161,9 @@ TEST_CASE("DXF export writes block definitions and model/paper INSERT references
   REQUIRE(imported.paperLayouts[0].paperBlockRefAttrs.size() == 2);
   CHECK(imported.paperLayouts[0].paperBlockRefAttrs[0].layer == "SHEET_INSERTS");
   CHECK(imported.paperLayouts[0].paperBlockRefs[0].xf.x == Catch::Approx(5.f).margin(0.001f));
+  CHECK((imported.paperLayouts[0].paperBlockRefs[0].xf.rotX == Catch::Approx(-0.15f).margin(0.001f) &&
+         imported.paperLayouts[0].paperBlockRefs[0].xf.rotY == Catch::Approx(0.27f).margin(0.001f) &&
+         imported.paperLayouts[0].paperBlockRefs[0].xf.rotZ == Catch::Approx(0.f).margin(0.001f)));
   CHECK(imported.paperLayouts[0].paperBlockRefs[1].xf.x == Catch::Approx(5.f).margin(0.001f));
   CHECK(imported.paperLayouts[0].paperBlockRefAttrs[1].layer == "SHEET_INSERTS_ALT");
   CHECK(imported.paperLayouts[1].paperBlockRefs[0].xf.x == Catch::Approx(15.f).margin(0.001f));
@@ -8175,7 +8185,12 @@ TEST_CASE("DXF export preserves nested block references and skips missing or cyc
   innerRef.xf.y = 3.f;
   innerRef.xf.sx = 1.5f;
   innerRef.xf.sy = 0.75f;
+  innerRef.xf.rotX = 0.4f;
+  innerRef.xf.rotY = -0.3f;
   innerRef.xf.rotZ = 0.25f;
+  innerRef.attrs.layer = "NESTED_INSERTS";
+  innerRef.attrs.color = "#12AB34";
+  innerRef.attrs.linetype = "DASHED";
   outer.content.nested.push_back(innerRef);
   CadBlockNested missingRef;
   missingRef.defName = "Missing";
@@ -8190,6 +8205,13 @@ TEST_CASE("DXF export preserves nested block references and skips missing or cyc
   cycleRef.defName = "Outer";
   inner.content.nested.push_back(cycleRef);
   st.blockDefs = {outer, inner};
+  std::vector<std::string> log;
+  AppCommandState jsonRoundTrip;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(jsonRoundTrip, SerializeGoSurveyJson(st), log));
+  REQUIRE(jsonRoundTrip.blockDefs.size() == 2);
+  REQUIRE(jsonRoundTrip.blockDefs[0].content.nested.size() == 2);
+  CHECK((jsonRoundTrip.blockDefs[0].content.nested[0].attrs.layer == "NESTED_INSERTS" &&
+         jsonRoundTrip.blockDefs[0].content.nested[0].attrs.color == "#12AB34"));
   CadBlockRef root;
   root.defName = "Outer";
   st.cadBlockRefs.push_back(root);
@@ -8204,7 +8226,6 @@ TEST_CASE("DXF export preserves nested block references and skips missing or cyc
   st.cadBlockRefs.push_back(invalidRoot);
   st.cadBlockRefAttrs.push_back(EntityAttributes{});
 
-  std::vector<std::string> log;
   REQUIRE(ExportDxfFile(st, p.c_str(), log));
   CHECK(LogContains(log, "skipped 2 model-space and 0 paper-space INSERT(s)"));
   CHECK(LogContains(log, "1 nested INSERT(s) with missing definitions, 1 cyclic nested INSERT(s)"));
@@ -8225,7 +8246,12 @@ TEST_CASE("DXF export preserves nested block references and skips missing or cyc
   CHECK(outerIt->content.nested[0].xf.y == Catch::Approx(3.f).margin(0.001f));
   CHECK(outerIt->content.nested[0].xf.sx == Catch::Approx(1.5f).margin(0.001f));
   CHECK(outerIt->content.nested[0].xf.sy == Catch::Approx(0.75f).margin(0.001f));
-  CHECK(outerIt->content.nested[0].xf.rotZ == Catch::Approx(0.25f).margin(0.001f));
+  CHECK((outerIt->content.nested[0].xf.rotX == Catch::Approx(0.4f).margin(0.001f) &&
+         outerIt->content.nested[0].xf.rotY == Catch::Approx(-0.3f).margin(0.001f) &&
+         outerIt->content.nested[0].xf.rotZ == Catch::Approx(0.25f).margin(0.001f)));
+  CHECK((outerIt->content.nested[0].attrs.layer == "NESTED_INSERTS" &&
+         outerIt->content.nested[0].attrs.color == "#12AB34" &&
+         outerIt->content.nested[0].attrs.linetype == "DASHED"));
   CHECK(innerIt->content.nested.empty());
 }
 

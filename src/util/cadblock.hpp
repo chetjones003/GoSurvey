@@ -104,6 +104,7 @@ struct CadBlockNested {
   std::string defName;
   CadBlockXform xf;
   std::string visState;
+  EntityAttributes attrs;
 };
 
 /// Piping role of a connection port (issue #486 increment A2). Drives auto-fitting routing: an

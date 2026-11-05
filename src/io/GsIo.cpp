@@ -569,6 +569,9 @@ json CadBlockContentToJson(const CadBlockContent& c) {
     CadBlockXformToJson(n.xf, xf);
     nj["xf"] = std::move(xf);
     nj["visState"] = n.visState;
+    json attrs;
+    EntityAttributesToJson(n.attrs, attrs);
+    nj["attrs"] = std::move(attrs);
     nested.push_back(std::move(nj));
   }
   o["nested"] = std::move(nested);
@@ -650,6 +653,8 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
       if (nj.contains("xf"))
         n.xf = CadBlockXformFromJson(nj["xf"]);
       n.visState = nj.value("visState", "");
+      if (nj.contains("attrs") && nj["attrs"].is_object())
+        n.attrs = EntityAttributesFromJson(nj["attrs"]);
       c.nested.push_back(std::move(n));
     }
   }

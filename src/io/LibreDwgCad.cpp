@@ -1642,10 +1642,13 @@ static void CaptureScratchIntoBlockContent(const AppCommandState& st, CadBlockCo
   c->meshAttrs = st.cadMeshAttrs;
   c->solids = st.cadSolids;
   c->solidAttrs = st.cadSolidAttrs;
-  for (const CadBlockRef& r : st.cadBlockRefs) {
+  for (size_t refIndex = 0; refIndex < st.cadBlockRefs.size(); ++refIndex) {
+    const CadBlockRef& r = st.cadBlockRefs[refIndex];
     CadBlockNested n;
     n.defName = r.defName;
     n.xf = r.xf;
+    if (refIndex < st.cadBlockRefAttrs.size())
+      n.attrs = st.cadBlockRefAttrs[refIndex];
     c->nested.push_back(std::move(n));
   }
 }
@@ -4956,7 +4959,8 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
   }
 }
 
-static void WriteBlockDefinitionNestedInserts(Dwg_Object_BLOCK_HEADER* blkhdr, const CadBlockContent& content) {
+static void WriteBlockDefinitionNestedInserts(Dwg_Object_BLOCK_HEADER* blkhdr, const CadBlockContent& content,
+                                               TableWriter& tw) {
   if (blkhdr == nullptr)
     return;
   for (const CadBlockNested& n : content.nested) {
@@ -4967,7 +4971,7 @@ static void WriteBlockDefinitionNestedInserts(Dwg_Object_BLOCK_HEADER* blkhdr, c
             dwg_add_INSERT(blkhdr, &ins, n.defName.c_str(), static_cast<double>(n.xf.sx),
                            static_cast<double>(n.xf.sy), static_cast<double>(n.xf.sz),
                            static_cast<double>(n.xf.rotZ)))
-      (void)e0;
+      tw.Apply(e0->parent, n.attrs);
   }
 }
 
@@ -7943,7 +7947,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     const auto hdrIt = blockHdrByName.find(def.name);
     if (hdrIt == blockHdrByName.end())
       continue;
-    WriteBlockDefinitionNestedInserts(hdrIt->second, def.content);
+    WriteBlockDefinitionNestedInserts(hdrIt->second, def.content, tw);
   }
   for (const auto& kv : blockHdrByName)
     dwg_add_ENDBLK(kv.second);

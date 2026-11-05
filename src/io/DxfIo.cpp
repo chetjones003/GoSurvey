@@ -117,6 +117,61 @@ struct DxfArcAsWritten {
   return true;
 }
 
+/// Converts DXF INSERT's OCS normal/rotation into the block Euler convention used by CadBlockXform.
+[[nodiscard]] bool DxfInsertRotationFromOcs(double nx, double ny, double nz, double rotationRad,
+                                             CadBlockXform* out) {
+  if (out == nullptr || !std::isfinite(rotationRad))
+    return false;
+  ucs::Ucs frame;
+  if (!ucs::FromNormal({0.0, 0.0, 0.0}, {nx, ny, nz}, &frame))
+    return false;
+  const double c = std::cos(rotationRad), s = std::sin(rotationRad);
+  const ray3d::Vec3 xAxis = ray3d::Add(ray3d::Scale(frame.xAxis, c), ray3d::Scale(frame.yAxis, s));
+  const ray3d::Vec3 yAxis = ray3d::Cross(frame.zAxis, xAxis);
+  const double m[3][3] = {{xAxis.x, yAxis.x, frame.zAxis.x},
+                          {xAxis.y, yAxis.y, frame.zAxis.y},
+                          {xAxis.z, yAxis.z, frame.zAxis.z}};
+  // CadBlockXformDirection applies Z, then Y, then X to a vector, so its matrix is Rx * Ry * Rz.
+  // The general CAD-block matrix helper decomposes Rz * Ry * Rx and is not the inverse here.
+  const double cy = std::hypot(m[0][0], m[0][1]);
+  if (cy > 1e-6) {
+    out->rotX = static_cast<float>(std::atan2(-m[1][2], m[2][2]));
+    out->rotY = static_cast<float>(std::atan2(m[0][2], cy));
+    out->rotZ = static_cast<float>(std::atan2(-m[0][1], m[0][0]));
+  } else {
+    out->rotX = 0.f;
+    out->rotY = static_cast<float>(std::copysign(kPi / 2.0, m[0][2]));
+    out->rotZ = static_cast<float>(std::atan2(m[1][0], m[1][1]));
+  }
+  return true;
+}
+
+/// Converts a CadBlockXform orientation and WCS insertion point to DXF INSERT OCS fields.
+[[nodiscard]] bool DxfInsertToOcs(const CadBlockXform& xf, double wx, double wy, double wz,
+                                  ray3d::Vec3* insertOcs, double* nx, double* ny, double* nz,
+                                  double* rotationRad) {
+  if (insertOcs == nullptr || nx == nullptr || ny == nullptr || nz == nullptr || rotationRad == nullptr)
+    return false;
+  CadBlockXform rotation = xf;
+  rotation.sx = rotation.sy = rotation.sz = 1.f;
+  float xx = 0.f, xy = 0.f, xz = 0.f, zx = 0.f, zy = 0.f, zz = 0.f;
+  CadBlockXformDirection(rotation, 1.f, 0.f, 0.f, &xx, &xy, &xz);
+  CadBlockXformDirection(rotation, 0.f, 0.f, 1.f, &zx, &zy, &zz);
+  const ray3d::Vec3 normal = ray3d::Normalize({static_cast<double>(zx), static_cast<double>(zy),
+                                               static_cast<double>(zz)});
+  if (ray3d::Length(normal) < 0.5 || !DxfWorldToOcs(wx, wy, wz, normal.x, normal.y, normal.z, insertOcs))
+    return false;
+  ucs::Ucs frame;
+  if (!ucs::FromNormal({0.0, 0.0, 0.0}, normal, &frame))
+    return false;
+  const ray3d::Vec3 xAxis{static_cast<double>(xx), static_cast<double>(xy), static_cast<double>(xz)};
+  *rotationRad = std::atan2(ray3d::Dot(xAxis, frame.yAxis), ray3d::Dot(xAxis, frame.xAxis));
+  *nx = normal.x;
+  *ny = normal.y;
+  *nz = normal.z;
+  return true;
+}
+
 /// True when a parsed group 210 is the default world +Z, i.e. the entity is flat.
 [[nodiscard]] bool DxfExtrusionIsFlat(double nx, double ny, double nz) {
   return nx == 0.0 && ny == 0.0 && nz == 1.0;
@@ -2047,6 +2102,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       EntityBase base;
       std::string blk;
       double ix = 0, iy = 0, iz = 0, sx = 1, sy = 1, sz = 1, rot = 0;
+      double nx = 0, ny = 0, nz = 1;
       bool has41 = false, has42 = false, has43 = false;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
@@ -2060,6 +2116,9 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         else if (c == 42) { ParseDouble(v, &sy); has42 = true; }
         else if (c == 43) { ParseDouble(v, &sz); has43 = true; }
         else if (c == 50) ParseDouble(v, &rot);
+        else if (c == 210) ParseDouble(v, &nx);
+        else if (c == 220) ParseDouble(v, &ny);
+        else if (c == 230) ParseDouble(v, &nz);
       }
       if (!has41) sx = 1;
       if (!has42) sy = 1;
@@ -2109,13 +2168,21 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       if (preserveInsertRefs) {
         CadBlockRef ref;
         ref.defName = blk;
-        ref.xf.x = static_cast<float>(ix - st.worldDocumentOriginX);
-        ref.xf.y = static_cast<float>(iy - st.worldDocumentOriginY);
-        ref.xf.z = static_cast<float>(iz);
+        ray3d::Vec3 worldInsert;
+        if (!DxfOcsToWorld(ix, iy, iz, nx, ny, nz, &worldInsert) ||
+            !DxfInsertRotationFromOcs(nx, ny, nz, rot * kDegToRad, &ref.xf)) {
+          (*skippedUnknown)++;
+          if (skipCounts)
+            (*skipCounts)["INSERT (invalid extrusion)"]++;
+          i = j;
+          continue;
+        }
+        ref.xf.x = static_cast<float>(worldInsert.x - st.worldDocumentOriginX);
+        ref.xf.y = static_cast<float>(worldInsert.y - st.worldDocumentOriginY);
+        ref.xf.z = static_cast<float>(worldInsert.z);
         ref.xf.sx = static_cast<float>(sx);
         ref.xf.sy = static_cast<float>(sy);
         ref.xf.sz = static_cast<float>(sz);
-        ref.xf.rotZ = static_cast<float>(rot * (3.14159265358979323846 / 180.0));
         st.cadBlockRefs.push_back(std::move(ref));
         st.cadBlockRefAttrs.push_back(at);
         i = j;
@@ -2371,10 +2438,13 @@ void ImportDxfBlockDefinitions(const std::vector<DxfPair>& t,
     content.polyAttrs = std::move(scratch.userPolylineAttrs);
     content.texts = std::move(scratch.cadAnnotations);
     content.textAttrs = std::move(scratch.cadAnnotationAttrs);
-    for (const CadBlockRef& ref : scratch.cadBlockRefs) {
+    for (size_t refIndex = 0; refIndex < scratch.cadBlockRefs.size(); ++refIndex) {
+      const CadBlockRef& ref = scratch.cadBlockRefs[refIndex];
       CadBlockNested nested;
       nested.defName = ref.defName;
       nested.xf = ref.xf;
+      if (refIndex < scratch.cadBlockRefAttrs.size())
+        nested.attrs = scratch.cadBlockRefAttrs[refIndex];
       def.content.nested.push_back(std::move(nested));
     }
     if (skUnknown > 0 || degenerate > 0) {
@@ -2425,6 +2495,9 @@ void BuildExportLayerRgbHint(const AppCommandState& st, std::unordered_map<std::
     const EntityAttributes& at = st.cadAnnotationAttrs[i];
     layers.insert(at.layer.empty() ? std::string("0") : at.layer);
   }
+  for (const CadBlockDefinition& def : st.blockDefs)
+    for (const CadBlockNested& nested : def.content.nested)
+      layers.insert(nested.attrs.layer.empty() ? std::string("0") : nested.attrs.layer);
   for (const SurveyPoint& p : st.surveyPoints)
     layers.insert(p.layer.empty() ? std::string("0") : p.layer);
   layers.insert("0");
@@ -2448,6 +2521,9 @@ void BuildExportLayerRgbHint(const AppCommandState& st, std::unordered_map<std::
     seedFromAttrs(st.userCircleAttrs[i]);
   for (size_t i = 0; i < st.cadAnnotationAttrs.size(); ++i)
     seedFromAttrs(st.cadAnnotationAttrs[i]);
+  for (const CadBlockDefinition& def : st.blockDefs)
+    for (const CadBlockNested& nested : def.content.nested)
+      seedFromAttrs(nested.attrs);
 
   for (const CadLayerRow& row : st.drawingLayerTable) {
     if (row.name.empty())
@@ -3223,7 +3299,7 @@ void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& 
   constexpr double kPiD = 3.14159265358979323846;
   auto num = [](double v) { return std::to_string(v); };
   struct Common {
-    std::string layer, ltype, aci, lw, tr;
+    std::string layer, ltype, aci, trueColor, lw, tr;
     bool hasTr = false;
   };
   auto commonOf = [&](const EntityAttributes& at) {
@@ -3231,6 +3307,11 @@ void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& 
     c.layer = at.layer.empty() ? std::string("0") : at.layer;
     c.ltype = DxfExportEntityLtype6(at);
     c.aci = std::to_string(DxfNearestAciFromRgbPacked(AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu));
+    uint32_t explicitRgb = 0;
+    if (!at.color.empty() && at.color[0] == '#' && Hex7ToRgbPacked(at.color, &explicitRgb))
+      c.trueColor = std::to_string(explicitRgb & 0xFFFFFFu);
+    else if (NamedColorToRgbPacked(at.color, &explicitRgb))
+      c.trueColor = std::to_string(explicitRgb & 0xFFFFFFu);
     c.lw = at.lineweightMm < 0.f ? std::string("-1") : std::to_string(CadDxfLineweightEnum370FromMm(at.lineweightMm));
     int pack = 0;
     if (DxfTransparency440(EffectiveEntityTransparency01(at, FindLayerRowDxfExport(st, c.layer)), &pack)) {
@@ -3250,6 +3331,8 @@ void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& 
     v.push_back({8, c.layer});
     v.push_back({6, c.ltype});
     v.push_back({62, c.aci});
+    if (!c.trueColor.empty())
+      v.push_back({420, c.trueColor});
     v.push_back({370, c.lw});
     if (c.hasTr)
       v.push_back({440, c.tr});
@@ -3457,18 +3540,31 @@ void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& 
         ++*nBlockRefsSkipped;
       continue;
     }
+    ray3d::Vec3 insertOcs;
+    double nx = 0.0, ny = 0.0, nz = 1.0, rotationRad = 0.0;
+    if (!DxfInsertToOcs(ref.xf, ref.xf.x, ref.xf.y, ref.xf.z, &insertOcs, &nx, &ny, &nz, &rotationRad)) {
+      if (nBlockRefsSkipped)
+        ++*nBlockRefsSkipped;
+      continue;
+    }
     std::vector<DxfOutPair> v;
     begin(v, "INSERT", commonOf(attrAt(L.paperBlockRefAttrs, ri)));
     v.push_back({100, "AcDbBlockReference"});
     v.push_back({2, ref.defName});
-    v.push_back({10, num(ref.xf.x)});
-    v.push_back({20, num(ref.xf.y)});
-    v.push_back({30, num(ref.xf.z)});
+    v.push_back({10, num(insertOcs.x)});
+    v.push_back({20, num(insertOcs.y)});
+    v.push_back({30, num(insertOcs.z)});
     v.push_back({41, num(ref.xf.sx)});
     v.push_back({42, num(ref.xf.sy)});
     v.push_back({43, num(ref.xf.sz)});
-    v.push_back({50, num(static_cast<double>(ref.xf.rotZ) * 180.0 / kPiD)});
+    v.push_back({50, num(rotationRad * 180.0 / kPiD)});
     flat(v);
+    v.erase(std::remove_if(v.begin(), v.end(), [](const DxfOutPair& pair) {
+              return pair.code == 210 || pair.code == 220 || pair.code == 230;
+            }), v.end());
+    v.push_back({210, num(nx)});
+    v.push_back({220, num(ny)});
+    v.push_back({230, num(nz)});
     flush(v);
   }
   // Issue #768: fills as solid HATCH, one boundary path per loop (the same shape model space writes).
@@ -3706,7 +3802,7 @@ std::vector<DxfOutPair> DxfBlockDefinitionEntityPairs(const AppCommandState& st,
     ref.xf = nested.xf;
     ref.visState = nested.visState;
     block.paperBlockRefs.push_back(std::move(ref));
-    block.paperBlockRefAttrs.push_back(EntityAttributes{});
+    block.paperBlockRefAttrs.push_back(nested.attrs);
   }
   std::vector<DxfOutPair> pairs;
   size_t written = 0;
@@ -3848,6 +3944,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
                               &content.polyAttrs, &content.textAttrs})
       for (const EntityAttributes& at : *attrs)
         addLayerName(at.layer);
+    for (const CadBlockNested& nested : content.nested)
+      addLayerName(nested.attrs.layer);
   }
   for (const EntityAttributes& at : st.cadBlockRefAttrs)
     addLayerName(at.layer);
@@ -3880,6 +3978,9 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
                             &st.cadPositionMarkerAttrs, &st.cadMultileaderAttrs, &st.cadSplineAttrs,
                             &st.cadPointAttrs, &st.cadPipeRunAttrs, &st.cadBlockRefAttrs})
     collectPlotStyles(*attrs);
+  for (size_t di : dxfBlockDefIndices)
+    for (const CadBlockNested& nested : st.blockDefs[di].content.nested)
+      addPlotStyleName(nested.attrs.plotStyleName);
   for (const PaperLayout& layout : st.paperLayouts)
     for (const auto* attrs : {&layout.paperLineAttrs, &layout.paperCircleAttrs, &layout.paperArcAttrs,
                               &layout.paperEllAttrs, &layout.paperPolyAttrs, &layout.paperTextAttrs,
@@ -6173,6 +6274,13 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       ++nModelBlockRefsSkipped;
       continue;
     }
+    ray3d::Vec3 insertOcs;
+    double nx = 0.0, ny = 0.0, nz = 1.0, rotationRad = 0.0;
+    if (!DxfInsertToOcs(ref.xf, worldX(ref.xf.x), worldY(ref.xf.y), ref.xf.z,
+                        &insertOcs, &nx, &ny, &nz, &rotationRad)) {
+      ++nModelBlockRefsSkipped;
+      continue;
+    }
     const EntityAttributes at = ri < st.cadBlockRefAttrs.size() ? st.cadBlockRefAttrs[ri] : EntityAttributes{};
     const std::string layer = at.layer.empty() ? std::string("0") : at.layer;
     const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer);
@@ -6183,16 +6291,16 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     emitEntityHeader(hb, layer, at, aci, lyr);
     emitPair(100, "AcDbBlockReference");
     emitPair(2, ref.defName);
-    emitPair(10, std::to_string(worldX(ref.xf.x)));
-    emitPair(20, std::to_string(worldY(ref.xf.y)));
-    emitPair(30, std::to_string(ref.xf.z));
+    emitPair(10, std::to_string(insertOcs.x));
+    emitPair(20, std::to_string(insertOcs.y));
+    emitPair(30, std::to_string(insertOcs.z));
     emitPair(41, std::to_string(ref.xf.sx));
     emitPair(42, std::to_string(ref.xf.sy));
     emitPair(43, std::to_string(ref.xf.sz));
-    emitPair(50, std::to_string(static_cast<double>(ref.xf.rotZ) * 180.0 / 3.14159265358979323846));
-    emitPair(210, "0.0");
-    emitPair(220, "0.0");
-    emitPair(230, "1.0");
+    emitPair(50, std::to_string(rotationRad * 180.0 / kPi));
+    emitPair(210, std::to_string(nx));
+    emitPair(220, std::to_string(ny));
+    emitPair(230, std::to_string(nz));
   }
 
   // Paper space (REQ-113, issue #765): each layout's entities, owned by that layout's block record.
