@@ -1,17 +1,21 @@
 #include "DxfIo.hpp"
 #include "DxfColors.hpp"
 #include "DwgIo.hpp"
+#include "LibreDwgCivil.hpp"
 #include "GsIo.hpp"
 #include "LibreDwg.hpp"
 #include "LibreDwgCad.hpp"
+#include "font/ShxFont.hpp"
 #include "LibreDwgAnnotContext.hpp"
 #include "LibreDwgMaterial.hpp"
 #include "LibreDwgLights.hpp"
+#include "TextStyle.hpp"
 
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadField.hpp"
 #include "CadDimStroke.hpp"
+#include "CadRubberPreview.hpp"
 #include "SurveyPoints.hpp"
 #include "io/SurveyCsv.hpp"
 #include "util/ucs.hpp"
@@ -19,25 +23,32 @@
 #include "util/brep.hpp"
 #include "util/cadpiperun.hpp"
 #include "util/spline.hpp"
+#include "io/RasterImage.hpp"
 
 #include "SolidMeasure.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-
+#include <catch2/generators/catch_generators.hpp>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #if defined(_WIN32)
@@ -52,6 +63,7 @@ extern "C" {
 #include <dwg.h>
 #include <dwg_api.h>
 
+void dwg_free_eed(Dwg_Object* obj);
 extern "C" void dwg_resolve_objectrefs_silent(Dwg_Data* dwg);
 }
 
@@ -131,6 +143,13 @@ void StripGosurveyAnnotativeEed(Dwg_Data& dwg) {
   }
 }
 
+void StripEntityEed(Dwg_Object* obj) {
+  if (obj == nullptr || obj->supertype != DWG_SUPERTYPE_ENTITY || obj->tio.entity == nullptr ||
+      obj->tio.entity->eed == nullptr)
+    return;
+  dwg_free_eed(obj);
+}
+
 bool DwgHasAcadAnnotativeDataEed(const Dwg_Data& dwg) {
   for (unsigned oi = 0; oi < dwg.num_objects; ++oi) {
     const Dwg_Object& obj = dwg.object[oi];
@@ -175,6 +194,136 @@ TEST_CASE("LibreDWG DWG round-trips a model-space LINE", "[dwg][libredwg]") {
   REQUIRE(ImportDwgFile(in, p.c_str(), log));
   REQUIRE(in.userLinesFlat.size() == 6);
   REQUIRE(in.userLinesFlat[3] == Catch::Approx(10.f).margin(0.05f));
+}
+
+TEST_CASE("Duplicated layouts and viewport controls persist through DWG and DXF (REQ-489, REQ-482)",
+          "[req489][req482][dwg][dxf][libredwg]") {
+  for (const bool dxf : {true, false}) {
+    INFO("format: " << (dxf ? "DXF" : "DWG"));
+    ScratchDir dir(dxf ? "layout-copy-dxf" : "layout-copy-dwg");
+    const auto path = (dir.path / (dxf ? "copy.dxf" : "copy.dwg")).string();
+    AppCommandState state;
+    PaperLayout source;
+    source.name = "Issued Sheet";
+    source.portraitWidthIn = 18.f;
+    source.portraitHeightIn = 24.f;
+    source.landscape = true;
+    source.paperLines = {1.f, 2.f, 0.f, 8.f, 2.f, 0.f};
+    source.paperLineAttrs.resize(1);
+    Viewport viewport;
+    viewport.modelCenterX = 42.0;
+    viewport.scaleModelPerPaperIn = 100.f;
+    viewport.on = false;
+    viewport.locked = true;
+    viewport.hidePlot = true;
+    source.viewports.push_back(viewport);
+    state.paperLayouts.push_back(source);
+    PaperLayout current;
+    current.name = "Current Sheet";
+    state.paperLayouts.push_back(current);
+    state.activeSpaceIndex = 1;
+    std::vector<std::string> log;
+    REQUIRE(CopyPaperLayout(state, 0, {}, log) == 2);
+    REQUIRE(state.activeSpaceIndex == 1);
+
+    REQUIRE((dxf ? ExportDxfFile(state, path.c_str(), log) : ExportDwgFile(state, path.c_str(), log)));
+    BITCODE_BL rawViewportFlags = 0;
+    if (!dxf) {
+      Dwg_Data raw{};
+      REQUIRE(dwg_read_file(path.c_str(), &raw) == 0);
+      for (BITCODE_BL i = 0; i < raw.num_objects; ++i) {
+        Dwg_Object* object = &raw.object[i];
+        if (object->fixedtype == DWG_TYPE_VIEWPORT && object->tio.entity != nullptr &&
+            object->tio.entity->tio.VIEWPORT != nullptr) {
+          rawViewportFlags = object->tio.entity->tio.VIEWPORT->status_flag;
+          break;
+        }
+      }
+      dwg_free(&raw);
+    }
+    AppCommandState loaded;
+    REQUIRE((dxf ? ImportDxfFile(loaded, path.c_str(), log) : ImportDwgFile(loaded, path.c_str(), log)));
+    const auto found = std::find_if(loaded.paperLayouts.begin(), loaded.paperLayouts.end(),
+                                    [](const PaperLayout& layout) { return layout.name == "Issued Sheet (2)"; });
+    REQUIRE(found != loaded.paperLayouts.end());
+    CHECK(found->sheetWidthIn() == Catch::Approx(source.sheetWidthIn()).margin(0.01));
+    CHECK(found->sheetHeightIn() == Catch::Approx(source.sheetHeightIn()).margin(0.01));
+    REQUIRE(found->paperLines.size() == source.paperLines.size());
+    REQUIRE(found->viewports.size() == 1);
+    CHECK(found->viewports[0].modelCenterX == Catch::Approx(42.0).margin(1e-6));
+    if (!dxf) {
+      CHECK((rawViewportFlags & 16384) != 0);
+      CHECK((rawViewportFlags & 2048) != 0);
+    }
+    CHECK_FALSE(found->viewports[0].on);
+    CHECK(found->viewports[0].locked);
+    CHECK(found->viewports[0].hidePlot);
+  }
+}
+
+TEST_CASE("Plot-style values and Page Setup table reference persist in the drawing payload (REQ-485)",
+          "[gsio][req485]") {
+  AppCommandState source;
+  source.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  EntityAttributes attr;
+  attr.plotStyleName = "Heavy Ink";
+  source.userLineAttrs.push_back(attr);
+  CadLayerRow layer;
+  layer.name = "0";
+  layer.plotStyleName = "Sheet Notes";
+  source.drawingLayerTable = {layer};
+  PaperLayout layout;
+  layout.name = "Sheet";
+  layout.plotStyleTablePath = "C:/plot styles/issue.ctb";
+  source.paperLayouts.push_back(layout);
+  PageSetup setup;
+  setup.name = "Issue setup";
+  setup.plotStyleTablePath = "C:/plot styles/issue.stb";
+  source.savedPageSetups.push_back(setup);
+
+  AppCommandState loaded;
+  std::vector<std::string> log;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(loaded, SerializeGoSurveyJson(source), log));
+  REQUIRE(loaded.userLineAttrs.size() == 1);
+  CHECK(loaded.userLineAttrs[0].plotStyleName == "Heavy Ink");
+  REQUIRE(loaded.drawingLayerTable.size() == 1);
+  CHECK(loaded.drawingLayerTable[0].plotStyleName == "Sheet Notes");
+  REQUIRE(loaded.paperLayouts.size() == 1);
+  CHECK(loaded.paperLayouts[0].plotStyleTablePath == source.paperLayouts[0].plotStyleTablePath);
+  REQUIRE(loaded.savedPageSetups.size() == 1);
+  CHECK(loaded.savedPageSetups[0].plotStyleTablePath == setup.plotStyleTablePath);
+}
+
+TEST_CASE("STB style assignments round-trip in DWG and DXF (REQ-485)", "[libredwg][dxf][dwg][req485]") {
+  ScratchDir dir("req485-stb-roundtrip");
+  for (const bool asDxf : {false, true}) {
+    AppCommandState source;
+    source.drawingLayerTable = DefaultDrawingLayerTable();
+    source.drawingLayerTable.front().plotStyleName = "Sheet Notes";
+    source.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 1.f, 1.f, 0.f};
+    EntityAttributes explicitStyle;
+    explicitStyle.plotStyleName = "Heavy Ink";
+    explicitStyle.layer = "0";
+    EntityAttributes byLayer;
+    byLayer.plotStyleName = "ByLayer";
+    byLayer.layer = "0";
+    source.userLineAttrs = {explicitStyle, byLayer};
+    const auto path = dir.path / (asDxf ? "styles.dxf" : "styles.dwg");
+    std::vector<std::string> log;
+    REQUIRE((asDxf ? ExportDxfFile(source, path.string().c_str(), log)
+                   : ExportDwgFile(source, path.string().c_str(), log)));
+    AppCommandState loaded;
+    REQUIRE((asDxf ? ImportDxfFile(loaded, path.string().c_str(), log)
+                   : ImportDwgFile(loaded, path.string().c_str(), log)));
+    CAPTURE(asDxf);
+    REQUIRE(loaded.userLineAttrs.size() == 2);
+    CHECK(loaded.userLineAttrs[0].plotStyleName == "Heavy Ink");
+    CHECK(loaded.userLineAttrs[1].plotStyleName == "ByLayer");
+    const auto layer = std::find_if(loaded.drawingLayerTable.begin(), loaded.drawingLayerTable.end(),
+                                    [](const CadLayerRow& row) { return row.name == "0"; });
+    REQUIRE(layer != loaded.drawingLayerTable.end());
+    CHECK(layer->plotStyleName == "Sheet Notes");
+  }
 }
 
 TEST_CASE("DXF round-trips an open fit SPLINE", "[dxf][libredwg][req443]") {
@@ -259,6 +408,163 @@ int CountDwgFixedType(const char* pathUtf8, enum DWG_OBJECT_TYPE ty) {
 
 int CountDwgMultileaders(const char* pathUtf8) {
   return CountDwgFixedType(pathUtf8, DWG_TYPE_MULTILEADER);
+}
+
+TEST_CASE("Modified dimension and text settings are native DWG fields", "[dwg][libredwg][req478][styles]") {
+  ScratchDir dir("dwg-style-settings");
+  const auto file = (dir.path / "styles.dwg").string();
+  AppCommandState state;
+  DimensionStyle dimension;
+  dimension.name = "Modified";
+  dimension.props = {{"suppressExt1", "1"}, {"suppressDim2", "1"}, {"offsetFromOrigin", "0.2"},
+      {"extendBeyondDimLines", "0.3"}, {"altEnabled", "1"}, {"altMultiplier", "12"},
+      {"tolMethod", "Deviation"}, {"tolUpper", "0.15"}, {"tolLower", "0.05"}, {"textOffset", "0.12"}};
+  state.dimensionStyles = {dimension}; state.activeDimensionStyle = dimension;
+  TextStyle text; text.name = "Mirrored"; text.fontFamily = "romans.shx"; text.heightInches = 0;
+  text.props = {{"backwards", "1"}, {"upsideDown", "1"}, {"vertical", "1"},
+      {"useBigFont", "1"}, {"bigFont", "bigfont.shx"}};
+  state.textStyles.push_back(text);
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(state, file.c_str(), log));
+  Dwg_Data dwg{}; REQUIRE(dwg_read_file(file.c_str(), &dwg) == 0);
+  auto dimHandle = dwg_find_tablehandle(&dwg, "Modified", "DIMSTYLE"); REQUIRE(dimHandle);
+  const auto* dim = dwg_resolve_handle_silent(&dwg, dimHandle->absolute_ref)->tio.object->tio.DIMSTYLE;
+  REQUIRE(dim);
+  CHECK(dim->DIMSE1 == 1); CHECK(dim->DIMSD2 == 1);
+  CHECK(dim->DIMEXO == Catch::Approx(10)); CHECK(dim->DIMEXE == Catch::Approx(15));
+  CHECK(dim->DIMALT == 1); CHECK(dim->DIMALTF == Catch::Approx(12));
+  CHECK(dim->DIMTOL == 1); CHECK(dim->DIMTP == Catch::Approx(.15)); CHECK(dim->DIMTM == Catch::Approx(.05));
+  CHECK(dim->DIMGAP == Catch::Approx(6));
+  auto textHandle = dwg_find_tablehandle(&dwg, "Mirrored", "STYLE"); REQUIRE(textHandle);
+  const auto* native = dwg_resolve_handle_silent(&dwg, textHandle->absolute_ref)->tio.object->tio.STYLE;
+  REQUIRE(native); CHECK(native->generation == 6); CHECK(native->is_vertical == 1);
+  CHECK(native->text_size == Catch::Approx(0));
+  dwg_free(&dwg);
+}
+
+TEST_CASE("Imported annotative styles retain paper heights independently of drawing scale", "[dwg][libredwg][req478][styles]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, (std::string(GOSURVEY_SAMPLES_DIR) + "/rapides-substation-civil3d-pointtables.dwg").c_str(), log, false));
+  const auto* dimension = DimensionStyles::Find(state.dimensionStyles, "LEE-STANDARD");
+  REQUIRE(dimension);
+  CHECK(dimension->props.at("annotative") == "1");
+  CHECK(dimension->textSizeInches == Catch::Approx(.08));
+  CHECK(dimension->arrowSizeInches == Catch::Approx(.08));
+  CHECK(dimension->props.at("dimLineWeight") == "ByLayer");
+  CHECK(dimension->props.at("extLineWeight") == "ByBlock");
+  const auto* text = TextStyles::Find(state.textStyles, "pnts"); REQUIRE(text);
+  CHECK(text->props.at("annotative") == "1");
+  CHECK(text->heightInches == Catch::Approx(.06));
+  const auto* leader = MultileaderStyles::Find(state.multileaderStyles, "l60s Sline"); REQUIRE(leader);
+  CHECK(leader->annotativeDefault);
+  CHECK(leader->textSizeInches == Catch::Approx(.06));
+}
+
+TEST_CASE("Native TABLESTYLE carries all three independently editable cell styles", "[dwg][libredwg][req478][styles][table-style]") {
+  ScratchDir dir("dwg-table-styles");
+  const auto file = (dir.path / "table-styles.dwg").string();
+  AppCommandState state;
+  state.dwgExportVersion = DwgSaveVersion::R2018;
+  CadTableStyle style;
+  style.name = "Survey Schedule";
+  style.textHeightInches = .14f;
+  style.headerTextHeightInches = .18f;
+  style.titleTextHeightInches = .24f;
+  style.props = {{"Data.horizontalMargin", "0.2"}, {"Data.bordersVisible", "0"},
+      {"Title.fillColor", "Yellow"}, {"Header.alignment", "Bottom Right"}};
+  state.tableStyles.push_back(style);
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(state, file.c_str(), log));
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(file.c_str(), &drawing) == 0);
+  const auto reference = dwg_find_tablehandle(&drawing, "Survey Schedule", "TABLESTYLE");
+  REQUIRE(reference);
+  const auto* object = dwg_resolve_handle_silent(&drawing, reference->absolute_ref);
+  REQUIRE(object);
+  const auto* record = object->tio.object->tio.TABLESTYLE;
+  REQUIRE(record); REQUIRE(record->overrides); REQUIRE(record->numoverrides == 3);
+  CHECK(record->overrides[0].id == 1);
+  CHECK(record->overrides[1].id == 2);
+  CHECK(record->overrides[2].id == 3);
+  CHECK(record->overrides[0].cellstyle.content_format.text_height == Catch::Approx(12));
+  CHECK(record->overrides[1].cellstyle.content_format.text_height == Catch::Approx(9));
+  CHECK(record->overrides[2].cellstyle.content_format.text_height == Catch::Approx(7));
+  CHECK(record->overrides[1].cellstyle.content_format.cell_alignment == 9);
+  CHECK(record->overrides[2].cellstyle.horiz_margin == Catch::Approx(10));
+  REQUIRE(record->overrides[2].cellstyle.borders);
+  CHECK(record->overrides[2].cellstyle.borders[0].visible == 1);
+  dwg_free(&drawing);
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, file.c_str(), log, false));
+  const auto* loaded = CadTableFindStyle(imported.tableStyles, style.name);
+  REQUIRE(loaded);
+  CHECK(loaded->textHeightInches == Catch::Approx(.14));
+  CHECK(loaded->headerTextHeightInches == Catch::Approx(.18));
+  CHECK(loaded->titleTextHeightInches == Catch::Approx(.24));
+  CHECK(loaded->props.at("Data.bordersVisible") == "0");
+  CHECK(loaded->props.at("Header.alignment") == "Bottom Right");
+}
+
+TEST_CASE("DWG multileaders reference named MLEADERSTYLE records", "[dwg][libredwg][req478][mleader-style]") {
+  ScratchDir dir("dwg-mleader-style");
+  const auto p = (dir.path / "mleader-style.dwg").string();
+  AppCommandState st;
+  MultileaderStyle style = MultileaderStyles::Default();
+  style.name = "Site Callout";
+  style.textSizeInches = 0.16f;
+  style.arrowSizeInches = 0.18f;
+  style.landingGapInches = 0.07f;
+  style.props = {{"leaderType", "Spline"}, {"landingLength", "0.75"},
+                 {"defaultText", "Survey note"}, {"textFrame", "1"}, {"maxPoints", "4"}};
+  st.multileaderStyles = {MultileaderStyles::Default(), style};
+  st.activeMultileaderStyle = style;
+  CadMultileader ml;
+  ml.styleName = style.name;
+  ml.pathXyz = {1.f, 2.f, 0.f, 5.f, 6.f, 0.f};
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.text = "Test callout";
+  ml.label.insX = 5.f;
+  ml.label.insY = 6.f;
+  ml.label.plottedHeightInches = style.textSizeInches;
+  ml.label.boxMinX = 5.f;
+  ml.label.boxMinY = 5.f;
+  ml.label.boxMaxX = 20.f;
+  ml.label.boxMaxY = 7.f;
+  st.cadMultileaders.push_back(ml);
+  st.cadMultileaderAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  BITCODE_H styleRef = dwg_find_tablehandle(&dwg, "Site Callout", "MLEADERSTYLE");
+  REQUIRE(styleRef != nullptr);
+  Dwg_Object* styleObject = dwg_resolve_handle_silent(&dwg, styleRef->absolute_ref);
+  REQUIRE(styleObject != nullptr);
+  REQUIRE(styleObject->fixedtype == DWG_TYPE_MLEADERSTYLE);
+  REQUIRE(styleObject->tio.object != nullptr);
+  const Dwg_Object_MLEADERSTYLE* nativeStyle = styleObject->tio.object->tio.MLEADERSTYLE;
+  REQUIRE(nativeStyle != nullptr);
+  CHECK(nativeStyle->text_height == Catch::Approx(8.0));
+  CHECK(nativeStyle->arrow_head_size == Catch::Approx(9.0));
+  CHECK(nativeStyle->landing_gap == Catch::Approx(3.5));
+  CHECK(nativeStyle->type == 2);
+  CHECK(nativeStyle->landing_dist == Catch::Approx(37.5));
+  CHECK(nativeStyle->has_text_frame == 1);
+  CHECK(nativeStyle->max_points == 4);
+  int referenced = 0;
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    Dwg_Object* object = &dwg.object[i];
+    if (object->fixedtype != DWG_TYPE_MULTILEADER || object->tio.entity == nullptr ||
+        object->tio.entity->tio.MULTILEADER == nullptr)
+      continue;
+    const Dwg_Entity_MULTILEADER* entity = object->tio.entity->tio.MULTILEADER;
+    if (entity->mleaderstyle != nullptr && entity->mleaderstyle->absolute_ref == styleRef->absolute_ref)
+      ++referenced;
+  }
+  CHECK(referenced == 1);
+  dwg_free(&dwg);
 }
 
 }  // namespace
@@ -658,6 +964,77 @@ TEST_CASE("LibreDWG dwg_add_MULTILEADER encodes and decodes (issue #619)",
   CHECK(CountDwgMultileaders(p.c_str()) == 1);
 }
 
+TEST_CASE("TEXT export starts with a valid unit width factor",
+          "[dwg][libredwg][req170][issue993]") {
+  for (const auto version : {R_2000, R_2010, R_2018}) {
+    CAPTURE(version);
+    Dwg_Data* dwg = dwg_new_Document(version, 0, 0);
+    REQUIRE(dwg != nullptr);
+    Dwg_Object* model = dwg_model_space_object(dwg);
+    REQUIRE(model != nullptr);
+    const dwg_point_3d point{1, 2, 0};
+    auto* text = dwg_add_TEXT(model->tio.object->tio.BLOCK_HEADER, "PLAN", &point, 0.3);
+    REQUIRE(text != nullptr);
+    CHECK(text->width_factor == Catch::Approx(1));
+    dwg_free(dwg);
+    std::free(dwg);
+  }
+}
+
+// R2010+ drops the arrowhead list, but retains the remaining common tail.
+TEST_CASE("MULTILEADER retains its common tail in R2010 and R2018",
+          "[dwg][libredwg][req170][issue993]") {
+  for (const auto version : {R_2010, R_2018}) {
+    CAPTURE(version);
+    ScratchDir dir("dwg-mleader-common-tail");
+    const auto path = (dir.path / "leader.dwg").string();
+    Dwg_Data* dwg = dwg_new_Document(version, 0, 0);
+    REQUIRE(dwg != nullptr);
+    Dwg_Object* model = dwg_model_space_object(dwg);
+    REQUIRE(model != nullptr);
+    const dwg_point_3d points[] = {{0, 0, 0}, {10, 2, 0}};
+    const dwg_point_3d textPoint{10, 2, 0}, direction{1, 0, 0};
+    auto* leader = dwg_add_MULTILEADER(model->tio.object->tio.BLOCK_HEADER,
+                                     2, points, "NOTE", &textPoint, &direction, 0.2, 3);
+    REQUIRE(leader != nullptr);
+    CHECK(leader->scale_factor == Catch::Approx(1));
+    leader->is_neg_textdir = 1;
+    leader->ipe_alignment = 2;
+    leader->justification = 1;
+    leader->scale_factor = 2.5;
+    leader->attach_top = 9;
+    leader->attach_bottom = 9;
+    leader->ctx.leaders[0].lastleaderlinepoint = {10, 2, 0};
+    leader->ctx.leaders[0].dogleg_vector = {1, 0, 0};
+    LibreDwgLinkBlockEntities(dwg);
+    REQUIRE(dwg_write_file(path.c_str(), dwg) == 0);
+    dwg_free(dwg);
+    std::free(dwg);
+    Dwg_Data read{};
+    REQUIRE(dwg_read_file(path.c_str(), &read) < DWG_ERR_CRITICAL);
+    bool found = false;
+    for (unsigned i = 0; i < read.num_objects; ++i) {
+      if (read.object[i].fixedtype != DWG_TYPE_MULTILEADER) continue;
+      const auto* decoded = read.object[i].tio.entity->tio.MULTILEADER;
+      REQUIRE(decoded != nullptr);
+      CHECK(decoded->is_neg_textdir == 1);
+      CHECK(decoded->ipe_alignment == 2);
+      CHECK(decoded->justification == 1);
+      CHECK(decoded->scale_factor == Catch::Approx(2.5));
+      CHECK(decoded->attach_top == 9);
+      CHECK(decoded->attach_bottom == 9);
+      CHECK(decoded->ctx.leaders[0].has_lastleaderlinepoint == 0);
+      CHECK(decoded->ctx.leaders[0].has_dogleg == 0);
+      CHECK(decoded->ctx.leaders[0].lastleaderlinepoint.x == Catch::Approx(10));
+      CHECK(decoded->ctx.leaders[0].lastleaderlinepoint.y == Catch::Approx(2));
+      CHECK(decoded->ctx.leaders[0].dogleg_vector.x == Catch::Approx(1));
+      found = true;
+    }
+    CHECK(found);
+    dwg_free(&read);
+  }
+}
+
 TEST_CASE("CadMultileader round-trips through native MULTILEADER DWG export (issue #619)",
           "[dwg][libredwg][issue619]") {
   ScratchDir dir("dwg-mleader");
@@ -670,6 +1047,10 @@ TEST_CASE("CadMultileader round-trips through native MULTILEADER DWG export (iss
   ml.label.insX = 12.f;
   ml.label.insY = 2.f;
   ml.label.text = "Monument A";
+  ml.label.rotationRad = 0.35f;
+  ml.label.mtextAttach = 6;
+  ml.labelWidthWorld = 8.f;
+  ml.labelHeightWorld = 0.18f;
   ml.label.boxMinX = 12.f;
   ml.label.boxMinY = 1.f;
   ml.label.boxMaxX = 20.f;
@@ -686,6 +1067,57 @@ TEST_CASE("CadMultileader round-trips through native MULTILEADER DWG export (iss
   REQUIRE(in.cadMultileaders.size() == 1);
   CHECK(in.cadMultileaders[0].pathXyz.size() == 9);
   CHECK(in.cadMultileaders[0].label.text.find("Monument") != std::string::npos);
+  CHECK(in.cadMultileaders[0].label.mtextAttach == 6);
+  CHECK(in.cadMultileaders[0].label.rotationRad == Catch::Approx(0.35f).margin(0.02f));
+}
+
+TEST_CASE("DWG import applies block scale to leader arrow sizes (REQ-367)", "[dwg][libredwg][req367]") {
+  ScratchDir dir("dwg-scaled-leader-arrows");
+  const auto path = (dir.path / "scaled-leaders.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* model = dwg_model_space_object(dwg);
+  REQUIRE(model != nullptr);
+  Dwg_Object_BLOCK_HEADER* modelHeader = model->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(modelHeader != nullptr);
+
+  Dwg_Object_BLOCK_HEADER* mleaderHeader = dwg_add_BLOCK_HEADER(dwg, "*DML1");
+  REQUIRE(mleaderHeader != nullptr);
+  dwg_add_BLOCK(mleaderHeader, "*DML1");
+  const dwg_point_3d mleaderPoints[] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}};
+  const dwg_point_3d mleaderText{10.0, 0.0, 0.0};
+  const dwg_point_3d mleaderDirection{1.0, 0.0, 0.0};
+  Dwg_Entity_MULTILEADER* mleader = dwg_add_MULTILEADER(mleaderHeader, 2, mleaderPoints, "MLeader",
+                                                         &mleaderText, &mleaderDirection, 0.2, 8.0);
+  REQUIRE(mleader != nullptr);
+  dwg_add_ENDBLK(mleaderHeader);
+
+  Dwg_Object_BLOCK_HEADER* leaderHeader = dwg_add_BLOCK_HEADER(dwg, "*DLD1");
+  REQUIRE(leaderHeader != nullptr);
+  dwg_add_BLOCK(leaderHeader, "*DLD1");
+  const dwg_point_3d labelPoint{10.0, 0.0, 0.0};
+  Dwg_Entity_MTEXT* label = dwg_add_MTEXT(leaderHeader, &labelPoint, 4.0, "LEADER");
+  REQUIRE(label != nullptr);
+  const dwg_point_3d leaderPoints[] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}};
+  Dwg_Entity_LEADER* leader = dwg_add_LEADER(leaderHeader, 2, leaderPoints, label, 0);
+  REQUIRE(leader != nullptr);
+  leader->dimasz = 0.2;
+  dwg_add_ENDBLK(leaderHeader);
+
+  const dwg_point_3d insertPoint{20.0, 30.0, 0.0};
+  REQUIRE(dwg_add_INSERT(modelHeader, &insertPoint, "*DML1", 2.0, 2.0, 1.0, 0.0) != nullptr);
+  REQUIRE(dwg_add_INSERT(modelHeader, &insertPoint, "*DLD1", 2.0, 2.0, 1.0, 0.0) != nullptr);
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(path.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState imported;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.cadMultileaders.size() == 2);
+  CHECK(imported.cadMultileaders[0].arrowSizeWorld == Catch::Approx(0.36f));
+  CHECK(imported.cadMultileaders[1].arrowSizeWorld == Catch::Approx(0.36f));
 }
 
 TEST_CASE("Block-content MULTILEADER import logs skip reason (REQ-367, issue #619)",
@@ -1091,21 +1523,360 @@ TEST_CASE("GOSURVEY CANNOSCALE EED round-trips on model space (issue #622)", "[d
   s.paperUnits = 1.f;
   s.drawingUnits = 50.f;
   st.annotationScales.push_back(std::move(s));
+  st.annotationScales.push_back({"1:100", 1.f, 100.f});
   st.currentAnnotationScaleIndex = 0;
   std::vector<std::string> log;
   REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
   AppCommandState in;
   in.modelUnitsPerPlottedInch = 10.f;
   REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
-  REQUIRE(in.annotationScales.size() == 1);
+  REQUIRE(in.annotationScales.size() == 2);
   CHECK(in.currentAnnotationScaleIndex == 0);
   CHECK(in.annotationScales[0].name == "1:50");
+}
+
+TEST_CASE("Native CANNOSCALE round-trips between GoSurvey and DWG (issue #622)", "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-native-cannoscale-roundtrip");
+  const auto p = (dir.path / "native-cannoscale.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  st.annotationScales = {{"1:50", 1.f, 50.f}, {"1:100", 1.f, 100.f}};
+  st.currentAnnotationScaleIndex = 1;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  const char* nativeScale = dwg_variable_dict(&dwg, "CANNOSCALE");
+  REQUIRE(nativeScale != nullptr);
+  CHECK(libredwgcad_detail::DecodeDwgString(nativeScale, dwg.header.version >= R_2007) == "1:100");
+  dwg_free(&dwg);
+
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.annotationScales.size() == 2);
+  CHECK(imported.currentAnnotationScaleIndex == 1);
+  CHECK(imported.annotationScales[static_cast<size_t>(imported.currentAnnotationScaleIndex)].name == "1:100");
+}
+
+TEST_CASE("DWG import restores the saved model viewport center, height, and twist (REQ-055)",
+          "[dwg][libredwg][req055]") {
+  ScratchDir dir("dwg-saved-model-view");
+  const auto basePath = (dir.path / "base.dwg").string();
+  const auto path = (dir.path / "saved-view.dwg").string();
+  AppCommandState source;
+  OneLine(source);
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(source, basePath.c_str(), log, /*asDxf=*/false));
+
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(basePath.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  const BITCODE_H ref = dwg_find_tablehandle(&dwg, "*Active", "VPORT");
+  REQUIRE(ref != nullptr);
+  Dwg_Object* object = dwg_resolve_handle_silent(&dwg, ref->absolute_ref);
+  REQUIRE(object != nullptr);
+  REQUIRE(object->tio.object != nullptr);
+  REQUIRE(object->tio.object->tio.VPORT != nullptr);
+  Dwg_Object_VPORT* viewport = object->tio.object->tio.VPORT;
+  viewport->VIEWSIZE = 80.0;
+  viewport->view_width = 120.0;
+  viewport->aspect_ratio = 1.5;
+  viewport->VIEWCTR.x = -10.0;
+  viewport->VIEWCTR.y = 20.0;
+  viewport->view_target = {100.0, 200.0, 5.0};
+  viewport->VIEWDIR = {0.0, 0.0, 1.0};
+  viewport->VIEWTWIST = 3.0 * 3.14159265358979323846 / 2.0;
+  REQUIRE((dwg_write_file(path.c_str(), &dwg) & DWG_ERR_CRITICAL) == 0);
+  dwg_free(&dwg);
+
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, /*asDxf=*/false));
+  CHECK(imported.viewportPanX == Catch::Approx(80.0));
+  CHECK(imported.viewportPanY == Catch::Approx(190.0));
+  CHECK(imported.viewportPanZ == Catch::Approx(5.0));
+  CHECK(imported.viewportZoom == Catch::Approx(1.25f));
+  CHECK(imported.viewportRollDeg == Catch::Approx(90.0f));
+}
+
+TEST_CASE("Legacy LEADER arrow size includes the saved CANNOSCALE model factor (REQ-367)",
+          "[dwg][libredwg][issue619]") {
+  // AutoCAD reports MESSER's DIMASZ 0.2 with ScaleFactor 16: header DIMSCALE 192 divided
+  // by the active architectural scale's drawing-units value 12.
+  CHECK(libredwgcad_detail::LegacyLeaderEffectiveDimScale(1.0, 192.0, 0.0625, 12.0) ==
+        Catch::Approx(192.0));
+  CHECK(libredwgcad_detail::LegacyLeaderEffectiveDimScale(1.0, 50.0, 1.0, 50.0) ==
+        Catch::Approx(1.0));
+  CHECK(libredwgcad_detail::LegacyLeaderEffectiveDimScale(50.0, 1.0, 0.0, 0.0) ==
+        Catch::Approx(50.0));
+  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(192.0, 0.0625, 12.0) == Catch::Approx(16.0));
+  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(50.0, 1.0, 50.0) == Catch::Approx(50.0));
+  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(1.0, 1.0, 50.0) == Catch::Approx(1.0));
+  CHECK(libredwgcad_detail::LegacyLeaderScaleFactor(4.0, 1.0, 50.0) == Catch::Approx(4.0));
+}
+
+TEST_CASE("Legacy LEADER uses its referenced DIMSTYLE scale (REQ-367)",
+          "[dwg][libredwg][issue619]") {
+  ScratchDir dir("dwg-leader-style-dimscale");
+  const auto path = (dir.path / "leader-style-dimscale.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  dwg->header_vars.DIMSCALE = 1.0;
+  Dwg_Object* model = dwg_model_space_object(dwg);
+  REQUIRE(model != nullptr);
+  Dwg_Object_BLOCK_HEADER* header = model->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(header != nullptr);
+  Dwg_Object_DIMSTYLE* style = dwg_add_DIMSTYLE(dwg, "Scaled Leader");
+  REQUIRE(style != nullptr);
+  style->DIMASZ = 0.2;
+  style->DIMSCALE = 50.0;
+  const dwg_point_3d textAt{6.0, 4.0, 0.0};
+  Dwg_Entity_MTEXT* text = dwg_add_MTEXT(header, &textAt, 4.0, "Style scale");
+  REQUIRE(text != nullptr);
+  text->text_height = 1.0;
+  const dwg_point_3d points[2] = {{0.0, 0.0, 0.0}, {6.0, 4.0, 0.0}};
+  Dwg_Entity_LEADER* leader = dwg_add_LEADER(header, 2, points, text, 0);
+  REQUIRE(leader != nullptr);
+  BITCODE_H styleRef = dwg_find_tablehandle(dwg, "Scaled Leader", "DIMSTYLE");
+  REQUIRE(styleRef != nullptr);
+  leader->dimstyle = dwg_add_handleref(dwg, 5, styleRef->absolute_ref, nullptr);
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(path.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState imported;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.cadMultileaders.size() == 1);
+  CHECK(imported.cadMultileaders.front().arrowSizeWorld == Catch::Approx(10.0f));
+}
+
+TEST_CASE("Legacy LEADER honors a unity DIMSTYLE scale over the drawing scale (REQ-367)",
+          "[dwg][libredwg][issue619]") {
+  ScratchDir dir("dwg-leader-unity-dimscale");
+  const auto path = (dir.path / "leader-unity-dimscale.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  dwg->header_vars.DIMSCALE = 50.0;
+  Dwg_Object* model = dwg_model_space_object(dwg);
+  REQUIRE(model != nullptr);
+  Dwg_Object_BLOCK_HEADER* header = model->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(header != nullptr);
+  Dwg_Object_DIMSTYLE* style = dwg_add_DIMSTYLE(dwg, "Unity Leader");
+  REQUIRE(style != nullptr);
+  style->DIMASZ = 0.36;
+  style->DIMSCALE = 1.0;
+  const dwg_point_3d textAt{6.0, 4.0, 0.0};
+  Dwg_Entity_MTEXT* text = dwg_add_MTEXT(header, &textAt, 4.0, "Unity style");
+  REQUIRE(text != nullptr);
+  text->text_height = 1.0;
+  const dwg_point_3d points[2] = {{0.0, 0.0, 0.0}, {6.0, 4.0, 0.0}};
+  Dwg_Entity_LEADER* leader = dwg_add_LEADER(header, 2, points, text, 0);
+  REQUIRE(leader != nullptr);
+  BITCODE_H styleRef = dwg_find_tablehandle(dwg, "Unity Leader", "DIMSTYLE");
+  REQUIRE(styleRef != nullptr);
+  leader->dimstyle = dwg_add_handleref(dwg, 5, styleRef->absolute_ref, nullptr);
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(path.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState imported;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.cadMultileaders.size() == 1);
+  CHECK(imported.cadMultileaders.front().arrowSizeWorld == Catch::Approx(0.36f));
+}
+
+TEST_CASE("R2004 LEADER fallback keeps each multileader arrow size (REQ-367)",
+          "[dwg][libredwg][issue619]") {
+  ScratchDir dir("dwg-r2004-multileader-arrow-size");
+  const auto path = (dir.path / "leader-arrow-size.dwg").string();
+  AppCommandState source;
+  source.dwgExportVersion = DwgSaveVersion::R2004;
+  source.modelUnitsPerPlottedInch = 1.f;
+  CadMultileader multileader;
+  multileader.arrowSizeWorld = 0.36f;
+  multileader.labelHeightWorld = 1.f;
+  multileader.labelWidthWorld = 4.f;
+  multileader.pathXyz = {0.f, 0.f, 0.f, 6.f, 0.f, 0.f};
+  multileader.label.kind = CadAnnotation::Kind::Mtext;
+  multileader.label.text = "Fallback arrow";
+  multileader.label.insX = 6.f;
+  source.cadMultileaders.push_back(multileader);
+  source.cadMultileaderAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(source, path.c_str(), log, /*asDxf=*/false));
+
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(path.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  Dwg_Entity_LEADER* leader = nullptr;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    Dwg_Object& object = dwg.object[i];
+    if (object.fixedtype == DWG_TYPE_LEADER && object.tio.entity != nullptr) {
+      leader = object.tio.entity->tio.LEADER;
+      break;
+    }
+  }
+  REQUIRE(leader != nullptr);
+  REQUIRE(leader->dimstyle != nullptr);
+  Dwg_Object* styleObject = dwg_resolve_handle_silent(&dwg, leader->dimstyle->absolute_ref);
+  REQUIRE(styleObject != nullptr);
+  REQUIRE(styleObject->fixedtype == DWG_TYPE_DIMSTYLE);
+  REQUIRE(styleObject->tio.object != nullptr);
+  REQUIRE(styleObject->tio.object->tio.DIMSTYLE != nullptr);
+  CHECK(styleObject->tio.object->tio.DIMSTYLE->DIMASZ == Catch::Approx(0.36));
+  dwg_free(&dwg);
+
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.cadMultileaders.size() == 1);
+  CHECK(imported.cadMultileaders.front().arrowSizeWorld == Catch::Approx(0.36f));
+}
+
+TEST_CASE("Legacy LEADER MTEXT keeps glyph height and orders hookline before text landing (REQ-367)",
+          "[dwg][libredwg][req367]") {
+  ScratchDir dir("dwg-legacy-leader-mtext-height");
+  const auto path = (dir.path / "legacy-leader-height.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* model = dwg_model_space_object(dwg);
+  REQUIRE(model != nullptr);
+  Dwg_Object_BLOCK_HEADER* header = model->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(header != nullptr);
+  const dwg_point_3d insertion{20.0, 10.0, 0.0};
+  Dwg_Entity_MTEXT* text = dwg_add_MTEXT(header, &insertion, 5.4, "LRP 31");
+  REQUIRE(text != nullptr);
+  text->text_height = 1.0;
+  text->attachment = 6;
+  text->x_axis_dir = {0.0, 1.0, 0.0};
+  text->rect_height = 1.0;
+  text->extents_height = 6.91745;
+  const dwg_point_3d points[2] = {{24.0, 25.0, 0.0}, {20.0, 11.44, 0.0}};
+  Dwg_Entity_LEADER* leader = dwg_add_LEADER(header, 2, points, text, 0);
+  REQUIRE(leader != nullptr);
+  leader->hookline_on = 1;
+  leader->hookline_dir = 1;
+  leader->annot_type = 0;
+  leader->x_direction = {0.0, 1.0, 0.0};
+  leader->dimasz = 0.2;
+
+  const dwg_point_3d leftInsertion{40.0, 12.88, 0.0};
+  Dwg_Entity_MTEXT* leftText = dwg_add_MTEXT(header, &leftInsertion, 5.4, "LRP 32");
+  REQUIRE(leftText != nullptr);
+  leftText->text_height = 1.0;
+  leftText->attachment = 4;
+  leftText->x_axis_dir = {0.0, 1.0, 0.0};
+  leftText->rect_height = 1.0;
+  const dwg_point_3d leftPoints[2] = {{40.0, 0.0, 0.0}, {40.0, 11.44, 0.0}};
+  Dwg_Entity_LEADER* leftLeader = dwg_add_LEADER(header, 2, leftPoints, leftText, 0);
+  REQUIRE(leftLeader != nullptr);
+  leftLeader->hookline_on = 1;
+  leftLeader->hookline_dir = 1;
+  leftLeader->annot_type = 0;
+  leftLeader->x_direction = {0.0, 1.0, 0.0};
+  leftLeader->dimasz = 0.2;
+
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(path.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState imported;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.cadMultileaders.size() == 2);
+  const auto findCallout = [&](const char* text) -> const CadMultileader* {
+    const auto found = std::find_if(imported.cadMultileaders.begin(), imported.cadMultileaders.end(),
+                                    [&](const CadMultileader& callout) {
+                                      return callout.label.text.find(text) != std::string::npos;
+                                    });
+    return found == imported.cadMultileaders.end() ? nullptr : &*found;
+  };
+  const CadMultileader* rightText = findCallout("LRP 31");
+  const CadMultileader* leftCallout = findCallout("LRP 32");
+  REQUIRE(rightText != nullptr);
+  REQUIRE(leftCallout != nullptr);
+  CHECK(rightText->label.mtextAttach == 6);
+  CHECK(leftCallout->label.mtextAttach == 4);
+  for (const CadMultileader* callout : {rightText, leftCallout}) {
+    REQUIRE(callout->pathXyz.size() == 9);
+    const size_t outer = callout->pathXyz.size() - 6;
+    const size_t landing = callout->pathXyz.size() - 3;
+    const double hookX = callout->pathXyz[outer] - callout->pathXyz[landing];
+    const double hookY = callout->pathXyz[outer + 1] - callout->pathXyz[landing + 1];
+    const double towardArrowX = callout->pathXyz[outer - 3] - callout->pathXyz[landing];
+    const double towardArrowY = callout->pathXyz[outer - 2] - callout->pathXyz[landing + 1];
+    CHECK(hookX * towardArrowX + hookY * towardArrowY > 0.0);
+  }
+}
+
+TEST_CASE("Native MULTILEADER scale contexts restore GoSurvey scale visibility (REQ-384)",
+          "[dwg][libredwg][req384]") {
+  ScratchDir dir("dwg-native-mleader-scales");
+  const auto p = (dir.path / "native-mleader-scales.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  st.annotationScales = {{"1:10", 1.f, 10.f}, {"1:50", 1.f, 50.f}};
+  st.currentAnnotationScaleIndex = 0;
+  CadMultileader ml{};
+  ml.annotative = true;
+  ml.arrowSizeWorld = 0.06f;
+  ml.labelWidthWorld = 16.f;
+  ml.labelHeightWorld = 2.f;
+  ml.annotativeVisibleScaleNames = {"1:50"};
+  ml.pathXyz = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f};
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.mtextAttach = 3;
+  ml.label.insX = 10.f;
+  ml.label.text = "Scale-specific callout";
+  ml.label.boxMinX = 10.f;
+  ml.label.boxMinY = -1.f;
+  ml.label.boxMaxX = 26.f;
+  ml.label.boxMaxY = 1.f;
+  st.cadMultileaders.push_back(std::move(ml));
+  st.cadMultileaderAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  Dwg_Object* mleaderObject = nullptr;
+  Dwg_Object_Entity* mleader = nullptr;
+  for (unsigned oi = 0; oi < dwg.num_objects; ++oi) {
+    Dwg_Object& obj = dwg.object[oi];
+    if (obj.fixedtype == DWG_TYPE_MULTILEADER && obj.tio.entity != nullptr) {
+      mleaderObject = &obj;
+      mleader = obj.tio.entity;
+      break;
+    }
+  }
+  REQUIRE(mleader != nullptr);
+  REQUIRE(mleader->tio.MULTILEADER != nullptr);
+  CHECK(mleader->tio.MULTILEADER->ctx.content.txt.width == Catch::Approx(16.f));
+  CHECK(mleader->tio.MULTILEADER->ctx.text_height == Catch::Approx(2.f));
+  StripEntityEed(mleaderObject);
+  REQUIRE((dwg_write_file(p.c_str(), &dwg) & DWG_ERR_CRITICAL) == 0);
+  dwg_free(&dwg);
+
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(imported.cadMultileaders.size() == 1);
+  CHECK(imported.cadMultileaders[0].annotative);
+  CHECK(imported.cadMultileaders[0].arrowSizeWorld == Catch::Approx(0.06f));
+  CHECK(imported.cadMultileaders[0].labelWidthWorld == Catch::Approx(16.f));
+  CHECK(imported.cadMultileaders[0].labelHeightWorld == Catch::Approx(2.f));
+  CHECK(imported.cadMultileaders[0].label.mtextAttach == 3);
+  CHECK(imported.cadMultileaders[0].annotativeVisibleScaleNames == std::vector<std::string>{"1:50"});
 }
 
 TEST_CASE("Multileader annotative flag persists through GsIo (issue #622)", "[issue622][gsio]") {
   AppCommandState src;
   CadMultileader ml{};
   ml.annotative = true;
+  ml.arrowSizeWorld = 0.06f;
+  ml.labelWidthWorld = 5.f;
+  ml.labelHeightWorld = 1.f;
   ml.pathXyz = {0.f, 0.f, 0.f, 5.f, 0.f, 0.f};
   ml.label.kind = CadAnnotation::Kind::Mtext;
   ml.label.text = "A";
@@ -1116,6 +1887,15 @@ TEST_CASE("Multileader annotative flag persists through GsIo (issue #622)", "[is
   REQUIRE(LoadGoSurveyFromJsonUtf8(back, SerializeGoSurveyJson(src), log));
   REQUIRE(back.cadMultileaders.size() == 1);
   CHECK(back.cadMultileaders[0].annotative);
+  CHECK(back.cadMultileaders[0].arrowSizeWorld == Catch::Approx(0.06f));
+  CHECK(back.cadMultileaders[0].labelWidthWorld == Catch::Approx(5.f));
+  CHECK(back.cadMultileaders[0].labelHeightWorld == Catch::Approx(1.f));
+}
+
+TEST_CASE("Multileader without an imported arrow override inherits its style size (REQ-367)",
+          "[dwg][issue619]") {
+  const CadMultileader multileader{};
+  CHECK(multileader.arrowSizeWorld == 0.f);
 }
 
 TEST_CASE("annotativeVisibleScaleNames persist through GsIo for block, hatch, and multileader (issue #622)",
@@ -2515,12 +3295,12 @@ TEST_CASE("LibreDWG imports the full layer table of a real R2018 DWG (issue #160
   bool sawVersion = false, sawCount = false;
   for (const std::string& l : log) {
     if (l.find("AutoCAD 2018") != std::string::npos) sawVersion = true;
-    if (l.find("154 layer(s)") != std::string::npos) sawCount = true;
+    if (l.find("155 layer(s)") != std::string::npos) sawCount = true;
   }
   CHECK(sawVersion);
   CHECK(sawCount);
 
-  // 154 imported + the always-present default layer "0".
+  // All 155 source layers, including the drawing-owned layer "0".
   CHECK(in.drawingLayerTable.size() == 155);
 
   auto row = [&](const char* n) -> const CadLayerRow* {
@@ -2544,7 +3324,7 @@ TEST_CASE("LibreDWG imports the full layer table of a real R2018 DWG (issue #160
   CHECK(row("C-FIRE-PIPE-12IN")->color == "#00BFFF");   // ACI 140
   CHECK(row("C-TOPO-MAJR")->color == "#0000FF");        // 0xc2 true colour, unchanged
   CHECK(row("V-SSWR-PIPE")->color == "#BF00FF");        // 0xc2 true colour
-  CHECK(row("C-PRKG-STRP")->color == "ByLayer");
+  CHECK(row("C-PRKG-STRP")->color == "#ADADAD");        // 0xc2 true colour (was misread as ByLayer)
 
   // Linetypes: the layer's assigned LTYPE name is imported, not forced to Continuous.
   CHECK(row("0 Center Lines")->linetype == "CENTER2");
@@ -2567,6 +3347,1501 @@ TEST_CASE("LibreDWG imports the full layer table of a real R2018 DWG (issue #160
   for (const EntityAttributes& a : in.userPolylineAttrs)
     if (a.layer == "C-FIRE-PIPE-12IN") ++firePipe12;
   CHECK(firePipe12 > 100);
+}
+
+TEST_CASE("DWG import preserves the drawing's layer zero appearance",
+          "[dwg][libredwg][civil3d][styles]") {
+  ScratchDir dir("layerzeroappearance");
+  const auto path = (dir.path / "source.dwg").string();
+  AppCommandState source;
+  source.drawingLayerTable = DefaultDrawingLayerTable();
+  auto& zero = source.drawingLayerTable.front();
+  REQUIRE(zero.name == "0");
+  zero.color = "#FFFF00";
+  zero.linetype = "DASHED";
+  zero.lineweightMm = 0.5f;
+  source.userLinesFlat = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f};
+  source.userLineAttrs = {EntityAttributes{}};
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(source, path.c_str(), log, false));
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, false));
+  const auto layer = std::find_if(imported.drawingLayerTable.begin(), imported.drawingLayerTable.end(),
+      [](const CadLayerRow& row) { return row.name == "0"; });
+  REQUIRE(layer != imported.drawingLayerTable.end());
+  CHECK(layer->color == "#FFFF00");
+  CHECK(layer->linetype == "DASHED");
+  CHECK(layer->lineweightMm == Catch::Approx(0.5f));
+}
+
+TEST_CASE("Explicit DWG entity RGB preserves dark blue and black without palette substitution",
+          "[dwg][libredwg][styles]") {
+  ScratchDir dir("entitydarkrgb");
+  const auto path = (dir.path / "source.dwg").string();
+  AppCommandState source;
+  source.dwgExportVersion = DwgSaveVersion::R2018;
+  const std::vector<std::string> colors = {"#000080", "#000001", "#000000", "#000100"};
+  for (const auto& color : colors) {
+    source.userLinesFlat.insert(source.userLinesFlat.end(), {0.f, 0.f, 0.f, 1.f, 1.f, 0.f});
+    EntityAttributes attributes;
+    attributes.color = color;
+    source.userLineAttrs.push_back(attributes);
+  }
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(source, path.c_str(), log, false));
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, false));
+  REQUIRE(imported.userLineAttrs.size() == colors.size());
+  for (std::size_t i = 0; i < colors.size(); ++i)
+    CHECK(imported.userLineAttrs[i].color == colors[i]);
+}
+
+TEST_CASE("Native CMC ByColor preserves RGB instead of its derived palette index",
+          "[dwg][libredwg][styles]") {
+  CHECK(libredwgcad_detail::ColorToStorage(5, 0xc2, 0xc2000080u) == "#000080");
+  CHECK(libredwgcad_detail::ColorToStorage(7, 0xc2, 0xc2123456u) == "#123456");
+  CHECK(libredwgcad_detail::ColorToStorage(0, 0xc2, 0xc2000000u) == "#000000");
+}
+
+TEST_CASE("DWG layer and dimension colors carry native AutoCAD CMC method tags",
+          "[dwg][libredwg][styles]") {
+  ScratchDir dir("nativecmctags");
+  const auto path = (dir.path / "colors.dwg").string();
+  AppCommandState source;
+  source.dwgExportVersion = DwgSaveVersion::R2018;
+  CadLayerRow indexed;
+  indexed.name = "Indexed red";
+  indexed.color = "#FF0000";
+  CadLayerRow rgb;
+  rgb.name = "Exact RGB";
+  rgb.color = "#123456";
+  source.drawingLayerTable = {indexed, rgb};
+  source.dimensionStyles = {source.activeDimensionStyle};
+  source.dimensionStyles.front().dimLineColor = "#123456";
+  source.dimensionStyles.front().extLineColor = "#FF0000";
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(source, path.c_str(), log, false));
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(path.c_str(), &drawing) < DWG_ERR_CRITICAL);
+  bool sawIndexed = false, sawRgb = false, sawDimension = false;
+  for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+    const auto& object = drawing.object[i];
+    if (object.supertype != DWG_SUPERTYPE_OBJECT || object.tio.object == nullptr) continue;
+    if (object.fixedtype == DWG_TYPE_LAYER && object.tio.object->tio.LAYER != nullptr) {
+      const auto* layer = object.tio.object->tio.LAYER;
+      const auto name = libredwgcad_detail::DecodeDwgString(layer->name, true);
+      if (name == indexed.name) { sawIndexed = true; CHECK(layer->color.rgb == 0xc3000001u); }
+      if (name == rgb.name) { sawRgb = true; CHECK(layer->color.rgb == 0xc2123456u); }
+    }
+    if (object.fixedtype == DWG_TYPE_DIMSTYLE && object.tio.object->tio.DIMSTYLE != nullptr) {
+      const auto* style = object.tio.object->tio.DIMSTYLE;
+      if (libredwgcad_detail::DecodeDwgString(style->name, true) != source.dimensionStyles.front().name) continue;
+      sawDimension = true;
+      CHECK(style->DIMCLRD.rgb == 0xc2123456u);
+      CHECK(style->DIMCLRE.rgb == 0xc3000001u);
+    }
+  }
+  CHECK(sawIndexed);
+  CHECK(sawRgb);
+  CHECK(sawDimension);
+  dwg_free(&drawing);
+}
+
+TEST_CASE("DWG block symbols keep small details in a large-coordinate survey drawing",
+          "[dwg][libredwg][styles][precision]") {
+  ScratchDir dir("surveymarkersymbol");
+  const auto path = (dir.path / "symbol.dwg").string();
+  AppCommandState source;
+  source.dwgExportVersion = DwgSaveVersion::R2018;
+  source.worldDocumentOriginX = 3254000.1234;
+  source.worldDocumentOriginY = 313000.4321;
+  source.userLinesFlat = {0.f, 0.f, 0.f, 100.f, 100.f, 0.f};
+  source.userLineAttrs = {EntityAttributes{}};
+  CadBlockDefinition symbol;
+  symbol.name = "Small survey marker";
+  symbol.content.lines = {0.0, 0.0, 0.0, 0.01, 0.025, 0.0};
+  symbol.content.lineAttrs = {EntityAttributes{}};
+  source.blockDefs.push_back(symbol);
+  CadBlockRef insert;
+  insert.defName = symbol.name;
+  insert.xf.x = 20.f;
+  insert.xf.y = 30.f;
+  source.cadBlockRefs.push_back(insert);
+  source.cadBlockRefAttrs = {EntityAttributes{}};
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(source, path.c_str(), log, false));
+  // Match the real survey fixture's populated extents so rebasing happens before block import.
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(path.c_str(), &drawing) < DWG_ERR_CRITICAL);
+  drawing.header_vars.EXTMIN.x = source.worldDocumentOriginX;
+  drawing.header_vars.EXTMIN.y = source.worldDocumentOriginY;
+  drawing.header_vars.EXTMAX.x = source.worldDocumentOriginX + 100.0;
+  drawing.header_vars.EXTMAX.y = source.worldDocumentOriginY + 100.0;
+  const auto withExtents = (dir.path / "populated-extents.dwg").string();
+  REQUIRE(dwg_write_file(withExtents.c_str(), &drawing) < DWG_ERR_CRITICAL);
+  dwg_free(&drawing);
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, withExtents.c_str(), log, false));
+  REQUIRE(std::fabs(imported.worldDocumentOriginX) > 3000000.0);
+  const auto definition = std::find_if(imported.blockDefs.begin(), imported.blockDefs.end(),
+      [&](const CadBlockDefinition& value) { return value.name == symbol.name; });
+  REQUIRE(definition != imported.blockDefs.end());
+  REQUIRE(definition->content.lines.size() == 6);
+  CHECK(definition->content.lines[0] == Catch::Approx(0.0).margin(1.e-7));
+  CHECK(definition->content.lines[1] == Catch::Approx(0.0).margin(1.e-7));
+  CHECK(definition->content.lines[3] - definition->content.lines[0] == Catch::Approx(0.01).margin(1.e-7));
+  CHECK(definition->content.lines[4] - definition->content.lines[1] == Catch::Approx(0.025).margin(1.e-7));
+}
+
+TEST_CASE("Civil 3D COGO point preview imports as GoSurvey survey points",
+          "[dwg][libredwg][civil3d][req479]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  const std::string path = SamplePath("rapides-substation-civil3d.dwg");
+  REQUIRE(ImportLibreCadFile(state, path.c_str(), log, /*asDxf=*/false));
+
+  // COGO markers become the domain point objects, without also leaving a duplicate generic CAD POINT.
+  // Coordinates and descriptions come from the point node; the hidden marker inherits its group style.
+  REQUIRE(state.surveyPoints.size() == 353);
+  std::unordered_set<int> pointNumbers;
+  for (const SurveyPoint& point : state.surveyPoints)
+    CHECK(pointNumbers.insert(point.id).second);
+  const auto pointOne = std::find_if(state.surveyPoints.begin(), state.surveyPoints.end(),
+                                     [](const SurveyPoint& point) { return point.id == 1; });
+  REQUIRE(pointOne != state.surveyPoints.end());
+  CHECK(std::fabs(pointOne->easting + state.worldDocumentOriginX - 3254449.911) < 0.001);
+  CHECK(std::fabs(pointOne->northing + state.worldDocumentOriginY - 313894.831) < 0.001);
+  CHECK(std::fabs(pointOne->elevation - 83.445) < 0.001);
+  CHECK(std::none_of(state.cadPoints.begin(), state.cadPoints.end(), [&](const CadPoint& point) {
+    return std::fabs(point.x + state.worldDocumentOriginX - 3254449.911) < 0.001 &&
+           std::fabs(point.y + state.worldDocumentOriginY - 313894.831) < 0.001 &&
+           std::fabs(point.z - 83.445) < 0.001;
+  }));
+  CHECK(pointOne->rawDescription == "CP");
+  CHECK(pointOne->styleName == "no points");
+  const auto pointSixtyFive = std::find_if(state.surveyPoints.begin(), state.surveyPoints.end(),
+                                           [](const SurveyPoint& point) { return point.id == 65; });
+  REQUIRE(pointSixtyFive != state.surveyPoints.end());
+  CHECK(std::fabs(pointSixtyFive->easting + state.worldDocumentOriginX - 3254495.084) < 0.001);
+  CHECK(std::fabs(pointSixtyFive->northing + state.worldDocumentOriginY - 313792.433) < 0.001);
+  CHECK(std::fabs(pointSixtyFive->elevation - 83.671) < 0.001);
+}
+
+TEST_CASE("Civil 3D COGO point number is decoded from its compact DWG field",
+          "[dwg][libredwg][civil3d][req479]") {
+  const unsigned char pointOne[] = {0x2f, 0x81, 0x10, 0x12, 0x8a, 0x40, 0xdb, 0x02};
+  const unsigned char point1000[] = {0x2f, 0x81, 0x0e, 0x80, 0x30, 0x00, 0x02, 0x8a, 0x40, 0xdb, 0x02};
+  const unsigned char point2000[] = {0x2f, 0x81, 0x0d, 0x00, 0x70, 0x00, 0x02, 0x8a, 0x40, 0xdb, 0x02};
+  const auto decodedOne = libredwgcivil::DecodeCogoPointNumber(pointOne, 59);
+  const auto decoded1000 = libredwgcivil::DecodeCogoPointNumber(point1000, 83);
+  const auto decoded2000 = libredwgcivil::DecodeCogoPointNumber(point2000, 83);
+  REQUIRE(decodedOne.has_value());
+  REQUIRE(decoded1000.has_value());
+  REQUIRE(decoded2000.has_value());
+  CHECK(*decodedOne == 1);
+  CHECK(*decoded1000 == 1000);
+  CHECK(*decoded2000 == 2000);
+  CHECK_FALSE(libredwgcivil::DecodeCogoPointNumber(pointOne, 16).has_value());
+}
+
+TEST_CASE("Resaved Rapides Civil 3D baseline contains point schedule tables",
+          "[dwg][libredwg][civil3d][req479]") {
+  const std::string source = SamplePath("rapides-substation-civil3d-pointtables.dwg");
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(source.c_str(), &drawing) < DWG_ERR_CRITICAL);
+
+  std::size_t pointScheduleTables = 0;
+  std::size_t nativeTables = 0;
+  std::size_t nativeTableStyles = 0;
+  for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+    const Dwg_Object& object = drawing.object[i];
+    if (object.fixedtype == DWG_TYPE_TABLE) ++nativeTables;
+    if (object.fixedtype == DWG_TYPE_TABLESTYLE) ++nativeTableStyles;
+    if (object.supertype != DWG_SUPERTYPE_ENTITY || object.tio.entity == nullptr ||
+        object.type < 500 || object.type - 500 >= drawing.num_classes)
+      continue;
+    const char* name = drawing.dwg_class[object.type - 500].dxfname;
+    if (name == nullptr || std::string_view(name) != "AECC_POINT_TABLE") continue;
+    ++pointScheduleTables;
+    CHECK(object.tio.entity->preview != nullptr);
+    CHECK(object.tio.entity->preview_size > 0);
+  }
+
+  CHECK(pointScheduleTables == 18);
+  CHECK(nativeTables == 0);  // Civil 3D point tables are custom entities, not AutoCAD TABLEs.
+  CHECK(nativeTableStyles == 3);
+  dwg_free(&drawing);
+}
+
+TEST_CASE("Civil point-node coordinates match COGO identities independently of proxy graphics",
+          "[dwg][libredwg][civil3d][req479]") {
+  for (const char* file : {"rapides-substation-civil3d.dwg", "rapides-substation-civil3d-pointtables.dwg"}) {
+    Dwg_Data drawing{};
+    REQUIRE(dwg_read_file(SamplePath(file).c_str(), &drawing) < DWG_ERR_CRITICAL);
+    std::map<int, CadPoint> coordinates;
+    for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+      const auto& object = drawing.object[i];
+      if (object.type < 500 || object.type - 500 >= drawing.num_classes) continue;
+      const char* name = drawing.dwg_class[object.type - 500].dxfname;
+      if (name == nullptr || std::string_view(name) != "AECC_POINT_NODE") continue;
+      const auto decoded = libredwgcivil::DecodePointNodeLocations(object.unknown_bits, object.num_unknown_bits);
+      REQUIRE(decoded.has_value());
+      REQUIRE(decoded->size() == 353);
+      for (const auto& point : *decoded)
+        REQUIRE(coordinates.emplace(point.number, point.location).second);
+      CHECK_FALSE(libredwgcivil::DecodePointNodeLocations(object.unknown_bits, 68).has_value());
+    }
+    REQUIRE(coordinates.size() == 353);
+    std::size_t compared = 0;
+    for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+      const auto& object = drawing.object[i];
+      if (object.type < 500 || object.type - 500 >= drawing.num_classes ||
+          object.supertype != DWG_SUPERTYPE_ENTITY || object.tio.entity == nullptr) continue;
+      const char* name = drawing.dwg_class[object.type - 500].dxfname;
+      if (name == nullptr || std::string_view(name) != "AECC_COGO_POINT") continue;
+      const auto number = libredwgcivil::DecodeCogoPointNumber(object.unknown_bits, object.num_unknown_bits);
+      const auto center = libredwgcivil::DecodeCogoPointProxyCenter(
+          object.tio.entity->preview, object.tio.entity->preview_size);
+      REQUIRE(number.has_value());
+      REQUIRE(center.has_value());
+      REQUIRE(coordinates.count(*number) == 1);
+      CHECK(coordinates.at(*number).x == Catch::Approx(center->x).margin(0.001));
+      CHECK(coordinates.at(*number).y == Catch::Approx(center->y).margin(0.001));
+      CHECK(coordinates.at(*number).z == Catch::Approx(center->z).margin(0.001));
+      ++compared;
+    }
+    CHECK(compared == 353);
+    dwg_free(&drawing);
+  }
+  CHECK_FALSE(libredwgcivil::DecodePointNodeLocations(nullptr, 100).has_value());
+}
+
+TEST_CASE("Civil point-style decoder matches all source API style values",
+          "[dwg][libredwg][civil3d][styles][req479]") {
+  std::ifstream referenceFile(SamplePath("rapides-point-style-reference.json"));
+  REQUIRE(referenceFile.good());
+  const auto reference = nlohmann::json::parse(referenceFile);
+  REQUIRE(reference.size() == 179);
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("rapides-substation-civil3d-pointtables.dwg").c_str(), &drawing) <
+          DWG_ERR_CRITICAL);
+  std::size_t checked = 0;
+  for (const auto& expected : reference) {
+    const auto handle = std::stoull(expected.at("handle").get<std::string>(), nullptr, 16);
+    Dwg_Object* object = dwg_resolve_handle_silent(&drawing, handle);
+    REQUIRE(object != nullptr);
+    REQUIRE(object->has_strings);
+    const std::size_t trailer = object->stringstream_size >= 32768 ? 33 : 17;
+    const std::size_t prefix = object->common_size + object->bitsize_pos;
+    REQUIRE(object->bitsize >= prefix + trailer + object->stringstream_size);
+    const std::size_t start = object->bitsize - prefix - trailer - object->stringstream_size;
+    const auto style = libredwgcivil::DecodePointStyle(object->unknown_bits, object->num_unknown_bits,
+                                                     start, object->stringstream_size);
+    INFO(expected.at("name").get<std::string>());
+    REQUIRE(style.has_value());
+    CHECK(libredwgcad_detail::DecodeDwgString(style->name.c_str(), true) ==
+          expected.at("name").get<std::string>());
+    CHECK(style->components[0].visible == expected.at("markerVisible").get<bool>());
+    CHECK(style->components[1].visible == expected.at("labelVisible").get<bool>());
+    CHECK(style->customMarker == expected.at("CustomMarkerStyle").get<unsigned>());
+    CHECK(style->markerOverlay == expected.at("CustomMarkerSuperimposeStyle").get<unsigned>());
+    CHECK(style->markerType == expected.at("MarkerType").get<unsigned>());
+    CHECK(style->sizeType == expected.at("SizeType").get<unsigned>());
+    CHECK(style->orientation == expected.at("Orientation").get<unsigned>());
+    CHECK(style->display3dType == expected.at("Display3dType").get<unsigned>());
+    CHECK(style->size == Catch::Approx(expected.at("MarkerSize").get<double>()).margin(1.e-12));
+    CHECK(style->rotation == Catch::Approx(expected.at("MarkerRotationAngle").get<double>()).margin(1.e-12));
+    CHECK(style->elevation == Catch::Approx(expected.at("Elevation").get<double>()).margin(1.e-12));
+    CHECK(style->scaleFactor == Catch::Approx(expected.at("ScaleFactor").get<double>()).margin(1.e-12));
+    const std::string colorMethod = expected.at("colorMethod");
+    const unsigned method = colorMethod == "ByLayer" ? 0xc0u : colorMethod == "ByBlock" ? 0xc1u :
+                            colorMethod == "ByColor" ? 0xc2u : 0xc3u;
+    CHECK((style->components[0].color >> 24) == method);
+    if (method == 0xc3)
+      CHECK((style->components[0].color & 0xffffffu) == expected.at("colorIndex").get<unsigned>());
+    CHECK_FALSE(libredwgcivil::DecodePointStyle(object->unknown_bits, object->num_unknown_bits,
+                                               start + 1, object->stringstream_size).has_value());
+    ++checked;
+  }
+  CHECK(checked == 179);
+  CHECK_FALSE(libredwgcivil::DecodePointStyle(nullptr, 100, 50, 10).has_value());
+  dwg_free(&drawing);
+}
+
+TEST_CASE("Civil point-style collections import as drawing-owned named styles",
+          "[dwg][libredwg][civil3d][styles][req479]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d-pointtables.dwg").c_str(), log, false));
+  REQUIRE(state.surveyPointStyles.size() == 179);
+  const auto* basic = FindSurveyPointStyle(state.surveyPointStyles, "Basic");
+  REQUIRE(basic != nullptr);
+  CHECK(basic->markerVisible);
+  CHECK(basic->color == "#FFFFFF");
+  CHECK(basic->displayComponents[0].layer == "V-NODE");
+  CHECK(basic->displayComponents[1].layer == "V-NODE-TEXT");
+  CHECK(basic->customMarker == 2);
+  const auto* hidden = FindSurveyPointStyle(state.surveyPointStyles, "no points");
+  REQUIRE(hidden != nullptr);
+  CHECK_FALSE(hidden->markerVisible);
+  CHECK_FALSE(hidden->labelVisible);
+  CHECK(hidden->customMarker == 3);
+  CHECK(state.surveyPoints.size() == 353);
+  for (const auto& point : state.surveyPoints)
+    CHECK(point.styleName == "Basic");
+}
+
+TEST_CASE("Civil 3D proxy graphics expose their 3D-polyline display primitives",
+          "[dwg][libredwg][civil3d][req479]") {
+  const std::string source = SamplePath("rapides-substation-civil3d.dwg");
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(source.c_str(), &drawing) < DWG_ERR_CRITICAL);
+
+  const Dwg_Object_Entity* surfaceEntity = nullptr;
+  for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+    const Dwg_Object& object = drawing.object[i];
+    if (object.supertype != DWG_SUPERTYPE_ENTITY || object.tio.entity == nullptr ||
+        object.type < 500 || object.type - 500 >= drawing.num_classes)
+      continue;
+    const char* className = drawing.dwg_class[object.type - 500].dxfname;
+    if (className != nullptr && std::string_view(className) == "AECC_TIN_SURFACE") {
+      surfaceEntity = object.tio.entity;
+      break;
+    }
+  }
+  REQUIRE(surfaceEntity != nullptr);
+  REQUIRE(surfaceEntity->preview != nullptr);
+  REQUIRE(surfaceEntity->preview_size > 0);
+
+  const auto decoded = libredwgcivil::DecodeProxyGraphicPolylines(
+      surfaceEntity->preview, static_cast<std::size_t>(surfaceEntity->preview_size));
+  REQUIRE(decoded.has_value());
+  REQUIRE(decoded->size() == 6);
+  std::size_t vertexCount = 0;
+  for (const auto& chain : *decoded) {
+    REQUIRE(chain.size() >= 2);
+    vertexCount += chain.size();
+    for (const CadPoint& point : chain) {
+      CHECK(std::isfinite(point.x));
+      CHECK(std::isfinite(point.y));
+      CHECK(std::isfinite(point.z));
+    }
+  }
+  CHECK(vertexCount == 18);
+
+  std::vector<unsigned char> malformed(16, 0);
+  malformed[0] = 16;
+  malformed[4] = 8;
+  malformed[8] = 4;  // Chunk sizes smaller than their 8-byte header are invalid.
+  malformed[12] = 6;
+  CHECK_FALSE(libredwgcivil::DecodeProxyGraphicPolylines(malformed.data(), malformed.size()).has_value());
+  dwg_free(&drawing);
+  // The TIN's preview outline is a fallback only: the surface test below checks that a decodable
+  // surface is imported as a real surface instead of these loose polylines.
+}
+
+namespace {
+// Civil API triangles of the supplied surface (world coordinates, rounded to 0.001 by the export).
+std::vector<std::array<std::array<double, 3>, 3>> CivilTinReferenceTriangles() {
+  std::ifstream file(SamplePath("rapides-tin-reference.json"));
+  REQUIRE(file.good());
+  const auto reference = nlohmann::json::parse(file);
+  std::vector<std::array<std::array<double, 3>, 3>> triangles;
+  for (const auto& triangle : reference.at("triangles")) {
+    std::array<std::array<double, 3>, 3> value{};
+    for (std::size_t vertex = 0; vertex < 3; ++vertex)
+      for (std::size_t axis = 0; axis < 3; ++axis)
+        value[vertex][axis] = triangle.at(vertex).at(axis).get<double>();
+    triangles.push_back(value);
+  }
+  return triangles;
+}
+
+void CheckSurfaceMatchesCivilReference(const AppCommandState& state, const CadSurface& surface) {
+  const auto expected = CivilTinReferenceTriangles();
+  REQUIRE(surface.tin != nullptr);
+  REQUIRE(surface.tin->triangleCount() == static_cast<int>(expected.size()));
+  for (std::size_t t = 0; t < expected.size(); ++t)
+    for (std::size_t vertex = 0; vertex < 3; ++vertex) {
+      const std::size_t index = surface.tin->indices[t * 3 + vertex];
+      REQUIRE(index < static_cast<std::size_t>(surface.tin->vertexCount()));
+      CHECK(surface.tin->vertsXyz[index * 3 + 0] + state.worldDocumentOriginX ==
+            Catch::Approx(expected[t][vertex][0]).margin(0.0006));
+      CHECK(surface.tin->vertsXyz[index * 3 + 1] + state.worldDocumentOriginY ==
+            Catch::Approx(expected[t][vertex][1]).margin(0.0006));
+      CHECK(surface.tin->vertsXyz[index * 3 + 2] == Catch::Approx(expected[t][vertex][2]).margin(0.0006));
+    }
+}
+}  // namespace
+
+TEST_CASE("Civil 3D TIN surface imports as a GoSurvey surface with the source triangulation",
+          "[dwg][libredwg][civil3d][req479][surface]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d.dwg").c_str(), log,
+                             /*asDxf=*/false));
+  REQUIRE(state.cadSurfaces.size() == 1);
+  REQUIRE(state.cadSurfaceAttrs.size() == 1);
+  const CadSurface& surface = state.cadSurfaces[0];
+  CHECK(surface.name == "Surface");
+  REQUIRE(surface.tin != nullptr);
+  // 222 stored vertices include the four-corner superstructure; the Civil API reports 218 used by
+  // 398 visible triangles (438 stored, 40 hidden by the superstructure and the boundaries).
+  CHECK(surface.tin->vertexCount() == 218);
+  CHECK(surface.tin->triangleCount() == 398);
+  CheckSurfaceMatchesCivilReference(state, surface);
+  for (std::size_t t = 0; t < surface.tin->indices.size(); t += 3) {
+    const auto vertex = [&](std::size_t i) { return &surface.tin->vertsXyz[surface.tin->indices[t + i] * 3]; };
+    const double twiceArea = (vertex(1)[0] - vertex(0)[0]) * (vertex(2)[1] - vertex(0)[1]) -
+                             (vertex(2)[0] - vertex(0)[0]) * (vertex(1)[1] - vertex(0)[1]);
+    CHECK(twiceArea > 0.0);  // counter-clockwise, as GoSurvey surfaces are
+  }
+  // The surface replaces its proxy outline rather than duplicating it as loose 3D polylines.
+  bool previewOutlineImported = false;
+  for (std::size_t offset = 0; offset + 2 < state.userPolylineVerts.size(); offset += 3)
+    previewOutlineImported |=
+        std::fabs(state.userPolylineVerts[offset] - (3254460.875 - state.worldDocumentOriginX)) < 0.001 &&
+        std::fabs(state.userPolylineVerts[offset + 1] - (313637.598 - state.worldDocumentOriginY)) < 0.001;
+  CHECK_FALSE(previewOutlineImported);
+}
+
+TEST_CASE("Point edits are refused on an imported fixed TIN instead of replacing its triangulation",
+          "[dwg][libredwg][civil3d][req479][surface]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d.dwg").c_str(), log, /*asDxf=*/false));
+  REQUIRE(state.cadSurfaces.size() == 1);
+  const auto before = state.cadSurfaces[0].tin;
+  REQUIRE(before != nullptr);
+  for (const char* command : {"SURFACEADDPOINT Surface, 0, 0, 100", "SURFACEMOVEPOINT Surface, 0, 0, 1, 1, 100",
+                              "SURFACEDELPOINT Surface, 0, 0"}) {
+    log.clear();
+    std::string line = command;
+    line.resize(256);
+    ProcessCommandLineSubmit(line.data(), static_cast<int>(line.size()), state, log);
+    bool refused = false;
+    for (const std::string& message : log) refused |= message.find("imported fixed triangulation") != std::string::npos;
+    CHECK(refused);
+  }
+  const CadSurface& surface = state.cadSurfaces[0];
+  CHECK(surface.addedPointXyz.empty());
+  CHECK(surface.movedPoints.empty());
+  CHECK(surface.deletedPointPicks.empty());
+  CHECK(surface.tin == before);
+}
+
+TEST_CASE("Civil 3D TIN surface survives GoSurvey DWG save and reopen",
+          "[dwg][libredwg][civil3d][req479][surface]") {
+  ScratchDir dir("civil-tin-roundtrip");
+  const auto path = (dir.path / "roundtrip.dwg").string();
+  AppCommandState source;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(source, SamplePath("rapides-substation-civil3d.dwg").c_str(), log,
+                             /*asDxf=*/false));
+  REQUIRE(source.cadSurfaces.size() == 1);
+  REQUIRE(ExportDwgFile(source, path.c_str(), log));
+  AppCommandState reopened;
+  REQUIRE(ImportDwgFile(reopened, path.c_str(), log));
+  REQUIRE(reopened.cadSurfaces.size() == 1);
+  CHECK(reopened.cadSurfaces[0].name == "Surface");
+  CheckSurfaceMatchesCivilReference(reopened, reopened.cadSurfaces[0]);
+}
+
+TEST_CASE("Civil TIN decoder refuses payloads it cannot verify without returning a partial surface",
+          "[dwg][libredwg][civil3d][req479][surface]") {
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("rapides-substation-civil3d.dwg").c_str(), &drawing) < DWG_ERR_CRITICAL);
+  const Dwg_Object* surface = nullptr;
+  for (BITCODE_BL i = 0; i < drawing.num_objects && surface == nullptr; ++i) {
+    const Dwg_Object& object = drawing.object[i];
+    if (object.type >= 500 && object.type - 500 < drawing.num_classes &&
+        std::string_view(drawing.dwg_class[object.type - 500].dxfname) == "AECC_TIN_SURFACE")
+      surface = &object;
+  }
+  REQUIRE(surface != nullptr);
+  const std::size_t bits = surface->num_unknown_bits;
+  const auto decoded = libredwgcivil::DecodeTinSurface(surface->unknown_bits, bits);
+  REQUIRE(decoded.has_value());
+  CHECK(decoded->indices.size() == 398 * 3);
+  CHECK(decoded->hiddenTriangles == 40);
+
+  CHECK_FALSE(libredwgcivil::DecodeTinSurface(nullptr, bits).has_value());
+  CHECK_FALSE(libredwgcivil::DecodeTinSurface(surface->unknown_bits, 35).has_value());
+  // Cut inside the triangle table.
+  CHECK_FALSE(libredwgcivil::DecodeTinSurface(surface->unknown_bits, 481000).has_value());
+
+  std::vector<unsigned char> copy(surface->unknown_bits, surface->unknown_bits + (bits + 7) / 8);
+  copy[0] ^= 0x01;  // signature mismatch
+  CHECK_FALSE(libredwgcivil::DecodeTinSurface(copy.data(), bits).has_value());
+  copy[0] ^= 0x01;
+  copy[2] ^= 0x10;  // revision mismatch
+  CHECK_FALSE(libredwgcivil::DecodeTinSurface(copy.data(), bits).has_value());
+  dwg_free(&drawing);
+}
+
+TEST_CASE("Civil surface styles decode to the source API values",
+          "[dwg][libredwg][civil3d][req479][surface][styles]") {
+  std::ifstream file(SamplePath("rapides-surface-style-reference.json"));
+  REQUIRE(file.good());
+  const auto reference = nlohmann::json::parse(file);
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("rapides-substation-civil3d.dwg").c_str(), &drawing) < DWG_ERR_CRITICAL);
+  const std::map<std::string, std::size_t> slot = {{"Points", 0}, {"Triangles", 1}, {"Boundary", 2},
+                                                   {"MajorContour", 3}, {"MinorContour", 4}};
+  REQUIRE(reference.at("styles").size() == 9);
+  for (const auto& expected : reference.at("styles")) {
+    const auto handle = std::stoull(expected.at("handle").get<std::string>(), nullptr, 16);
+    const Dwg_Object* object = dwg_resolve_handle_silent(&drawing, handle);
+    REQUIRE(object != nullptr);
+    INFO(expected.at("name").get<std::string>());
+    const std::size_t prefix = object->common_size + object->bitsize_pos;
+    const std::size_t trailer = object->stringstream_size >= 32768 ? 33 : 17;
+    REQUIRE(object->bitsize >= prefix + trailer + object->stringstream_size);
+    const std::size_t strings = object->bitsize - prefix - trailer - object->stringstream_size;
+    const auto style = libredwgcivil::DecodeSurfaceStyle(object->unknown_bits, object->num_unknown_bits,
+                                                         strings, object->stringstream_size);
+    REQUIRE(style.has_value());
+    const std::string name = expected.at("name").get<std::string>();
+    CHECK(std::u16string(style->name) == std::u16string(name.begin(), name.end()));
+    CHECK(style->minorInterval == Catch::Approx(expected.at("minorInterval").get<double>()));
+    CHECK(style->majorInterval == Catch::Approx(expected.at("majorInterval").get<double>()));
+    REQUIRE(style->smoothContours.has_value());
+    REQUIRE(style->smoothingFactor.has_value());
+    CHECK(*style->smoothContours == expected.at("smoothContours").get<bool>());
+    CHECK(*style->smoothingFactor == expected.at("smoothingFactor").get<unsigned>());
+    for (const auto& [component, index] : slot) {
+      const auto& want = expected.at("components").at(component);
+      CHECK(style->components[index].visible == want.at("visible").get<bool>());
+      const int aci = want.at("colorIndex").get<int>();
+      CHECK(style->components[index].color == (aci == 256 ? 0xc0000000u : (0xc3000000u | static_cast<unsigned>(aci))));
+    }
+  }
+  // Refuses anything that is not the verified revision, without returning a partial style.
+  const Dwg_Object* any = dwg_resolve_handle_silent(&drawing, 0x30f29);
+  REQUIRE(any != nullptr);
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceStyle(nullptr, 100, 50, 10).has_value());
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceStyle(any->unknown_bits, 40, 20, 10).has_value());
+  dwg_free(&drawing);
+}
+
+TEST_CASE("Civil 3D TIN surface keeps its Civil surface style",
+          "[dwg][libredwg][civil3d][req479][surface][styles]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d.dwg").c_str(), log,
+                             /*asDxf=*/false));
+  REQUIRE(state.cadSurfaces.size() == 1);
+  const std::string name = "Standard [Copy] [Copy] [Copy] [Copy]";
+  CHECK(state.cadSurfaces[0].styleName == name);
+  const SurfaceStyle* style = SurfaceStyles::Find(state.surfaceStyles, name);
+  REQUIRE(style != nullptr);
+  // The drawing shows this surface as a contour map: 0.5 ft minor and 1 ft major contours with a
+  // visible border, and no triangles.
+  CHECK(style->minorIntervalFt == Catch::Approx(0.5));
+  CHECK(style->majorIntervalFt == Catch::Approx(1.0));
+  // Smoothing is on with factor 7, so the contours are smoothed (three Chaikin passes).
+  CHECK(style->contourSmoothPasses == 3);
+  CHECK_FALSE(style->triangles.visible);
+  CHECK_FALSE(style->points.visible);
+  CHECK(style->border.visible);
+  CHECK(style->majorContour.visible);
+  CHECK(style->minorContour.visible);
+  // The built-in "Standard" is replaced by the drawing's own definition of that name.
+  const SurfaceStyle* standard = SurfaceStyles::Find(state.surfaceStyles, "Standard");
+  REQUIRE(standard != nullptr);
+  CHECK(standard->minorIntervalFt == Catch::Approx(1.0));
+  CHECK(standard->majorIntervalFt == Catch::Approx(2.0));
+  CHECK(standard->contourSmoothPasses == 0);
+}
+
+TEST_CASE("Rapides Civil 3D drawing imports dimension and multileader style tables",
+          "[dwg][libredwg][civil3d][req479][styles]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d.dwg").c_str(), log, false));
+  CHECK(state.activeDimensionStyle.name == "LEE-STANDARD");
+  CHECK(state.dimensionStyles.size() >= 8);
+  for (const char* name : {"Annotative", "LEE-STANDARD", "Proposed-ANNO", "PRO-TEXT", "ROMANS", "SlabSurvey",
+                           "Standard", "STANDARD_96_3"}) {
+    INFO(name);
+    CHECK(DimensionStyles::Find(state.dimensionStyles, name) != nullptr);
+  }
+  const DimensionStyle* lee = DimensionStyles::Find(state.dimensionStyles, "LEE-STANDARD");
+  REQUIRE(lee != nullptr);
+  CHECK((lee->unitFormat == DimUnitFormat::Architectural || lee->unitFormat == DimUnitFormat::Engineering ||
+         !lee->unitSuffix.empty()));
+  CHECK(state.multileaderStyles.size() >= 6);
+  for (const char* name :
+       {"l100s Straight", "l60s Sline", "l60s Straight", "l80s Sline", "l80s Straight", "Standard"}) {
+    INFO(name);
+    CHECK(MultileaderStyles::Find(state.multileaderStyles, name) != nullptr);
+  }
+  CHECK(state.surfaceStyles.size() >= 9);
+}
+
+TEST_CASE("Civil label font fallback uses romans.shx without a decoded style font",
+          "[dwg][libredwg][civil3d][req479][labels]") {
+  AppCommandState state;
+  TextStyles::EnsureStandard(state.textStyles);
+  for (TextStyle& style : state.textStyles) style.fontFamily.clear();
+  CHECK(libredwgcad_detail::CivilLabelFontFamily(state, nullptr) == TextStyles::kDefaultFontFamily);
+}
+
+TEST_CASE("Civil 3D surface elevation labels decode and import as marker plus elevation text",
+          "[dwg][libredwg][civil3d][req479][surface][labels]") {
+  std::ifstream file(SamplePath("rapides-elevation-label-reference.json"));
+  REQUIRE(file.good());
+  const auto reference = nlohmann::json::parse(file);
+  const auto& labels = reference.at("labels");
+  REQUIRE(labels.size() == 11);
+
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("rapides-substation-civil3d.dwg").c_str(), &drawing) < DWG_ERR_CRITICAL);
+  for (const auto& expected : labels) {
+    const auto handle = std::stoull(expected.at("handle").get<std::string>(), nullptr, 16);
+    const Dwg_Object* object = dwg_resolve_handle_silent(&drawing, handle);
+    REQUIRE(object != nullptr);
+    const auto decoded = libredwgcivil::DecodeSurfaceElevationLabel(
+        object->unknown_bits, static_cast<std::size_t>(object->num_unknown_bits));
+    REQUIRE(decoded.has_value());
+    CHECK(decoded->location.x == Catch::Approx(expected.at("x").get<double>()).margin(1.e-6));
+    CHECK(decoded->location.y == Catch::Approx(expected.at("y").get<double>()).margin(1.e-6));
+    CHECK(decoded->location.z == Catch::Approx(expected.at("z").get<double>()).margin(1.e-9));
+  }
+  const auto collectorNameFromEntity = [&](const Dwg_Object& entity) -> std::string {
+    const std::size_t prefix = entity.common_size + entity.bitsize_pos;
+    if (entity.bitsize < prefix) return {};
+    const auto refs = libredwgcivil::DecodeHandleList(entity.unknown_bits, entity.num_unknown_bits,
+                                                      entity.bitsize - prefix, entity.handle.value);
+    for (uint64_t handle : refs) {
+      const Dwg_Object* collector = dwg_resolve_handle_silent(&drawing, handle);
+      if (collector == nullptr || collector->type < 500) continue;
+      const char* className = drawing.dwg_class[collector->type - 500].dxfname;
+      if (className == nullptr || std::strcmp(className, "AECC_LABEL_COLLECTOR_STYLE") != 0) continue;
+      const std::size_t collectorPrefix = collector->common_size + collector->bitsize_pos;
+      const std::size_t trailer = collector->stringstream_size >= 32768 ? 33 : 17;
+      if (!collector->has_strings ||
+          collector->bitsize < collectorPrefix + trailer + collector->stringstream_size)
+        continue;
+      const std::size_t strings =
+          collector->bitsize - collectorPrefix - trailer - collector->stringstream_size;
+      const auto decoded = libredwgcivil::DecodeLabelStyle(collector->unknown_bits,
+                                                           collector->num_unknown_bits, strings,
+                                                           collector->stringstream_size);
+      if (!decoded.has_value() || decoded->name.empty()) continue;
+      return libredwgcad_detail::DecodeDwgString(decoded->name.c_str(), true);
+    }
+    return {};
+  };
+  for (const auto& expected : labels) {
+    const auto handle = std::stoull(expected.at("handle").get<std::string>(), nullptr, 16);
+    const Dwg_Object* object = dwg_resolve_handle_silent(&drawing, handle);
+    REQUIRE(object != nullptr);
+    CHECK(collectorNameFromEntity(*object) == expected.at("style").get<std::string>());
+  }
+  const Dwg_Object* first = dwg_resolve_handle_silent(&drawing, 0x30f65);
+  REQUIRE(first != nullptr);
+  const std::size_t bits = first->num_unknown_bits;
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceElevationLabel(nullptr, bits).has_value());
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceElevationLabel(first->unknown_bits, 800).has_value());
+  std::vector<unsigned char> copy(first->unknown_bits, first->unknown_bits + (bits + 7) / 8);
+  copy[1] ^= 0x01;  // revision mismatch
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceElevationLabel(copy.data(), bits).has_value());
+  copy[1] ^= 0x01;
+  copy[44] ^= 0xff;  // the raw (x, y) copy no longer agrees with the compact point
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceElevationLabel(copy.data(), bits).has_value());
+  dwg_free(&drawing);
+
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d.dwg").c_str(), log,
+                             /*asDxf=*/false));
+  const auto elevationOnlyStyle = std::find_if(state.surveyPointLabelStyles.begin(),
+                                                 state.surveyPointLabelStyles.end(),
+                                                 [](const SurveyPointLabelStyleDefinition& value) {
+                                                   return value.name == "Elevation Only";
+                                                 });
+  REQUIRE(elevationOnlyStyle != state.surveyPointLabelStyles.end());
+  CHECK(elevationOnlyStyle->fontFamily != "Arial");
+  for (const auto& expected : labels) {
+    const std::string text = expected.at("text").get<std::string>();
+    const double localX = expected.at("x").get<double>() - state.worldDocumentOriginX;
+    const double localY = expected.at("y").get<double>() - state.worldDocumentOriginY;
+    const auto annotation = std::find_if(state.cadAnnotations.begin(), state.cadAnnotations.end(),
+        [&](const CadAnnotation& value) {
+          return value.text == text && std::fabs(value.insX - (localX + 2.5)) < 0.01 &&
+                 std::fabs(value.insY - localY) < 0.01;
+        });
+    INFO(text);
+    REQUIRE(annotation != state.cadAnnotations.end());
+    CHECK(annotation->mtextAttach == 4);
+    CHECK(annotation->plottedHeightInches * state.modelUnitsPerPlottedInch ==
+          Catch::Approx(expected.at("textHeight").get<double>()).margin(1.e-4));
+    bool markerFound = false;
+    for (std::size_t i = 0; i + 3 < state.userCirclesCxCyZR.size(); i += 4)
+      markerFound |= std::fabs(state.userCirclesCxCyZR[i] - localX) < 1.e-3 &&
+                     std::fabs(state.userCirclesCxCyZR[i + 1] - localY) < 1.e-3 &&
+                     std::fabs(state.userCirclesCxCyZR[i + 3] - expected.at("markerRadius").get<double>()) < 1.e-9;
+    CHECK(markerFound);
+    CHECK_FALSE(annotation->fontFamily.empty());
+    CHECK(annotation->fontFamily == elevationOnlyStyle->fontFamily);
+  }
+}
+
+TEST_CASE("Civil 3D surface contour labels decode and import as elevation text",
+          "[dwg][libredwg][civil3d][req479][surface][labels]") {
+  std::ifstream file(SamplePath("rapides-contour-label-reference.json"));
+  REQUIRE(file.good());
+  const auto reference = nlohmann::json::parse(file);
+  const auto& labels = reference.at("labels");
+  REQUIRE(labels.size() == 44);
+  REQUIRE(reference.at("emptyGroups").size() == 6);
+
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("rapides-substation-civil3d.dwg").c_str(), &drawing) < DWG_ERR_CRITICAL);
+  const auto decode = [&](const Dwg_Object* object) {
+    return libredwgcivil::DecodeSurfaceContourLabel(object->unknown_bits,
+        static_cast<std::size_t>(object->num_unknown_bits), object->tio.entity->preview,
+        static_cast<std::size_t>(object->tio.entity->preview_size));
+  };
+  for (const auto& expected : labels) {
+    const auto handle = std::stoull(expected.at("handle").get<std::string>(), nullptr, 16);
+    const Dwg_Object* object = dwg_resolve_handle_silent(&drawing, handle);
+    REQUIRE(object != nullptr);
+    const auto decoded = decode(object);
+    REQUIRE(decoded.has_value());
+    CHECK(decoded->x == Catch::Approx(expected.at("x").get<double>()).margin(1.e-6));
+    CHECK(decoded->y == Catch::Approx(expected.at("y").get<double>()).margin(1.e-6));
+    CHECK(decoded->z == Catch::Approx(expected.at("z").get<double>()).margin(1.e-9));
+  }
+  for (const auto& handleText : reference.at("emptyGroups")) {
+    const Dwg_Object* object = dwg_resolve_handle_silent(&drawing, std::stoull(handleText.get<std::string>(), nullptr, 16));
+    REQUIRE(object != nullptr);
+    CHECK_FALSE(decode(object).has_value());
+  }
+  const Dwg_Object* first = dwg_resolve_handle_silent(&drawing, 0x30fb1);
+  REQUIRE(first != nullptr);
+  const std::size_t bits = first->num_unknown_bits;
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceContourLabel(nullptr, bits, first->tio.entity->preview,
+      static_cast<std::size_t>(first->tio.entity->preview_size)).has_value());
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceContourLabel(first->unknown_bits, bits, nullptr, 0).has_value());
+  std::vector<unsigned char> copy(first->unknown_bits, first->unknown_bits + (bits + 7) / 8);
+  copy[1] ^= 0x01;  // revision mismatch
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceContourLabel(copy.data(), bits, first->tio.entity->preview,
+      static_cast<std::size_t>(first->tio.entity->preview_size)).has_value());
+  copy[1] ^= 0x01;
+  copy[100] ^= 0xff;  // stored x no longer agrees with the outline's centre
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceContourLabel(copy.data(), bits, first->tio.entity->preview,
+      static_cast<std::size_t>(first->tio.entity->preview_size)).has_value());
+  dwg_free(&drawing);
+
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d.dwg").c_str(), log,
+                             /*asDxf=*/false));
+  const double pi = 3.14159265358979323846;
+  for (const auto& expected : labels) {
+    const std::string text = expected.at("text").get<std::string>();
+    const double localX = expected.at("x").get<double>() - state.worldDocumentOriginX;
+    const double localY = expected.at("y").get<double>() - state.worldDocumentOriginY;
+    const auto annotation = std::find_if(state.cadAnnotations.begin(), state.cadAnnotations.end(),
+        [&](const CadAnnotation& value) {
+          return value.text == text && std::fabs(value.insX - localX) < 0.01 && std::fabs(value.insY - localY) < 0.01;
+        });
+    INFO(expected.at("handle").get<std::string>() << " " << text);
+    REQUIRE(annotation != state.cadAnnotations.end());
+    CHECK(annotation->mtextAttach == 5);
+    CHECK(annotation->plottedHeightInches * state.modelUnitsPerPlottedInch ==
+          Catch::Approx(expected.at("textHeight").get<double>()).margin(1.e-4));
+    // Rotation follows the contour, derived from the surface: within 15 degrees of Civil's (text
+    // direction is equivalent modulo 180 degrees).
+    double difference = std::fmod(std::fabs(annotation->rotationRad - expected.at("rotation").get<double>()), pi);
+    difference = (std::min)(difference, pi - difference);
+    CHECK(difference < 15.0 * pi / 180.0);
+    CHECK_FALSE(annotation->fontFamily.empty());
+  }
+  // Groups without a label (and the 7,464 parcels) no longer leave their empty-label box at the
+  // world origin, three million feet from the site.
+  for (std::size_t i = 0; i + 2 < state.userPolylineVerts.size(); i += 3) {
+    const double worldX = state.userPolylineVerts[i] + state.worldDocumentOriginX;
+    const double worldY = state.userPolylineVerts[i + 1] + state.worldDocumentOriginY;
+    const bool atOrigin = worldY >= -1.e-6 && worldY <= 0.12 && worldX >= 0.0 && worldX <= 1.5;
+    CHECK_FALSE(atOrigin);
+  }
+}
+
+TEST_CASE("Civil 3D point descriptions and point groups import with the points",
+          "[dwg][libredwg][civil3d][req479][points]") {
+  std::ifstream file(SamplePath("rapides-point-reference.json"));
+  REQUIRE(file.good());
+  const auto reference = nlohmann::json::parse(file);
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d-pointtables.dwg").c_str(), log,
+                             /*asDxf=*/false));
+  REQUIRE(state.surveyPoints.size() == 353);
+
+  // Literal descriptions and Civil's predefined CP string token both match the source API.
+  std::size_t described = 0;
+  for (const auto& expected : reference.at("points")) {
+    const int number = expected.at("number").get<int>();
+    const auto point = std::find_if(state.surveyPoints.begin(), state.surveyPoints.end(),
+                                    [&](const SurveyPoint& value) { return value.id == number; });
+    REQUIRE(point != state.surveyPoints.end());
+    INFO("point " << number);
+    CHECK(point->rawDescription == expected.at("rawDescription").get<std::string>());
+    CHECK(point->description == point->rawDescription);
+    ++described;
+  }
+  CHECK(described == 353);
+
+  // Point groups: all 25 import by name with the stored membership. One group (WATER, which holds
+  // no points) has a layout whose list cannot be verified and is imported empty and reported.
+  REQUIRE(reference.at("groups").size() == 25);
+  CHECK(state.pointGroups.size() == 25);
+  // The Prospector lists groups in Civil's order, which the API reports as the reference order.
+  for (std::size_t i = 0; i < 25 && i < state.pointGroups.size(); ++i)
+    CHECK(state.pointGroups[i].name == reference.at("groups")[i].at("name").get<std::string>());
+  for (const auto& expected : reference.at("groups")) {
+    const std::string name = expected.at("name").get<std::string>();
+    const auto group = std::find_if(state.pointGroups.begin(), state.pointGroups.end(),
+                                    [&](const PointGroup& value) { return value.name == name; });
+    INFO(name);
+    REQUIRE(group != state.pointGroups.end());
+    std::vector<int> want = expected.at("members").get<std::vector<int>>();
+    std::vector<int> got = group->rule.explicitIds;
+    std::sort(want.begin(), want.end());
+    std::sort(got.begin(), got.end());
+    CHECK(got == want);
+  }
+  CHECK(std::any_of(log.begin(), log.end(), [](const std::string& line) {
+    return line.find("Civil point groups decoded: 25") != std::string::npos; }));
+}
+
+TEST_CASE("Civil point node and group decoders refuse layouts they cannot verify",
+          "[dwg][libredwg][civil3d][req479][points]") {
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("rapides-substation-civil3d-pointtables.dwg").c_str(), &drawing) < DWG_ERR_CRITICAL);
+  const Dwg_Object* node = nullptr;
+  for (BITCODE_BL i = 0; i < drawing.num_objects && node == nullptr; ++i) {
+    const Dwg_Object& object = drawing.object[i];
+    if (object.type >= 500 && object.type - 500 < drawing.num_classes &&
+        std::string_view(drawing.dwg_class[object.type - 500].dxfname) == "AECC_POINT_NODE")
+      node = &object;
+  }
+  REQUIRE(node != nullptr);
+  const std::size_t prefix = node->common_size + node->bitsize_pos;
+  const std::size_t trailer = node->stringstream_size >= 32768 ? 33 : 17;
+  const std::size_t strings = node->bitsize - prefix - trailer - node->stringstream_size;
+  const auto decoded = libredwgcivil::DecodePointNodeDescriptions(
+      node->unknown_bits, node->num_unknown_bits, strings, node->stringstream_size);
+  REQUIRE(decoded.has_value());
+  CHECK(decoded->size() == 353);
+  CHECK_FALSE(libredwgcivil::DecodePointNodeDescriptions(nullptr, 100, 50, 10).has_value());
+  CHECK_FALSE(libredwgcivil::DecodePointNodeDescriptions(node->unknown_bits, node->num_unknown_bits,
+                                                         strings, node->stringstream_size - 400).has_value());
+  CHECK_FALSE(libredwgcivil::DecodePointNodeDescriptions(node->unknown_bits, node->num_unknown_bits,
+                                                         strings - 64, node->stringstream_size).has_value());
+
+  const std::unordered_set<int> none;
+  CHECK_FALSE(libredwgcivil::DecodePointGroup(nullptr, 100, 50, 10, none).has_value());
+  dwg_free(&drawing);
+}
+
+TEST_CASE("Civil point-group display priority supplies styles without replacing point overrides",
+          "[dwg][libredwg][civil3d][req479][points]") {
+  for (const bool explicitStyles : {false, true}) {
+    AppCommandState state;
+    std::vector<std::string> log;
+    REQUIRE(ImportLibreCadFile(state, SamplePath(explicitStyles
+        ? "rapides-substation-civil3d-pointtables.dwg" : "rapides-substation-civil3d.dwg").c_str(),
+        log, false));
+    REQUIRE(state.surveyPoints.size() == 353);
+    CHECK(state.modelUnitsPerPlottedInch == Catch::Approx(20.f));
+    for (const auto& point : state.surveyPoints) {
+      INFO("point " << point.id << ", explicit overrides " << explicitStyles);
+      CHECK(point.styleName == (explicitStyles ? "Basic" : "no points"));
+      CHECK(point.labelStyleName == "no points");
+      CHECK(SurveyPointMarkerVisible(point, state.surveyPointStyles) == explicitStyles);
+    }
+    CHECK(std::none_of(log.begin(), log.end(), [](const std::string& line) {
+      return line.find("member list could not be verified") != std::string::npos;
+    }));
+  }
+}
+
+TEST_CASE("Civil point label collections retain source visibility and component expressions",
+          "[dwg][libredwg][civil3d][req479][points][styles]") {
+  std::ifstream file(SamplePath("rapides-point-label-style-reference.json"));
+  REQUIRE(file.good());
+  const auto reference = nlohmann::json::parse(file);
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d-pointtables.dwg").c_str(), log, false));
+  REQUIRE(state.surveyPointLabelStyles.size() == 10);
+  for (const auto& expected : reference.at("styles")) {
+    const auto style = std::find_if(state.surveyPointLabelStyles.begin(), state.surveyPointLabelStyles.end(),
+        [&](const SurveyPointLabelStyleDefinition& value) { return value.name == expected.at("name"); });
+    INFO(expected.at("name"));
+    REQUIRE(style != state.surveyPointLabelStyles.end());
+    CHECK(style->visible == expected.at("visible").get<bool>());
+    if (expected.at("components").size() > 0 && expected.at("components")[0].contains("height"))
+      CHECK(style->textHeightPlottedInches ==
+            Catch::Approx(expected.at("components")[0].at("height").get<double>() * 12.0));
+    CHECK_FALSE(style->fontFamily.empty());
+    REQUIRE(style->civilTextContents.size() == expected.at("components").size());
+    for (std::size_t i = 0; i < style->civilTextContents.size(); ++i) {
+      std::string content = style->civilTextContents[i];
+      // Independent API reference uses readable property names. DWG expressions use stable
+      // numeric property/modifier IDs and escape an MTEXT paragraph slash a second time.
+      for (const auto& [encoded, readable] : std::vector<std::pair<std::string, std::string>>{
+          {"16797697", "Point Number"}, {"33574914", "Point Elevation"},
+          {"67129348", "Full Description"}, {"33574917", "Northing"}, {"33574918", "Easting"},
+          {"2097", "Uft"}, {"2387", "P2"}, {"2388", "P3"}, {"2433", "RN"},
+          {"2593", "Sn"}, {"2609", "OF"}, {"2657", "AP"}, {"2449", "CP"}, {"\\\\P", "\\P"}}) {
+        for (std::size_t p = 0; (p = content.find(encoded, p)) != std::string::npos; p += readable.size())
+          content.replace(p, encoded.size(), readable);
+      }
+      CHECK(content == expected.at("components")[i].at("content").get<std::string>());
+    }
+  }
+  for (const auto& point : state.surveyPoints)
+    CHECK_FALSE(SurveyPointNamedLabelVisible(point, state.surveyPointLabelStyles));
+  CHECK(std::none_of(log.begin(), log.end(), [](const std::string& line) {
+    return line.find("point text content not decoded") != std::string::npos ||
+           line.find("point label visibility not decoded") != std::string::npos;
+  }));
+}
+
+TEST_CASE("Native DWG point markers retain custom geometry color and hidden labels",
+          "[dwg][libredwg][req479][points][styles]") {
+  ScratchDir dir("styled-point-export");
+  const auto path = (dir.path / "points.dwg").string();
+  AppCommandState state;
+  state.modelUnitsPerPlottedInch = 20.f;
+  SurveyPointStyleDefinition style;
+  style.name = "White Plus";
+  style.hasExplicitMarkerGeometry = true;
+  style.customMarker = 2;
+  style.crossSpanPlottedInches = .1f;
+  style.color = "ACI:7";
+  state.surveyPointStyles.push_back(style);
+  SurveyPointLabelStyleDefinition label;
+  label.name = "Hidden labels";
+  label.visible = false;
+  state.surveyPointLabelStyles.push_back(label);
+  SurveyPoint point;
+  point.id = 17;
+  point.easting = 3254400.123;
+  point.northing = 313800.456;
+  point.elevation = 83.2;
+  point.styleName = style.name;
+  point.labelStyleName = label.name;
+  point.description = "CONTROL";
+  state.surveyPoints.push_back(point);
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(state, path.c_str(), log));
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(path.c_str(), &drawing) < DWG_ERR_CRITICAL);
+  int lines = 0, circles = 0, attributes = 0;
+  for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+    const auto& object = drawing.object[i];
+    if (object.fixedtype == DWG_TYPE_LINE) {
+      ++lines;
+      const auto* line = object.tio.entity->tio.LINE;
+      CHECK(std::hypot(line->end.x - line->start.x, line->end.y - line->start.y) == Catch::Approx(2.0));
+    }
+    if (object.fixedtype == DWG_TYPE_CIRCLE) ++circles;
+    if (object.fixedtype == DWG_TYPE_ATTRIB) {
+      ++attributes;
+      CHECK((object.tio.entity->tio.ATTRIB->flags & 1u) != 0);
+      CHECK(object.tio.entity->tio.ATTRIB->mtext_type == 1);
+      CHECK(object.tio.entity->entmode == 0);
+      REQUIRE(object.tio.entity->ownerhandle != nullptr);
+      const auto* owner = dwg_resolve_handle_silent(&drawing, object.tio.entity->ownerhandle->absolute_ref);
+      REQUIRE(owner != nullptr);
+      CHECK(owner->fixedtype == DWG_TYPE_INSERT);
+    }
+    if (object.fixedtype == DWG_TYPE_ATTDEF) {
+      CHECK(object.tio.entity->tio.ATTDEF->width_factor == Catch::Approx(1.0));
+      CHECK(object.tio.entity->tio.ATTDEF->mtext_type == 1);
+    }
+    if (object.fixedtype == DWG_TYPE_INSERT) {
+      const auto* insert = object.tio.entity->tio.INSERT;
+      for (BITCODE_BL j = 0; j < insert->num_owned; ++j)
+        CHECK(insert->attribs[j]->handleref.code == 3);
+    }
+  }
+  CHECK(lines == 2);
+  CHECK(circles == 0);
+  CHECK(attributes == 2);
+  dwg_free(&drawing);
+}
+
+TEST_CASE("Civil point table segments retain row offsets insertion and exact group reference",
+          "[dwg][libredwg][civil3d][req479][tables]") {
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("rapides-substation-civil3d-pointtables.dwg").c_str(), &drawing) < DWG_ERR_CRITICAL);
+  unsigned segments = 0;
+  for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+    const auto& object = drawing.object[i];
+    if (object.type < 500 || object.type - 500 >= drawing.num_classes ||
+        std::string_view(drawing.dwg_class[object.type - 500].dxfname) != "AECC_POINT_TABLE") continue;
+    INFO("table handle " << object.handle.value);
+    const std::size_t prefix = object.common_size + object.bitsize_pos;
+    const std::size_t strings = object.bitsize - prefix - 17 - object.stringstream_size;
+    const auto decoded = libredwgcivil::DecodePointTable(object.unknown_bits, object.num_unknown_bits, strings);
+    REQUIRE(decoded.has_value());
+    CHECK(decoded->maximumRows == 20);
+    CHECK(decoded->firstRow == segments * 20);
+    const auto preview = libredwgcivil::DecodeProxyGraphicPolylines(object.tio.entity->preview,
+                                                                   object.tio.entity->preview_size);
+    REQUIRE(preview.has_value());
+    REQUIRE(preview->size() == 1);
+    REQUIRE(preview->front().size() == 5);
+    CHECK(decoded->transform[3] == Catch::Approx((*preview)[0][3].x));
+    CHECK(decoded->transform[7] == Catch::Approx((*preview)[0][3].y));
+    if (segments == 0) {
+      const auto handles = libredwgcivil::DecodeHandleList(object.unknown_bits, object.num_unknown_bits,
+                                                          object.bitsize - prefix, object.handle.value);
+      REQUIRE_FALSE(handles.empty());
+      const auto* group = dwg_resolve_handle_silent(&drawing, handles.back());
+      REQUIRE(group != nullptr);
+      REQUIRE(group->type >= 500);
+      CHECK(std::string_view(drawing.dwg_class[group->type - 500].dxfname) == "AECC_POINT_PG");
+    }
+    CHECK_FALSE(libredwgcivil::DecodePointTable(object.unknown_bits, strings - 1, strings).has_value());
+    ++segments;
+  }
+  CHECK(segments == 18);
+  CHECK_FALSE(libredwgcivil::DecodePointTable(nullptr, 4000, 3000).has_value());
+  dwg_free(&drawing);
+}
+
+TEST_CASE("Civil point table styles decode drawing columns expressions and text sizes",
+          "[dwg][libredwg][civil3d][req479][tables]") {
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("rapides-substation-civil3d-pointtables.dwg").c_str(), &drawing) < DWG_ERR_CRITICAL);
+  const std::array<uint64_t, 4> handles = {0x1973, 0x19a2, 0x1a6bd, 0x2f9b4};
+  const std::array<std::u16string, 4> names = {u"Latitude and Longitude", u"PNEZD format", u"Standard", u"NCRS N-E-LAT-LON"};
+  for (std::size_t i = 0; i < handles.size(); ++i) {
+    const auto* object = dwg_resolve_handle_silent(&drawing, handles[i]);
+    REQUIRE(object != nullptr);
+    const auto prefix = object->common_size + object->bitsize_pos;
+    const auto strings = object->bitsize - prefix - 17 - object->stringstream_size;
+    const auto style = libredwgcivil::DecodeTableStyle(object->unknown_bits, object->num_unknown_bits,
+                                                      strings, object->stringstream_size);
+    REQUIRE(style.has_value());
+    CHECK(style->name == names[i]);
+    CHECK(style->columns.size() == (i == 3 ? 6 : 5));
+    CHECK(style->columns.front().expression == u"<[16797697]>");
+    if (i != 2) CHECK(style->columns.back().expression == u"<[167792643(2449)]>");
+    else CHECK(style->columns[1].expression == u"<[167792643(2449)]>");
+    CHECK(style->dataTextHeight == Catch::Approx(i == 3 ? .006666666666666666 : .008333333333333333));
+    CHECK(style->headerTextHeight == Catch::Approx(style->dataTextHeight));
+    CHECK(style->titleTextHeight == Catch::Approx(i < 2 ? .0125 : style->dataTextHeight));
+    for (const auto& column : style->columns) CHECK(column.width == 0);
+    CHECK_FALSE(libredwgcivil::DecodeTableStyle(object->unknown_bits, strings - 1,
+                                               strings, object->stringstream_size).has_value());
+    if (handles[i] == 0x19a2) {
+      CHECK(style->displayComponents[0].color == 0xc0000000u);
+      CHECK(style->displayComponents[7].color == 0xc0000000u);
+      CHECK(style->displayComponents[10].color == 0xc0000000u);
+    }
+  }
+  dwg_free(&drawing);
+}
+
+TEST_CASE("Civil point tables import editable rows from their drawing-owned group and style",
+          "[dwg][libredwg][civil3d][req479][tables]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d-pointtables.dwg").c_str(), log, false));
+  REQUIRE(state.cadTables.size() == 18);
+  REQUIRE(state.cadTableAttrs.size() == 18);
+  const auto& first = state.cadTables.front();
+  CHECK(first.styleName == "PNEZD format");
+  CHECK(first.cols == 5);
+  REQUIRE(first.cells.size() == 110);
+  CHECK(first.cells[0] == "Point Table");
+  CHECK(first.cells[5] == "Point #");
+  CHECK(first.cells[6] == "Elevation");
+  CHECK(first.cells[10] == "65");
+  CHECK(first.cells[15] == "1");
+  CHECK(first.cells[19] == "CP");
+  // The column proportions come from SHX glyph metrics, which exist only where an Autodesk font folder is installed.
+  const auto* measuringFont = Shx::Resolve(first.fontFamily);
+  const bool measuredWithShx = measuringFont != nullptr && measuringFont->valid();
+  if (measuredWithShx) CHECK(first.width == Catch::Approx(93.4285714286));
+  else CHECK(first.width > 0.f);
+  CHECK(first.height == Catch::Approx(135.6666666667));
+  CHECK(first.plottedHeightInches == Catch::Approx(.1));
+  CHECK(first.mergeTitleRow);
+  CHECK(first.surveyPointDataRows);
+  REQUIRE(first.columnWeights.size() == 5);
+  // Civil point-table styles keep oracle grid/border/data colors when components decode as ByLayer.
+  const auto pnezd = std::find_if(state.tableStyles.begin(), state.tableStyles.end(),
+                                     [](const CadTableStyle& style) {
+                                       return style.civilStyleName == "PNEZD format";
+                                     });
+  REQUIRE(pnezd != state.tableStyles.end());
+  CHECK(pnezd->gridLineColor == "1");
+  CHECK(pnezd->borderColor == "5");
+  CHECK((pnezd->dataTextColor == "150" || pnezd->dataTextColor == "#007FFF"));
+  REQUIRE(first.columnWeights.size() == 5);
+  if (measuredWithShx) CHECK(first.columnWeights[4] > first.columnWeights[0]);
+  CHECK(state.cadTableAttrs.front().layer == "V-NODE-TABL");
+  CHECK(state.cadTables.back().cells.size() == 75);
+  unsigned styles = 0;
+  for (const auto& style : state.tableStyles) if (!style.civilStyleName.empty()) ++styles;
+  CHECK(styles == 4);
+}
+
+TEST_CASE("AutoCAD-authored R2018 attributes keep their exact binary field boundary",
+          "[dwg][libredwg][attributes]") {
+  Dwg_Data drawing{};
+  const int error = dwg_read_file(SamplePath("autocad-r2018-point-attributes.dwg").c_str(), &drawing);
+  REQUIRE(error < DWG_ERR_CRITICAL);
+  CHECK(error == 0);
+  auto checkBody = [](const Dwg_Data& data, std::size_t definitionBits) {
+    unsigned attributes = 0;
+    unsigned definitions = 0;
+    for (BITCODE_BL i = 0; i < data.num_objects; ++i) {
+      const auto& object = data.object[i];
+      if (object.fixedtype != DWG_TYPE_ATTRIB && object.fixedtype != DWG_TYPE_ATTDEF) continue;
+      const std::size_t body = object.bitsize - object.common_size - object.bitsize_pos -
+                               object.stringstream_size - 17;
+      if (object.fixedtype == DWG_TYPE_ATTRIB) {
+        CHECK(body == 229);
+        ++attributes;
+      } else {
+        CHECK(body == definitionBits);
+        ++definitions;
+      }
+    }
+    CHECK(attributes == 1);
+    CHECK(definitions == 1);
+  };
+  checkBody(drawing, 243);
+  ScratchDir dir("autocad-attribute-boundary");
+  const auto path = (dir.path / "roundtrip.dwg").string();
+  REQUIRE(dwg_write_file(path.c_str(), &drawing) == 0);
+  dwg_free(&drawing);
+  REQUIRE(dwg_read_file(path.c_str(), &drawing) < DWG_ERR_CRITICAL);
+  // The writer uses the one-bit default normal instead of the source's explicit
+  // seven-bit (0,0,1) normal. ATTDEF otherwise retains its eight-bit trailing field.
+  checkBody(drawing, 237);
+  dwg_free(&drawing);
+}
+
+TEST_CASE("R2018 MTEXT constructors use the native embedded-object class defaults",
+          "[dwg][libredwg][mtext][req479]") {
+  Dwg_Data reference{};
+  REQUIRE(dwg_read_file(SamplePath("autocad-r2018-block-mtext.dwg").c_str(), &reference) == 0);
+  const Dwg_Entity_MTEXT* native = nullptr;
+  for (BITCODE_BL i = 0; i < reference.num_objects; ++i)
+    if (reference.object[i].fixedtype == DWG_TYPE_MTEXT) native = reference.object[i].tio.entity->tio.MTEXT;
+  REQUIRE(native != nullptr);
+  Dwg_Data* drawing = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(drawing != nullptr);
+  const dwg_point_3d insertion{0, 0, 0};
+  auto* text = dwg_add_MTEXT(dwg_model_space_object(drawing)->tio.object->tio.BLOCK_HEADER,
+                            &insertion, 4, "FO");
+  REQUIRE(text != nullptr);
+  CHECK(text->is_not_annotative == native->is_not_annotative);
+  CHECK(text->class_version == native->class_version);
+  CHECK(text->default_flag == native->default_flag);
+  CHECK(text->ignore_attachment == native->ignore_attachment);
+  text->attachment = 5;
+  ScratchDir dir("mtext-embedded-attachment");
+  const auto path = (dir.path / "center.dwg").string();
+  REQUIRE(dwg_write_file(path.c_str(), drawing) == 0);
+  Dwg_Data centered{};
+  REQUIRE(dwg_read_file(path.c_str(), &centered) == 0);
+  for (BITCODE_BL i = 0; i < centered.num_objects; ++i) {
+    if (centered.object[i].fixedtype != DWG_TYPE_MTEXT) continue;
+    const auto* value = centered.object[i].tio.entity->tio.MTEXT;
+    CHECK(value->attachment == 5);
+    CHECK(value->ignore_attachment == 5);
+  }
+  dwg_free(&centered);
+  dwg_free(drawing);
+  free(drawing);
+  dwg_free(&reference);
+}
+
+TEST_CASE("AutoCAD R2018 entity material flags precede shadow and plot-style flags",
+          "[dwg][libredwg][material][req479]") {
+  const bool noShadows = GENERATE(false, true);
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath(noShadows ? "autocad-r2018-material-shadow-flags.dwg" :
+      "autocad-r2018-mesh-material.dwg").c_str(), &drawing) == 0);
+  unsigned hosts = 0;
+  for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+    const auto& object = drawing.object[i];
+    if (object.fixedtype != DWG_TYPE_POLYLINE_PFACE) continue;
+    const auto* entity = object.tio.entity;
+    CHECK(entity->material_flags == 3);
+    CHECK(entity->shadow_flags == (noShadows ? 3 : 0));
+    CHECK(entity->plotstyle_flags == 0);
+    REQUIRE(entity->material != nullptr);
+    const auto* material = dwg_resolve_handle_silent(&drawing, entity->material->absolute_ref);
+    REQUIRE(material != nullptr);
+    CHECK(material->fixedtype == DWG_TYPE_MATERIAL);
+    ++hosts;
+  }
+  CHECK(hosts == 1);
+  dwg_free(&drawing);
+}
+
+TEST_CASE("AutoCAD R2018 multileader omits the legacy arrowhead array",
+          "[dwg][libredwg][multileader][req479]") {
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("autocad-r2018-mleader.dwg").c_str(), &drawing) == 0);
+  unsigned count = 0;
+  for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+    if (drawing.object[i].fixedtype != DWG_TYPE_MULTILEADER) continue;
+    const auto* leader = drawing.object[i].tio.entity->tio.MULTILEADER;
+    CHECK(leader->num_blocklabels == 0);
+    CHECK(leader->scale_factor == Catch::Approx(1.0));
+    CHECK(leader->ctx.num_leaders == 1);
+    CHECK(leader->ctx.has_content_txt == 1);
+    // Native storage keeps the head in the line and its tail in the leader cluster.
+    REQUIRE(leader->ctx.leaders[0].lines[0].num_points == 1);
+    CHECK(leader->ctx.leaders[0].lines[0].points[0].x == 0);
+    CHECK(leader->ctx.leaders[0].lines[0].points[0].y == 0);
+    CHECK(leader->ctx.leaders[0].lastleaderlinepoint.x == 3);
+    CHECK(leader->ctx.leaders[0].lastleaderlinepoint.y == 4);
+    ++count;
+  }
+  CHECK(count == 1);
+  dwg_free(&drawing);
+}
+
+TEST_CASE("AutoCAD R2018 multileader survives LibreDWG write and reread",
+          "[dwg][libredwg][multileader][req479][issue993]") {
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("autocad-r2018-mleader.dwg").c_str(), &drawing) == 0);
+  ScratchDir dir("r2018-mleader-roundtrip");
+  const auto path = (dir.path / "roundtrip.dwg").string();
+  REQUIRE(dwg_write_file(path.c_str(), &drawing) == 0);
+  dwg_free(&drawing);
+  Dwg_Data again{};
+  const int error = dwg_read_file(path.c_str(), &again);
+  REQUIRE(error < DWG_ERR_CRITICAL);
+  CHECK(error == 0);
+  unsigned count = 0;
+  for (BITCODE_BL i = 0; i < again.num_objects; ++i) {
+    if (again.object[i].fixedtype != DWG_TYPE_MULTILEADER) continue;
+    const auto* leader = again.object[i].tio.entity->tio.MULTILEADER;
+    REQUIRE(leader != nullptr);
+    CHECK(leader->num_blocklabels == 0);
+    CHECK(leader->num_arrowheads == 0);
+    CHECK(leader->scale_factor == Catch::Approx(1.0));
+    ++count;
+  }
+  CHECK(count == 1);
+  dwg_free(&again);
+}
+
+TEST_CASE("Rapides multileaders export as decodable R2018 MULTILEADER entities",
+          "[dwg][libredwg][multileader][req479][issue993]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d.dwg").c_str(), log, false));
+  REQUIRE(state.cadMultileaders.size() == 3);
+  state.dwgExportVersion = DwgSaveVersion::R2018;
+  ScratchDir dir("rapides-mleader-export");
+  const auto path = (dir.path / "export.dwg").string();
+  REQUIRE(ExportLibreCadFile(state, path.c_str(), log, false));
+  Dwg_Data exported{};
+  const int error = dwg_read_file(path.c_str(), &exported);
+  REQUIRE(error < DWG_ERR_CRITICAL);
+  CHECK(error == 0);
+  unsigned leaders = 0;
+  for (BITCODE_BL i = 0; i < exported.num_objects; ++i) {
+    if (exported.object[i].fixedtype != DWG_TYPE_MULTILEADER) continue;
+    const auto* leader = exported.object[i].tio.entity->tio.MULTILEADER;
+    REQUIRE(leader != nullptr);
+    CHECK(leader->num_blocklabels == 0);
+    CHECK(leader->num_arrowheads == 0);
+    CHECK(leader->scale_factor == Catch::Approx(1.0));
+    ++leaders;
+  }
+  CHECK(leaders == 3);
+  dwg_free(&exported);
+}
+
+TEST_CASE("Write multileader audit fixtures for accoreconsole", "[.][mleader-audit]") {
+  const char* root = std::getenv("GOSURVEY_ORACLE_DIR");
+  REQUIRE(root != nullptr);
+  const std::filesystem::path out(root);
+  std::filesystem::create_directories(out);
+  const auto nativeControl = SamplePath("autocad-r2018-mleader.dwg");
+  std::filesystem::copy_file(nativeControl, out / "control-mleader-native.dwg",
+                            std::filesystem::copy_options::overwrite_existing);
+  AppCommandState leadersOnly;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(leadersOnly, SamplePath("rapides-substation-civil3d.dwg").c_str(), log, false));
+  REQUIRE(leadersOnly.cadMultileaders.size() == 3);
+  leadersOnly.dwgExportVersion = DwgSaveVersion::R2018;
+  const auto leadersOut = (out / "rapides-three-mleaders.dwg").string();
+  REQUIRE(ExportLibreCadFile(leadersOnly, leadersOut.c_str(), log, false));
+  AppCommandState mapped;
+  log.clear();
+  REQUIRE(ImportLibreCadFile(mapped, SamplePath("rapides-substation-civil3d.dwg").c_str(), log, false));
+  mapped.dwgExportVersion = DwgSaveVersion::R2018;
+  const auto mappedOut = (out / "rapides-full-mapped.dwg").string();
+  REQUIRE(ExportLibreCadFile(mapped, mappedOut.c_str(), log, false));
+}
+
+TEST_CASE("Write full Rapides mapped export for accoreconsole AUDIT", "[req479][full-baseline-audit]") {
+  const char* root = std::getenv("GOSURVEY_ORACLE_DIR");
+  const std::filesystem::path out = root ? std::filesystem::path(root) :
+      std::filesystem::path(GOSURVEY_SAMPLES_DIR).parent_path() / "build" / "artifacts" / "full-baseline-audit";
+  std::filesystem::create_directories(out);
+  AppCommandState mapped;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(mapped, SamplePath("rapides-substation-civil3d.dwg").c_str(), log, false));
+  mapped.dwgExportVersion = DwgSaveVersion::R2018;
+  const auto mappedOut = (out / "rapides-full-mapped.dwg").string();
+  REQUIRE(ExportLibreCadFile(mapped, mappedOut.c_str(), log, false));
+}
+
+TEST_CASE("Native annotative multileader scale records contain their complete context",
+          "[dwg][libredwg][multileader][req384][req479]") {
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("autocad-r2018-annotative-mleader.dwg").c_str(), &drawing) == 0);
+  unsigned count = 0;
+  for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+    if (drawing.object[i].fixedtype != DWG_TYPE_MLEADEROBJECTCONTEXTDATA) continue;
+    const auto* record = drawing.object[i].tio.object->tio.MLEADEROBJECTCONTEXTDATA;
+    CHECK(record->class_version == 4);
+    CHECK(record->is_default == 1);
+    REQUIRE(record->ctx.num_leaders == 1);
+    CHECK(record->ctx.text_height == Catch::Approx(1));
+    CHECK(record->ctx.has_content_txt == 1);
+    CHECK(libredwgcad_detail::DecodeDwgString(record->ctx.content.txt.default_text, true) == "Control");
+    CHECK(record->ctx.leaders[0].lastleaderlinepoint.x == 3);
+    ++count;
+  }
+  CHECK(count == 1);
+  dwg_free(&drawing);
+}
+
+TEST_CASE("LibreDWG retains Civil 3D class names in same-version raw rewrite",
+          "[dwg][libredwg][civil3d][raw-roundtrip]") {
+  const std::string source = SamplePath("rapides-substation-civil3d.dwg");
+  ScratchDir dir("civil3d-raw-roundtrip");
+  const auto output = (dir.path / "roundtrip.dwg").string();
+  Dwg_Data sourceDwg{};
+  REQUIRE(dwg_read_file(source.c_str(), &sourceDwg) < DWG_ERR_CRITICAL);
+  REQUIRE(sourceDwg.num_classes == 721);
+  REQUIRE(dwg_write_file(output.c_str(), &sourceDwg) == 0);
+  dwg_free(&sourceDwg);
+
+  Dwg_Data result{};
+  REQUIRE(dwg_read_file(output.c_str(), &result) < DWG_ERR_CRITICAL);
+  size_t cogo = 0, surfaces = 0, parcels = 0;
+  REQUIRE(result.num_classes == 721);
+  bool hasCogoClass = false, hasSurfaceClass = false, hasParcelClass = false;
+  for (BITCODE_BL i = 0; i < result.num_classes; ++i)
+    {
+      const char* name = result.dwg_class[i].dxfname;
+      hasCogoClass |= name && std::string_view(name) == "AECC_COGO_POINT";
+      hasSurfaceClass |= name && std::string_view(name) == "AECC_TIN_SURFACE";
+      hasParcelClass |= name && std::string_view(name) == "AECC_PARCEL";
+    }
+  CHECK(hasCogoClass);
+  CHECK(hasSurfaceClass);
+  CHECK(hasParcelClass);
+  for (BITCODE_BL i = 0; i < result.num_objects; ++i) {
+    const Dwg_Object& object = result.object[i];
+    if (object.type < 500 || object.type - 500 >= result.num_classes)
+      continue;
+    const char* name = result.dwg_class[object.type - 500].dxfname;
+    if (name == nullptr) continue;
+    if (std::string_view(name) == "AECC_COGO_POINT") ++cogo;
+    if (std::string_view(name) == "AECC_TIN_SURFACE") ++surfaces;
+    if (std::string_view(name) == "AECC_PARCEL") ++parcels;
+  }
+  CHECK(cogo == 353);
+  CHECK(surfaces == 1);
+  CHECK(parcels == 7464);
+
+  // Class counts alone can hide payload loss. Compare every AECC record by stable DWG handle,
+  // including its uninterpreted custom bits and, for entities, proxy graphics. This exercises the
+  // in-process pass-through layer independently of the GoSurvey domain importer/exporter.
+  struct RawRecord {
+    std::string className;
+    std::uint32_t bitCount = 0;
+    std::string bits;
+    std::string preview;
+    bool operator==(const RawRecord& other) const {
+      return className == other.className && bitCount == other.bitCount && bits == other.bits &&
+             preview == other.preview;
+    }
+  };
+  auto collectCivilRecords = [](const Dwg_Data& drawing) {
+    std::map<std::uint64_t, RawRecord> records;
+    for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+      const Dwg_Object& object = drawing.object[i];
+      if (object.type < 500 || object.type - 500 >= drawing.num_classes)
+        continue;
+      const char* className = drawing.dwg_class[object.type - 500].dxfname;
+      if (className == nullptr || std::string_view(className).rfind("AECC_", 0) != 0)
+        continue;
+      RawRecord record;
+      record.className = className;
+      record.bitCount = object.num_unknown_bits;
+      const size_t bitBytes = (static_cast<size_t>(object.num_unknown_bits) + 7) / 8;
+      if (object.unknown_bits != nullptr && bitBytes != 0)
+        record.bits.assign(reinterpret_cast<const char*>(object.unknown_bits), bitBytes);
+      if (object.supertype == DWG_SUPERTYPE_ENTITY && object.tio.entity != nullptr &&
+          object.tio.entity->preview != nullptr && object.tio.entity->preview_size > 0) {
+        record.preview.assign(reinterpret_cast<const char*>(object.tio.entity->preview),
+                              static_cast<size_t>(object.tio.entity->preview_size));
+      }
+      records.emplace(object.handle.value, std::move(record));
+    }
+    return records;
+  };
+  Dwg_Data original{};
+  REQUIRE(dwg_read_file(source.c_str(), &original) < DWG_ERR_CRITICAL);
+  const auto originalCivilRecords = collectCivilRecords(original);
+  dwg_free(&original);
+  const auto rewrittenCivilRecords = collectCivilRecords(result);
+  REQUIRE(originalCivilRecords.size() >= 8000);
+  CHECK(rewrittenCivilRecords == originalCivilRecords);
+  dwg_free(&result);
+}
+
+TEST_CASE("GoSurvey exports mapped Civil 3D data as editable ordinary DWG entities",
+          "[dwg][libredwg][civil3d][req479]") {
+  const std::string source = SamplePath("rapides-substation-civil3d.dwg");
+  ScratchDir dir("civil3d-app-preservation");
+  const auto outputPath = (dir.path / "mapped.dwg").string();
+  auto readBytes = [](const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  };
+
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(state, source.c_str(), log));
+  REQUIRE_FALSE(state.surveyPoints.empty());
+  state.surveyPoints.front().rawDescription = "EDITED";
+  state.surveyPoints.front().description = "EDITED";
+  REQUIRE(ExportDwgFile(state, outputPath.c_str(), log));
+
+  const std::string outputBytes = readBytes(outputPath);
+  std::string trailer;
+  REQUIRE(TryGoSurveyDwgPayloadFromBytes(outputBytes, trailer));
+  CHECK(trailer.find("EDITED") != std::string::npos);
+  Dwg_Data output{};
+  REQUIRE(dwg_read_file(outputPath.c_str(), &output) < DWG_ERR_CRITICAL);
+  CHECK(output.num_objects > 0);
+  dwg_free(&output);
 }
 
 // GitHub issue #391 / REQ-312 — the DWG ARC writer never set `extrusion`, so a tilted arc
@@ -3844,6 +6119,12 @@ TEST_CASE("DWG round-trips Aligned, Linear and Angular dimensions (REQ-366, issu
   st.activeDimensionStyle.dimLineColor = "ACI:1";
   st.activeDimensionStyle.extLineColor = "ACI:2";
   st.activeDimensionStyle.textColor = "ACI:3";
+  st.dimensionStyles = {DimensionStyles::Default(), st.activeDimensionStyle};
+  DimensionStyle archived = DimensionStyles::Default();
+  archived.name = "Unused Drawing Style";
+  archived.textSizeInches = 0.18f;
+  archived.unitPrecision = 4;
+  st.dimensionStyles.push_back(archived);
 
   CadAnnotation aligned{};
   aligned.kind = CadAnnotation::Kind::DimAligned;
@@ -3887,10 +6168,10 @@ TEST_CASE("DWG round-trips Aligned, Linear and Angular dimensions (REQ-366, issu
     DimensionStyles::BakeTextOntoDimension(a, st.activeDimensionStyle);
   {
     AngleDisplaySettings angleSet{};
-    CadDimRefreshMeasurementText(&st.cadAnnotations[0], st.activeDimensionStyle.unitPrecision, angleSet);
-    CadDimRefreshMeasurementText(&st.cadAnnotations[1], st.activeDimensionStyle.unitPrecision, angleSet);
-    CadDimRefreshMeasurementText(&st.cadAnnotations[2], st.activeDimensionStyle.unitPrecision, angleSet);
-    CadDimRefreshMeasurementText(&st.cadAnnotations[3], st.activeDimensionStyle.unitPrecision, angleSet);
+    CadDimRefreshMeasurementText(&st.cadAnnotations[0], st.activeDimensionStyle, angleSet);
+    CadDimRefreshMeasurementText(&st.cadAnnotations[1], st.activeDimensionStyle, angleSet);
+    CadDimRefreshMeasurementText(&st.cadAnnotations[2], st.activeDimensionStyle, angleSet);
+    CadDimRefreshMeasurementText(&st.cadAnnotations[3], st.activeDimensionStyle, angleSet);
   }
 
   std::vector<std::string> log;
@@ -3924,6 +6205,11 @@ TEST_CASE("DWG round-trips Aligned, Linear and Angular dimensions (REQ-366, issu
 
   AppCommandState in;
   REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  CHECK(DimensionStyles::Find(in.dimensionStyles, "Unused Drawing Style") != nullptr);
+  if (const DimensionStyle* roundTripped = DimensionStyles::Find(in.dimensionStyles, "Unused Drawing Style")) {
+    CHECK(roundTripped->unitPrecision == 4);
+    CHECK(roundTripped->textSizeInches == Catch::Approx(0.18f).epsilon(0.02));
+  }
 
   std::vector<const CadAnnotation*> dims;
   for (const CadAnnotation& a : in.cadAnnotations)
@@ -3940,6 +6226,7 @@ TEST_CASE("DWG round-trips Aligned, Linear and Angular dimensions (REQ-366, issu
 
   const CadAnnotation* ba = findKind(CadAnnotation::Kind::DimAligned, false);
   REQUIRE(ba != nullptr);
+  CHECK(ba->dimensionStyleName == "GSDIM");
   CHECK(ba->dimExt1X + in.worldDocumentOriginX == Catch::Approx(0.0).margin(0.02));
   CHECK(ba->dimExt1Y + in.worldDocumentOriginY == Catch::Approx(0.0).margin(0.02));
   CHECK(ba->dimExt2X + in.worldDocumentOriginX == Catch::Approx(30.0).margin(0.02));
@@ -3971,6 +6258,28 @@ TEST_CASE("DWG round-trips Aligned, Linear and Angular dimensions (REQ-366, issu
     if (l.find("REQ-366") != std::string::npos && l.find("import") != std::string::npos)
       loggedImportDims = true;
   CHECK(loggedImportDims);
+}
+
+TEST_CASE("Annotate Center Mark and Centerline ribbon commands create drawing geometry", "[issue804][annotate]") {
+  AppCommandState mark;
+  mark.userCirclesCxCyZR = {10.0, 20.0, 0.0, 5.0};
+  mark.selection.push_back({SelectedEntity::Type::Circle, 0});
+  std::vector<std::string> log;
+  REQUIRE(DispatchByPrimaryForTest("centermark", mark, log));
+  CHECK(mark.userLinesFlat.size() == 24);
+  CHECK(mark.userLineAttrs.size() == 4);
+
+  AppCommandState line;
+  line.userLinesFlat = {0, 0, 0, 10, 0, 0, 0, 4, 0, 10, 4, 0};
+  line.selection.push_back({SelectedEntity::Type::LineSeg, 0});
+  line.selection.push_back({SelectedEntity::Type::LineSeg, 1});
+  REQUIRE(DispatchByPrimaryForTest("centerline", line, log));
+  REQUIRE(line.userLinesFlat.size() == 18);
+  CHECK(line.userLinesFlat[12] == Catch::Approx(0.0));
+  CHECK(line.userLinesFlat[13] == Catch::Approx(2.0));
+  CHECK(line.userLinesFlat[15] == Catch::Approx(10.0));
+  CHECK(line.userLinesFlat[16] == Catch::Approx(2.0));
+  CHECK(line.userLineAttrs.size() == 1);
 }
 
 // REQ-366 statement 3: a DIMENSION subtype GoSurvey does not model (Radius here, hand-built
@@ -4212,7 +6521,7 @@ TEST_CASE("GOSURVEY annoVisScales EED round-trips on annotative dimension (issue
   aligned.insZ = 0.f;
   DimensionStyles::BakeTextOntoDimension(aligned, st.activeDimensionStyle);
   AngleDisplaySettings angleSet{};
-  CadDimRefreshMeasurementText(&aligned, st.activeDimensionStyle.unitPrecision, angleSet);
+  CadDimRefreshMeasurementText(&aligned, st.activeDimensionStyle, angleSet);
   st.cadAnnotations.push_back(std::move(aligned));
   st.cadAnnotationAttrs.push_back(EntityAttributes{});
   std::vector<std::string> log;
@@ -4242,7 +6551,7 @@ TEST_CASE("AcadAnnotative EED imports annotative aligned dimension (issue #622)"
   aligned.insZ = 0.f;
   DimensionStyles::BakeTextOntoDimension(aligned, st.activeDimensionStyle);
   AngleDisplaySettings angleSet{};
-  CadDimRefreshMeasurementText(&aligned, st.activeDimensionStyle.unitPrecision, angleSet);
+  CadDimRefreshMeasurementText(&aligned, st.activeDimensionStyle, angleSet);
   st.cadAnnotations.push_back(std::move(aligned));
   st.cadAnnotationAttrs.push_back(EntityAttributes{});
   std::vector<std::string> log;
@@ -4413,6 +6722,42 @@ TEST_CASE("DWG round-trips entity and layer lineweight (REQ-170, issue #609)",
   REQUIRE(heavy != nullptr);
   CHECK(heavy->lineweightMm == Catch::Approx(0.35f).margin(0.02f));
 }
+
+TEST_CASE("DWG import preserves a full-sheet 36 by 48 inch paper viewport (REQ-113, issue #1012)",
+          "[dwg][libredwg][req113][issue1012]") {
+  ScratchDir dir("dwg-large-paper-viewport");
+  const auto path = (dir.path / "large-paper-viewport.dwg").string();
+  AppCommandState state;
+  PaperLayout layout;
+  layout.name = "Large Sheet";
+  layout.portraitWidthIn = 36.f;
+  layout.portraitHeightIn = 48.f;
+  layout.landscape = false;
+  Viewport viewport;
+  viewport.paperWIn = 36.f;
+  viewport.paperHIn = 48.f;
+  viewport.paperXIn = 0.f;
+  viewport.paperYIn = 0.f;
+  viewport.scaleModelPerPaperIn = 240.f;
+  layout.viewports.push_back(viewport);
+  state.paperLayouts.push_back(layout);
+
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(state, path.c_str(), log));
+  StripGosurveyDwgTrailer(path);
+
+  AppCommandState imported;
+  REQUIRE(ImportDwgFile(imported, path.c_str(), log));
+  REQUIRE(imported.paperLayouts.size() == 1);
+  CHECK(imported.paperLayouts[0].name == "Large Sheet");
+  REQUIRE(imported.paperLayouts[0].viewports.size() == 1);
+  const Viewport& result = imported.paperLayouts[0].viewports[0];
+  CHECK(result.paperXIn == Catch::Approx(0.f).margin(0.01f));
+  CHECK(result.paperYIn == Catch::Approx(0.f).margin(0.01f));
+  CHECK(result.paperWIn == Catch::Approx(36.f).margin(0.01f));
+  CHECK(result.paperHIn == Catch::Approx(48.f).margin(0.01f));
+}
+
 // REQ-037 / REQ-170, issue #610: paper layouts, sheet lines, and viewport scales survive DWG save/open.
 TEST_CASE("DWG round-trips paper layouts and viewport scales (REQ-170, issue #610)",
           "[dwg][libredwg][req170][issue610]") {
@@ -4816,6 +7161,19 @@ TEST_CASE("R2018 mesh MATERIAL round-trip; solid material listed in export loss 
   meshExport.dwgExportVersion = DwgSaveVersion::R2018;
   std::vector<std::string> log;
   REQUIRE(ExportLibreCadFile(meshExport, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data native{};
+  REQUIRE(dwg_read_file(p.c_str(), &native) == 0);
+  for (BITCODE_BL i = 0; i < native.num_objects; ++i) {
+    if (native.object[i].fixedtype != DWG_TYPE_MATERIAL) continue;
+    const auto* material = native.object[i].tio.object->tio.MATERIAL;
+    REQUIRE(material != nullptr);
+    for (const auto* map : {&material->diffusemap, &material->specularmap, &material->reflectionmap,
+                            &material->opacitymap, &material->bumpmap, &material->refractionmap}) {
+      REQUIRE(map->transmatrix != nullptr);
+      for (std::size_t j = 0; j < 16; ++j) CHECK(map->transmatrix[j] == (j % 5 == 0 ? 1.0 : 0.0));
+    }
+  }
+  dwg_free(&native);
   AppCommandState in;
   REQUIRE(ImportDwgFile(in, p.c_str(), log));
   REQUIRE(in.cadMeshes.size() == 1);
@@ -4888,10 +7246,21 @@ TEST_CASE("DWG import maps POINT LEADER SOLID 3DFACE and mesh (REQ-170, issue #6
   REQUIRE(dwg_add_POINT(hdr, &pt) != nullptr);
 
   const dwg_point_3d mtextPt{8.0, 8.0, 0.0};
-  Dwg_Entity_MTEXT* mt = dwg_add_MTEXT(hdr, &mtextPt, 12.0, "Leader note");
+  Dwg_Entity_MTEXT* mt = dwg_add_MTEXT(hdr, &mtextPt, 3.0, "Leader note");
   REQUIRE(mt != nullptr);
+  mt->attachment = 6;  // middle-right insertion point, as used by the MESSER callouts
+  mt->text_height = 0.25;
+  mt->rect_width = 3.0;
+  mt->x_axis_dir = {0.0, 1.0, 0.0};
+  Dwg_Object_DIMSTYLE* dimStyle = dwg_add_DIMSTYLE(dwg, "Standard");
+  REQUIRE(dimStyle != nullptr);
+  dimStyle->DIMASZ = 0.25;
   const dwg_point_3d lpts[2] = {{0.0, 0.0, 0.0}, {8.0, 8.0, 0.0}};
-  REQUIRE(dwg_add_LEADER(hdr, 2, lpts, mt, 0) != nullptr);
+  Dwg_Entity_LEADER* leader = dwg_add_LEADER(hdr, 2, lpts, mt, 0);
+  REQUIRE(leader != nullptr);
+  BITCODE_H dimStyleRef = dwg_find_tablehandle(dwg, "Standard", "DIMSTYLE");
+  REQUIRE(dimStyleRef != nullptr);
+  leader->dimstyle = dwg_add_handleref(dwg, 5, dimStyleRef->absolute_ref, nullptr);
 
   const dwg_point_3d s1{10.0, 0.0, 0.0};
   const dwg_point_2d s2{15.0, 0.0};
@@ -4913,14 +7282,25 @@ TEST_CASE("DWG import maps POINT LEADER SOLID 3DFACE and mesh (REQ-170, issue #6
   AppCommandState st;
   std::vector<std::string> log;
   REQUIRE(ImportDwgFile(st, p.c_str(), log));
-  CHECK(st.cadPositionMarkers.size() == 1);
-  CHECK(st.cadPositionMarkers[0].x == Catch::Approx(1.0).margin(0.01));
+  REQUIRE(st.cadPoints.size() == 1);
+  CHECK(st.cadPoints[0].x == Catch::Approx(1.0).margin(0.01));
+  CHECK(st.cadPoints[0].y == Catch::Approx(2.0).margin(0.01));
+  CHECK(st.cadPositionMarkers.empty());
   CHECK(st.cadFilledRegions.size() >= 1);
   REQUIRE(st.cadMeshes.size() >= 1);
   CHECK(st.cadMeshes[0]->triangleCount() >= 2);
   REQUIRE(st.cadMultileaders.size() >= 1);
   CHECK(st.cadMultileaders[0].label.text.find("Leader note") != std::string::npos);
   CHECK(st.cadMultileaders[0].pathXyz.size() >= 6);
+  CHECK(st.cadMultileaders[0].label.mtextAttach == 6);
+  CHECK_FALSE(st.cadMultileaders[0].label.fontFamily.empty());
+  CHECK(st.cadMultileaders[0].arrowSizeWorld == Catch::Approx(0.25f));
+  CHECK(st.cadMultileaders[0].labelWidthWorld == Catch::Approx(3.0f));
+  CHECK(st.cadMultileaders[0].labelHeightWorld == Catch::Approx(0.25f));
+  CHECK(st.cadMultileaders[0].label.boxMinX == Catch::Approx(7.875f));
+  CHECK(st.cadMultileaders[0].label.boxMinY == Catch::Approx(5.0f));
+  CHECK(st.cadMultileaders[0].label.boxMaxX == Catch::Approx(8.125f));
+  CHECK(st.cadMultileaders[0].label.boxMaxY == Catch::Approx(8.0f));
 }
 
 TEST_CASE("DWG import maps POLYLINE_PFACE to CadMesh (REQ-170, issue #613)",
@@ -5052,7 +7432,7 @@ TEST_CASE("Annotative TEXT, INSERT, and DIMENSION export annotation context (REQ
   dim.insY = 2.f;
   DimensionStyles::BakeTextOntoDimension(dim, st.activeDimensionStyle);
   AngleDisplaySettings angleSet{};
-  CadDimRefreshMeasurementText(&dim, st.activeDimensionStyle.unitPrecision, angleSet);
+  CadDimRefreshMeasurementText(&dim, st.activeDimensionStyle, angleSet);
   st.cadAnnotations.push_back(std::move(dim));
   st.cadAnnotationAttrs.push_back(EntityAttributes{});
 
@@ -5129,8 +7509,17 @@ TEST_CASE("Annotative MULTILEADER and HATCH export annotation context (REQ-384 i
   int mleaderCtx = 0;
   int hatchScaleCtx = 0;
   for (unsigned i = 0; i < dwg.num_objects; ++i) {
-    if (dwg.object[i].fixedtype == DWG_TYPE_MLEADEROBJECTCONTEXTDATA)
+    if (dwg.object[i].fixedtype == DWG_TYPE_MLEADEROBJECTCONTEXTDATA) {
       ++mleaderCtx;
+      const auto* context = dwg.object[i].tio.object->tio.MLEADEROBJECTCONTEXTDATA;
+      REQUIRE(context->ctx.num_leaders == 1);
+      CHECK(context->ctx.has_content_txt == 1);
+      CHECK(libredwgcad_detail::DecodeDwgString(context->ctx.content.txt.default_text, true) == "Callout");
+      REQUIRE(dwg.object[i].tio.object->ownerhandle != nullptr);
+      const auto* owner = dwg_resolve_handle_silent(&dwg, dwg.object[i].tio.object->ownerhandle->absolute_ref);
+      REQUIRE(owner != nullptr);
+      CHECK(owner->fixedtype == DWG_TYPE_DICTIONARY);
+    }
     if (dwg.object[i].fixedtype == DWG_TYPE_ANNOTSCALEOBJECTCONTEXTDATA)
       ++hatchScaleCtx;
   }
@@ -5226,7 +7615,7 @@ TEST_CASE("R2018 export re-read preserves MTEXT and DIMENSION annotation context
   dim.insY = 3.f;
   DimensionStyles::BakeTextOntoDimension(dim, st.activeDimensionStyle);
   AngleDisplaySettings angleSet{};
-  CadDimRefreshMeasurementText(&dim, st.activeDimensionStyle.unitPrecision, angleSet);
+  CadDimRefreshMeasurementText(&dim, st.activeDimensionStyle, angleSet);
   st.cadAnnotations.push_back(std::move(dim));
   st.cadAnnotationAttrs.push_back(EntityAttributes{});
 
@@ -5421,6 +7810,80 @@ std::vector<std::pair<std::string, std::string>> DxfPaperEntities(const std::str
   return out;
 }
 
+int DxfEntityIntGroup(const std::string& dxf, const std::string& entityType, int groupCode) {
+  std::istringstream input(dxf);
+  std::string code, value;
+  std::vector<std::pair<std::string, std::string>> pairs;
+  while (std::getline(input, code) && std::getline(input, value)) {
+    while (!code.empty() && (code.front() == ' ' || code.front() == '\t' || code.front() == '\r'))
+      code.erase(code.begin());
+    while (!code.empty() && (code.back() == ' ' || code.back() == '\t' || code.back() == '\r'))
+      code.pop_back();
+    if (!value.empty() && value.back() == '\r') value.pop_back();
+    pairs.emplace_back(code, value);
+  }
+  int combined = -1;
+  for (size_t i = 0; i + 1 < pairs.size(); ++i) {
+    if (pairs[i].first != "0" || pairs[i].second != entityType)
+      continue;
+    for (size_t j = i + 1; j + 1 < pairs.size() && pairs[j].first != "0"; ++j) {
+      if (pairs[j].first == std::to_string(groupCode)) {
+        try {
+          const int parsed = std::stoi(pairs[j].second);
+          combined = combined < 0 ? parsed : (combined | parsed);
+        } catch (...) {
+        }
+        break;
+      }
+    }
+  }
+  return combined;
+}
+
+std::pair<size_t, size_t> DxfBlockDefinitionRange(const std::string& dxf, const std::string& name) {
+  struct Pair {
+    std::string code;
+    std::string value;
+    size_t offset;
+  };
+  std::istringstream input(dxf);
+  std::vector<Pair> pairs;
+  std::string code, value;
+  size_t offset = 0;
+  while (std::getline(input, code) && std::getline(input, value)) {
+    const size_t pairOffset = offset;
+    offset += code.size() + 1 + value.size() + 1;
+    auto trim = [](std::string& s) {
+      const size_t first = s.find_first_not_of(" \t\r");
+      if (first == std::string::npos) {
+        s.clear();
+        return;
+      }
+      s = s.substr(first, s.find_last_not_of(" \t\r") - first + 1);
+    };
+    trim(code);
+    trim(value);
+    pairs.push_back({std::move(code), std::move(value), pairOffset});
+  }
+  for (size_t i = 0; i + 1 < pairs.size(); ++i) {
+    if (pairs[i].code != "0" || pairs[i].value != "BLOCK")
+      continue;
+    size_t headerEnd = i + 1;
+    bool matches = false;
+    while (headerEnd < pairs.size() && pairs[headerEnd].code != "0") {
+      if (pairs[headerEnd].code == "2" && pairs[headerEnd].value == name)
+        matches = true;
+      ++headerEnd;
+    }
+    if (!matches) continue;
+    for (size_t end = headerEnd; end < pairs.size(); ++end) {
+      if (pairs[end].code == "0" && pairs[end].value == "ENDBLK")
+        return {pairs[i].offset, pairs[end].offset};
+    }
+  }
+  return {std::string::npos, std::string::npos};
+}
+
 PaperLayout MakePaperLayoutWithEveryType(const char* name) {
   PaperLayout L;
   L.name = name;
@@ -5505,25 +7968,291 @@ TEST_CASE("DXF export writes every paper-space entity type tagged with its layou
   CHECK(text.find("\r\nSheet B\r\n") != std::string::npos);
 }
 
-TEST_CASE("DXF export names paper-space block references it cannot write (issue #765, REQ-201)",
-          "[dxf][paperspace][issue765]") {
-  ScratchDir dir("p765blk");
-  const auto p = (dir.path / "paperblk.dxf").string();
+TEST_CASE("DXF import restores paper entity types into the matching layouts (issue #781)",
+          "[dxf][paperspace][issue781]") {
+  ScratchDir dir("issue781paperimport");
+  const auto path = (dir.path / "paper-import.dxf").string();
+  AppCommandState source;
+  OneLine(source);
+  PaperLayout first = MakePaperLayoutWithEveryType("Import A");
+  PaperLayout second = MakePaperLayoutWithEveryType("Import B");
+  second.paperLines[0] += 20.f;
+  second.paperCircles[0] += 20.f;
+  second.paperArcs[0].cx += 20.f;
+  second.paperEllipses[0].cx += 20.f;
+  second.paperPolyVerts[0] += 20.f;
+  second.paperTexts[0].insX += 20.f;
+  source.paperLayouts = {first, second};
+
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(source, path.c_str(), log));
+  {
+    std::ifstream input(path, std::ios::binary);
+    std::string text(std::istreambuf_iterator<char>(input), {});
+    const size_t entities = text.find("2\r\nENTITIES\r\n");
+    REQUIRE(entities != std::string::npos);
+    const size_t endEntities = text.find("0\r\nENDSEC\r\n", entities);
+    REQUIRE(endEntities != std::string::npos);
+    text.insert(endEntities, "0\r\n3DSOLID\r\n5\r\nF00DBEEF\r\n67\r\n1\r\n410\r\nImport A\r\n8\r\n0\r\n");
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    REQUIRE(output.good());
+    output.write(text.data(), static_cast<std::streamsize>(text.size()));
+  }
+  AppCommandState imported;
+  REQUIRE(ImportDxfFile(imported, path.c_str(), log));
+  CHECK(std::any_of(log.begin(), log.end(), [](const std::string& entry) {
+    return entry.find("paper-space \"3DSOLID\" × 1") != std::string::npos;
+  }));
+  REQUIRE(imported.paperLayouts.size() == 2);
+
+  const auto checkLayout = [&](const PaperLayout& actual, const PaperLayout& expected) {
+    INFO("layout " << expected.name);
+    CHECK(actual.name == expected.name);
+    REQUIRE(actual.paperLines.size() == expected.paperLines.size());
+    CHECK(actual.paperLines[0] == Catch::Approx(expected.paperLines[0]).margin(0.001f));
+    CHECK(actual.paperLines[3] == Catch::Approx(expected.paperLines[3]).margin(0.001f));
+    REQUIRE(actual.paperCircles.size() == expected.paperCircles.size());
+    CHECK(actual.paperCircles[0] == Catch::Approx(expected.paperCircles[0]).margin(0.001f));
+    REQUIRE(actual.paperArcs.size() == 1);
+    CHECK(actual.paperArcs[0].cx == Catch::Approx(expected.paperArcs[0].cx).margin(0.001f));
+    REQUIRE(actual.paperEllipses.size() == 1);
+    CHECK(actual.paperEllipses[0].cx == Catch::Approx(expected.paperEllipses[0].cx).margin(0.001f));
+    REQUIRE(actual.paperPolyOffsets.size() == expected.paperPolyOffsets.size());
+    CHECK(actual.paperPolyVerts[0] == Catch::Approx(expected.paperPolyVerts[0]).margin(0.001f));
+    REQUIRE(actual.paperTexts.size() >= 2);
+    CHECK(actual.paperTexts[0].text == expected.paperTexts[0].text);
+    CHECK(actual.paperTexts[0].insX == Catch::Approx(expected.paperTexts[0].insX).margin(0.001f));
+    CHECK(std::any_of(actual.paperTexts.begin(), actual.paperTexts.end(), [&](const CadAnnotation& text) {
+      return text.kind == CadAnnotation::Kind::Mtext && text.text == "NOTES";
+    }));
+    REQUIRE(actual.viewports.size() == 1);
+    CHECK(actual.viewports[0].paperWIn == Catch::Approx(expected.viewports[0].paperWIn).margin(0.001f));
+  };
+  checkLayout(imported.paperLayouts[0], first);
+  checkLayout(imported.paperLayouts[1], second);
+}
+
+TEST_CASE("DXF export writes block definitions and model/paper INSERT references (issue #780)",
+          "[dxf][paperspace][block][issue780]") {
+  ScratchDir dir("issue780blk");
+  const auto p = (dir.path / "blocks.dxf").string();
   AppCommandState st;
   OneLine(st);
-  PaperLayout L = MakePaperLayoutWithEveryType("Sheet A");
-  L.paperBlockRefs.resize(2);
-  L.paperBlockRefAttrs.resize(2);
-  st.paperLayouts.push_back(L);
+  CadBlockDefinition def;
+  def.id = 7;
+  def.name = "TitleBlock";
+  def.baseX = 1.f;
+  def.baseY = 2.f;
+  def.content.lines = {1.0, 2.0, 0.0, 11.0, 2.0, 0.0};
+  def.content.lineAttrs.resize(1);
+  def.content.texts.push_back(CadAnnotation{});
+  def.content.texts.back().kind = CadAnnotation::Kind::Text;
+  def.content.texts.back().text = "SHEET A";
+  def.content.texts.back().insX = 3.f;
+  def.content.texts.back().insY = 4.f;
+  def.content.texts.back().plottedHeightInches = 0.25f;
+  def.content.textAttrs.resize(1);
+  def.content.circles = {5.0, 6.0, 0.0, 2.0};
+  def.content.circleNormals = {0.f, 1.f, 0.f};
+  st.blockDefs.push_back(def);
+  CadBlockRef modelRef;
+  modelRef.defName = "TitleBlock";
+  modelRef.xf.x = 100.f;
+  modelRef.xf.y = 200.f;
+  modelRef.xf.sx = 2.f;
+  modelRef.xf.sy = 3.f;
+  modelRef.xf.rotX = 0.2f;
+  modelRef.xf.rotY = -0.35f;
+  modelRef.xf.rotZ = 0.5f;
+  st.cadBlockRefs.push_back(modelRef);
+  EntityAttributes modelRefAttr;
+  modelRefAttr.layer = "MODEL_INSERTS";
+  st.cadBlockRefAttrs.push_back(modelRefAttr);
+  PaperLayout first = MakePaperLayoutWithEveryType("Sheet A");
+  CadBlockRef paperRef;
+  paperRef.defName = "TitleBlock";
+  paperRef.xf.x = 5.f;
+  paperRef.xf.y = 6.f;
+  paperRef.xf.rotX = -0.15f;
+  paperRef.xf.rotY = 0.27f;
+  first.paperBlockRefs.push_back(paperRef);
+  EntityAttributes paperRefAttr;
+  paperRefAttr.layer = "SHEET_INSERTS";
+  first.paperBlockRefAttrs.push_back(paperRefAttr);
+  // Identical block transforms are still distinct source entities when their attributes differ.
+  first.paperBlockRefs.push_back(paperRef);
+  EntityAttributes duplicatePaperRefAttr;
+  duplicatePaperRefAttr.layer = "SHEET_INSERTS_ALT";
+  first.paperBlockRefAttrs.push_back(duplicatePaperRefAttr);
+  st.paperLayouts.push_back(first);
+  PaperLayout second;
+  second.name = "Sheet B";
+  paperRef.xf.x = 15.f;
+  second.paperBlockRefs.push_back(paperRef);
+  second.paperBlockRefAttrs.push_back(EntityAttributes{});
+  st.paperLayouts.push_back(second);
+
   std::vector<std::string> log;
   REQUIRE(ExportDxfFile(st, p.c_str(), log));
-  bool named = false;
-  for (const std::string& l : log)
-    if (l.find("2 paper-space block reference(s) not written") != std::string::npos)
-      named = true;
-  CHECK(named);
-  for (const auto& e : DxfPaperEntities(p))
-    CHECK(e.first != "INSERT");
+  CHECK(LogContains(log, "1 unsupported block member(s)"));
+  if (const char* fixturePath = std::getenv("GOSURVEY_ISSUE780_FIXTURE"); fixturePath && *fixturePath) {
+    const std::filesystem::path fixture(fixturePath);
+    std::error_code ec;
+    std::filesystem::create_directories(fixture.parent_path(), ec);
+    REQUIRE_FALSE(ec);
+    std::filesystem::copy_file(p, fixture, std::filesystem::copy_options::overwrite_existing, ec);
+    REQUIRE_FALSE(ec);
+  }
+  const auto entities = DxfPaperEntities(p);
+  CHECK(std::count_if(entities.begin(), entities.end(), [](const auto& e) { return e.first == "INSERT"; }) == 3);
+  CHECK_FALSE(LogContains(log, "no matching block definition"));
+
+  std::ifstream file(p, std::ios::binary);
+  std::string text(std::istreambuf_iterator<char>(file), {});
+  CHECK(text.find("\r\nTitleBlock\r\n") != std::string::npos);
+  CHECK(text.find("\r\nSHEET A\r\n") != std::string::npos);
+  CHECK(text.find("\r\n*Paper_Space0\r\n") != std::string::npos);
+  CHECK(text.find("\r\nSheet B\r\n") != std::string::npos);
+
+  // A SOLID HATCH inside a block cannot be represented by CadBlockContent today. Import must report
+  // the unsupported fill rather than silently dropping it.
+  const auto [titleBlock, endBlock] = DxfBlockDefinitionRange(text, "TitleBlock");
+  REQUIRE(titleBlock != std::string::npos);
+  REQUIRE(endBlock != std::string::npos);
+  CHECK(text.substr(titleBlock, endBlock - titleBlock).find("\r\nCIRCLE\r\n") == std::string::npos);
+  const std::string linearSpline =
+      "0\r\nSPLINE\r\n100\r\nAcDbEntity\r\n8\r\n0\r\n100\r\nAcDbSpline\r\n"
+      "70\r\n0\r\n71\r\n1\r\n72\r\n4\r\n73\r\n2\r\n74\r\n0\r\n"
+      "40\r\n0\r\n40\r\n0\r\n40\r\n1\r\n40\r\n1\r\n"
+      "10\r\n0\r\n20\r\n0\r\n30\r\n0\r\n10\r\n1\r\n20\r\n1\r\n30\r\n0\r\n";
+  text.insert(endBlock, linearSpline);
+  const std::string solidHatch =
+      "0\r\nHATCH\r\n100\r\nAcDbEntity\r\n8\r\n0\r\n100\r\nAcDbHatch\r\n2\r\nSOLID\r\n"
+      "70\r\n1\r\n71\r\n0\r\n91\r\n1\r\n92\r\n2\r\n72\r\n0\r\n73\r\n1\r\n93\r\n4\r\n"
+      "10\r\n0\r\n20\r\n0\r\n10\r\n10\r\n20\r\n0\r\n10\r\n10\r\n20\r\n10\r\n"
+      "10\r\n0\r\n20\r\n10\r\n97\r\n0\r\n75\r\n0\r\n76\r\n1\r\n98\r\n0\r\n";
+  text.insert(endBlock, solidHatch);
+  REQUIRE(text.find(solidHatch, titleBlock) != std::string::npos);
+  {
+    std::ofstream output(p, std::ios::binary | std::ios::trunc);
+    REQUIRE(output.good());
+    output.write(text.data(), static_cast<std::streamsize>(text.size()));
+  }
+
+  AppCommandState imported;
+  REQUIRE(ImportDxfFile(imported, p.c_str(), log));
+  CHECK(LogContains(log, "block definition 'TitleBlock' skipped 2 unsupported entity/entities (HATCH × 1, SPLINE × 1)"));
+  REQUIRE(imported.blockDefs.size() == 1);
+  CHECK(imported.blockDefs[0].name == "TitleBlock");
+  REQUIRE(imported.cadBlockRefs.size() == 1);
+  CHECK(imported.cadBlockRefs[0].defName == "TitleBlock");
+  CHECK(imported.cadBlockRefs[0].xf.x == Catch::Approx(100.f).margin(0.001f));
+  CHECK(imported.cadBlockRefs[0].xf.y == Catch::Approx(200.f).margin(0.001f));
+  CHECK(imported.cadBlockRefs[0].xf.sx == Catch::Approx(2.f).margin(0.001f));
+  CHECK(imported.cadBlockRefs[0].xf.sy == Catch::Approx(3.f).margin(0.001f));
+  CHECK((imported.cadBlockRefs[0].xf.rotX == Catch::Approx(0.2f).margin(0.001f) &&
+         imported.cadBlockRefs[0].xf.rotY == Catch::Approx(-0.35f).margin(0.001f) &&
+         imported.cadBlockRefs[0].xf.rotZ == Catch::Approx(0.5f).margin(0.001f)));
+  REQUIRE(imported.cadBlockRefAttrs.size() == 1);
+  CHECK(imported.cadBlockRefAttrs[0].layer == "MODEL_INSERTS");
+  REQUIRE(imported.paperLayouts.size() == 2);
+  REQUIRE(imported.paperLayouts[0].paperBlockRefs.size() == 2);
+  REQUIRE(imported.paperLayouts[1].paperBlockRefs.size() == 1);
+  REQUIRE(imported.paperLayouts[0].paperBlockRefAttrs.size() == 2);
+  CHECK(imported.paperLayouts[0].paperBlockRefAttrs[0].layer == "SHEET_INSERTS");
+  CHECK(imported.paperLayouts[0].paperBlockRefs[0].xf.x == Catch::Approx(5.f).margin(0.001f));
+  CHECK((imported.paperLayouts[0].paperBlockRefs[0].xf.rotX == Catch::Approx(-0.15f).margin(0.001f) &&
+         imported.paperLayouts[0].paperBlockRefs[0].xf.rotY == Catch::Approx(0.27f).margin(0.001f) &&
+         imported.paperLayouts[0].paperBlockRefs[0].xf.rotZ == Catch::Approx(0.f).margin(0.001f)));
+  CHECK(imported.paperLayouts[0].paperBlockRefs[1].xf.x == Catch::Approx(5.f).margin(0.001f));
+  CHECK(imported.paperLayouts[0].paperBlockRefAttrs[1].layer == "SHEET_INSERTS_ALT");
+  CHECK(imported.paperLayouts[1].paperBlockRefs[0].xf.x == Catch::Approx(15.f).margin(0.001f));
+}
+
+TEST_CASE("DXF export preserves nested block references and skips missing or cyclic nested references (issue #780)",
+          "[dxf][block][issue780]") {
+  ScratchDir dir("issue780nested");
+  const auto p = (dir.path / "nested.dxf").string();
+  AppCommandState st;
+  OneLine(st);
+
+  CadBlockDefinition outer;
+  outer.id = 1;
+  outer.name = "Outer";
+  CadBlockNested innerRef;
+  innerRef.defName = "Inner";
+  innerRef.xf.x = 2.f;
+  innerRef.xf.y = 3.f;
+  innerRef.xf.sx = 1.5f;
+  innerRef.xf.sy = 0.75f;
+  innerRef.xf.rotX = 0.4f;
+  innerRef.xf.rotY = -0.3f;
+  innerRef.xf.rotZ = 0.25f;
+  innerRef.attrs.layer = "NESTED_INSERTS";
+  innerRef.attrs.color = "#12AB34";
+  innerRef.attrs.linetype = "DASHED";
+  outer.content.nested.push_back(innerRef);
+  CadBlockNested missingRef;
+  missingRef.defName = "Missing";
+  outer.content.nested.push_back(missingRef);
+
+  CadBlockDefinition inner;
+  inner.id = 2;
+  inner.name = "Inner";
+  inner.content.lines = {0., 0., 0., 1., 0., 0.};
+  inner.content.lineAttrs.resize(1);
+  CadBlockNested cycleRef;
+  cycleRef.defName = "Outer";
+  inner.content.nested.push_back(cycleRef);
+  st.blockDefs = {outer, inner};
+  std::vector<std::string> log;
+  AppCommandState jsonRoundTrip;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(jsonRoundTrip, SerializeGoSurveyJson(st), log));
+  REQUIRE(jsonRoundTrip.blockDefs.size() == 2);
+  REQUIRE(jsonRoundTrip.blockDefs[0].content.nested.size() == 2);
+  CHECK((jsonRoundTrip.blockDefs[0].content.nested[0].attrs.layer == "NESTED_INSERTS" &&
+         jsonRoundTrip.blockDefs[0].content.nested[0].attrs.color == "#12AB34"));
+  CadBlockRef root;
+  root.defName = "Outer";
+  st.cadBlockRefs.push_back(root);
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  CadBlockRef missingRoot;
+  missingRoot.defName = "MissingRoot";
+  st.cadBlockRefs.push_back(missingRoot);
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  CadBlockRef invalidRoot;
+  invalidRoot.defName = "Outer";
+  invalidRoot.xf.x = std::nanf("");
+  st.cadBlockRefs.push_back(invalidRoot);
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  CHECK(LogContains(log, "skipped 2 model-space and 0 paper-space INSERT(s)"));
+  CHECK(LogContains(log, "1 nested INSERT(s) with missing definitions, 1 cyclic nested INSERT(s)"));
+
+  AppCommandState imported;
+  REQUIRE(ImportDxfFile(imported, p.c_str(), log));
+  REQUIRE(imported.cadBlockRefs.size() == 1);
+  REQUIRE(imported.blockDefs.size() == 2);
+  const auto outerIt = std::find_if(imported.blockDefs.begin(), imported.blockDefs.end(),
+                                    [](const CadBlockDefinition& def) { return def.name == "Outer"; });
+  const auto innerIt = std::find_if(imported.blockDefs.begin(), imported.blockDefs.end(),
+                                    [](const CadBlockDefinition& def) { return def.name == "Inner"; });
+  REQUIRE(outerIt != imported.blockDefs.end());
+  REQUIRE(innerIt != imported.blockDefs.end());
+  REQUIRE(outerIt->content.nested.size() == 1);
+  CHECK(outerIt->content.nested[0].defName == "Inner");
+  CHECK(outerIt->content.nested[0].xf.x == Catch::Approx(2.f).margin(0.001f));
+  CHECK(outerIt->content.nested[0].xf.y == Catch::Approx(3.f).margin(0.001f));
+  CHECK(outerIt->content.nested[0].xf.sx == Catch::Approx(1.5f).margin(0.001f));
+  CHECK(outerIt->content.nested[0].xf.sy == Catch::Approx(0.75f).margin(0.001f));
+  CHECK((outerIt->content.nested[0].xf.rotX == Catch::Approx(0.4f).margin(0.001f) &&
+         outerIt->content.nested[0].xf.rotY == Catch::Approx(-0.3f).margin(0.001f) &&
+         outerIt->content.nested[0].xf.rotZ == Catch::Approx(0.25f).margin(0.001f)));
+  CHECK((outerIt->content.nested[0].attrs.layer == "NESTED_INSERTS" &&
+         outerIt->content.nested[0].attrs.color == "#12AB34" &&
+         outerIt->content.nested[0].attrs.linetype == "DASHED"));
+  CHECK(innerIt->content.nested.empty());
 }
 
 TEST_CASE("DXF export without paper layouts writes no paper-space entities (issue #765)",
@@ -5534,6 +8263,14 @@ TEST_CASE("DXF export without paper layouts writes no paper-space entities (issu
   OneLine(st);
   std::vector<std::string> log;
   REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  if (const char* fixturePath = std::getenv("GOSURVEY_ISSUE780_BASELINE_FIXTURE"); fixturePath && *fixturePath) {
+    const std::filesystem::path fixture(fixturePath);
+    std::error_code ec;
+    std::filesystem::create_directories(fixture.parent_path(), ec);
+    REQUIRE_FALSE(ec);
+    std::filesystem::copy_file(p, fixture, std::filesystem::copy_options::overwrite_existing, ec);
+    REQUIRE_FALSE(ec);
+  }
   CHECK(DxfPaperEntities(p).empty());
 }
 
@@ -5722,6 +8459,7 @@ TEST_CASE("Paper size, orientation and viewport state round-trip through DWG (is
   vp.camElevationDeg = 40.f;
   vp.camRollDeg = 10.f;
   vp.frozenLayers = {"Walls"};
+  vp.clipBoundary = {{2.f, 2.f, 0.25f}, {12.f, 2.f, 0.f}, {5.f, 10.f, 0.f}};
   vp.locked = true;
   vp.on = false;
   sheet.viewports.push_back(vp);
@@ -5751,6 +8489,10 @@ TEST_CASE("Paper size, orientation and viewport state round-trip through DWG (is
   CHECK(v.camRollDeg == Catch::Approx(10.f).margin(0.01f));
   CHECK(v.locked);
   CHECK_FALSE(v.on);
+  REQUIRE(v.clipBoundary.size() == 3);
+  CHECK(v.clipBoundary[0].xIn == Catch::Approx(2.f).margin(0.01f));
+  CHECK(v.clipBoundary[0].yIn == Catch::Approx(2.f).margin(0.01f));
+  CHECK(v.clipBoundary[0].bulge == Catch::Approx(0.25f).margin(0.001f));
   REQUIRE(v.frozenLayers.size() == 1);
   CHECK(v.frozenLayers[0] == "Walls");
   const PaperLayout& tall = in.paperLayouts[1];
@@ -5804,6 +8546,7 @@ TEST_CASE("DXF round-trips paper-space fills, sheet setup and viewport state (is
   vp.camElevationDeg = 40.f;
   vp.camRollDeg = 10.f;
   vp.frozenLayers = {"Walls"};
+  vp.clipBoundary = {{2.f, 2.f, 0.25f}, {12.f, 2.f, 0.f}, {5.f, 10.f, 0.f}};
   vp.locked = true;
   vp.on = false;
   sheet.viewports.push_back(vp);
@@ -5819,6 +8562,13 @@ TEST_CASE("DXF round-trips paper-space fills, sheet setup and viewport state (is
   st.paperLayouts.push_back(std::move(second));
   std::vector<std::string> log;
   REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  {
+    std::ifstream input(p, std::ios::binary);
+    const std::string dxf(std::istreambuf_iterator<char>(input), {});
+    const int status = DxfEntityIntGroup(dxf, "VIEWPORT", 90);
+    REQUIRE(status >= 0);
+    CHECK((status & 65536) != 0);  // enables nonrectangular clipping in external CAD readers
+  }
   AppCommandState in;
   REQUIRE(ImportDxfFile(in, p.c_str(), log));
   REQUIRE(in.paperLayouts.size() == 2);
@@ -5844,6 +8594,10 @@ TEST_CASE("DXF round-trips paper-space fills, sheet setup and viewport state (is
   CHECK(v.camRollDeg == Catch::Approx(10.f).margin(0.05f));
   CHECK(v.locked);
   CHECK_FALSE(v.on);
+  REQUIRE(v.clipBoundary.size() == 3);
+  CHECK(v.clipBoundary[0].xIn == Catch::Approx(2.f).margin(0.001f));
+  CHECK(v.clipBoundary[0].yIn == Catch::Approx(2.f).margin(0.001f));
+  CHECK(v.clipBoundary[0].bulge == Catch::Approx(0.25f).margin(0.001f));
   REQUIRE(v.frozenLayers.size() == 1);
   CHECK(v.frozenLayers[0] == "Walls");
   const PaperLayout& tall = in.paperLayouts[1];
@@ -5930,6 +8684,203 @@ TEST_CASE("DXF writes a paper-space table as grid lines and cell text (issue #76
   CHECK(found == 4);
 }
 
+// REQ-113 / issue #1010: a sheet spline is written as a native DWG SPLINE on its layout's paper space and
+// read back into that layout. ExportLibreCadFile writes no GoSurvey trailer, so ImportDwgFile must take the
+// native path here (a trailer would hide a missing reader).
+TEST_CASE("DWG writes and reads a sheet spline natively (REQ-113, issue #1010)",
+          "[dwg][libredwg][paperspace][issue1010]") {
+  ScratchDir dir("p1010spline");
+  const auto p = (dir.path / "sheet-spline.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  PaperLayout sheet;
+  sheet.name = "Sheet S";
+  spline::Spline spl;
+  // Control-vertex form: LibreDWG reads fit-point SPLINEs back as control polygons, so this is the form
+  // the DWG round trip can check exactly (the same choice as the closed CV round trip above).
+  REQUIRE(spline::MakeControl({{1, 1, 0}, {4, 5, 0}, {8, 2, 0}, {10, 6, 0}}, false, &spl, nullptr));
+  sheet.paperSplines.push_back(spl);
+  sheet.paperSplineAttrs.resize(1);
+  st.paperLayouts.push_back(std::move(sheet));
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  AppCommandState in;
+  log.clear();
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 1);
+  const PaperLayout& L = in.paperLayouts[0];
+  REQUIRE(L.paperSplines.size() == 1);
+  const spline::Spline& back = L.paperSplines[0];
+  CHECK(back.degree == 3);
+  CHECK_FALSE(back.isFit());
+  REQUIRE(back.ctrl.size() == spl.ctrl.size());
+  for (std::size_t i = 0; i < spl.ctrl.size(); ++i) {
+    CHECK(back.ctrl[i].x == Catch::Approx(spl.ctrl[i].x).margin(1e-6));
+    CHECK(back.ctrl[i].y == Catch::Approx(spl.ctrl[i].y).margin(1e-6));
+  }
+  CHECK(spline::Length(back) == Catch::Approx(spline::Length(spl)).margin(1e-3));
+  CHECK(L.paperSplineAttrs.size() == 1);
+  CHECK(in.cadSplines.empty());
+}
+
+// REQ-113 / issue #1010: a sheet dimension is written as a native DWG DIMENSION on its layout and read back
+// into that layout's text store with its extension points and text (ExportLibreCadFile writes no trailer).
+TEST_CASE("DWG writes and reads a sheet dimension natively (REQ-113, issue #1010)",
+          "[dwg][libredwg][paperspace][issue1010]") {
+  ScratchDir dir("p1010dim");
+  const auto p = (dir.path / "sheet-dim.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  PaperLayout sheet;
+  sheet.name = "Sheet D";
+  CadAnnotation lin;
+  lin.kind = CadAnnotation::Kind::DimLinear;
+  lin.dimExt1X = 2.f;
+  lin.dimExt1Y = 2.f;
+  lin.dimExt2X = 10.f;
+  lin.dimExt2Y = 2.f;
+  lin.insX = 6.f;
+  lin.insY = 4.f;
+  lin.dimSignedOffset = 2.f;
+  lin.dimLinearVertical = false;
+  lin.text = "8.00";
+  lin.plottedHeightInches = 0.125f;
+  sheet.paperTexts.push_back(lin);
+  sheet.paperTextAttrs.resize(1);
+  st.paperLayouts.push_back(std::move(sheet));
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  AppCommandState in;
+  log.clear();
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 1);
+  const PaperLayout& L = in.paperLayouts[0];
+  size_t dims = 0;
+  for (const CadAnnotation& a : L.paperTexts) {
+    if (!CadAnnotationIsDimension(a))
+      continue;
+    ++dims;
+    CHECK(a.kind == CadAnnotation::Kind::DimLinear);
+    CHECK(a.dimExt1X == Catch::Approx(2.0).margin(1e-3));
+    CHECK(a.dimExt2X == Catch::Approx(10.0).margin(1e-3));
+    CHECK(a.text.find("8") != std::string::npos);
+  }
+  CHECK(dims == 1);
+}
+
+// REQ-456 / issue #1010: a sheet POINT is written as a native DWG POINT on its layout and read back there, never
+// as a survey point, and the drawing's point display (PDMODE, PDSIZE) is kept with the drawing.
+TEST_CASE("DWG writes and reads sheet points natively (REQ-456, issue #1010)",
+          "[dwg][libredwg][paperspace][issue1010]") {
+  ScratchDir dir("p1010point");
+  const auto p = (dir.path / "sheet-point.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.pdMode = 3;
+  st.pdSize = 0.1;
+  PaperLayout sheet;
+  sheet.name = "Sheet P";
+  sheet.paperPoints = {CadPoint{3.0, 4.0, 0.0}, CadPoint{7.5, 1.25, 0.0}};
+  sheet.paperPointAttrs.resize(2);
+  st.paperLayouts.push_back(std::move(sheet));
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  AppCommandState in;
+  log.clear();
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 1);
+  const PaperLayout& L = in.paperLayouts[0];
+  REQUIRE(L.paperPoints.size() == 2);
+  CHECK(L.paperPoints[0].x == Catch::Approx(3.0).margin(1e-4));
+  CHECK(L.paperPoints[0].y == Catch::Approx(4.0).margin(1e-4));
+  CHECK(L.paperPoints[1].x == Catch::Approx(7.5).margin(1e-4));
+  CHECK(L.paperPoints[1].y == Catch::Approx(1.25).margin(1e-4));
+  CHECK(L.paperPointAttrs.size() == 2);
+  CHECK(in.surveyPoints.empty());
+  CHECK(in.pdMode == 3);
+  CHECK(in.pdSize == Catch::Approx(0.1).margin(1e-9));
+}
+
+// REQ-457 / issue #1010: a sheet raster image is written as a native DWG IMAGE with its IMAGEDEF and read back on
+// its layout with the same placement, size and file. A missing file unloads and is logged; a truncated file is refused.
+namespace {
+std::string RepoIconPath() {
+  return std::string(GOSURVEY_SAMPLES_DIR) + "/../resources/icons/Active_File.png";
+}
+}  // namespace
+
+TEST_CASE("Sheet raster images probe, refuse truncated files, and round-trip (REQ-457, issue #1010)",
+          "[dwg][libredwg][paperspace][issue1010]") {
+  ScratchDir dir("p1010img");
+  const std::string png = RepoIconPath();
+  REQUIRE(std::filesystem::exists(png));
+  int pw = 0;
+  int ph = 0;
+  std::string why;
+  REQUIRE(ProbeRasterImage(png, &pw, &ph, &why));
+  CHECK(pw > 0);
+  CHECK(ph > 0);
+
+  // A truncated copy is refused and no image is placed.
+  const auto truncated = (dir.path / "truncated.png").string();
+  {
+    std::ifstream in(png, std::ios::binary);
+    std::vector<char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::ofstream out(truncated, std::ios::binary);
+    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size() / 3));
+  }
+  CHECK_FALSE(ProbeRasterImage(truncated, nullptr, nullptr, &why));
+  CadRasterImage refused;
+  CHECK_FALSE(MakeSheetRasterImage(truncated, 1.f, 1.f, 3.f, 3.f, 0.f, &refused, &why));
+  CHECK(refused.path.empty());
+
+  // Round trip: a copy of the icon placed on a sheet, then deleted before reopening.
+  const auto copy = (dir.path / "sheet-image.png").string();
+  std::filesystem::copy_file(png, copy);
+  AppCommandState st;
+  OneLine(st);
+  PaperLayout sheet;
+  sheet.name = "Sheet I";
+  CadRasterImage placed;
+  REQUIRE(MakeSheetRasterImage(copy, 2.f, 3.f, 4.f, 2.f, 0.5f, &placed, &why));
+  sheet.paperImages.push_back(placed);
+  sheet.paperImageAttrs.resize(1);
+  st.paperLayouts.push_back(std::move(sheet));
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, (dir.path / "sheet-image.dwg").string().c_str(), log, /*asDxf=*/false));
+
+  AppCommandState in;
+  log.clear();
+  REQUIRE(ImportDwgFile(in, (dir.path / "sheet-image.dwg").string().c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 1);
+  REQUIRE(in.paperLayouts[0].paperImages.size() == 1);
+  const CadRasterImage& back = in.paperLayouts[0].paperImages[0];
+  CHECK(back.path == copy);
+  CHECK(back.pixelW == pw);
+  CHECK(back.pixelH == ph);
+  CHECK(back.insX == Catch::Approx(2.f).margin(1e-3f));
+  CHECK(back.insY == Catch::Approx(3.f).margin(1e-3f));
+  CHECK(back.width == Catch::Approx(4.f).margin(1e-3f));
+  CHECK(back.height == Catch::Approx(2.f).margin(1e-3f));
+  CHECK(back.rotationRad == Catch::Approx(0.5f).margin(1e-3f));
+
+  // Missing file on reopen: the image is unloaded, the log says so, and the sheet still loads.
+  std::filesystem::remove(copy);
+  AppCommandState gone;
+  log.clear();
+  REQUIRE(ImportDwgFile(gone, (dir.path / "sheet-image.dwg").string().c_str(), log));
+  REQUIRE(gone.paperLayouts.size() == 1);
+  CHECK(gone.paperLayouts[0].paperImages.empty());
+  bool logged = false;
+  for (const std::string& l : log)
+    if (l.find("file is missing") != std::string::npos)
+      logged = true;
+  CHECK(logged);
+}
+
 // Issue #768 / REQ-113 acceptance 7 - hidden fixture writer for the AutoCAD oracle (accoreconsole).
 // Run with GOSURVEY_ORACLE_DIR=<dir> GoSurveyTests "[.oracle768]"; it writes <dir>/L<n>_<version>.dwg and
 // sheet.dxf. Levels add one feature at a time so a file AutoCAD rejects points at the feature:
@@ -5996,6 +8947,31 @@ static void BuildOracleState(AppCommandState& st, int level) {
     tb.plottedHeightInches = 0.15f;
     sheet.paperTables.push_back(tb);
     sheet.paperTableAttrs.push_back(EntityAttributes{});
+    CadAnnotation dim;
+    dim.kind = CadAnnotation::Kind::DimLinear;
+    dim.dimExt1X = 2.f; dim.dimExt1Y = 2.f;
+    dim.dimExt2X = 10.f; dim.dimExt2Y = 2.f;
+    dim.insX = 6.f; dim.insY = 4.f;
+    dim.dimSignedOffset = 2.f;
+    dim.text = "8.00";
+    dim.plottedHeightInches = 0.125f;
+    sheet.paperTexts.push_back(dim);
+    sheet.paperTextAttrs.push_back(EntityAttributes{});
+    sheet.paperPoints = {CadPoint{18.0, 12.0, 0.0}, CadPoint{20.0, 13.0, 0.0}};  // REQ-456 sheet points
+    sheet.paperPointAttrs.resize(2);
+    st.pdMode = 3;
+    CadRasterImage picture;  // REQ-457 sheet image: the repository icon, placed on the sheet
+    std::string picWhy;
+    if (MakeSheetRasterImage(RepoIconPath(), 26.f, 2.f, 4.f, 2.f, 0.f, &picture, &picWhy)) {
+      sheet.paperImages.push_back(picture);
+      sheet.paperImageAttrs.push_back(EntityAttributes{});
+    }
+    st.pdSize = 0.1;
+    spline::Spline wave;
+    // Fixed, valid fit points: MakeFit cannot fail here, so its result is deliberately unused.
+    (void)spline::MakeFit({{2, 20, 0}, {6, 24, 0}, {10, 20, 0}, {14, 24, 0}}, false, &wave, nullptr);
+    sheet.paperSplines.push_back(wave);
+    sheet.paperSplineAttrs.push_back(EntityAttributes{});
   }
   st.paperLayouts.push_back(std::move(sheet));
   PaperLayout tall;
@@ -6013,9 +8989,9 @@ TEST_CASE("Write the paper-space oracle fixtures (issue #768)", "[.][oracle768]"
   REQUIRE(outDir != nullptr);
   const std::filesystem::path dir = std::filesystem::path(outDir);
   std::filesystem::create_directories(dir);
-  const std::pair<const char*, DwgSaveVersion> versions[] = {{"R2000", DwgSaveVersion::R2000},
-                                                               {"R2010", DwgSaveVersion::R2010},
-                                                               {"R2018", DwgSaveVersion::R2018}};
+  const std::pair<const char*, DwgSaveVersion> versions[] = {
+      {"R2000", DwgSaveVersion::R2000}, {"R2010", DwgSaveVersion::R2010},
+      {"R2018", DwgSaveVersion::R2018}};
   std::vector<std::string> log;
   for (int level = 0; level <= 4; ++level)
     for (const auto& v : versions) {
@@ -6028,4 +9004,196 @@ TEST_CASE("Write the paper-space oracle fixtures (issue #768)", "[.][oracle768]"
   AppCommandState st;
   BuildOracleState(st, 4);
   REQUIRE(ExportDxfFile(st, (dir / "sheet.dxf").string().c_str(), log));
+  // Per-object isolation (issue #1010): one sheet holding only a fill, a leader or a table, written at R2000
+  // and R2018, so AutoCAD's open check can name the object that a version rejects.
+  const auto oneObject = [&](const char* tag, auto addObject) {
+    for (const auto& v : versions) {
+      AppCommandState one;
+      PaperLayout sheet;
+      sheet.name = "Plan";
+      sheet.portraitWidthIn = 24.f;
+      sheet.portraitHeightIn = 36.f;
+      sheet.landscape = true;
+      addObject(sheet);
+      one.paperLayouts.push_back(std::move(sheet));
+      one.dwgExportVersion = v.second;
+      REQUIRE(ExportLibreCadFile(one, (dir / (std::string(tag) + "_" + v.first + ".dwg")).string().c_str(), log,
+                                 /*asDxf=*/false));
+    }
+  };
+  // Model-space leader for comparison (issue #1010): the same multileader as ONLYLEADER, drawn in model space.
+  for (const auto& v : versions) {
+    AppCommandState model;
+    CadMultileader ml{};
+    ml.pathXyz = {16.f, 8.f, 0.f, 18.f, 8.f, 0.f};
+    ml.label.kind = CadAnnotation::Kind::Mtext;
+    ml.label.insX = 18.f; ml.label.insY = 8.f;
+    ml.label.text = "SEE NOTE 4";
+    ml.label.plottedHeightInches = 0.2f;
+    ml.label.boxMinX = 18.f; ml.label.boxMinY = 7.8f; ml.label.boxMaxX = 21.f; ml.label.boxMaxY = 8.2f;
+    model.cadMultileaders.push_back(ml);
+    model.cadMultileaderAttrs.push_back(EntityAttributes{});
+    model.dwgExportVersion = v.second;
+    REQUIRE(ExportLibreCadFile(model, (dir / (std::string("MODELLEADER_") + v.first + ".dwg")).string().c_str(), log,
+                               /*asDxf=*/false));
+    if (v.second == DwgSaveVersion::R2018)  // text form of the same entity, to diff against AutoCAD's own
+      REQUIRE(ExportLibreCadFile(model, (dir / "MODELLEADER_R2018.dxf").string().c_str(), log, /*asDxf=*/true));
+  }
+  oneObject("ONLYFILL", [](PaperLayout& sheet) {
+    sheet.paperFilledRegions.push_back(SquareHatchRegion(16.f, 3.f, 2.f));
+    sheet.paperFilledRegionAttrs.push_back(EntityAttributes{});
+  });
+  oneObject("ONLYLEADER", [](PaperLayout& sheet) {
+    CadMultileader ml{};
+    ml.pathXyz = {16.f, 8.f, 0.f, 18.f, 8.f, 0.f};
+    ml.label.kind = CadAnnotation::Kind::Mtext;
+    ml.label.insX = 18.f; ml.label.insY = 8.f;
+    ml.label.text = "SEE NOTE 4";
+    ml.label.plottedHeightInches = 0.2f;
+    ml.label.boxMinX = 18.f; ml.label.boxMinY = 7.8f; ml.label.boxMaxX = 21.f; ml.label.boxMaxY = 8.2f;
+    sheet.paperMultileaders.push_back(ml);
+    sheet.paperMultileaderAttrs.push_back(EntityAttributes{});
+  });
+  oneObject("ONLYTABLE", [](PaperLayout& sheet) {
+    CadTable tb;
+    tb.insX = 2.f; tb.insY = 14.f; tb.width = 4.f; tb.height = 2.f; tb.cols = 2;
+    tb.cells = {"ALPHA", "BETA", "GAMMA", "DELTA"};
+    tb.plottedHeightInches = 0.15f;
+    sheet.paperTables.push_back(tb);
+    sheet.paperTableAttrs.push_back(EntityAttributes{});
+  });
+  // REQ-457 isolation (issue #1010): one sheet holding only the image, written at R2000 and R2018.
+  for (const auto& v : versions) {
+    AppCommandState imgOnly;
+    PaperLayout sheet;
+    sheet.name = "Plan";
+    sheet.portraitWidthIn = 24.f;
+    sheet.portraitHeightIn = 36.f;
+    sheet.landscape = true;
+    CadRasterImage picture;
+    std::string picWhy;
+    REQUIRE(MakeSheetRasterImage(RepoIconPath(), 26.f, 2.f, 4.f, 2.f, 0.f, &picture, &picWhy));
+    sheet.paperImages.push_back(picture);
+    sheet.paperImageAttrs.push_back(EntityAttributes{});
+    imgOnly.paperLayouts.push_back(std::move(sheet));
+    imgOnly.dwgExportVersion = v.second;
+    REQUIRE(ExportLibreCadFile(imgOnly, (dir / (std::string("IMGONLY_") + v.first + ".dwg")).string().c_str(), log,
+                               /*asDxf=*/false));
+  }
+  // Isolation fixtures (issue #1010): level 4 without the spline, and the spline alone on level 1's sheet.
+  for (const auto& v : versions) {
+    AppCommandState noSpline;
+    BuildOracleState(noSpline, 4);
+    noSpline.paperLayouts[0].paperSplines.clear();
+    noSpline.paperLayouts[0].paperSplineAttrs.clear();
+    noSpline.dwgExportVersion = v.second;
+    REQUIRE(ExportLibreCadFile(noSpline, (dir / (std::string("NOSPLINE_") + v.first + ".dwg")).string().c_str(), log,
+                               /*asDxf=*/false));
+    AppCommandState splineOnly;
+    BuildOracleState(splineOnly, 1);
+    spline::Spline wave;
+    (void)spline::MakeFit({{2, 20, 0}, {6, 24, 0}, {10, 20, 0}, {14, 24, 0}}, false, &wave, nullptr);
+    splineOnly.paperLayouts[0].paperSplines.push_back(wave);
+    splineOnly.paperLayouts[0].paperSplineAttrs.push_back(EntityAttributes{});
+    splineOnly.dwgExportVersion = v.second;
+    REQUIRE(ExportLibreCadFile(splineOnly, (dir / (std::string("SPLINEONLY_") + v.first + ".dwg")).string().c_str(),
+                               log, /*asDxf=*/false));
+  }
+}
+
+// Issue #1016: isolate a paper viewport with a bulged polygon clip for the AutoCAD file oracle.
+// Run with GOSURVEY_ORACLE_DIR=<dir> GoSurveyTests "[.][oracle1016]".
+TEST_CASE("Write the clipped paper viewport oracle fixture (issue #1016)", "[.][oracle1016]") {
+  const char* outDir = std::getenv("GOSURVEY_ORACLE_DIR");
+  REQUIRE(outDir != nullptr);
+  const std::filesystem::path dir(outDir);
+  std::filesystem::create_directories(dir);
+  AppCommandState st;
+  BuildOracleState(st, 2);
+  REQUIRE(st.paperLayouts.size() == 2);
+  REQUIRE(st.paperLayouts[0].viewports.size() == 1);
+  st.paperLayouts[0].viewports[0].clipBoundary = {
+      {2.f, 2.f, 0.25f}, {12.f, 2.f, 0.f}, {5.f, 10.f, 0.f}};
+  std::vector<std::string> log;
+  const std::pair<const char*, DwgSaveVersion> versions[] = {
+      {"R2000", DwgSaveVersion::R2000}, {"R2010", DwgSaveVersion::R2010},
+      {"R2018", DwgSaveVersion::R2018}};
+  for (const auto& version : versions) {
+    st.dwgExportVersion = version.second;
+    const auto path = dir / (std::string("clipped_viewport_") + version.first + ".dwg");
+    REQUIRE(ExportLibreCadFile(st, path.string().c_str(), log, /*asDxf=*/false));
+  }
+  REQUIRE(ExportDxfFile(st, (dir / "clipped_viewport.dxf").string().c_str(), log));
+}
+
+// Issue #804 dimension audit (REQ-477, REQ-459). Regression coverage for dimensions picked in the
+// reverse direction (text was stored upside down), for angular text placement, and for the value
+// after an edit (the refresh path used to drop the active style's unit scale).
+TEST_CASE("Dimension text rotation is normalised so text reads upright (REQ-477)", "[dim][issue804]") {
+  REQUIRE(CadDimReadableTextRotation(0.f) == Catch::Approx(0.f));
+  REQUIRE(CadDimReadableTextRotation(3.14159265f) == Catch::Approx(0.f));
+  REQUIRE(CadDimReadableTextRotation(-1.57079633f) == Catch::Approx(1.57079633f));
+  REQUIRE(CadDimReadableTextRotation(-2.35619449f) == Catch::Approx(0.78539816f));
+  REQUIRE(CadDimReadableTextRotation(0.78539816f) == Catch::Approx(0.78539816f));
+}
+
+TEST_CASE("DIMLINEAR picked right to left stores upright text (REQ-477)", "[dim][issue804]") {
+  AppCommandState st;
+  st.active = AppCommandState::Kind::DimLinear;
+  st.dimPhase = AppCommandState::DimPhase::WaitDimLinePt;
+  st.dimE1x = 10.f;
+  st.dimE1y = 0.f;
+  st.dimE2x = 0.f;
+  st.dimE2y = 0.f;
+  st.dimLinearDraftVertical = false;
+  CadAnnotation d{};
+  REQUIRE(CadDimLinearBuildDraft(st, 5.f, 5.f, &d));
+  REQUIRE(d.rotationRad == Catch::Approx(0.f));
+}
+
+TEST_CASE("DIMLINEAR draft adds visible strokes to viewport rubber preview", "[dim][issue804][preview]") {
+  AppCommandState st;
+  st.active = AppCommandState::Kind::DimLinear;
+  st.dimPhase = AppCommandState::DimPhase::WaitDimLinePt;
+  st.dimE1x = 0.f;
+  st.dimE1y = 0.f;
+  st.dimE2x = 10.f;
+  st.dimE2y = 0.f;
+  std::vector<float> rubber;
+  AppendCadDraftRubberLines(st, 5.f, 3.f, false, 0., 0., 100.f, 800, rubber);
+  REQUIRE_FALSE(rubber.empty());
+  REQUIRE(rubber.size() >= 18);
+}
+
+TEST_CASE("DIMANGULAR text is horizontal at any bisector direction (REQ-477)", "[dim][issue804]") {
+  CadAnnotation a{};
+  a.kind = CadAnnotation::Kind::DimAngular;
+  a.dimAngVertexX = 0.f;
+  a.dimAngVertexY = 0.f;
+  a.dimExt1X = -10.f;
+  a.dimExt1Y = 0.f;
+  a.dimExt2X = 0.f;
+  a.dimExt2Y = -10.f;
+  a.dimSignedOffset = 4.f;
+  a.plottedHeightInches = 0.1f;
+  CadDimAngularSyncTextPlacement(&a, 1.f);
+  REQUIRE(a.rotationRad == Catch::Approx(0.f));
+}
+
+TEST_CASE("Dimension value keeps the style's unit scale after a refresh (REQ-459)", "[dim][issue804]") {
+  DimensionStyle sty = DimensionStyles::Default();
+  sty.unitScale = 2.0;
+  CadAnnotation a{};
+  a.kind = CadAnnotation::Kind::DimLinear;
+  a.dimExt1X = 0.f;
+  a.dimExt1Y = 0.f;
+  a.dimExt2X = 10.f;
+  a.dimExt2Y = 0.f;
+  a.dimSignedOffset = 3.f;
+  AngleDisplaySettings angleSet{};
+  CadDimRefreshMeasurementText(&a, sty, angleSet);
+  REQUIRE(a.text == "20.00");
+  sty.unitPrecision = 0;
+  CadDimRefreshMeasurementText(&a, sty, angleSet);
+  REQUIRE(a.text == "20");
 }

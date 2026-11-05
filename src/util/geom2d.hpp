@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cassert>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -41,6 +43,29 @@ struct BulgeArcSpan {
   double sweep = 0.0;       // signed; endAngle = startAngle + sweep
 };
 [[nodiscard]] BulgeArcSpan BulgeArc(double x0, double y0, double x1, double y1, double bulge);
+
+/// Walks the chord p0→p1 as a line, or as \p segs equal arc steps when the bulge is a real arc.
+/// \p addSeg is called as addSeg(xA, yA, xB, yB) for each sample chord (paper overlay and PDF plot).
+template <class SegFn>
+void ForEachBulgeChord(double x0, double y0, double x1, double y1, double bulge, int segs, SegFn&& addSeg) {
+  assert(segs > 0);
+  assert(std::isfinite(x0) && std::isfinite(y0) && std::isfinite(x1) && std::isfinite(y1));
+  const BulgeArcSpan span = BulgeArc(x0, y0, x1, y1, bulge);
+  if (!span.valid) {
+    addSeg(x0, y0, x1, y1);
+    return;
+  }
+  double px = x0;
+  double py = y0;
+  for (int i = 1; i <= segs; ++i) {
+    const double ang = span.startAngle + span.sweep * static_cast<double>(i) / static_cast<double>(segs);
+    const double qx = span.cx + span.radius * std::cos(ang);
+    const double qy = span.cy + span.radius * std::sin(ang);
+    addSeg(px, py, qx, qy);
+    px = qx;
+    py = qy;
+  }
+}
 
 /// Arc length of the segment p0->p1 carrying `bulge`; the plain chord length when it is straight.
 [[nodiscard]] double BulgeSegmentLength(double x0, double y0, double x1, double y1, double bulge);

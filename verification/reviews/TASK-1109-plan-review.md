@@ -4,10 +4,10 @@
 
 ## Specification and scope
 
-- **PASS — Authority:** GOAL-001 and accepted REQ-456 authorize Qt-only work across the Start page, editor/drawing workspace, command/status area, Properties and Toolspace, and the named principal windows. REQ-081, REQ-302, REQ-427, and REQ-436 supply the appearance, ribbon, minimum-width, and theme-identity constraints.
+- **PASS — Authority:** GOAL-001 and accepted REQ-491 authorize Qt-only work across the Start page, editor/drawing workspace, command/status area, Properties and Toolspace, and the named principal windows. REQ-081, REQ-302, REQ-427, and REQ-436 supply the appearance, ribbon, minimum-width, and theme-identity constraints.
 - **PASS — User decisions:** The plan retains both appearances while preserving the Light nanoCAD classic identity; keeps commands and workflows reachable; permits removal only of exact duplicate controls; preserves context-specific routes; excludes ImGui; and targets only Qt.
-- **PASS — Acceptance coverage:** The task plan restates each REQ-456 acceptance condition, including same-size comparison to Round 1, command/message visibility, reachable actions, both appearances, informative empty states, complete dialogs, no workflow loss, and screenshot/council records.
-- **PASS — SPEC consistency:** REQ-081's active text now permits refinements under REQ-456 while retaining its historical revision record. The traceability row no longer claims pixel-identical Light output. REQ-456 does not depend on unrelated REQ-453.
+- **PASS — Acceptance coverage:** The task plan restates each REQ-491 acceptance condition, including same-size comparison to Round 1, command/message visibility, reachable actions, both appearances, informative empty states, complete dialogs, no workflow loss, and screenshot/council records.
+- **PASS — SPEC consistency:** REQ-081's active text now permits refinements under REQ-491 while retaining its historical revision record. The traceability row no longer claims pixel-identical Light output. REQ-491 does not depend on unrelated REQ-453.
 
 ## Architecture and implementation plan
 
@@ -19,7 +19,7 @@
 
 ## Risks and completion gates
 
-- The surface list is broad. Keep each edit localized and include only named REQ-456 dialogs or direct layout/theme dependencies.
+- The surface list is broad. Keep each edit localized and include only named REQ-491 dialogs or direct layout/theme dependencies.
 - Do not remove any distinct command route. If a control is removed, record the duplicate action and retained path in the task log.
 - Run the specified Release build, Qt editor test, and output-layout check after implementation. Record before/after artifact paths and one result for each complete council review round. Round 2 remains a task completion gate.
 

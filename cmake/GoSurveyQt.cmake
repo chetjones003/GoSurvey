@@ -44,6 +44,7 @@ function(gosurvey_assert_no_imgui_in_link_graph target)
 endfunction()
 
 add_library(gosurvey_qt_frontend STATIC
+  src/qt/DrawingDocumentTabBar.cpp
   src/qt/EditorWindow.cpp
   src/qt/EditorInput.cpp
   src/qt/EditorRibbon.cpp
@@ -60,8 +61,10 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorPointClouds.cpp
   src/qt/EditorUpdate.cpp
   src/qt/EditorDialogs.cpp
+  src/qt/StyleEditors.cpp
   src/qt/EditorPoints.cpp
   src/qt/EditorPointGroups.cpp
+  src/qt/EditorPointTableDialog.cpp
   src/qt/EditorLayerManager.cpp
   src/qt/EditorProperties.cpp
   src/qt/EditorSurfaces.cpp
@@ -71,6 +74,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorPointTransfer.cpp
   src/qt/EditorBlockAuthoring.cpp
   src/qt/EditorPipePalette.cpp
+  src/qt/EditorGradingPalette.cpp
   src/qt/AdjustmentWindow.cpp
   src/qt/AdjustmentEditor.cpp
   src/qt/PdfWindow.cpp
@@ -87,11 +91,11 @@ add_library(gosurvey_qt_frontend STATIC
   src/pdf/PdfAnnotate.cpp
   src/pdf/PdfMeasure.cpp
   src/pdf/PdfScaleCheck.cpp
-  src/pdf/PdfSnap.cpp
   src/pdf/PdfCoordExtract.cpp
   src/pdf/PdfRaw.cpp
   src/pdf/PdfSplit.cpp
   src/io/PdfPlot.cpp
+  src/io/PlotStyleTable.cpp
   src/traverse/TraverseReport.cpp
   src/platform/WinFileDialogs.cpp
   src/platform/MapTilePlatform.cpp

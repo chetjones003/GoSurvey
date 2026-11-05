@@ -23,7 +23,8 @@
 #include <QButtonGroup>
 #include <QWheelEvent>
 #include <QResizeEvent>
-#include <QSpinBox>
+#include <QComboBox>
+#include <QFocusEvent>
 #include <QDoubleSpinBox>
 #include <QFontMetrics>
 #include <QProgressBar>
@@ -46,6 +47,7 @@
 #include <QComboBox>
 #include <QSignalBlocker>
 #include <QFileInfo>
+#include <QTemporaryDir>
 #include <QActionGroup>
 #include <QDebug>
 #include <tuple>
@@ -465,6 +467,14 @@ void PdfWindow::RefreshAppearanceIcons() {
     if (button->property("cadIcon").isValid())
       button->setIcon(CadCommandIcon(button->property("cadIcon").toString()));
 }
+class PdfSelectAllSpinBox final : public QSpinBox {
+ public:
+  using QSpinBox::QSpinBox;
+  void focusInEvent(QFocusEvent* event) override {
+    QSpinBox::focusInEvent(event);
+    if (lineEdit() != nullptr) lineEdit()->selectAll();
+  }
+};
 
 PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   setObjectName("pdfViewerWindow");
@@ -491,7 +501,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   auto* findAction = makeAction("pdfFindAction", "Find...", "Find.png", "Find text in the document (Ctrl+F)", [this] { ShowFindBar(); });
   findAction->setShortcut(QKeySequence::Find);
   addAction(findAction); // a shortcut only fires while its action sits on a visible widget: keep Find live from every tab
-  m_PageNumber = new QSpinBox(this);
+  m_PageNumber = new PdfSelectAllSpinBox(this);
   m_PageNumber->setRange(1, 1);
   m_PageNumber->setAccessibleName("Page");
   connect(m_PageNumber, &QSpinBox::valueChanged, this, [this] {
@@ -904,7 +914,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   m_StatusPageCount->setObjectName("pdfStatusPageCount");
   m_StatusPageCount->setMinimumWidth(48);
   m_ZoomBox->setMinimumSize(96, 30);
-  for (QAction* action : {firstAction, previousAction}) statusBar()->addPermanentWidget(statusButton(action));
+  statusBar()->addPermanentWidget(statusButton(firstAction));
   m_ToolStatus = new QLabel(this);
   m_ToolStatus->setObjectName("pdfActiveTool");
   m_ToolStatus->setMinimumWidth(0);
@@ -914,9 +924,12 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   auto* pageLabel = new QLabel("Page", this);
   pageLabel->setObjectName("pdfStatusPageLabel");
   statusBar()->addPermanentWidget(pageLabel);
+  statusBar()->addPermanentWidget(statusButton(previousAction));
   statusBar()->addPermanentWidget(m_PageNumber);
+  statusBar()->addPermanentWidget(statusButton(nextAction));
   statusBar()->addPermanentWidget(m_StatusPageCount);
-  for (QAction* action : {nextAction, lastAction, zoomOutAction}) statusBar()->addPermanentWidget(statusButton(action));
+  statusBar()->addPermanentWidget(statusButton(lastAction));
+  statusBar()->addPermanentWidget(statusButton(zoomOutAction));
   statusBar()->addPermanentWidget(m_ZoomBox);
   for (QAction* action : {zoomInAction, fitWidth, fitPage}) statusBar()->addPermanentWidget(statusButton(action));
   m_StatusMore = new QToolButton(this);
@@ -1338,6 +1351,8 @@ PdfWindow::~PdfWindow() {
   if (m_SaveWork.valid()) {
     try { m_SaveWork.wait(); } catch (const std::exception& error) { qWarning() << "PDF save wait failed during shutdown:" << error.what(); }
   }
+  m_Document.reset();
+  m_TemporaryDirectory.reset();
 }
 
 void PdfWindow::Open(const QString& path) {
@@ -1351,6 +1366,12 @@ void PdfWindow::Open(const QString& path) {
   });
   statusBar()->showMessage("Opening PDF...");
   m_OpenPoll->start();
+}
+
+void PdfWindow::OpenPlotPreview(const QString& path, std::unique_ptr<QTemporaryDir> temporaryDirectory) {
+  m_TemporaryDirectory = std::move(temporaryDirectory);
+  m_TemporaryPreviewPath = path;
+  Open(path);
 }
 
 bool PdfWindow::LoadFile(const QString& path, QString& error) {
@@ -1392,6 +1413,7 @@ bool PdfWindow::AdoptDocument(std::unique_ptr<pdfview::PdfDocument> document, co
   for (auto& page : m_SnapPages) *page.second.cancel = true;
   m_SnapPages.clear();
   m_Thumbs->SetDocument(nullptr);
+  const bool isPlotPreview = m_TemporaryDirectory && path == m_TemporaryPreviewPath;
   m_Document = std::move(document);
   m_Thumbs->SetDocument(m_Document.get());
   m_Page->placeholder.clear();
@@ -1415,7 +1437,12 @@ bool PdfWindow::AdoptDocument(std::unique_ptr<pdfview::PdfDocument> document, co
   m_Scroll->verticalScrollBar()->setValue(0); m_Scroll->horizontalScrollBar()->setValue(0);
   SyncPageNav();
   SyncThumbnail();
-  setWindowTitle("GoSurvey | " + path + "[*]"); setWindowModified(false);
+  setWindowTitle(isPlotPreview ? QString("GoSurvey | Plot Preview[*]") : QString("GoSurvey | ") + path + "[*]");
+  setWindowModified(false);
+  if (m_TemporaryDirectory && !isPlotPreview) {
+    m_TemporaryDirectory.reset();
+    m_TemporaryPreviewPath.clear();
+  }
   UpdateScaleDisplay();
   if (m_SnapOn) StartSnapRead(0);
   RequestRender();
@@ -1881,6 +1908,7 @@ void PdfWindow::ShowExtractReview() {
     layout->addWidget(completionPanel);
     layout->setStretch(layout->indexOf(completionPanel), 1);
     auto* table = new QTableWidget(0, 2, m_ExtractReview); table->setObjectName("pdfCoordinateCandidates");
+    m_ExtractCandidatesTable = table;
     table->setHorizontalHeaderLabels({"Candidate details", "Decision"});
     table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
@@ -1888,9 +1916,23 @@ void PdfWindow::ShowExtractReview() {
     table->verticalHeader()->hide();
     table->setSelectionMode(QAbstractItemView::NoSelection);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers); layout->addWidget(table);
+    m_ExtractSkippedIntro = new QLabel("Skipped table rows (not imported as candidates):", m_ExtractReview);
+    m_ExtractSkippedIntro->setObjectName("pdfCoordinateSkippedIntro");
+    m_ExtractSkippedIntro->setWordWrap(true);
+    layout->addWidget(m_ExtractSkippedIntro);
+    m_ExtractSkippedTable = new QTableWidget(0, 2, m_ExtractReview);
+    m_ExtractSkippedTable->setObjectName("pdfCoordinateSkippedRows");
+    m_ExtractSkippedTable->setHorizontalHeaderLabels({"Source text", "Reason"});
+    m_ExtractSkippedTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    m_ExtractSkippedTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_ExtractSkippedTable->setWordWrap(true);
+    layout->addWidget(m_ExtractSkippedTable);
     auto* close = new QPushButton("Close", m_ExtractReview); close->setObjectName("pdfCoordinateReviewClose");
     connect(close, &QPushButton::clicked, m_ExtractReview, &QDialog::reject);
-    connect(m_ExtractReview, &QDialog::rejected, this, [this] { m_ExtractBox = false; m_Page->update(); }); // review closed: the box goes
+    connect(m_ExtractReview, &QDialog::rejected, this, [this] {
+      m_ExtractBox = false;
+      if (m_Page != nullptr) m_Page->update(); // review closed: the box goes
+    });
     auto* acceptAll = new QPushButton("Accept all", m_ExtractReview); acceptAll->setObjectName("pdfCoordinateAcceptAll");
     acceptAll->setProperty("pdfPrimaryAction", true);
     auto* denyAll = new QPushButton("Deny all", m_ExtractReview); denyAll->setObjectName("pdfCoordinateDenyAll");
@@ -1973,7 +2015,26 @@ void PdfWindow::ShowExtractReview() {
         .arg(QString::number(c.northing, 'f', 3)).arg(QString::number(c.easting, 'f', 3)).arg(elevation)
         .arg(description.toHtmlEscaped()).arg(pointNumber));
     details->setToolTip(QString::fromUtf8(c.sourceText.c_str()));
-    table->setCellWidget(row, 0, details);
+    auto* detailPanel = new QWidget(table);
+    auto* detailLayout = new QVBoxLayout(detailPanel);
+    detailLayout->setContentsMargins(0, 0, 0, 0);
+    detailLayout->setSpacing(4);
+    detailLayout->addWidget(details);
+    auto* createAs = new QComboBox(detailPanel);
+    createAs->setObjectName(QString("pdfCoordinateCreateAs_%1").arg(row));
+    createAs->setAccessibleName(QString("Create candidate %1 as").arg(row + 1));
+    createAs->addItem("Circle", static_cast<int>(pdfview::CoordCandidate::CreateAs::Circle));
+    createAs->addItem("Survey point", static_cast<int>(pdfview::CoordCandidate::CreateAs::SurveyPoint));
+    const int createIndex = (c.createAs == pdfview::CoordCandidate::CreateAs::SurveyPoint ||
+        (c.createAs == pdfview::CoordCandidate::CreateAs::Auto && c.HasDescription() && c.HasElevation())) ? 1 : 0;
+    createAs->setCurrentIndex(createIndex);
+    connect(createAs, qOverload<int>(&QComboBox::currentIndexChanged), this, [this, row](int index) {
+      if (!m_ExtractResult || row < 0 || row >= static_cast<int>(m_ExtractResult->candidates.size())) return;
+      m_ExtractResult->candidates[static_cast<std::size_t>(row)].createAs =
+          index == 1 ? pdfview::CoordCandidate::CreateAs::SurveyPoint : pdfview::CoordCandidate::CreateAs::Circle;
+    });
+    detailLayout->addWidget(createAs, 0, Qt::AlignLeft);
+    table->setCellWidget(row, 0, detailPanel);
     auto* decisions = new QWidget(table); auto* buttons = new QVBoxLayout(decisions); buttons->setContentsMargins(2, 2, 2, 2);
     buttons->setSpacing(4);
     auto* accept = new QPushButton("Accept", decisions); auto* deny = new QPushButton("Deny", decisions);
@@ -1989,6 +2050,18 @@ void PdfWindow::ShowExtractReview() {
     table->setRowHeight(row, std::clamp(static_cast<int>(std::ceil(detailDocument.size().height()) + 30), 100, 240));
     connect(accept, &QPushButton::clicked, this, [this, row] { DecideExtractCandidate(row, true); });
     connect(deny, &QPushButton::clicked, this, [this, row] { DecideExtractCandidate(row, false); });
+  }
+  if (m_ExtractSkippedIntro != nullptr && m_ExtractSkippedTable != nullptr) {
+    const auto& skipped = m_ExtractResult->skippedTableRows;
+    m_ExtractSkippedTable->setRowCount(static_cast<int>(skipped.size()));
+    for (int row = 0; row < m_ExtractSkippedTable->rowCount(); ++row) {
+      const auto& item = skipped[static_cast<std::size_t>(row)];
+      m_ExtractSkippedTable->setItem(row, 0, new QTableWidgetItem(QString::fromUtf8(item.sourceText.c_str())));
+      m_ExtractSkippedTable->setItem(row, 1, new QTableWidgetItem(QString::fromUtf8(item.reason.c_str())));
+    }
+    const bool showSkipped = !skipped.empty();
+    m_ExtractSkippedIntro->setVisible(showSkipped);
+    m_ExtractSkippedTable->setVisible(showSkipped);
   }
   if (auto* acceptAll = m_ExtractReview->findChild<QPushButton*>("pdfCoordinateAcceptAll")) {
     acceptAll->setVisible(hasCandidates); acceptAll->setEnabled(hasCandidates);

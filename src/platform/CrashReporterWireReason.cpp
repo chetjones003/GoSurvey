@@ -9,6 +9,16 @@
 
 namespace crashReporter {
 
+std::string TruncateUtf8(std::string_view text, std::size_t maxBytes) {
+  if (text.size() <= maxBytes)
+    return std::string(text);
+  std::size_t cut = maxBytes;
+  // A continuation byte is 10xxxxxx. Back up to the lead byte so the cut falls between characters.
+  while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80)
+    --cut;
+  return std::string(text.substr(0, cut));
+}
+
 std::string ExceptionCodeToWireReason(unsigned long exceptionCode) {
 #ifdef _WIN32
   switch (exceptionCode) {

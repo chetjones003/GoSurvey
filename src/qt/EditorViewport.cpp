@@ -22,11 +22,16 @@
 #include <QLineF>
 #include <QInputDialog>
 #include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QMenu>
 #include <QIcon>
 #include <QOpenGLContext>
+#include <QOpenGLBuffer>
+#include <QOpenGLShaderProgram>
+#include <QOpenGLTextureBlitter>
+#include <QOpenGLVertexArrayObject>
 #include <QApplication>
 #include <QPainter>
 #include <QPainterPath>
@@ -36,6 +41,190 @@
 #include <QLayout>
 #include <QWheelEvent>
 #include <algorithm>
+#include <cassert>
+#include "CadCommands.hpp"
+#include "pdf/PdfAttach.hpp"
+
+namespace {
+
+template <class Project>
+static QPainterPath PaperViewportShapePath(const Viewport& viewport, Project&& project) {
+  QPainterPath path;
+  if (viewport.clipBoundary.size() < 3) {
+    const QPointF a = project(viewport.paperXIn, viewport.paperYIn);
+    const QPointF b = project(viewport.paperXIn + viewport.paperWIn, viewport.paperYIn + viewport.paperHIn);
+    path.addRect(QRectF(a, b).normalized());
+    return path;
+  }
+  const auto& first = viewport.clipBoundary.front();
+  path.moveTo(project(first.xIn, first.yIn));
+  constexpr double kPi = 3.14159265358979323846;
+  for (size_t i = 0; i < viewport.clipBoundary.size(); ++i) {
+    const Viewport::ClipVertex& a = viewport.clipBoundary[i];
+    const Viewport::ClipVertex& b = viewport.clipBoundary[(i + 1) % viewport.clipBoundary.size()];
+    const BulgeArcSpan arc = BulgeArc(a.xIn, a.yIn, b.xIn, b.yIn, a.bulge);
+    if (!arc.valid) {
+      path.lineTo(project(b.xIn, b.yIn));
+      continue;
+    }
+    const int steps = std::clamp(static_cast<int>(std::ceil(std::fabs(arc.sweep) / (kPi / 36.0))), 1, 720);
+    for (int step = 1; step <= steps; ++step) {
+      const double angle = arc.startAngle + arc.sweep * static_cast<double>(step) / steps;
+      path.lineTo(project(arc.cx + arc.radius * std::cos(angle), arc.cy + arc.radius * std::sin(angle)));
+    }
+  }
+  path.closeSubpath();
+  return path;
+}
+
+// RenderScene reads only the raster/transform fields. Snap geometry and lookup grids stay borrowed
+// in the committed attachment rather than being copied on each cursor-move frame.
+static PdfAttachment PdfRenderCopy(const PdfAttachment& source) {
+  PdfAttachment result;
+  result.insertX = source.insertX;
+  result.insertY = source.insertY;
+  result.scale = source.scale;
+  result.rotationDeg = source.rotationDeg;
+  result.pageWidthPts = source.pageWidthPts;
+  result.pageHeightPts = source.pageHeightPts;
+  result.glTexId = source.glTexId;
+  result.fade = source.fade;
+  result.showBackground = source.showBackground;
+  result.snapVisDark = source.snapVisDark;
+  return result;
+}
+
+static void RotatePdfInsertAroundBase(float bx, float by, float rad, float* x, float* y) {
+  const float c = std::cos(rad);
+  const float s = std::sin(rad);
+  const float dx = *x - bx;
+  const float dy = *y - by;
+  *x = bx + dx * c - dy * s;
+  *y = by + dx * s + dy * c;
+}
+
+static void AppendDashedPreviewSegment(std::vector<float>& lines, double ax, double ay, double az,
+                                       double bx, double by, double bz, double orthoHalfH, int heightPx) {
+  const double dx = bx - ax, dy = by - ay, dz = bz - az;
+  const double length = std::sqrt(dx * dx + dy * dy + dz * dz);
+  if (!(length > 1e-12) || heightPx <= 0)
+    return;
+  const double worldPerPixel = 2.0 * orthoHalfH / heightPx;
+  const double dash = 8.0 * worldPerPixel;
+  const double period = 14.0 * worldPerPixel;
+  for (double start = 0.0; start < length; start += period) {
+    const double end = std::min(length, start + dash);
+    const double t0 = start / length, t1 = end / length;
+    lines.insert(lines.end(), {static_cast<float>(ax + dx * t0), static_cast<float>(ay + dy * t0),
+                               static_cast<float>(az + dz * t0), static_cast<float>(ax + dx * t1),
+                               static_cast<float>(ay + dy * t1), static_cast<float>(az + dz * t1)});
+  }
+}
+
+static void ScalePdfInsertAroundBase(float bx, float by, float sc, float* x, float* y) {
+  *x = bx + sc * (*x - bx);
+  *y = by + sc * (*y - by);
+}
+
+/// REQ-356: dismiss the line-end grip menu after the pointer leaves it for one second.
+class GripMenuDismissFilter final : public QObject {
+public:
+  explicit GripMenuDismissFilter(QMenu* menu) : QObject(menu), m_Menu(menu) {
+    m_Timer.setSingleShot(true);
+    m_Timer.setInterval(1000);
+    m_Timer.setParent(menu);
+    connect(&m_Timer, &QTimer::timeout, menu, &QMenu::close);
+    menu->installEventFilter(this);
+  }
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (watched != m_Menu)
+      return QObject::eventFilter(watched, event);
+    if (event->type() == QEvent::Leave)
+      m_Timer.start();
+    else if (event->type() == QEvent::Enter)
+      m_Timer.stop();
+    return false;
+  }
+
+private:
+  QMenu* m_Menu;
+  QTimer m_Timer;
+};
+
+static void AppendHighlightFloatVerts(const std::vector<float>& batch, std::vector<double>* out) {
+  out->reserve(out->size() + batch.size());
+  for (float v : batch)
+    out->push_back(static_cast<double>(v));
+}
+
+static bool SelectionIncludesPdfUnderlay(const AppCommandState& st, int index) {
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type == SelectedEntity::Type::PdfUnderlay && e.index == index)
+      return true;
+  }
+  return false;
+}
+
+static void AppendModifyPdfGhostPreviews(const AppCommandState& st, float curX, float curY,
+                                         std::vector<PdfAttachment>* ghosts) {
+  assert(ghosts != nullptr);
+  if (ghosts == nullptr)
+    return;
+  using K = AppCommandState::Kind;
+  using MP = AppCommandState::ModifyPhase;
+  const int count = static_cast<int>(st.pdfAttachments.size());
+  if (st.active == K::Move || st.active == K::Copy) {
+    if (st.modifyPhase != MP::NeedDestination)
+      return;
+    const float dx = curX - st.modifyBaseX;
+    const float dy = curY - st.modifyBaseY;
+    for (int pi = 0; pi < count; ++pi) {
+      if (!SelectionIncludesPdfUnderlay(st, pi))
+        continue;
+      PdfAttachment ghost = PdfRenderCopy(st.pdfAttachments[static_cast<std::size_t>(pi)]);
+      ghost.insertX += dx;
+      ghost.insertY += dy;
+      ghosts->push_back(ghost);
+    }
+    return;
+  }
+  if (st.active == K::Rotate) {
+    float theta = 0.f;
+    if (!CadRotatePreviewTheta(st, curX, curY, &theta))
+      return;
+    const float bx = st.rotateBaseX;
+    const float by = st.rotateBaseY;
+    constexpr float kPdfRadToDeg = 180.f / 3.14159265f;
+    for (int pi = 0; pi < count; ++pi) {
+      if (!SelectionIncludesPdfUnderlay(st, pi))
+        continue;
+      PdfAttachment ghost = PdfRenderCopy(st.pdfAttachments[static_cast<std::size_t>(pi)]);
+      RotatePdfInsertAroundBase(bx, by, theta, &ghost.insertX, &ghost.insertY);
+      ghost.rotationDeg += theta * kPdfRadToDeg;
+      ghosts->push_back(ghost);
+    }
+    return;
+  }
+  if (st.active == K::Scale) {
+    if (st.modifyPhase != MP::NeedDestination)
+      return;
+    float sc = 1.f;
+    if (!CadScalePreviewFactor(st, curX, curY, &sc))
+      return;
+    const float bx = st.modifyBaseX;
+    const float by = st.modifyBaseY;
+    for (int pi = 0; pi < count; ++pi) {
+      if (!SelectionIncludesPdfUnderlay(st, pi))
+        continue;
+      PdfAttachment ghost = PdfRenderCopy(st.pdfAttachments[static_cast<std::size_t>(pi)]);
+      ScalePdfInsertAroundBase(bx, by, sc, &ghost.insertX, &ghost.insertY);
+      ghost.scale = std::max(ghost.scale * sc, 1e-9f);
+      ghosts->push_back(ghost);
+    }
+  }
+}
+
+}  // namespace
 
 EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>& log, QWidget* parent)
     : QOpenGLWidget(parent), m_State(state), m_Log(log), m_Renderer(std::make_unique<ViewportRenderer>()) {
@@ -45,6 +234,62 @@ EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>&
   setMinimumSize(240, 180);
   setCursor(Qt::CrossCursor);
   m_RightTimer.setSingleShot(true);
+  m_GripMenuTimer.setSingleShot(true);
+  m_GripMenuTimer.setInterval(500);
+  connect(&m_GripMenuTimer, &QTimer::timeout, this, [this] {
+    const int entityIndex = m_State.gripMenuHoverEntityIndex;
+    const int which = m_State.gripMenuHoverWhich;
+    if (entityIndex < 0 || which < 0 || m_State.active != AppCommandState::Kind::None ||
+        m_State.selection.empty() || !m_PointerInside) return;
+    const std::uint64_t projectUid = m_State.activeDrawingIdx > 0 &&
+        m_State.activeDrawingIdx < static_cast<int>(m_State.drawingTabs.size())
+        ? m_State.drawingTabs[static_cast<size_t>(m_State.activeDrawingIdx)].projectUid : 0u;
+    const bool readOnly = projectUid && std::any_of(m_State.openProjects.begin(), m_State.openProjects.end(),
+        [projectUid](const auto& project) { return project.uid == projectUid && project.readOnly; });
+    if (readOnly) return;
+    const size_t k = static_cast<size_t>(entityIndex) * 6;
+    if (k + 5 >= m_State.userLinesFlat.size()) return;
+    const float gx = static_cast<float>(m_State.userLinesFlat[k + (which == 0 ? 0 : 3)]);
+    const float gy = static_cast<float>(m_State.userLinesFlat[k + (which == 0 ? 1 : 4)]);
+    m_State.gripMenuPendingEntityIndex = entityIndex;
+    m_State.gripMenuPendingWhich = which;
+    auto* menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    QAction* lengthen = menu->addAction("Lengthen");
+    QAction* stretch = menu->addAction("Stretch");
+    const auto arm = [this, entityIndex, gx, gy](bool alongLine) {
+      const Camera camera = CadViewCamera(m_State);
+      const float tolerance = camera.orthoHalfH * 12.f / static_cast<float>(std::max(1, height()));
+      if (!TryBeginEntityGripAtLocal(m_State, gx, gy, tolerance) ||
+          m_State.entityGripType != SelectedEntity::Type::LineSeg ||
+          m_State.entityGripEntityIndex != entityIndex) return;
+      m_State.entityGripLengthenMode = alongLine;
+      if (alongLine) {
+        const size_t line = static_cast<size_t>(entityIndex) * 6;
+        const bool startGrip = m_State.entityGripWhich == 0;
+        const float dx = static_cast<float>(m_State.userLinesFlat[line + (startGrip ? 0 : 3)] -
+                                            m_State.userLinesFlat[line + (startGrip ? 3 : 0)]);
+        const float dy = static_cast<float>(m_State.userLinesFlat[line + (startGrip ? 1 : 4)] -
+                                            m_State.userLinesFlat[line + (startGrip ? 4 : 1)]);
+        const float length = std::hypot(dx, dy);
+        if (length > 1e-8f) {
+          m_State.entityGripLengthenDirX = dx / length;
+          m_State.entityGripLengthenDirY = dy / length;
+        }
+      }
+      m_GripMovedWithButton = false;
+      if (changed) changed();
+      update();
+    };
+    connect(lengthen, &QAction::triggered, this, [arm] { arm(true); });
+    connect(stretch, &QAction::triggered, this, [arm] { arm(false); });
+    connect(menu, &QMenu::aboutToHide, this, [this] {
+      m_State.gripMenuPendingEntityIndex = -1;
+      m_State.gripMenuPendingWhich = -1;
+    });
+    new GripMenuDismissFilter(menu);
+    menu->popup(QCursor::pos());
+  });
   m_ViewAnimTimer.setInterval(16);
   connect(&m_ViewAnimTimer, &QTimer::timeout, this, [this] { StepViewAnimation(); });
   m_MapTimer.setInterval(100);
@@ -77,12 +322,19 @@ EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>&
 EditorViewport::~EditorViewport() { Cleanup(); }
 
 void EditorViewport::Cleanup() {
-  if (!m_Ready || !context()) return;
+  if (!context()) return;
   m_MapTimer.stop();
   m_ViewAnimTimer.stop();
   makeCurrent();
+  if (m_TextureBlitter && m_TextureBlitter->isCreated()) m_TextureBlitter->destroy();
+  if (m_ClipMaskVao && m_ClipMaskVao->isCreated()) m_ClipMaskVao->destroy();
+  if (m_ClipMaskBuffer && m_ClipMaskBuffer->isCreated()) m_ClipMaskBuffer->destroy();
+  m_TextureBlitter.reset();
+  m_ClipMaskVao.reset();
+  m_ClipMaskBuffer.reset();
+  m_ClipMaskProgram.reset();
   m_OnlineMap.reset();
-  m_Renderer->Shutdown();
+  if (m_Ready && m_Renderer) m_Renderer->Shutdown();
   m_Ready = false;
   doneCurrent();
 }
@@ -96,6 +348,33 @@ void EditorViewport::initializeGL() {
   while (glGetError() != GL_NO_ERROR) {}
   std::string error;
   m_Ready = m_Renderer->Init(&error);
+  if (m_Ready) {
+    m_TextureBlitter = std::make_unique<QOpenGLTextureBlitter>();
+    m_ClipMaskProgram = std::make_unique<QOpenGLShaderProgram>();
+    m_ClipMaskBuffer = std::make_unique<QOpenGLBuffer>(QOpenGLBuffer::VertexBuffer);
+    m_ClipMaskVao = std::make_unique<QOpenGLVertexArrayObject>();
+    const char* vertex = "#version 330 core\nlayout(location=0) in vec2 position;\n"
+                         "void main(){ gl_Position=vec4(position,0.0,1.0); }\n";
+    const char* fragment = "#version 330 core\nout vec4 color;\nvoid main(){ color=vec4(0.0); }\n";
+    const bool ready = m_TextureBlitter->create() &&
+        m_ClipMaskProgram->addShaderFromSourceCode(QOpenGLShader::Vertex, vertex) &&
+        m_ClipMaskProgram->addShaderFromSourceCode(QOpenGLShader::Fragment, fragment) &&
+        m_ClipMaskProgram->link() && m_ClipMaskBuffer->create() && m_ClipMaskVao->create();
+    if (ready) {
+      m_ClipMaskVao->bind();
+      m_ClipMaskBuffer->bind();
+      m_ClipMaskProgram->bind();
+      m_ClipMaskProgram->enableAttributeArray(0);
+      m_ClipMaskProgram->setAttributeBuffer(0, GL_FLOAT, 0, 2, sizeof(float) * 2);
+      m_ClipMaskProgram->release();
+      m_ClipMaskBuffer->release();
+      m_ClipMaskVao->release();
+    } else {
+      error = "Paper viewport clip renderer initialization failed.";
+      m_Ready = false;
+      m_Renderer->Shutdown();
+    }
+  }
   // REQ-450: the viewport draws its own cursor, so the operating-system one is hidden - but only
   // once drawing works, so a failed renderer still leaves a visible pointer.
   if (m_Ready) setCursor(Qt::BlankCursor);
@@ -106,6 +385,114 @@ void EditorViewport::initializeGL() {
   }
   m_Error = QString::fromStdString(error);
   connect(context(), &QOpenGLContext::aboutToBeDestroyed, this, [this] { Cleanup(); }, Qt::DirectConnection);
+}
+
+bool EditorViewport::DrawPaperViewportClipMask(const QPainterPath& path, int framebufferWidth, int framebufferHeight) {
+  if (!m_ClipMaskProgram || !m_ClipMaskBuffer || !m_ClipMaskVao || framebufferWidth <= 0 || framebufferHeight <= 0)
+    return false;
+  std::vector<float> vertices;
+  const QList<QPolygonF> polygons = path.toFillPolygons();
+  const float dpr = static_cast<float>(devicePixelRatioF());
+  auto pushPoint = [&](const QPointF& point) {
+    const float x = static_cast<float>(point.x()) * dpr;
+    const float y = static_cast<float>(point.y()) * dpr;
+    vertices.push_back(2.f * x / static_cast<float>(framebufferWidth) - 1.f);
+    vertices.push_back(1.f - 2.f * y / static_cast<float>(framebufferHeight));
+  };
+  for (QPolygonF polygon : polygons) {
+    if (polygon.size() > 1 && QLineF(polygon.front(), polygon.back()).length() < 1.e-4)
+      polygon.removeLast();
+    if (polygon.size() < 3)
+      continue;
+    auto cross = [](const QPointF& a, const QPointF& b, const QPointF& c) {
+      return (b.x() - a.x()) * (c.y() - a.y()) - (b.y() - a.y()) * (c.x() - a.x());
+    };
+    double twiceArea = 0.0;
+    for (int i = 0; i < polygon.size(); ++i) {
+      const QPointF& a = polygon[i];
+      const QPointF& b = polygon[(i + 1) % polygon.size()];
+      twiceArea += a.x() * b.y() - b.x() * a.y();
+    }
+    if (std::fabs(twiceArea) < 1.e-6)
+      continue;
+    const double orientation = twiceArea > 0.0 ? 1.0 : -1.0;
+    std::vector<int> remaining;
+    remaining.reserve(static_cast<size_t>(polygon.size()));
+    for (int i = 0; i < polygon.size(); ++i)
+      remaining.push_back(i);
+    auto insideTriangle = [&](const QPointF& p, const QPointF& a, const QPointF& b, const QPointF& c) {
+      const double ab = orientation * cross(a, b, p);
+      const double bc = orientation * cross(b, c, p);
+      const double ca = orientation * cross(c, a, p);
+      return ab >= -1.e-6 && bc >= -1.e-6 && ca >= -1.e-6;
+    };
+    size_t guard = 0;
+    while (remaining.size() > 3 && guard++ < static_cast<size_t>(polygon.size()) * polygon.size()) {
+      bool clipped = false;
+      for (size_t i = 0; i < remaining.size(); ++i) {
+        const int ia = remaining[(i + remaining.size() - 1) % remaining.size()];
+        const int ib = remaining[i];
+        const int ic = remaining[(i + 1) % remaining.size()];
+        const QPointF& a = polygon[ia];
+        const QPointF& b = polygon[ib];
+        const QPointF& c = polygon[ic];
+        if (orientation * cross(a, b, c) <= 1.e-7)
+          continue;
+        bool containsVertex = false;
+        for (int candidate : remaining) {
+          if (candidate == ia || candidate == ib || candidate == ic)
+            continue;
+          if (insideTriangle(polygon[candidate], a, b, c)) {
+            containsVertex = true;
+            break;
+          }
+        }
+        if (containsVertex)
+          continue;
+        pushPoint(a);
+        pushPoint(b);
+        pushPoint(c);
+        remaining.erase(remaining.begin() + static_cast<std::ptrdiff_t>(i));
+        clipped = true;
+        break;
+      }
+      if (!clipped)
+        break;
+    }
+    if (remaining.size() != 3)
+      return false;
+    if (remaining.size() == 3) {
+      pushPoint(polygon[remaining[0]]);
+      pushPoint(polygon[remaining[1]]);
+      pushPoint(polygon[remaining[2]]);
+    }
+  }
+  if (vertices.empty())
+    return false;
+
+  glDisable(GL_DEPTH_TEST);
+  glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+  glEnable(GL_STENCIL_TEST);
+  glStencilMask(0xFF);
+  glClearStencil(0);
+  glClear(GL_STENCIL_BUFFER_BIT);
+  glStencilFunc(GL_ALWAYS, 0, 0xFF);
+  glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE); // ear clipping yields non-overlapping concave triangles
+  m_ClipMaskVao->bind();
+  m_ClipMaskBuffer->bind();
+  m_ClipMaskBuffer->allocate(vertices.data(), static_cast<int>(vertices.size() * sizeof(float)));
+  m_ClipMaskProgram->bind();
+  m_ClipMaskProgram->enableAttributeArray(0);
+  m_ClipMaskProgram->setAttributeBuffer(0, GL_FLOAT, 0, 2, sizeof(float) * 2);
+  glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices.size() / 2));
+  m_ClipMaskProgram->release();
+  m_ClipMaskBuffer->release();
+  m_ClipMaskVao->release();
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glStencilMask(0x00);
+  glStencilFunc(GL_NOTEQUAL, 0, 0xFF);
+  glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+  return true;
 }
 
 void EditorViewport::InvalidateGeometry() {
@@ -125,6 +512,7 @@ void EditorViewport::CancelSelectionBox() {
   m_State.selBoxWaitingSecond = false;
   m_State.selBoxPreview.clear();
   m_LeftDragSelection = false;
+  m_IdleBoxFirstClickPending = false;
   if (changed) changed();
   update();
 }
@@ -143,7 +531,7 @@ bool EditorViewport::CancelGripEdit() {
       ann.dimExt1X = m_State.dimGripOrigExt1X; ann.dimExt1Y = m_State.dimGripOrigExt1Y;
       ann.dimExt2X = m_State.dimGripOrigExt2X; ann.dimExt2Y = m_State.dimGripOrigExt2Y;
       ann.dimSignedOffset = m_State.dimGripOrigSignedOffset; ann.insX = m_State.dimGripOrigInsX; ann.insY = m_State.dimGripOrigInsY;
-      CadDimRefreshMeasurementText(&ann, m_State.displayLinearPrecision, CadAngleDisplaySettings(m_State));
+      CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(m_State, ann), CadAngleDisplaySettings(m_State));
     }
     ClearDimGripInteraction(m_State);
   } else {
@@ -228,9 +616,40 @@ void EditorViewport::paintGL() {
     m_Renderer->BlitRenderedFrame(defaultFramebufferObject(), w, h);
   } else if (m_Ready && !paperSpace) {
     const Camera camera = CadViewCamera(m_State);
-    std::vector<float> rubber, preview, previewCircles, highlight, highlightCircles;
+    std::vector<float> rubber, preview, previewCircles, highlightCircles;
+    std::vector<double> highlight;
     AppendCadDraftRubberLines(m_State, m_Cursor.x, m_Cursor.y, m_State.orthoMode,
         camera.targetX, camera.targetY, camera.orthoHalfH, h, rubber);
+    std::vector<float> trimRemovalLines;
+    if (m_State.active == AppCommandState::Kind::Trim &&
+        m_State.trimPhase == AppCommandState::TrimPhase::CuttingLine_WaitP2 &&
+        (m_State.activeSpaceIndex == kModelSpaceIndex || InFloatingModelSpace(m_State))) {
+      float p2x = static_cast<float>(m_Cursor.x);
+      float p2y = static_cast<float>(m_Cursor.y);
+      float p2z = m_State.viewportSnapPickValid ? static_cast<float>(m_State.viewportSnapPickLocalZ)
+                                                : m_State.uiCursorWorldZ;
+      const bool trim3d = !CadViewIsPlan(m_State);
+      if (trim3d) {
+        ApplyOrthoConstrainFromAnchor(m_State, m_State.trimCutInfP1x, m_State.trimCutInfP1y,
+            &p2x, &p2y, m_State.orthoMode, m_State.trimCutInfP1z, p2z, &p2z);
+      } else if (m_State.orthoMode) {
+        const float dx = p2x - m_State.trimCutInfP1x;
+        const float dy = p2y - m_State.trimCutInfP1y;
+        if (std::fabs(dx) >= std::fabs(dy)) p2y = m_State.trimCutInfP1y;
+        else p2x = m_State.trimCutInfP1x;
+      }
+      AppendDashedPreviewSegment(rubber, m_State.trimCutInfP1x, m_State.trimCutInfP1y,
+          m_State.trimCutInfP1z, p2x, p2y, p2z, camera.orthoHalfH, h);
+      if (trim3d) {
+        CadTrimAppendCutLineRemovedPreview3D(m_State,
+            {m_State.trimCutInfP1x, m_State.trimCutInfP1y, m_State.trimCutInfP1z},
+            {p2x, p2y, p2z}, &trimRemovalLines);
+      } else {
+        CadTrimAppendCutLineRemovedPreview(m_State, m_State.trimCutInfP1x, m_State.trimCutInfP1y,
+            p2x, p2y, .5f * (m_State.trimCutInfP1x + p2x),
+            .5f * (m_State.trimCutInfP1y + p2y), &trimRemovalLines);
+      }
+    }
     BuildTransformPreview(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y),
         &preview, &previewCircles, camera.orthoHalfH, h);
     BuildSelectionHighlight(m_State, &highlight, &highlightCircles);
@@ -246,7 +665,7 @@ void EditorViewport::paintGL() {
     std::vector<float> subObjectLines;
     BuildSubObjectHighlight(m_State, &subObjectOverlay.selectedFaceTris,
         &subObjectOverlay.selectedFaceEdges, &subObjectLines);
-    highlight.insert(highlight.end(), subObjectLines.begin(), subObjectLines.end());
+    AppendHighlightFloatVerts(subObjectLines, &highlight);
     std::vector<float> subHoverLines;
     BuildSubObjectHoverHighlight(m_State, &subObjectOverlay.hoverFaceTris,
         &subObjectOverlay.hoverFaceEdges, &subHoverLines);
@@ -257,6 +676,9 @@ void EditorViewport::paintGL() {
     ext.circleNormals = &m_State.userCircleNormals;
     ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
     ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
+    ext.points = &m_State.cadPoints; ext.pointAttrs = &m_State.cadPointAttrs;
+    ext.pdMode = m_State.pdMode;
+    ext.pdSize = m_State.pdSize;
     ext.polylineVerts = &m_State.userPolylineVerts;
     ext.polylineOffsets = &m_State.userPolylineOffsets;
     ext.polylineClosed = &m_State.userPolylineClosed;
@@ -309,13 +731,40 @@ void EditorViewport::paintGL() {
     m_OnlineMap->Update(m_State, m_State.activeSpaceIndex == kModelSpaceIndex, camera, w, h, m_Log);
     tuning.mapTiles = &m_OnlineMap->DrawList();
     m_Renderer->SetSize(w, h);
+    std::vector<PdfAttachment> pdfForRender;
+    const std::vector<PdfAttachment>* pdfAttachments = &m_State.pdfAttachments;
+    const bool placingPdf = m_State.active == AppCommandState::Kind::PdfAttach &&
+        m_State.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint &&
+        m_State.pdfAttachPreviewReady;
+    const bool modifyingPdf = (m_State.active == AppCommandState::Kind::Move ||
+        m_State.active == AppCommandState::Kind::Copy || m_State.active == AppCommandState::Kind::Scale ||
+        m_State.active == AppCommandState::Kind::Rotate) &&
+        std::any_of(m_State.selection.begin(), m_State.selection.end(), [](const SelectedEntity& e) {
+          return e.type == SelectedEntity::Type::PdfUnderlay;
+        });
+    if (placingPdf || modifyingPdf) {
+      pdfForRender.reserve(m_State.pdfAttachments.size() * 2 + 1);
+      for (const auto& attachment : m_State.pdfAttachments)
+        pdfForRender.push_back(PdfRenderCopy(attachment));
+      if (placingPdf) {
+        PdfAttachment ghost = PdfRenderCopy(m_State.pdfAttachPreview);
+        ghost.insertX = static_cast<float>(m_Cursor.x);
+        ghost.insertY = static_cast<float>(m_Cursor.y);
+        ghost.scale = m_State.pdfAttachScale;
+        ghost.rotationDeg = m_State.pdfAttachRotDeg;
+        pdfForRender.push_back(std::move(ghost));
+      }
+      AppendModifyPdfGhostPreviews(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y),
+                                   &pdfForRender);
+      pdfAttachments = &pdfForRender;
+    }
     m_Renderer->RenderScene(camera, w, h, m_State.userLinesFlat, m_State.userCirclesCxCyZR,
-        m_State.cadGpuRevision + m_RenderRevision, rubber, &m_Snap, 6.f,
+        m_State.cadGpuRevision + m_RenderRevision, rubber, &m_Snap, m_State.objectSnapGlyphHalfPx,
         &preview, &previewCircles, &highlight, &highlightCircles, &subHoverLines, nullptr, nullptr,
         &m_State.userLineAttrs, &m_State.userCircleAttrs, &ext, m_Grid, &m_State.drawingLayerTable, tuning,
-        &m_State.pdfAttachments, -1, &m_State.cadFilledRegions, &m_State.cadFilledRegionAttrs,
+        pdfAttachments, -1, &m_State.cadFilledRegions, &m_State.cadFilledRegionAttrs,
         &m_State.cadMeshes, &m_State.cadMeshAttrs, &m_State.solidDisplayGeometry,
-        &m_State.surfaceDisplayGeometry, nullptr, nullptr, nullptr, nullptr, &subObjectOverlay,
+        &m_State.surfaceDisplayGeometry, nullptr, &trimRemovalLines, nullptr, nullptr, &subObjectOverlay,
         gizmoOverlay.empty() ? nullptr : &gizmoOverlay,
         &m_State.cadPointClouds, &m_State.cadPointCloudAttrs, &m_State.pointCloudDisplay);
     const bool capturePending = m_State.pendingThumbnailTabIdx == m_State.activeDrawingIdx &&
@@ -365,6 +814,9 @@ void EditorViewport::paintGL() {
     ext.circleNormals = &m_State.userCircleNormals;
     ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
     ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
+    ext.points = &m_State.cadPoints; ext.pointAttrs = &m_State.cadPointAttrs;
+    ext.pdMode = m_State.pdMode;
+    ext.pdSize = m_State.pdSize;
     ext.polylineVerts = &m_State.userPolylineVerts;
     ext.polylineOffsets = &m_State.userPolylineOffsets;
     ext.polylineClosed = &m_State.userPolylineClosed;
@@ -380,6 +832,7 @@ void EditorViewport::paintGL() {
     ext.blockRefs = &m_State.cadBlockRefs;
     ext.blockRefAttrs = &m_State.cadBlockRefAttrs;
     for (const auto& viewport : layout.viewports) {
+      if (!viewport.on) continue;  // REQ-482: leave the paper frame, but do not render model contents.
       const QPointF q0 = paperPoint(viewport.paperXIn, viewport.paperYIn);
       const QPointF q1 = paperPoint(viewport.paperXIn + viewport.paperWIn, viewport.paperYIn + viewport.paperHIn);
       const QRectF rectPx(QPointF(std::min(q0.x(), q1.x()), std::min(q0.y(), q1.y())),
@@ -415,7 +868,21 @@ void EditorViewport::paintGL() {
       glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
           m_Renderer->ColorTexture(), 0);
       glBindFramebuffer(GL_DRAW_FRAMEBUFFER, defaultFramebufferObject());
-      glBlitFramebuffer(0, 0, viewW, viewH, left, bottom, right, top, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+      if (viewport.clipBoundary.size() >= 3 && m_TextureBlitter) {
+        const QPainterPath clipPath = PaperViewportShapePath(viewport, paperPoint);
+        if (DrawPaperViewportClipMask(clipPath, w, h)) {
+          const QRectF target(static_cast<double>(left), static_cast<double>(bottom),
+                              static_cast<double>(viewW), static_cast<double>(viewH));
+          const QMatrix4x4 transform = QOpenGLTextureBlitter::targetTransform(target, QRect(0, 0, w, h));
+          m_TextureBlitter->bind();
+          m_TextureBlitter->blit(m_Renderer->ColorTexture(), transform, QOpenGLTextureBlitter::OriginBottomLeft);
+          m_TextureBlitter->release();
+        }
+        glDisable(GL_STENCIL_TEST);
+        glStencilMask(0xFF);
+      } else {
+        glBlitFramebuffer(0, 0, viewW, viewH, left, bottom, right, top, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+      }
       glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
       glDeleteFramebuffers(1, &readFbo);
     }
@@ -451,9 +918,8 @@ void EditorViewport::paintGL() {
     sheetPath.addRect(sheetRect);
     QPainterPath viewportHoles;
     for (const auto& viewport : layout.viewports) {
-      const QRectF viewportRect(project(viewport.paperXIn, viewport.paperYIn),
-          project(viewport.paperXIn + viewport.paperWIn, viewport.paperYIn + viewport.paperHIn));
-      viewportHoles.addRect(viewportRect.normalized());
+      if (viewport.on)
+        viewportHoles.addPath(PaperViewportShapePath(viewport, project));
     }
     sheetPath = sheetPath.subtracted(viewportHoles);
     painter.drawPath(sheetPath);
@@ -537,21 +1003,59 @@ void EditorViewport::paintGL() {
       }
       painter.drawPolyline(curve);
     }
+    for (std::size_t si = 0; si < layout.paperSplines.size(); ++si) {
+      const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Spline, static_cast<int>(si));
+      painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
+      std::vector<ray3d::Vec3> pts;
+      spline::Tessellate(layout.paperSplines[si], kSplineSampleTolerance, &pts);
+      QPolygonF curve;
+      for (const auto& v : pts)
+        curve << project(v.x, v.y);
+      if (curve.size() > 1)
+        painter.drawPolyline(curve);
+    }
+    {
+      const double viewH = std::max(1.0, static_cast<double>(layout.sheetHeightIn()));
+      const double halfSize = CadPointMarkerSize(m_State.pdSize, viewH);
+      std::vector<CadPointStroke> strokes;
+      for (std::size_t pi = 0; pi < layout.paperPoints.size(); ++pi) {
+        const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Point, static_cast<int>(pi));
+        painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
+        CadPointDisplayStrokes(layout.paperPoints[pi], m_State.pdMode, halfSize, &strokes);
+        for (const CadPointStroke& s : strokes)
+          painter.drawLine(project(s.x0, s.y0), project(s.x1, s.y1));
+      }
+    }
     for (std::size_t p = 0; p + 1 < layout.paperPolyOffsets.size(); ++p) {
       const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Polyline, static_cast<int>(p));
       painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
       const int begin = layout.paperPolyOffsets[p], end = layout.paperPolyOffsets[p + 1];
+      const bool closed = p < layout.paperPolyClosed.size() && layout.paperPolyClosed[p] != 0;
       QPolygonF polyline;
-      for (int v = begin; v < end; ++v) {
-        const std::size_t offset = static_cast<std::size_t>(v) * 3;
-        if (offset + 1 < layout.paperPolyVerts.size())
-          polyline << project(layout.paperPolyVerts[offset], layout.paperPolyVerts[offset + 1]);
+      if (begin < end) {
+        const std::size_t first = static_cast<std::size_t>(begin) * 3;
+        if (first + 1 < layout.paperPolyVerts.size())
+          polyline << project(layout.paperPolyVerts[first], layout.paperPolyVerts[first + 1]);
       }
-      if (polyline.size() > 1) {
-        const bool closed = p < layout.paperPolyClosed.size() && layout.paperPolyClosed[p] != 0;
-        if (closed) polyline << polyline.front();
+      const int nVert = end - begin;
+      const int nSeg = closed ? nVert : nVert - 1;
+      for (int s = 0; s < nSeg; ++s) {
+        const int ia = begin + s;
+        const int ib = begin + ((s + 1) % nVert);
+        const std::size_t a = static_cast<std::size_t>(ia) * 3;
+        const std::size_t b = static_cast<std::size_t>(ib) * 3;
+        if (b + 1 >= layout.paperPolyVerts.size())
+          break;
+        const float bulge = static_cast<std::size_t>(ia) < layout.paperPolyVertsBulge.size()
+                                ? layout.paperPolyVertsBulge[static_cast<std::size_t>(ia)]
+                                : 0.f;
+        ForEachBulgeChord(layout.paperPolyVerts[a], layout.paperPolyVerts[a + 1], layout.paperPolyVerts[b],
+                          layout.paperPolyVerts[b + 1], bulge, 16, [&](double, double, double bx, double by) {
+                            polyline << project(bx, by);
+                          });
+      }
+      if (polyline.size() > 1)
         painter.drawPolyline(polyline);
-      }
     }
     const float pxPerInch = static_cast<float>(std::hypot(p1.x() - p0.x(), p1.y() - p0.y()) /
         std::max<double>(layout.sheetWidthIn(), 1.e-6));
@@ -592,9 +1096,17 @@ void EditorViewport::paintGL() {
       }
     }
     for (const auto& leader : layout.paperMultileaders) {  // issue #768: leader paths + label
+      const float arrowIn = std::max(m_State.activeMultileaderStyle.arrowSizeInches, 0.01f);
       auto drawPath = [&](const std::vector<float>& pts) {
         for (std::size_t i = 0; i + 5 < pts.size(); i += 3)
           painter.drawLine(project(pts[i], pts[i + 1]), project(pts[i + 3], pts[i + 4]));
+        const CadLeaderArrowHead arrow = CadMultileaderArrow(leader, pts, arrowIn);
+        if (!arrow.valid)
+          return;
+        painter.setBrush(QColor("#252a30"));
+        painter.drawPolygon(QPolygonF{project(arrow.tipX, arrow.tipY), project(arrow.b1x, arrow.b1y),
+                                      project(arrow.b2x, arrow.b2y)});
+        painter.setBrush(Qt::NoBrush);
       };
       painter.setPen(QPen(QColor("#252a30"), 1));
       drawPath(leader.pathXyz);
@@ -641,9 +1153,12 @@ void EditorViewport::paintGL() {
     for (const auto& viewport : layout.viewports) {
       const QRectF viewportRect(project(viewport.paperXIn, viewport.paperYIn),
           project(viewport.paperXIn + viewport.paperWIn, viewport.paperYIn + viewport.paperHIn));
+      const QPainterPath viewportPath = PaperViewportShapePath(viewport, project);
       const QRectF clippedViewport = viewportRect.normalized().intersected(sheetRect).intersected(rect());
       painter.save();
-      painter.setClipRect(clippedViewport);
+      painter.setClipPath(viewportPath);
+      painter.setClipRect(clippedViewport, Qt::IntersectClip);
+      if (viewport.on) {
       auto modelProject = [&](double x, double y) {
         float paperX = 0.f, paperY = 0.f;
         ModelToPaperIn(viewport, x + m_State.worldDocumentOriginX,
@@ -686,14 +1201,17 @@ void EditorViewport::paintGL() {
           painter.drawText(modelProject(x, y), QString::fromUtf8(table.cells[static_cast<std::size_t>(i)].c_str()));
         }
       }
+      }
       painter.restore();
       painter.setPen(QPen(QColor("#4d738b"), 1));
       painter.setBrush(Qt::NoBrush);
-      painter.drawRect(viewportRect.normalized());
+      painter.drawPath(viewportPath);
     }
     painter.restore();
   } else {
     DrawQtModelAnnotations(painter, m_State, static_cast<float>(width()), static_cast<float>(height()));
+    DrawQtTransformAnnotationPreviews(painter, m_State, static_cast<float>(m_Cursor.x),
+        static_cast<float>(m_Cursor.y), static_cast<float>(width()), static_cast<float>(height()));
     const Camera gripCamera = CadViewCamera(m_State);
     for (const SelectedEntity& selected : m_State.selection) {
       std::vector<ray3d::Vec3> grips;
@@ -756,6 +1274,13 @@ void EditorViewport::paintGL() {
               const spline::Vec3 v = spline::EditablePoint(sp, i);
               grips.push_back({v.x, v.y, v.z});
             }
+          }
+          break;
+        }
+        case SelectedEntity::Type::Point: {
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.cadPoints.size()) {
+            const CadPoint& p = m_State.cadPoints[static_cast<std::size_t>(selected.index)];
+            grips.push_back({p.x, p.y, p.z});
           }
           break;
         }
@@ -850,6 +1375,23 @@ void EditorViewport::paintGL() {
       const double reach = std::hypot(width(), height());
       painter.drawLine(line.p1() - direction * reach, line.p1() + direction * reach);
     }
+  } else if (!paperSpace && inputPrompt.haveBase && m_State.orthoMode) {
+    const ray3d::Vec3 anchor{inputPrompt.baseWorld.x - m_State.worldDocumentOriginX,
+        inputPrompt.baseWorld.y - m_State.worldDocumentOriginY, inputPrompt.baseWorld.z};
+    float x = static_cast<float>(m_Cursor.x), y = static_cast<float>(m_Cursor.y), z = static_cast<float>(m_Cursor.z);
+    ApplyOrthoConstrainFromAnchor(m_State, static_cast<float>(anchor.x), static_cast<float>(anchor.y), &x, &y,
+                                  true, static_cast<float>(anchor.z), z, &z);
+    const auto camera = CadViewCamera(m_State);
+    float ax = 0, ay = 0, bx = 0, by = 0;
+    camera.WorldToScreen(anchor.x, anchor.y, anchor.z, width(), height(), &ax, &ay);
+    camera.WorldToScreen(x, y, z, width(), height(), &bx, &by);
+    const QLineF line(QPointF(ax, ay), QPointF(bx, by));
+    if (line.length() > 0.1) {
+      const QPointF direction = (line.p2() - line.p1()) / line.length();
+      painter.setPen(QPen(QColor("#78eb8c"), 1, Qt::DashLine));
+      const double reach = std::hypot(width(), height());
+      painter.drawLine(line.p1() - direction * reach, line.p1() + direction * reach);
+    }
   }
   painter.setPen(QColor("#bcc6d3"));
   painter.drawText(16, 26, paperSpace ? "[Paper]" : "[Model]  [Orthographic]");
@@ -877,7 +1419,18 @@ void EditorViewport::DrawCursor(QPainter& painter) {
   painter.setRenderHint(QPainter::Antialiasing, false);
   painter.setPen(QPen(color, 1.0));
   painter.setBrush(Qt::NoBrush);
-  const double x = std::floor(m_Last.x()) + 0.5, y = std::floor(m_Last.y()) + 0.5;
+  double x = std::floor(m_Last.x()) + 0.5;
+  double y = std::floor(m_Last.y()) + 0.5;
+  if (m_Snap.valid && !ViewportIsObjectSelectionStep(m_State)) {
+    const Camera camera = CadViewCamera(m_State);
+    float sx = 0.f, sy = 0.f;
+    camera.WorldToScreen(m_Cursor.x, m_Cursor.y, m_Cursor.z,
+        static_cast<float>(width()), static_cast<float>(height()), &sx, &sy);
+    if (std::isfinite(sx) && std::isfinite(sy)) {
+      x = std::floor(static_cast<double>(sx)) + 0.5;
+      y = std::floor(static_cast<double>(sy)) + 0.5;
+    }
+  }
   const double half = static_cast<double>(shape.pickHalfPx);
   if (shape.arms) {
     const double arm = static_cast<double>(shape.armLengthPx) * 0.5;
@@ -916,8 +1469,65 @@ bool EditorViewport::ViewPoint(QPointF point, ray3d::Vec3& world) const {
   return ray3d::RayPlaneIntersect(ray, {{camera.targetX, camera.targetY, camera.targetZ}, camera.ForwardWorld()}, &world);
 }
 
+void EditorViewport::CommitPendingIdleSelectionClick(Qt::KeyboardModifiers modifiers) {
+  if (!m_PendingIdleSelectionClick)
+    return;
+  const ViewportPickResult& hit = m_PendingIdlePick;
+  if (hit.family == ViewportPickFamily::None)
+    return;
+  const SelectedEntity picked = hit.entity;
+  if (hit.family == ViewportPickFamily::Solid) {
+    m_State.subObjectSelection.clear();
+    const auto it = std::find_if(m_State.selection.begin(), m_State.selection.end(),
+        [&](const SelectedEntity& entry) { return entry.type == hit.entity.type && entry.index == hit.entity.index; });
+    if (modifiers & Qt::ShiftModifier) {
+      if (it != m_State.selection.end()) m_State.selection.erase(it);
+      else m_State.selection.push_back(hit.entity);
+    } else {
+      ClearCadSelection(m_State);
+      m_State.selectedSurveyPointIndices.clear();
+      m_State.selection.push_back(hit.entity);
+    }
+  } else if (hit.family == ViewportPickFamily::Annotation && hit.entity.index >= 0 &&
+             static_cast<std::size_t>(hit.entity.index) < m_State.cadAnnotations.size()) {
+    const CadAnnotation& annotation = m_State.cadAnnotations[static_cast<std::size_t>(hit.entity.index)];
+    const bool linked = annotation.kind == CadAnnotation::Kind::Mtext && annotation.surveyPointLabelForId >= 0;
+    if (modifiers & Qt::ShiftModifier) {
+      auto it = std::find_if(m_State.selection.begin(), m_State.selection.end(), [&](const SelectedEntity& entry) {
+        return entry.type == hit.entity.type && entry.index == hit.entity.index;
+      });
+      if (it == m_State.selection.end()) m_State.selection.push_back(hit.entity);
+      else m_State.selection.erase(it);
+      if (linked) ApplyLinkedSurveyForAnnotationPick(m_State, hit.entity.index, true);
+    } else {
+      ClearCadSelection(m_State);
+      if (linked) ApplyLinkedSurveyForAnnotationPick(m_State, hit.entity.index, false);
+      else m_State.selectedSurveyPointIndices.clear();
+      m_State.selection.push_back(hit.entity);
+      if (linked) SyncSurveyPointLinkedMtextSelection(m_State,
+          SurveyPointIndexForId(m_State, annotation.surveyPointLabelForId));
+    }
+  } else {
+    auto it = std::find_if(m_State.selection.begin(), m_State.selection.end(),
+        [&](const SelectedEntity& entry) { return entry.type == picked.type && entry.index == picked.index; });
+    if (modifiers & Qt::ShiftModifier) {
+      if (it != m_State.selection.end()) m_State.selection.erase(it);
+      else m_State.selection.push_back(picked);
+    } else {
+      ClearCadSelection(m_State);
+      m_State.selectedSurveyPointIndices.clear();
+      m_State.selection.push_back(picked);
+    }
+  }
+  if (changed) changed();
+}
+
 void EditorViewport::mousePressEvent(QMouseEvent* event) {
   setFocus();
+  if (event->button() == Qt::LeftButton) {
+    m_PendingIdleSelectionClick = false;
+    m_IdleBoxFirstClickPending = false;
+  }
   m_Last = event->position();
   const auto projectReadOnly = [this] {
     const auto uid = m_State.activeDrawingIdx >= 0 && static_cast<std::size_t>(m_State.activeDrawingIdx) < m_State.drawingTabs.size()
@@ -968,6 +1578,7 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     return;
   } else if (event->button() == Qt::LeftButton && (WorldPoint(m_Last, m_Cursor) ||
              (m_State.active == AppCommandState::Kind::None && ViewPoint(m_Last, m_Cursor)))) {
+    const ray3d::Vec3 rawCursor = m_Cursor;
     const Camera camera = CadViewCamera(m_State);
     auto ray = camera.ScreenRay(static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()),
         static_cast<float>(width()), static_cast<float>(height()));
@@ -980,9 +1591,20 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     }
     const bool paperModifyActive = m_State.paperLengthenPhase || m_State.paperExtendPhase || m_State.paperBreakPhase ||
         m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase;
-    m_Snap = (m_State.active != AppCommandState::Kind::None || gripActive || paperModifyActive) ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
+    const bool objectSelectionStep = ViewportIsObjectSelectionStep(m_State);
+    const bool createPointsPlacement = m_State.showCreatePointsWindow &&
+                                       m_State.active == AppCommandState::Kind::None;
+    const bool midCmdUsesSnap = (m_State.active != AppCommandState::Kind::None || gripActive || paperModifyActive ||
+                                 createPointsPlacement) && !objectSelectionStep;
+    m_Snap = midCmdUsesSnap ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
         true, camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), exclude,
         CadViewIsPlan(m_State) ? nullptr : &ray, onlyKind) : CadSnap::Hit{};
+    if (gripActive && !objectSelectionStep) {
+      const CadSnap::Hit gripSnap = CadSnap::FindGripSnap(m_Cursor.x, m_Cursor.y, m_State,
+          camera.orthoHalfH * m_State.objectSnapAperturePx / static_cast<float>(std::max(1, height())));
+      if (gripSnap.valid && (!m_Snap.valid || CadSnap::Priority(gripSnap.kind) > CadSnap::Priority(m_Snap.kind)))
+        m_Snap = gripSnap;
+    }
     if (m_Snap.valid) m_Cursor = {m_Snap.x, m_Snap.y, m_Snap.z};
     else if (m_State.entityGripMoveActive) {
       float orthoX = static_cast<float>(m_Cursor.x), orthoY = static_cast<float>(m_Cursor.y);
@@ -1012,6 +1634,16 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
       return;
     }
     const auto route = ViewportClickRouteFor(m_State);
+    if (route == ViewportClickRoute::SelectionBox && m_State.active == AppCommandState::Kind::Zoom &&
+        !m_State.selBoxWaitingSecond) {
+      m_State.uiCursorWorldZ = static_cast<float>(rawCursor.z);
+      BeginSelectionBoxCorner(m_State, static_cast<float>(rawCursor.x), static_cast<float>(rawCursor.y),
+          static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()));
+      if (changed) changed();
+      update();
+      event->accept();
+      return;
+    }
     bool overlayHandled = false;
     if (route == ViewportClickRoute::SubObjectFacePick &&
         m_State.active == AppCommandState::Kind::SectionPlane) {
@@ -1151,8 +1783,67 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
       tolerance.vertex = aperture;
       tolerance.edge = aperture;
       SubmitSubObjectPick(m_State, ray, tolerance, event->modifiers() & Qt::ShiftModifier, m_Log);
+    } else if (route == ViewportClickRoute::SelectionAccumulate) {
+      const bool shift = event->modifiers() & Qt::ShiftModifier;
+      const bool ctrl = event->modifiers() & Qt::ControlModifier;
+      const bool fenceWindow = m_Last.x() >= m_State.selBoxAnchorScreenX;
+      if (m_State.selBoxWaitingSecond) {
+        if (SubmitViewportSelectionAccumulateClick(
+                m_State, rawCursor.x, rawCursor.y, static_cast<float>(m_Last.x()),
+                static_cast<float>(m_Last.y()), shift, ctrl, CadViewIsPlan(m_State) ? nullptr : &ray,
+                static_cast<float>(width()), static_cast<float>(height()), camera.orthoHalfH, m_Log, false)) {
+          CancelSelectionBox();
+        } else {
+          SubmitViewportPick(m_State, m_Cursor.x, m_Cursor.y, m_Log, shift, fenceWindow,
+              CadViewIsPlan(m_State) ? nullptr : &ray);
+        }
+        m_LeftDragSelection = false;
+        m_HasSelectionBoxSnapshot = false;
+        m_SelectionBeforeBox.clear();
+        m_SurveySelectionBeforeBox.clear();
+      } else if (SubmitViewportSelectionAccumulateClick(
+                     m_State, rawCursor.x, rawCursor.y, static_cast<float>(m_Last.x()),
+                     static_cast<float>(m_Last.y()), shift, ctrl, CadViewIsPlan(m_State) ? nullptr : &ray,
+                     static_cast<float>(width()), static_cast<float>(height()), camera.orthoHalfH, m_Log)) {
+        m_State.selBoxWaitingSecond = false;
+        m_LeftDragSelection = false;
+      } else if (m_State.selBoxWaitingSecond) {
+        m_SelectionPress = m_Last;
+        m_LeftDragSelection = true;
+      }
+    } else if (route == ViewportClickRoute::SelectionBox) {
+      const bool shift = event->modifiers() & Qt::ShiftModifier;
+      const bool fenceWindow = m_Last.x() >= m_State.selBoxAnchorScreenX;
+      if (m_State.selBoxWaitingSecond) {
+        const double pickX = m_State.active == AppCommandState::Kind::Zoom ? rawCursor.x : m_Cursor.x;
+        const double pickY = m_State.active == AppCommandState::Kind::Zoom ? rawCursor.y : m_Cursor.y;
+        SubmitViewportPick(m_State, pickX, pickY, m_Log, shift, fenceWindow,
+            CadViewIsPlan(m_State) ? nullptr : &ray);
+        m_LeftDragSelection = false;
+      } else {
+        BeginSelectionBoxCorner(m_State, static_cast<float>(rawCursor.x), static_cast<float>(rawCursor.y),
+            static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()));
+        m_SelectionPress = m_Last;
+        m_LeftDragSelection = true;
+      }
+    } else if (m_State.active == AppCommandState::Kind::None && m_State.selBoxWaitingSecond &&
+               SubmitViewportSelectionAccumulateClick(
+                   m_State, rawCursor.x, rawCursor.y, static_cast<float>(m_Last.x()),
+                   static_cast<float>(m_Last.y()), event->modifiers() & Qt::ShiftModifier,
+                   event->modifiers() & Qt::ControlModifier, CadViewIsPlan(m_State) ? nullptr : &ray,
+                   static_cast<float>(width()), static_cast<float>(height()), camera.orthoHalfH, m_Log, false)) {
+      // An ordinary object click after an empty click is a pick, not the opposite box corner.
+      // Keep the new hit instead of restoring the pre-box snapshot through CancelSelectionBox.
+      m_State.selBoxWaitingSecond = false;
+      m_State.selBoxPreview.clear();
+      m_LeftDragSelection = false;
+      m_HasSelectionBoxSnapshot = false;
+      m_SelectionBeforeBox.clear();
+      m_SurveySelectionBeforeBox.clear();
     } else if (m_State.active != AppCommandState::Kind::None || m_State.selBoxWaitingSecond) {
-      SubmitViewportPick(m_State, m_Cursor.x, m_Cursor.y, m_Log, false,
+      const double pickX = m_State.active == AppCommandState::Kind::Zoom ? rawCursor.x : m_Cursor.x;
+      const double pickY = m_State.active == AppCommandState::Kind::Zoom ? rawCursor.y : m_Cursor.y;
+      SubmitViewportPick(m_State, pickX, pickY, m_Log, false,
           m_Last.x() >= m_State.selBoxAnchorScreenX, CadViewIsPlan(m_State) ? nullptr : &ray);
       m_LeftDragSelection = false;
       m_HasSelectionBoxSnapshot = false;
@@ -1210,7 +1901,12 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
               });
               if (modifiers & Qt::ShiftModifier) {
                 if (it != m_State.selection.end()) m_State.selection.erase(it);
-              } else if (it == m_State.selection.end()) m_State.selection.push_back(candidateEntity);
+                else m_State.selection.push_back(candidateEntity);
+              } else {
+                ClearCadSelection(m_State);
+                m_State.selectedSurveyPointIndices.clear();
+                m_State.selection.push_back(candidateEntity);
+              }
               if (changed) changed();
               update();
             });
@@ -1218,48 +1914,17 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
           menu->popup(event->globalPosition().toPoint());
           return;
         }
-        if (hit.family == ViewportPickFamily::Solid) {
-          m_State.subObjectSelection.clear();
-          const auto it = std::find_if(m_State.selection.begin(), m_State.selection.end(),
-              [&](const SelectedEntity& entry) { return entry.type == hit.entity.type && entry.index == hit.entity.index; });
-          if (event->modifiers() & Qt::ShiftModifier) {
-            if (it != m_State.selection.end()) m_State.selection.erase(it);
-          } else if (it == m_State.selection.end()) m_State.selection.push_back(hit.entity);
-        } else if (hit.family == ViewportPickFamily::Annotation && hit.entity.index >= 0 &&
-                   static_cast<std::size_t>(hit.entity.index) < m_State.cadAnnotations.size()) {
-          const CadAnnotation& annotation = m_State.cadAnnotations[static_cast<std::size_t>(hit.entity.index)];
-          const bool linked = annotation.kind == CadAnnotation::Kind::Mtext && annotation.surveyPointLabelForId >= 0;
-          if (event->modifiers() & Qt::ShiftModifier) {
-            auto it = std::find_if(m_State.selection.begin(), m_State.selection.end(), [&](const SelectedEntity& entry) {
-              return entry.type == hit.entity.type && entry.index == hit.entity.index;
-            });
-            if (it == m_State.selection.end()) m_State.selection.push_back(hit.entity);
-            else m_State.selection.erase(it);
-            if (linked) ApplyLinkedSurveyForAnnotationPick(m_State, hit.entity.index, true);
-          } else {
-            ClearCadSelection(m_State);
-            if (linked) ApplyLinkedSurveyForAnnotationPick(m_State, hit.entity.index, false);
-            else m_State.selectedSurveyPointIndices.clear();
-            m_State.selection.push_back(hit.entity);
-            if (linked) SyncSurveyPointLinkedMtextSelection(m_State,
-                SurveyPointIndexForId(m_State, annotation.surveyPointLabelForId));
-          }
-        } else {
-          auto it = std::find_if(m_State.selection.begin(), m_State.selection.end(),
-              [&](const SelectedEntity& entry) { return entry.type == picked.type && entry.index == picked.index; });
-          if (event->modifiers() & Qt::ShiftModifier) {
-            if (it != m_State.selection.end()) m_State.selection.erase(it);
-          } else if (it == m_State.selection.end()) m_State.selection.push_back(picked);
-        }
+        m_PendingIdleSelectionClick = true;
+        m_SelectionPress = m_Last;
+        m_PendingIdlePick = hit;
+        m_SelectionBeforePendingClick = m_State.selection;
+        m_SurveySelectionBeforePendingClick = m_State.selectedSurveyPointIndices;
+        m_SubObjectSelectionBeforePendingClick = m_State.subObjectSelection;
       } else {
         m_SelectionBeforeBox = m_State.selection;
         m_SurveySelectionBeforeBox = m_State.selectedSurveyPointIndices;
         m_HasSelectionBoxSnapshot = true;
-        if (!(event->modifiers() & Qt::ShiftModifier)) ClearSelection(m_State);
-        m_SelectionPress = m_Last;
-        m_LeftDragSelection = true;
-        BeginSelectionBoxCorner(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y),
-            static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()));
+        m_IdleBoxFirstClickPending = true;
       }
     }
   }
@@ -1323,11 +1988,64 @@ void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
       }
     }
   }
+  // REQ-476 (D-2026-10-30-b): a double-click on a model-space table cell edits its text, as the paper cell does.
+  if (m_State.activeSpaceIndex == kModelSpaceIndex) {
+    const float wx = static_cast<float>(m_Cursor.x);
+    const float wy = static_cast<float>(m_Cursor.y);
+    for (int ti = static_cast<int>(m_State.cadTables.size()) - 1; ti >= 0; --ti) {
+      const CadTable& table = m_State.cadTables[static_cast<std::size_t>(ti)];
+      if (!m_State.hiddenEntityIds.empty() && static_cast<std::size_t>(ti) < m_State.cadTableAttrs.size() &&
+          CadEntityIdHidden(&m_State.hiddenEntityIds, m_State.cadTableAttrs[static_cast<std::size_t>(ti)].id))
+        continue;  // a hidden table cannot be picked or edited
+      const int cell = CadTableCellAtWorld(table, wx, wy);
+      if (cell < 0)
+        continue;
+      if (CadTableCellIsSurveyPointData(m_State.tableStyles, table, cell)) {
+        QMessageBox::information(this, "Point table",
+                                 "Point table values come from survey points and cannot be edited here.");
+        event->accept();
+        return;
+      }
+      const auto uid = m_State.activeDrawingIdx > 0 && m_State.activeDrawingIdx < static_cast<int>(m_State.drawingTabs.size())
+          ? m_State.drawingTabs[m_State.activeDrawingIdx].projectUid : 0;
+      const auto readOnly = std::find_if(m_State.openProjects.begin(), m_State.openProjects.end(),
+          [uid](const auto& session) { return uid && session.uid == uid && session.readOnly; });
+      if (readOnly != m_State.openProjects.end()) {
+        QMessageBox::warning(this, "Read-only project", "This project was opened read-only. The table cell cannot be changed.");
+        event->accept();
+        return;
+      }
+      OpenTableCellEditor(m_State, ti, cell);
+      if (!m_State.tableCellEditorOpen) {
+        event->accept();
+        return;
+      }
+      bool accepted = false;
+      const int row = cell / table.cols + 1;
+      const int column = cell % table.cols + 1;
+      const QString value = QInputDialog::getText(this, "Edit table cell",
+          QString("Row %1, column %2:").arg(row).arg(column), QLineEdit::Normal,
+          QString::fromUtf8(m_State.tableCellEditorBuf.c_str()), &accepted);
+      if (accepted) {
+        m_State.tableCellEditorBuf = value.toUtf8().toStdString();
+        std::vector<std::string> cellLog;
+        CommitTableCellEditor(m_State, cellLog);
+        if (changed) changed();
+      } else {
+        CancelTableCellEditor(m_State);
+      }
+      update();
+      event->accept();
+      return;
+    }
+  }
   QOpenGLWidget::mouseDoubleClickEvent(event);
 }
 
 void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
   const QPointF delta = event->position() - m_Last;
+  const Viewport* floatingViewport = CurrentViewport(m_State);
+  const bool floatingLocked = InFloatingModelSpace(m_State) && floatingViewport != nullptr && floatingViewport->locked;
   const bool leftCommandDrag = (event->buttons() & Qt::LeftButton) &&
       (m_State.active == AppCommandState::Kind::Pan || m_State.active == AppCommandState::Kind::Orbit);
   const bool commandOrbitDrag = leftCommandDrag && m_State.active == AppCommandState::Kind::Orbit;
@@ -1335,12 +2053,12 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
       (event->modifiers() & Qt::ShiftModifier);
   const bool panDrag = (leftCommandDrag && m_State.active == AppCommandState::Kind::Pan) ||
       ((event->buttons() & Qt::MiddleButton) && !(event->modifiers() & Qt::ShiftModifier));
-  if (middleOrbitDrag || (commandOrbitDrag && m_State.activeSpaceIndex == kModelSpaceIndex)) {
+  if (!floatingLocked && (middleOrbitDrag || (commandOrbitDrag && m_State.activeSpaceIndex == kModelSpaceIndex))) {
     m_State.viewAnimActive = false;  // A manual ORBIT takes over from any ViewCube animation (REQ-059).
     m_State.viewportAzimuthDeg += static_cast<float>(delta.x()) * 0.4f;
     m_State.viewportElevationDeg = std::clamp(m_State.viewportElevationDeg +
         static_cast<float>(delta.y()) * 0.4f, -89.9f, 90.f);
-  } else if (panDrag) {
+  } else if (panDrag && !floatingLocked) {
     ray3d::Vec3 before, after;
     if (ViewPoint(m_Last, before) && ViewPoint(event->position(), after)) {
       m_State.viewportPanX += before.x - after.x;
@@ -1387,11 +2105,62 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
     const auto* onlyKind = m_State.objectSnapKindOverrideValid ? &overrideKind : nullptr;
     const bool paperModifyActive = m_State.paperLengthenPhase || m_State.paperExtendPhase || m_State.paperBreakPhase ||
         m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase;
-    m_Snap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag || paperModifyActive)
+    const bool objectSelectionStep = ViewportIsObjectSelectionStep(m_State);
+    // CREATEPOINTS is a modeless dialog: no AppCommandState::Kind is active, but placement still
+    // follows the normal object-snap pipeline. Without this branch its click path receives raw cursor
+    // coordinates and survey-point snaps appear disabled only while the dialog is open.
+    const bool createPointsPlacement = m_State.showCreatePointsWindow &&
+                                       m_State.active == AppCommandState::Kind::None;
+    const bool gripDrag = m_State.entityGripMoveActive || m_State.dimGripMoveActive || m_State.mtextGripMoveActive;
+    const bool midCmdUsesSnap = (m_State.active != AppCommandState::Kind::None || gripDrag || sectionGripDrag ||
+                                 paperModifyActive || createPointsPlacement) && !objectSelectionStep;
+    m_Snap = midCmdUsesSnap
         ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State, true,
             camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), {},
             CadViewIsPlan(m_State) ? nullptr : &ray, onlyKind)
         : CadSnap::Hit{};
+    if (!objectSelectionStep && !m_State.selection.empty()) {
+      const CadSnap::Hit gripSnap = CadSnap::FindGripSnap(m_Cursor.x, m_Cursor.y, m_State,
+          camera.orthoHalfH * m_State.objectSnapAperturePx / static_cast<float>(std::max(1, height())));
+      if (gripSnap.valid && (!m_Snap.valid || CadSnap::Priority(gripSnap.kind) > CadSnap::Priority(m_Snap.kind)))
+        m_Snap = gripSnap;
+    }
+    if (event->buttons() == Qt::NoButton && m_State.active == AppCommandState::Kind::None &&
+        !m_State.entityGripMoveActive && !m_State.dimGripMoveActive && !m_State.mtextGripMoveActive) {
+      int hoverEntity = -1, hoverWhich = -1;
+      double nearest = std::pow(static_cast<double>(m_State.gripSizePx + 4.f), 2.0);
+      for (const SelectedEntity& selected : m_State.selection) {
+        if (selected.type != SelectedEntity::Type::LineSeg || selected.index < 0) continue;
+        const size_t k = static_cast<size_t>(selected.index) * 6;
+        if (k + 5 >= m_State.userLinesFlat.size()) continue;
+        for (int which = 0; which < 2; ++which) {
+          const double gx = m_State.userLinesFlat[k + (which == 0 ? 0 : 3)];
+          const double gy = m_State.userLinesFlat[k + (which == 0 ? 1 : 4)];
+          float sx = 0.f, sy = 0.f;
+          camera.WorldToScreen(gx, gy, m_State.userLinesFlat[k + (which == 0 ? 2 : 5)],
+              static_cast<float>(width()), static_cast<float>(height()), &sx, &sy);
+          const double dx = sx - m_Last.x(), dy = sy - m_Last.y();
+          const double d2 = dx * dx + dy * dy;
+          if (std::isfinite(d2) && d2 <= nearest) {
+            nearest = d2;
+            hoverEntity = selected.index;
+            hoverWhich = which;
+          }
+        }
+      }
+      if (hoverEntity != m_State.gripMenuHoverEntityIndex || hoverWhich != m_State.gripMenuHoverWhich) {
+        m_GripMenuTimer.stop();
+        m_State.gripMenuHoverEntityIndex = hoverEntity;
+        m_State.gripMenuHoverWhich = hoverWhich;
+        if (hoverEntity >= 0) m_GripMenuTimer.start();
+        else m_State.gripMenuHoverDwell.armed = false;
+      }
+    } else {
+      m_GripMenuTimer.stop();
+      m_State.gripMenuHoverEntityIndex = -1;
+      m_State.gripMenuHoverWhich = -1;
+      m_State.gripMenuHoverDwell.armed = false;
+    }
     if (m_Snap.valid) m_Cursor = {m_Snap.x, m_Snap.y, m_Snap.z};
     m_State.viewportSnapPickValid = m_Snap.valid;
     m_State.viewportSnapPickLocalX = m_Cursor.x;
@@ -1502,9 +2271,9 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
         case 4: ann.insX = m_State.dimGripOrigInsX + (x - m_State.dimGripDownWorldX); ann.insY = m_State.dimGripOrigInsY + (y - m_State.dimGripDownWorldY); break;
         default: break;
       }
-      CadDimRefreshMeasurementText(&ann, m_State.displayLinearPrecision, CadAngleDisplaySettings(m_State));
+      CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(m_State, ann), CadAngleDisplaySettings(m_State));
       float sx1=0, sy1=0, sx2=0, sy2=0, tx=0, ty=0, nx=0, ny=0, length=0;
-      if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &length)) ann.rotationRad = std::atan2(ty, tx);
+      if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &length)) ann.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
       BumpCadGpuCache(m_State);
     }
     if (cursorChanged) cursorChanged(m_Cursor.x, m_Cursor.y, m_Cursor.z);
@@ -1539,24 +2308,40 @@ void EditorViewport::mouseReleaseEvent(QMouseEvent* event) {
     ClearMtextGripInteraction(m_State);
   }
   if (event->button() == Qt::LeftButton && m_GripMovedWithButton) m_GripMovedWithButton = false;
+  if (event->button() == Qt::LeftButton && m_PendingIdleSelectionClick) {
+    CommitPendingIdleSelectionClick(event->modifiers());
+    m_PendingIdleSelectionClick = false;
+    m_SelectionBeforePendingClick.clear();
+    m_SurveySelectionBeforePendingClick.clear();
+    m_SubObjectSelectionBeforePendingClick.clear();
+    m_PendingIdlePick = {};
+  }
+  if (event->button() == Qt::LeftButton && m_IdleBoxFirstClickPending &&
+      m_State.active == AppCommandState::Kind::None && !InFloatingModelSpace(m_State)) {
+    m_IdleBoxFirstClickPending = false;
+    ray3d::Vec3 point;
+    if (WorldPoint(event->position(), point)) {
+      BeginSelectionBoxCorner(m_State, static_cast<float>(point.x), static_cast<float>(point.y),
+          static_cast<float>(event->position().x()), static_cast<float>(event->position().y()));
+    } else {
+      CancelSelectionBox();
+    }
+  }
   if (event->button() == Qt::LeftButton && m_LeftDragSelection) {
     const QPointF delta = event->position() - m_SelectionPress;
-    if (std::abs(delta.x()) + std::abs(delta.y()) > 3.0) {
+    if (std::abs(delta.x()) + std::abs(delta.y()) > 3.0 && m_State.selBoxWaitingSecond) {
       ray3d::Vec3 point;
       if (WorldPoint(event->position(), point)) {
-        m_State.uiCursorWorldZ = static_cast<float>(point.z);
-        const auto camera = CadViewCamera(m_State);
-        const auto ray = camera.ScreenRay(static_cast<float>(event->position().x()), static_cast<float>(event->position().y()),
-            static_cast<float>(width()), static_cast<float>(height()));
+        const Camera camera = CadViewCamera(m_State);
+        const auto ray = camera.ScreenRay(event->position().x(), event->position().y(), width(), height());
         SubmitViewportPick(m_State, point.x, point.y, m_Log, event->modifiers() & Qt::ShiftModifier,
             event->position().x() >= m_SelectionPress.x(), CadViewIsPlan(m_State) ? nullptr : &ray);
-        m_State.selBoxWaitingSecond = false;
         m_HasSelectionBoxSnapshot = false;
         m_SelectionBeforeBox.clear();
         m_SurveySelectionBeforeBox.clear();
       }
-      m_LeftDragSelection = false;
     }
+    m_LeftDragSelection = false;
   }
   if (event->button() == Qt::LeftButton) {
     const auto camera = CadViewCamera(m_State);
@@ -1616,6 +2401,11 @@ void EditorViewport::PerformRightClick(RightClickAction action, const QPoint& gl
 }
 
 void EditorViewport::wheelEvent(QWheelEvent* event) {
+  const Viewport* floatingViewport = CurrentViewport(m_State);
+  if (InFloatingModelSpace(m_State) && floatingViewport != nullptr && floatingViewport->locked) {
+    event->accept();
+    return;
+  }
   ray3d::Vec3 before, after;
   const bool anchor = ViewPoint(event->position(), before);
   m_State.viewportZoom = std::clamp(m_State.viewportZoom * static_cast<float>(
@@ -1681,6 +2471,9 @@ void EditorViewport::keyReleaseEvent(QKeyEvent* event) {
 }
 
 void EditorViewport::SetOrientation(float azimuth, float elevation) {
+  const Viewport* floatingViewport = CurrentViewport(m_State);
+  if (InFloatingModelSpace(m_State) && floatingViewport != nullptr && floatingViewport->locked)
+    return;
   m_State.viewportAzimuthDeg = azimuth;
   m_State.viewportElevationDeg = elevation;
   m_State.viewportRollDeg = 0.f;
@@ -1688,6 +2481,22 @@ void EditorViewport::SetOrientation(float azimuth, float elevation) {
 }
 
 void EditorViewport::RefreshCommandCursor() {
+  if (QWidget* bar = findChild<QWidget*>(QStringLiteral("floatingCommandBar"))) {
+    if (bar->isVisible()) {
+      const QPoint local = mapFromGlobal(QCursor::pos());
+      if (bar->geometry().contains(local)) {
+        QWidget* under = bar->childAt(bar->mapFromGlobal(QCursor::pos()));
+        for (QWidget* widget = under; widget && widget != bar; widget = widget->parentWidget()) {
+          if (qobject_cast<QLineEdit*>(widget) || qobject_cast<QPlainTextEdit*>(widget)) {
+            setCursor(Qt::IBeamCursor);
+            return;
+          }
+        }
+        setCursor(Qt::ArrowCursor);
+        return;
+      }
+    }
+  }
   const bool overCube = viewcube::Contains(CubeScene(), m_Last.x(), m_Last.y());
   setCursor(overCube ? Qt::ArrowCursor : (m_PointerInside && m_State.active == AppCommandState::Kind::Pan
       ? Qt::OpenHandCursor : (m_Ready ? Qt::BlankCursor : Qt::CrossCursor)));
@@ -1695,6 +2504,9 @@ void EditorViewport::RefreshCommandCursor() {
 
 // REQ-059: the widget's orientation changes ease to the target instead of snapping.
 void EditorViewport::AnimateToOrientation(float azimuth, float elevation) {
+  const Viewport* floatingViewport = CurrentViewport(m_State);
+  if (InFloatingModelSpace(m_State) && floatingViewport != nullptr && floatingViewport->locked)
+    return;
   CadStartViewAnimation(m_State, azimuth, elevation);
   StartViewAnimationClock();
   update();

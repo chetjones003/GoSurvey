@@ -196,10 +196,25 @@ void EditorWindow::RefreshDraftingInput(const QString& hint) {
   m_DynamicGroup.showZ = prompt.showZ;
   const bool active = m_State.activeDrawingIdx > 0 && m_State.active != AppCommandState::Kind::None &&
       m_State.active != AppCommandState::Kind::Pan && m_State.active != AppCommandState::Kind::Orbit;
-  m_DynamicInput->setVisible(active);
+  const bool bearingPickAwaitingCommand =
+      (m_State.active == AppCommandState::Kind::Line || m_State.active == AppCommandState::Kind::Polyline) &&
+      m_State.segmentAnglePickPhase == AppCommandState::SegmentAnglePickPhase::WaitAdjustOrCommit;
+  if (bearingPickAwaitingCommand && m_DynamicInput->isVisible()) m_Command->clear();
+  m_DynamicInput->setVisible(active && !bearingPickAwaitingCommand);
   if (!active) return;
   m_DynamicPrompt->setText(m_DynamicHint);
-  const int count = prompt.pointEntry ? dyninput::FieldCount(m_DynamicGroup) : 1;
+  const bool hintOnly = !prompt.pointEntry;
+  const int count = hintOnly ? 0 : dyninput::FieldCount(m_DynamicGroup);
+  const QFontMetrics promptMetrics(m_DynamicPrompt->font());
+  const int promptMaxWidth = std::max(200, m_Viewport->width() - 48);
+  const int hintWidth = promptMetrics.horizontalAdvance(m_DynamicHint) + 8;
+  if (hintOnly && hintWidth <= promptMaxWidth) {
+    m_DynamicPrompt->setWordWrap(false);
+    m_DynamicPrompt->setMaximumWidth(hintWidth);
+  } else {
+    m_DynamicPrompt->setWordWrap(true);
+    m_DynamicPrompt->setMaximumWidth(hintOnly ? promptMaxWidth : 420);
+  }
   const auto live = CadDynInputLive(m_State, prompt, m_DynamicGroup.mode,
       m_DynamicCursor.x, m_DynamicCursor.y, m_DynamicCursor.z);
   for (int i = 0; i < 3; ++i) {
@@ -277,6 +292,13 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
     if (focus->isWindow()) break;
   }
   const bool ctrl = key->modifiers().testFlag(Qt::ControlModifier);
+  if (event->type() == QEvent::KeyPress && ctrl && key->key() == Qt::Key_Z &&
+      widget == m_Command && m_Command->text().isEmpty()) {
+    DoUndo(m_State, m_Log);
+    ResetDraftingInput();
+    Refresh();
+    return true;
+  }
   if ((widget == m_Command || suggestionPopupWidget) &&
       (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
       event->type() == QEvent::ShortcutOverride) {

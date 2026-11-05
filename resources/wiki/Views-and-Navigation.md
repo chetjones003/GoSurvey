@@ -16,6 +16,18 @@ per notch. The same page reports the current zoom and pan values.
 
 ## Zoom commands
 
+### Model viewport zoom presets
+
+The status bar's **Viewport zoom** list sets the current model editor zoom using ratios such as
+**1:50**. Choose **Add custom scale…** to enter another positive ratio, such as **1:75**.
+The ratio expresses drawing units per screen inch, using the viewport height and display DPI.
+
+Custom presets belong to the current drawing and are saved and restored with **DWG and DXF**.
+They use a separate list from annotation scales. Choosing a zoom preset changes the view; it does
+not change drawing geometry, plot scale, or a paper viewport's scale. The control is disabled in
+paper space and while editing the model through a paper viewport. Wheel zoom can leave the view
+between presets, with no preset selected.
+
 ### ZOOMEXTENTS (`ZE`)
 
 **Ribbon:** View → Extents **Command:** `ZOOMEXTENTS`, `ZE`

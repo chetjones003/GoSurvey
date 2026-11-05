@@ -2788,3 +2788,24 @@ TEST_CASE("Every bundled fitting yields drawable geometry under its listed name"
   // rather than pass by iterating nothing.
   CHECK(fittingsSeen >= 3);
 }
+TEST_CASE("CadBlockPlaceInsert routes a reference to the active paper layout",
+          "[issue124][block][insert][paperspace]") {
+  AppCommandState st;
+  st.paperLayouts.emplace_back();
+  st.activeSpaceIndex = 0;
+  CadBlockDefinition def;
+  def.name = "TREE";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  st.blockDefs.push_back(def);
+  CadBlockXform xf;
+  xf.x = 10.f;
+  xf.y = 20.f;
+  std::vector<std::string> log;
+
+  REQUIRE(CadBlockPlaceInsert(st, "TREE", xf, false, log));
+  REQUIRE(st.paperLayouts[0].paperBlockRefs.size() == 1);
+  CHECK(st.paperLayouts[0].paperBlockRefs[0].xf.x == Catch::Approx(10.f));
+  CHECK(st.paperLayouts[0].paperBlockRefs[0].xf.y == Catch::Approx(20.f));
+  CHECK(st.paperLayouts[0].paperBlockRefAttrs.size() == 1);
+  CHECK(st.cadBlockRefs.empty());
+}

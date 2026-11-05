@@ -13,6 +13,7 @@
 
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
+#include "GsIoTestSupport.hpp"
 
 using Catch::Approx;
 
@@ -42,10 +43,10 @@ TEST_CASE("Per-viewport camera round-trips through document JSON payload (REQ-06
 
   const std::filesystem::path path = UniqueGsPath("vpcam");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyTemplateFile(st, path.string().c_str(), log));
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.string().c_str(), log));
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
   REQUIRE(loaded.paperLayouts.size() == 1);
   REQUIRE(loaded.paperLayouts[0].viewports.size() == 2);
 
@@ -74,15 +75,47 @@ TEST_CASE("Per-viewport visual style round-trips through document JSON payload (
 
   const std::filesystem::path path = UniqueGsPath("vpvis");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyTemplateFile(st, path.string().c_str(), log));
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.string().c_str(), log));
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
   REQUIRE(loaded.paperLayouts.size() == 1);
   REQUIRE(loaded.paperLayouts[0].viewports.size() == 3);
   CHECK(loaded.paperLayouts[0].viewports[0].visualStyle == VisualStyle::Wireframe2D);
   CHECK(loaded.paperLayouts[0].viewports[1].visualStyle == VisualStyle::Hidden);
   CHECK(loaded.paperLayouts[0].viewports[2].visualStyle == VisualStyle::Shaded);
+}
+
+TEST_CASE("Closed-polyline viewport clipping boundary round-trips through document JSON (REQ-490)",
+          "[payload][req490]") {
+  AppCommandState st;
+  PaperLayout layout;
+  Viewport vp;
+  vp.clipBoundary = {{1.f, 2.f, 0.5f}, {8.f, 2.f, 0.f}, {4.f, 9.f, -0.25f}};
+  Viewport twoArcCircle;
+  twoArcCircle.clipBoundary = {{2.f, 4.f, 1.f}, {6.f, 4.f, 1.f}};
+  Viewport degenerate;
+  degenerate.clipBoundary = {{1.f, 1.f, 0.f}, {5.f, 1.f, 0.f}};
+  layout.viewports = {vp, twoArcCircle, degenerate};
+  st.paperLayouts.push_back(layout);
+  const auto path = UniqueGsPath("vpclip");
+  std::vector<std::string> log;
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
+  AppCommandState loaded;
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
+  REQUIRE(loaded.paperLayouts.size() == 1);
+  REQUIRE(loaded.paperLayouts[0].viewports.size() == 3);
+  const auto& boundary = loaded.paperLayouts[0].viewports[0].clipBoundary;
+  REQUIRE(boundary.size() == 3);
+  CHECK(boundary[0].xIn == Approx(1.f));
+  CHECK(boundary[0].yIn == Approx(2.f));
+  CHECK(boundary[0].bulge == Approx(0.5f));
+  CHECK(boundary[2].bulge == Approx(-0.25f));
+  const auto& circleBoundary = loaded.paperLayouts[0].viewports[1].clipBoundary;
+  REQUIRE(circleBoundary.size() == 2);
+  CHECK(circleBoundary[0].bulge == Approx(1.f));
+  CHECK(circleBoundary[1].bulge == Approx(1.f));
+  CHECK(loaded.paperLayouts[0].viewports[2].clipBoundary.empty());
 }
 
 TEST_CASE("A legacy document JSON payload with no camera keys loads every viewport in plan view (REQ-061)", "[payload][req061]") {
@@ -96,7 +129,7 @@ TEST_CASE("A legacy document JSON payload with no camera keys loads every viewpo
 
   const std::filesystem::path path = UniqueGsPath("legacy");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyTemplateFile(st, path.string().c_str(), log));
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
 
   // Strip the camera keys from the saved JSON to simulate a file written before REQ-061.
   std::string raw;
@@ -132,7 +165,7 @@ TEST_CASE("A legacy document JSON payload with no camera keys loads every viewpo
   }
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.string().c_str(), log));
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
   REQUIRE(loaded.paperLayouts.size() == 1);
   REQUIRE(loaded.paperLayouts[0].viewports.size() == 1);
   REQUIRE(loaded.paperLayouts[0].viewports[0].cameraIsPlan());

@@ -74,6 +74,8 @@ int DwgAnnotContextCountObjects(const _dwg_struct* dwg);
 /// Default-scale context object for an entity extension dictionary, if any (REQ-384 inc 4).
 const _dwg_object* DwgImportResolveDefaultContextObject(const _dwg_struct* dwg,
                                                         const _dwg_object_entity* ent);
+void DwgImportAnnotativeScaleNames(const _dwg_struct* dwg, const _dwg_object_entity* ent,
+                                   std::vector<std::string>* names);
 int DwgImportDefaultContextMergeCount();
 void DwgImportNoteDefaultContextMerged();
 

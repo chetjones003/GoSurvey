@@ -2,6 +2,7 @@
 
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
+#include "CadDimStroke.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "geom2d.hpp"
 #include "util/cadpiperun.hpp"  // CadBuildPipeRunSolids (issue #486 increment B2 / REQ-345)
@@ -147,11 +148,49 @@ void AppendSolidBaseProfile(const AppCommandState& cmd, std::vector<float>& out)
 
 } // namespace
 
-void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double curY, bool orthoEnabled,
+void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, bool orthoEnabled,
                                double /*viewAnchorX*/, double /*viewAnchorY*/, float orthoHalfH, int fbHeightPx,
                                std::vector<float>& rubberLines) {
   const float curXf = static_cast<float>(curX);
   const float curYf = static_cast<float>(curY);
+  // Preview the same dimension geometry the command will commit. Keeping this in the shared draft
+  // pass ensures cursor movement, snap results, and rubber-band rendering use the same point.
+  CadAnnotation dimensionDraft;
+  bool hasDimensionDraft = false;
+  switch (cmd.active) {
+    case AppCommandState::Kind::DimLinear:
+      hasDimensionDraft = CadDimLinearBuildDraft(cmd, curXf, curYf, &dimensionDraft);
+      break;
+    case AppCommandState::Kind::DimAligned:
+      hasDimensionDraft = CadDimAlignedBuildDraft(cmd, curXf, curYf, &dimensionDraft);
+      break;
+    case AppCommandState::Kind::DimAngular:
+      hasDimensionDraft = CadDimAngularBuildDraft(cmd, curXf, curYf, &dimensionDraft);
+      break;
+    default:
+      break;
+  }
+  if (hasDimensionDraft) {
+    CadDimStrokeParams params;
+    params.modelUnitsPerPlottedInch = cmd.modelUnitsPerPlottedInch;
+    params.arrowSizeInches = cmd.activeDimensionStyle.arrowSizeInches;
+    params.arrowScale = cmd.viewportDimArrowScale;
+    params.arrowType = cmd.activeDimensionStyle.arrowType;
+    CadDimWorldStrokes strokes;
+    if (CadDimBuildWorldStrokes(dimensionDraft, params, &strokes)) {
+      for (const auto& s : strokes.segs)
+        PushRubberSegViewRel(rubberLines, s.x0, s.y0, s.x1, s.y1, 0., 0., dimensionDraft.insZ,
+                             dimensionDraft.insZ);
+      for (const auto& a : strokes.arrows) {
+        PushRubberSegViewRel(rubberLines, a.x0, a.y0, a.x1, a.y1, 0., 0., dimensionDraft.insZ,
+                             dimensionDraft.insZ);
+        PushRubberSegViewRel(rubberLines, a.x1, a.y1, a.x2, a.y2, 0., 0., dimensionDraft.insZ,
+                             dimensionDraft.insZ);
+        PushRubberSegViewRel(rubberLines, a.x2, a.y2, a.x0, a.y0, 0., 0., dimensionDraft.insZ,
+                             dimensionDraft.insZ);
+      }
+    }
+  }
   // The elevation this command will COMMIT at (REQ-058). A rubber drawn on the datum while the
   // geometry lands on the work plane reads as correct in plan view and is plainly wrong the moment
   // the view tilts — the same class of defect as TASK-035 DEFECT-C.
@@ -464,6 +503,29 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       float ox = 0.f, oy = 0.f;
       localOf(cmd.ucsPendingOrigin, &ox, &oy);
       PushRubberSegViewRel(rubberLines, ox, oy, curXf, curYf, 0., 0., zc, zc);
+    }
+  }
+
+  if (cmd.active == AppCommandState::Kind::PdfAttach &&
+      cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint &&
+      cmd.pdfAttachPreviewReady && cmd.pdfAttachPreview.pageWidthPts > 0.f &&
+      cmd.pdfAttachPreview.pageHeightPts > 0.f) {
+    const float cosR = std::cos(cmd.pdfAttachRotDeg * 3.14159265f / 180.f);
+    const float sinR = std::sin(cmd.pdfAttachRotDeg * 3.14159265f / 180.f);
+    const float W = cmd.pdfAttachPreview.pageWidthPts * cmd.pdfAttachScale;
+    const float H = cmd.pdfAttachPreview.pageHeightPts * cmd.pdfAttachScale;
+    const float corners[4][2] = {{0.f, 0.f}, {W, 0.f}, {W, H}, {0.f, H}};
+    float xs[4]{};
+    float ys[4]{};
+    for (int i = 0; i < 4; ++i) {
+      const float px = corners[i][0];
+      const float py = corners[i][1];
+      xs[i] = curXf + px * cosR - py * sinR;
+      ys[i] = curYf + px * sinR + py * cosR;
+    }
+    for (int i = 0; i < 4; ++i) {
+      const int j = (i + 1) % 4;
+      PushRubberSegViewRel(rubberLines, xs[i], ys[i], xs[j], ys[j], 0., 0., zc, zc);
     }
   }
 

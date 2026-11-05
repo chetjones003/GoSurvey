@@ -58,8 +58,7 @@ Set a value to **ByLayer** to hand control back to the object's layer ([[Layers]
 | Radius | Editable |
 | **Derived:** Diameter · Circumference · **Area** | Read-only, computed from the radius |
 
-This is the only place GoSurvey reports an area — there is no `AREA` command and no area for
-polylines.
+A circle's area is also listed here. `AREA` reports typed points or a closed polyline or circle.
 
 ### Annotation — TEXT and MTEXT
 

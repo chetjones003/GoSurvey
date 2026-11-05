@@ -7,7 +7,7 @@
 
 ## 1. Authority
 - Goal:         GOAL-001 — Make the Qt workspaces easy to navigate and visually clear.
-- Requirements: REQ-456 (accepted); related REQ-081, REQ-302, REQ-427, and REQ-436.
+- Requirements: REQ-491 (accepted); related REQ-081, REQ-302, REQ-427, and REQ-436.
 - Constraints:  Preserve existing command/workflow semantics, drawing data, entity colors, selection, snapping, undo, and ImGui behavior. Add no dependency or architecture abstraction.
 - Acceptance:
   - Qt captures at the same dimensions/state as the Round 1 minimum-width editor show a wider drawing viewport than the baseline; command entry and messages are usable without their primary text being truncated, and every existing ribbon/contextual action remains reachable inline or from its overflow/collapsed control.
@@ -31,7 +31,7 @@
 | # | Question | Asked (date) | Answer |
 |---|----------|--------------|--------|
 | Q1 | May the Light theme change to improve consistency, amending REQ-081's explicit freeze? | 2026-11-03 | Yes; amend the SPEC for both appearances and major Qt surfaces. |
-| Q2 | Should the SPEC add a project goal and application-wide UI acceptance requirement before implementation? | 2026-11-03 | Yes; add GOAL-001 and REQ-456. |
+| Q2 | Should the SPEC add a project goal and application-wide UI acceptance requirement before implementation? | 2026-11-03 | Yes; add GOAL-001 and REQ-491. |
 | Q3 | What qualifies as a removable redundant control or workflow? | 2026-11-03 | Remove only duplicate controls for the same action; preserve context-specific access. |
 | Q4 | How is the Round 2 score target interpreted? | 2026-11-03 | Each of GPT-6 Luna, Claude Sonnet, and Cursor Gemini must score at least 9/10. |
 | Q5 | Which frontends are covered? | 2026-11-03 | Qt only, matching Round 1 evidence. |
@@ -48,7 +48,7 @@ None.
   - [x] Complete three-provider Round 1 UI review and consolidate representative screenshots.
   - [x] Map the requested scope to existing requirements and identify the SPEC GAP.
   - [x] Record the user's SPEC decision in the project and requirement documents.
-  - [x] Complete Verification against REQ-456, architecture §2–3, affected UI sources, tests, and visual review workflow; finalize implementation file/test list.
+  - [x] Complete Verification against REQ-491, architecture §2–3, affected UI sources, tests, and visual review workflow; finalize implementation file/test list.
   - [x] Implement the reviewed Qt layout, empty-state, theme, and principal-dialog changes.
   - [x] Capture representative before/after screenshots and run the applicable Qt shard checks.
   - [ ] Address remaining council findings and collect a fresh full review from all three named providers.
@@ -58,7 +58,7 @@ None.
 
 ## 8. Implementation log
 - 2026-11-03 — Round 1 scores: GPT-6 Luna 6/10; Claude Sonnet 6.5/10; Cursor Gemini 6.8/10. Native harness subagent, an additional Codex/GPT-6 Luna review, scored 6/10. Evidence was repository/test-fixture screenshots; no live interaction session was reviewed.
-- 2026-11-03 — User resolved the SPEC GAP by approving both appearances and major Qt surfaces. Added GOAL-001, REQ-456, and D-2026-11-03-a; amended REQ-081/REQ-436. No implementation files changed.
+- 2026-11-03 — User resolved the SPEC GAP by approving both appearances and major Qt surfaces. Added GOAL-001, REQ-491, and D-2026-11-03-a; amended REQ-081/REQ-436. No implementation files changed.
 - 2026-11-03 — Verification PASS: plan fits the existing Qt UI/Viewport owner and test/capture infrastructure; no dependency or architecture change. Detailed verdict: `verification/reviews/TASK-1109-plan-review.md`.
 - 2026-11-03 — User selected Adaptive Canvas (D-2026-11-03-b). Implementation started with responsive side docks, full-width command/messages, and a concise no-selection Properties state.
 - 2026-11-03 — Implemented Adaptive Canvas collapse/rail access and resize restoration, full-width command/messages, clearer Start and Properties empty states, broader Light/Dark control styling, and readability fixes in Project Settings, Layer Manager, Adjustment, and PDF audit surfaces. No command or context-specific route was removed.
@@ -142,7 +142,7 @@ None.
 ## 9. Self-verification
 - [x] build-project — Release build passed
 - [x] architecture-review — changes remain in the Qt UI / Viewport owner
-- [x] code-review — standards and REQ-456 reviews completed against the current working tree and `origin/master`; no clear hard standards breach or command/workflow loss. `ShowExtractReview()` could be split for maintainability.
+- [x] code-review — standards and REQ-491 reviews completed against the current working tree and `origin/master`; no clear hard standards breach or command/workflow loss. `ShowExtractReview()` could be split for maintainability.
 - [x] dependency-audit — no dependency changes
 - [x] performance-review — source review found no changes in the drawing/render loop; theme updates, candidate layout, and synchronous adaptive-dock layout activation are event-driven UI work. No benchmark comparison was run.
 - [x] testing — Round 24 Release build passed; focused Qt tests for Start search clear actions and PDF Compare spin-box input handling passed; `build.output-layout` and `git diff --check` passed. The full six-shard run (285 tests, 0 failures) passed immediately before the Round 24 input-control changes.
@@ -222,7 +222,7 @@ None.
 - Independent per-surface review of Round 35 Dark/Light screenshots is pending. No ≥9/10 all-surface gate pass is claimed until the independent reviews confirm it.
 
 ## Round 36 — follow-up to Round 35 input-UX review
-- Requirement authority: accepted REQ-456 clauses 2–5 and 7; existing task direction keeps Civil 3D as a professional reference and requires each GoSurvey surface to score independently at least 9/10.
+- Requirement authority: accepted REQ-491 clauses 2–5 and 7; existing task direction keeps Civil 3D as a professional reference and requires each GoSurvey surface to score independently at least 9/10.
 - Plan: correct the screenshot-only viewport artifacts and state mismatch; make selected-tab accents and Properties axis badges consistent in Light; make Start empty-search copy truthful; tighten dirty/focus cues in Adjustment and Application Settings; improve PDF Compare result scanning, PDF Audit running-state parity, and Coordinate Review action sizing/placement.
 - Verification: rebuild Release, run the six Qt editor shards and output-layout check, regenerate affected Dark/Light captures from the final binaries, and publish a Round 36 T3 visualizer for independent review.
 - Architectural boundary: Qt UI and test capture code only. No command semantics, model data, entity colors, selection behavior, persistence, or ImGui behavior changes.

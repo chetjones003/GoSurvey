@@ -9,14 +9,17 @@
 #include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
 #include "util/meshgeom.hpp"
+#include "util/geom2d.hpp"
 #include "util/pointcloudcache.hpp"
 #include "BrepJson.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <set>
 #include <nlohmann/json.hpp>
 
 namespace {
@@ -284,6 +287,8 @@ void EntityAttributesToJson(const EntityAttributes& e, json& o) {
   o["id"] = e.id;  // REQ-076 stable identity; additive, no format-version bump (ADR-020 (d))
   o["layer"] = e.layer;
   o["color"] = e.color;
+  if (e.plotStyleName != "Normal")
+    o["plotStyleName"] = e.plotStyleName;
   o["linetype"] = e.linetype;
   o["lineweightMm"] = e.lineweightMm;
   o["transparency"] = e.transparency;
@@ -310,6 +315,7 @@ EntityAttributes EntityAttributesFromJson(const json& o) {
   e.id           = o.value("id",           static_cast<std::uint64_t>(0));
   e.layer        = o.value("layer",        e.layer);
   e.color        = o.value("color",        e.color);
+  e.plotStyleName = o.value("plotStyleName", e.plotStyleName);
   e.linetype     = o.value("linetype",     e.linetype);
   e.lineweightMm = o.value("lineweightMm", e.lineweightMm);
   e.transparency = o.value("transparency", e.transparency);
@@ -564,6 +570,9 @@ json CadBlockContentToJson(const CadBlockContent& c) {
     CadBlockXformToJson(n.xf, xf);
     nj["xf"] = std::move(xf);
     nj["visState"] = n.visState;
+    json attrs;
+    EntityAttributesToJson(n.attrs, attrs);
+    nj["attrs"] = std::move(attrs);
     nested.push_back(std::move(nj));
   }
   o["nested"] = std::move(nested);
@@ -645,6 +654,8 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
       if (nj.contains("xf"))
         n.xf = CadBlockXformFromJson(nj["xf"]);
       n.visState = nj.value("visState", "");
+      if (nj.contains("attrs") && nj["attrs"].is_object())
+        n.attrs = EntityAttributesFromJson(nj["attrs"]);
       c.nested.push_back(std::move(n));
     }
   }
@@ -906,6 +917,8 @@ void CadLayerRowToJson(const CadLayerRow& r, json& o) {
   o["frozen"] = r.frozen;
   o["locked"] = r.locked;
   o["color"] = r.color;
+  if (r.plotStyleName != "Normal")
+    o["plotStyleName"] = r.plotStyleName;
   o["linetype"] = r.linetype;
   o["lineweightMm"] = r.lineweightMm;
   o["transparency"] = r.transparency;
@@ -919,6 +932,7 @@ CadLayerRow CadLayerRowFromJson(const json& o) {
   r.frozen       = o.value("frozen",       r.frozen);
   r.locked       = o.value("locked",       r.locked);
   r.color        = o.value("color",        r.color);
+  r.plotStyleName = o.value("plotStyleName", r.plotStyleName);
   r.linetype     = o.value("linetype",     r.linetype);
   r.lineweightMm = o.value("lineweightMm", r.lineweightMm);
   r.transparency = o.value("transparency", r.transparency);
@@ -1079,6 +1093,45 @@ SurveyLabelStyleTemplates SurveyLabelTemplatesFromJson(const json& o) {
 // The solid `internal document payload` encoding lives in BrepJson.hpp (namespace `gsio`) so it is linkable without the
 // command layer this file drags in. `gsio::SolidToJson` / `gsio::SolidFromJson` are used below.
 
+// REQ-443 / REQ-113 (issue #1010): spline <-> trailer JSON, shared by the model-space and sheet stores.
+static json CadSplineToJson(const CadSpline& s) {
+  json o;
+  o["degree"] = s.degree;
+  o["periodic"] = s.periodic;
+  o["knots"] = s.knots;
+  o["ctrl"] = json::array();
+  for (const ray3d::Vec3& p : s.ctrl)
+    o["ctrl"].push_back({p.x, p.y, p.z});
+  o["weights"] = s.weights;
+  o["fit"] = json::array();
+  for (const ray3d::Vec3& p : s.fit)
+    o["fit"].push_back({p.x, p.y, p.z});
+  return o;
+}
+
+static CadSpline CadSplineFromJson(const json& o) {
+  CadSpline s;
+  s.degree = o.value("degree", 3);
+  s.periodic = o.value("periodic", false);
+  if (o.contains("knots") && o["knots"].is_array())
+    for (const auto& k : o["knots"])
+      if (k.is_number()) s.knots.push_back(k.get<double>());
+  const auto readPoints = [](const json& list, std::vector<ray3d::Vec3>* out) {
+    if (!list.is_array()) return;
+    for (const auto& p : list) {
+      if (!p.is_array() || p.size() != 3 || !p[0].is_number() || !p[1].is_number() || !p[2].is_number())
+        continue;
+      out->push_back({p[0].get<double>(), p[1].get<double>(), p[2].get<double>()});
+    }
+  };
+  if (o.contains("ctrl")) readPoints(o["ctrl"], &s.ctrl);
+  if (o.contains("fit")) readPoints(o["fit"], &s.fit);
+  if (o.contains("weights") && o["weights"].is_array())
+    for (const auto& w : o["weights"])
+      if (w.is_number()) s.weights.push_back(w.get<double>());
+  return s;
+}
+
 json BuildRoot(const AppCommandState& st) {
   json root;
   root["format"] = "gosurvey";
@@ -1130,6 +1183,11 @@ json BuildRoot(const AppCommandState& st) {
       o["descriptionMatch"] = g.rule.descriptionMatch;
       o["rawDescriptionMatch"] = g.rule.rawDescriptionMatch;
       o["explicitIds"] = g.rule.explicitIds;
+      o["pointStyleName"] = g.pointStyleName;
+      o["labelStyleName"] = g.labelStyleName;
+      o["displayPriority"] = g.displayPriority;
+      o["pointStyleOverride"] = g.pointStyleOverride;
+      o["labelStyleOverride"] = g.labelStyleOverride;
       groups.push_back(std::move(o));
     }
     doc["pointGroups"] = std::move(groups);
@@ -1149,6 +1207,8 @@ json BuildRoot(const AppCommandState& st) {
       o["name"] = s.name;
       if (!s.fontFamily.empty()) o["fontFamily"] = s.fontFamily;
       o["heightInches"] = s.heightInches;
+      if (!s.props.empty()) o["props"] = s.props;
+      o["widthFactor"] = s.widthFactor;
       if (s.obliqueDeg != 0.f) o["obliqueDeg"] = s.obliqueDeg;
       if (s.bold)   o["bold"] = true;
       if (s.italic) o["italic"] = true;
@@ -1227,6 +1287,7 @@ json BuildRoot(const AppCommandState& st) {
     const bool isDefault = (ds == def);
     if (!isDefault) {
       json o;
+      o["name"] = ds.name;
       o["textSizeInches"] = ds.textSizeInches;
       if (!ds.textFont.empty()) o["textFont"] = ds.textFont;
       o["textColor"] = ds.textColor;
@@ -1241,8 +1302,42 @@ json BuildRoot(const AppCommandState& st) {
       o["unitFormat"] = static_cast<int>(ds.unitFormat);
       o["unitPrecision"] = ds.unitPrecision;
       o["unitScale"] = ds.unitScale;
+      if (!ds.unitSuffix.empty()) o["unitSuffix"] = ds.unitSuffix;
+      if (!ds.props.empty()) o["props"] = ds.props;
       doc["dimensionStyle"] = std::move(o);
     }
+    json all = json::array();
+    std::vector<DimensionStyle> styles =
+        st.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : st.dimensionStyles;
+    auto active = std::find_if(styles.begin(), styles.end(), [&](const DimensionStyle& style) {
+      return style.name == ds.name;
+    });
+    if (active == styles.end())
+      styles.push_back(ds);
+    else
+      *active = ds;
+    for (const DimensionStyle& style : styles) {
+      json o;
+      o["name"] = style.name;
+      o["textSizeInches"] = style.textSizeInches;
+      o["textFont"] = style.textFont;
+      o["textColor"] = style.textColor;
+      o["textAlign"] = static_cast<int>(style.textAlign);
+      o["dimLineColor"] = style.dimLineColor;
+      o["dimLineType"] = style.dimLineType;
+      o["extLineColor"] = style.extLineColor;
+      o["extLineType"] = style.extLineType;
+      o["arrowSizeInches"] = style.arrowSizeInches;
+      o["arrowType"] = static_cast<int>(style.arrowType);
+      o["arrowColor"] = style.arrowColor;
+      o["unitFormat"] = static_cast<int>(style.unitFormat);
+      o["unitPrecision"] = style.unitPrecision;
+      o["unitScale"] = style.unitScale;
+      if (!style.unitSuffix.empty()) o["unitSuffix"] = style.unitSuffix;
+      if (!style.props.empty()) o["props"] = style.props;
+      all.push_back(std::move(o));
+    }
+    doc["dimensionStyles"] = std::move(all);
   }
   {
     const MultileaderStyle& ms = st.activeMultileaderStyle;
@@ -1258,8 +1353,64 @@ json BuildRoot(const AppCommandState& st) {
         o["textFont"] = ms.textFont;
       o["arrowSizeInches"] = ms.arrowSizeInches;
       o["landingGapInches"] = ms.landingGapInches;
+      if (!ms.props.empty()) o["props"] = ms.props;
       doc["multileaderStyle"] = std::move(o);
     }
+    json all = json::array();
+    std::vector<MultileaderStyle> named =
+        st.multileaderStyles.empty() ? MultileaderStyles::DefaultStyles() : st.multileaderStyles;
+    auto active = std::find_if(named.begin(), named.end(), [&](const MultileaderStyle& style) {
+      return style.name == ms.name;
+    });
+    if (active == named.end())
+      named.push_back(ms);
+    else
+      *active = ms;
+    for (const MultileaderStyle& style : named) {
+      json item;
+      item["name"] = style.name;
+      item["textSizeInches"] = style.textSizeInches;
+      item["textFont"] = style.textFont;
+      item["arrowSizeInches"] = style.arrowSizeInches;
+      item["landingGapInches"] = style.landingGapInches;
+      item["annotativeDefault"] = style.annotativeDefault;
+      if (!style.props.empty()) item["props"] = style.props;
+      all.push_back(std::move(item));
+    }
+    doc["multileaderStyles"] = std::move(all);
+  }
+  {
+    json styles = json::array();
+    for (const CadTableStyle& style : st.tableStyles) {
+      json o;
+      o["name"] = style.name;
+      o["point"] = style.point;
+      o["headerRow"] = style.headerRow;
+      o["textHeightInches"] = style.textHeightInches;
+      o["columnWidthInches"] = style.columnWidthInches;
+      o["rowHeightInches"] = style.rowHeightInches;
+      o["columnHeaders"] = style.columnHeaders;
+      o["columnExpressions"] = style.columnExpressions;
+      o["columnWidths"] = style.columnWidths;
+      if (!style.props.empty()) o["props"] = style.props;
+      o["title"] = style.title;
+      o["civilStyleName"] = style.civilStyleName;
+      o["textStyleName"] = style.textStyleName;
+      o["headerTextStyleName"] = style.headerTextStyleName;
+      o["titleTextStyleName"] = style.titleTextStyleName;
+      o["headerTextHeightInches"] = style.headerTextHeightInches;
+      o["titleTextHeightInches"] = style.titleTextHeightInches;
+      if (!style.dataTextColor.empty()) o["dataTextColor"] = style.dataTextColor;
+      if (!style.headerTextColor.empty()) o["headerTextColor"] = style.headerTextColor;
+      if (!style.titleTextColor.empty()) o["titleTextColor"] = style.titleTextColor;
+      if (!style.gridLineColor.empty()) o["gridLineColor"] = style.gridLineColor;
+      if (!style.borderColor.empty()) o["borderColor"] = style.borderColor;
+      json columns = json::array();
+      for (CadPointTableColumn column : style.pointColumns) columns.push_back(static_cast<int>(column));
+      o["pointColumns"] = std::move(columns);
+      styles.push_back(std::move(o));
+    }
+    doc["tableStyles"] = std::move(styles);
   }
   // Paper space layouts (REQ-031). Viewports/frozen layers persist in a later increment.
   {
@@ -1285,6 +1436,8 @@ json BuildRoot(const AppCommandState& st) {
       o["landscape"] = l.landscape;
       o["presetIdx"] = l.presetIdx;
       o["pageSetupName"] = l.pageSetupName;
+      if (!l.plotStyleTablePath.empty())
+        o["plotStyleTablePath"] = l.plotStyleTablePath;
       o["fitToPaper"] = l.fitToPaper;
       o["scaleModelPerPaperIn"] = l.scaleModelPerPaperIn;
       o["plotArea"] = l.plotArea;
@@ -1302,6 +1455,12 @@ json BuildRoot(const AppCommandState& st) {
         vo["paperYIn"] = v.paperYIn;
         vo["paperWIn"] = v.paperWIn;
         vo["paperHIn"] = v.paperHIn;
+        if (!v.clipBoundary.empty()) {
+          json boundary = json::array();
+          for (const Viewport::ClipVertex& vertex : v.clipBoundary)
+            boundary.push_back({vertex.xIn, vertex.yIn, vertex.bulge});
+          vo["clipBoundary"] = std::move(boundary);
+        }
         vo["modelCenterX"] = v.modelCenterX;
         vo["modelCenterY"] = v.modelCenterY;
         vo["scaleModelPerPaperIn"] = v.scaleModelPerPaperIn;
@@ -1320,6 +1479,9 @@ json BuildRoot(const AppCommandState& st) {
         }
         vo["layer"] = v.layer;
         vo["frozenLayers"] = v.frozenLayers;
+        vo["on"] = v.on;  // REQ-482: independent paper viewport display state.
+        vo["locked"] = v.locked;
+        vo["hidePlot"] = v.hidePlot;
         vo["vpColorLayers"] = v.vpColorLayers;    // REQ-046: per-viewport layer color override (parallel arrays)
         vo["vpColorValues"] = v.vpColorValues;
         vps.push_back(vo);
@@ -1378,9 +1540,25 @@ json BuildRoot(const AppCommandState& st) {
           ells.push_back(eo);
         }
         o["paperEllipses"] = std::move(ells);
+        json pimgs = json::array();  // REQ-457 / issue #1010: sheet raster IMAGE underlays
+        for (const CadRasterImage& im : l.paperImages) {
+          json io;
+          io["path"] = im.path;
+          io["insX"] = im.insX;
+          io["insY"] = im.insY;
+          io["width"] = im.width;
+          io["height"] = im.height;
+          io["rotationRad"] = im.rotationRad;
+          io["pixelW"] = im.pixelW;
+          io["pixelH"] = im.pixelH;
+          pimgs.push_back(io);
+        }
+        o["paperImages"] = std::move(pimgs);
+        o["paperImageAttrs"] = attrsToJson(l.paperImageAttrs);
         o["paperEllAttrs"] = attrsToJson(l.paperEllAttrs);
         o["paperPolyOffsets"] = l.paperPolyOffsets;
         o["paperPolyVerts"] = l.paperPolyVerts;
+        o["paperPolyVertsBulge"] = l.paperPolyVertsBulge;
         json pc = json::array();
         for (uint8_t c : l.paperPolyClosed)
           pc.push_back(static_cast<int>(c));
@@ -1407,6 +1585,28 @@ json BuildRoot(const AppCommandState& st) {
           pbr.push_back(CadBlockRefToJson(r));
         o["paperBlockRefs"] = std::move(pbr);
         o["paperBlockRefAttrs"] = attrsToJson(l.paperBlockRefAttrs);
+        json psp = json::array();
+        for (const CadSpline& s : l.paperSplines) {
+          json so;
+          so["degree"] = s.degree;
+          so["periodic"] = s.periodic;
+          so["knots"] = s.knots;
+          so["ctrl"] = json::array();
+          for (const ray3d::Vec3& p : s.ctrl)
+            so["ctrl"].push_back({p.x, p.y, p.z});
+          so["weights"] = s.weights;
+          so["fit"] = json::array();
+          for (const ray3d::Vec3& p : s.fit)
+            so["fit"].push_back({p.x, p.y, p.z});
+          psp.push_back(std::move(so));
+        }
+        o["paperSplines"] = std::move(psp);
+        o["paperSplineAttrs"] = attrsToJson(l.paperSplineAttrs);
+        json ppt = json::array();
+        for (const CadPoint& p : l.paperPoints)
+          ppt.push_back({p.x, p.y, p.z});
+        o["paperPoints"] = std::move(ppt);
+        o["paperPointAttrs"] = attrsToJson(l.paperPointAttrs);
       }
       layouts.push_back(o);
     }
@@ -1426,6 +1626,8 @@ json BuildRoot(const AppCommandState& st) {
       o["offsetXIn"] = ps.offsetXIn;
       o["offsetYIn"] = ps.offsetYIn;
       o["centerPlot"] = ps.centerPlot;
+      if (!ps.plotStyleTablePath.empty())
+        o["plotStyleTablePath"] = ps.plotStyleTablePath;
       setups.push_back(o);
     }
     doc["savedPageSetups"] = setups;
@@ -1572,11 +1774,33 @@ json BuildRoot(const AppCommandState& st) {
       g["cutRun"] = i.grading->cutRun;
       g["fillRun"] = i.grading->fillRun;
       g["sideLeft"] = i.grading->sideLeft;
+      if (i.grading->target != CadGradingDefinition::Target::Surface) {
+        g["target"] = static_cast<int>(i.grading->target);
+        g["targetValue"] = i.grading->targetValue;
+        if (i.grading->target == CadGradingDefinition::Target::Distance)
+          g["distanceGradePercent"] = i.grading->distanceGradePercent;
+      }
       o["grading"] = std::move(g);
     }
     flInfo.push_back(std::move(o));
   }
   doc["featureLineInfo"] = std::move(flInfo);
+  if (!st.gradingPresets.empty()) {
+    json presets = json::array();
+    for (const CadGradingPreset& p : st.gradingPresets) {
+      json o;
+      o["name"] = p.name;
+      o["targetSurfaceId"] = p.targetSurfaceId;
+      o["cutRun"] = p.cutRun;
+      o["fillRun"] = p.fillRun;
+      o["sideLeft"] = p.sideLeft;
+      o["target"] = static_cast<int>(p.target);
+      o["targetValue"] = p.targetValue;
+      o["distanceGradePercent"] = p.distanceGradePercent;
+      presets.push_back(std::move(o));
+    }
+    doc["gradingPresets"] = std::move(presets);
+  }
   json flAttrs = json::array();
   for (const auto& a : st.featureLineAttrs) {
     json o;
@@ -1646,8 +1870,17 @@ json BuildRoot(const AppCommandState& st) {
   for (const CadMultileader& ml : st.cadMultileaders) {
     json o;
     o["path"] = ml.pathXyz;
+    o["arrowSizeWorld"] = ml.arrowSizeWorld;
+    o["labelWidthWorld"] = ml.labelWidthWorld;
+    o["labelHeightWorld"] = ml.labelHeightWorld;
     if (ml.annotative)
       o["annotative"] = true;
+    if (ml.splinePath)
+      o["splinePath"] = true;
+    if (!ml.showArrow)
+      o["showArrow"] = false;
+    if (!ml.styleName.empty())
+      o["styleName"] = ml.styleName;
     if (!ml.annotativeVisibleScaleNames.empty())
       o["annotativeVisibleScaleNames"] = ml.annotativeVisibleScaleNames;
     if (!ml.extraLeaderPaths.empty()) {
@@ -1673,20 +1906,8 @@ json BuildRoot(const AppCommandState& st) {
     doc["multileaderAttrs"] = std::move(multileaderAttrs);
 
   json splines = json::array();
-  for (const CadSpline& s : st.cadSplines) {
-    json o;
-    o["degree"] = s.degree;
-    o["periodic"] = s.periodic;
-    o["knots"] = s.knots;
-    o["ctrl"] = json::array();
-    for (const ray3d::Vec3& p : s.ctrl)
-      o["ctrl"].push_back({p.x, p.y, p.z});
-    o["weights"] = s.weights;
-    o["fit"] = json::array();
-    for (const ray3d::Vec3& p : s.fit)
-      o["fit"].push_back({p.x, p.y, p.z});
-    splines.push_back(std::move(o));
-  }
+  for (const CadSpline& s : st.cadSplines)
+    splines.push_back(CadSplineToJson(s));
   if (!splines.empty())
     doc["splines"] = std::move(splines);
   json splineAttrs = json::array();
@@ -1697,6 +1918,24 @@ json BuildRoot(const AppCommandState& st) {
   }
   if (!splineAttrs.empty())
     doc["splineAttrs"] = std::move(splineAttrs);
+
+  json points = json::array();
+  for (const CadPoint& p : st.cadPoints)
+    points.push_back({p.x, p.y, p.z});
+  if (!points.empty())
+    doc["cadPoints"] = std::move(points);
+  json pointAttrs = json::array();
+  for (const auto& a : st.cadPointAttrs) {
+    json o;
+    EntityAttributesToJson(a, o);
+    pointAttrs.push_back(std::move(o));
+  }
+  if (!pointAttrs.empty())
+    doc["cadPointAttrs"] = std::move(pointAttrs);
+  if (st.pdMode != 0)
+    doc["pdMode"] = st.pdMode;
+  if (st.pdSize != 0.0)
+    doc["pdSize"] = st.pdSize;
 
   doc["drawingInsUnits"] = st.drawingInsUnits;
   json blockDefs = json::array();
@@ -1771,6 +2010,20 @@ json BuildRoot(const AppCommandState& st) {
     doc["annotationScales"] = std::move(scales);
     if (st.currentAnnotationScaleIndex >= 0)
       doc["currentAnnotationScaleIndex"] = st.currentAnnotationScaleIndex;
+  }
+
+  if (!st.viewportZoomScales.empty()) {
+    json scales = json::array();
+    for (const CadAnnotationScale& s : st.viewportZoomScales) {
+      json o;
+      o["name"] = s.name;
+      o["paperUnits"] = s.paperUnits;
+      o["drawingUnits"] = s.drawingUnits;
+      scales.push_back(std::move(o));
+    }
+    doc["viewportZoomScales"] = std::move(scales);
+    if (st.currentViewportZoomScaleIndex >= 0)
+      doc["currentViewportZoomScaleIndex"] = st.currentViewportZoomScaleIndex;
   }
 
   if (!st.dwgImportedLights.empty() || st.dwgImportedSunPresent || st.dwgImportedLightListPresent) {
@@ -1972,6 +2225,15 @@ json BuildRoot(const AppCommandState& st) {
     for (const CadSurface& s : st.cadSurfaces) {
       json o;
       o["name"] = s.name;
+      if (s.gradingGroup) {
+        o["gradingMembers"] = json::array();
+        for (const auto &member : s.gradingMembers) {
+          json row = {{"gradingId", member.gradingId},
+                      {"strips", member.strips ? json(*member.strips) : json::array()}};
+          if (member.infill) row["infill"] = true;
+          o["gradingMembers"].push_back(std::move(row));
+        }
+      }
       // REQ-070: the style is a reference by name, and it is omitted when empty so a surface that
       // has never been given one writes exactly the bytes it wrote before styles existed.
       if (!s.styleName.empty())
@@ -2097,6 +2359,7 @@ json BuildRoot(const AppCommandState& st) {
         o["volumeBaseName"] = s.volumeBaseName;
       if (!s.volumeComparisonName.empty())
         o["volumeComparisonName"] = s.volumeComparisonName;
+      if (s.importedFixedTin) o["importedFixedTin"] = true;
       if (s.tin) {
         o["verts"] = s.tin->vertsXyz;
         o["indices"] = s.tin->indices;
@@ -2141,10 +2404,61 @@ json BuildRoot(const AppCommandState& st) {
     o["rawDescription"] = p.rawDescription;  // REQ-066; additive, no format-version bump
     o["layer"] = p.layer;
     o["labelStyle"] = static_cast<int>(p.labelStyle);
+    o["styleName"] = p.styleName;
+    o["labelStyleName"] = p.labelStyleName;
     o["labelMtextAnnId"] = p.labelMtextAnnId;  // annotation entity id since REQ-076, not an index
     survey.push_back(std::move(o));
   }
   doc["surveyPoints"] = std::move(survey);
+  {
+    json styles = json::array();
+    for (const SurveyPointStyleDefinition& style : st.surveyPointStyles) {
+      json item;
+      item["name"] = style.name;
+      item["crossSpanPlottedInches"] = style.crossSpanPlottedInches;
+      item["color"] = style.color;
+      item["labelStyleName"] = style.labelStyleName;
+      item["markerVisible"] = style.markerVisible;
+      item["labelVisible"] = style.labelVisible;
+      item["hasExplicitMarkerGeometry"] = style.hasExplicitMarkerGeometry;
+      item["markerType"] = style.markerType;
+      item["customMarker"] = style.customMarker;
+      item["markerOverlay"] = style.markerOverlay;
+      item["markerSizeType"] = style.markerSizeType;
+      item["markerOrientation"] = style.markerOrientation;
+      item["markerDisplay3dType"] = style.markerDisplay3dType;
+      item["markerSize"] = style.markerSize;
+      item["markerRotationRad"] = style.markerRotationRad;
+      item["markerFixedScale"] = style.markerFixedScale;
+      item["markerElevation"] = style.markerElevation;
+      item["markerScaleFactor"] = style.markerScaleFactor;
+      item["markerBlockName"] = style.markerBlockName;
+      item["displayComponents"] = json::array();
+      for (const auto& component : style.displayComponents)
+        item["displayComponents"].push_back({{"visible", component.visible}, {"color", component.color},
+            {"layer", component.layer}, {"linetype", component.linetype},
+            {"lineweight", component.lineweight}, {"linetypeScale", component.linetypeScale}});
+      styles.push_back(std::move(item));
+    }
+    doc["surveyPointStyles"] = std::move(styles);
+  }
+  {
+    json styles = json::array();
+    for (const SurveyPointLabelStyleDefinition& style : st.surveyPointLabelStyles) {
+      json item;
+      item["name"] = style.name;
+      json templates;
+      SurveyLabelTemplatesToJson(style.templates, templates);
+      item["templates"] = std::move(templates);
+      item["fontFamily"] = style.fontFamily;
+      item["textHeightPlottedInches"] = style.textHeightPlottedInches;
+      item["color"] = style.color;
+      item["visible"] = style.visible;
+      item["civilTextContents"] = style.civilTextContents;
+      styles.push_back(std::move(item));
+    }
+    doc["surveyPointLabelStyles"] = std::move(styles);
+  }
   doc["createPointsNextId"] = st.createPointsNextId;
   if (!st.pointVisibility.IsDefault()) {  // REQ-377: a project drawing's point visibility rules; additive
     const projpts::Rules& r = st.pointVisibility;
@@ -2324,6 +2638,131 @@ json BuildRoot(const AppCommandState& st) {
 }
 
 bool ValidateDocumentJson(const json& doc, std::vector<std::string>& log) {
+  // Validate before the loader clears the current drawing (REQ-001).
+  if (doc.contains("gradingPresets")) {
+    if (!doc["gradingPresets"].is_array()) {
+      log.push_back("Invalid grading presets in drawing.");
+      return false;
+    }
+    std::vector<std::string> names;
+    for (const auto& p : doc["gradingPresets"]) {
+      if (!p.is_object() || !p.contains("name") || !p["name"].is_string() ||
+          !p.contains("targetSurfaceId") || !p["targetSurfaceId"].is_number_unsigned() ||
+          !p.contains("cutRun") || !p["cutRun"].is_number() ||
+          !p.contains("fillRun") || !p["fillRun"].is_number() ||
+          !p.contains("sideLeft") || !p["sideLeft"].is_boolean() ||
+          !p.contains("target") || !p["target"].is_number_integer() ||
+          !p.contains("targetValue") || !p["targetValue"].is_number() ||
+          !p.contains("distanceGradePercent") || !p["distanceGradePercent"].is_number()) {
+        log.push_back("Invalid grading preset in drawing.");
+        return false;
+      }
+      const std::string name = p["name"].get<std::string>();
+      const double cut = p["cutRun"].get<double>();
+      const double fill = p["fillRun"].get<double>();
+      const double value = p["targetValue"].get<double>();
+      const double grade = p["distanceGradePercent"].get<double>();
+      int target = -1;
+      if (p["target"].is_number_unsigned()) {
+        const auto rawTarget = p["target"].get<std::uint64_t>();
+        if (rawTarget <= 3) target = static_cast<int>(rawTarget);
+      } else {
+        const auto rawTarget = p["target"].get<std::int64_t>();
+        if (rawTarget >= 0 && rawTarget <= 3) target = static_cast<int>(rawTarget);
+      }
+      const std::string folded = [&name] { std::string v = name; std::transform(v.begin(), v.end(), v.begin(),
+          [](unsigned char c) { return static_cast<char>(std::tolower(c)); }); return v; }();
+      if (name.find_first_not_of(" \t\r\n") == std::string::npos || !std::isfinite(cut) || cut <= 0.0 ||
+          !std::isfinite(fill) || fill <= 0.0 || !std::isfinite(value) || !std::isfinite(grade) ||
+          target < 0 || target > 3 || (target == 1 && value <= 0.0) ||
+          (target == static_cast<int>(CadGradingDefinition::Target::Surface) &&
+           p["targetSurfaceId"].get<std::uint64_t>() == 0) ||
+          std::find(names.begin(), names.end(), folded) != names.end()) {
+        log.push_back("Invalid grading preset in drawing.");
+        return false;
+      }
+      names.push_back(folded);
+    }
+  }
+  if (doc.contains("featureLineInfo") && doc["featureLineInfo"].is_array()) {
+    for (const auto& info : doc["featureLineInfo"]) {
+      if (!info.is_object() || !info.contains("grading") || !info["grading"].is_object()) continue;
+      const auto& grading = info["grading"];
+      if (!grading.contains("target")) continue; // legacy REQ-398/997 definition means Surface
+      if (!grading["target"].is_number_integer() ||
+          (grading.contains("targetValue") && !grading["targetValue"].is_number()) ||
+          (grading.contains("distanceGradePercent") && !grading["distanceGradePercent"].is_number())) {
+        log.push_back("Invalid grading target in drawing.");
+        return false;
+      }
+      int target = -1;
+      if (grading["target"].is_number_unsigned()) {
+        const auto raw = grading["target"].get<std::uint64_t>();
+        if (raw <= 3) target = static_cast<int>(raw);
+      } else {
+        const auto raw = grading["target"].get<std::int64_t>();
+        if (raw >= 0 && raw <= 3) target = static_cast<int>(raw);
+      }
+      if (target != static_cast<int>(CadGradingDefinition::Target::Surface) &&
+          !grading.contains("targetValue")) {
+        log.push_back("Invalid grading target in drawing.");
+        return false;
+      }
+      if (target == static_cast<int>(CadGradingDefinition::Target::Distance) &&
+          !grading.contains("distanceGradePercent")) {
+        log.push_back("Invalid grading target in drawing.");
+        return false;
+      }
+      const double value = grading.value("targetValue", 0.0);
+      const double percent = grading.value("distanceGradePercent", 0.0);
+      if (target < 0 || target > 3 || !std::isfinite(value) || !std::isfinite(percent) ||
+          (target == static_cast<int>(CadGradingDefinition::Target::Distance) && value <= 0.0)) {
+        log.push_back("Invalid grading target in drawing.");
+        return false;
+      }
+    }
+  }
+  std::vector<std::uint64_t> gradingIds;
+  if (doc.contains("surfaces") && doc["surfaces"].is_array()) {
+    for (const auto& surface : doc["surfaces"]) {
+      if (!surface.is_object() || !surface.contains("gradingMembers")) continue;
+      const auto& members = surface["gradingMembers"];
+      if (!members.is_array()) {
+        log.push_back("Invalid grading group membership in drawing.");
+        return false;
+      }
+      for (const auto& row : members) {
+        if (!row.is_object() || !row.contains("gradingId") || !row["gradingId"].is_number_unsigned() ||
+            row["gradingId"].get<std::uint64_t>() == 0 || !row.contains("strips") ||
+            !row["strips"].is_array() || row["strips"].empty()) {
+          log.push_back("Invalid grading group member in drawing.");
+          return false;
+        }
+        if (row.contains("infill") && !row["infill"].is_boolean()) {
+          log.push_back("Invalid grading group member in drawing.");
+          return false;
+        }
+        const auto id = row["gradingId"].get<std::uint64_t>();
+        if (std::find(gradingIds.begin(), gradingIds.end(), id) != gradingIds.end()) {
+          log.push_back("A grading belongs to more than one group or occurs twice in its group.");
+          return false;
+        }
+        gradingIds.push_back(id);
+        for (const auto& strip : row["strips"]) {
+          const bool infill = row.value("infill", false);
+          if (!strip.is_array() ||
+              (infill ? (strip.size() < 9 || strip.size() % 3 != 0) : strip.size() != 12) ||
+              !std::all_of(strip.begin(), strip.end(), [](const json& v) {
+                return v.is_number() && std::isfinite(v.get<double>());
+              })) {
+            log.push_back("Invalid baked grading strip in drawing.");
+            return false;
+          }
+        }
+      }
+    }
+  }
+
   if (!doc.contains("lineVerts") || !doc["lineVerts"].is_array()) {
     log.push_back("internal document payload: missing document.lineVerts array.");
     return false;
@@ -2580,6 +3019,11 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       g.rule.idRangesText = o.value("idRanges", std::string());
       g.rule.descriptionMatch = o.value("descriptionMatch", std::string());
       g.rule.rawDescriptionMatch = o.value("rawDescriptionMatch", std::string());
+      g.pointStyleName = o.value("pointStyleName", std::string());
+      g.labelStyleName = o.value("labelStyleName", std::string());
+      g.displayPriority = o.value("displayPriority", 0u);
+      g.pointStyleOverride = o.value("pointStyleOverride", false);
+      g.labelStyleOverride = o.value("labelStyleOverride", false);
       if (o.contains("explicitIds") && o["explicitIds"].is_array())
         for (const auto& v : o["explicitIds"])
           if (v.is_number_integer())
@@ -2607,6 +3051,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       l.presetIdx = o.value("presetIdx", l.presetIdx);
       if (o.contains("pageSetupName") && o["pageSetupName"].is_string())
         l.pageSetupName = o["pageSetupName"].get<std::string>();
+      l.plotStyleTablePath = o.value("plotStyleTablePath", l.plotStyleTablePath);
       l.fitToPaper = o.value("fitToPaper", l.fitToPaper);
       l.scaleModelPerPaperIn = o.value("scaleModelPerPaperIn", l.scaleModelPerPaperIn);
       l.plotArea = o.value("plotArea", l.plotArea);
@@ -2626,6 +3071,42 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           v.paperYIn = vo.value("paperYIn", v.paperYIn);
           v.paperWIn = vo.value("paperWIn", v.paperWIn);
           v.paperHIn = vo.value("paperHIn", v.paperHIn);
+          if (vo.contains("clipBoundary") && vo["clipBoundary"].is_array()) {
+            for (const auto& item : vo["clipBoundary"]) {
+              if (!item.is_array() || item.size() != 3 || !item[0].is_number() || !item[1].is_number() ||
+                  !item[2].is_number()) {
+                v.clipBoundary.clear();
+                break;
+              }
+              const float x = item[0].get<float>(), y = item[1].get<float>(), bulge = item[2].get<float>();
+              if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(bulge)) {
+                v.clipBoundary.clear();
+                break;
+              }
+              v.clipBoundary.push_back({x, y, bulge});
+            }
+            if (v.clipBoundary.size() >= 2) {
+              double twiceArea = 0.0;
+              bool validBoundary = true;
+              for (size_t i = 0; i < v.clipBoundary.size(); ++i) {
+                const auto& a = v.clipBoundary[i];
+                const auto& b = v.clipBoundary[(i + 1) % v.clipBoundary.size()];
+                ForEachBulgeChord(a.xIn, a.yIn, b.xIn, b.yIn, a.bulge, 16,
+                                  [&](double x0, double y0, double x1, double y1) {
+                                    if (!std::isfinite(x0) || !std::isfinite(y0) || !std::isfinite(x1) ||
+                                        !std::isfinite(y1)) {
+                                      validBoundary = false;
+                                      return;
+                                    }
+                                    twiceArea += x0 * y1 - y0 * x1;
+                                  });
+              }
+              if (!validBoundary || !std::isfinite(twiceArea) || std::fabs(twiceArea) < 1.e-8)
+                v.clipBoundary.clear();
+            } else if (!v.clipBoundary.empty()) {
+              v.clipBoundary.clear();
+            }
+          }
           v.modelCenterX = vo.value("modelCenterX", v.modelCenterX);
           v.modelCenterY = vo.value("modelCenterY", v.modelCenterY);
           v.scaleModelPerPaperIn = vo.value("scaleModelPerPaperIn", v.scaleModelPerPaperIn);
@@ -2652,6 +3133,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           }
           if (vo.contains("layer") && vo["layer"].is_string())
             v.layer = vo["layer"].get<std::string>();
+          v.on = vo.value("on", v.on);
+          v.locked = vo.value("locked", v.locked);
+          v.hidePlot = vo.value("hidePlot", v.hidePlot);
           if (vo.contains("frozenLayers") && vo["frozenLayers"].is_array()) {
             for (const auto& fl : vo["frozenLayers"]) {
               if (fl.is_string())
@@ -2729,6 +3213,23 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
               l.paperEllipses.push_back(CadEllipseFromJson(eo));
         readAttrs("paperEllAttrs", l.paperEllAttrs);
         l.paperEllAttrs.resize(l.paperEllipses.size());
+        if (o.contains("paperImages") && o["paperImages"].is_array())
+          for (const auto& io : o["paperImages"]) {
+            if (!io.is_object() || !io.contains("path") || !io["path"].is_string())
+              continue;
+            CadRasterImage im;
+            im.path = io["path"].get<std::string>();
+            im.insX = io.value("insX", 0.f);
+            im.insY = io.value("insY", 0.f);
+            im.width = io.value("width", 0.f);
+            im.height = io.value("height", 0.f);
+            im.rotationRad = io.value("rotationRad", 0.f);
+            im.pixelW = io.value("pixelW", 0);
+            im.pixelH = io.value("pixelH", 0);
+            l.paperImages.push_back(im);
+          }
+        readAttrs("paperImageAttrs", l.paperImageAttrs);
+        l.paperImageAttrs.resize(l.paperImages.size());
         if (o.contains("paperPolyOffsets") && o["paperPolyOffsets"].is_array())
           for (const auto& v : o["paperPolyOffsets"])
             if (v.is_number())
@@ -2737,6 +3238,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           for (const auto& v : o["paperPolyVerts"])
             if (v.is_number())
               l.paperPolyVerts.push_back(v.get<float>());
+        if (o.contains("paperPolyVertsBulge") && o["paperPolyVertsBulge"].is_array())
+          for (const auto& v : o["paperPolyVertsBulge"])
+            if (v.is_number())
+              l.paperPolyVertsBulge.push_back(v.get<float>());
         if (o.contains("paperPolyClosed") && o["paperPolyClosed"].is_array())
           for (const auto& v : o["paperPolyClosed"])
             if (v.is_number())
@@ -2748,12 +3253,14 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
              static_cast<size_t>(l.paperPolyOffsets.back()) * 3 != l.paperPolyVerts.size())) {
           l.paperPolyOffsets.clear();
           l.paperPolyVerts.clear();
+          l.paperPolyVertsBulge.clear();
           l.paperPolyClosed.clear();
           l.paperPolyAttrs.clear();
         } else {
           readAttrs("paperPolyAttrs", l.paperPolyAttrs);
           l.paperPolyClosed.resize(static_cast<size_t>(std::max(0, nPoly)));
           l.paperPolyAttrs.resize(static_cast<size_t>(std::max(0, nPoly)));
+          l.paperPolyVertsBulge.resize(l.paperPolyVerts.size() / 3, 0.f);
         }
         if (o.contains("paperFilledRegions") && o["paperFilledRegions"].is_array())
           for (const auto& el : o["paperFilledRegions"])
@@ -2784,6 +3291,44 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
               l.paperBlockRefs.push_back(CadBlockRefFromJson(br));
         readAttrs("paperBlockRefAttrs", l.paperBlockRefAttrs);
         l.paperBlockRefAttrs.resize(l.paperBlockRefs.size());
+        if (o.contains("paperSplines") && o["paperSplines"].is_array()) {
+          for (const auto& so : o["paperSplines"]) {
+            if (!so.is_object())
+              continue;
+            CadSpline s;
+            s.degree = so.value("degree", 3);
+            s.periodic = so.value("periodic", false);
+            if (so.contains("knots") && so["knots"].is_array())
+              for (const auto& k : so["knots"])
+                if (k.is_number()) s.knots.push_back(k.get<double>());
+            auto readPts = [](const json& list, std::vector<ray3d::Vec3>* out) {
+              if (!list.is_array()) return;
+              for (const auto& p : list) {
+                if (!p.is_array() || p.size() != 3 || !p[0].is_number() || !p[1].is_number() || !p[2].is_number())
+                  continue;
+                out->push_back({p[0].get<double>(), p[1].get<double>(), p[2].get<double>()});
+              }
+            };
+            if (so.contains("ctrl")) readPts(so["ctrl"], &s.ctrl);
+            if (so.contains("fit")) readPts(so["fit"], &s.fit);
+            if (so.contains("weights") && so["weights"].is_array())
+              for (const auto& w : so["weights"])
+                if (w.is_number()) s.weights.push_back(w.get<double>());
+            if (spline::Validate(s).empty())
+              l.paperSplines.push_back(std::move(s));
+          }
+        }
+        readAttrs("paperSplineAttrs", l.paperSplineAttrs);
+        l.paperSplineAttrs.resize(l.paperSplines.size());
+        if (o.contains("paperPoints") && o["paperPoints"].is_array()) {
+          for (const auto& p : o["paperPoints"]) {
+            if (!p.is_array() || p.size() != 3 || !p[0].is_number() || !p[1].is_number() || !p[2].is_number())
+              continue;
+            l.paperPoints.push_back(CadPoint{p[0].get<double>(), p[1].get<double>(), p[2].get<double>()});
+          }
+        }
+        readAttrs("paperPointAttrs", l.paperPointAttrs);
+        l.paperPointAttrs.resize(l.paperPoints.size());
       }
       st.paperLayouts.push_back(l);
     }
@@ -2814,6 +3359,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       ps.offsetXIn = o.value("offsetXIn", ps.offsetXIn);
       ps.offsetYIn = o.value("offsetYIn", ps.offsetYIn);
       ps.centerPlot = o.value("centerPlot", ps.centerPlot);
+      ps.plotStyleTablePath = o.value("plotStyleTablePath", ps.plotStyleTablePath);
       st.savedPageSetups.push_back(ps);
     }
   }
@@ -2840,7 +3386,12 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       s.name         = o.value("name", std::string());
       s.fontFamily   = o.value("fontFamily", std::string());
       s.heightInches = o.value("heightInches", 0.125f);
+      s.widthFactor  = o.value("widthFactor", 1.f);
       s.obliqueDeg   = o.value("obliqueDeg", 0.f);
+      if (o.contains("props") && o["props"].is_object()) {
+        for (const auto& property : o["props"].items())
+          if (property.value().is_string()) s.props[property.key()] = property.value().get<std::string>();
+      }
       s.bold         = o.value("bold", false);
       s.italic       = o.value("italic", false);
       if (!s.name.empty()) st.textStyles.push_back(std::move(s));
@@ -2942,6 +3493,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     DimensionStyle ds = DimensionStyles::Default();
     if (doc.contains("dimensionStyle") && doc["dimensionStyle"].is_object()) {
       const auto& o = doc["dimensionStyle"];
+      ds.name = o.value("name", ds.name);
       ds.textSizeInches = o.value("textSizeInches", ds.textSizeInches);
       ds.textFont = o.value("textFont", ds.textFont);
       ds.textColor = o.value("textColor", ds.textColor);
@@ -2956,7 +3508,44 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       ds.unitFormat = static_cast<DimUnitFormat>(o.value("unitFormat", static_cast<int>(ds.unitFormat)));
       ds.unitPrecision = o.value("unitPrecision", ds.unitPrecision);
       ds.unitScale = o.value("unitScale", ds.unitScale);
+      ds.unitSuffix = o.value("unitSuffix", ds.unitSuffix);
+      if (o.contains("props") && o["props"].is_object()) {
+        for (const auto& property : o["props"].items())
+          if (property.value().is_string()) ds.props[property.key()] = property.value().get<std::string>();
+      }
     }
+    st.dimensionStyles.clear();
+    if (doc.contains("dimensionStyles") && doc["dimensionStyles"].is_array()) {
+      for (const auto& o : doc["dimensionStyles"]) {
+        if (!o.is_object()) continue;
+        DimensionStyle style = DimensionStyles::Default();
+        style.name = o.value("name", style.name);
+        style.textSizeInches = o.value("textSizeInches", style.textSizeInches);
+        style.textFont = o.value("textFont", style.textFont);
+        style.textColor = o.value("textColor", style.textColor);
+        style.textAlign = static_cast<DimTextAlign>(o.value("textAlign", static_cast<int>(style.textAlign)));
+        style.dimLineColor = o.value("dimLineColor", style.dimLineColor);
+        style.dimLineType = o.value("dimLineType", style.dimLineType);
+        style.extLineColor = o.value("extLineColor", style.extLineColor);
+        style.extLineType = o.value("extLineType", style.extLineType);
+        style.arrowSizeInches = o.value("arrowSizeInches", style.arrowSizeInches);
+        style.arrowType = static_cast<DimArrowType>(o.value("arrowType", static_cast<int>(style.arrowType)));
+        style.arrowColor = o.value("arrowColor", style.arrowColor);
+        style.unitFormat = static_cast<DimUnitFormat>(o.value("unitFormat", static_cast<int>(style.unitFormat)));
+        style.unitPrecision = o.value("unitPrecision", style.unitPrecision);
+        style.unitScale = o.value("unitScale", style.unitScale);
+        style.unitSuffix = o.value("unitSuffix", style.unitSuffix);
+      if (o.contains("props") && o["props"].is_object()) {
+        for (const auto& property : o["props"].items())
+          if (property.value().is_string()) style.props[property.key()] = property.value().get<std::string>();
+      }
+        if (std::none_of(st.dimensionStyles.begin(), st.dimensionStyles.end(), [&](const DimensionStyle& existing) {
+              return existing.name == style.name;
+            })) st.dimensionStyles.push_back(std::move(style));
+      }
+    }
+    if (st.dimensionStyles.empty()) st.dimensionStyles.push_back(ds);
+    if (const DimensionStyle* active = DimensionStyles::Find(st.dimensionStyles, ds.name)) ds = *active;
     st.activeDimensionStyle = ds;
     st.dimStyleDraft = ds;
   }
@@ -2971,10 +3560,85 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       ms.arrowSizeInches = o.value("arrowSizeInches", ms.arrowSizeInches);
       ms.landingGapInches = o.value("landingGapInches", ms.landingGapInches);
       ms.annotativeDefault = o.value("annotativeDefault", false);
+      if (o.contains("props") && o["props"].is_object()) {
+        for (const auto& property : o["props"].items())
+          if (property.value().is_string()) ms.props[property.key()] = property.value().get<std::string>();
+      }
     }
     st.activeMultileaderStyle = ms;
     st.mleaderStyleDraft = ms;
+    st.multileaderStyles.clear();
+    if (doc.contains("multileaderStyles") && doc["multileaderStyles"].is_array()) {
+      for (const auto& o : doc["multileaderStyles"]) {
+        if (!o.is_object()) continue;
+        MultileaderStyle style = MultileaderStyles::Default();
+        style.name = o.value("name", style.name);
+        if (style.name.empty()) continue;
+        style.textSizeInches = o.value("textSizeInches", style.textSizeInches);
+        style.textFont = o.value("textFont", style.textFont);
+        style.arrowSizeInches = o.value("arrowSizeInches", style.arrowSizeInches);
+        style.landingGapInches = o.value("landingGapInches", style.landingGapInches);
+        style.annotativeDefault = o.value("annotativeDefault", style.annotativeDefault);
+      if (o.contains("props") && o["props"].is_object()) {
+        for (const auto& property : o["props"].items())
+          if (property.value().is_string()) style.props[property.key()] = property.value().get<std::string>();
+      }
+        if (MultileaderStyles::Find(st.multileaderStyles, style.name) == nullptr)
+          st.multileaderStyles.push_back(std::move(style));
+      }
+    }
+    if (st.multileaderStyles.empty()) st.multileaderStyles.push_back(ms);
+    if (MultileaderStyles::Find(st.multileaderStyles, ms.name) == nullptr)
+      st.multileaderStyles.push_back(ms);
+    else if (const MultileaderStyle* active = MultileaderStyles::Find(st.multileaderStyles, ms.name))
+      ms = *active;
+    st.activeMultileaderStyle = ms;
+    st.mleaderStyleDraft = ms;
   }
+  st.tableStyles.clear();
+  if (doc.contains("tableStyles") && doc["tableStyles"].is_array()) {
+    for (const auto& o : doc["tableStyles"]) {
+      if (!o.is_object()) continue;
+      CadTableStyle style;
+      style.name = o.value("name", std::string());
+      if (style.name.empty()) continue;
+      style.point = o.value("point", false);
+      style.headerRow = o.value("headerRow", true);
+      style.textHeightInches = o.value("textHeightInches", style.textHeightInches);
+      style.columnWidthInches = o.value("columnWidthInches", style.columnWidthInches);
+      style.rowHeightInches = o.value("rowHeightInches", style.rowHeightInches);
+      style.columnHeaders = o.value("columnHeaders", style.columnHeaders);
+      style.columnExpressions = o.value("columnExpressions", style.columnExpressions);
+      style.columnWidths = o.value("columnWidths", style.columnWidths);
+      if (o.contains("props") && o["props"].is_object()) {
+        for (const auto& property : o["props"].items())
+          if (property.value().is_string()) style.props[property.key()] = property.value().get<std::string>();
+      }
+      style.title = o.value("title", style.title);
+      style.civilStyleName = o.value("civilStyleName", style.civilStyleName);
+      style.textStyleName = o.value("textStyleName", style.textStyleName);
+      style.headerTextStyleName = o.value("headerTextStyleName", style.headerTextStyleName);
+      style.titleTextStyleName = o.value("titleTextStyleName", style.titleTextStyleName);
+      style.headerTextHeightInches = o.value("headerTextHeightInches", style.headerTextHeightInches);
+      style.titleTextHeightInches = o.value("titleTextHeightInches", style.titleTextHeightInches);
+      style.dataTextColor = o.value("dataTextColor", style.dataTextColor);
+      style.headerTextColor = o.value("headerTextColor", style.headerTextColor);
+      style.titleTextColor = o.value("titleTextColor", style.titleTextColor);
+      style.gridLineColor = o.value("gridLineColor", style.gridLineColor);
+      style.borderColor = o.value("borderColor", style.borderColor);
+      if (o.contains("pointColumns") && o["pointColumns"].is_array()) {
+        for (const auto& column : o["pointColumns"]) {
+          const int value = column.get<int>();
+          if (value >= 0 && value <= static_cast<int>(CadPointTableColumn::Description))
+            style.pointColumns.push_back(static_cast<CadPointTableColumn>(value));
+        }
+      }
+      if (std::none_of(st.tableStyles.begin(), st.tableStyles.end(), [&](const CadTableStyle& existing) {
+            return existing.name == style.name;
+          })) st.tableStyles.push_back(std::move(style));
+    }
+  }
+  if (st.tableStyles.empty()) st.tableStyles = CadTableBuiltinStyles();
 
   st.userLinesFlat.clear();
   for (const auto& v : doc["lineVerts"])
@@ -3069,6 +3733,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.featureLineClosed.clear();
   st.featureLineElevPt.clear();
   st.featureLineInfo.clear();
+  st.gradingPresets.clear();
   st.featureLineAttrs.clear();
   if (doc.contains("featureLineOffsets") && doc["featureLineOffsets"].is_array())
     for (const auto& v : doc["featureLineOffsets"])
@@ -3098,12 +3763,32 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           d.cutRun = g->value("cutRun", 0.0);
           d.fillRun = g->value("fillRun", 0.0);
           d.sideLeft = g->value("sideLeft", true);
+          const int target = g->value("target", 0);
+          const bool validTarget = target >= 0 && target <= 3;
+          if (validTarget) d.target = static_cast<CadGradingDefinition::Target>(target);
+          d.targetValue = g->value("targetValue", 0.0);
+          d.distanceGradePercent = g->value("distanceGradePercent", 0.0);
           if (d.baselineId != 0 && std::isfinite(d.cutRun) && d.cutRun > 0.0 &&
-              std::isfinite(d.fillRun) && d.fillRun > 0.0)
+              std::isfinite(d.fillRun) && d.fillRun > 0.0 &&
+              validTarget && std::isfinite(d.targetValue) && std::isfinite(d.distanceGradePercent) &&
+              (d.target != CadGradingDefinition::Target::Distance || d.targetValue > 0.0))
             i.grading = d;
         }
       }
       st.featureLineInfo.push_back(std::move(i));
+    }
+  if (doc.contains("gradingPresets") && doc["gradingPresets"].is_array())
+    for (const auto& o : doc["gradingPresets"]) {
+      CadGradingPreset p;
+      p.name = o.at("name").get<std::string>();
+      p.targetSurfaceId = o.at("targetSurfaceId").get<std::uint64_t>();
+      p.cutRun = o.at("cutRun").get<double>();
+      p.fillRun = o.at("fillRun").get<double>();
+      p.sideLeft = o.at("sideLeft").get<bool>();
+      p.target = static_cast<CadGradingDefinition::Target>(o.at("target").get<int>());
+      p.targetValue = o.at("targetValue").get<double>();
+      p.distanceGradePercent = o.at("distanceGradePercent").get<double>();
+      st.gradingPresets.push_back(std::move(p));
     }
   if (doc.contains("featureLineAttrs") && doc["featureLineAttrs"].is_array())
     for (const auto& o : doc["featureLineAttrs"])
@@ -3128,6 +3813,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   }
   st.cadTableAttrs.resize(st.cadTables.size());
   MigrateLegacyAnnotationTables(st);
+  CadTableSyncSurveyPointTables(st.cadTables, st.tableStyles, st.modelUnitsPerPlottedInch);
 
   // Position Markers (REQ-359 item 3). Missing / garbage entries are skipped, never a crash.
   st.cadPositionMarkers.clear();
@@ -3161,12 +3847,18 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (!o.is_object())
         continue;
       CadMultileader ml;
+      ml.arrowSizeWorld = o.value("arrowSizeWorld", ml.arrowSizeWorld);
+      ml.labelWidthWorld = o.value("labelWidthWorld", ml.labelWidthWorld);
+      ml.labelHeightWorld = o.value("labelHeightWorld", ml.labelHeightWorld);
       if (o.contains("path") && o["path"].is_array()) {
         for (const auto& v : o["path"])
           if (v.is_number())
             ml.pathXyz.push_back(static_cast<float>(v.get<double>()));
       }
       ml.annotative = o.value("annotative", false);
+      ml.splinePath = o.value("splinePath", false);
+      ml.showArrow = o.value("showArrow", true);
+      ml.styleName = o.value("styleName", std::string("Standard"));
       if (o.contains("annotativeVisibleScaleNames") && o["annotativeVisibleScaleNames"].is_array())
         ml.annotativeVisibleScaleNames = o["annotativeVisibleScaleNames"].get<std::vector<std::string>>();
       if (o.contains("extraPaths") && o["extraPaths"].is_array()) {
@@ -3204,25 +3896,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       const size_t attrIndex = splineIndex++;
       if (!o.is_object())
         continue;
-      CadSpline s;
-      s.degree = o.value("degree", 3);
-      s.periodic = o.value("periodic", false);
-      if (o.contains("knots") && o["knots"].is_array())
-        for (const auto& k : o["knots"])
-          if (k.is_number()) s.knots.push_back(k.get<double>());
-      const auto readPoints = [](const json& list, std::vector<ray3d::Vec3>* out) {
-        if (!list.is_array()) return;
-        for (const auto& p : list) {
-          if (!p.is_array() || p.size() != 3 || !p[0].is_number() || !p[1].is_number() || !p[2].is_number())
-            continue;
-          out->push_back({p[0].get<double>(), p[1].get<double>(), p[2].get<double>()});
-        }
-      };
-      if (o.contains("ctrl")) readPoints(o["ctrl"], &s.ctrl);
-      if (o.contains("fit")) readPoints(o["fit"], &s.fit);
-      if (o.contains("weights") && o["weights"].is_array())
-        for (const auto& w : o["weights"])
-          if (w.is_number()) s.weights.push_back(w.get<double>());
+      CadSpline s = CadSplineFromJson(o);
       if (spline::Validate(s).empty()) {
         st.cadSplines.push_back(std::move(s));
         st.cadSplineAttrs.push_back(attrs != nullptr && attrIndex < attrs->size() && (*attrs)[attrIndex].is_object()
@@ -3232,6 +3906,26 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     }
   }
   st.cadSplineAttrs.resize(st.cadSplines.size());
+
+  st.cadPoints.clear();
+  st.cadPointAttrs.clear();
+  if (doc.contains("cadPoints") && doc["cadPoints"].is_array()) {
+    const json* attrs = doc.contains("cadPointAttrs") && doc["cadPointAttrs"].is_array()
+                            ? &doc["cadPointAttrs"] : nullptr;
+    size_t i = 0;
+    for (const auto& p : doc["cadPoints"]) {
+      const size_t attrIndex = i++;
+      if (!p.is_array() || p.size() != 3 || !p[0].is_number() || !p[1].is_number() || !p[2].is_number())
+        continue;
+      st.cadPoints.push_back(CadPoint{p[0].get<double>(), p[1].get<double>(), p[2].get<double>()});
+      st.cadPointAttrs.push_back(attrs != nullptr && attrIndex < attrs->size() && (*attrs)[attrIndex].is_object()
+                                     ? EntityAttributesFromJson((*attrs)[attrIndex])
+                                     : EntityAttributes{});
+    }
+  }
+  st.cadPointAttrs.resize(st.cadPoints.size());
+  st.pdMode = doc.value("pdMode", 0);
+  st.pdSize = doc.value("pdSize", 0.0);
 
   st.drawingInsUnits = doc.value("drawingInsUnits", st.drawingInsUnits);
   st.blockDefs.clear();
@@ -3476,6 +4170,17 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (!el.is_object())
         continue;
       CadSurface s;
+      if (el.contains("gradingMembers")) {
+        s.gradingGroup = true;
+        for (const auto& row : el["gradingMembers"]) {
+          CadGradingGroupMember member;
+          member.gradingId = row["gradingId"].get<std::uint64_t>();
+          member.infill = row.value("infill", false);
+          member.strips = std::make_shared<const std::vector<std::vector<double>>>(
+              row["strips"].get<std::vector<std::vector<double>>>());
+          s.gradingMembers.push_back(std::move(member));
+        }
+      }
       s.name = el.value("name", std::string());
       if (s.name.empty())
         continue;  // an unnamed surface cannot be referenced or managed
@@ -3638,6 +4343,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         else
           log.push_back("Surface \"" + s.name + "\": stored triangulation is inconsistent — dropped.");
       }
+      s.importedFixedTin = s.tin && el.value("importedFixedTin", false);
       st.cadSurfaces.push_back(std::move(s));
     }
   }
@@ -3732,6 +4438,22 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.currentAnnotationScaleIndex = st.annotationScales.empty() ? -1 : 0;
   }
 
+  st.viewportZoomScales.clear();
+  st.currentViewportZoomScaleIndex = -1;
+  if (doc.contains("viewportZoomScales") && doc["viewportZoomScales"].is_array()) {
+    for (const auto& el : doc["viewportZoomScales"]) {
+      CadAnnotationScale s;
+      s.name = el.value("name", std::string{});
+      s.paperUnits = el.value("paperUnits", 1.f);
+      s.drawingUnits = el.value("drawingUnits", 1.f);
+      if (!s.name.empty() && s.paperUnits > 0.f && s.drawingUnits > 0.f)
+        st.viewportZoomScales.push_back(std::move(s));
+    }
+    st.currentViewportZoomScaleIndex = doc.value("currentViewportZoomScaleIndex", -1);
+    if (st.currentViewportZoomScaleIndex >= static_cast<int>(st.viewportZoomScales.size()))
+      st.currentViewportZoomScaleIndex = st.viewportZoomScales.empty() ? -1 : 0;
+  }
+
   st.dwgImportedLights.clear();
   st.dwgImportedSunPresent = false;
   st.dwgImportedLightList = {};
@@ -3809,6 +4531,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         p.rawDescription = o["rawDescription"].get<std::string>();
       if (o.contains("layer") && o["layer"].is_string())
         p.layer = o["layer"].get<std::string>();
+      p.styleName = o.value("styleName", std::string("Standard"));
+      p.labelStyleName = o.value("labelStyleName", std::string("Standard"));
       const int ls = o.value("labelStyle", static_cast<int>(SurveyPointLabelStyle::NumberDesc));
       if (ls >= 0 && ls <= static_cast<int>(SurveyPointLabelStyle::NumberNorthEastElev))
         p.labelStyle = static_cast<SurveyPointLabelStyle>(ls);
@@ -3819,6 +4543,68 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.surveyPoints.push_back(std::move(p));
     }
   }
+  st.surveyPointStyles.clear();
+  if (doc.contains("surveyPointStyles") && doc["surveyPointStyles"].is_array()) {
+    for (const auto& o : doc["surveyPointStyles"]) {
+      if (!o.is_object()) continue;
+      SurveyPointStyleDefinition style;
+      style.name = o.value("name", style.name);
+      if (style.name.empty()) continue;
+      style.crossSpanPlottedInches = o.value("crossSpanPlottedInches", style.crossSpanPlottedInches);
+      style.color = o.value("color", style.color);
+      style.labelStyleName = o.value("labelStyleName", style.labelStyleName);
+      style.markerVisible = o.value("markerVisible", style.markerVisible);
+      style.labelVisible = o.value("labelVisible", style.labelVisible);
+      style.hasExplicitMarkerGeometry = o.value("hasExplicitMarkerGeometry", false);
+      style.markerType = o.value("markerType", style.markerType);
+      style.customMarker = o.value("customMarker", style.customMarker);
+      style.markerOverlay = o.value("markerOverlay", style.markerOverlay);
+      style.markerSizeType = o.value("markerSizeType", style.markerSizeType);
+      style.markerOrientation = o.value("markerOrientation", style.markerOrientation);
+      style.markerDisplay3dType = o.value("markerDisplay3dType", style.markerDisplay3dType);
+      style.markerSize = o.value("markerSize", style.markerSize);
+      style.markerRotationRad = o.value("markerRotationRad", style.markerRotationRad);
+      style.markerFixedScale = o.value("markerFixedScale", style.markerFixedScale);
+      style.markerElevation = o.value("markerElevation", style.markerElevation);
+      style.markerScaleFactor = o.value("markerScaleFactor", style.markerScaleFactor);
+      style.markerBlockName = o.value("markerBlockName", style.markerBlockName);
+      if (o.contains("displayComponents") && o["displayComponents"].is_array()) {
+        const auto& components = o["displayComponents"];
+        for (std::size_t i = 0; i < std::min(components.size(), style.displayComponents.size()); ++i) {
+          if (!components[i].is_object()) continue;
+          auto& component = style.displayComponents[i];
+          component.visible = components[i].value("visible", component.visible);
+          component.color = components[i].value("color", component.color);
+          component.layer = components[i].value("layer", component.layer);
+          component.linetype = components[i].value("linetype", component.linetype);
+          component.lineweight = components[i].value("lineweight", component.lineweight);
+          component.linetypeScale = components[i].value("linetypeScale", component.linetypeScale);
+        }
+      }
+      st.surveyPointStyles.push_back(std::move(style));
+    }
+  }
+  if (st.surveyPointStyles.empty()) st.surveyPointStyles = DefaultSurveyPointStyles();
+  st.surveyPointLabelStyles.clear();
+  if (doc.contains("surveyPointLabelStyles") && doc["surveyPointLabelStyles"].is_array()) {
+    for (const auto& o : doc["surveyPointLabelStyles"]) {
+      if (!o.is_object()) continue;
+      SurveyPointLabelStyleDefinition style;
+      style.name = o.value("name", style.name);
+      if (style.name.empty()) continue;
+      if (o.contains("templates") && o["templates"].is_object())
+        style.templates = SurveyLabelTemplatesFromJson(o["templates"]);
+      style.fontFamily = o.value("fontFamily", style.fontFamily);
+      style.textHeightPlottedInches = o.value("textHeightPlottedInches", style.textHeightPlottedInches);
+      style.color = o.value("color", style.color);
+      style.visible = o.value("visible", true);
+      if (o.contains("civilTextContents") && o["civilTextContents"].is_array())
+        for (const auto& content : o["civilTextContents"])
+          if (content.is_string()) style.civilTextContents.push_back(content.get<std::string>());
+      st.surveyPointLabelStyles.push_back(std::move(style));
+    }
+  }
+  if (st.surveyPointLabelStyles.empty()) st.surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
 
   st.createPointsNextId = doc.value("createPointsNextId", 1);
   st.pointVisibility = projpts::Rules{};  // REQ-377: absent -> show every point of the project
@@ -4072,12 +4858,98 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
     return false;
   }
   try {
+    json root = BuildRoot(st);
+    json& doc = root["document"];
+    // A .gst carries reusable standards, setup, and vector linework. Keep this list in sync with
+    // BuildRoot whenever a new entity store is added; only non-linework drawing content is removed.
+    for (const char* key : {
+             "annotations",
+             "annotationAttrs", "tables", "tableAttrs", "positionMarkers", "positionMarkerAttrs", "multileaders",
+             "multileaderAttrs", "cadPoints", "cadPointAttrs", "blockRefs", "blockRefAttrs", "filledRegions",
+             "filledRegionAttrs", "meshes", "meshAttrs", "pointClouds",
+             "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "surfaces",
+             "surfaceAttrs", "surveyPoints", "blockFavorites", "blockRecent"})
+      doc[key] = json::array();
+
+    // Captured map tiles are source-drawing imagery, not reusable template settings.
+    if (doc.contains("drawingSettings") && doc["drawingSettings"].is_object())
+      doc["drawingSettings"].erase("capturedAreas");
+
+    // Keep named views and named UCS definitions as reusable drawing standards, but do not carry
+    // over the source drawing's current camera, projection, active view, or current UCS.
+    if (doc.contains("view") && doc["view"].is_object()) {
+      json reusableViews = json::object();
+      if (doc["view"].contains("namedViews")) reusableViews["namedViews"] = doc["view"]["namedViews"];
+      if (doc["view"].contains("namedUcs")) reusableViews["namedUcs"] = doc["view"]["namedUcs"];
+      doc["view"] = std::move(reusableViews);
+    } else {
+      doc.erase("view");
+    }
+
+    // Keep reusable view/settings state and entity ID counters with the retained linework.
+    // Block definitions are limited to dependencies of paper-space border inserts and point-style markers.
+    std::set<std::string> neededBlocks;
+    auto collectBlock = [&](const json& value, const char* field) {
+      if (value.is_object() && value.contains(field) && value[field].is_string())
+        neededBlocks.insert(value[field].get<std::string>());
+    };
+    if (doc.contains("surveyPointStyles") && doc["surveyPointStyles"].is_array())
+      for (const auto& style : doc["surveyPointStyles"]) collectBlock(style, "markerBlockName");
+    if (doc.contains("paperLayouts") && doc["paperLayouts"].is_array())
+      for (const auto& layout : doc["paperLayouts"])
+        if (layout.contains("paperBlockRefs") && layout["paperBlockRefs"].is_array())
+          for (const auto& ref : layout["paperBlockRefs"]) collectBlock(ref, "defName");
+    if (doc.contains("blockDefs") && doc["blockDefs"].is_array()) {
+      json defs = doc["blockDefs"];
+      json kept = json::array();
+      const auto isNeededBlock = [&](const std::string& candidate) {
+        return std::any_of(neededBlocks.begin(), neededBlocks.end(), [&](const std::string& needed) {
+          return CadBlockEqCi(candidate, needed);
+        });
+      };
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        for (const auto& def : defs) {
+          if (!def.is_object() || !def.contains("name") || !def["name"].is_string()) continue;
+          const std::string name = def["name"].get<std::string>();
+          if (!isNeededBlock(name)) continue;
+          bool already = false;
+          for (const auto& prior : kept)
+            if (prior.is_object() && CadBlockEqCi(prior.value("name", std::string{}), name)) {
+              already = true;
+              break;
+            }
+          if (already) continue;
+          kept.push_back(def);
+          changed = true;
+          if (def.contains("content") && def["content"].is_object() &&
+              def["content"].contains("nested") && def["content"]["nested"].is_array())
+            for (const auto& nested : def["content"]["nested"]) collectBlock(nested, "defName");
+        }
+      }
+      doc["blockDefs"] = std::move(kept);
+    }
+    if (doc.contains("paperLayouts") && doc["paperLayouts"].is_array()) {
+      for (json& layout : doc["paperLayouts"]) {
+        for (const char* key : {
+                 "paperTexts", "paperTextAttrs", "paperImages", "paperImageAttrs", "paperFilledRegions",
+                 "paperFilledRegionAttrs", "paperPoints", "paperPointAttrs", "paperMultileaders",
+                 "paperMultileaderAttrs", "paperTables", "paperTableAttrs"})
+          layout[key] = json::array();
+      }
+    }
+
     std::ofstream f(std::filesystem::path(pathUtf8), std::ios::binary);
     if (!f) {
       log.push_back(std::string("Could not open for write: ") + pathUtf8);
       return false;
     }
-    f << SerializeGoSurveyJson(st);
+    f << root.dump(2);
+    if (!f) {
+      log.push_back(std::string("Could not finish writing template: ") + pathUtf8);
+      return false;
+    }
     log.push_back(std::string("Saved GoSurvey template (.gst): ") + pathUtf8);
     return true;
   } catch (const std::exception& e) {

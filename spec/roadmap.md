@@ -8,6 +8,16 @@
 
 ---
 
+## Approved grading toolkit sequence (D-2026-11-02-a)
+
+1. REQ-456–458: four target modes, explicit infill, group-aware deletion and Qt palette.
+2. REQ-459: Copy Create, copied presets and Qt feature-line elevation editing.
+3. REQ-460: reviewed regional/transition semantics and explicitly rebuilt bench chains.
+4. REQ-461: detached snapshots, group/selection raise-lower and reviewed quality utilities.
+
+See [grading-toolkit.md](grading-toolkit.md). Each increment requires its own verification
+and Qt screenshot gate. Automatic source tracking and optimizer #813 are separately scoped.
+
 ## How to use this document
 
 - The roadmap pulls from `requirements.md`. A roadmap item should reference the
@@ -309,6 +319,11 @@ A lightweight board that complements the milestones. Keep each column honest.
   map into CAD stores / retire converter from File open-save → point cloud + PTS → PTX/LAS/LAZ/E57
   → IMAGE → IFC view. **No code until a Workshop task cites these REQs.** ODA and native scan
   project formats stay out.
+- **Civil 3D semantic DWG import (REQ-478/479, D-2026-10-31-a/b, ADR-074).** Decode supported Civil 3D
+  records in-process and map point metadata, TIN topology, alignments, labels, and styles into GoSurvey
+  objects. Export ordinary AutoCAD entities and style records that AutoCAD accepts without Recover; do not
+  author Civil 3D custom objects. Use Rapides Substation as the baseline and log unmapped source data.
+  No Civil 3D/AutoCAD runtime bridge, Object Enabler, or ODA Civil SDK is shipped or required.
 - **M-Surfaces-119 — Issue #119 remainder** (D-2026-08-27-a, ADR-039, D-2026-08-27-b). Phases 1–3
   (REQ-124…135) implemented on the 119 branch. REQ-136 TIN volume surface in progress. Grid /
   corridor / contour smoothing and labels / TIN swap remain out of scope.

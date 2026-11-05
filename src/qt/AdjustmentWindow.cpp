@@ -399,6 +399,7 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   projectForm->addRow(adjustmentTypeLabel, m_SettingsAdjustmentType);
   m_SettingsMaxIterations = new QSpinBox(projectOptions);
   m_SettingsMaxIterations->setObjectName("issue915MaxIterations");
+  m_SettingsMaxIterations->setFixedHeight(32);
   m_SettingsMaxIterations->setRange(1, std::numeric_limits<int>::max());
   auto* maxIterationsLabel = new QLabel("Maximum iterations", projectOptions);
   maxIterationsLabel->setMinimumWidth(settingsLabelWidth);
@@ -407,12 +408,14 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   convergence->setObjectName("issue915ConvergenceLimit");
   convergence->setDecimals(12); convergence->setRange(1.e-12, 1.0);
   convergence->setMinimumHeight(26);
+  convergence->setFixedHeight(32);
   auto* convergenceLabel = new QLabel("Convergence limit", projectOptions);
   convergenceLabel->setMinimumWidth(settingsLabelWidth);
   projectForm->addRow(convergenceLabel, convergence);
   auto* refraction = new ConciseDoubleSpinBox(projectOptions);
   refraction->setObjectName("issue915RefractionCoefficient");
   refraction->setDecimals(6); refraction->setRange(0.0, 1.0);
+  refraction->setFixedHeight(32);
   refraction->setToolTip("Least-squares observation weighting. This is separate from the traverse curvature correction k above.");
   auto* refractionLabel = new QLabel("LSA refraction coefficient", projectOptions);
   refractionLabel->setMinimumWidth(settingsLabelWidth);
@@ -443,7 +446,7 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
     editor->setObjectName(field.name);
     editor->setDecimals(field.decimals);
     editor->setRange(field.minimum, field.maximum);
-    editor->setMinimumHeight(26);
+    editor->setFixedHeight(32);
     QString label = QString::fromUtf8(field.label);
     if (field.linear) label += " (" + UnitSuffix() + ")";
     auto* fieldLabel = new QLabel(label, instrumentOptions);

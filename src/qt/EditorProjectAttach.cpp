@@ -17,6 +17,7 @@
 #include <QDoubleSpinBox>
 #include <QEventLoop>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QImage>
 #include <QLineEdit>
 #include <QSpinBox>
@@ -27,7 +28,16 @@
 #include <QMessageBox>
 #include <QPalette>
 #include <QPushButton>
-#include <QVBoxLayout>
+#include <QScrollArea>
+#include <QToolButton>
+#include <QButtonGroup>
+#include <QComboBox>
+#include <QDesktopServices>
+#include <QUrl>
+#include <QGridLayout>
+#include <QDialogButtonBox>
+#include <QProgressBar>
+#include <QApplication>
 
 #include <utility>
 #include <algorithm>
@@ -37,6 +47,38 @@
 
 namespace {
 using Prompt = AppCommandState::ProjectAttachPrompt;
+
+/// Page spin box: select all on focus so typing replaces the page number.
+class SelectAllSpinBox final : public QSpinBox {
+ public:
+  using QSpinBox::QSpinBox;
+  void focusInEvent(QFocusEvent* event) override {
+    QSpinBox::focusInEvent(event);
+    if (lineEdit() != nullptr) lineEdit()->selectAll();
+  }
+};
+
+constexpr int kPdfAttachThumbGridColumns = 5;
+
+static QString PdfAttachDialogStyleSheet(bool dark) {
+  return QtApplyAccent(
+      "QDialog#pdfAttachDialog QGroupBox {"
+      "  font-weight:600; margin-top:8px; padding:8px 8px 6px 8px;"
+      "  border:1px solid palette(mid); border-radius:3px; }"
+      "QDialog#pdfAttachDialog QGroupBox::title {"
+      "  subcontrol-origin:margin; left:8px; padding:0 4px; color:@strong@; }"
+      "QDialog#pdfAttachDialog QComboBox,"
+      "QDialog#pdfAttachDialog QDoubleSpinBox,"
+      "QDialog#pdfAttachDialog QSpinBox {"
+      "  min-height:22px; padding:2px 6px; border:1px solid palette(mid); border-radius:2px; }"
+      "QDialog#pdfAttachDialog QScrollArea#pdfAttachPageStripScroll {"
+      "  background:palette(base); border:1px solid palette(mid); }"
+      "QDialog#pdfAttachDialog QLabel#pdfAttachPreview {"
+      "  color:@quiet@; padding:24px; }"
+      "QDialog#pdfAttachDialog QLabel#pdfAttachSavedPath { color:@quiet@; font-size:11px; }"
+      "QDialog#pdfAttachDialog QLabel#pdfAttachStatus { color:palette(windowText); }",
+      dark);
+}
 
 QString SizeText(std::uint64_t bytes) {
   const double value = static_cast<double>(bytes);
@@ -220,33 +262,79 @@ void EditorWindow::ShowPdfAttachDialog() {
   m_ModalOpen = true;
   QDialog dialog(this);
   dialog.setObjectName("pdfAttachDialog");
-  dialog.setWindowTitle("PDF Attach");
+  dialog.setWindowTitle("Attach PDF Underlay");
   dialog.setWindowModality(Qt::ApplicationModal);
-  dialog.resize(690, 620);
+  dialog.resize(920, 640);
+  const bool darkDialog = dialog.palette().color(QPalette::Window).lightness() < 128;
+  dialog.setStyleSheet(PdfAttachDialogStyleSheet(darkDialog));
+
+  auto* pathEdit = new QLineEdit(QString::fromUtf8(m_State.pdfAttachFilePath), &dialog);
+  pathEdit->setObjectName("pdfAttachPath");
+  pathEdit->hide();
+
   auto* root = new QVBoxLayout(&dialog);
-  auto* form = new QFormLayout;
-  root->addLayout(form);
-  auto* path = new QLineEdit(QString::fromUtf8(m_State.pdfAttachFilePath), &dialog);
-  path->setObjectName("pdfAttachPath");
+  root->setContentsMargins(12, 12, 12, 10);
+  root->setSpacing(8);
+
+  auto* mainRow = new QHBoxLayout;
+  mainRow->setSpacing(12);
+  root->addLayout(mainRow, 1);
+
+  auto* leftColumn = new QVBoxLayout;
+  leftColumn->setSpacing(8);
+  mainRow->addLayout(leftColumn, 1);
+
   auto* browse = new QPushButton("Browse...", &dialog);
   browse->setObjectName("pdfAttachBrowse");
-  auto* pathRow = new QWidget(&dialog);
-  auto* pathLayout = new QHBoxLayout(pathRow);
-  pathLayout->setContentsMargins(0, 0, 0, 0);
-  pathLayout->addWidget(path, 1);
-  pathLayout->addWidget(browse);
-  form->addRow("PDF file", pathRow);
-  auto* page = new QSpinBox(&dialog);
-  page->setObjectName("pdfAttachPage");
-  page->setRange(1, 1);
-  page->setValue(std::max(1, m_State.pdfAttachSelectedPage + 1));
-  form->addRow("Page", page);
-  auto* preview = new QLabel("Choose a PDF to preview its selected page.", &dialog);
-  preview->setObjectName("pdfAttachPreview");
-  preview->setAlignment(Qt::AlignCenter);
-  preview->setMinimumHeight(220);
-  preview->setFrameShape(QFrame::StyledPanel);
-  root->addWidget(preview, 1);
+  auto* name = new QComboBox(&dialog);
+  name->setObjectName("pdfAttachName");
+  name->setEditable(true);
+  name->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  auto* nameLabel = new QLabel("Name:", &dialog);
+  nameLabel->setFixedWidth(44);
+  auto* nameRow = new QHBoxLayout;
+  nameRow->setSpacing(8);
+  nameRow->addWidget(nameLabel);
+  nameRow->addWidget(name, 1);
+  nameRow->addWidget(browse);
+  leftColumn->addLayout(nameRow);
+
+  auto* thumbGridScroll = new QScrollArea(&dialog);
+  thumbGridScroll->setObjectName("pdfAttachPageStripScroll");
+  thumbGridScroll->setWidgetResizable(true);
+  thumbGridScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  thumbGridScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  thumbGridScroll->setMinimumHeight(360);
+  thumbGridScroll->setFrameShape(QFrame::StyledPanel);
+  auto* gridHost = new QWidget(thumbGridScroll);
+  gridHost->setObjectName("pdfAttachPageStrip");
+  auto* gridLayout = new QGridLayout(gridHost);
+  gridLayout->setContentsMargins(8, 8, 8, 8);
+  gridLayout->setHorizontalSpacing(8);
+  gridLayout->setVerticalSpacing(8);
+  auto* gridPlaceholder = new QLabel("Choose a PDF to preview pages.", gridHost);
+  gridPlaceholder->setObjectName("pdfAttachPreview");
+  gridPlaceholder->setAlignment(Qt::AlignCenter);
+  gridLayout->addWidget(gridPlaceholder, 0, 0, 1, kPdfAttachThumbGridColumns);
+  thumbGridScroll->setWidget(gridHost);
+  leftColumn->addWidget(thumbGridScroll, 1);
+
+  auto* savedPath = new QLabel(&dialog);
+  savedPath->setObjectName("pdfAttachSavedPath");
+  savedPath->setWordWrap(true);
+  savedPath->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  leftColumn->addWidget(savedPath);
+
+  auto* settingsHost = new QWidget(&dialog);
+  settingsHost->setObjectName("pdfAttachSettings");
+  settingsHost->setFixedWidth(268);
+  auto* settingsLayout = new QVBoxLayout(settingsHost);
+  settingsLayout->setContentsMargins(0, 0, 0, 0);
+  settingsLayout->setSpacing(8);
+  mainRow->addWidget(settingsHost);
+
+  auto* pageButtons = new QButtonGroup(&dialog);
+  pageButtons->setExclusive(true);
   auto number = [&](const char* name, double value, int decimals, double low, double high, double step) {
     auto* field = new QDoubleSpinBox(&dialog);
     field->setObjectName(name);
@@ -256,20 +344,64 @@ void EditorWindow::ShowPdfAttachDialog() {
     field->setValue(value);
     return field;
   };
-  auto* x = number("pdfAttachX", m_State.pdfAttachInsertX, 4, -1.e9, 1.e9, 1.0);
-  auto* y = number("pdfAttachY", m_State.pdfAttachInsertY, 4, -1.e9, 1.e9, 1.0);
-  auto* scale = number("pdfAttachScale", m_State.pdfAttachScale, 6, 1.e-6, 1.e6, .1);
-  auto* rotation = number("pdfAttachRotation", m_State.pdfAttachRotDeg, 2, -360000, 360000, 5);
-  auto* dpi = number("pdfAttachDpi", m_State.pdfAttachRasterDpi, 0, 72, 300, 10);
-  form->addRow("Insertion X", x);
-  form->addRow("Insertion Y", y);
-  form->addRow("Scale", scale);
-  form->addRow("Rotation (degrees)", rotation);
-  form->addRow("Raster DPI", dpi);
-  auto* specifyInsert = new QCheckBox("Pick insertion point in drawing", &dialog);
+  auto* page = new SelectAllSpinBox(&dialog);
+  page->setObjectName("pdfAttachPage");
+  page->setRange(1, 1);
+  page->setValue(std::max(1, m_State.pdfAttachSelectedPage + 1));
+  page->hide();
+
+  auto* pathType = new QComboBox(&dialog);
+  pathType->setObjectName("pdfAttachPathType");
+  pathType->addItem(QStringLiteral("Relative path"));
+  pathType->addItem(QStringLiteral("Full path"));
+  pathType->addItem(QStringLiteral("No path"));
+  auto* pathGroup = new QGroupBox("Path type", settingsHost);
+  auto* pathForm = new QFormLayout(pathGroup);
+  pathForm->addRow(pathType);
+  settingsLayout->addWidget(pathGroup);
+
+  auto* specifyInsert = new QCheckBox("Specify on-screen", &dialog);
   specifyInsert->setObjectName("pdfAttachSpecifyInsert");
   specifyInsert->setChecked(m_State.pdfAttachSpecifyInsert);
-  root->addWidget(specifyInsert);
+  auto* x = number("pdfAttachX", m_State.pdfAttachInsertX, 4, -1.e9, 1.e9, 1.0);
+  auto* y = number("pdfAttachY", m_State.pdfAttachInsertY, 4, -1.e9, 1.e9, 1.0);
+  auto* z = number("pdfAttachZ", 0.0, 4, -1.e9, 1.e9, 1.0);
+  z->setEnabled(false);
+  auto* insertGroup = new QGroupBox("Insertion point", settingsHost);
+  auto* insertForm = new QFormLayout(insertGroup);
+  insertForm->addRow(specifyInsert);
+  insertForm->addRow("X", x);
+  insertForm->addRow("Y", y);
+  insertForm->addRow("Z", z);
+  settingsLayout->addWidget(insertGroup);
+
+  auto* specifyScale = new QCheckBox("Specify on-screen", &dialog);
+  specifyScale->setObjectName("pdfAttachSpecifyScale");
+  specifyScale->setChecked(m_State.pdfAttachSpecifyScale);
+  auto* scale = number("pdfAttachScale", m_State.pdfAttachScale, 6, 1.e-6, 1.e6, .1);
+  auto* scaleGroup = new QGroupBox("Scale", settingsHost);
+  auto* scaleForm = new QFormLayout(scaleGroup);
+  scaleForm->addRow(specifyScale);
+  scaleForm->addRow("Scale factor", scale);
+  settingsLayout->addWidget(scaleGroup);
+
+  auto* specifyRot = new QCheckBox("Specify on-screen", &dialog);
+  specifyRot->setObjectName("pdfAttachSpecifyRot");
+  specifyRot->setChecked(m_State.pdfAttachSpecifyRot);
+  auto* rotation = number("pdfAttachRotation", m_State.pdfAttachRotDeg, 2, -360000, 360000, 5);
+  auto* rotGroup = new QGroupBox("Rotation", settingsHost);
+  auto* rotForm = new QFormLayout(rotGroup);
+  rotForm->addRow(specifyRot);
+  rotForm->addRow("Angle", rotation);
+  settingsLayout->addWidget(rotGroup);
+  settingsLayout->addStretch();
+
+  auto* details = new QWidget(&dialog);
+  details->setObjectName("pdfAttachDetails");
+  details->setVisible(false);
+  auto* detailsLayout = new QVBoxLayout(details);
+  detailsLayout->setContentsMargins(0, 0, 0, 0);
+  auto* dpi = number("pdfAttachDpi", m_State.pdfAttachRasterDpi, 0, 72, 300, 10);
   auto* snapLines = new QCheckBox("Lines", &dialog);
   snapLines->setObjectName("pdfAttachSnapLines");
   snapLines->setChecked(m_State.pdfAttachSnapLines);
@@ -279,19 +411,70 @@ void EditorWindow::ShowPdfAttachDialog() {
   auto* snapText = new QCheckBox("Text", &dialog);
   snapText->setObjectName("pdfAttachSnapText");
   snapText->setChecked(m_State.pdfAttachSnapText);
+  auto* detailsForm = new QFormLayout;
+  detailsForm->addRow("Raster DPI", dpi);
   auto* snapRow = new QHBoxLayout;
   snapRow->addWidget(new QLabel("Recognize snaps:", &dialog));
   snapRow->addWidget(snapLines);
   snapRow->addWidget(snapCircles);
   snapRow->addWidget(snapText);
   snapRow->addStretch();
-  root->addLayout(snapRow);
+  detailsLayout->addLayout(detailsForm);
+  detailsLayout->addLayout(snapRow);
+  root->addWidget(details);
+
+  auto syncFieldEnable = [&] {
+    x->setEnabled(!specifyInsert->isChecked());
+    y->setEnabled(!specifyInsert->isChecked());
+    scale->setEnabled(!specifyScale->isChecked());
+    rotation->setEnabled(!specifyRot->isChecked());
+  };
+  connect(specifyInsert, &QCheckBox::toggled, &dialog, syncFieldEnable);
+  connect(specifyScale, &QCheckBox::toggled, &dialog, syncFieldEnable);
+  connect(specifyRot, &QCheckBox::toggled, &dialog, syncFieldEnable);
+  syncFieldEnable();
+
   auto* status = new QLabel(&dialog);
   status->setObjectName("pdfAttachStatus");
   status->setWordWrap(true);
-  root->addWidget(status);
+  auto* pagePrevious = new QToolButton(&dialog);
+  pagePrevious->setObjectName("pdfAttachPagePrevious");
+  pagePrevious->setText("◀");
+  pagePrevious->setToolTip("Previous page");
+  pagePrevious->setAutoRaise(true);
+  pagePrevious->setFixedSize(34, 28);
+  auto* pageNext = new QToolButton(&dialog);
+  pageNext->setObjectName("pdfAttachPageNext");
+  pageNext->setText("▶");
+  pageNext->setToolTip("Next page");
+  pageNext->setAutoRaise(true);
+  pageNext->setFixedSize(34, 28);
+  connect(pagePrevious, &QToolButton::clicked, &dialog, [&] {
+    if (page->value() > page->minimum()) page->setValue(page->value() - 1);
+  });
+  connect(pageNext, &QToolButton::clicked, &dialog, [&] {
+    if (page->value() < page->maximum()) page->setValue(page->value() + 1);
+  });
+  auto* loadProgress = new QProgressBar(&dialog);
+  loadProgress->setObjectName("pdfAttachLoadProgress");
+  loadProgress->setTextVisible(true);
+  loadProgress->setFormat("Loading page previews %p% (%v / %m)");
+  loadProgress->hide();
+  leftColumn->addWidget(loadProgress);
+  auto* showDetails = new QPushButton("Show Details <<", &dialog);
+  showDetails->setObjectName("pdfAttachShowDetails");
+  showDetails->setFlat(true);
+  auto* bottomLeft = new QHBoxLayout;
+  bottomLeft->addWidget(showDetails);
+  bottomLeft->addWidget(status, 1);
+  bottomLeft->addWidget(pagePrevious);
+  bottomLeft->addWidget(pageNext);
+  leftColumn->addLayout(bottomLeft);
+
+  auto* footer = new QHBoxLayout;
+  footer->addStretch();
   auto* buttons = new QDialogButtonBox(&dialog);
-  auto* attach = buttons->addButton("Attach", QDialogButtonBox::AcceptRole);
+  auto* attach = buttons->addButton("OK", QDialogButtonBox::AcceptRole);
   attach->setObjectName("pdfAttachConfirm");
   attach->setDefault(true);
   attach->setStyleSheet(QtApplyAccent("QPushButton { background:@fill@; color:white; font-weight:600; padding:6px 18px; border:0; border-radius:4px; }"
@@ -299,36 +482,165 @@ void EditorWindow::ShowPdfAttachDialog() {
                                       dialog.palette().color(QPalette::Window).lightness() < 128));
   auto* cancel = buttons->addButton(QDialogButtonBox::Cancel);
   cancel->setObjectName("pdfAttachCancel");
-  root->addWidget(buttons);
+  auto* help = buttons->addButton("Help", QDialogButtonBox::HelpRole);
+  help->setObjectName("pdfAttachHelp");
+  footer->addWidget(buttons);
+  root->addLayout(footer);
+
+  connect(showDetails, &QPushButton::clicked, &dialog, [details, showDetails] {
+    const bool open = !details->isVisible();
+    details->setVisible(open);
+    showDetails->setText(open ? "Hide Details >>" : "Show Details <<");
+  });
+  connect(help, &QPushButton::clicked, &dialog, [] {
+    QDesktopServices::openUrl(QUrl("https://github.com/chetjones003/GoSurvey/wiki/PDF-Underlays"));
+  });
 
   std::unique_ptr<pdfview::PdfDocument> document;
-  auto showPage = [&] {
-    if (!document) return;
+  const QString thumbFrame = darkDialog ? QStringLiteral("#e6a64b") : QStringLiteral("#c47a12");
+  const QString thumbIdle = darkDialog ? QStringLiteral("#3c464f") : QStringLiteral("#d8dee3");
+  auto renderThumb = [&](int pageIndex, int maxW, int maxH) -> QPixmap {
     pdfview::Bitmap bitmap;
-    if (!document->RenderPage(page->value() - 1, 340, 280, bitmap, [] { return false; })) {
-      preview->setText("The selected page could not be previewed.");
-      return;
-    }
+    if (!document || pageIndex < 0 || pageIndex >= document->PageCount()) return {};
+    if (!document->RenderPage(pageIndex, maxW, maxH, bitmap, [] { return false; })) return {};
     QImage image(bitmap.bgra.data(), bitmap.w, bitmap.h, static_cast<qsizetype>(bitmap.w) * 4,
                  QImage::Format_ARGB32);
-    preview->setPixmap(QPixmap::fromImage(image.copy()).scaled(preview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    return QPixmap::fromImage(image.copy());
+  };
+  auto syncSelectedThumb = [&](int pageIndex) {
+    for (QAbstractButton* button : pageButtons->buttons()) {
+      const bool selected = button->property("pageIndex").toInt() == pageIndex;
+      button->setChecked(selected);
+      button->setStyleSheet(selected
+          ? QString("QToolButton { border:2px solid %1; border-radius:4px; padding:2px; background:%2; }")
+                .arg(thumbFrame, thumbIdle)
+          : QString("QToolButton { border:1px solid %1; border-radius:4px; padding:3px; background:transparent; }")
+                .arg(thumbIdle));
+    }
+    if (QAbstractButton* selected = pageButtons->checkedButton())
+      thumbGridScroll->ensureWidgetVisible(selected);
+  };
+  auto clearThumbGrid = [&] {
+    while (QLayoutItem* item = gridLayout->takeAt(0)) {
+      if (QWidget* widget = item->widget()) {
+        if (widget != gridPlaceholder)
+          widget->deleteLater();
+      }
+      delete item;
+    }
+    for (QAbstractButton* old : pageButtons->buttons()) pageButtons->removeButton(old);
+    gridPlaceholder->hide();
+  };
+  auto rebuildStripPlaceholders = [&] {
+    clearThumbGrid();
+    if (!document || document->PageCount() <= 0) {
+      gridPlaceholder->setText("Choose a PDF to preview pages.");
+      gridPlaceholder->show();
+      gridLayout->addWidget(gridPlaceholder, 0, 0, 1, kPdfAttachThumbGridColumns);
+      return;
+    }
+    gridPlaceholder->hide();
+    const int pageCount = document->PageCount();
+    for (int i = 0; i < pageCount; ++i) {
+      auto* button = new QToolButton(gridHost);
+      button->setObjectName(QString("pdfAttachPageThumb%1").arg(i));
+      button->setProperty("pageIndex", i);
+      button->setCheckable(true);
+      button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+      button->setIconSize(QSize(92, 108));
+      button->setFixedSize(100, 124);
+      button->setText(QString::number(i + 1));
+      pageButtons->addButton(button);
+      const int row = i / kPdfAttachThumbGridColumns;
+      const int col = i % kPdfAttachThumbGridColumns;
+      gridLayout->addWidget(button, row, col);
+      connect(button, &QToolButton::clicked, &dialog, [&, i] {
+        page->setValue(i + 1);
+        syncSelectedThumb(i);
+      });
+    }
+  };
+  QTimer thumbLoadTimer(&dialog);
+  thumbLoadTimer.setSingleShot(true);
+  int thumbLoadNext = 0;
+  auto applyStripThumb = [&](int pageIndex) {
+    if (!document || pageIndex < 0 || pageIndex >= document->PageCount()) return;
+    auto* button = gridHost->findChild<QToolButton*>(QString("pdfAttachPageThumb%1").arg(pageIndex));
+    if (button == nullptr) return;
+    const QPixmap thumb = renderThumb(pageIndex, 236, 264);
+    if (thumb.isNull()) return;
+    button->setIcon(QIcon(thumb.scaled(button->iconSize(), Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+  };
+  auto pumpStripThumbs = [&] {
+    if (!document) {
+      loadProgress->hide();
+      return;
+    }
+    const int total = document->PageCount();
+    while (thumbLoadNext < total) {
+      applyStripThumb(thumbLoadNext);
+      thumbLoadNext++;
+      loadProgress->setValue(thumbLoadNext);
+      if (thumbLoadNext % 2 == 0 || thumbLoadNext >= total) {
+        thumbLoadTimer.start(0);
+        return;
+      }
+    }
+    loadProgress->hide();
+    status->setText(QString("%1 page%2").arg(total).arg(total == 1 ? "" : "s"));
+    syncSelectedThumb(page->value() - 1);
+  };
+  connect(&thumbLoadTimer, &QTimer::timeout, &dialog, pumpStripThumbs);
+  auto startStripThumbLoad = [&] {
+    thumbLoadTimer.stop();
+    thumbLoadNext = 0;
+    rebuildStripPlaceholders();
+    if (!document || document->PageCount() <= 0) {
+      loadProgress->hide();
+      return;
+    }
+    syncSelectedThumb(page->value() - 1);
+    const int total = document->PageCount();
+    loadProgress->setRange(0, total);
+    loadProgress->setValue(0);
+    loadProgress->show();
+    status->setText(QString("Loading previews for %1 page%2…")
+                        .arg(total)
+                        .arg(total == 1 ? "" : "s"));
+    applyStripThumb(page->value() - 1);
+    thumbLoadTimer.start(0);
+  };
+  auto showPage = [&] {
+    if (!document) return;
+    syncSelectedThumb(page->value() - 1);
   };
   auto load = [&] {
+    thumbLoadTimer.stop();
+    loadProgress->hide();
     document.reset();
-    preview->clear();
-    const QString file = path->text().trimmed();
+    clearThumbGrid();
+    gridPlaceholder->setText("Choose a PDF to preview pages.");
+    gridPlaceholder->show();
+    gridLayout->addWidget(gridPlaceholder, 0, 0, 1, kPdfAttachThumbGridColumns);
+    const QString file = pathEdit->text().trimmed();
     if (file.isEmpty()) {
       page->setRange(1, 1);
-      preview->setText("Choose a PDF to preview its selected page.");
+      name->setCurrentText({});
+      savedPath->clear();
       status->clear();
       return;
     }
+    const QFileInfo info(file);
+    name->setCurrentText(info.completeBaseName());
+    savedPath->setText(QString("Saved path: %1").arg(info.absoluteFilePath()));
     auto opened = pdfview::PdfDocument::Open(std::filesystem::path(file.toStdWString()));
     if (!opened.doc) {
       page->setRange(1, 1);
       status->setText(QString("Unable to open PDF: %1").arg(QString::fromUtf8(opened.error.c_str())));
       status->setStyleSheet("color:#c74747;");
-      preview->setText("No page preview is available.");
+      gridPlaceholder->setText("No page preview is available.");
+      gridPlaceholder->show();
+      gridLayout->addWidget(gridPlaceholder, 0, 0, 1, kPdfAttachThumbGridColumns);
       return;
     }
     document = std::move(opened.doc);
@@ -336,25 +648,26 @@ void EditorWindow::ShowPdfAttachDialog() {
     page->setValue(std::clamp(m_State.pdfAttachSelectedPage + 1, 1, page->maximum()));
     status->setText(QString("%1 page%2").arg(document->PageCount()).arg(document->PageCount() == 1 ? "" : "s"));
     status->setStyleSheet({});
-    showPage();
+    syncSelectedThumb(page->value() - 1);
+    startStripThumbLoad();
   };
   connect(browse, &QPushButton::clicked, &dialog, [&] {
-    const QString selected = QFileDialog::getOpenFileName(&dialog, "Select PDF", path->text(), "PDF files (*.pdf)");
-    if (!selected.isEmpty()) { path->setText(selected); load(); }
+    const QString selected = QFileDialog::getOpenFileName(&dialog, "Select PDF", pathEdit->text(), "PDF files (*.pdf)");
+    if (!selected.isEmpty()) { pathEdit->setText(selected); load(); }
   });
-  connect(path, &QLineEdit::editingFinished, &dialog, load);
+  connect(pathEdit, &QLineEdit::editingFinished, &dialog, load);
   connect(page, qOverload<int>(&QSpinBox::valueChanged), &dialog, [&, showPage] { showPage(); });
   connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
   connect(attach, &QPushButton::clicked, &dialog, [&] {
     if (!document) load();
     if (!document) {
-      if (path->text().trimmed().isEmpty()) {
+      if (pathEdit->text().trimmed().isEmpty()) {
         status->setText("Choose a PDF file before attaching.");
         status->setStyleSheet("color:#c74747;");
       }
       return;
     }
-    const QByteArray utf8 = path->text().trimmed().toUtf8();
+    const QByteArray utf8 = pathEdit->text().trimmed().toUtf8();
     if (page->value() < 1 || page->value() > document->PageCount() || scale->value() <= 0) {
       status->setText("Choose a readable PDF page and a positive scale before attaching.");
       status->setStyleSheet("color:#c74747;");
@@ -368,6 +681,8 @@ void EditorWindow::ShowPdfAttachDialog() {
     m_State.pdfAttachRotDeg = static_cast<float>(rotation->value());
     m_State.pdfAttachRasterDpi = static_cast<float>(dpi->value());
     m_State.pdfAttachSpecifyInsert = specifyInsert->isChecked();
+    m_State.pdfAttachSpecifyScale = specifyScale->isChecked();
+    m_State.pdfAttachSpecifyRot = specifyRot->isChecked();
     m_State.pdfAttachSnapLines = snapLines->isChecked();
     m_State.pdfAttachSnapCircles = snapCircles->isChecked();
     m_State.pdfAttachSnapText = snapText->isChecked();
@@ -431,7 +746,7 @@ void EditorWindow::ShowPdfAttachDialog() {
     if (m_State.active == AppCommandState::Kind::PdfAttach && m_State.projectAttachPrompt.kind == Prompt::Kind::None)
       CancelPdfAttachCommand(m_State, m_Log);
   });
-  if (!path->text().isEmpty()) load();
+  if (!pathEdit->text().isEmpty()) load();
   dialog.exec();
   m_ModalOpen = false;
   Refresh();

@@ -1,4 +1,6 @@
 #include "EditorWindow.hpp"
+#include "DrawingDocumentTabBar.hpp"
+#include "StylePreview.hpp"
 #include "QtAccent.hpp"
 #include "EditorChrome.hpp"
 #include "QtAppearance.hpp"
@@ -21,6 +23,7 @@
 #include "AdjustmentWindow.hpp"
 #include "QtText.hpp"
 #include "PdfWindow.hpp"
+#include "PdfPlot.hpp"
 #include "SurveyPoints.hpp"
 #include "CadBlocks.hpp"
 #include "DwgIo.hpp"
@@ -28,6 +31,8 @@
 #include "AppPaths.hpp"
 #include "geo/CoordinateSystems.hpp"
 #include "UserPrefs.hpp"
+#include "ViewportZoomScale.hpp"
+#include <QInputDialog>
 #include "RecentDrawings.hpp"
 #include "ThumbnailCache.hpp"
 #include "WhatsNewLogic.hpp"
@@ -40,6 +45,7 @@
 #include "ProjectWarnings.hpp"
 #include "util/PlotScales.hpp"
 #include "MtextRichFormat.hpp"
+#include "ToolspaceCatalog.hpp"
 #include "Version.hpp"
 #include <QAction>
 #include <QApplication>
@@ -347,6 +353,7 @@ QString GeneratedCommandIconFamily(const QString& name, const QString& descripti
   if (text.contains("move") || text.contains("copy") || text.contains("rotate") ||
       text.contains("scale") || text.contains("mirror") || text.contains("array") ||
       text.contains("offset")) return "transform";
+  if (text.contains("leader")) return "dimension";
   if (text.contains("line") || text.contains("poly") || text.contains("curve") ||
       text.contains("spline") || text.contains("arc")) return "geometry";
   if (text.contains("list") || text.contains("table") || text.contains("report") ||
@@ -366,9 +373,61 @@ void EditorWindow::LoadCoordinateSystemDictionaries() {
   geo::LoadDictionaries(directory);
 }
 
+void InstallDrawingDocumentTabStripImpl(QMainWindow* window, QTabBar* tabs) {
+  if (window == nullptr || tabs == nullptr) return;
+  auto* wrapper = window->findChild<QWidget*>("ribbonWrapper");
+  if (wrapper == nullptr) return;
+  if (wrapper->property("drawingTabStripInstalled").toBool()) return;
+  QLayout* strip = wrapper->layout();
+  if (strip == nullptr) return;
+
+  auto* outer = new QVBoxLayout;
+  outer->setObjectName("ribbonOuterLayout");
+  outer->setContentsMargins(0, 0, 0, 0);
+  outer->setSpacing(0);
+
+  auto* ribbonRow = new QHBoxLayout;
+  ribbonRow->setContentsMargins(0, 0, 0, 0);
+  ribbonRow->setSpacing(2);
+  while (QLayoutItem* item = strip->takeAt(0)) ribbonRow->addItem(item);
+  delete strip;
+  outer->addLayout(ribbonRow);
+
+  auto* docStrip = new QWidget(wrapper);
+  docStrip->setObjectName("drawingTabRow");
+  docStrip->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  const int tabHeight = tabs->height();
+  docStrip->setFixedHeight(tabHeight);
+  auto* docLayout = new QHBoxLayout(docStrip);
+  docLayout->setContentsMargins(0, 0, 0, 0);
+  docLayout->setSpacing(0);
+  tabs->setParent(docStrip);
+  tabs->setExpanding(false);
+  tabs->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+  docLayout->addWidget(tabs, 0);
+  auto* newDrawingTab = new QToolButton(docStrip);
+  newDrawingTab->setObjectName("drawingTabNew");
+  newDrawingTab->setText("+");
+  newDrawingTab->setToolTip("New drawing");
+  newDrawingTab->setFixedSize(26, 26);
+  newDrawingTab->setAutoRaise(true);
+  docLayout->addWidget(newDrawingTab, 0, Qt::AlignVCenter);
+  docLayout->addStretch(1);
+  outer->addWidget(docStrip);
+  wrapper->setLayout(outer);
+  wrapper->setProperty("drawingTabStripInstalled", true);
+
+  if (auto* ribbon = window->findChild<QTabWidget*>("ribbon")) {
+    wrapper->setMinimumHeight(ribbon->height() + tabHeight);
+    wrapper->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  }
+}
+
 EditorWindow::EditorWindow(QString developmentBranchLabel)
     : m_DevelopmentBranchLabel(std::move(developmentBranchLabel)) {
   m_State.measureAnnotationText = MeasureQtText;
+  // ADDPOINTTABLE opens the point table dialog in this editor rather than asking typed prompts (REQ-474).
+  m_State.addPointTableDialogAvailable = true;
   // Issue #1083: before any drawing can open, so the zone, grid readouts and the online map work
   // without Drawing Settings having been opened first.
   LoadCoordinateSystemDictionaries();
@@ -391,16 +450,12 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
 
   auto* center = new QWidget(this);
   auto* centerLayout = new QVBoxLayout(center);
-  centerLayout->setContentsMargins(0, 0, 0, 0);
+  centerLayout->setContentsMargins(0, 0, 0, 6);
   centerLayout->setSpacing(0);
-  m_Tabs = new QTabBar(center);
+  m_Tabs = new DrawingDocumentTabBar(this);
   m_Tabs->setObjectName("drawingTabs");
-  m_Tabs->setTabsClosable(true);
-  m_Tabs->setExpanding(false);
   m_Tabs->setAutoHide(false);
-  m_Tabs->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-  m_Tabs->setMinimumHeight(m_Tabs->fontMetrics().height() + 12);
-  centerLayout->addWidget(m_Tabs);
+  m_Tabs->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
   m_Pages = new QStackedWidget(center);
   auto* start = new QWidget(m_Pages);
   start->setObjectName("startScreen");
@@ -806,17 +861,19 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   centerLayout->addWidget(m_Pages, 1);
   auto* spaceBar = new QWidget(center);
   spaceBar->setObjectName("paperSpaceBar");
+  spaceBar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  spaceBar->setMinimumHeight(34);
   auto* spaceRow = new QHBoxLayout(spaceBar);
-  spaceRow->setContentsMargins(6, 2, 6, 2);
+  spaceRow->setContentsMargins(6, 0, 6, 0);
   spaceRow->setSpacing(4);
-  m_SpaceTabs = new QTabBar(spaceBar);
+  m_SpaceTabs = new DrawingDocumentTabBar(spaceBar, DrawingDocumentTabBar::Kind::Space);
   m_SpaceTabs->setObjectName("paperSpaceTabs");
-  m_SpaceTabs->setExpanding(false);
   m_SpaceTabs->setContextMenuPolicy(Qt::CustomContextMenu);
   spaceRow->addWidget(m_SpaceTabs, 1);
   auto* manageLayouts = new QToolButton(spaceBar);
   manageLayouts->setObjectName("manageLayoutsButton");
   manageLayouts->setText("Manage layouts…");
+  manageLayouts->setAutoRaise(true);
   spaceRow->addWidget(manageLayouts);
   centerLayout->addWidget(spaceBar);
   setCentralWidget(center);
@@ -824,6 +881,7 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   BuildDocks();
   UpdateChromeIcons();
   m_Coordinates = new QLabel(this);
+  statusBar()->setMinimumHeight(34);
   statusBar()->setSizeGripEnabled(false);
   statusBar()->addPermanentWidget(new VisibleSizeGrip(this));
   statusBar()->addPermanentWidget(m_Coordinates, 1);
@@ -838,11 +896,49 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   annotationScale->setMinimumWidth(110);
   annotationScale->setAccessibleName("Annotation scale");
   annotationScale->setToolTip("Current annotation scale");
+  annotationScale->setMaxVisibleItems(14);
+  annotationScale->setStyleSheet(PopupComboStyleSheet());
   statusBar()->addWidget(annotationScale);
   connect(annotationScale, &QComboBox::activated, this, [this](int index) {
     if (index < 0 || index >= static_cast<int>(m_State.annotationScales.size()) ||
         index == m_State.currentAnnotationScaleIndex) return;
     SetCurrentAnnotationScaleIndex(m_State, index);
+    Refresh();
+  });
+  auto* viewportZoom = new QComboBox(this);
+  viewportZoom->setObjectName("statusViewportZoom");
+  viewportZoom->setMinimumWidth(110);
+  viewportZoom->setAccessibleName("Viewport zoom scale");
+  viewportZoom->setToolTip("Model viewport zoom ratio (REQ-458)");
+  viewportZoom->setMaxVisibleItems(14);
+  viewportZoom->setStyleSheet(PopupComboStyleSheet());
+  statusBar()->addWidget(viewportZoom);
+  connect(viewportZoom, QOverload<int>::of(&QComboBox::activated), this, [this, viewportZoom](int index) {
+    if (viewportZoom->itemData(index).toString() == QLatin1String("__add__")) {
+      bool ok = false;
+      const QString text = QInputDialog::getText(this, "Viewport zoom scale", "Enter ratio (e.g. 1:75):",
+          QLineEdit::Normal, QStringLiteral("1:50"), &ok);
+      if (!ok) {
+        Refresh();
+        return;
+      }
+      float paperUnits = 1.f, drawingUnits = 1.f;
+      const QByteArray utf8 = text.toUtf8();
+      if (!TryParseViewportZoomRatio(std::string(utf8.constData(), static_cast<std::size_t>(utf8.size())), &paperUnits,
+                                     &drawingUnits)) {
+        QMessageBox::warning(this, "Viewport zoom scale", "Enter a ratio like 1:50.");
+        Refresh();
+        return;
+      }
+      AddViewportZoomScale(m_State, std::string(utf8.constData(), static_cast<std::size_t>(utf8.size())), paperUnits,
+                           drawingUnits);
+      Refresh();
+      return;
+    }
+    if (index < 0 || index >= static_cast<int>(m_State.viewportZoomScales.size()) ||
+        index == m_State.currentViewportZoomScaleIndex)
+      return;
+    SetCurrentViewportZoomScaleIndex(m_State, index);
     Refresh();
   });
   auto* multiSelect = new QToolButton(this);
@@ -882,9 +978,17 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
     if (tab <= 0) return;
     const int layoutIndex = tab - 1;
     QMenu menu(this);
+    menu.setObjectName("layoutTabContextMenu");
     menu.addAction("Set Current", this, [this, layoutIndex] { SetActiveSpace(m_State, layoutIndex); Refresh(); });
     menu.addAction("Page Setup Manager…", this, [this, layoutIndex] { ShowPageSetupManager(layoutIndex); });
     menu.addAction("Viewports…", this, [this, layoutIndex] { SetActiveSpace(m_State, layoutIndex); m_State.showViewportsWindow = true; Refresh(); });
+    menu.addSeparator();
+    auto* duplicate = menu.addAction("Duplicate", this, [this, layoutIndex] {
+      if (ActiveDrawingReadOnly() || layoutIndex >= static_cast<int>(m_State.paperLayouts.size())) return;
+      CopyPaperLayout(m_State, layoutIndex, {}, m_Log);
+      Refresh();
+    });
+    duplicate->setEnabled(!ActiveDrawingReadOnly());
     menu.addSeparator();
     menu.addAction("Rename…", this, [this, layoutIndex] {
       if (ActiveDrawingReadOnly()) return;
@@ -994,6 +1098,7 @@ void EditorWindow::BuildRibbon() {
   file->addAction(CommandAction("&Open...", "Open.png", "OPEN", QKeySequence::Open));
   file->addAction(CommandAction("&Save", "Save.png", "SAVE", QKeySequence::Save));
   file->addAction(CommandAction("Save &as...", "Save_As.png", "SAVEAS", QKeySequence::SaveAs));
+  file->addAction(CommandAction("Save as &Template...", "Save_As.png", "SAVETEMPLATE"));
   file->addSeparator();
   file->addAction(CommandAction("Drawing Settings...", "settings.png", "DRAWINGSETTINGS"));
   file->addSeparator();
@@ -1052,7 +1157,28 @@ void EditorWindow::BuildRibbon() {
   aboutAction->setObjectName("aboutGoSurveyAction");
   BuildTitleBar(applicationMenu);
   BuildRibbonPages();
+  InstallDrawingDocumentTabStripImpl(this, m_Tabs);
+  if (auto* newTab = findChild<QToolButton*>("drawingTabNew"))
+    connect(newTab, &QToolButton::clicked, this, [this] { NewDrawing(); });
 }
+
+// Tab order in the Toolspace: Project, Prospector, Settings (REQ-142).
+namespace {
+int ToolspaceTabIndex(AppCommandState::ToolspaceTab tab) {
+  switch (tab) {
+    case AppCommandState::ToolspaceTab::Project: return 0;
+    case AppCommandState::ToolspaceTab::Settings: return 2;
+    case AppCommandState::ToolspaceTab::Prospector: break;
+  }
+  return 1;
+}
+
+AppCommandState::ToolspaceTab ToolspaceTabFromIndex(int index) {
+  if (index == 0) return AppCommandState::ToolspaceTab::Project;
+  if (index == 2) return AppCommandState::ToolspaceTab::Settings;
+  return AppCommandState::ToolspaceTab::Prospector;
+}
+}  // namespace
 
 void EditorWindow::BuildDocks() {
   auto makeDock = [&](const char* title, const char* name, Qt::DockWidgetArea area, QWidget* widget) {
@@ -1064,26 +1190,52 @@ void EditorWindow::BuildDocks() {
       if (menu->objectName() == "viewMenu") menu->addAction(dock->toggleViewAction());
     return dock;
   };
-  m_Toolspace = new TopographicTreeWidget(true, this);
-  m_Toolspace->setHeaderLabel("Prospector");
-  m_Toolspace->setUniformRowHeights(true);
-  m_Toolspace->setIndentation(14);
-  m_Toolspace->setMinimumWidth(0);
-  m_Toolspace->setContextMenuPolicy(Qt::CustomContextMenu);
-  connect(m_Toolspace, &QWidget::customContextMenuRequested, this, [this](const QPoint& position) { ShowToolspaceContextMenu(position); });
+  // One tree per tab (REQ-142). Prospector is created first so it stays the dock's first tree; the tab order is set below.
+  auto makeToolspaceTree = [this](const char* name, const char* header) {
+    auto* tree = new TopographicTreeWidget(true, this);
+    tree->setObjectName(name);
+    tree->setHeaderLabel(header);
+    tree->setUniformRowHeights(true);
+    tree->setIndentation(14);
+    tree->setMinimumWidth(0);
+    tree->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(tree, &QWidget::customContextMenuRequested, this, [this, tree](const QPoint& position) { ShowToolspaceContextMenu(tree, position); });
+    connect(tree, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* item, int) {
+      const auto index = item->data(0, Qt::UserRole);
+      if (index.isValid()) SwitchDrawing(index.toInt());
+    });
+    return tree;
+  };
+  m_Toolspace = makeToolspaceTree("toolspaceProspectorTree", "Prospector");
+  m_ToolspaceProject = makeToolspaceTree("toolspaceProjectTree", "Project");
+  m_ToolspaceSettings = makeToolspaceTree("toolspaceSettingsTree", "Settings");
+  auto* projectPage = new QWidget(this);
+  projectPage->setObjectName("toolspaceProjectPage");
+  auto* projectLayout = new QVBoxLayout(projectPage);
+  auto* projectButtons = new QHBoxLayout();
+  m_ToolspaceRefresh = new QPushButton("Refresh", projectPage);
+  m_ToolspaceRefresh->setObjectName("toolspaceRefresh");
+  connect(m_ToolspaceRefresh, &QPushButton::clicked, this, [this] { Submit("REFRESH"); });
+  m_ToolspaceProjectHealth = new QPushButton("Project Health", projectPage);
+  m_ToolspaceProjectHealth->setObjectName("toolspaceProjectHealth");
+  connect(m_ToolspaceProjectHealth, &QPushButton::clicked, this, [this] { Submit("PROJECTHEALTH"); });
+  projectButtons->addWidget(m_ToolspaceRefresh);
+  projectButtons->addWidget(m_ToolspaceProjectHealth);
+  m_ToolspaceAddPdf = new QPushButton("Add PDF...", projectPage);
+  m_ToolspaceAddPdf->setObjectName("toolspaceAddPdf");
+  connect(m_ToolspaceAddPdf, &QPushButton::clicked, this, [this] { Submit("ADDPDFTOPROJECT"); });
+  projectButtons->addWidget(m_ToolspaceAddPdf);
+  projectButtons->addStretch();
+  projectLayout->addLayout(projectButtons);
+  projectLayout->addWidget(m_ToolspaceProject);
   auto* toolspaceTabs = new QTabWidget(this);
   toolspaceTabs->setObjectName("toolspaceTabs");
+  toolspaceTabs->addTab(projectPage, "Project");
   toolspaceTabs->addTab(m_Toolspace, "Prospector");
-  auto* toolSettings = new QWidget(toolspaceTabs);
-  auto* toolSettingsLayout = new QVBoxLayout(toolSettings);
-  auto* settingsNote = new QLabel("Workspace and drawing preferences", toolSettings);
-  settingsNote->setWordWrap(true);
-  toolSettingsLayout->addWidget(settingsNote);
-  auto* settingsButton = new QPushButton("Open application settings…", toolSettings);
-  toolSettingsLayout->addWidget(settingsButton);
-  toolSettingsLayout->addStretch();
-  connect(settingsButton, &QPushButton::clicked, this, [this] { ShowSettings(); });
-  toolspaceTabs->addTab(toolSettings, "Settings");
+  toolspaceTabs->addTab(m_ToolspaceSettings, "Settings");
+  toolspaceTabs->setCurrentIndex(ToolspaceTabIndex(AppCommandState::ToolspaceTab::Prospector));
+  // Connected after the initial tabs exist, so building the tab bar does not overwrite the saved tab.
+  connect(toolspaceTabs, &QTabWidget::currentChanged, this, [this](int index) { m_State.toolspaceTab = ToolspaceTabFromIndex(index); });
   m_ToolspaceDock = makeDock("Toolspace", "toolspaceDock", Qt::RightDockWidgetArea, toolspaceTabs);
   BuildPropertiesPanel();
   m_PropertiesScroll->setMinimumWidth(0);
@@ -1148,6 +1300,7 @@ void EditorWindow::BuildDocks() {
   m_PropertiesRail->hide();
   m_ToolspaceRail->hide();
   m_CommandBar = new FloatingCommandBar(m_Viewport);
+  m_CommandBar->refreshViewportCursor = [this] { m_Viewport->RefreshCommandCursor(); };
   m_CommandBar->optionSelected = [this](const QString& shortcut) { Submit(shortcut); m_Command->setFocus(); };
   m_Transcript = m_CommandBar->Transcript();
   m_Command = m_CommandBar->Input();
@@ -1272,10 +1425,6 @@ void EditorWindow::BuildDocks() {
     m_Command->clear();
     Submit(command);
     m_Command->setFocus(Qt::OtherFocusReason);
-  });
-  connect(m_Toolspace, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* item, int) {
-    const auto index = item->data(0, Qt::UserRole);
-    if (index.isValid()) SwitchDrawing(index.toInt());
   });
 }
 
@@ -1416,6 +1565,7 @@ void EditorWindow::Submit(const QString& command) {
     if (!path.isEmpty()) OpenDrawing(path);
   } else if (verb == "SAVE" || verb == "QSAVE") SaveDrawing();
   else if (verb == "SAVEAS") SaveDrawing(true);
+  else if (verb == "SAVETEMPLATE") SaveDrawingTemplate();
   else if (verb == "PDFVIEW") ShowPdf();
   else if (verb == "LSA" || verb == "TRAVERSE") ShowAdjustment();
   else if (verb == "POINTDATABASE") ShowPoints(true);
@@ -1542,7 +1692,7 @@ void EditorWindow::ShowPageSetupManager(int layoutIndex) {
     const float height = value.landscape ? std::min(value.portraitWidthIn, value.portraitHeightIn) : std::max(value.portraitWidthIn, value.portraitHeightIn);
     details->setText(QString("Device\nGoSurvey PDF (vector)\n\nPaper\n%1\n%2 × %3 in · %4\n\nPlot area\nLayout\n\nScale\n%5")
         .arg(paper).arg(width, 0, 'f', 2).arg(height, 0, 'f', 2).arg(value.landscape ? "Landscape" : "Portrait")
-        .arg(value.fitToPaper ? "Fit to paper" : QString::number(value.scaleModelPerPaperIn, 'g', 5) + " model units / inch"));
+        .arg(value.fitToPaper ? "Fit to paper" : "1 : " + QString::number(value.scaleModelPerPaperIn, 'g', 5)));
     const bool saved = selected > 0 && selected - 1 < static_cast<int>(m_State.savedPageSetups.size());
     apply->setEnabled(writable && saved); modify->setEnabled(writable); create->setEnabled(writable);
     m_State.pageSetupManagerSel = selected - 1;
@@ -1590,13 +1740,24 @@ void EditorWindow::ShowPageSetupEditor(int targetIndex) {
   auto* customWidth = new QDoubleSpinBox(&dialog); customWidth->setRange(0.1, 1e5); customWidth->setDecimals(3); customWidth->setSuffix(" in"); customWidth->setValue(draft.portraitWidthIn); form->addRow("Custom width", customWidth);
   auto* customHeight = new QDoubleSpinBox(&dialog); customHeight->setRange(0.1, 1e5); customHeight->setDecimals(3); customHeight->setSuffix(" in"); customHeight->setValue(draft.portraitHeightIn); form->addRow("Custom height", customHeight);
   auto* fit = new QCheckBox("Fit to paper", &dialog); fit->setChecked(draft.fitToPaper); form->addRow("Plot scale", fit);
-  auto* scale = new QDoubleSpinBox(&dialog); scale->setRange(0.0001, 1e9); scale->setDecimals(4); scale->setValue(std::max(0.0001f, draft.scaleModelPerPaperIn)); form->addRow("Model units / inch", scale);
+  auto* scale = new QDoubleSpinBox(&dialog); scale->setRange(0.0001, 1e9); scale->setDecimals(4); scale->setValue(std::max(0.0001f, draft.scaleModelPerPaperIn)); form->addRow("Plot ratio (1 : N)", scale);
   auto* offsetX = new QDoubleSpinBox(&dialog); offsetX->setRange(-1e6, 1e6); offsetX->setDecimals(3); offsetX->setValue(draft.offsetXIn); form->addRow("Offset X (in)", offsetX);
   auto* offsetY = new QDoubleSpinBox(&dialog); offsetY->setRange(-1e6, 1e6); offsetY->setDecimals(3); offsetY->setValue(draft.offsetYIn); form->addRow("Offset Y (in)", offsetY);
   auto* center = new QCheckBox("Center the plot", &dialog); center->setChecked(draft.centerPlot); form->addRow("Placement", center);
+  auto* plotStylePath = new QLineEdit(QString::fromUtf8(draft.plotStyleTablePath.c_str()), &dialog);
+  plotStylePath->setObjectName("pageSetupPlotStyleTablePath");
+  auto* browsePlotStyle = new QPushButton("Browse…", &dialog);
+  auto* plotStyleRow = new QWidget(&dialog); auto* plotStyleRowLayout = new QHBoxLayout(plotStyleRow);
+  plotStyleRowLayout->setContentsMargins(0, 0, 0, 0); plotStyleRowLayout->addWidget(plotStylePath); plotStyleRowLayout->addWidget(browsePlotStyle);
+  form->addRow("Plot style table", plotStyleRow);
+  connect(browsePlotStyle, &QPushButton::clicked, &dialog, [this, plotStylePath] {
+    const QString path = QFileDialog::getOpenFileName(this, "Select plot style table", plotStylePath->text(),
+                                                       "Plot style tables (*.ctb *.stb)");
+    if (!path.isEmpty()) plotStylePath->setText(path);
+  });
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog); form->addRow(buttons);
   const bool writable = !ActiveDrawingReadOnly();
-  for (QWidget* widget : {static_cast<QWidget*>(paper), static_cast<QWidget*>(orientation), static_cast<QWidget*>(customWidth), static_cast<QWidget*>(customHeight), static_cast<QWidget*>(fit), static_cast<QWidget*>(scale), static_cast<QWidget*>(offsetX), static_cast<QWidget*>(offsetY), static_cast<QWidget*>(center)}) widget->setEnabled(writable);
+  for (QWidget* widget : {static_cast<QWidget*>(paper), static_cast<QWidget*>(orientation), static_cast<QWidget*>(customWidth), static_cast<QWidget*>(customHeight), static_cast<QWidget*>(fit), static_cast<QWidget*>(scale), static_cast<QWidget*>(offsetX), static_cast<QWidget*>(offsetY), static_cast<QWidget*>(center), static_cast<QWidget*>(plotStylePath), static_cast<QWidget*>(browsePlotStyle)}) widget->setEnabled(writable);
   auto updateCustom = [paper, customWidth, customHeight, writable] {
     const bool custom = paper->currentData().toInt() < 0;
     customWidth->setEnabled(custom && writable);
@@ -1619,6 +1780,7 @@ void EditorWindow::ShowPageSetupEditor(int targetIndex) {
   else { draft.portraitWidthIn = static_cast<float>(customWidth->value()); draft.portraitHeightIn = static_cast<float>(customHeight->value()); }
   draft.landscape = orientation->currentIndex() == 1; draft.fitToPaper = fit->isChecked(); draft.scaleModelPerPaperIn = static_cast<float>(scale->value());
   draft.offsetXIn = static_cast<float>(offsetX->value()); draft.offsetYIn = static_cast<float>(offsetY->value()); draft.centerPlot = center->isChecked();
+  draft.plotStyleTablePath = plotStylePath->text().trimmed().toUtf8().toStdString();
   if (saved) m_State.savedPageSetups[static_cast<size_t>(targetIndex)] = draft;
   else {
     PushUndoSnapshot(m_State, "Modify page setup");
@@ -1648,7 +1810,12 @@ void EditorWindow::ShowViewportsManager() {
   }
   QDialog dialog(this); dialog.setObjectName("viewportsManager"); dialog.setWindowTitle("Viewports — " + QString::fromUtf8(m_State.paperLayouts[static_cast<size_t>(layoutIndex)].name.c_str())); dialog.resize(450, 350);
   auto* outer = new QVBoxLayout(&dialog);
-  auto* list = new QListWidget(&dialog); list->setObjectName("viewportsList"); outer->addWidget(list, 1);
+  auto* list = new QListWidget(&dialog); list->setObjectName("viewportsList");
+  list->setSelectionMode(QAbstractItemView::ExtendedSelection); outer->addWidget(list, 1);
+  auto* controlRow = new QHBoxLayout(); outer->addLayout(controlRow);
+  auto* viewportOn = new QCheckBox("On", &dialog); viewportOn->setObjectName("viewportOn"); controlRow->addWidget(viewportOn);
+  auto* viewportLock = new QCheckBox("Display locked", &dialog); viewportLock->setObjectName("viewportDisplayLock"); controlRow->addWidget(viewportLock);
+  auto* viewportHidePlot = new QCheckBox("Hide in plots", &dialog); viewportHidePlot->setObjectName("viewportHidePlot"); controlRow->addWidget(viewportHidePlot);
   auto* annotationScaleRow = new QHBoxLayout(); outer->addLayout(annotationScaleRow);
   annotationScaleRow->addWidget(new QLabel("Annotative scale:", &dialog));
   auto* annotationScale = new QComboBox(&dialog); annotationScale->setObjectName("viewportAnnotationScale");
@@ -1659,6 +1826,16 @@ void EditorWindow::ShowViewportsManager() {
     annotationScale->setEnabled(false);
   }
   annotationScaleRow->addWidget(annotationScale, 1);
+  auto* drawingScaleRow = new QHBoxLayout(); outer->addLayout(drawingScaleRow);
+  drawingScaleRow->addWidget(new QLabel("Viewport drawing scale:", &dialog));
+  auto* drawingScale = new QComboBox(&dialog); drawingScale->setObjectName("viewportDrawingScale");
+  for (const CadAnnotationScale& scale : m_State.annotationScales)
+    drawingScale->addItem(QString::fromUtf8(scale.name.c_str()), QString::fromUtf8(scale.name.c_str()));
+  if (drawingScale->count() == 0) {
+    drawingScale->addItem("No drawing scales");
+    drawingScale->setEnabled(false);
+  }
+  drawingScaleRow->addWidget(drawingScale, 1);
   auto* row = new QHBoxLayout(); outer->addLayout(row);
   auto* add = new QPushButton("Add viewport", &dialog); add->setObjectName("viewportAdd");
   auto* scale = new QPushButton("Set scale…", &dialog); scale->setObjectName("viewportScale");
@@ -1675,8 +1852,24 @@ void EditorWindow::ShowViewportsManager() {
           .arg(vp.paperWIn, 0, 'f', 2).arg(vp.paperHIn, 0, 'f', 2));
     }
     if (list->count() > 0) list->setCurrentRow(std::clamp(m_State.selectedViewportIndex, 0, list->count() - 1));
+    if (list->selectedItems().empty() && list->currentItem()) list->currentItem()->setSelected(true);
+    {
+      std::vector<int> selected;
+      for (QListWidgetItem* item : list->selectedItems()) selected.push_back(list->row(item));
+      std::sort(selected.begin(), selected.end());
+      m_State.selectedViewports = selected;
+      m_State.selectedViewportIndex = selected.empty() ? -1 : selected.back();
+      m_State.selectedViewportLayout = selected.empty() ? -1 : layoutIndex;
+    }
     const int selected = list->currentRow();
     const bool hasViewport = selected >= 0 && static_cast<size_t>(selected) < viewports.size();
+    const QSignalBlocker onBlock(viewportOn), lockBlock(viewportLock), hidePlotBlock(viewportHidePlot);
+    viewportOn->setChecked(hasViewport && viewports[static_cast<size_t>(selected)].on);
+    viewportLock->setChecked(hasViewport && viewports[static_cast<size_t>(selected)].locked);
+    viewportHidePlot->setChecked(hasViewport && viewports[static_cast<size_t>(selected)].hidePlot);
+    viewportOn->setEnabled(writable && hasViewport);
+    viewportLock->setEnabled(writable && hasViewport);
+    viewportHidePlot->setEnabled(writable && hasViewport);
     const std::string effectiveScale = hasViewport
         ? CadActiveAnnotationScaleName(&m_State.annotationScales, m_State.currentAnnotationScaleIndex,
                                        &viewports[static_cast<size_t>(selected)], m_State.modelUnitsPerPlottedInch)
@@ -1685,14 +1878,47 @@ void EditorWindow::ShowViewportsManager() {
     const int scaleIndex = annotationScale->findData(QString::fromUtf8(effectiveScale.c_str()));
     annotationScale->setCurrentIndex(scaleIndex);
     annotationScale->setEnabled(writable && hasViewport && scaleIndex >= 0);
-    scale->setEnabled(writable && list->currentRow() >= 0); remove->setEnabled(writable && list->currentRow() >= 0);
+    int drawingScaleIndex = -1;
+    if (hasViewport) {
+      const float actual = viewports[static_cast<size_t>(selected)].scaleModelPerPaperIn;
+      for (int i = 0; i < static_cast<int>(m_State.annotationScales.size()); ++i) {
+        const float ratio = CadAnnotationScaleModelUnitsPerPlottedInch(m_State.annotationScales[static_cast<size_t>(i)]);
+        if (std::fabs(actual - ratio) <= std::max(1.e-5f, std::fabs(ratio) * 1.e-5f)) {
+          drawingScaleIndex = i;
+          break;
+        }
+      }
+    }
+    const QSignalBlocker drawingScaleBlock(drawingScale);
+    drawingScale->setCurrentIndex(drawingScaleIndex);
+    drawingScale->setEnabled(writable && !m_State.annotationScales.empty() && !m_State.selectedViewports.empty());
+    const bool canScale = writable && hasViewport && !viewports[static_cast<size_t>(selected)].locked;
+    scale->setEnabled(canScale); remove->setEnabled(writable && list->currentRow() >= 0);
   };
   refill();
+  auto applyViewportControl = [&](bool Viewport::*field, bool value, const char* description) {
+    const int rowIndex = list->currentRow();
+    auto& viewports = m_State.paperLayouts[static_cast<size_t>(layoutIndex)].viewports;
+    if (!writable || rowIndex < 0 || static_cast<size_t>(rowIndex) >= viewports.size()) return;
+    Viewport& viewport = viewports[static_cast<size_t>(rowIndex)];
+    if (viewport.*field == value) return;
+    PushUndoSnapshot(m_State, description);
+    viewport.*field = value;
+    BumpCadGpuCache(m_State);
+    Refresh();
+    refill();
+  };
+  connect(viewportOn, &QCheckBox::toggled, &dialog,
+          [&, applyViewportControl](bool value) { applyViewportControl(&Viewport::on, value, "Viewport on/off"); });
+  connect(viewportLock, &QCheckBox::toggled, &dialog,
+          [&, applyViewportControl](bool value) { applyViewportControl(&Viewport::locked, value, "Viewport display lock"); });
+  connect(viewportHidePlot, &QCheckBox::toggled, &dialog,
+          [&, applyViewportControl](bool value) { applyViewportControl(&Viewport::hidePlot, value, "Viewport hide plot"); });
   connect(list, &QListWidget::currentRowChanged, &dialog, [&, writable](int rowIndex) {
-    if (rowIndex >= 0) SelectViewport(m_State, rowIndex, false);
-    scale->setEnabled(writable && rowIndex >= 0); remove->setEnabled(writable && rowIndex >= 0);
     const auto& viewports = m_State.paperLayouts[static_cast<size_t>(layoutIndex)].viewports;
     const bool hasViewport = rowIndex >= 0 && static_cast<size_t>(rowIndex) < viewports.size();
+    scale->setEnabled(writable && hasViewport && !viewports[static_cast<size_t>(rowIndex)].locked);
+    remove->setEnabled(writable && rowIndex >= 0);
     const std::string effectiveScale = hasViewport
         ? CadActiveAnnotationScaleName(&m_State.annotationScales, m_State.currentAnnotationScaleIndex,
                                        &viewports[static_cast<size_t>(rowIndex)], m_State.modelUnitsPerPlottedInch)
@@ -1700,6 +1926,35 @@ void EditorWindow::ShowViewportsManager() {
     const QSignalBlocker block(annotationScale);
     annotationScale->setCurrentIndex(annotationScale->findData(QString::fromUtf8(effectiveScale.c_str())));
     annotationScale->setEnabled(writable && hasViewport && annotationScale->currentIndex() >= 0);
+    const QSignalBlocker drawingScaleBlock(drawingScale);
+    int drawingScaleIndex = -1;
+    if (hasViewport) {
+      const float actual = viewports[static_cast<size_t>(rowIndex)].scaleModelPerPaperIn;
+      for (int i = 0; i < static_cast<int>(m_State.annotationScales.size()); ++i) {
+        const float ratio = CadAnnotationScaleModelUnitsPerPlottedInch(m_State.annotationScales[static_cast<size_t>(i)]);
+        if (std::fabs(actual - ratio) <= std::max(1.e-5f, std::fabs(ratio) * 1.e-5f)) { drawingScaleIndex = i; break; }
+      }
+    }
+    drawingScale->setCurrentIndex(drawingScaleIndex);
+    drawingScale->setEnabled(writable && !m_State.annotationScales.empty() && !list->selectedItems().isEmpty());
+  });
+  connect(list, &QListWidget::itemSelectionChanged, &dialog, [&, writable] {
+    std::vector<int> selected;
+    for (QListWidgetItem* item : list->selectedItems()) selected.push_back(list->row(item));
+    std::sort(selected.begin(), selected.end());
+    m_State.selectedViewports = selected;
+    m_State.selectedViewportIndex = selected.empty() ? -1 : selected.back();
+    m_State.selectedViewportLayout = selected.empty() ? -1 : layoutIndex;
+    drawingScale->setEnabled(writable && !m_State.annotationScales.empty() && !selected.empty());
+  });
+  connect(drawingScale, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&, writable](int index) {
+    if (!writable || index < 0 || list->selectedItems().isEmpty()) return;
+    const std::string name = drawingScale->itemData(index).toString().toUtf8().toStdString();
+    HandleVpMatchScaleCommand(name, m_State, m_Log);
+    BumpCadGpuCache(m_State);
+    Refresh();
+    refill();
+    for (QListWidgetItem* item : list->selectedItems()) item->setSelected(true);
   });
   connect(annotationScale, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&, writable](int index) {
     const int viewportIndex = list->currentRow();
@@ -1837,6 +2092,8 @@ void EditorWindow::showEvent(QShowEvent* event) {
 #endif
   if (auto* grip = findChild<QSizeGrip*>("editorResizeGrip"))
     grip->setVisible(!isMaximized() && !isFullScreen());
+  if (statusBar() != nullptr && statusBar()->layout() != nullptr)
+    statusBar()->layout()->setContentsMargins(4, 3, 6, 8);
   m_Tabs->updateGeometry();
   if (centralWidget()->layout()) centralWidget()->layout()->activate();
   m_Tabs->update();
@@ -1907,6 +2164,7 @@ void EditorWindow::EndInteractiveResize() {
 }
 
 void EditorWindow::SwitchDrawing(int index) {
+  ++m_DocumentGeneration;
   if (index < 0 || index >= static_cast<int>(m_State.drawingTabs.size()) || index == m_State.activeDrawingIdx) return;
   CancelActiveCommand(m_State, m_Log);
   RefreshProjects();
@@ -1925,13 +2183,23 @@ void EditorWindow::NewDrawing(std::uint32_t projectUid) {
       m_State.activeDrawingIdx < static_cast<int>(m_State.drawingTabs.size()))
     projectUid = m_State.drawingTabs[static_cast<size_t>(m_State.activeDrawingIdx)].projectUid;
   if (projectUid == 0) {
-    ShowDrawingTemplateChooser();
+    QString templatePath = QString::fromUtf8(m_State.defaultDrawingTemplatePathUtf8);
+    if (templatePath.isEmpty()) {
+      const auto bundled = ResolveDefaultWorkspaceTemplateGstPath();
+      if (bundled.empty()) {
+        QMessageBox::warning(this, "New drawing", "GoSurvey’s default drawing template could not be found.");
+        return;
+      }
+      templatePath = QString::fromStdWString(bundled.wstring());
+    }
+    CreateDrawingFromTemplate(0, templatePath);
     return;
   }
   CreateDrawingFromTemplate(projectUid);
 }
 
 void EditorWindow::CreateDrawingFromTemplate(std::uint32_t projectUid, const QString& templatePath) {
+  ++m_DocumentGeneration;
   RefreshProjects();
   const int previous = m_State.activeDrawingIdx;
   SaveDocumentToSnapshot(m_State, m_State.activeDrawingIdx);
@@ -2039,6 +2307,7 @@ void EditorWindow::ShowDrawingTemplateChooser() {
 }
 
 void EditorWindow::OpenDrawing(const QString& path) {
+  ++m_DocumentGeneration;
   const auto found = gsproj::FindProjectFor(std::filesystem::path(path.toStdWString()));
   std::uint32_t uid = 0;
   if (found.state == gsproj::FindState::Damaged) {
@@ -2114,6 +2383,53 @@ bool EditorWindow::SaveDrawing(bool saveAs) {
   return true;
 }
 
+bool EditorWindow::SaveDrawingTemplate() {
+  if (m_State.activeDrawingIdx <= 0 || m_State.activeDrawingIdx >= static_cast<int>(m_State.drawingTabs.size())) {
+    QMessageBox::information(this, "Save as Template", "Open a drawing before saving a template.");
+    return false;
+  }
+
+  const auto userDataDirectory = UserDataDirectory();
+  if (userDataDirectory.empty()) {
+    QMessageBox::warning(this, "Save as Template", "The personal GoSurvey data folder is unavailable.");
+    return false;
+  }
+  const auto templateDirectory = userDataDirectory / "drawing-templates";
+  std::error_code directoryError;
+  std::filesystem::create_directories(templateDirectory, directoryError);
+  if (directoryError) {
+    QMessageBox::warning(this, "Save as Template", "The personal template folder could not be created.");
+    return false;
+  }
+
+  const auto& tab = m_State.drawingTabs[static_cast<size_t>(m_State.activeDrawingIdx)];
+  QString baseName = QString::fromUtf8(tab.name.c_str()).trimmed();
+  if (!m_State.activeDocFilePath.empty())
+    baseName = QFileInfo(QString::fromUtf8(m_State.activeDocFilePath.c_str())).completeBaseName();
+  if (baseName.isEmpty()) baseName = "Drawing Template";
+  const QString initialPath = QString::fromStdWString((templateDirectory / (baseName + ".gst").toStdWString()).wstring());
+  QFileDialog dialog(this, "Save as Template", initialPath, "GoSurvey template (*.gst)");
+  dialog.setObjectName("saveDrawingTemplateDialog");
+  dialog.setAcceptMode(QFileDialog::AcceptSave);
+  dialog.setFileMode(QFileDialog::AnyFile);
+  dialog.setDefaultSuffix("gst");
+  dialog.setOption(QFileDialog::DontUseNativeDialog, true);
+
+  m_ModalOpen = true;
+  const bool accepted = dialog.exec() == QDialog::Accepted;
+  m_ModalOpen = false;
+  if (!accepted) return false;
+
+  QString path = dialog.selectedFiles().value(0);
+  if (path.isEmpty()) return false;
+  if (!path.endsWith(".gst", Qt::CaseInsensitive)) path += ".gst";
+  if (!SaveGoSurveyTemplateFile(m_State, path.toUtf8().constData(), m_Log)) {
+    QMessageBox::warning(this, "Save as Template", "The template could not be saved. See the command log.");
+    return false;
+  }
+  return true;
+}
+
 bool EditorWindow::ConfirmSave() {
   if (m_State.activeDrawingIdx == 0 || m_State.cadGpuRevision == m_State.activeDocSavedRevision) return true;
   const auto answer = QMessageBox::question(this, "Unsaved drawing",
@@ -2184,93 +2500,377 @@ void EditorWindow::closeEvent(QCloseEvent* event) {
   event->accept();
 }
 
-// The Toolspace tree is rebuilt only when what it lists changes. Refresh() runs on every viewport click,
-// and rebuilding the tree (icons and all) took ~100 ms of each one.
+namespace {
+// The labels from the root down to \p item, used to find the same row again after a rebuild.
+QString ToolspaceItemPath(const QTreeWidgetItem* item) {
+  QStringList parts;
+  for (; item; item = item->parent()) parts.prepend(item->text(0));
+  return parts.join(QChar(0x1f));
+}
+
+// Icon for a Toolspace row (REQ-142). CadCommandIcon recolours its strokes for the current palette, so each
+// icon is cached per theme; otherwise a tree with hundreds of layers would recolour every icon on every refresh.
+QIcon ToolspaceIcon(const QString& file) {
+  static QHash<QString, QIcon> cache;
+  const QString key = file + (qApp->palette().color(QPalette::Window).lightness() > 128 ? QStringLiteral("|light") : QStringLiteral("|dark"));
+  const auto found = cache.constFind(key);
+  if (found != cache.constEnd()) return found.value();
+  const QIcon icon = CadCommandIcon(file);
+  cache.insert(key, icon);
+  return icon;
+}
+
+// A tracked file's icon follows its kind: PDFs, drawings, point clouds, and anything else as a plain file.
+QIcon TrackedItemIcon(const QString& path) {
+  const QString suffix = QFileInfo(path).suffix().toLower();
+  if (suffix == "pdf") return ToolspaceIcon("PDF.png");
+  if (suffix == "dwg") return ToolspaceIcon("Active_File.png");
+  if (suffix == "e57" || suffix == "las" || suffix == "laz" || suffix == "pts" || suffix == "ptx") return ToolspaceIcon("point_cloud.png");
+  return ToolspaceIcon("file.png");
+}
+
+// Rebuilds one Toolspace tree with \p fill. Rows that were expanded or selected stay so, unless the tree is new.
+// Rows that did not exist before keep the state \p fill gave them, so a new folder opens by default.
+template <typename Fill>
+void RebuildToolspaceTree(QTreeWidget* tree, Fill fill) {
+  const bool initialTree = tree->topLevelItemCount() == 0;
+  QSet<QString> previous;
+  QSet<QString> expanded;
+  QString currentItem;
+  for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+    previous.insert(ToolspaceItemPath(*it));
+    if ((*it)->isExpanded()) expanded.insert(ToolspaceItemPath(*it));
+    if ((*it) == tree->currentItem()) currentItem = ToolspaceItemPath(*it);
+  }
+  tree->clear();
+  fill();
+  if (!initialTree) for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+    const QString path = ToolspaceItemPath(*it);
+    if (previous.contains(path)) (*it)->setExpanded(expanded.contains(path));
+    if (path == currentItem) tree->setCurrentItem(*it);
+  }
+}
+}  // namespace
+
 void EditorWindow::RefreshToolspace() {
+  // The Toolspace trees and buttons exist only after BuildDocks(); a refresh before that has nothing to update.
+  if (!m_ToolspaceRefresh || !m_ToolspaceProjectHealth || !m_ToolspaceAddPdf || !m_ToolspaceProject || !m_Toolspace || !m_ToolspaceSettings) return;
+  const int drawingIdx = m_State.activeDrawingIdx;
+  const bool drawingOpen = drawingIdx > 0 && drawingIdx < static_cast<int>(m_State.drawingTabs.size());
+  const std::uint32_t activeProject = drawingOpen ? m_State.drawingTabs[static_cast<size_t>(drawingIdx)].projectUid : 0;
+  // Button state is cheap, so it is set before the key check that skips rebuilding the trees.
+  m_ToolspaceProjectHealth->setEnabled(activeProject != 0);
+  m_ToolspaceRefresh->setEnabled(activeProject != 0 && !ActiveDrawingReadOnly());
+  m_ToolspaceAddPdf->setEnabled(activeProject != 0 && !ActiveDrawingReadOnly());
   QStringList key;
   for (const auto& session : m_State.openProjects) {
     key << QString::fromUtf8(session.project.name.c_str()) + (session.readOnly ? "|ro" : "|rw");
-    for (const auto& item : session.project.items) key << QString::fromUtf8(item.path.c_str());
+    for (const auto& item : session.project.items) key << QString::fromUtf8(item.path.c_str()) << QString::fromUtf8(item.kind.c_str());
   }
   key << "#drawings";
-  for (std::size_t i = 1; i < m_State.drawingTabs.size(); ++i) key << QString::fromUtf8(m_State.drawingTabs[i].name.c_str());
-  key << "#points" + QString::number(m_State.surveyPoints.size()) << "#surfaces";
+  for (std::size_t i = 1; i < m_State.drawingTabs.size(); ++i)
+    key << QString::fromUtf8(m_State.drawingTabs[i].name.c_str()) << QString::number(m_State.drawingTabs[i].projectUid);
+  key << "#points" + QString::number(m_State.surveyPoints.size()) << "#groups";
+  for (const auto& group : m_State.pointGroups) key << QString::fromUtf8(group.name.c_str());
+  key << "#surfaces";
   for (const auto& surface : m_State.cadSurfaces) key << QString::fromUtf8(surface.name.c_str());
   key << "#styles";
   for (const auto& surfaceStyle : m_State.surfaceStyles) key << QString::fromUtf8(surfaceStyle.name.c_str());
   key << "#blocks";
   for (const auto& block : m_State.blockDefs) key << QString::fromUtf8(block.name.c_str());
+  key << "#text";
+  for (const auto& textStyle : m_State.textStyles) key << QString::fromUtf8(textStyle.name.c_str());
+  key << "#layers";
+  for (const auto& row : m_State.drawingLayerTable) key << QString::fromUtf8(row.name.c_str());
+  key << "#dimension" << QString::fromUtf8(m_State.activeDimensionStyle.name.c_str());
+  // The Settings tree lists every style table, so its names belong in the key too.
+  key << "#dimstyles";
+  for (const auto& style : m_State.dimensionStyles) key << QString::fromUtf8(style.name.c_str());
+  key << "#mleaderstyles";
+  for (const auto& style : m_State.multileaderStyles) key << QString::fromUtf8(style.name.c_str());
+  key << "#tablestyles";
+  for (const auto& style : m_State.tableStyles) key << QString::fromUtf8(style.name.c_str()) + (style.point ? "|p" : "|d");
+  key << "#pointstyles";
+  for (const auto& style : m_State.surveyPointStyles) key << QString::fromUtf8(style.name.c_str());
+  key << "#pointlabelstyles";
+  for (const auto& style : m_State.surveyPointLabelStyles) key << QString::fromUtf8(style.name.c_str());
+  key << "#root" << QString::fromStdString(ToolspaceActiveDrawingName(m_State));
+  key << "#featurelines" << QString::number(ToolspaceFeatureLineCount(m_State));
+  for (size_t i = 0; i < m_State.featureLineInfo.size(); ++i) key << QString::fromStdString(m_State.featureLineInfo[i].name);
+  key << (drawingOpen ? "#open" : "#closed");
+  // The Toolspace trees are rebuilt only when what they list changes. Refresh() runs on every viewport click,
+  // and rebuilding the trees (icons and all) took ~100 ms of each one.
   if (m_ToolspaceKey == key && m_Toolspace->topLevelItemCount() > 0) return;
   m_ToolspaceKey = key;
-  auto itemPath = [](QTreeWidgetItem* item) {
-    QStringList parts; for (; item; item = item->parent()) parts.prepend(item->text(0));
-    return parts.join(QChar(0x1f));
-  };
-  const bool initialTree = m_Toolspace->topLevelItemCount() == 0;
-  QSet<QString> expanded;
-  QString currentItem;
-  for (QTreeWidgetItemIterator it(m_Toolspace); *it; ++it) {
-    if ((*it)->isExpanded()) expanded.insert(itemPath(*it));
-    if ((*it) == m_Toolspace->currentItem()) currentItem = itemPath(*it);
-  }
-  m_Toolspace->clear();
-  auto* projects = new QTreeWidgetItem(m_Toolspace, {"Projects"});
-  projects->setIcon(0, style()->standardIcon(QStyle::SP_DirHomeIcon));
-  for (const auto& session : m_State.openProjects) {
-    auto* project = new QTreeWidgetItem(projects, {QString::fromUtf8(session.project.name.c_str()) +
-        (session.readOnly ? " (read-only)" : "")});
-    project->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
-    for (const auto& item : session.project.items)
-      new QTreeWidgetItem(project, {QString::fromUtf8(item.path.c_str())});
-  }
-  projects->setExpanded(true);
-  auto* drawings = new QTreeWidgetItem(m_Toolspace, {"Drawings"});
-  drawings->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
-  for (int i = 1; i < static_cast<int>(m_State.drawingTabs.size()); ++i) {
-    auto* drawing = new QTreeWidgetItem(drawings, {QString::fromUtf8(m_State.drawingTabs[i].name.c_str())});
-    drawing->setData(0, Qt::UserRole, i);
-    drawing->setIcon(0, CadCommandIcon("Active_File.png"));
-  }
-  drawings->setExpanded(true);
-  auto* points = new QTreeWidgetItem(m_Toolspace, {"Survey points (" + QString::number(m_State.surveyPoints.size()) + ")"});
-  points->setIcon(0, CadCommandIcon("Point.png"));
-  auto* surfaces = new QTreeWidgetItem(m_Toolspace, {"Surfaces"});
-  surfaces->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
-  surfaces->setData(0, Qt::UserRole + 1, "surfacesFolder");
-  for (int i = 0; i < static_cast<int>(m_State.cadSurfaces.size()); ++i) {
-    auto* surface = new QTreeWidgetItem(surfaces, {QString::fromUtf8(m_State.cadSurfaces[static_cast<size_t>(i)].name.c_str())});
-    surface->setData(0, Qt::UserRole + 1, "surface");  // Qt::UserRole itself is the drawing-tab index
-    surface->setData(0, Qt::UserRole + 2, i);
-  }
-  auto* surfaceStyles = new QTreeWidgetItem(m_Toolspace, {"Surface Styles"});
-  surfaceStyles->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
-  surfaceStyles->setData(0, Qt::UserRole + 1, "stylesFolder");
-  for (const auto& surfaceStyle : m_State.surfaceStyles) {
-    auto* entry = new QTreeWidgetItem(surfaceStyles, {QString::fromUtf8(surfaceStyle.name.c_str())});
-    entry->setData(0, Qt::UserRole + 1, "style");
-    entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(surfaceStyle.name.c_str()));
-  }
-  auto* blocks = new QTreeWidgetItem(m_Toolspace, {"Blocks"});
-  blocks->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
-  for (const auto& block : m_State.blockDefs) new QTreeWidgetItem(blocks, {QString::fromUtf8(block.name.c_str())});
-  if (!initialTree) for (QTreeWidgetItemIterator it(m_Toolspace); *it; ++it) {
-    (*it)->setExpanded(expanded.contains(itemPath(*it)));
-    if (itemPath(*it) == currentItem) m_Toolspace->setCurrentItem(*it);
-  }
+
+  RebuildToolspaceTree(m_ToolspaceProject, [this] {
+    if (m_State.openProjects.empty()) {
+      (new QTreeWidgetItem(m_ToolspaceProject, {"No project is open"}))->setIcon(0, ToolspaceIcon("info.png"));
+    } else {
+      auto* projects = new QTreeWidgetItem(m_ToolspaceProject, {"Projects"});
+      projects->setIcon(0, ToolspaceIcon("c3d_workfolder.png"));
+      projects->setData(0, Qt::UserRole + 1, "projectsFolder");
+      for (const auto& session : m_State.openProjects) {
+        auto* project = new QTreeWidgetItem(projects, {QString::fromUtf8(session.project.name.c_str()) +
+            (session.readOnly ? " (read-only)" : "")});
+        project->setIcon(0, ToolspaceIcon("project.png"));
+        project->setData(0, Qt::UserRole + 1, "project");
+        project->setData(0, Qt::UserRole + 4, session.uid);
+        // Tracked items by folder (REQ-379 clause 3). Linked files sit under "Linked files" with a link badge; the
+        // rest sit under the first folder of their project path, or directly under the project at the root.
+        QHash<QString, QTreeWidgetItem*> folders;
+        for (const auto& item : session.project.items) {
+          const QString path = QString::fromUtf8(item.path.c_str());
+          const bool linked = item.kind == gsproj::kKindLocalLink;
+          // Linked files use a key that no folder name can have (it starts with a control character), so a real folder called
+          // "Linked files" is not merged into the linked group.
+          const QString folder = linked ? QStringLiteral("linked") : (path.contains('/') ? path.section('/', 0, 0) : QString());
+          QTreeWidgetItem* parent = project;
+          if (!folder.isEmpty()) {
+            if (!folders.contains(folder)) {
+              auto* node = new QTreeWidgetItem(project, {linked ? QStringLiteral("Linked files") : folder});
+              node->setIcon(0, ToolspaceIcon("c3d_setfolder.png"));
+              node->setData(0, Qt::UserRole + 1, linked ? "linkedFolder" : "projectFolder");
+              folders.insert(folder, node);
+            }
+            parent = folders.value(folder);
+          }
+          const QString label = linked ? QFileInfo(path).fileName() + " (link)" : (folder.isEmpty() ? path : path.section('/', 1));
+          auto* row = new QTreeWidgetItem(parent, {label});
+          row->setToolTip(0, linked ? path + "\nLinked file: does not travel with the project" : path);
+          row->setIcon(0, TrackedItemIcon(path));
+          row->setData(0, Qt::UserRole + 1, "trackedItem");
+          row->setData(0, Qt::UserRole + 5, linked ? path : QString::fromStdWString(session.project.Folder().wstring()) + "/" + path);
+          row->setData(0, Qt::UserRole + 6, linked);
+        }
+      }
+      projects->setExpanded(true);
+    }
+    auto* drawings = new QTreeWidgetItem(m_ToolspaceProject, {"Drawings"});
+    drawings->setIcon(0, ToolspaceIcon("c3d_setfolder.png"));
+    drawings->setData(0, Qt::UserRole + 1, "drawingsFolder");
+    for (int i = 1; i < static_cast<int>(m_State.drawingTabs.size()); ++i) {
+      if (m_State.drawingTabs[static_cast<size_t>(i)].projectUid == 0) continue;  // project drawings only (REQ-142)
+      auto* drawing = new QTreeWidgetItem(drawings, {QString::fromUtf8(m_State.drawingTabs[i].name.c_str())});
+      drawing->setData(0, Qt::UserRole, i);
+      drawing->setData(0, Qt::UserRole + 1, "projectDrawing");
+      drawing->setIcon(0, ToolspaceIcon("Active_File.png"));
+    }
+    drawings->setExpanded(true);
+  });
+
+  RebuildToolspaceTree(m_Toolspace, [this, drawingOpen] {
+    if (!drawingOpen) { (new QTreeWidgetItem(m_Toolspace, {"No drawing is open"}))->setIcon(0, ToolspaceIcon("info.png")); return; }
+    // REQ-142: Prospector is rooted at the active drawing's name; its collections sit under that root.
+    auto* root = new QTreeWidgetItem(m_Toolspace, {QString::fromStdString(ToolspaceActiveDrawingName(m_State))});
+    root->setIcon(0, ToolspaceIcon("Active_File.png"));
+    root->setData(0, Qt::UserRole + 1, "drawingRoot");
+    root->setExpanded(true);
+    auto* points = new QTreeWidgetItem(root, {"Survey points (" + QString::number(m_State.surveyPoints.size()) + ")"});
+    points->setIcon(0, ToolspaceIcon("Point.png"));
+    points->setData(0, Qt::UserRole + 1, "points");
+    auto* pointGroups = new QTreeWidgetItem(root, {"Point Groups"});
+    pointGroups->setIcon(0, ToolspaceIcon("Group.png"));
+    pointGroups->setData(0, Qt::UserRole + 1, "pointGroupsFolder");
+    for (const auto& group : m_State.pointGroups) {
+      auto* entry = new QTreeWidgetItem(pointGroups, {QString::fromUtf8(group.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("Group.png"));
+      entry->setData(0, Qt::UserRole + 1, "pointGroup");
+    }
+    auto* surfaces = new QTreeWidgetItem(root, {"Surfaces"});
+    surfaces->setIcon(0, ToolspaceIcon("c3d_surfaces.png"));
+    surfaces->setData(0, Qt::UserRole + 1, "surfacesFolder");
+    for (int i = 0; i < static_cast<int>(m_State.cadSurfaces.size()); ++i) {
+      auto* surface = new QTreeWidgetItem(surfaces, {QString::fromUtf8(m_State.cadSurfaces[static_cast<size_t>(i)].name.c_str())});
+      surface->setIcon(0, ToolspaceIcon("c3d_surfaces.png"));
+      surface->setData(0, Qt::UserRole + 1, "surface");  // Qt::UserRole itself is the drawing-tab index
+      surface->setData(0, Qt::UserRole + 2, i);
+      // Civil 3D's surface branch: Masks, Watersheds and a Definition node listing what builds it.
+      // These are informational nodes; their data lives in the surface's properties.
+      const CadSurface& source = m_State.cadSurfaces[static_cast<size_t>(i)];
+      const auto folder = [&](QTreeWidgetItem* parent, const QString& label) {
+        auto* node = new QTreeWidgetItem(parent, {label});
+        node->setIcon(0, ToolspaceIcon("c3d_surfaces.png"));
+        node->setData(0, Qt::UserRole + 1, "surfaceDefinitionNode");
+        node->setData(0, Qt::UserRole + 2, i);
+        return node;
+      };
+      folder(surface, "Masks");
+      folder(surface, "Watersheds");
+      auto* definition = folder(surface, "Definition");
+      folder(definition, "Boundaries");
+      folder(definition, "Breaklines");
+      folder(definition, "Contours");
+      folder(definition, "DEM Files");
+      folder(definition, "Drawing Objects");
+      folder(definition, "Edits");
+      folder(definition, "Point Files");
+      auto* definitionGroups = folder(definition, "Point Groups");
+      for (const std::string& groupName : source.sourcePointGroups) folder(definitionGroups, QString::fromUtf8(groupName.c_str()));
+      folder(definition, "Point Survey Queries");
+      folder(definition, "Figure Survey Queries");
+    }
+    auto* blocks = new QTreeWidgetItem(root, {"Blocks"});
+    blocks->setIcon(0, ToolspaceIcon("block.png"));
+    blocks->setData(0, Qt::UserRole + 1, "blocksFolder");
+    for (const auto& block : m_State.blockDefs) {
+      auto* entry = new QTreeWidgetItem(blocks, {QString::fromUtf8(block.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("Block_Base.png"));
+      entry->setData(0, Qt::UserRole + 1, "block");
+      entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(block.name.c_str()));
+    }
+    // Feature lines are named when they have a name, otherwise numbered (same rule as TOOLSPACE LIST).
+    auto* featureLines = new QTreeWidgetItem(root, {"Feature Lines"});
+    featureLines->setIcon(0, ToolspaceIcon("c3d_featureline.png"));
+    featureLines->setData(0, Qt::UserRole + 1, "featureLinesFolder");
+    for (size_t i = 0; i < ToolspaceFeatureLineCount(m_State); ++i) {
+      const QString name = i < m_State.featureLineInfo.size() && !m_State.featureLineInfo[i].name.empty()
+          ? QString::fromStdString(m_State.featureLineInfo[i].name) : "Feature Line " + QString::number(i + 1);
+      auto* entry = new QTreeWidgetItem(featureLines, {name});
+      entry->setIcon(0, ToolspaceIcon("c3d_featureline.png"));
+      entry->setData(0, Qt::UserRole + 1, "featureLine");
+      entry->setData(0, Qt::UserRole + 2, static_cast<int>(i));
+    }
+  });
+
+  // Drawing-level style tables only (REQ-142). App-wide preferences stay in View → Settings.
+  RebuildToolspaceTree(m_ToolspaceSettings, [this, drawingOpen] {
+    if (!drawingOpen) { (new QTreeWidgetItem(m_ToolspaceSettings, {"No drawing is open"}))->setIcon(0, ToolspaceIcon("info.png")); return; }
+    // Civil 3D's Settings tab: General / Point / Surface collections, each with its own folders.
+    const auto settingsFolder = [](QTreeWidgetItem* parent, const QString& label, const char* role = "settingsFolder") {
+      auto* node = new QTreeWidgetItem(parent, {label});
+      node->setIcon(0, ToolspaceIcon("c3d_workfolder.png"));
+      node->setData(0, Qt::UserRole + 1, role);
+      return node;
+    };
+    auto* general = new QTreeWidgetItem(m_ToolspaceSettings, {"General"});
+    general->setIcon(0, ToolspaceIcon("settings.png"));
+    general->setData(0, Qt::UserRole + 1, "generalFolder");
+    auto* multipurpose = settingsFolder(general, "Multipurpose Styles");
+    settingsFolder(general, "Label Styles");
+    settingsFolder(general, "Commands");
+    auto* textStyles = new QTreeWidgetItem(multipurpose, {"Text Styles"});
+    textStyles->setIcon(0, ToolspaceIcon("Text_Style.png"));
+    textStyles->setData(0, Qt::UserRole + 1, "textStylesFolder");
+    for (const auto& textStyle : m_State.textStyles) {
+      auto* entry = new QTreeWidgetItem(textStyles, {QString::fromUtf8(textStyle.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("text.png"));
+      entry->setData(0, Qt::UserRole + 1, "textStyle");
+      entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(textStyle.name.c_str()));
+    }
+    auto* layers = new QTreeWidgetItem(multipurpose, {"Layers"});
+    layers->setIcon(0, ToolspaceIcon("layers.png"));
+    layers->setData(0, Qt::UserRole + 1, "layersFolder");
+    for (const auto& row : m_State.drawingLayerTable) {
+      auto* entry = new QTreeWidgetItem(layers, {QString::fromUtf8(row.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("Layer_Properties.png"));
+      entry->setData(0, Qt::UserRole + 1, "layer");
+      entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(row.name.c_str()));
+    }
+    auto* dimensionStyles = new QTreeWidgetItem(multipurpose, {"Dimension Styles"});
+    dimensionStyles->setIcon(0, ToolspaceIcon("Dim_Style.png"));
+    dimensionStyles->setData(0, Qt::UserRole + 1, "dimensionFolder");
+    for (const auto& dimensionStyle : m_State.dimensionStyles) {
+      QString label = QString::fromUtf8(dimensionStyle.name.c_str());
+      if (dimensionStyle.name == m_State.activeDimensionStyle.name)
+        label += QStringLiteral(" (current)");
+      auto* entry = new QTreeWidgetItem(dimensionStyles, {label});
+      entry->setIcon(0, ToolspaceIcon("dimstyle.png"));
+      entry->setData(0, Qt::UserRole + 1, "dimensionStyle");
+      entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(dimensionStyle.name.c_str()));
+    }
+    auto* multileaderStyles = new QTreeWidgetItem(multipurpose, {"Multileader Styles"});
+    multileaderStyles->setIcon(0, ToolspaceIcon("Multileader.png"));
+    multileaderStyles->setData(0, Qt::UserRole + 1, "multileaderStylesFolder");
+    for (const auto& mleaderStyle : m_State.multileaderStyles) {
+      QString label = QString::fromUtf8(mleaderStyle.name.c_str());
+      if (mleaderStyle.name == m_State.activeMultileaderStyle.name)
+        label += QStringLiteral(" (current)");
+      auto* entry = new QTreeWidgetItem(multileaderStyles, {label});
+      entry->setIcon(0, ToolspaceIcon("Multileader.png"));
+      entry->setData(0, Qt::UserRole + 1, "multileaderStyle");
+      entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(mleaderStyle.name.c_str()));
+    }
+    multipurpose->setExpanded(true);
+    general->setExpanded(true);
+    auto* point = new QTreeWidgetItem(m_ToolspaceSettings, {"Point"});
+    point->setIcon(0, ToolspaceIcon("Single_Point.png"));
+    point->setData(0, Qt::UserRole + 1, "pointSettingsFolder");
+    settingsFolder(point, "User-Defined Property Classifications");
+    auto* pointStyleFolder = settingsFolder(point, "Point Styles");
+    for (const auto& pointStyle : m_State.surveyPointStyles) {
+      auto* entry = new QTreeWidgetItem(pointStyleFolder, {QString::fromUtf8(pointStyle.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("Single_Point.png"));
+      entry->setData(0, Qt::UserRole + 1, "pointStyle");
+    }
+    auto* pointLabelFolder = settingsFolder(point, "Label Styles");
+    for (const auto& labelStyle : m_State.surveyPointLabelStyles) {
+      auto* entry = new QTreeWidgetItem(pointLabelFolder, {QString::fromUtf8(labelStyle.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("text.png"));
+      entry->setData(0, Qt::UserRole + 1, "pointLabelStyle");
+    }
+    settingsFolder(point, "Point File Formats");
+    settingsFolder(point, "Description Key Sets");
+    settingsFolder(point, "External Data References");
+    auto* pointTableStyles = settingsFolder(point, "Table Styles", "tableStylesFolder");
+    for (const auto& tableStyle : m_State.tableStyles) {
+      if (!tableStyle.point) continue;
+      auto* entry = new QTreeWidgetItem(pointTableStyles, {QString::fromUtf8(tableStyle.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("Table.png"));
+      entry->setData(0, Qt::UserRole + 1, "tableStyle");
+      entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(tableStyle.name.c_str()));
+    }
+    settingsFolder(point, "Commands");
+    point->setExpanded(true);
+    auto* surface = new QTreeWidgetItem(m_ToolspaceSettings, {"Surface"});
+    surface->setIcon(0, ToolspaceIcon("c3d_surfaces.png"));
+    surface->setData(0, Qt::UserRole + 1, "surfaceSettingsFolder");
+    auto* surfaceStyles = settingsFolder(surface, "Surface Styles", "stylesFolder");
+    for (const auto& surfaceStyle : m_State.surfaceStyles) {
+      auto* entry = new QTreeWidgetItem(surfaceStyles, {QString::fromUtf8(surfaceStyle.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("Tint.png"));
+      entry->setData(0, Qt::UserRole + 1, "style");
+      entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(surfaceStyle.name.c_str()));
+    }
+    settingsFolder(surface, "Label Styles");
+    settingsFolder(surface, "Table Styles");
+    settingsFolder(surface, "Commands");
+    surface->setExpanded(true);
+  });
 }
 
 void EditorWindow::Refresh() {
   if (m_Refreshing) return;
   m_Refreshing = true;
+  const bool modelSpace = m_State.activeSpaceIndex == kModelSpaceIndex && !InFloatingModelSpace(m_State);
   if (auto* annotationScale = findChild<QComboBox*>("statusAnnotationScale")) {
     const QSignalBlocker block(annotationScale);
     annotationScale->clear();
     for (const auto& scale : m_State.annotationScales)
       annotationScale->addItem(QString::fromUtf8(CadAnnotationScaleStatusLabel(scale).c_str()));
     const bool hasScales = !m_State.annotationScales.empty();
-    if (!hasScales) annotationScale->addItem("No annotation scales");
-    annotationScale->setCurrentIndex(hasScales ? m_State.currentAnnotationScaleIndex : 0);
+    if (m_State.annotationScales.empty()) {
+      // No scale list in this drawing: still show the plot scale it is drawn at, read-only.
+      annotationScale->addItem(QString::fromUtf8(PlotScaleLabel(m_State.drawingInsUnits, m_State.modelUnitsPerPlottedInch).c_str()));
+      annotationScale->setCurrentIndex(0);
+    } else {
+      annotationScale->setCurrentIndex(m_State.currentAnnotationScaleIndex);
+    }
     annotationScale->setEnabled(hasScales);
+    annotationScale->setVisible(!modelSpace);
+  }
+  if (auto* viewportZoom = findChild<QComboBox*>("statusViewportZoom")) {
+    EnsureDefaultViewportZoomScales(m_State.viewportZoomScales);
+    EnsureViewportZoomScaleIndexForDisplay(m_State);
+    const QSignalBlocker block(viewportZoom);
+    viewportZoom->clear();
+    for (const CadAnnotationScale& scale : m_State.viewportZoomScales)
+      viewportZoom->addItem(QString::fromUtf8(CadViewportZoomScaleStatusLabel(scale).c_str()));
+    viewportZoom->addItem(tr("Add custom scale…"), QStringLiteral("__add__"));
+    if (m_State.currentViewportZoomScaleIndex >= 0)
+      viewportZoom->setCurrentIndex(m_State.currentViewportZoomScaleIndex);
+    viewportZoom->setEnabled(modelSpace && !m_State.viewportZoomScales.empty());
+    viewportZoom->setVisible(modelSpace);
   }
   RefreshProjects();
   const QSignalBlocker tabBlock(m_Tabs);
@@ -2283,6 +2883,8 @@ void EditorWindow::Refresh() {
     if (i == m_Tabs->count()) m_Tabs->addTab(title); else m_Tabs->setTabText(i, title);
   }
   m_Tabs->setTabButton(0, QTabBar::RightSide, nullptr);
+  if (m_Tabs->count() > 0)
+    m_Tabs->setTabIcon(0, windowIcon().pixmap(16, 16));
   m_Tabs->setCurrentIndex(m_State.activeDrawingIdx);
   {
     const QSignalBlocker spaceBlock(m_SpaceTabs);
@@ -2300,7 +2902,9 @@ void EditorWindow::Refresh() {
   }
   if (auto* spaceBar = findChild<QWidget*>("paperSpaceBar"))
     spaceBar->setVisible(m_State.activeDrawingIdx > 0);
-  m_Tabs->setMinimumHeight(std::max(m_Tabs->sizeHint().height(), m_Tabs->fontMetrics().height() + 12));
+  if (auto* drawingTabRow = findChild<QWidget*>("drawingTabRow"))
+    drawingTabRow->setVisible(true);
+  m_Tabs->update();
   m_Pages->setCurrentIndex(m_State.activeDrawingIdx == 0 ? 0 : 1);
   const bool drawingActive = m_State.activeDrawingIdx > 0;
   if (auto* drawingSettings = findChild<QAction*>("command_DRAWINGSETTINGS"))
@@ -2323,6 +2927,10 @@ void EditorWindow::Refresh() {
       line = "Drawing data was updated for compatibility with this version of GoSurvey.";
     }
     m_CommandBar->Append(line);
+  }
+  if (auto* toolspaceTabs = findChild<QTabWidget*>("toolspaceTabs")) {
+    const QSignalBlocker toolspaceBlock(toolspaceTabs);
+    toolspaceTabs->setCurrentIndex(ToolspaceTabIndex(m_State.toolspaceTab));
   }
   QString commandHint;
   for (const auto* hint : {LineCommandFooterHint(m_State), CircleCommandFooterHint(m_State), ModifyCommandFooterHint(m_State),
@@ -2778,6 +3386,103 @@ void EditorWindow::ShowPdf() {
   window->show();
 }
 
+// Opens one PDF from the Project tab in the PDF viewer (REQ-379 clause 5 and REQ-387).
+void EditorWindow::ShowPdfFile(const QString& path) {
+  auto* window = new PdfWindow(nullptr);
+  window->SetEditor(this);
+  connect(this, &QObject::destroyed, window, [window] { window->SetEditor(nullptr); window->close(); });
+  window->show();
+  window->Open(path);
+}
+
+// REQ-486: preview the active layout through the same vector PDF path as PLOT. The viewer owns
+// the temporary directory until it closes, so PDFium's source remains available for annotations.
+void EditorWindow::PreviewActiveLayout() {
+  const int layoutIndex = m_State.activeSpaceIndex;
+  if (InFloatingModelSpace(m_State) || layoutIndex < 0 ||
+      static_cast<size_t>(layoutIndex) >= m_State.paperLayouts.size()) {
+    QMessageBox::information(this, "Plot Preview", "Switch to a paper layout first.");
+    return;
+  }
+
+  auto temporary = std::make_unique<QTemporaryDir>(QDir::tempPath() + "/GoSurvey-PlotPreview-XXXXXX");
+  if (!temporary->isValid()) {
+    QMessageBox::warning(this, "Plot Preview", "A temporary PDF preview could not be created.");
+    return;
+  }
+
+  const QString pdfPath = temporary->filePath("preview.pdf");
+  std::vector<std::string> plotLog;
+  if (!PlotLayoutsToPdf(m_State, {layoutIndex}, pdfPath.toUtf8().constData(), plotLog)) {
+    QString message = "The active layout could not be plotted.";
+    if (!plotLog.empty()) {
+      message += "\n\n";
+      for (size_t i = 0; i < plotLog.size(); ++i) {
+        if (i) message += "\n";
+        message += QString::fromUtf8(plotLog[i].c_str());
+      }
+    }
+    QMessageBox::warning(this, "Plot Preview", message);
+    return;
+  }
+
+  auto* window = new PdfWindow(nullptr);
+  window->SetEditor(this);
+  connect(this, &QObject::destroyed, window, [window] { window->SetEditor(nullptr); window->close(); });
+  window->show();
+  window->OpenPlotPreview(pdfPath, std::move(temporary));
+}
+
+// REQ-487: display the active layout's effective settings without entering the mutable setup manager.
+void EditorWindow::ShowActiveLayoutDetails() {
+  const int layoutIndex = m_State.activeSpaceIndex;
+  if (InFloatingModelSpace(m_State) || layoutIndex < 0 ||
+      static_cast<size_t>(layoutIndex) >= m_State.paperLayouts.size())
+    return;
+
+  const PaperLayout& layout = m_State.paperLayouts[static_cast<size_t>(layoutIndex)];
+  const PageSetup setup = PageSetupFromLayout(layout, layout.pageSetupName);
+  const QString paperName = setup.presetIdx >= 0 && setup.presetIdx < kPaperSizePresetCount
+      ? QString::fromUtf8(kPaperSizePresets[setup.presetIdx].name) : QStringLiteral("Custom");
+  const QString pageSetupName = setup.name.empty()
+      ? QStringLiteral("No named Page Setup (layout settings)") : QString::fromUtf8(setup.name.c_str());
+  const QString paperSize = QStringLiteral("%1 — %2 × %3 in")
+      .arg(paperName).arg(layout.sheetWidthIn(), 0, 'f', 2).arg(layout.sheetHeightIn(), 0, 'f', 2);
+  const QString plotArea = setup.plotArea == 0 ? QStringLiteral("Layout")
+      : QStringLiteral("Unknown (%1)").arg(setup.plotArea);
+  const QString plotScale = setup.fitToPaper ? QStringLiteral("Fit to paper")
+      : QStringLiteral("1 : %1").arg(setup.scaleModelPerPaperIn, 0, 'g', 6);
+  const QString placement = QStringLiteral("Center: %1; offsets: X %2 in, Y %3 in")
+      .arg(setup.centerPlot ? QStringLiteral("Yes") : QStringLiteral("No"))
+      .arg(setup.offsetXIn, 0, 'f', 3).arg(setup.offsetYIn, 0, 'f', 3);
+  const QString plotStyle = setup.plotStyleTablePath.empty()
+      ? QStringLiteral("No plot style table") : QString::fromUtf8(setup.plotStyleTablePath.c_str());
+
+  QDialog dialog(this);
+  dialog.setObjectName("activeLayoutDetailsDialog");
+  dialog.setWindowTitle("View Details — " + QString::fromUtf8(layout.name.c_str()));
+  auto* form = new QFormLayout(&dialog);
+  auto addValue = [&](const char* objectName, const QString& title, const QString& value) {
+    auto* label = new QLabel(value, &dialog);
+    label->setObjectName(QString::fromLatin1(objectName));
+    label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    form->addRow(title, label);
+  };
+  addValue("layoutDetailsPageSetup", QStringLiteral("Page Setup"), pageSetupName);
+  addValue("layoutDetailsDevice", QStringLiteral("Output device"), QStringLiteral("GoSurvey PDF (vector)"));
+  addValue("layoutDetailsPaper", QStringLiteral("Paper size"), paperSize);
+  addValue("layoutDetailsOrientation", QStringLiteral("Orientation"),
+           setup.landscape ? QStringLiteral("Landscape") : QStringLiteral("Portrait"));
+  addValue("layoutDetailsPlotArea", QStringLiteral("Plot area"), plotArea);
+  addValue("layoutDetailsScale", QStringLiteral("Scale"), plotScale);
+  addValue("layoutDetailsPlacement", QStringLiteral("Placement"), placement);
+  addValue("layoutDetailsPlotStyle", QStringLiteral("Plot style table"), plotStyle);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+  form->addRow(buttons);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::accept);
+  dialog.exec();
+}
+
 bool EditorWindow::CommitPdfCoordinate(const pdfview::CoordCandidate& c) {
   if (!CreatePdfCoordinate(c)) return false;
   FinishPdfCoordinates();
@@ -2818,7 +3523,7 @@ bool EditorWindow::CreatePdfCoordinate(const pdfview::CoordCandidate& c) {
         [id](const SurveyPoint& p) { return p.id == id; })) ++id;
     SurveyPoint point{};
     point.id = id; point.easting = c.easting; point.northing = c.northing;
-    point.elevation = *c.elevation; point.description = c.description; point.rawDescription = c.description;
+    point.elevation = c.elevation.value_or(0.0); point.description = c.description; point.rawDescription = c.description;
     if (std::any_of(m_State.surveyPoints.begin(), m_State.surveyPoints.end(), [id](const SurveyPoint& p) { return p.id == id; })) {
       QMessageBox box(QMessageBox::Warning, "Point number already exists",
                       QString("Point %1 already exists. Choose how to resolve the conflict.").arg(id), QMessageBox::NoButton, this);
@@ -2876,7 +3581,7 @@ bool EditorWindow::RunSmokeChecks(QString& error) {
   if (!m_State.userLinesFlat.empty()) { error = "UNDO did not remove segment"; return false; }
   Submit("REDO");
   if (m_State.userLinesFlat.size() != 6) { error = "REDO did not restore segment"; return false; }
-  CreateDrawingFromTemplate();  // NewDrawing() opens the template chooser, a modal dialog
+  CreateDrawingFromTemplate();  // Open Drawing starts with an empty tab before loading the file.
   if (!m_State.userLinesFlat.empty()) { error = "New document inherited geometry"; return false; }
   SwitchDrawing(1);
   if (m_State.userLinesFlat.size() != 6) { error = "Document switch lost geometry"; return false; }

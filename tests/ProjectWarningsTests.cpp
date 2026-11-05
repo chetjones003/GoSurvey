@@ -507,21 +507,53 @@ TEST_CASE("req383 a units mismatch warns", "[req383]") {
   CHECK(pc.text.find("unit") != std::string::npos);
 }
 
-TEST_CASE("req383 two standalone drawings and the same project are never checked", "[req383]") {
+TEST_CASE("req383 matching coordinate systems do not prompt", "[req383]") {
   TempDir d("paste-ok");
   AppCommandState st;
   PasteSetup(st, d.path);
   st.drawingTabs[1].projectUid = 7;  // same project, same zone, same unit
   CHECK(CheckClipboardPaste(st).verdict == PasteCheck::Verdict::Ok);
 
-  st.drawingTabs[1].projectUid = 0;  // both standalone, a zone mismatch alone is still unchecked:
-  st.clipboard.srcProjectUid = 0;    // no coordinate-system concept applies outside a Project
-  st.clipboard.srcZone = "TX83-CF";
+  st.drawingTabs[1].projectUid = 0;  // standalone drawings with no comparable system are not mismatches
+  st.clipboard.srcProjectUid = 0;
+  st.clipboard.srcZone.clear();
   st.drawingSettings.zoneCode = "TX83-NF";
   CHECK(CheckClipboardPaste(st).verdict == PasteCheck::Verdict::Ok);
   std::vector<std::string> log;
   StartPasteCommand(st, log);
-  CHECK(st.active == AppCommandState::Kind::Paste);  // exactly as before projects existed
+  CHECK(st.active == AppCommandState::Kind::Paste);
+}
+
+namespace {
+void ZoneConvertSetup(AppCommandState& st, const fs::path& dir, double* worldX, double* worldY);
+}
+
+TEST_CASE("req383 standalone coordinate-system mismatch blocks until converted or canceled", "[req383][issue782]") {
+  TempDir d("paste-zone-standalone");
+  AppCommandState st;
+  double wx = 0.0, wy = 0.0;
+  ZoneConvertSetup(st, d.path, &wx, &wy);
+  st.drawingTabs[1].projectUid = 0;
+  st.clipboard.srcProjectUid = 0;
+
+  const PasteCheck pc = CheckClipboardPaste(st);
+  CHECK(pc.verdict == PasteCheck::Verdict::Block);
+  CHECK(pc.canConvert);
+  CHECK(pc.text.find("standalone drawing") != std::string::npos);
+  CHECK(pc.text.find("Convert") != std::string::npos);
+
+  std::vector<std::string> log;
+  StartPasteCommand(st, log);
+  REQUIRE(st.pastePrompt.active);
+  CHECK(st.pastePrompt.block);
+  CHECK(st.pastePrompt.canConvert);
+  StartPasteOrigCommand(st, log);
+  CHECK(st.pastePrompt.original);
+  CHECK(st.pastePrompt.block);
+
+  REQUIRE(ConvertClipboardForPaste(st, log));
+  CHECK(st.clipboard.srcZone == st.drawingSettings.zoneCode);
+  CHECK(CheckClipboardPaste(st).verdict == PasteCheck::Verdict::Ok);
 }
 
 TEST_CASE("req383 two standalone drawings with a unit mismatch still warn and offer convert (issue #831)",
@@ -629,6 +661,8 @@ void ZoneConvertSetup(AppCommandState& st, const fs::path& dir, double* worldX, 
   st.clipboard.srcOriginX = kSrcOx;
   st.clipboard.srcOriginY = kSrcOy;
   st.clipboard.lines = {243.14, 391.26, 150.0, 743.14, 391.26, 160.0};
+  SurveyPoint clipboardPoint = Pt(9, 243.14, 391.26, 150.0, "BM");
+  st.clipboard.surveyPoints = {clipboardPoint};
   st.clipboard.basePtX = 243.14f;
   st.clipboard.basePtY = 391.26f;
   st.drawingSettings.zoneCode = "HARN/TX.TX-N";
@@ -676,6 +710,9 @@ TEST_CASE("req383 a coordinate-system mismatch can be converted and lands at the
   const double len = std::hypot(cb.lines[3] - cb.lines[0], cb.lines[4] - cb.lines[1]);
   CHECK(len / (500.0 * 1200.0 / 3937.0) == Approx(1.0).margin(0.01));
   CHECK(cb.lines[2] == Approx(150.0 * 1200.0 / 3937.0).margin(1e-4));  // heights scale with the unit
+  CHECK(cb.surveyPoints[0].easting == Approx(cb.lines[0]).margin(1e-3));
+  CHECK(cb.surveyPoints[0].northing == Approx(cb.lines[1]).margin(1e-3));
+  CHECK(cb.surveyPoints[0].elevation == Approx(cb.lines[2]).margin(1e-4));
   CHECK(cb.basePtX == Approx(cb.lines[0]).margin(1e-3));               // the paste anchor moves with the copy
   CHECK(cb.srcZone == "HARN/TX.TX-N");
   CHECK(cb.srcMetersPerUnit == Approx(1.0));
@@ -792,6 +829,179 @@ TEST_CASE("req383 cancelling the paste prompt changes neither the clipboard nor 
   CHECK(st.clipboard.lines == before);
   CHECK(st.clipboard.srcZone == "HARN/TX.TX-CF");
   CHECK(st.active != AppCommandState::Kind::Paste);
+}
+
+TEST_CASE("issue782 copies selected survey points with a paste anchor and preserves their data", "[req383][issue782]") {
+  AppCommandState st;
+  st.surveyPoints = {Pt(42, 10, 20, 7, "EG")};
+  st.surveyPoints[0].rawDescription = "EG";
+  st.surveyPoints[0].layer = "V-TOPO";
+  st.surveyPoints[0].labelMtextAnnId = 1234;
+  st.selectedSurveyPointIndices = {0};
+  std::vector<std::string> log;
+
+  CopySelectionToClipboard(st, log);
+
+  REQUIRE(st.clipboard.surveyPoints.size() == 1);
+  CHECK(st.clipboard.surveyPoints[0].id == 42);
+  CHECK(st.clipboard.surveyPoints[0].rawDescription == "EG");
+  CHECK(st.clipboard.surveyPoints[0].layer == "V-TOPO");
+  CHECK(st.clipboard.basePtX == Catch::Approx(10));
+  CHECK(st.clipboard.basePtY == Catch::Approx(20));
+
+  st.surveyPoints.clear();
+  st.selectedSurveyPointIndices.clear();
+  CommitClipboardPasteAt(st, 110, 220, log);
+  REQUIRE(st.surveyPoints.size() == 1);
+  CHECK(st.surveyPoints[0].id == 42);
+  CHECK(st.surveyPoints[0].easting == Catch::Approx(110));
+  CHECK(st.surveyPoints[0].northing == Catch::Approx(220));
+  CHECK(st.surveyPoints[0].elevation == Catch::Approx(7));
+  CHECK(st.surveyPoints[0].labelMtextAnnId != 1234);
+}
+
+TEST_CASE("issue782 survey point paste keeps sub-unit precision at large coordinates", "[req383][issue782]") {
+  constexpr double sourceX = 1234567.123456789;
+  constexpr double sourceY = 7654321.654321098;
+  constexpr double targetX = 1234600.7654321;
+  constexpr double targetY = 7654400.1234567;
+  AppCommandState st;
+  st.surveyPoints = {Pt(42, sourceX, sourceY, 7, "SOURCE")};
+  st.selectedSurveyPointIndices = {0};
+  std::vector<std::string> log;
+  CopySelectionToClipboard(st, log);
+  CHECK(std::abs(st.clipboard.basePtX - sourceX) < 1e-9);
+  CHECK(std::abs(st.clipboard.basePtY - sourceY) < 1e-9);
+
+  st.surveyPoints.clear();
+  st.selectedSurveyPointIndices.clear();
+  CommitClipboardPasteAt(st, targetX, targetY, log);
+  REQUIRE(st.surveyPoints.size() == 1);
+  CHECK(std::abs(st.surveyPoints[0].easting - targetX) < 1e-7);
+  CHECK(std::abs(st.surveyPoints[0].northing - targetY) < 1e-7);
+
+  st.surveyPoints[0] = Pt(42, 1, 2, 3, "DEST");
+  CommitClipboardPasteAt(st, targetX, targetY, log);
+  REQUIRE(st.pointEditPrompt.active);
+  ResolveClipboardPastePointConflict(st, AppCommandState::PointEditPrompt::Answer::Renumber, log);
+  REQUIRE(st.surveyPoints.size() == 2);
+  CHECK(std::abs(st.surveyPoints[1].easting - targetX) < 1e-7);
+  CHECK(std::abs(st.surveyPoints[1].northing - targetY) < 1e-7);
+}
+
+TEST_CASE("issue782 pasted line and survey point use the same precise offset", "[req383][issue782]") {
+  constexpr double sourceX = 1234567.123456789;
+  constexpr double sourceY = 7654321.654321098;
+  AppCommandState st;
+  st.surveyPoints = {Pt(42, sourceX, sourceY, 7, "SOURCE")};
+  st.selectedSurveyPointIndices = {0};
+  st.userLinesFlat = {sourceX, sourceY, 0, sourceX + 0.5, sourceY, 0};
+  st.selection.push_back({SelectedEntity::Type::LineSeg, 0});
+  std::vector<std::string> log;
+  CopySelectionToClipboard(st, log);
+  REQUIRE(st.clipboard.lines.size() == 6);
+  const double destinationX = st.clipboard.basePtX + 1000000.03;
+  const double destinationY = st.clipboard.basePtY + 1000000.07;
+  st.surveyPoints.clear();
+  st.userLinesFlat.clear();
+  st.selection.clear();
+  CommitClipboardPasteAt(st, destinationX, destinationY, log);
+  REQUIRE(st.surveyPoints.size() == 1);
+  REQUIRE(st.userLinesFlat.size() == 6);
+  CHECK(std::abs(st.userLinesFlat[0] - st.surveyPoints[0].easting) < 1e-7);
+  CHECK(std::abs(st.userLinesFlat[1] - st.surveyPoints[0].northing) < 1e-7);
+}
+
+TEST_CASE("issue782 point-number conflict choices keep paste atomic", "[req383][issue782]") {
+  SECTION("renumber keeps the destination point and leaves the clipboard number unchanged") {
+    AppCommandState st;
+    st.surveyPoints = {Pt(42, 1, 2, 3, "DEST")};
+    st.clipboard.surveyPoints = {Pt(42, 10, 20, 7, "SOURCE")};
+    st.clipboard.basePtX = 10;
+    st.clipboard.basePtY = 20;
+    std::vector<std::string> log;
+
+    CommitClipboardPasteAt(st, 110, 220, log);
+    REQUIRE(st.pointEditPrompt.active);
+    CHECK(st.pointEditPrompt.clipboardPaste);
+    CHECK(st.pointEditPrompt.conflicts == std::vector<int>{42});
+    REQUIRE(st.surveyPoints.size() == 1);
+    CHECK(st.surveyPoints[0].description == "DEST");
+
+    ResolveClipboardPastePointConflict(st, AppCommandState::PointEditPrompt::Answer::Renumber, log);
+
+    REQUIRE(st.surveyPoints.size() == 2);
+    CHECK(st.surveyPoints[0].id == 42);
+    CHECK(st.surveyPoints[1].id == 43);
+    CHECK(st.surveyPoints[1].easting == Catch::Approx(110));
+    CHECK(st.clipboard.surveyPoints[0].id == 42);
+  }
+
+  SECTION("overwrite replaces the destination number and cancel leaves it unchanged") {
+    AppCommandState st;
+    st.surveyPoints = {Pt(42, 1, 2, 3, "DEST")};
+    st.clipboard.surveyPoints = {Pt(42, 10, 20, 7, "SOURCE")};
+    st.clipboard.basePtX = 10;
+    st.clipboard.basePtY = 20;
+    std::vector<std::string> log;
+
+    CommitClipboardPasteAt(st, 110, 220, log);
+    ResolveClipboardPastePointConflict(st, AppCommandState::PointEditPrompt::Answer::Proceed, log);
+    REQUIRE(st.surveyPoints.size() == 1);
+    CHECK(st.surveyPoints[0].easting == Catch::Approx(110));
+    CHECK(st.surveyPoints[0].description == "SOURCE");
+
+    st.surveyPoints[0] = Pt(42, 1, 2, 3, "DEST");
+    st.pointEditPrompt = {};
+    CommitClipboardPasteAt(st, 110, 220, log);
+    ResolveClipboardPastePointConflict(st, AppCommandState::PointEditPrompt::Answer::Cancel, log);
+    REQUIRE(st.surveyPoints.size() == 1);
+    CHECK(st.surveyPoints[0].description == "DEST");
+  }
+
+  SECTION("PASTEORIG asks about the same destination number before changing anything") {
+    AppCommandState st;
+    st.surveyPoints = {Pt(42, 1, 2, 3, "DEST")};
+    st.clipboard.surveyPoints = {Pt(42, 10, 20, 7, "SOURCE")};
+    st.clipboard.basePtX = 10;
+    st.clipboard.basePtY = 20;
+    std::vector<std::string> log;
+
+    StartPasteOrigCommand(st, log);
+    REQUIRE(st.pointEditPrompt.active);
+    CHECK(st.pointEditPrompt.clipboardPaste);
+    ResolveClipboardPastePointConflict(st, Answer::Cancel, log);
+    REQUIRE(st.surveyPoints.size() == 1);
+    CHECK(st.surveyPoints[0].description == "DEST");
+  }
+}
+
+TEST_CASE("issue782 overwrite flows through the shared project point database", "[req383][issue782]") {
+  TempDir d("paste-points-shared");
+  AppCommandState st;
+  Project(st, d.path, false);
+  st.drawingTabs[1].pointsMode = Tab::PointsMode::Shared;
+  SurveyPoint existing = Pt(42, 1, 2, 3, "DEST");
+  st.openProjects[0].points->points = {{existing, "EG.dwg"}};
+  st.openProjects[0].points->revision = 1;
+  st.clipboard.surveyPoints = {Pt(42, 10, 20, 7, "SOURCE")};
+  st.clipboard.basePtX = 10;
+  st.clipboard.basePtY = 20;
+  std::vector<std::string> log;
+
+  CommitClipboardPasteAt(st, 110, 220, log);
+  REQUIRE(st.pointEditPrompt.active);
+  CHECK(st.pointEditPrompt.conflicts == std::vector<int>{42});
+  ResolveClipboardPastePointConflict(st, Answer::Proceed, log);
+  REQUIRE(st.pointEditPrompt.active);
+  CHECK(st.pointEditPrompt.conflictAnswer == Answer::Proceed);
+  SyncProjectPoints(st, log, 1.0);
+
+  REQUIRE(st.openProjects[0].points->points.size() == 1);
+  CHECK(st.openProjects[0].points->points[0].point.easting == Approx(110));
+  CHECK(st.openProjects[0].points->points[0].point.northing == Approx(220));
+  CHECK(st.openProjects[0].points->points[0].point.description == "SOURCE");
+  CHECK_FALSE(st.pointEditPrompt.active);
 }
 
 TEST_CASE("req383 a paper-space copy has nothing to convert", "[req383][issue722]") {

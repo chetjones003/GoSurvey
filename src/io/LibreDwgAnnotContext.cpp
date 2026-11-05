@@ -3,6 +3,7 @@
 #include "CadCommands.hpp"
 #include "CadEntities.hpp"
 #include "DwgIo.hpp"
+#include "LibreDwgCad.hpp"
 
 #include <cstring>
 
@@ -30,6 +31,22 @@ struct ImportStats {
 };
 
 ImportStats gStats{};
+
+bool ContextTextIsWide(const Dwg_Data& dwg) {
+  return dwg.header.from_version >= R_2007 &&
+      (!(dwg.opts & DWG_OPTS_IN) || (dwg.opts & DWG_OPTS_TU));
+}
+
+const Dwg_Object* ContextDictionaryItem(const Dwg_Data& dwg, const Dwg_Object_DICTIONARY& dictionary,
+                                       const char* name) {
+  if (!dictionary.texts || !dictionary.itemhandles) return nullptr;
+  for (BITCODE_BL i = 0; i < dictionary.numitems; ++i) {
+    if (libredwgcad_detail::DecodeDwgString(dictionary.texts[i], ContextTextIsWide(dwg)) == name &&
+        dictionary.itemhandles[i])
+      return dwg_resolve_handle_silent(const_cast<Dwg_Data*>(&dwg), dictionary.itemhandles[i]->absolute_ref);
+  }
+  return nullptr;
+}
 
 [[nodiscard]] bool IsAnnotationContextType(Dwg_Object_Type ty) {
   switch (ty) {
@@ -83,8 +100,8 @@ ImportStats gStats{};
   if (dict == nullptr || dict->texts == nullptr || dict->itemhandles == nullptr)
     return nullptr;
   for (BITCODE_BL i = 0; i < dict->numitems; ++i) {
-    const char* key = dict->texts[i];
-    if (key == nullptr || std::strcmp(key, "AcDbContextDataManager") != 0)
+    const auto key = libredwgcad_detail::DecodeDwgString(dict->texts[i], ContextTextIsWide(*dwg));
+    if (key != "AcDbContextDataManager")
       continue;
     if (dict->itemhandles[i] == nullptr || dict->itemhandles[i]->absolute_ref == 0)
       return nullptr;
@@ -127,6 +144,21 @@ ImportStats gStats{};
 [[nodiscard]] const Dwg_Object* ResolveDefaultContextFromManager(const Dwg_Data* dwg,
                                                                  const Dwg_Object* mgrShell) {
   assert(dwg != nullptr && mgrShell != nullptr);
+  if (mgrShell->fixedtype == DWG_TYPE_DICTIONARY && mgrShell->tio.object) {
+    const auto* scales = ContextDictionaryItem(*dwg, *mgrShell->tio.object->tio.DICTIONARY,
+                                              "ACDB_ANNOTATIONSCALES");
+    if (!scales || scales->fixedtype != DWG_TYPE_DICTIONARY || !scales->tio.object) return nullptr;
+    const auto* dictionary = scales->tio.object->tio.DICTIONARY;
+    const Dwg_Object* fallback = nullptr;
+    for (BITCODE_BL i = 0; i < dictionary->numitems; ++i) {
+      if (!dictionary->itemhandles || !dictionary->itemhandles[i]) continue;
+      const auto* context = dwg_resolve_handle_silent(const_cast<Dwg_Data*>(dwg), dictionary->itemhandles[i]->absolute_ref);
+      if (!context || !IsAnnotationContextType(context->fixedtype)) continue;
+      if (ContextObjectIsDefault(context)) return context;
+      if (!fallback) fallback = context;
+    }
+    return fallback;
+  }
   if (mgrShell->fixedtype != DWG_TYPE_CONTEXTDATAMANAGER || mgrShell->tio.object == nullptr)
     return nullptr;
   const Dwg_Object_CONTEXTDATAMANAGER* mgr = mgrShell->tio.object->tio.CONTEXTDATAMANAGER;
@@ -156,6 +188,9 @@ ImportStats gStats{};
   int n = 0;
   for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
     if (IsAnnotationContextType(dwg->object[i].fixedtype))
+      ++n;
+    else if (dwg->object[i].fixedtype == DWG_TYPE_DICTIONARY && dwg->object[i].tio.object &&
+             ContextDictionaryItem(*dwg, *dwg->object[i].tio.object->tio.DICTIONARY, "ACDB_ANNOTATIONSCALES"))
       ++n;
   }
   return n;
@@ -453,7 +488,73 @@ void FillOcdDimension(Dwg_OCD_Dimension* dim, const Dwg_DIMENSION_common* common
   return obj;
 }
 
-[[nodiscard]] Dwg_Object* AppendMleaderContextObject(Dwg_Data* dwg, BITCODE_HV scaleAbsRef, bool isDefault) {
+template <typename T>
+T* CopyContextArray(const T* source, std::size_t count) {
+  if (count == 0 || source == nullptr) return nullptr;
+  auto* copy = static_cast<T*>(std::calloc(count, sizeof(T)));
+  if (copy) std::memcpy(copy, source, count * sizeof(T));
+  return copy;
+}
+
+BITCODE_T CopyContextText(const Dwg_Data& dwg, BITCODE_T source) {
+  if (!source) return nullptr;
+  const bool wide = ContextTextIsWide(dwg);
+  std::size_t bytes = 0;
+  if (wide) {
+    const auto* text = reinterpret_cast<const std::uint16_t*>(source);
+    while (text[bytes / 2] != 0) bytes += 2;
+    bytes += 2;
+  } else bytes = std::strlen(source) + 1;
+  return CopyContextArray(source, bytes);
+}
+
+// Scale contexts own independent geometry/text buffers. Handle references are drawing-global,
+// while vector and string fields are freed by each record's codec.
+bool CopyMleaderContext(Dwg_Data& dwg, const Dwg_MLEADER_AnnotContext& source,
+                        Dwg_MLEADER_AnnotContext* target) {
+  *target = source;
+  target->leaders = nullptr;
+  if (source.has_content_txt) {
+    target->content.txt.default_text = nullptr;
+    target->content.txt.col_sizes = nullptr;
+    target->content.txt.default_text = CopyContextText(dwg, source.content.txt.default_text);
+    target->content.txt.col_sizes = CopyContextArray(source.content.txt.col_sizes, source.content.txt.num_col_sizes);
+    if ((source.content.txt.default_text && !target->content.txt.default_text) ||
+        (source.content.txt.num_col_sizes && !target->content.txt.col_sizes)) return false;
+  } else if (source.has_content_blk) {
+    target->content.blk.transform = CopyContextArray(source.content.blk.transform, 16);
+    if (source.content.blk.transform && !target->content.blk.transform) return false;
+  }
+  target->leaders = CopyContextArray(source.leaders, source.num_leaders);
+  if (source.num_leaders && !target->leaders) return false;
+  for (BITCODE_BL i = 0; i < source.num_leaders; ++i) {
+    target->leaders[i].parent = nullptr;
+    target->leaders[i].lines = nullptr;
+    target->leaders[i].breaks = nullptr;
+  }
+  for (BITCODE_BL i = 0; i < source.num_leaders; ++i) {
+    const auto& from = source.leaders[i];
+    auto& to = target->leaders[i];
+    to.breaks = CopyContextArray(from.breaks, from.num_breaks);
+    to.lines = CopyContextArray(from.lines, from.num_lines);
+    if ((from.num_breaks && !to.breaks) || (from.num_lines && !to.lines)) return false;
+    for (BITCODE_BL j = 0; j < from.num_lines; ++j) {
+      to.lines[j].parent = &to;
+      to.lines[j].points = nullptr;
+      to.lines[j].breaks = nullptr;
+    }
+    for (BITCODE_BL j = 0; j < from.num_lines; ++j) {
+      to.lines[j].points = CopyContextArray(from.lines[j].points, from.lines[j].num_points);
+      to.lines[j].breaks = CopyContextArray(from.lines[j].breaks, from.lines[j].num_breaks);
+      if ((from.lines[j].num_points && !to.lines[j].points) ||
+          (from.lines[j].num_breaks && !to.lines[j].breaks)) return false;
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] Dwg_Object* AppendMleaderContextObject(Dwg_Data* dwg, const Dwg_Entity_MULTILEADER* source,
+                                                    BITCODE_HV scaleAbsRef, bool isDefault) {
   assert(dwg != nullptr);
   const int classNumber = EnsureMleaderContextClass(dwg);
   if (classNumber < 0)
@@ -469,6 +570,7 @@ void FillOcdDimension(Dwg_OCD_Dimension* dim, const Dwg_DIMENSION_common* common
   obj->tio.object->tio.MLEADEROBJECTCONTEXTDATA = ctx;
   ctx->parent = obj->tio.object;
   InitAnnotScaleBase(dwg, obj, scaleAbsRef, isDefault);
+  if (source == nullptr || !CopyMleaderContext(*dwg, source->ctx, &ctx->ctx)) return nullptr;
   return obj;
 }
 
@@ -541,11 +643,12 @@ struct ContextSource {
   const Dwg_Entity_TEXT* text;
   const Dwg_Entity_INSERT* insert;
   const Dwg_DIMENSION_common* dimension;
+  const Dwg_Entity_MULTILEADER* mleader = nullptr;
 };
 
 struct ContextPair {
   const CadAnnotationScale* scale;
-  Dwg_Object* obj;
+  BITCODE_BL objectIndex;
 };
 
 [[nodiscard]] Dwg_Object* MakeContextObject(Dwg_Data* dwg, const ContextSource& src, BITCODE_HV scaleAbsRef,
@@ -563,7 +666,7 @@ struct ContextPair {
   case CtxObjectKind::Angdim:
     return AppendAngdimContextObject(dwg, src.dimension, scaleAbsRef, isDefault);
   case CtxObjectKind::Mleader:
-    return AppendMleaderContextObject(dwg, scaleAbsRef, isDefault);
+    return AppendMleaderContextObject(dwg, src.mleader, scaleAbsRef, isDefault);
   case CtxObjectKind::HatchScale:
     return AppendHatchScaleContextObject(dwg, scaleAbsRef, isDefault);
   default:
@@ -597,57 +700,45 @@ struct ContextPair {
     Dwg_Object* ctxObj = MakeContextObject(dwg, src, it->second, isDefault);
     if (ctxObj == nullptr)
       return false;
-    pairs.push_back(ContextPair{sc, ctxObj});
+    pairs.push_back(ContextPair{sc, ctxObj->index});
     ++(*objectsWritten);
   }
   if (pairs.empty())
     return false;
 
-  const int mgrClass = EnsureContextManagerClass(dwg);
-  if (mgrClass < 0)
-    return false;
-  Dwg_Object* mgrShell =
-      AppendObjectShell(dwg, DWG_TYPE_CONTEXTDATAMANAGER, mgrClass, "CONTEXTDATAMANAGER", "CONTEXTDATAMANAGER");
-  if (mgrShell == nullptr)
-    return false;
-  auto* mgr = static_cast<Dwg_Object_CONTEXTDATAMANAGER*>(std::calloc(1, sizeof(Dwg_Object_CONTEXTDATAMANAGER)));
-  if (mgr == nullptr)
-    return false;
-  mgrShell->tio.object->tio.CONTEXTDATAMANAGER = mgr;
-  mgr->parent = mgrShell->tio.object;
-
-  mgr->num_submgrs = 1;
-  mgr->submgrs = static_cast<Dwg_CONTEXTDATA_submgr*>(std::calloc(1, sizeof(Dwg_CONTEXTDATA_submgr)));
-  if (mgr->submgrs == nullptr)
-    return false;
-  mgr->submgrs[0].parent = mgr;
-  mgr->submgrs[0].num_entries = static_cast<BITCODE_BL>(pairs.size());
-  mgr->submgrs[0].entries =
-      static_cast<Dwg_CONTEXTDATA_dict*>(std::calloc(pairs.size(), sizeof(Dwg_CONTEXTDATA_dict)));
-  if (mgr->submgrs[0].entries == nullptr)
-    return false;
-
-  for (size_t i = 0; i < pairs.size(); ++i) {
-    mgr->submgrs[0].entries[i].parent = &mgr->submgrs[0];
-    mgr->submgrs[0].entries[i].text = dwg_add_u8_input(dwg, pairs[i].scale->name.c_str());
-    mgr->submgrs[0].entries[i].itemhandle =
-        dwg_add_handleref(dwg, 5, pairs[i].obj->handle.value, mgrShell);
+  // AutoCAD owns contexts through three ordinary dictionaries, not a placeholder custom manager:
+  // entity -> AcDbContextDataManager -> ACDB_ANNOTATIONSCALES -> *A<n> -> scale context.
+  auto* scalesDictionary = dwg_add_DICTIONARY(dwg, nullptr, nullptr, 0);
+  if (!scalesDictionary) return false;
+  const BITCODE_BL scalesIndex = scalesDictionary->parent->objid;
+  const auto scalesHandle = dwg->object[scalesIndex].handle.value;
+  for (std::size_t i = 0; i < pairs.size(); ++i) {
+    const auto key = "*A" + std::to_string(i + 1);
+    auto& object = dwg->object[pairs[i].objectIndex];
+    dwg_add_DICTIONARY_item(scalesDictionary, key.c_str(), object.handle.value);
+    LinkOwnedObject(dwg, object.tio.object, scalesHandle);
+    object.tio.object->is_xdic_missing = 1;
   }
-
-  Dwg_Object* entObj = &dwg->object[ent->objid];
-  const BITCODE_HV entHandle = entObj->handle.value;
-  const BITCODE_HV mgrHandle = mgrShell->handle.value;
-
-  Dwg_Object_DICTIONARY* xdict = dwg_add_DICTIONARY(dwg, nullptr, "AcDbContextDataManager", mgrHandle);
-  int err = 0;
-  Dwg_Object* xdictObj = xdict != nullptr ? dwg_obj_generic_to_object(xdict, &err) : nullptr;
-  if (xdictObj == nullptr || err != 0)
-    return false;
-
-  LinkOwnedObject(dwg, xdictObj->tio.object, entHandle);
-  LinkOwnedObject(dwg, mgrShell->tio.object, xdictObj->handle.value);
-  ent->xdicobjhandle = dwg_add_handleref(dwg, 3, xdictObj->handle.value, entObj);
-  mgrShell->tio.object->xdicobjhandle = dwg_add_handleref(dwg, 3, 0, nullptr);
+  auto* manager = dwg_add_DICTIONARY(dwg, nullptr, "ACDB_ANNOTATIONSCALES", scalesHandle);
+  if (!manager) return false;
+  const BITCODE_BL managerIndex = manager->parent->objid;
+  const auto managerHandle = dwg->object[managerIndex].handle.value;
+  auto* extension = dwg_add_DICTIONARY(dwg, nullptr, "AcDbContextDataManager", managerHandle);
+  if (!extension) return false;
+  const BITCODE_BL extensionIndex = extension->parent->objid;
+  auto* extensionObject = &dwg->object[extensionIndex];
+  const auto extensionHandle = extensionObject->handle.value;
+  extension->is_hardowner = 1;
+  extension->itemhandles[0] = dwg_add_handleref(dwg, 3, managerHandle, extensionObject);
+  auto* entityObject = &dwg->object[ent->objid];
+  extensionObject->tio.object->ownerhandle = dwg_add_handleref(dwg, 4, entityObject->handle.value, extensionObject);
+  extensionObject->tio.object->is_xdic_missing = 1;
+  LinkOwnedObject(dwg, dwg->object[managerIndex].tio.object, extensionHandle);
+  LinkOwnedObject(dwg, dwg->object[scalesIndex].tio.object, managerHandle);
+  dwg->object[managerIndex].tio.object->is_xdic_missing = 1;
+  dwg->object[scalesIndex].tio.object->is_xdic_missing = 1;
+  ent->xdicobjhandle = dwg_add_handleref(dwg, 3, extensionHandle, entityObject);
+  ent->is_xdic_missing = 0;
   dwg_resolve_objectrefs_silent(dwg);
   return true;
 }
@@ -712,11 +803,10 @@ bool DwgExportAttachMleaderAnnotationContext(DwgExportAnnotContext* ctx, Dwg_Obj
                                              const Dwg_Entity_MULTILEADER* mleader, const CadMultileader& ml,
                                              const AppCommandState& st) {
   assert(mleader != nullptr);
-  (void)mleader;
   if (!ml.annotative)
     return false;
   const CadAnnotation host = AnnotHostFromMultileader(ml);
-  const ContextSource src{CtxObjectKind::Mleader, nullptr, nullptr, nullptr, nullptr};
+  const ContextSource src{CtxObjectKind::Mleader, nullptr, nullptr, nullptr, nullptr, mleader};
   return AttachContextObjects(ctx, ent, st, host, src, &ctx->mleaderContextObjectsWritten);
 }
 
@@ -734,27 +824,27 @@ bool DwgExportAttachHatchAnnotationContext(DwgExportAnnotContext* ctx, Dwg_Objec
 
 void DwgExportAnnotContextAppendLog(const DwgExportAnnotContext& ctx, std::vector<std::string>& log) {
   if (ctx.mtextContextObjectsWritten > 0) {
-    log.push_back("CAD export — wrote " + std::to_string(ctx.mtextContextObjectsWritten) +
+    log.push_back("CAD export â€” wrote " + std::to_string(ctx.mtextContextObjectsWritten) +
                   " MTEXT annotation context object(s) (REQ-384, issue #688).");
   }
   if (ctx.textContextObjectsWritten > 0) {
-    log.push_back("CAD export — wrote " + std::to_string(ctx.textContextObjectsWritten) +
+    log.push_back("CAD export â€” wrote " + std::to_string(ctx.textContextObjectsWritten) +
                   " TEXT annotation context object(s) (REQ-384 inc 3, issue #688).");
   }
   if (ctx.blkrefContextObjectsWritten > 0) {
-    log.push_back("CAD export — wrote " + std::to_string(ctx.blkrefContextObjectsWritten) +
+    log.push_back("CAD export â€” wrote " + std::to_string(ctx.blkrefContextObjectsWritten) +
                   " INSERT annotation context object(s) (REQ-384 inc 3, issue #688).");
   }
   if (ctx.dimContextObjectsWritten > 0) {
-    log.push_back("CAD export — wrote " + std::to_string(ctx.dimContextObjectsWritten) +
+    log.push_back("CAD export â€” wrote " + std::to_string(ctx.dimContextObjectsWritten) +
                   " DIMENSION annotation context object(s) (REQ-384 inc 3, issue #688).");
   }
   if (ctx.mleaderContextObjectsWritten > 0) {
-    log.push_back("CAD export — wrote " + std::to_string(ctx.mleaderContextObjectsWritten) +
+    log.push_back("CAD export â€” wrote " + std::to_string(ctx.mleaderContextObjectsWritten) +
                   " MULTILEADER annotation context object(s) (REQ-384 inc 4, issue #688).");
   }
   if (ctx.hatchContextObjectsWritten > 0) {
-    log.push_back("CAD export — wrote " + std::to_string(ctx.hatchContextObjectsWritten) +
+    log.push_back("CAD export â€” wrote " + std::to_string(ctx.hatchContextObjectsWritten) +
                   " HATCH scale context object(s) (REQ-384 inc 4, issue #688).");
   }
 }
@@ -817,7 +907,7 @@ void DwgAnnotContextImportAppendLog(std::vector<std::string>& log) {
   assert(log.size() < 1000000);
   if (gStats.contextObjects <= 0)
     return;
-  std::string line = "DWG import — found " + std::to_string(gStats.contextObjects) +
+  std::string line = "DWG import â€” found " + std::to_string(gStats.contextObjects) +
                      " AutoCAD annotation context object(s); GoSurvey uses entity geometry and "
                      "AcadAnnotative/GOSURVEY markers";
   if (gStats.defaultContextMerged > 0) {
@@ -826,7 +916,7 @@ void DwgAnnotContextImportAppendLog(std::vector<std::string>& log) {
     line += gStats.defaultContextMerged == 1 ? "y" : "ies";
     line += ", REQ-384 inc 4)";
   } else {
-    line += " (REQ-384 — per-scale context merge partial; default-scale MTEXT/TEXT only)";
+    line += " (REQ-384 â€” per-scale context merge partial; default-scale MTEXT/TEXT only)";
   }
   line += ".";
   log.push_back(std::move(line));
@@ -838,6 +928,33 @@ const Dwg_Object* DwgImportResolveDefaultContextObject(const Dwg_Data* dwg, cons
   if (mgrShell == nullptr)
     return nullptr;
   return ResolveDefaultContextFromManager(dwg, mgrShell);
+}
+
+void DwgImportAnnotativeScaleNames(const Dwg_Data* dwg, const Dwg_Object_Entity* ent,
+                                   std::vector<std::string>* names) {
+  if (dwg == nullptr || ent == nullptr || names == nullptr)
+    return;
+  const Dwg_Object* shell = ResolveContextManagerObject(dwg, ent);
+  if (shell == nullptr || shell->fixedtype != DWG_TYPE_CONTEXTDATAMANAGER || shell->tio.object == nullptr)
+    return;
+  const Dwg_Object_CONTEXTDATAMANAGER* mgr = shell->tio.object->tio.CONTEXTDATAMANAGER;
+  if (mgr == nullptr || mgr->submgrs == nullptr)
+    return;
+  for (BITCODE_BL si = 0; si < mgr->num_submgrs; ++si) {
+    const Dwg_CONTEXTDATA_submgr& sub = mgr->submgrs[si];
+    if (sub.entries == nullptr)
+      continue;
+    for (BITCODE_BL ei = 0; ei < sub.num_entries; ++ei) {
+      BITCODE_T text = sub.entries[ei].text;
+      if (text == nullptr)
+        continue;
+      // Annotation scale names are conventionally ASCII identifiers. LibreDWG stores the
+      // context manager key in BITCODE_T; its narrow representation is already UTF-8.
+      std::string name(reinterpret_cast<const char*>(text));
+      if (!name.empty() && std::find(names->begin(), names->end(), name) == names->end())
+        names->push_back(std::move(name));
+    }
+  }
 }
 
 int DwgImportDefaultContextMergeCount() {

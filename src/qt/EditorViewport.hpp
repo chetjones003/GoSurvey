@@ -16,7 +16,12 @@
 
 class ViewportRenderer;
 class QPainter;
+class QPainterPath;
 class QLabel;
+class QOpenGLBuffer;
+class QOpenGLShaderProgram;
+class QOpenGLTextureBlitter;
+class QOpenGLVertexArrayObject;
 
 class EditorViewport final : public QOpenGLWidget {
   friend class QtEditorTests;
@@ -70,7 +75,9 @@ private:
   void StepViewAnimation();
   void Cleanup();
   bool WorldPoint(QPointF point, ray3d::Vec3& world) const;
+  bool DrawPaperViewportClipMask(const QPainterPath& path, int framebufferWidth, int framebufferHeight);
   bool ViewPoint(QPointF point, ray3d::Vec3& world) const;
+  void CommitPendingIdleSelectionClick(Qt::KeyboardModifiers modifiers);
   void ClearTransientInput();
   void RightPress(const QPoint& globalPosition);
   void PerformRightClick(RightClickAction action, const QPoint& globalPosition);
@@ -78,10 +85,15 @@ private:
   AppCommandState& m_State;
   std::vector<std::string>& m_Log;
   std::unique_ptr<ViewportRenderer> m_Renderer;
+  std::unique_ptr<QOpenGLBuffer> m_ClipMaskBuffer;
+  std::unique_ptr<QOpenGLShaderProgram> m_ClipMaskProgram;
+  std::unique_ptr<QOpenGLTextureBlitter> m_TextureBlitter;
+  std::unique_ptr<QOpenGLVertexArrayObject> m_ClipMaskVao;
   std::unique_ptr<OnlineMapController> m_OnlineMap;
   PartThumbnailImages m_PartThumbs;
   QTimer m_MapTimer;
   QTimer m_ViewAnimTimer;
+  QTimer m_GripMenuTimer;
   QElapsedTimer m_ViewAnimClock;
   bool m_CubePressed = false;  ///< The press in progress was consumed by the ViewCube.
   std::size_t m_LastMapLogSize = 0;
@@ -98,9 +110,15 @@ private:
   bool m_PointerInside = false;
   bool m_Grid = true;
   bool m_LeftDragSelection = false;
+  bool m_PendingIdleSelectionClick = false;
+  bool m_IdleBoxFirstClickPending = false;
   bool m_HasSelectionBoxSnapshot = false;
   std::vector<SelectedEntity> m_SelectionBeforeBox;
   std::vector<int> m_SurveySelectionBeforeBox;
+  std::vector<SelectedEntity> m_SelectionBeforePendingClick;
+  std::vector<int> m_SurveySelectionBeforePendingClick;
+  std::vector<SelectedSubObject> m_SubObjectSelectionBeforePendingClick;
+  ViewportPickResult m_PendingIdlePick{};
   bool m_GripMovedWithButton = false;
   QPointF m_SelectionPress;
   std::uint32_t m_RenderRevision = 0;

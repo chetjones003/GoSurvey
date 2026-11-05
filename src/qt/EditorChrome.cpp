@@ -1,8 +1,11 @@
 #include "EditorChrome.hpp"
+#include <QEnterEvent>
+#include <QMouseEvent>
 #include "EditorWindow.hpp"
 #include "CommandBar.hpp"
 #include "TopographicArtwork.hpp"
 #include <QApplication>
+#include <QMetaObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QKeyEvent>
@@ -125,9 +128,45 @@ void EditorWindow::BuildTitleBar(QMenu* applicationMenu) {
 bool EditorWindow::nativeEvent(const QByteArray& type, void* message, qintptr* result) {
 #ifdef _WIN32
   auto* msg = static_cast<MSG*>(message);
+  if (msg->message == WM_COPYDATA) {
+    constexpr ULONG_PTR kOpenDrawingCopyData = 0x47534457; // "GSDW"
+    const auto* data = reinterpret_cast<const COPYDATASTRUCT*>(msg->lParam);
+    if (data != nullptr && data->dwData == kOpenDrawingCopyData && data->lpData != nullptr &&
+        data->cbData >= sizeof(wchar_t) && data->cbData % sizeof(wchar_t) == 0) {
+      const auto* widePath = static_cast<const wchar_t*>(data->lpData);
+      int charCount = static_cast<int>(data->cbData / sizeof(wchar_t));
+      while (charCount > 0 && widePath[charCount - 1] == L'\0')
+        --charCount;
+      const QString path = QString::fromWCharArray(widePath, charCount);
+      if (!path.isEmpty()) {
+        QMetaObject::invokeMethod(this, [this, path] {
+          showNormal();
+          raise();
+          activateWindow();
+          OpenDrawing(path);
+        }, Qt::QueuedConnection);
+        *result = TRUE;
+        return true;
+      }
+    }
+    *result = FALSE;
+    return true;
+  }
   if (msg->message == WM_NCCALCSIZE) {
     // Keep the custom Qt title bar inside the full client area while retaining the
     // native sizing/caption styles that Windows uses for resize and Snap Assist.
+    // A maximized frame window overhangs the monitor by its sizing border on every side; pull the
+    // client area back in so the edges of the app are not cut off by the screen.
+    if (msg->wParam && IsZoomed(msg->hwnd)) {
+      auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam); // NOLINT(performance-no-int-to-ptr): Win32 encodes NCCALCSIZE_PARAMS* in LPARAM.
+      const UINT dpi = GetDpiForWindow(msg->hwnd);
+      const int borderX = GetSystemMetricsForDpi(SM_CXFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+      const int borderY = GetSystemMetricsForDpi(SM_CYFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+      params->rgrc[0].left += borderX;
+      params->rgrc[0].right -= borderX;
+      params->rgrc[0].top += borderY;
+      params->rgrc[0].bottom -= borderY;
+    }
     *result = 0;
     return true;
   }
@@ -188,27 +227,36 @@ titleHitTest:
 
 FloatingCommandBar::FloatingCommandBar(QWidget* viewport) : QFrame(viewport) {
   setObjectName("floatingCommandBar"); setAttribute(Qt::WA_StyledBackground);
+  setMouseTracking(true);
+  setCursor(Qt::ArrowCursor);
   if (!qApp->property("defaultQtStyle").toBool()) setStyleSheet("#floatingCommandBar { background:transparent; border:0; } #commandRow { background:#343b45; border:1px solid #596572; border-radius:4px; } #commandInput { background:#f4f5f6; color:#20262d; border:0; border-radius:2px; padding:6px; } #commandRecent { color:#cdd7e2; background:#29313b; padding:5px 9px; border-radius:3px; } QToolButton { border:0; padding:3px; }");
   auto* layout = new QVBoxLayout(this); layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(8);
   m_Transcript = new QPlainTextEdit(this); m_Transcript->setObjectName("commandConsole");
   m_Transcript->setReadOnly(true); m_Transcript->setMaximumBlockCount(5000); m_Transcript->setLineWrapMode(QPlainTextEdit::WidgetWidth); m_Transcript->setFixedHeight(200);
+  m_Transcript->setCursor(Qt::IBeamCursor);
   m_Transcript->setFont(QFont("Consolas", 10)); m_Transcript->hide(); layout->addWidget(m_Transcript);
   m_Recent = new QLabel(this); m_Recent->setObjectName("commandRecent"); m_Recent->setTextFormat(Qt::PlainText);
   m_Recent->setWordWrap(true);
   m_Recent->setToolTip("Recent command message. Expand command history or press F2 to view the full transcript.");
+  m_Recent->setCursor(Qt::ArrowCursor);
   m_Recent->setAutoFillBackground(true);
   m_Recent->setMaximumHeight(70); m_Recent->hide(); layout->addWidget(m_Recent);
   auto* opacity = new QGraphicsOpacityEffect(m_Recent); opacity->setOpacity(1); m_Recent->setGraphicsEffect(opacity);
   m_Fade = new QPropertyAnimation(opacity, "opacity", this); m_Fade->setDuration(1000); m_Fade->setStartValue(1.0); m_Fade->setEndValue(0.0);
   connect(m_Fade, &QPropertyAnimation::finished, this, [this] { m_Recent->hide(); Place(); });
   m_Hint = new QLabel(this); m_Hint->setObjectName("commandHint");
+  m_Hint->setCursor(Qt::ArrowCursor);
   m_Hint->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
   m_Hint->setAutoFillBackground(true);
   if (!qApp->property("defaultQtStyle").toBool()) m_Hint->setStyleSheet("color:#8fd09a; background:#29313b; padding:4px 8px; border-radius:3px;");
   m_Hint->setTextFormat(Qt::RichText); m_Hint->setTextInteractionFlags(Qt::LinksAccessibleByMouse | Qt::LinksAccessibleByKeyboard);
+  // The hint is a link-bearing overlay above the viewport. Keep the complete press/release sequence
+  // with the label, including clicks on link glyphs, so the viewport cannot also treat it as a pick.
+  m_Hint->setAttribute(Qt::WA_NoMousePropagation);
   connect(m_Hint, &QLabel::linkActivated, this, [this](const QString& shortcut) { if (optionSelected) optionSelected(shortcut); });
   m_Hint->hide(); layout->addWidget(m_Hint);
   auto* bar = new QFrame(this); bar->setObjectName("commandRow"); bar->setAutoFillBackground(true);
+  bar->setCursor(Qt::ArrowCursor);
   auto* row = new QHBoxLayout(bar); row->setContentsMargins(3, 3, 3, 3); row->setSpacing(5);
   auto* grip = new QLabel("⠿", bar); grip->setToolTip("Drag horizontally to move the command line"); grip->setCursor(Qt::SizeHorCursor);
   m_Grip = grip; grip->setObjectName("commandDragGrip"); row->addWidget(grip); grip->installEventFilter(this);
@@ -297,6 +345,22 @@ void FloatingCommandBar::SetHint(const QString& hint) {
 // An ignored Return from QLineEdit must stop here rather than reaching the viewport's
 // repeat/finish-command handler and submitting a second, empty command.
 void FloatingCommandBar::keyPressEvent(QKeyEvent* event) { event->accept(); }
+
+void FloatingCommandBar::enterEvent(QEnterEvent* event) {
+  if (refreshViewportCursor) refreshViewportCursor();
+  QFrame::enterEvent(event);
+}
+
+void FloatingCommandBar::leaveEvent(QEvent* event) {
+  if (refreshViewportCursor) refreshViewportCursor();
+  QFrame::leaveEvent(event);
+}
+
+void FloatingCommandBar::mouseMoveEvent(QMouseEvent* event) {
+  if (refreshViewportCursor) refreshViewportCursor();
+  QFrame::mouseMoveEvent(event);
+}
+
 bool FloatingCommandBar::eventFilter(QObject* watched, QEvent* event) {
   if (watched == parentWidget() && event->type() == QEvent::Resize) Place();
   if (watched == m_Grip || watched == m_SizeGrip) {

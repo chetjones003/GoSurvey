@@ -14,6 +14,7 @@
 #include "SurfaceStyle.hpp"
 #include "DimensionStyle.hpp"
 #include "MultileaderStyle.hpp"
+#include "util/cadtablestyle.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
 #include "render/SectionClip.hpp"  // GL-free; the pick and snap paths honour the live clip (REQ-341)
 // The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
@@ -49,6 +50,7 @@
 #include "util/hoverdwell.hpp"
 #include "util/hoverpickgate.hpp"  // per-frame viewport hover-pick throttle (GitHub issue #166)
 #include "util/cadtable.hpp"   // CadTable entity (REQ-148 / D-2026-08-28-i)
+#include "util/cadtablestyle.hpp"  // table styles and point rows (REQ-474, REQ-475)
 #include "util/cadblock.hpp"   // Block definitions + INSERT refs (GitHub issue #124)
 #include "util/cadsolid.hpp"   // B-rep solids + their tessellation cache (REQ-313 / ADR-045)
 #include "util/solidpick.hpp"  // solidpick::Kind, for SelectedSubObject (REQ-318 / ADR-049)
@@ -146,7 +148,9 @@ struct SelectedEntity {
     /// Spline (REQ-443 / issue #803): an editable 3D NURBS curve. Selects, erases, moves, copies,
     /// rotates, scales and mirrors; TRIM / EXTEND / OFFSET / FILLET / CHAMFER / JOIN / EXPLODE /
     /// STRETCH refuse it by name (\ref DropSplinesFromSelection).
-    Spline = 19
+    Spline = 19,
+    /// CAD POINT (REQ-456 / issue #1019). Appended after Spline so existing type values stay stable.
+    Point = 20
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -245,6 +249,8 @@ struct CadLayerRow {
   bool locked = false;
   /// Layer swatch color (same encoding as \ref EntityAttributes::color except not "ByLayer").
   std::string color = "White";
+  /// Named STB plot style assigned to this layer; defaults to Normal.
+  std::string plotStyleName = "Normal";
   std::string linetype = "Continuous";
   float lineweightMm = -1.f; ///< \c -1 = default (DXF layer 370 -3 on export).
   float transparency = 0.f;  ///< 0 opaque .. 1 fully transparent (layer-wide).
@@ -326,7 +332,7 @@ void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float modelUnitsPerPlott
 /// After editing extension points or dimension offset, restore text from fixed (normal, tangent) offsets vs dim mid.
 void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, float alongT);
 /// Recompute dimension text from current geometry (linear / aligned / angular).
-void CadDimRefreshMeasurementText(CadAnnotation* ann, int linearPrecision, const AngleDisplaySettings& angle);
+void CadDimRefreshMeasurementText(CadAnnotation* ann, const DimensionStyle& style, const AngleDisplaySettings& angle);
 
 // CadArc and CadEllipse are defined in CadEntities.hpp (shared with PaperSpace.hpp, ADR-013).
 
@@ -846,6 +852,11 @@ struct CadExtendedGeometryInput {
   /// REQ-443 splines (NURBS curves), tessellated by the renderer to the view.
   const std::vector<CadSpline>* splines = nullptr;
   const std::vector<EntityAttributes>* splineAttrs = nullptr;
+  /// REQ-456 CAD POINT entities.
+  const std::vector<CadPoint>* points = nullptr;
+  const std::vector<EntityAttributes>* pointAttrs = nullptr;
+  int pdMode = 0;
+  double pdSize = 0.0;
   const std::vector<double>* polylineVerts = nullptr;
   const std::vector<int>* polylineOffsets = nullptr;
   const std::vector<uint8_t>* polylineClosed = nullptr;
@@ -899,7 +910,8 @@ template <class VT>
 /// rubber-band preview, and this gate — where the symptom was that a drawing containing ONLY a
 /// feature line rendered nothing at all, while still hovering and selecting, because the whole
 /// committed-geometry block was skipped. One predicate, one place to add the next entity kind, and
-/// a test that fails when someone forgets. REQ-087.
+/// a test that fails when someone forgets. REQ-087. REQ-443 splines and REQ-456 points belong here
+/// for the same reason: a drawing that holds only that kind must still enter the draw block.
 [[nodiscard]] inline bool CadExtendedHasDrawableGeometry(const CadExtendedGeometryInput& e) {
   if (e.arcs != nullptr && !e.arcs->empty())
     return true;
@@ -910,6 +922,10 @@ template <class VT>
   if (CadChainHasEntities(e.featureLineVerts, e.featureLineOffsets))
     return true;
   if (e.blockRefs != nullptr && !e.blockRefs->empty())
+    return true;
+  if (e.splines != nullptr && !e.splines->empty())
+    return true;
+  if (e.points != nullptr && !e.points->empty())
     return true;
   return false;
 }
@@ -986,8 +1002,8 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
 
 /// In-process clipboard for COPYCLIP / PASTECLIP.  Geometry stored at local (storage) coordinates.
 struct CadClipboard {
-  float basePtX = 0.f; ///< Bounding-box center X used as paste anchor (local space).
-  float basePtY = 0.f;
+  double basePtX = 0.0; ///< Bounding-box center X used as paste anchor (local space).
+  double basePtY = 0.0;
 
   std::vector<double>            lines;
   std::vector<EntityAttributes> lineAttrs;
@@ -1005,6 +1021,8 @@ struct CadClipboard {
   std::vector<EntityAttributes> ellAttrs;
   std::vector<CadSpline>        splines; ///< REQ-443 model-space SPLINE entities.
   std::vector<EntityAttributes> splineAttrs;
+  std::vector<CadPoint>         points; ///< REQ-456 CAD POINT entities.
+  std::vector<EntityAttributes> pointAttrs;
   std::vector<int>              polyOffsets; ///< Self-contained offset table (starts with 0).
   std::vector<double>            polyVerts;
   std::vector<float>            polyVertsBulge; ///< REQ-316 / ADR-047: per-vertex bulge, size()/3.
@@ -1018,6 +1036,7 @@ struct CadClipboard {
   std::vector<EntityAttributes> blockRefAttrs;
   std::vector<CadFilledRegion>  filledRegions;     ///< Solid fills enclosed by the copy selection (REQ-038 addendum).
   std::vector<EntityAttributes> filledRegionAttrs;
+  std::vector<SurveyPoint>       surveyPoints; ///< Selected model-space survey points (REQ-383 #782).
   /// Source space of the copy. Text height has different units per space (model: plotted-inches × scale = model
   /// units; paper: paper inches), so a cross-space paste scales annotation height by modelUnitsPerPlottedInch.
   bool fromPaper = false;
@@ -1033,8 +1052,8 @@ struct CadClipboard {
 
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
-           (polyOffsets.size() <= 1) && splines.empty() && annotations.empty() && tables.empty() && blockRefs.empty() &&
-           filledRegions.empty();
+           (polyOffsets.size() <= 1) && splines.empty() && points.empty() && annotations.empty() && tables.empty() &&
+           blockRefs.empty() && filledRegions.empty() && surveyPoints.empty();
   }
 };
 
@@ -1320,6 +1339,7 @@ struct DrawingGeometrySnapshot {
   std::vector<uint8_t>            featureLineClosed;
   std::vector<uint8_t>            featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<CadGradingPreset> gradingPresets;
   std::vector<EntityAttributes>   featureLineAttrs;
   std::vector<CadAnnotation>    cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
@@ -1340,12 +1360,17 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;       ///< Drawing TABLE entities (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadTableStyle>    tableStyles = CadTableBuiltinStyles();
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
   std::vector<EntityAttributes> cadMultileaderAttrs;
   std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
   std::vector<EntityAttributes> cadSplineAttrs;
+  std::vector<CadPoint> cadPoints;  ///< REQ-456 / issue #1019
+  std::vector<EntityAttributes> cadPointAttrs;
+  int pdMode = 0;     ///< AutoCAD PDMODE for CAD POINT display
+  double pdSize = 0.0;  ///< AutoCAD PDSIZE; 0 = 5% of view
   /// Pipe runs (issue #486 / REQ-345). Without this, BEDIT's swap left the MAIN drawing's pipe
   /// runs rendering inside the block editor's own viewport — cadTables/cadBlockRefs beside it are
   /// swapped for exactly this reason ("hide everything that is not the block being edited",
@@ -1360,6 +1385,8 @@ struct DrawingGeometrySnapshot {
   std::vector<CadBlockRef>        cadBlockRefs;
   std::vector<EntityAttributes>   cadBlockRefAttrs;
   std::vector<SurveyPoint>      surveyPoints;
+  std::vector<SurveyPointStyleDefinition> surveyPointStyles = DefaultSurveyPointStyles();
+  std::vector<SurveyPointLabelStyleDefinition> surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
   /// Named point groups (REQ-067). Undoable, like textStyles — creating or editing one is a
   /// single-step undo. Rules only; membership is never stored.
   std::vector<PointGroup>       pointGroups;
@@ -1372,7 +1399,9 @@ struct DrawingGeometrySnapshot {
   /// what lets a style edit be undoable without a single contour entering the undo stack.
   std::vector<SurfaceStyle>     surfaceStyles;
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
+  std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
+  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<PaperLayout>      paperLayouts;  ///< Paper layouts incl. native paper geometry (REQ-037/038) — undoable.
   double worldDocumentOriginX = 0.0;
@@ -1445,6 +1474,8 @@ constexpr size_t kUcsPreviousDepth = 10;
 /// Snapshot of all per-drawing data.  AppCommandState holds the live (active-tab) copy directly;
 /// switching tabs saves the active fields here and restores the target tab's snapshot.
 struct DrawingDocument {
+  std::vector<CadAnnotationScale> viewportZoomScales;
+  int currentViewportZoomScaleIndex = -1;
   double viewportPanX = 0.0;
   double viewportPanY = 0.0;
   float  viewportZoom = 1.f;
@@ -1505,6 +1536,7 @@ struct DrawingDocument {
   std::vector<uint8_t>            featureLineClosed;
   std::vector<uint8_t>            featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<CadGradingPreset> gradingPresets;
   std::vector<EntityAttributes>   featureLineAttrs;
   std::vector<CadAnnotation>    cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
@@ -1520,12 +1552,17 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;         ///< Drawing TABLE (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadTableStyle>    tableStyles = CadTableBuiltinStyles();
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
   std::vector<EntityAttributes> cadMultileaderAttrs;
   std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
   std::vector<EntityAttributes> cadSplineAttrs;
+  std::vector<CadPoint> cadPoints;  ///< REQ-456 / issue #1019
+  std::vector<EntityAttributes> cadPointAttrs;
+  int pdMode = 0;
+  double pdSize = 0.0;
   /// Pipe runs and the networks that group them (issue #486 / REQ-345). Per DRAWING, like every
   /// other entity store here: without them, routing a run in one drawing left it rendering — and
   /// selectable, and snappable — in every other tab, because a tab switch swaps the whole document
@@ -1540,6 +1577,8 @@ struct DrawingDocument {
   std::vector<CadBlockRef>        cadBlockRefs;
   std::vector<EntityAttributes>   cadBlockRefAttrs;
   std::vector<SurveyPoint>      surveyPoints;
+  std::vector<SurveyPointStyleDefinition> surveyPointStyles = DefaultSurveyPointStyles();
+  std::vector<SurveyPointLabelStyleDefinition> surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
   std::vector<PointGroup>       pointGroups;            ///< Named point groups (REQ-067).
   std::vector<int>              selectedSurveyPointIndices;
   std::vector<CadLayerRow>      drawingLayerTable;
@@ -1552,7 +1591,9 @@ struct DrawingDocument {
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
+  std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
+  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
   std::string                   activeTextStyleName = "Standard";  ///< Style for new TEXT/MTEXT.
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<SelectedEntity>   selection;
@@ -1644,22 +1685,22 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
 /// REQ-037 / ADR-009: the active layout's paper-space geometry store a draw/edit command writes to,
 /// or nullptr when the command targets model space (model space active, or floating model space).
 PaperLayout* ActivePaperGeometryTarget(AppCommandState& st);
+const PaperLayout* ActivePaperGeometryTarget(const AppCommandState& st);
 
 // Native paper-space geometry selection + edit (REQ-037). Indices are into the ACTIVE layout's stores.
 void ClearPaperEntitySelection(AppCommandState& st);
-/// Topmost paper entity (text over line) within \p tolIn of (x,y) in paper inches; false if none.
 /// Moves everything a model-space reader put into \p scratch (read with origin 0 and 1 unit per plotted
 /// inch, so every number is already in paper inches) into \p L's own stores (issue #768, REQ-113). Shared
-/// by the DWG and DXF readers. Returns true when a polyline carried a bulge: the sheet's polyline store
-/// has none, so curved segments arrive straight and the caller reports it (REQ-201).
-bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch);
+/// by the DWG and DXF readers. Paper POINT and SPLINE come through the same scratch (REQ-456).
+void AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch);
 
+/// Topmost paper entity (text over line) within \p tolIn of (x,y) in paper inches; false if none.
 bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperEntityRef* out,
                        const std::vector<CadBlockDefinition>* blockDefs = nullptr);
 void TogglePaperEntitySelection(AppCommandState& st, PaperEntityRef ref, bool additive);
 void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& log);
 void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn, bool copy,
-                                    std::vector<std::string>& log);
+                                    std::vector<std::string>& log, bool pushUndo = true);
 /// #764 - paper-space SCALE: uniform scale of the selected paper entities about a point (paper inches).
 void ScaleSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float factor,
                                 std::vector<std::string>& log);
@@ -1669,7 +1710,7 @@ void FinishPaperMoveCopy(AppCommandState& st, float dxIn, float dyIn, std::vecto
 /// Second-point step of paper MIRROR (click or typed). Refuses a zero-length mirror line.
 void FinishPaperMirror(AppCommandState& st, float x2In, float y2In, std::vector<std::string>& log);
 void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float angRad,
-                                 std::vector<std::string>& log);
+                                 std::vector<std::string>& log, bool pushUndo = true);
 /// REQ-103 MIRROR, pure-paper-space path. Always duplicates and keeps the source (see the
 /// definition's comment for why there is no erase-source toggle here).
 void MirrorSelectedPaperEntities(AppCommandState& st, float x0In, float y0In, float x1In, float y1In,
@@ -1744,6 +1785,9 @@ void ApplyPageSetupToLayout(PaperLayout& layout, const PageSetup& ps);
 PageSetup PageSetupFromLayout(const PaperLayout& layout, const std::string& name);
 /// Reorder/copy a layout to before \p beforeIdx (== size → move to end); copy clones it. Move-or-Copy.
 void MoveOrCopyLayout(AppCommandState& cmd, int layoutIdx, int beforeIdx, bool makeCopy, std::vector<std::string>& log);
+/// Duplicate a layout at the end, leaving the previously active layout selected. Returns the copy index or -1.
+int CopyPaperLayout(AppCommandState& cmd, int layoutIdx, const std::string& requestedName,
+                    std::vector<std::string>& log);
 
 /// REQ-302: top-level ribbon tabs, in display order. UI-layer concept, but the active index is
 /// persisted app state (AppCommandState::activeRibbonTab) so it lives alongside kModelSpaceIndex-
@@ -2072,6 +2116,17 @@ struct AppCommandState {
     PadSolid,
     /// REQ-443: create a fit-point or control-vertex NURBS spline.
     Spline,
+    /// REQ-456 / issue #1019.
+    Point,
+    Leader,
+    Pedit,
+    Measure,
+    Divide,
+    Area,
+    List,
+    DataExtract,
+    Table,
+    PointTable,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -2084,6 +2139,16 @@ struct AppCommandState {
     case Kind::Arc:           return "ARC";
     case Kind::Ellipse:       return "ELLIPSE";
     case Kind::Spline:        return "SPLINE";
+    case Kind::Point:         return "POINT";
+    case Kind::Leader:        return "LEADER";
+    case Kind::Pedit:         return "PEDIT";
+    case Kind::Measure:       return "MEASURE";
+    case Kind::Divide:        return "DIVIDE";
+    case Kind::Area:          return "AREA";
+    case Kind::List:          return "LIST";
+    case Kind::DataExtract:   return "DATAEXTRACTION";
+    case Kind::Table:         return "TABLE";
+    case Kind::PointTable:    return "ADDPOINTTABLE";
     case Kind::Text:          return "TEXT";
     case Kind::Mtext:         return "MTEXT";
     case Kind::Mleader:          return "MLEADER";
@@ -2212,6 +2277,9 @@ struct AppCommandState {
   std::vector<CadAnnotationScale> annotationScales;
   /// Index into \ref annotationScales for model-space annotative display (-1 = drawing plot scale only).
   int currentAnnotationScaleIndex = -1;
+  /// REQ-458: model editor viewport zoom ratio presets (separate from annotationScales).
+  std::vector<CadAnnotationScale> viewportZoomScales;
+  int currentViewportZoomScaleIndex = -1;
   /// REQ-385: LIGHT entities and SUN object from DWG import (issue #624 lights slice).
   std::vector<CadDwgImportedLight> dwgImportedLights;
   CadDwgImportedSun dwgImportedSun{};
@@ -2556,6 +2624,38 @@ struct AppCommandState {
 
   enum class SplineMethod : std::uint8_t { Fit, Control } splineMethod = SplineMethod::Fit;
   std::vector<spline::Vec3> splineDraftPoints;
+
+  /// REQ-456 LEADER / POINT / PEDIT / MEASURE / DIVIDE / AREA / LIST drafts.
+  enum class LeaderAnnotation : std::uint8_t { Mtext, None } leaderAnnotation = LeaderAnnotation::Mtext;
+  enum class LeaderPathStyle : std::uint8_t { Straight, Spline } leaderPathStyle = LeaderPathStyle::Straight;
+  bool leaderShowArrow = true;
+  enum class LeaderPhase : std::uint8_t { WaitFirst, WaitNext, WaitAnnotation, WaitFormat } leaderPhase =
+      LeaderPhase::WaitFirst;
+  bool leaderFinishAfterAnnotation = false;
+  std::vector<spline::Vec3> leaderDraftPoints;
+  enum class PeditPhase : std::uint8_t {
+    WaitObject,
+    WaitOption,
+    WaitVertex,
+    WaitJoin,
+    WaitVertexMove,
+    WaitVertexInsert
+  } peditPhase = PeditPhase::WaitObject;
+  int peditIndex = -1;
+  int peditVertex = 0;
+  bool peditPaper = false;
+  /// MEASURE and DIVIDE share object-pick + value prompt state (same AutoCAD two-step).
+  enum class MeasurePhase : std::uint8_t { WaitObject, WaitValue } measurePhase = MeasurePhase::WaitObject;
+  SelectedEntity measureTarget{};
+  bool measurePaper = false;
+  PaperEntityRef measurePaperTarget{PaperEntityRef::Type::Line, -1};
+  double measurePickX = 0.0;
+  double measurePickY = 0.0;
+  enum class AreaPhase : std::uint8_t { WaitFirst, WaitNext, WaitObject } areaPhase = AreaPhase::WaitFirst;
+  std::vector<spline::Vec3> areaDraftPoints;
+  double areaRunning = 0.0;
+  bool areaSubtract = false;
+  bool areaAccumulate = false;  ///< Add/Subtract keeps a running total and stays in the command.
 
   /// PADSOLID (GitHub #150): pick the boundary, then sit on an options prompt until a pad
   /// elevation is given. The surface is remembered between runs in a drawing, so the common case
@@ -3223,6 +3323,7 @@ struct AppCommandState {
   std::vector<uint8_t> featureLineClosed;
   std::vector<uint8_t> featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<CadGradingPreset> gradingPresets;
   std::vector<EntityAttributes> featureLineAttrs;
 
   /// GRADING (REQ-398): pick the baseline feature line, then sit on an options prompt offering the
@@ -3236,6 +3337,9 @@ struct AppCommandState {
     WaitFillSlope,
     WaitSurfaceName,
     WaitSide,
+    WaitTargetKind,
+    WaitTargetValue,
+    WaitDistanceGrade,
   } gradingPhase = GradingPhase::WaitBaseline;
   /// The baseline, held by **stable entity id** and never by array index — REQ-076's own words,
   /// which say "never an array index, so an edit that compacts the store cannot silently retarget
@@ -3246,6 +3350,9 @@ struct AppCommandState {
   std::string gradingSurface;      ///< target surface name, remembered between runs
   bool gradingSideLeft = true;     ///< open baselines only; meaningless for a closed one
   bool gradingSideChosen = false;  ///< an open baseline must be told, so this starts false
+  CadGradingDefinition::Target gradingTarget = CadGradingDefinition::Target::Surface;
+  double gradingTargetValue = 0.0;
+  double gradingDistanceGradePercent = 0.0;
   /// Issue #997: the stable id of the grading result being EDITED, or 0 when GRADING is creating a
   /// new one. Set when GRADING starts on a selected result; Enter then rebuilds that line in place.
   std::uint64_t gradingEditId = 0;
@@ -3497,12 +3604,39 @@ struct AppCommandState {
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
   std::vector<CadTable> cadTables;
   std::vector<EntityAttributes> cadTableAttrs;
+  /// Table styles of this drawing (REQ-475). The built-in set; style editing is a follow-up.
+  std::vector<CadTableStyle> tableStyles = CadTableBuiltinStyles();
+  /// TABLE and ADDPOINTTABLE prompt state (REQ-466, REQ-474).
+  int tableStage = 0;
+  std::string tablePendingStyle;
+  int tablePendingCols = 3;
+  int tablePendingRows = 2;
+  float tablePendingColumnWidthInches = 1.5f;
+  float tablePendingRowHeightInches = 0.375f;
+  bool tableInsertDialogRequested = false;
+  int pointTableStage = 0;
+  std::string pointTableStyle;
+  std::string pointTableLayer;
+  bool pointTableSplitEnabled = true;
+  int pointTableMaxRows = 20;
+  int pointTableMaxStack = 3;
+  double pointTableOffset = 0.3;
+  bool pointTableTileAcross = true;
+  bool pointTableDynamic = true;
+  std::vector<int> pointTableIds;
+  /// Set by the Qt editor. ADDPOINTTABLE then opens the dialog instead of typed prompts.
+  bool addPointTableDialogAvailable = false;
+  bool addPointTableDialogRequested = false;
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
   std::vector<EntityAttributes> cadMultileaderAttrs;
   std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
   std::vector<EntityAttributes> cadSplineAttrs;
+  std::vector<CadPoint> cadPoints;  ///< REQ-456 / issue #1019
+  std::vector<EntityAttributes> cadPointAttrs;
+  int pdMode = 0;
+  double pdSize = 0.0;
 
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef> cadBlockRefs;
@@ -4416,6 +4550,8 @@ struct AppCommandState {
     Polar_WaitAngle,        ///< typed degrees, or click (angle from center to cursor)
     Polar_WaitRotateAnswer, ///< "[Y]es / [N]o"; commits on completion
   } arrayPhase = ArrayPhase::PickSelection;
+  /// True while ARRAY is operating on native entities in the active paper layout.
+  bool arrayOnPaper = false;
 
   int arrayCols = 0;
   int arrayRows = 0;
@@ -4593,6 +4729,8 @@ struct AppCommandState {
 
   // --- Survey / COGO points (in-memory database; optional JSON file) ---
   std::vector<SurveyPoint> surveyPoints;
+  std::vector<SurveyPointStyleDefinition> surveyPointStyles = DefaultSurveyPointStyles();
+  std::vector<SurveyPointLabelStyleDefinition> surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
   /// Named point groups (REQ-067) — drawing-owned rules, resolved on demand, never cached.
   std::vector<PointGroup> pointGroups;
   CreatePointsOptions createPointsOpts;
@@ -4771,11 +4909,14 @@ struct AppCommandState {
   /// Pure value type, undoable via snapshot (like textStyles/surfaceStyles).  New dimensions bake this
   /// style's effective values; existing dimensions read the active style at draw/measure time (phase 1).
   DimensionStyle activeDimensionStyle = DimensionStyles::Default();
+  std::vector<DimensionStyle> dimensionStyles = DimensionStyles::DefaultStyles();
+  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
   DimensionStyle dimStyleDraft = DimensionStyles::Default();
   bool showDimStyleDialog = false;
   MultileaderStyle activeMultileaderStyle = MultileaderStyles::Default();
   MultileaderStyle mleaderStyleDraft = MultileaderStyles::Default();
   bool showMleaderStyleDialog = false;
+  bool showTableStyleDialog = false;
   /// Viewport CAD crosshair (Drawing1): RGB 0–1, arm length as fraction of viewport width/height, pickbox half-size in px.
   float viewportCrosshairR = 1.f;
   float viewportCrosshairG = 0.8392157f;
@@ -5031,6 +5172,7 @@ struct AppCommandState {
   char surveyExportCsvPath[512]{};
   /// UTF-8 path to optional startup .gst template (Settings → Startup). Empty = use bundled resources/default-template.gst.
   char defaultWorkspaceTemplatePathUtf8[768]{};
+  char defaultDrawingTemplatePathUtf8[768]{};
   /// Active UI layout stem (file resources/layouts/<stem>.ini). See View → Layout.
   char activeUiLayoutNameUtf8[64]{"default"};
   bool openSaveLayoutAsPopup = false;
@@ -5061,8 +5203,8 @@ struct AppCommandState {
   /// COPY placed CAD duplicates; modal collects policy before duplicating selected survey points.
   bool copySurveyDupModalOpen = false;
   bool copySurveyDupModalOpenRequested = false;
-  float pendingCopyDx = 0.f;
-  float pendingCopyDy = 0.f;
+  double pendingCopyDx = 0.0;
+  double pendingCopyDy = 0.0;
   float pendingCopyDz = 0.f;  // REQ-329 increment 1: COPY under a UCS carries a Z delta to survey points
   SurveyDuplicatePolicy copySurveyDuplicatePolicy = SurveyDuplicatePolicy::Renumber;
   /// DXF import merges its embedded survey points with existing ones. Points whose ID collides are held
@@ -5167,6 +5309,7 @@ struct AppCommandState {
     int         othersOpenShowing = 0;   ///< other OPEN drawings of the project that show a deleted point
     int         othersClosedMaybe = 0;   ///< drawings of the project that are not open (rules unread)
     bool        deletePending = false;   ///< the delete question (not only the number-conflict one) is showing
+    bool        clipboardPaste = false;  ///< number conflict came from a pending clipboard paste.
     std::vector<std::string> otherNames; ///< names of those open drawings
     /// The answers. None = not asked yet. Delete: Proceed / HideHere / Cancel. Conflict: Proceed
     /// (overwrite) / Renumber / Cancel.
@@ -5174,6 +5317,9 @@ struct AppCommandState {
     Answer      deleteAnswer = Answer::None;
     Answer      conflictAnswer = Answer::None;
   } pointEditPrompt;
+  bool clipboardPasteResolving = false; ///< the user answered a clipboard point-number question; bypass preflight once.
+  bool clipboardPasteOverwrite = false;
+  bool clipboardPasteOriginal = false;
   /// REQ-383 clauses 1 and 3: a paste that crosses a project / coordinate-system / units boundary.
   /// `block` = coordinate-system mismatch (only Cancel); otherwise Paste anyway / Cancel.
   struct PastePrompt {
@@ -5422,6 +5568,7 @@ struct AppCommandState {
   int   paperVpPhase = 0;
   float paperVpFirstXIn = 0.f;
   float paperVpFirstYIn = 0.f;
+  int   paperVpMode = 0;  ///< REQ-490: 0 = rectangle, 1 = awaiting closed polyline Object pick.
   // Paper-space grip edit (REQ-035): grabbed grip on selectedViewportIndex (click-grab, move, click-commit).
   int   paperGripCorner = -2;                ///< -2 none, -1 move (whole viewport), 0..3 resize corner.
   // Paper-space MOVE/COPY of selected viewports (REQ-035): 0 idle, 1 need base, 2 need destination.
@@ -5701,6 +5848,39 @@ inline bool CadViewIsPlan(const AppCommandState& st) {
   return std::fabs(st.viewportElevationDeg - 90.f) < 1e-4f && std::fabs(st.viewportAzimuthDeg) < 1e-4f;
 }
 
+/// True when model-space Qt overlay and linework should show geometry on \p layerName.
+inline bool CadLayerAllowsViewportDisplay(const AppCommandState& st, const std::string& layerName) {
+  const CadLayerRow* row = FindDrawingLayerRowCi(st, layerName);
+  if (!row)
+    return true;
+  return row->on && !row->frozen;
+}
+
+/// Prefer \p preferred, but fall back to layer \c 0 or the first on/thawed layer so new entities are visible.
+inline std::string CadVisibleLayerForNewEntity(const AppCommandState& st, const std::string& preferred) {
+  const std::string layer = preferred.empty() ? std::string("0") : preferred;
+  if (CadLayerAllowsViewportDisplay(st, layer))
+    return layer;
+  if (CadLayerAllowsViewportDisplay(st, "0"))
+    return "0";
+  for (const CadLayerRow& row : st.drawingLayerTable) {
+    if (CadLayerAllowsViewportDisplay(st, row.name))
+      return row.name;
+  }
+  return layer;
+}
+
+inline const DimensionStyle& CadDimensionStyleForAnnotation(const AppCommandState& st,
+                                                              const CadAnnotation& ann) {
+  if (!ann.dimensionStyleName.empty()) {
+    for (const DimensionStyle& style : st.dimensionStyles) {
+      if (style.name == ann.dimensionStyleName)
+        return style;
+    }
+  }
+  return st.activeDimensionStyle;
+}
+
 /// Duration of a ViewCube orientation change, in seconds. Short enough not to feel sluggish, long
 /// enough to read the rotation — REQ-059 requires the view to settle within 0.5 s.
 inline constexpr float kViewAnimSeconds = 0.28f;
@@ -5943,7 +6123,9 @@ enum class EntityKind : std::uint8_t {
   /// REQ-367 / issue #619. Appended after PositionMarker for the same id-sweep reason.
   Multileader,
   /// REQ-443 / issue #803. Appended after Multileader for the same id-sweep reason.
-  Spline
+  Spline,
+  /// REQ-456 / issue #1019. Appended after Spline for the same id-sweep reason.
+  Point
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -6421,6 +6603,9 @@ void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vect
 /// Sets `CurrentViewport(st)`'s scale from a typed "1:N" ratio or a bare model-units-per-inch
 /// number; a blank \p args reports the current viewport's scale instead.
 void HandleVpscaleCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
+/// Apply one drawing-owned named annotation scale to every selected paper viewport in the active
+/// layout. Unlike VPSCALE, this does not target a floating viewport or parse a free-form ratio.
+void HandleVpMatchScaleCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
 /// Opens the Page Setup Manager dialog for the active layout (refuses in model space).
 void StartPageSetupCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The candidate wall, optionally including the segment \p cursor is currently proposing.
@@ -7222,6 +7407,29 @@ void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartSplineCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartPointCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartLeaderCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartPeditCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartMeasureCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartDivideCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartAreaCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartListCommand(AppCommandState& st, std::vector<std::string>& log);
+/// DATAEXTRACTION (REQ-467, issue #804): selection, typed columns, then a spreadsheet file.
+void StartDataExtractCommand(AppCommandState& st, std::vector<std::string>& log);
+/// TABLE (REQ-466): typed style, columns and rows, then the insertion point.
+void StartTableCommand(AppCommandState& st, std::vector<std::string>& log);
+/// ADDPOINTTABLE (REQ-474): opens the point table dialog in the Qt editor, or runs typed prompts.
+void StartAddPointTableCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Continues ADDPOINTTABLE with points chosen in the dialog; returns false (and logs why) when none apply.
+bool BeginAddPointTableWithPoints(AppCommandState& st, const std::string& styleName, std::vector<int> ids,
+                                  std::vector<std::string>& log);
+void ExecutePdModeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void ExecutePdSizeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+bool HandleCadDrawInquiryTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
+bool SubmitCadDrawInquiryViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
+[[nodiscard]] const char* CadDrawInquiryCommandInputHint(const AppCommandState& st);
+void ResetCadDrawInquiryDrafts(AppCommandState& st);
+void CommitCadPointAt(AppCommandState& st, double x, double y, double z, std::vector<std::string>& log);
 
 /// TRIMSTATE (REQ-056): prompt for a new value, echoing the current one.
 void StartTrimStateCommand(AppCommandState& st, std::vector<std::string>& log);
@@ -7643,7 +7851,7 @@ bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std
 int PickFilledRegionAt(const AppCommandState& st, double wx, double wy, const ray3d::Ray* ray = nullptr);
 
 /// Which kind of thing \ref ResolveViewportPick found under the cursor (GitHub issue #564 §2).
-enum class ViewportPickFamily : std::uint8_t { None, Table, Annotation, Linework, Solid, FilledRegion };
+enum class ViewportPickFamily : std::uint8_t { None, Table, Annotation, Linework, Solid, FilledRegion, PdfUnderlay };
 
 /// The inputs a viewport hover or click already has, gathered so both ask the SAME question.
 struct ViewportPickRequest {
@@ -8456,6 +8664,16 @@ void SubmitViewportPick(AppCommandState& st, double localX, double localY, std::
                         bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false,
                         const ray3d::Ray* pickRay = nullptr);
 
+/// One click during \c ViewportClickRoute::SelectionAccumulate: toggle a hit into the growing
+/// selection, or arm a selection box on empty space. Returns true when an entity/sub-object was
+/// toggled; false when a box corner was armed instead (or when \p beginBoxOnMiss is false and the
+/// click missed).
+bool SubmitViewportSelectionAccumulateClick(AppCommandState& st, double rawLocalX, double rawLocalY,
+                                            float anchorScreenX, float anchorScreenY, bool shiftModifier,
+                                            bool ctrlModifier, const ray3d::Ray* pickRay,
+                                            float viewportWidthPx, float viewportHeightPx, float orthoHalfH,
+                                            std::vector<std::string>& log, bool beginBoxOnMiss = true);
+
 void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st, std::vector<std::string>& log);
 void StartAlignCommand(AppCommandState& st, std::vector<std::string>& log);
 void ExecuteAlignCommand(AppCommandState& st, std::vector<std::string>& log);
@@ -8476,7 +8694,9 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
 void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Commit a PASTE: place the clipboard at (x,y) in the ACTIVE space's coordinates (world for model, paper
 /// inches for a paper layout). Routes the write + new selection by active space (REQ-038, ADR-013).
-void CommitClipboardPasteAt(AppCommandState& st, float x, float y, std::vector<std::string>& log);
+void CommitClipboardPasteAt(AppCommandState& st, double x, double y, std::vector<std::string>& log);
+void ResolveClipboardPastePointConflict(AppCommandState& st, AppCommandState::PointEditPrompt::Answer answer,
+                                        std::vector<std::string>& log);
 /// Immediately paste clipboard contents at their original (stored) coordinates without interaction.
 void StartPasteOrigCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Release draft cache and preview texture; resets command state to idle.

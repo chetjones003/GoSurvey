@@ -46,13 +46,20 @@ model height = default text height (inches on the sheet) × model units per plot
 
 ## Plotting one layout
 
-**Ribbon (Layout):** Plot
+**Ribbon (Output):** Plot or Preview
 
 1. Switch to the layout you want. Plot is only available in paper space —
    `PLOT — switch to a paper layout first.`
-2. Press **Plot**.
-3. Choose an output path. The default filename is the layout name plus `.pdf`.
+2. Press **Preview** to plot the active sheet into GoSurvey's PDF viewer without choosing a filename.
+   The preview uses the layout's saved Page Setup and CTB/STB table. You can annotate the preview
+   and use **Save As...** in the PDF viewer to keep an edited copy.
+3. Press **Plot** when you want to export directly, then choose an output path. The default
+   filename is the layout name plus `.pdf`.
 4. The log reports `PLOT — wrote 1 page(s) to <path>`.
+
+In the Output tab's **Export to DWF/PDF** group, **Export** also saves the active paper layout to a
+vector PDF. It uses the same saved Page Setup and CTB/STB table as Plot and asks for an output
+filename. It is available while a paper layout is active.
 
 There is **no typed `PLOT` command** — use the ribbon button.
 
@@ -103,6 +110,25 @@ not appear in that viewport's page.
    labels come out at the right size.
 7. Turn **VPLOCK** on so later panning cannot rescale the viewport.
 8. **Plot**.
+
+---
+
+## Page Setup plot options
+
+The layout's **Page Setup Manager** holds four placement options that the PDF plot honours:
+
+| Option | What the PDF does |
+|---|---|
+| **Plot scale** (1 : N) | Draws the whole sheet at 1 / N of its size, text sizes included. `1 : 1` is the default |
+| **Fit to paper** | Scales the sheet content until it fills the sheet in its limiting direction, with its lower-left corner at the sheet's corner |
+| **Center the plot** | Centres the sheet content on the sheet. The offsets are ignored while this is on |
+| **Plot offset X / Y** | Moves the sheet content by that many inches from the sheet's lower-left corner |
+
+Fit and centre measure the content on the sheet: viewport frames, lines, circles, arcs, ellipses, fills, block references, polylines (including their
+bulges), splines, points, multileaders and text. Lineweights keep the width the layer or entity asks for.
+
+> AutoCAD plots layouts at 1:1 and turns fit and centre off for them. GoSurvey applies them, so a sheet
+> plotted in GoSurvey can differ from the same layout plotted in AutoCAD.
 
 ---
 
