@@ -1,8 +1,7 @@
 ---
 
-name: github-issue-implementation
+name: implement-issue
 description: Fully review and implement a GitHub issue from start to finish. Use when asked to review, plan, implement, and submit a GitHub issue as a PR.
-----------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # GitHub Issue Implementation
 

@@ -28,6 +28,10 @@
 #include <QMenu>
 #include <QIcon>
 #include <QOpenGLContext>
+#include <QOpenGLBuffer>
+#include <QOpenGLShaderProgram>
+#include <QOpenGLTextureBlitter>
+#include <QOpenGLVertexArrayObject>
 #include <QApplication>
 #include <QPainter>
 #include <QPainterPath>
@@ -42,6 +46,36 @@
 #include "pdf/PdfAttach.hpp"
 
 namespace {
+
+template <class Project>
+static QPainterPath PaperViewportShapePath(const Viewport& viewport, Project&& project) {
+  QPainterPath path;
+  if (viewport.clipBoundary.size() < 3) {
+    const QPointF a = project(viewport.paperXIn, viewport.paperYIn);
+    const QPointF b = project(viewport.paperXIn + viewport.paperWIn, viewport.paperYIn + viewport.paperHIn);
+    path.addRect(QRectF(a, b).normalized());
+    return path;
+  }
+  const auto& first = viewport.clipBoundary.front();
+  path.moveTo(project(first.xIn, first.yIn));
+  constexpr double kPi = 3.14159265358979323846;
+  for (size_t i = 0; i < viewport.clipBoundary.size(); ++i) {
+    const Viewport::ClipVertex& a = viewport.clipBoundary[i];
+    const Viewport::ClipVertex& b = viewport.clipBoundary[(i + 1) % viewport.clipBoundary.size()];
+    const BulgeArcSpan arc = BulgeArc(a.xIn, a.yIn, b.xIn, b.yIn, a.bulge);
+    if (!arc.valid) {
+      path.lineTo(project(b.xIn, b.yIn));
+      continue;
+    }
+    const int steps = std::clamp(static_cast<int>(std::ceil(std::fabs(arc.sweep) / (kPi / 36.0))), 1, 720);
+    for (int step = 1; step <= steps; ++step) {
+      const double angle = arc.startAngle + arc.sweep * static_cast<double>(step) / steps;
+      path.lineTo(project(arc.cx + arc.radius * std::cos(angle), arc.cy + arc.radius * std::sin(angle)));
+    }
+  }
+  path.closeSubpath();
+  return path;
+}
 
 // RenderScene reads only the raster/transform fields. Snap geometry and lookup grids stay borrowed
 // in the committed attachment rather than being copied on each cursor-move frame.
@@ -288,12 +322,19 @@ EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>&
 EditorViewport::~EditorViewport() { Cleanup(); }
 
 void EditorViewport::Cleanup() {
-  if (!m_Ready || !context()) return;
+  if (!context()) return;
   m_MapTimer.stop();
   m_ViewAnimTimer.stop();
   makeCurrent();
+  if (m_TextureBlitter && m_TextureBlitter->isCreated()) m_TextureBlitter->destroy();
+  if (m_ClipMaskVao && m_ClipMaskVao->isCreated()) m_ClipMaskVao->destroy();
+  if (m_ClipMaskBuffer && m_ClipMaskBuffer->isCreated()) m_ClipMaskBuffer->destroy();
+  m_TextureBlitter.reset();
+  m_ClipMaskVao.reset();
+  m_ClipMaskBuffer.reset();
+  m_ClipMaskProgram.reset();
   m_OnlineMap.reset();
-  m_Renderer->Shutdown();
+  if (m_Ready && m_Renderer) m_Renderer->Shutdown();
   m_Ready = false;
   doneCurrent();
 }
@@ -307,6 +348,33 @@ void EditorViewport::initializeGL() {
   while (glGetError() != GL_NO_ERROR) {}
   std::string error;
   m_Ready = m_Renderer->Init(&error);
+  if (m_Ready) {
+    m_TextureBlitter = std::make_unique<QOpenGLTextureBlitter>();
+    m_ClipMaskProgram = std::make_unique<QOpenGLShaderProgram>();
+    m_ClipMaskBuffer = std::make_unique<QOpenGLBuffer>(QOpenGLBuffer::VertexBuffer);
+    m_ClipMaskVao = std::make_unique<QOpenGLVertexArrayObject>();
+    const char* vertex = "#version 330 core\nlayout(location=0) in vec2 position;\n"
+                         "void main(){ gl_Position=vec4(position,0.0,1.0); }\n";
+    const char* fragment = "#version 330 core\nout vec4 color;\nvoid main(){ color=vec4(0.0); }\n";
+    const bool ready = m_TextureBlitter->create() &&
+        m_ClipMaskProgram->addShaderFromSourceCode(QOpenGLShader::Vertex, vertex) &&
+        m_ClipMaskProgram->addShaderFromSourceCode(QOpenGLShader::Fragment, fragment) &&
+        m_ClipMaskProgram->link() && m_ClipMaskBuffer->create() && m_ClipMaskVao->create();
+    if (ready) {
+      m_ClipMaskVao->bind();
+      m_ClipMaskBuffer->bind();
+      m_ClipMaskProgram->bind();
+      m_ClipMaskProgram->enableAttributeArray(0);
+      m_ClipMaskProgram->setAttributeBuffer(0, GL_FLOAT, 0, 2, sizeof(float) * 2);
+      m_ClipMaskProgram->release();
+      m_ClipMaskBuffer->release();
+      m_ClipMaskVao->release();
+    } else {
+      error = "Paper viewport clip renderer initialization failed.";
+      m_Ready = false;
+      m_Renderer->Shutdown();
+    }
+  }
   // REQ-450: the viewport draws its own cursor, so the operating-system one is hidden - but only
   // once drawing works, so a failed renderer still leaves a visible pointer.
   if (m_Ready) setCursor(Qt::BlankCursor);
@@ -317,6 +385,114 @@ void EditorViewport::initializeGL() {
   }
   m_Error = QString::fromStdString(error);
   connect(context(), &QOpenGLContext::aboutToBeDestroyed, this, [this] { Cleanup(); }, Qt::DirectConnection);
+}
+
+bool EditorViewport::DrawPaperViewportClipMask(const QPainterPath& path, int framebufferWidth, int framebufferHeight) {
+  if (!m_ClipMaskProgram || !m_ClipMaskBuffer || !m_ClipMaskVao || framebufferWidth <= 0 || framebufferHeight <= 0)
+    return false;
+  std::vector<float> vertices;
+  const QList<QPolygonF> polygons = path.toFillPolygons();
+  const float dpr = static_cast<float>(devicePixelRatioF());
+  auto pushPoint = [&](const QPointF& point) {
+    const float x = static_cast<float>(point.x()) * dpr;
+    const float y = static_cast<float>(point.y()) * dpr;
+    vertices.push_back(2.f * x / static_cast<float>(framebufferWidth) - 1.f);
+    vertices.push_back(1.f - 2.f * y / static_cast<float>(framebufferHeight));
+  };
+  for (QPolygonF polygon : polygons) {
+    if (polygon.size() > 1 && QLineF(polygon.front(), polygon.back()).length() < 1.e-4)
+      polygon.removeLast();
+    if (polygon.size() < 3)
+      continue;
+    auto cross = [](const QPointF& a, const QPointF& b, const QPointF& c) {
+      return (b.x() - a.x()) * (c.y() - a.y()) - (b.y() - a.y()) * (c.x() - a.x());
+    };
+    double twiceArea = 0.0;
+    for (int i = 0; i < polygon.size(); ++i) {
+      const QPointF& a = polygon[i];
+      const QPointF& b = polygon[(i + 1) % polygon.size()];
+      twiceArea += a.x() * b.y() - b.x() * a.y();
+    }
+    if (std::fabs(twiceArea) < 1.e-6)
+      continue;
+    const double orientation = twiceArea > 0.0 ? 1.0 : -1.0;
+    std::vector<int> remaining;
+    remaining.reserve(static_cast<size_t>(polygon.size()));
+    for (int i = 0; i < polygon.size(); ++i)
+      remaining.push_back(i);
+    auto insideTriangle = [&](const QPointF& p, const QPointF& a, const QPointF& b, const QPointF& c) {
+      const double ab = orientation * cross(a, b, p);
+      const double bc = orientation * cross(b, c, p);
+      const double ca = orientation * cross(c, a, p);
+      return ab >= -1.e-6 && bc >= -1.e-6 && ca >= -1.e-6;
+    };
+    size_t guard = 0;
+    while (remaining.size() > 3 && guard++ < static_cast<size_t>(polygon.size()) * polygon.size()) {
+      bool clipped = false;
+      for (size_t i = 0; i < remaining.size(); ++i) {
+        const int ia = remaining[(i + remaining.size() - 1) % remaining.size()];
+        const int ib = remaining[i];
+        const int ic = remaining[(i + 1) % remaining.size()];
+        const QPointF& a = polygon[ia];
+        const QPointF& b = polygon[ib];
+        const QPointF& c = polygon[ic];
+        if (orientation * cross(a, b, c) <= 1.e-7)
+          continue;
+        bool containsVertex = false;
+        for (int candidate : remaining) {
+          if (candidate == ia || candidate == ib || candidate == ic)
+            continue;
+          if (insideTriangle(polygon[candidate], a, b, c)) {
+            containsVertex = true;
+            break;
+          }
+        }
+        if (containsVertex)
+          continue;
+        pushPoint(a);
+        pushPoint(b);
+        pushPoint(c);
+        remaining.erase(remaining.begin() + static_cast<std::ptrdiff_t>(i));
+        clipped = true;
+        break;
+      }
+      if (!clipped)
+        break;
+    }
+    if (remaining.size() != 3)
+      return false;
+    if (remaining.size() == 3) {
+      pushPoint(polygon[remaining[0]]);
+      pushPoint(polygon[remaining[1]]);
+      pushPoint(polygon[remaining[2]]);
+    }
+  }
+  if (vertices.empty())
+    return false;
+
+  glDisable(GL_DEPTH_TEST);
+  glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+  glEnable(GL_STENCIL_TEST);
+  glStencilMask(0xFF);
+  glClearStencil(0);
+  glClear(GL_STENCIL_BUFFER_BIT);
+  glStencilFunc(GL_ALWAYS, 0, 0xFF);
+  glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE); // ear clipping yields non-overlapping concave triangles
+  m_ClipMaskVao->bind();
+  m_ClipMaskBuffer->bind();
+  m_ClipMaskBuffer->allocate(vertices.data(), static_cast<int>(vertices.size() * sizeof(float)));
+  m_ClipMaskProgram->bind();
+  m_ClipMaskProgram->enableAttributeArray(0);
+  m_ClipMaskProgram->setAttributeBuffer(0, GL_FLOAT, 0, 2, sizeof(float) * 2);
+  glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices.size() / 2));
+  m_ClipMaskProgram->release();
+  m_ClipMaskBuffer->release();
+  m_ClipMaskVao->release();
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glStencilMask(0x00);
+  glStencilFunc(GL_NOTEQUAL, 0, 0xFF);
+  glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+  return true;
 }
 
 void EditorViewport::InvalidateGeometry() {
@@ -656,6 +832,7 @@ void EditorViewport::paintGL() {
     ext.blockRefs = &m_State.cadBlockRefs;
     ext.blockRefAttrs = &m_State.cadBlockRefAttrs;
     for (const auto& viewport : layout.viewports) {
+      if (!viewport.on) continue;  // REQ-482: leave the paper frame, but do not render model contents.
       const QPointF q0 = paperPoint(viewport.paperXIn, viewport.paperYIn);
       const QPointF q1 = paperPoint(viewport.paperXIn + viewport.paperWIn, viewport.paperYIn + viewport.paperHIn);
       const QRectF rectPx(QPointF(std::min(q0.x(), q1.x()), std::min(q0.y(), q1.y())),
@@ -691,7 +868,21 @@ void EditorViewport::paintGL() {
       glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
           m_Renderer->ColorTexture(), 0);
       glBindFramebuffer(GL_DRAW_FRAMEBUFFER, defaultFramebufferObject());
-      glBlitFramebuffer(0, 0, viewW, viewH, left, bottom, right, top, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+      if (viewport.clipBoundary.size() >= 3 && m_TextureBlitter) {
+        const QPainterPath clipPath = PaperViewportShapePath(viewport, paperPoint);
+        if (DrawPaperViewportClipMask(clipPath, w, h)) {
+          const QRectF target(static_cast<double>(left), static_cast<double>(bottom),
+                              static_cast<double>(viewW), static_cast<double>(viewH));
+          const QMatrix4x4 transform = QOpenGLTextureBlitter::targetTransform(target, QRect(0, 0, w, h));
+          m_TextureBlitter->bind();
+          m_TextureBlitter->blit(m_Renderer->ColorTexture(), transform, QOpenGLTextureBlitter::OriginBottomLeft);
+          m_TextureBlitter->release();
+        }
+        glDisable(GL_STENCIL_TEST);
+        glStencilMask(0xFF);
+      } else {
+        glBlitFramebuffer(0, 0, viewW, viewH, left, bottom, right, top, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+      }
       glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
       glDeleteFramebuffers(1, &readFbo);
     }
@@ -727,9 +918,8 @@ void EditorViewport::paintGL() {
     sheetPath.addRect(sheetRect);
     QPainterPath viewportHoles;
     for (const auto& viewport : layout.viewports) {
-      const QRectF viewportRect(project(viewport.paperXIn, viewport.paperYIn),
-          project(viewport.paperXIn + viewport.paperWIn, viewport.paperYIn + viewport.paperHIn));
-      viewportHoles.addRect(viewportRect.normalized());
+      if (viewport.on)
+        viewportHoles.addPath(PaperViewportShapePath(viewport, project));
     }
     sheetPath = sheetPath.subtracted(viewportHoles);
     painter.drawPath(sheetPath);
@@ -963,9 +1153,12 @@ void EditorViewport::paintGL() {
     for (const auto& viewport : layout.viewports) {
       const QRectF viewportRect(project(viewport.paperXIn, viewport.paperYIn),
           project(viewport.paperXIn + viewport.paperWIn, viewport.paperYIn + viewport.paperHIn));
+      const QPainterPath viewportPath = PaperViewportShapePath(viewport, project);
       const QRectF clippedViewport = viewportRect.normalized().intersected(sheetRect).intersected(rect());
       painter.save();
-      painter.setClipRect(clippedViewport);
+      painter.setClipPath(viewportPath);
+      painter.setClipRect(clippedViewport, Qt::IntersectClip);
+      if (viewport.on) {
       auto modelProject = [&](double x, double y) {
         float paperX = 0.f, paperY = 0.f;
         ModelToPaperIn(viewport, x + m_State.worldDocumentOriginX,
@@ -1008,10 +1201,11 @@ void EditorViewport::paintGL() {
           painter.drawText(modelProject(x, y), QString::fromUtf8(table.cells[static_cast<std::size_t>(i)].c_str()));
         }
       }
+      }
       painter.restore();
       painter.setPen(QPen(QColor("#4d738b"), 1));
       painter.setBrush(Qt::NoBrush);
-      painter.drawRect(viewportRect.normalized());
+      painter.drawPath(viewportPath);
     }
     painter.restore();
   } else {
@@ -1850,6 +2044,8 @@ void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
 
 void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
   const QPointF delta = event->position() - m_Last;
+  const Viewport* floatingViewport = CurrentViewport(m_State);
+  const bool floatingLocked = InFloatingModelSpace(m_State) && floatingViewport != nullptr && floatingViewport->locked;
   const bool leftCommandDrag = (event->buttons() & Qt::LeftButton) &&
       (m_State.active == AppCommandState::Kind::Pan || m_State.active == AppCommandState::Kind::Orbit);
   const bool commandOrbitDrag = leftCommandDrag && m_State.active == AppCommandState::Kind::Orbit;
@@ -1857,12 +2053,12 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
       (event->modifiers() & Qt::ShiftModifier);
   const bool panDrag = (leftCommandDrag && m_State.active == AppCommandState::Kind::Pan) ||
       ((event->buttons() & Qt::MiddleButton) && !(event->modifiers() & Qt::ShiftModifier));
-  if (middleOrbitDrag || (commandOrbitDrag && m_State.activeSpaceIndex == kModelSpaceIndex)) {
+  if (!floatingLocked && (middleOrbitDrag || (commandOrbitDrag && m_State.activeSpaceIndex == kModelSpaceIndex))) {
     m_State.viewAnimActive = false;  // A manual ORBIT takes over from any ViewCube animation (REQ-059).
     m_State.viewportAzimuthDeg += static_cast<float>(delta.x()) * 0.4f;
     m_State.viewportElevationDeg = std::clamp(m_State.viewportElevationDeg +
         static_cast<float>(delta.y()) * 0.4f, -89.9f, 90.f);
-  } else if (panDrag) {
+  } else if (panDrag && !floatingLocked) {
     ray3d::Vec3 before, after;
     if (ViewPoint(m_Last, before) && ViewPoint(event->position(), after)) {
       m_State.viewportPanX += before.x - after.x;
@@ -2205,6 +2401,11 @@ void EditorViewport::PerformRightClick(RightClickAction action, const QPoint& gl
 }
 
 void EditorViewport::wheelEvent(QWheelEvent* event) {
+  const Viewport* floatingViewport = CurrentViewport(m_State);
+  if (InFloatingModelSpace(m_State) && floatingViewport != nullptr && floatingViewport->locked) {
+    event->accept();
+    return;
+  }
   ray3d::Vec3 before, after;
   const bool anchor = ViewPoint(event->position(), before);
   m_State.viewportZoom = std::clamp(m_State.viewportZoom * static_cast<float>(
@@ -2270,6 +2471,9 @@ void EditorViewport::keyReleaseEvent(QKeyEvent* event) {
 }
 
 void EditorViewport::SetOrientation(float azimuth, float elevation) {
+  const Viewport* floatingViewport = CurrentViewport(m_State);
+  if (InFloatingModelSpace(m_State) && floatingViewport != nullptr && floatingViewport->locked)
+    return;
   m_State.viewportAzimuthDeg = azimuth;
   m_State.viewportElevationDeg = elevation;
   m_State.viewportRollDeg = 0.f;
@@ -2300,6 +2504,9 @@ void EditorViewport::RefreshCommandCursor() {
 
 // REQ-059: the widget's orientation changes ease to the target instead of snapping.
 void EditorViewport::AnimateToOrientation(float azimuth, float elevation) {
+  const Viewport* floatingViewport = CurrentViewport(m_State);
+  if (InFloatingModelSpace(m_State) && floatingViewport != nullptr && floatingViewport->locked)
+    return;
   CadStartViewAnimation(m_State, azimuth, elevation);
   StartViewAnimationClock();
   update();

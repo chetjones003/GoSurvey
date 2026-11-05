@@ -46,13 +46,20 @@ model height = default text height (inches on the sheet) × model units per plot
 
 ## Plotting one layout
 
-**Ribbon (Layout):** Plot
+**Ribbon (Output):** Plot or Preview
 
 1. Switch to the layout you want. Plot is only available in paper space —
    `PLOT — switch to a paper layout first.`
-2. Press **Plot**.
-3. Choose an output path. The default filename is the layout name plus `.pdf`.
+2. Press **Preview** to plot the active sheet into GoSurvey's PDF viewer without choosing a filename.
+   The preview uses the layout's saved Page Setup and CTB/STB table. You can annotate the preview
+   and use **Save As...** in the PDF viewer to keep an edited copy.
+3. Press **Plot** when you want to export directly, then choose an output path. The default
+   filename is the layout name plus `.pdf`.
 4. The log reports `PLOT — wrote 1 page(s) to <path>`.
+
+In the Output tab's **Export to DWF/PDF** group, **Export** also saves the active paper layout to a
+vector PDF. It uses the same saved Page Setup and CTB/STB table as Plot and asks for an output
+filename. It is available while a paper layout is active.
 
 There is **no typed `PLOT` command** — use the ribbon button.
 

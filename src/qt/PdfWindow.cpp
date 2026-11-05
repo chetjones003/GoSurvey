@@ -46,6 +46,7 @@
 #include <QComboBox>
 #include <QSignalBlocker>
 #include <QFileInfo>
+#include <QTemporaryDir>
 #include <QActionGroup>
 #include <QDebug>
 #include <tuple>
@@ -1116,6 +1117,8 @@ PdfWindow::~PdfWindow() {
   if (m_SaveWork.valid()) {
     try { m_SaveWork.wait(); } catch (const std::exception& error) { qWarning() << "PDF save wait failed during shutdown:" << error.what(); }
   }
+  m_Document.reset();
+  m_TemporaryDirectory.reset();
 }
 
 void PdfWindow::Open(const QString& path) {
@@ -1129,6 +1132,12 @@ void PdfWindow::Open(const QString& path) {
   });
   statusBar()->showMessage("Opening PDF...");
   m_OpenPoll->start();
+}
+
+void PdfWindow::OpenPlotPreview(const QString& path, std::unique_ptr<QTemporaryDir> temporaryDirectory) {
+  m_TemporaryDirectory = std::move(temporaryDirectory);
+  m_TemporaryPreviewPath = path;
+  Open(path);
 }
 
 bool PdfWindow::LoadFile(const QString& path, QString& error) {
@@ -1170,6 +1179,7 @@ bool PdfWindow::AdoptDocument(std::unique_ptr<pdfview::PdfDocument> document, co
   for (auto& page : m_SnapPages) *page.second.cancel = true;
   m_SnapPages.clear();
   m_Thumbs->SetDocument(nullptr);
+  const bool isPlotPreview = m_TemporaryDirectory && path == m_TemporaryPreviewPath;
   m_Document = std::move(document);
   m_Thumbs->SetDocument(m_Document.get());
   m_Page->placeholder.clear();
@@ -1193,7 +1203,12 @@ bool PdfWindow::AdoptDocument(std::unique_ptr<pdfview::PdfDocument> document, co
   m_Scroll->verticalScrollBar()->setValue(0); m_Scroll->horizontalScrollBar()->setValue(0);
   SyncPageNav();
   SyncThumbnail();
-  setWindowTitle("GoSurvey | " + path + "[*]"); setWindowModified(false);
+  setWindowTitle(isPlotPreview ? QString("GoSurvey | Plot Preview[*]") : QString("GoSurvey | ") + path + "[*]");
+  setWindowModified(false);
+  if (m_TemporaryDirectory && !isPlotPreview) {
+    m_TemporaryDirectory.reset();
+    m_TemporaryPreviewPath.clear();
+  }
   UpdateScaleDisplay();
   if (m_SnapOn) StartSnapRead(0);
   RequestRender();

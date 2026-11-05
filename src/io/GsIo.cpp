@@ -9,6 +9,7 @@
 #include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
 #include "util/meshgeom.hpp"
+#include "util/geom2d.hpp"
 #include "util/pointcloudcache.hpp"
 #include "BrepJson.hpp"
 
@@ -286,6 +287,8 @@ void EntityAttributesToJson(const EntityAttributes& e, json& o) {
   o["id"] = e.id;  // REQ-076 stable identity; additive, no format-version bump (ADR-020 (d))
   o["layer"] = e.layer;
   o["color"] = e.color;
+  if (e.plotStyleName != "Normal")
+    o["plotStyleName"] = e.plotStyleName;
   o["linetype"] = e.linetype;
   o["lineweightMm"] = e.lineweightMm;
   o["transparency"] = e.transparency;
@@ -312,6 +315,7 @@ EntityAttributes EntityAttributesFromJson(const json& o) {
   e.id           = o.value("id",           static_cast<std::uint64_t>(0));
   e.layer        = o.value("layer",        e.layer);
   e.color        = o.value("color",        e.color);
+  e.plotStyleName = o.value("plotStyleName", e.plotStyleName);
   e.linetype     = o.value("linetype",     e.linetype);
   e.lineweightMm = o.value("lineweightMm", e.lineweightMm);
   e.transparency = o.value("transparency", e.transparency);
@@ -566,6 +570,9 @@ json CadBlockContentToJson(const CadBlockContent& c) {
     CadBlockXformToJson(n.xf, xf);
     nj["xf"] = std::move(xf);
     nj["visState"] = n.visState;
+    json attrs;
+    EntityAttributesToJson(n.attrs, attrs);
+    nj["attrs"] = std::move(attrs);
     nested.push_back(std::move(nj));
   }
   o["nested"] = std::move(nested);
@@ -647,6 +654,8 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
       if (nj.contains("xf"))
         n.xf = CadBlockXformFromJson(nj["xf"]);
       n.visState = nj.value("visState", "");
+      if (nj.contains("attrs") && nj["attrs"].is_object())
+        n.attrs = EntityAttributesFromJson(nj["attrs"]);
       c.nested.push_back(std::move(n));
     }
   }
@@ -908,6 +917,8 @@ void CadLayerRowToJson(const CadLayerRow& r, json& o) {
   o["frozen"] = r.frozen;
   o["locked"] = r.locked;
   o["color"] = r.color;
+  if (r.plotStyleName != "Normal")
+    o["plotStyleName"] = r.plotStyleName;
   o["linetype"] = r.linetype;
   o["lineweightMm"] = r.lineweightMm;
   o["transparency"] = r.transparency;
@@ -921,6 +932,7 @@ CadLayerRow CadLayerRowFromJson(const json& o) {
   r.frozen       = o.value("frozen",       r.frozen);
   r.locked       = o.value("locked",       r.locked);
   r.color        = o.value("color",        r.color);
+  r.plotStyleName = o.value("plotStyleName", r.plotStyleName);
   r.linetype     = o.value("linetype",     r.linetype);
   r.lineweightMm = o.value("lineweightMm", r.lineweightMm);
   r.transparency = o.value("transparency", r.transparency);
@@ -1424,6 +1436,8 @@ json BuildRoot(const AppCommandState& st) {
       o["landscape"] = l.landscape;
       o["presetIdx"] = l.presetIdx;
       o["pageSetupName"] = l.pageSetupName;
+      if (!l.plotStyleTablePath.empty())
+        o["plotStyleTablePath"] = l.plotStyleTablePath;
       o["fitToPaper"] = l.fitToPaper;
       o["scaleModelPerPaperIn"] = l.scaleModelPerPaperIn;
       o["plotArea"] = l.plotArea;
@@ -1441,6 +1455,12 @@ json BuildRoot(const AppCommandState& st) {
         vo["paperYIn"] = v.paperYIn;
         vo["paperWIn"] = v.paperWIn;
         vo["paperHIn"] = v.paperHIn;
+        if (!v.clipBoundary.empty()) {
+          json boundary = json::array();
+          for (const Viewport::ClipVertex& vertex : v.clipBoundary)
+            boundary.push_back({vertex.xIn, vertex.yIn, vertex.bulge});
+          vo["clipBoundary"] = std::move(boundary);
+        }
         vo["modelCenterX"] = v.modelCenterX;
         vo["modelCenterY"] = v.modelCenterY;
         vo["scaleModelPerPaperIn"] = v.scaleModelPerPaperIn;
@@ -1459,6 +1479,9 @@ json BuildRoot(const AppCommandState& st) {
         }
         vo["layer"] = v.layer;
         vo["frozenLayers"] = v.frozenLayers;
+        vo["on"] = v.on;  // REQ-482: independent paper viewport display state.
+        vo["locked"] = v.locked;
+        vo["hidePlot"] = v.hidePlot;
         vo["vpColorLayers"] = v.vpColorLayers;    // REQ-046: per-viewport layer color override (parallel arrays)
         vo["vpColorValues"] = v.vpColorValues;
         vps.push_back(vo);
@@ -1603,6 +1626,8 @@ json BuildRoot(const AppCommandState& st) {
       o["offsetXIn"] = ps.offsetXIn;
       o["offsetYIn"] = ps.offsetYIn;
       o["centerPlot"] = ps.centerPlot;
+      if (!ps.plotStyleTablePath.empty())
+        o["plotStyleTablePath"] = ps.plotStyleTablePath;
       setups.push_back(o);
     }
     doc["savedPageSetups"] = setups;
@@ -3026,6 +3051,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       l.presetIdx = o.value("presetIdx", l.presetIdx);
       if (o.contains("pageSetupName") && o["pageSetupName"].is_string())
         l.pageSetupName = o["pageSetupName"].get<std::string>();
+      l.plotStyleTablePath = o.value("plotStyleTablePath", l.plotStyleTablePath);
       l.fitToPaper = o.value("fitToPaper", l.fitToPaper);
       l.scaleModelPerPaperIn = o.value("scaleModelPerPaperIn", l.scaleModelPerPaperIn);
       l.plotArea = o.value("plotArea", l.plotArea);
@@ -3045,6 +3071,42 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           v.paperYIn = vo.value("paperYIn", v.paperYIn);
           v.paperWIn = vo.value("paperWIn", v.paperWIn);
           v.paperHIn = vo.value("paperHIn", v.paperHIn);
+          if (vo.contains("clipBoundary") && vo["clipBoundary"].is_array()) {
+            for (const auto& item : vo["clipBoundary"]) {
+              if (!item.is_array() || item.size() != 3 || !item[0].is_number() || !item[1].is_number() ||
+                  !item[2].is_number()) {
+                v.clipBoundary.clear();
+                break;
+              }
+              const float x = item[0].get<float>(), y = item[1].get<float>(), bulge = item[2].get<float>();
+              if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(bulge)) {
+                v.clipBoundary.clear();
+                break;
+              }
+              v.clipBoundary.push_back({x, y, bulge});
+            }
+            if (v.clipBoundary.size() >= 2) {
+              double twiceArea = 0.0;
+              bool validBoundary = true;
+              for (size_t i = 0; i < v.clipBoundary.size(); ++i) {
+                const auto& a = v.clipBoundary[i];
+                const auto& b = v.clipBoundary[(i + 1) % v.clipBoundary.size()];
+                ForEachBulgeChord(a.xIn, a.yIn, b.xIn, b.yIn, a.bulge, 16,
+                                  [&](double x0, double y0, double x1, double y1) {
+                                    if (!std::isfinite(x0) || !std::isfinite(y0) || !std::isfinite(x1) ||
+                                        !std::isfinite(y1)) {
+                                      validBoundary = false;
+                                      return;
+                                    }
+                                    twiceArea += x0 * y1 - y0 * x1;
+                                  });
+              }
+              if (!validBoundary || !std::isfinite(twiceArea) || std::fabs(twiceArea) < 1.e-8)
+                v.clipBoundary.clear();
+            } else if (!v.clipBoundary.empty()) {
+              v.clipBoundary.clear();
+            }
+          }
           v.modelCenterX = vo.value("modelCenterX", v.modelCenterX);
           v.modelCenterY = vo.value("modelCenterY", v.modelCenterY);
           v.scaleModelPerPaperIn = vo.value("scaleModelPerPaperIn", v.scaleModelPerPaperIn);
@@ -3071,6 +3133,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           }
           if (vo.contains("layer") && vo["layer"].is_string())
             v.layer = vo["layer"].get<std::string>();
+          v.on = vo.value("on", v.on);
+          v.locked = vo.value("locked", v.locked);
+          v.hidePlot = vo.value("hidePlot", v.hidePlot);
           if (vo.contains("frozenLayers") && vo["frozenLayers"].is_array()) {
             for (const auto& fl : vo["frozenLayers"]) {
               if (fl.is_string())
@@ -3294,6 +3359,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       ps.offsetXIn = o.value("offsetXIn", ps.offsetXIn);
       ps.offsetYIn = o.value("offsetYIn", ps.offsetYIn);
       ps.centerPlot = o.value("centerPlot", ps.centerPlot);
+      ps.plotStyleTablePath = o.value("plotStyleTablePath", ps.plotStyleTablePath);
       st.savedPageSetups.push_back(ps);
     }
   }

@@ -152,6 +152,8 @@ private:
   void ShowToolspaceContextMenu(QTreeWidget* tree, const QPoint& position);
   QMenu* BuildToolspaceMenu(QTreeWidgetItem* item);
   void ShowPdfFile(const QString& path);
+  void PreviewActiveLayout();
+  void ShowActiveLayoutDetails();
   void ShowPasteWarning();
   void ShowAlignResultsDialog();
   void ShowProjectAttachPrompt();

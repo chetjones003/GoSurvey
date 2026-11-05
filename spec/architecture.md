@@ -5241,3 +5241,56 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   computed beta version consistently with the installer and update manifest. No application
   dependency or stable-release behavior changes.
 - Status: accepted (D-2026-11-02-a); backs REQ-202.
+
+### ADR-077 — Value-owned clipping boundary for MVIEW object viewports   (2026-11-03, accepted)
+- Context: REQ-490 adds a viewport made from a closed paper-space polyline. `Viewport` currently
+  stores only a rectangular paper-space extent; the editor composites each rendered model view as
+  a rectangular framebuffer blit. DWG VIEWPORT and DXF VIEWPORT records already provide a native
+  clip-boundary handle and distinguish polygon clipping, but GoSurvey does not currently retain
+  such a boundary in its viewport value.
+- Decision: Store the copied paper-space polyline boundary as optional value-owned geometry on the
+  viewport, including the polyline's supported straight and bulge-arc segments. Do not keep an
+  entity-index or associative link to the source; leave that source polyline unchanged. The Qt
+  renderer and PDF plotter clip model content to this value boundary. DWG/DXF writers emit a native
+  clipping-boundary entity and link it from the viewport's standard clip-boundary field; readers
+  restore that boundary into the viewport value. Rectangular viewports keep the existing fast path
+  and serialized representation when the optional boundary is absent. No new dependency or
+  rendering abstraction is introduced.
+- Alternatives: (1) Keep Object rectangular by using the source polyline's bounding box — rejected
+  because it does not follow the requested outline. (2) Store an index into `PaperLayout`'s polyline
+  arrays — rejected because array compaction makes indices unstable (architecture §11.9), and the
+  viewport must remain valid if the source is later edited or deleted. (3) Reintroduce a separate
+  user-drawn polygon command — rejected because #1016 only requests an Object option.
+- Consequences: `Viewport` gains optional boundary value state; Qt and PDF rendering gain a polygon
+  clip path; DWG/DXF import/export gains native clip-boundary entity handling. AutoCAD read-back is
+  a required interoperability check. Viewport selection, MOVE/COPY, undo/redo, and paper-space
+  rendering must treat the boundary as part of the viewport state. This supersedes only the
+  closed-object use case of REQ-034's withdrawal; vertex-drawn polygonal creation remains deferred.
+- Status: accepted (D-2026-11-03-i); backs REQ-490.
+
+### ADR-078 — Drawing-owned plot-style names and Page Setup table references   (2026-11-04, accepted)
+- Context: REQ-485 adds CTB/STB evaluation to the existing vector PDF path. Page Setup and
+  `PageSetup` currently own paper size and plot settings, but no style-table reference. Layers and
+  entities currently have no named plot-style assignment, and DXF emits only a placeholder
+  `ACAD_PLOTSTYLENAME` dictionary. The user selected imported STB assignment preservation, but no
+  style editor or assignment UI.
+- Decision: Keep the existing PDFium vector PDF writer and evaluate the selected table there. Extend
+  `PageSetup` with an optional reference to an existing CTB/STB file; persist that reference with
+  GoSurvey drawing data, but do not embed or edit the external table. Preserve native named STB
+  assignment names on imported layers and entities as drawing-owned values, with entity assignment
+  taking precedence over layer assignment and `Normal` as the fallback. New GoSurvey-created
+  entities explicitly use `Normal`. DWG/DXF IO maps those values to the native plot-style table
+  dictionary and object/layer references. Do not add a plot-style editor, assignment UI, output
+  device, or third-party parser dependency in this increment.
+- Alternatives: (1) Drop imported assignments — rejected because it silently changes drawing
+  appearance and conflicts with the user's confirmed requirement. (2) Add assignment/editor UI —
+  deferred; the user selected existing-table application only. (3) Add PNG, DWF, or direct printer
+  paths — rejected for this increment; they are separate output capabilities and ADR-007 remains
+  the PDF output decision.
+- Consequences: the Domain data model and GoSurvey serialization gain optional table-reference and
+  plot-style-name fields; DWG/DXF IO must read and write native named-style references; the PDF
+  plotter must parse and apply the selected existing table while preserving vector output. A missing
+  or invalid table is an explicit plot failure. Table files remain external, so a stored reference
+  may be unavailable on another machine and must be reported rather than silently ignored. No new
+  dependency or renderer abstraction is introduced.
+- Status: accepted (D-2026-11-04-e); backs REQ-485.

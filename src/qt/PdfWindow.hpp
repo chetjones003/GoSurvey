@@ -20,6 +20,7 @@
 #include <QRect>
 class PdfCanvas;
 class PdfScaleDialogs;
+class QTemporaryDir;
 class QAction;
 class QActionGroup;
 class QPushButton;
@@ -52,6 +53,7 @@ public:
   explicit PdfWindow(QWidget* parent);
   ~PdfWindow() override;
   void Open(const QString& path);
+  void OpenPlotPreview(const QString& path, std::unique_ptr<QTemporaryDir> temporaryDirectory);
   bool LoadFile(const QString& path, QString& error);
   bool SaveFile(const QString& path, QString& error);
   bool IsBusy() const { return m_Work.valid() || m_OpenWork.valid(); }
@@ -184,6 +186,8 @@ private:
   void UpdatePropertiesPanel();
   void PollOpen();
   bool AdoptDocument(std::unique_ptr<pdfview::PdfDocument> document, const QString& path, QString& error);
+  std::unique_ptr<QTemporaryDir> m_TemporaryDirectory;
+  QString m_TemporaryPreviewPath;
   std::unique_ptr<pdfview::PdfDocument> m_Document;
   std::future<pdfview::Bitmap> m_Work;
   std::future<pdfview::PdfDocument::OpenResult> m_OpenWork;
