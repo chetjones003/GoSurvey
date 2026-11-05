@@ -427,3 +427,26 @@ TEST_CASE("A spiral can be entered by A", "[req481][alignment]") {
   Submit(st, "ALIGNMENTEDIT SA, 1, A, 150", log);
   CHECK(LogHas(log, "is not a spiral"));
 }
+
+TEST_CASE("GETSTATIONOFFSET with only an alignment picks points until ESC", "[req484][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT PK", log);
+  Submit(st, "ALIGNMENTADD PK, TANGENT, 0, 0, 0, 500", log);  // due north from the origin
+  log.clear();
+  Submit(st, "GETSTATIONOFFSET PK", log);
+  CHECK(st.active == AppCommandState::Kind::StationOffsetPick);
+  CHECK(LogHas(log, "pick a point"));
+  log.clear();
+  Submit(st, "10,120", log);
+  CHECK(LogHas(log, "Station = 1+20.00"));
+  CHECK(LogHas(log, "Offset = 10.00 (right)"));
+  CHECK(st.active == AppCommandState::Kind::StationOffsetPick);  // ready for the next point
+  log.clear();
+  Submit(st, "-5,300", log);
+  CHECK(LogHas(log, "Station = 3+00.00"));
+  CHECK(LogHas(log, "(left)"));
+  CancelActiveCommand(st, log);
+  CHECK(st.active == AppCommandState::Kind::None);
+  CHECK(LogHas(log, "GETSTATIONOFFSET ended."));
+}

@@ -15057,6 +15057,10 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     CommitIdPointAt(st, static_cast<float>(wx), static_cast<float>(wy), log);
     return;
   }
+  if (st.active == K::StationOffsetPick) {  // REQ-484.4
+    CommitStationOffsetPick(st, wx, wy, log);
+    return;
+  }
 
   if (st.active == K::GeoMarkPoint || st.active == K::GeoReorientMarker ||
       st.active == K::DrawingSettingsPick || st.active == K::GeoCaptureArea) {  // REQ-359 / 360 / 364
@@ -44666,6 +44670,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("OFFSET canceled.");
   else if (st.active == AppCommandState::Kind::IdPoint)
     log.push_back("ID canceled.");
+  else if (st.active == AppCommandState::Kind::StationOffsetPick)
+    log.push_back("GETSTATIONOFFSET ended.");
   else if (st.active == AppCommandState::Kind::GeoMarkPoint || st.active == AppCommandState::Kind::GeoMarkLatLong ||
            st.active == AppCommandState::Kind::GeoReorientMarker ||
            st.active == AppCommandState::Kind::DrawingSettingsPick ||
@@ -47503,6 +47509,16 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     CommitIdPointAt(st, px, py, log);
     return;
   }
+  if (st.active == K::StationOffsetPick) {  // REQ-484.4: a typed X,Y instead of a pick
+    float px = 0.f;
+    float py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
+      log.push_back("GETSTATIONOFFSET - pick in the viewport or type X,Y; ESC ends.");
+      return;
+    }
+    CommitStationOffsetPick(st, px, py, log);
+    return;
+  }
 
   if (st.active == K::SurveyInverse) {
     using SIP = AppCommandState::SurveyInversePhase;
@@ -48948,6 +48964,8 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
 
   if (st.active == K::IdPoint)
     return "ID: Pick point (OSNAP when enabled) or type X,Y — logs UCS World | ESC cancel";
+  if (st.active == K::StationOffsetPick)
+    return "GETSTATIONOFFSET: Pick point (OSNAP when enabled) or type X,Y — reports station and offset | ESC ends";
   if (const char* alignmentPrompt = AlignmentCommandPrompt(st))  // REQ-485
     return alignmentPrompt;
   if (st.active == K::GeoMarkPoint)  // REQ-359

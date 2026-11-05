@@ -360,6 +360,19 @@ void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vect
     f.pop_back();
   }
   double x = 0.0, y = 0.0;
+  if (f.size() == 1 && !f[0].empty()) {  // REQ-484.4 pick: each click reports, until ESC
+    const alignment::Alignment* a = Resolve(st, "GETSTATIONOFFSET", f[0], log);
+    if (a == nullptr) return;
+    if (st.active != AppCommandState::Kind::None) {
+      log.push_back("GETSTATIONOFFSET - finish or cancel the active command first.");
+      return;
+    }
+    st.active = AppCommandState::Kind::StationOffsetPick;
+    st.stationOffsetPickArgs = a->name + (surfaceName.empty() ? std::string{} : ", SURFACE=" + surfaceName);
+    log.push_back("GETSTATIONOFFSET - pick a point (or type X,Y) to report its station and offset on \"" + a->name +
+                  "\". ESC ends.");
+    return;
+  }
   if (f.size() == 3 && Lower(f[1]) == "point") {  // REQ-501.3: a survey point, by its point number
     double number = 0.0;
     if (!ParseNum(f[2], &number)) {
@@ -375,8 +388,8 @@ void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vect
     x = point->easting;  // the survey point's coordinates are world, and so is the query
     y = point->northing;
   } else if (f.size() != 3 || !ParseNum(f[1], &x) || !ParseNum(f[2], &y)) {
-    log.push_back("GETSTATIONOFFSET - usage: GETSTATIONOFFSET <alignment>, <x>, <y> | <alignment>, POINT, <number>"
-                  " [, SURFACE=<surface>].");
+    log.push_back("GETSTATIONOFFSET - usage: GETSTATIONOFFSET <alignment>[, <x>, <y> | , POINT, <number>]"
+                  " [, SURFACE=<surface>] (the alignment alone picks points until ESC).");
     return;
   }
 
@@ -407,6 +420,21 @@ void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vect
     else line += " Elevation: the point is off the surface \"" + surfaceName + "\".";
   }
   log.push_back(line);
+}
+
+void CommitStationOffsetPick(AppCommandState& st, double lx, double ly, std::vector<std::string>& log) {
+  assert(st.active == AppCommandState::Kind::StationOffsetPick);
+  assert(std::isfinite(lx) && std::isfinite(ly));
+  double wx = 0.0, wy = 0.0;
+  CadCoord::WorldFromLocal(st, static_cast<float>(lx), static_cast<float>(ly), &wx, &wy);
+  std::array<char, 64> sx{}, sy{};
+  std::snprintf(sx.data(), sx.size(), "%.17g", wx);
+  std::snprintf(sy.data(), sy.size(), "%.17g", wy);
+  const std::vector<std::string> f = SplitFields(st.stationOffsetPickArgs);
+  std::string args = f.empty() ? std::string{} : f[0];
+  args += std::string(", ") + sx.data() + ", " + sy.data();
+  for (size_t i = 1; i < f.size(); ++i) args += ", " + f[i];
+  RunGetStationOffset(st, args, log);  // the command stays active for the next pick
 }
 
 // GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset>  - REQ-484.4

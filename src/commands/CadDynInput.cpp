@@ -314,6 +314,7 @@ bool CadCommandExpectsPointEntry(const AppCommandState& cmd) {
            cmd.dimAngularPhase == DAP::WaitRay2;
   }
   case K::IdPoint: return true;
+  case K::StationOffsetPick: return true;
   case K::SurveyInverse: return true;
   case K::Dist: return true;
   // REQ-074. Missing here as well as from the viewport click dispatch, so SURFELEV got neither

@@ -158,6 +158,7 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::DimLinear:
   case K::DimAngular:
   case K::IdPoint:
+  case K::StationOffsetPick:
   case K::SurveyInverse:
   case K::Dist:
   case K::Paste:

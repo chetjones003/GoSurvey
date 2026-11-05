@@ -450,6 +450,8 @@ TEST_CASE("A Civil 3D alignment imports as an editable alignment on Civil 3D's g
   CHECK(worstAfter <= kClothoidAgreement);
   CHECK(LogHas(log, "Civil 3D alignment \"GS Fixture\": 9 entities, 1 station equation(s)"));
   CHECK_FALSE(LogHas(log, "\"AECC_ALIGNMENT(semantic data not decoded"));  // its preview is not read as well
+  CHECK(LogHas(log, "not decoded for \"GS Fixture\": type, description, alignment style, label set, labels"));  // REQ-496.3
+  CHECK(LogHas(log, "its spirals are read as clothoids"));
 }
 
 TEST_CASE("Civil 3D station equations keep their direction", "[req496][alignment][dwg][civil3d]") {

@@ -5132,6 +5132,12 @@ std::unordered_set<BITCODE_RLL> ImportCivilAlignments(AppCommandState& st, Dwg_D
                   " entities, " + std::to_string(equations) + " station equation(s)" +
                   (rec->startingStation ? "" : "; its starting station was not decoded (0+00 used)") +
                   (refused.empty() ? "" : "; station equations refused (raw station back -> ahead):" + refused) + ".");
+    // REQ-496.3 / REQ-201: say what was not read, so nothing is dropped silently.
+    const bool hasSpiral = std::any_of(made.Entities().begin(), made.Entities().end(),
+                                       [](const alignment::Entity& e) { return e.kind == alignment::EntityKind::Spiral; });
+    log.push_back("  not decoded for \"" + name + "\": type, description, alignment style, label set, labels, design "
+                  "criteria and design speeds (Standard and defaults used)" +
+                  (hasSpiral ? "; the spiral type is not decoded and its spirals are read as clothoids" : "") + ".");
     st.alignments.push_back(std::move(made));
     imported.insert(object.handle.value);
   }

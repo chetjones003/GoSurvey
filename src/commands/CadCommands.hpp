@@ -2149,7 +2149,11 @@ struct AppCommandState {
     AlignmentLayout,
     /// REQ-485.2 CREATEALIGNMENTFROMOBJECTS: pick the objects, then accept or reverse the direction.
     AlignmentFromObjects,
+    /// REQ-484.4 GETSTATIONOFFSET <alignment> with no point: each click (or typed X,Y) reports a station and offset,
+    /// until ESC. \ref stationOffsetPickArgs holds the alignment and any SURFACE= option.
+    StationOffsetPick,
   } active = Kind::None;
+  std::string stationOffsetPickArgs;
 
   static const char* KindName(Kind k) {
     switch (k) {
@@ -2171,6 +2175,7 @@ struct AppCommandState {
     case Kind::DataExtract:   return "DATAEXTRACTION";
     case Kind::Table:         return "TABLE";
     case Kind::PointTable:    return "ADDPOINTTABLE";
+    case Kind::StationOffsetPick: return "GETSTATIONOFFSET";
     case Kind::Text:          return "TEXT";
     case Kind::Mtext:         return "MTEXT";
     case Kind::Mleader:          return "MLEADER";
@@ -8142,6 +8147,8 @@ void RunAlignmentAdd(AppCommandState& st, const std::string& args, std::vector<s
 void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentDelete(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-484.4: reports the station and offset of one picked point (drawing-local) while GETSTATIONOFFSET picks.
+void CommitStationOffsetPick(AppCommandState& st, double lx, double ly, std::vector<std::string>& log);
 void RunGetPointFromStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunCreateAlignmentFromObjects(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 // REQ-485 interactive creation: ALIGNMENTLAYOUT picks PIs, CREATEALIGNMENTFROMOBJECTS without a name picks objects.
