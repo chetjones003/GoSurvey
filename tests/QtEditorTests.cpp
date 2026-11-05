@@ -1098,12 +1098,55 @@ private Q_SLOTS:
     window.resize(1200, 800);
     window.show();
     QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    auto alignmentFolders = [&] {  // REQ-480 AC1 / AC4: the Prospector's Alignments folder only when there are any
+      int folders = 0, entries = 0;
+      auto* prospector = window.findChild<QTreeWidget*>("toolspaceProspectorTree");
+      if (prospector == nullptr) return -1;
+      for (QTreeWidgetItemIterator it(prospector); *it; ++it) {
+        const QString role = (*it)->data(0, Qt::UserRole + 1).toString();
+        folders += role == "alignmentsFolder" ? 1 : 0;
+        entries += role == "alignment" ? 1 : 0;
+      }
+      return folders * 100 + entries;
+    };
+    window.Refresh();
+    QCOMPARE(alignmentFolders(), 0);
     for (const char* line : {"ALIGNMENT PRN1, , 0+00", "ALIGNMENTADD PRN1, TANGENT, 0, 0, 90, 300"}) window.Submit(line);
+    window.Refresh();
+    QCOMPARE(alignmentFolders(), 101);  // one folder, one alignment in it
     window.State().selection = {{SelectedEntity::Type::Alignment, 0}};
     window.Refresh();
     auto* name = window.findChild<QLineEdit*>("propAlignmentName");
     QVERIFY(name);
     QCOMPARE(name->text(), QString("PRN1"));
+    {  // REQ-501 AC1: the values equal the entity data
+      auto label = [&](const char* objectName) {
+        auto* l = window.findChild<QLabel*>(objectName);
+        return l == nullptr ? QString("<missing %1>").arg(objectName) : l->text();
+      };
+      const alignment::Alignment& al = window.State().alignments[0];
+      QCOMPARE(label("propAlignmentEndStation"), QString::fromStdString(alignment::FormatStation(al.EndStationWithEquations())));
+      QVERIFY(label("propAlignmentLength").startsWith("300.00"));
+      QVERIFY(label("propAlignmentStart").contains("0.00"));
+      QVERIFY(label("propAlignmentEnd").startsWith("300.00"));
+      QCOMPARE(label("propAlignmentEntities"), QString("1"));
+      QCOMPARE(label("propAlignmentCurves"), QString("0"));
+      QCOMPARE(label("propAlignmentSpirals"), QString("0"));
+      QCOMPARE(label("propAlignmentEquations"), QString("0"));
+      QCOMPARE(label("propAlignmentParent"), QString("(none)"));
+      QCOMPARE(label("propAlignmentContinuityStatus"), QString("OK"));
+      QVERIFY(label("propAlignmentStartBearing") == label("propAlignmentEndBearing"));
+      // With design criteria the status says whether the alignment meets them (REQ-501.1).
+      for (const char* line : {"ALIGNMENTCHECKSET NEW, Strict", "ALIGNMENTCHECKSET SET, Strict, MINLINE, 500",
+                               "ALIGNMENTCRITERIA PRN1, Strict"})
+        window.Submit(line);
+      QCOMPARE(window.State().alignments[0].checkSetName, std::string("Strict"));
+      window.Refresh();  // the panel follows the alignment's own fields, not only its geometry
+      QVERIFY2(window.findChild<QLabel*>("propAlignmentDesignStatus") != nullptr, "no design status row");
+      QCOMPARE(window.findChild<QLabel*>("propAlignmentDesignStatus")->text(), QString("1 violation(s)"));
+      name = window.findChild<QLineEdit*>("propAlignmentName");
+      QVERIFY(name);
+    }
     name->setText("Renamed Road");
     name->editingFinished();
     QCOMPARE(window.State().alignments[0].name, std::string("Renamed Road"));

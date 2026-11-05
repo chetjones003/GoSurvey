@@ -2003,9 +2003,7 @@ namespace {
 alignment::AlignmentReportFormat ReportFormatFor(const AppCommandState& st, const alignment::Alignment& a,
                                                  alignment::AlignmentReportFormat fmt) {
   const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.alignmentStyles, a);
-  for (const alignment::AlignmentCheckSet& set : st.alignmentCheckSets) {
-    if (!criteriaName.empty() && set.name == criteriaName) fmt.checkSet = &set;
-  }
+  if (!criteriaName.empty()) fmt.checkSet = alignment::FindCheckSet(st.alignmentCheckSets, criteriaName);
   return fmt;
 }
 
@@ -2072,7 +2070,7 @@ void RunAlignmentReport(AppCommandState& st, const std::string& args, std::vecto
     SheetGrid::Grid grid;
     bool header = false;
     for (const alignment::Alignment* a : targets) {
-      SheetGrid::Grid part = alignment::BuildAlignmentReportCsv(*a, fmt);
+      SheetGrid::Grid part = alignment::BuildAlignmentReportCsv(*a, ReportFormatFor(st, *a, fmt));
       if (part.empty()) continue;
       if (!header) {
         grid.push_back(part.front());

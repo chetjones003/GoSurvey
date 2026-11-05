@@ -8,12 +8,17 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <variant>
 #include <string>
 #include <vector>
 
 #include "CadCommands.hpp"
 #include "CadSnap.hpp"
 #include "alignment/Alignment.hpp"
+#include "alignment/AlignmentDesign.hpp"
+#include "alignment/AlignmentReport.hpp"
+#include "io/SpreadsheetIo.hpp"
 
 using alignment::Alignment;
 using alignment::Point2;
@@ -741,4 +746,54 @@ TEST_CASE("Intersection snap ignores an alignment's own sample vertices but find
   CHECK(cross.kind == CadSnap::Kind::Intersection);
   CHECK(std::fabs(cross.y - on.y) <= 1e-3);
   CHECK(std::fabs(road.GetStationOffset(cross.x, cross.y).offset) <= 1e-3);
+}
+
+// --- REQ-494: reports ---
+
+TEST_CASE("The report marks each entity as meeting or violating the criteria, and lists the violation",
+          "[req494][req502][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT R1", log);
+  Submit(st, "ALIGNMENTADD R1, TANGENT, 0, 0, 90, 300", log);
+  Submit(st, "ALIGNMENTADD R1, CURVE, 150, 20, LEFT", log);
+  Submit(st, "ALIGNMENTADD R1, TANGENT, 400", log);
+  Submit(st, "ALIGNMENTCHECKSET NEW, Rural", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, MINLINE, 350", log);  // the first tangent (300) is too short
+  Submit(st, "ALIGNMENTCRITERIA R1, Rural", log);
+  log.clear();
+  Submit(st, "ALIGNMENTREPORT R1", log);
+  CHECK(LogHas(log, "Entity 1: "));  // the finding itself (AC3)
+  CHECK(LogHas(log, "Design criteria: violates: "));
+  CHECK(LogHas(log, "Design criteria: meets"));
+}
+
+TEST_CASE("The CSV report file re-reads to the numbers at the display precision", "[req494][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT R2", log);
+  Submit(st, "ALIGNMENTADD R2, TANGENT, 0, 0, 45, 250", log);
+  Submit(st, "ALIGNMENTADD R2, CURVE, 500, 15, RIGHT", log);
+  const std::string path = (std::filesystem::temp_directory_path() / "gosurvey-req494.csv").string();
+  log.clear();
+  Submit(st, "ALIGNMENTREPORT R2, CSV, " + path, log);
+  REQUIRE(LogHas(log, "CSV written"));
+  SheetGrid::Grid grid;
+  std::string err;
+  REQUIRE(SpreadsheetIo::ReadCsv(path, &grid, &err));
+  std::filesystem::remove(path);
+  REQUIRE(grid.size() == 3);
+  auto number = [](const SheetGrid::Cell& c) {
+    if (std::holds_alternative<double>(c)) return std::get<double>(c);
+    double v = 0.0;
+    return std::sscanf(std::get<std::string>(c).c_str(), "%lf", &v) == 1 ? v : -1.0;
+  };
+  const double scale = std::pow(10.0, st.displayLinearPrecision);
+  auto shown = [&](double v) { return std::round(v * scale) / scale; };
+  const alignment::CurveData cd = alignment::ComputeCurveData({0, 0}, 0.0, 500.0, 500.0 * 15.0 * kDeg, true);
+  CHECK(number(grid[1][7]) == Approx(250.0).epsilon(0).margin(1e-9));
+  CHECK(number(grid[2][8]) == Approx(500.0).epsilon(0).margin(1e-9));
+  CHECK(number(grid[2][10]) == Approx(shown(cd.arcLength)).epsilon(0).margin(1e-9));
+  CHECK(number(grid[2][11]) == Approx(shown(cd.tangentLength)).epsilon(0).margin(1e-9));
+  CHECK(number(grid[2][12]) == Approx(shown(cd.chord)).epsilon(0).margin(1e-9));
 }

@@ -10,6 +10,7 @@
 #include <QPainter>
 
 #include "AlignmentStyle.hpp"
+#include "alignment/AlignmentDesign.hpp"
 #include "CadColor.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadLinetype.hpp"
@@ -107,6 +108,17 @@ void EditorWindow::RefreshProperties() {
   mix(st.annotationScales.size());
   mix(st.drawingLayerTable.size()); mix(static_cast<std::uint64_t>(st.activeDrawingIdx));
   mix(qHash(m_PropertiesNote));
+  // A selected alignment's own fields change without a geometry revision (criteria, name, station) - REQ-501.1.
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Alignment || e.index < 0 || static_cast<size_t>(e.index) >= st.alignments.size())
+      continue;
+    const alignment::Alignment& al = st.alignments[static_cast<size_t>(e.index)];
+    mix(std::hash<std::string>{}(al.name + '\n' + al.description + '\n' + al.layer + '\n' + al.style + '\n' + al.checkSetName));
+    mix(static_cast<std::uint64_t>(std::llround(al.startingStation * 1e6)));
+    mix(al.equations.size());
+    mix(al.designSpeeds.size());
+    mix(st.alignmentCheckSets.size());
+  }
   if (fp == m_PropertiesFingerprint && m_PropertiesScroll->widget()) return;
   m_PropertiesFingerprint = fp;
 
@@ -664,7 +676,7 @@ void EditorWindow::RefreshProperties() {
       readOnly(rows, "Type", kTypeNames[static_cast<int>(al.type)], "propAlignmentType");
       editableAlignmentField(rows, "Style", Text(al.style), "propAlignmentStyle", "STYLE", al.name);
       editableAlignmentField(rows, "Layer", Text(al.layer), "propAlignmentLayer", "LAYER", al.name);
-      // Offsets name their parent by id (REQ-488); design criteria are not built yet (REQ-502).
+      // Offsets name their parent by id (REQ-488).
       QString parentName = QStringLiteral("(none)");
       if (al.parentId != 0) {
         for (const alignment::Alignment& other : st.alignments) {
@@ -675,6 +687,13 @@ void EditorWindow::RefreshProperties() {
       const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.alignmentStyles, al);
       readOnly(rows, "Design criteria", criteriaName.empty() ? QStringLiteral("none") : Text(criteriaName),
                "propAlignmentDesignCriteria");
+      // REQ-501.1 design criteria status: meets, or how many checks the alignment fails (REQ-502).
+      if (const alignment::AlignmentCheckSet* set = alignment::FindCheckSet(st.alignmentCheckSets, criteriaName)) {
+        const size_t findings = alignment::CheckDesign(al, *set, st.displayLinearPrecision).size();
+        readOnly(rows, "Design criteria status", findings == 0 ? QStringLiteral("Meets criteria")
+                                                               : QString("%1 violation(s)").arg(findings),
+                 "propAlignmentDesignStatus");
+      }
       if (!al.Empty()) {
         const double ox = CadCoord::WorldOriginX(st), oy = CadCoord::WorldOriginY(st);
         const AngleDisplaySettings angles = CadAngleDisplaySettings(st);

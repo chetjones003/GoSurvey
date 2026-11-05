@@ -5,6 +5,7 @@
 
 #include "util/NumFormat.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <string>
@@ -70,8 +71,27 @@ void AppendContinuityFindings(const Alignment& a, const AlignmentReportFormat& f
   if (!any) lines->push_back("  (none at " + std::string(ContinuityRequirementLabel(a.continuityRequirement)) + " level)");
 }
 
+/// REQ-494: "meets" or "violates: <findings>" for one entity against the check set; empty without criteria.
+std::string CriteriaMark(const AlignmentReportFormat& fmt, const std::vector<DesignFinding>& findings, int entityIndex) {
+  assert(entityIndex >= 0);
+  assert(findings.size() < findings.max_size());
+  if (fmt.checkSet == nullptr) return {};
+  std::string broken;
+  for (const DesignFinding& f : findings)
+    if (f.entity == entityIndex + 1) broken += (broken.empty() ? "" : "; ") + f.text;
+  return broken.empty() ? std::string("meets") : "violates: " + broken;
+}
+
+/// A value as the display precision shows it, so the CSV re-reads to the numbers on screen (REQ-494).
+double Rounded(double v, int decimals) {
+  assert(decimals >= 0 && decimals <= 12);
+  assert(std::isfinite(v));
+  const double scale = std::pow(10.0, std::clamp(decimals, 0, 12));
+  return std::round(v * scale) / scale;
+}
+
 void AppendEntityTextBlock(const Alignment& a, int entityIndex, const AlignmentReportFormat& fmt,
-                           std::vector<std::string>* lines) {
+                           const std::vector<DesignFinding>& findings, std::vector<std::string>* lines) {
   assert(lines != nullptr);
   assert(entityIndex >= 0);
   assert(static_cast<size_t>(entityIndex) < a.Entities().size());
@@ -79,6 +99,8 @@ void AppendEntityTextBlock(const Alignment& a, int entityIndex, const AlignmentR
   lines->push_back("");
   lines->push_back("ENTITY " + std::to_string(entityIndex + 1));
   lines->push_back(KindLabel(e.kind));
+  if (const std::string mark = CriteriaMark(fmt, findings, entityIndex); !mark.empty())
+    lines->push_back("Design criteria: " + mark);
   if (e.kind == EntityKind::Line) {
     lines->push_back("Bearing: " + Brg(fmt, e.startAzimuth));
     lines->push_back("Length: " + Lin(fmt.linearPrecision, e.length));
@@ -110,12 +132,18 @@ SheetGrid::Row CsvHeaderRow() {
           std::string("start_station"), std::string("end_station"), std::string("bearing"), std::string("length"),
           std::string("radius"), std::string("delta"), std::string("arc_length"), std::string("tangent_length"),
           std::string("chord"), std::string("spiral_a"), std::string("spiral_ls"), std::string("start_radius"),
-          std::string("end_radius"), std::string("direction")};
+          std::string("end_radius"), std::string("direction"), std::string("criteria")};
 }
 
 void PushCsvNumber(SheetGrid::Row* row, double v) {
   assert(row != nullptr);
   row->push_back(v);
+}
+
+/// Decimals of an angle in degrees at the display precision (DMS / surveyor show seconds: four more places).
+int AngleDecimals(const AngleDisplaySettings& angles) {
+  assert(angles.precision >= 0);
+  return std::clamp(angles.type == AngleDisplayType::DecimalDegrees ? angles.precision : angles.precision + 4, 0, 12);
 }
 
 void PushCsvText(SheetGrid::Row* row, std::string v) {
@@ -183,13 +211,18 @@ void BuildAlignmentReportLines(const Alignment& a, const AlignmentReportFormat& 
     lines->push_back("(no entities)");
     return;
   }
-  for (size_t i = 0; i < a.Entities().size(); ++i) AppendEntityTextBlock(a, static_cast<int>(i), format, lines);
+  const std::vector<DesignFinding> findings =
+      format.checkSet == nullptr ? std::vector<DesignFinding>{} : CheckDesign(a, *format.checkSet, format.linearPrecision);
+  for (size_t i = 0; i < a.Entities().size(); ++i) AppendEntityTextBlock(a, static_cast<int>(i), format, findings, lines);
 }
 
 SheetGrid::Grid BuildAlignmentReportCsv(const Alignment& a, const AlignmentReportFormat& format) {
   SheetGrid::Grid grid;
   grid.push_back(CsvHeaderRow());
   if (a.Empty()) return grid;
+  const std::vector<DesignFinding> findings =
+      format.checkSet == nullptr ? std::vector<DesignFinding>{} : CheckDesign(a, *format.checkSet, format.linearPrecision);
+  const int lp = format.linearPrecision, ap = AngleDecimals(format.angles);
   for (size_t i = 0; i < a.Entities().size(); ++i) {
     const int ii = static_cast<int>(i);
     const Entity& e = a.Entities()[i];
@@ -202,35 +235,36 @@ SheetGrid::Grid BuildAlignmentReportCsv(const Alignment& a, const AlignmentRepor
     PushCsvText(&row, Sta(a, a.EntityEndStation(ii)));
     PushCsvText(&row, Brg(format, e.startAzimuth));
     if (e.kind == EntityKind::Line) {
-      PushCsvNumber(&row, e.length);
+      PushCsvNumber(&row, Rounded(e.length, lp));
       for (int n = 0; n < 9; ++n) PushCsvEmpty(&row);  // radius .. end_radius (9 columns)
       PushCsvText(&row, e.right ? "Right" : "Left");
     } else if (e.kind == EntityKind::Arc) {
       CurveData cd;
       (void)a.CurveDataFor(ii, &cd);
       PushCsvEmpty(&row);
-      PushCsvNumber(&row, cd.radius);
-      PushCsvNumber(&row, cd.delta / kDegToRad);
-      PushCsvNumber(&row, cd.arcLength);
-      PushCsvNumber(&row, cd.tangentLength);
-      PushCsvNumber(&row, cd.chord);
+      PushCsvNumber(&row, Rounded(cd.radius, lp));
+      PushCsvNumber(&row, Rounded(cd.delta / kDegToRad, ap));
+      PushCsvNumber(&row, Rounded(cd.arcLength, lp));
+      PushCsvNumber(&row, Rounded(cd.tangentLength, lp));
+      PushCsvNumber(&row, Rounded(cd.chord, lp));
       for (int n = 0; n < 4; ++n) PushCsvEmpty(&row);  // spiral_a .. end_radius (4 columns)
       PushCsvText(&row, e.right ? "Right" : "Left");
     } else {
       SpiralData sd;
       (void)SpiralDataFor(ii, a, &sd);
       PushCsvEmpty(&row);
-      PushCsvNumber(&row, sd.endRadius);
-      PushCsvNumber(&row, sd.deflection / kDegToRad);
+      PushCsvNumber(&row, Rounded(sd.endRadius, lp));
+      PushCsvNumber(&row, Rounded(sd.deflection / kDegToRad, ap));
       PushCsvEmpty(&row);
       PushCsvEmpty(&row);
       PushCsvEmpty(&row);
-      PushCsvNumber(&row, sd.parameterA);
-      PushCsvNumber(&row, sd.length);
-      PushCsvNumber(&row, sd.startRadius);
-      PushCsvNumber(&row, sd.endRadius);
+      PushCsvNumber(&row, Rounded(sd.parameterA, lp));
+      PushCsvNumber(&row, Rounded(sd.length, lp));
+      PushCsvNumber(&row, Rounded(sd.startRadius, lp));
+      PushCsvNumber(&row, Rounded(sd.endRadius, lp));
       PushCsvText(&row, e.right ? "Right" : "Left");
     }
+    PushCsvText(&row, CriteriaMark(format, findings, ii));
     grid.push_back(std::move(row));
   }
   return grid;
