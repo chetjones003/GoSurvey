@@ -137,7 +137,7 @@ QWidget* BuildGeneralTab(const AppCommandState& st, bool fromObjects, DialogFiel
   for (const auto& l : st.drawingLayerTable) layers << Q(l.name);
   for (const auto& s : st.alignmentLabelSets) sets << Q(s.name);
   if (layers.isEmpty()) layers << "0";
-  f->style = NameCombo(tab, styles, "Standard");
+  f->style = NameCombo(tab, styles, Q(st.alignmentStyleCurrent));  // REQ-491: the current style
   f->layer = NameCombo(tab, layers, Q(st.currentLayer));
   f->layer->setEditable(true);
   f->labelSet = NameCombo(tab, sets, "Standard");

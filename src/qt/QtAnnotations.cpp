@@ -329,6 +329,12 @@ struct LabelFace {
   Shx::Font* stroke = nullptr;  ///< The SHX font, when the text style names one that loads.
   std::string strokeFamily;
   QFont ttf;
+  // REQ-492.5 formatting from the label style: every line is written as prefix + text + suffix; numbers use `linear`
+  // decimals and stations `station`; a View-oriented label stays level on the screen.
+  std::string prefix, suffix;
+  bool viewOriented = false;
+  int linear = 2;
+  alignment::StationFormat station;
 
   [[nodiscard]] bool Drawable() const { return std::isfinite(px) && px >= 2.0; }
   [[nodiscard]] double RunWidth(bool ascii, const std::string& run) const {
@@ -337,11 +343,12 @@ struct LabelFace {
   }
   [[nodiscard]] double Width(const std::string& text) const {
     double w = 0.0;
-    for (const auto& [ascii, run] : AsciiRuns(text)) w += RunWidth(ascii, run);
+    for (const auto& [ascii, run] : AsciiRuns(prefix + text + suffix)) w += RunWidth(ascii, run);
     return w;
   }
   // Writes `text` with its baseline starting at `start`, in the painter's current transform.
-  void Draw(QPainter& painter, QPointF start, const std::string& text) const {
+  void Draw(QPainter& painter, QPointF start, const std::string& line) const {
+    const std::string text = prefix + line + suffix;
     QPen pen(color, 1.0);
     pen.setCosmetic(true);
     painter.setPen(pen);
@@ -369,6 +376,11 @@ LabelFace MakeLabelFace(const AppCommandState& state, const std::string& styleNa
   assert(pixelsPerUnit >= 0.0);
   const AlignmentLabelStyle& style = AlignmentLabelStyles::Resolve(state.alignmentLabelStyles, styleName);
   LabelFace face;
+  face.prefix = style.prefix;
+  face.suffix = style.suffix;
+  face.viewOriented = style.viewOriented;
+  face.linear = AlignmentLabelStyles::Precision(style, state.displayLinearPrecision);
+  face.station = AlignmentLabelStyles::StationFormatFor(style, state.alignmentStationFormat);
   face.color = ResolvedColor(style.color, layerColor);
   face.px = AlignmentLabelStyles::TextHeight(style, state.modelUnitsPerPlottedInch) * pixelsPerUnit;
   const TextStyle* textStyle = TextStyles::Find(state.textStyles, style.textStyle);
@@ -393,8 +405,9 @@ void DrawTextAlong(QPainter& painter, const LabelFace& face, QPointF start, QPoi
   assert(std::isfinite(start.x()) && std::isfinite(start.y()));
   assert(std::isfinite(along.x()) && std::isfinite(along.y()));
   const double textWidth = face.Width(text);
-  double angle = std::atan2(along.y(), along.x()) * 180.0 / alignment::kPi;
+  double angle = face.viewOriented ? 0.0 : std::atan2(along.y(), along.x()) * 180.0 / alignment::kPi;
   double x = centered ? -0.5 * textWidth : 0.0;
+  if (face.viewOriented && !centered && along.x() < 0.0) x = -textWidth;  // still reads away from its anchor
   if (angle > 90.0 || angle < -90.0) {
     angle += 180.0;
     if (!centered) x = -textWidth;
@@ -508,13 +521,14 @@ void DrawAlignmentStationText(QPainter& painter, const AppCommandState& state, c
   const LabelFace major = MakeLabelFace(state, ls.majorStyle, ppu, layerColor);
   for (const alignment::StationTickLabel& tick : ticks) {
     if (!tick.major) continue;
-    PlaceStack(painter, major, FrameAt(view, al, tick.rawStation), {alignment::FormatStation(tick.displayedStation, state.alignmentStationFormat)},
+    PlaceStack(painter, major, FrameAt(view, al, tick.rawStation), {alignment::FormatStation(tick.displayedStation, major.station)},
                {1.0, -1.0}, rowPx + 0.3 * major.px, boxes);
   }
   if (!ls.equationsOn) return;
   const LabelFace equation = MakeLabelFace(state, ls.equationStyle, ppu, layerColor);
   for (const alignment::EquationLabel& eq : alignment::CollectEquationLabels(al)) {
-    const std::string text = "EQ " + alignment::FormatStation(eq.backDisplayed, state.alignmentStationFormat) + " = " + alignment::FormatStation(eq.aheadDisplayed, state.alignmentStationFormat);
+    const std::string text = "EQ " + alignment::FormatStation(eq.backDisplayed, equation.station) + " = " +
+                             alignment::FormatStation(eq.aheadDisplayed, equation.station);
     PlaceStack(painter, equation, FrameAt(view, al, eq.rawStation), {text}, {1.0, -1.0}, rowPx + 0.3 * equation.px, boxes);
   }
 }
@@ -549,6 +563,7 @@ void DrawAlignmentSegmentText(QPainter& painter, const AppCommandState& state, c
   const int n = static_cast<int>(al.Entities().size());
   const std::vector<std::string> tags = alignment::ShowsTagLabels(al) ? alignment::SegmentTags(al) : std::vector<std::string>{};
   for (int i = 0; i < n; ++i) {
+    if (!alignment::SegmentIsLabelled(al, i)) continue;  // REQ-492.3 single segment labels
     const alignment::Entity& e = al.Entities()[static_cast<size_t>(i)];
     const double mid = 0.5 * (al.EntityStartStation(i) + al.EntityEndStation(i));
     const AlignmentScreenFrame f = FrameAt(view, al, mid);
@@ -560,13 +575,13 @@ void DrawAlignmentSegmentText(QPainter& painter, const AppCommandState& state, c
     alignment::SpiralData sd;
     std::vector<std::string> lines;
     if (e.kind == alignment::EntityKind::Line) {
-      DrawLineLabel(painter, face, f, alignment::LineLabelLines(e, state.displayLinearPrecision, angles), boxes);
+      DrawLineLabel(painter, face, f, alignment::LineLabelLines(e, face.linear, angles), boxes);
       continue;
     }
     if (e.kind == alignment::EntityKind::Arc && al.CurveDataFor(i, &cd))
-      lines = alignment::CurveLabelLines(cd, state.displayLinearPrecision, angles);
+      lines = alignment::CurveLabelLines(cd, face.linear, angles);
     else if (e.kind == alignment::EntityKind::Spiral && alignment::SpiralDataFor(i, al, &sd))
-      lines = alignment::SpiralLabelLines(sd, state.displayLinearPrecision);
+      lines = alignment::SpiralLabelLines(sd, face.linear);
     const double inside = e.right ? -1.0 : 1.0;
     PlaceStack(painter, face, f, lines, {inside, -inside}, 0.6 * face.px, boxes);
   }
@@ -583,27 +598,62 @@ void DrawAlignmentLabels(QPainter& painter, const AppCommandState& state, const 
   // Leaders first (they stay where Civil 3D puts them), then the long segment labels, then the short station text,
   // each stepping around what is already placed (D-2026-11-04-e).
   LabelBoxes& boxes = *claimed;
-  if (ls.geometryPointsOn) {
-    const LabelFace face = MakeLabelFace(state, ls.geometryStyle, ppu, layerColor);
-    for (const alignment::GeometryPointLabel& gp : alignment::CollectGeometryPointLabels(al, state.alignmentStationFormat))
-      DrawLeaderLabel(painter, face, FrameAt(view, al, gp.internalStation), 1.0, gp.text, &boxes);
+  if (ls.geometryPointsOn) {  // REQ-492.1: the first Geometry Points item, then any further ones in their own styles
+    std::vector<std::pair<const std::string*, const std::vector<std::string>*>> items{{&ls.geometryStyle, &ls.geometryCodes}};
+    for (const AlignmentGeometryLabelItem& item : ls.extraGeometryItems) items.emplace_back(&item.style, &item.codes);
+    for (const auto& [styleName, codes] : items) {
+      const LabelFace face = MakeLabelFace(state, *styleName, ppu, layerColor);
+      for (const alignment::GeometryPointLabel& gp : alignment::CollectGeometryPointLabels(al, face.station))
+        if (AlignmentLabelStyles::ItemLabelsCode(*codes, alignment::GeometryPointAbbreviation(gp.code)))
+          DrawLeaderLabel(painter, face, FrameAt(view, al, gp.internalStation), 1.0, gp.text, &boxes);
+    }
   }
   if (ls.designSpeedsOn) {
     const LabelFace face = MakeLabelFace(state, ls.speedStyle, ppu, layerColor);
     const bool metric = state.drawingInsUnits == 4 || state.drawingInsUnits == 6;
-    for (const alignment::DesignSpeedLabel& d : alignment::CollectDesignSpeedLabels(al, metric, state.alignmentStationFormat))
+    for (const alignment::DesignSpeedLabel& d : alignment::CollectDesignSpeedLabels(al, metric, face.station))
       DrawLeaderLabel(painter, face, FrameAt(view, al, d.internalStation), -1.0, d.text, &boxes);
   }
-  if (al.segmentLabels)
+  if (alignment::HasSegmentLabels(al))
     DrawAlignmentSegmentText(painter, state, view, al, MakeLabelFace(state, ls.segmentStyle, ppu, layerColor), &boxes);
   DrawAlignmentStationText(painter, state, view, al, ticks, ls, sty != nullptr ? sty->majorTickLength : 0.0, layerColor,
                            &boxes);
   // REQ-492.4: station/offset labels, fixed or relative, drawn where they resolve on the current geometry.
   const LabelFace offsetFace = MakeLabelFace(state, ls.offsetStyle, ppu, layerColor);
   for (const alignment::StationOffsetLabel& sl : al.stationLabels) {
-    const alignment::StationOffsetLabelPlacement placed = alignment::PlaceStationOffsetLabel(al, sl, state.displayLinearPrecision,
-                                                                                             state.alignmentStationFormat);
+    const alignment::StationOffsetLabelPlacement placed =
+        alignment::PlaceStationOffsetLabel(al, sl, offsetFace.linear, offsetFace.station);
     if (placed.onAlignment && offsetFace.Drawable()) offsetFace.Draw(painter, view.Project(placed.point), placed.text);
+  }
+}
+
+// REQ-491 Markers tab: one geometry point marker in its shape, `halfSize` drawing units across each way.
+void DrawAlignmentMarker(QPainter& painter, const AlignmentView& view, alignment::Point2 q, const AlignmentMarkerSpec& m) {
+  assert(std::isfinite(q.x) && std::isfinite(q.y));
+  assert(m.halfSize >= 0.0);
+  const double h = m.halfSize;
+  switch (m.shape) {
+    case AlignmentMarkerShape::Cross:
+      painter.drawLine(view.Project({q.x - h, q.y}), view.Project({q.x + h, q.y}));
+      painter.drawLine(view.Project({q.x, q.y - h}), view.Project({q.x, q.y + h}));
+      return;
+    case AlignmentMarkerShape::X:
+      painter.drawLine(view.Project({q.x - h, q.y - h}), view.Project({q.x + h, q.y + h}));
+      painter.drawLine(view.Project({q.x - h, q.y + h}), view.Project({q.x + h, q.y - h}));
+      return;
+    case AlignmentMarkerShape::Circle: {
+      const QPointF c = view.Project(q);
+      const double r = std::hypot(view.Project({q.x + h, q.y}).x() - c.x(), view.Project({q.x + h, q.y}).y() - c.y());
+      painter.setBrush(Qt::NoBrush);
+      painter.drawEllipse(c, r, r);
+      return;
+    }
+    case AlignmentMarkerShape::Square:
+      painter.setBrush(Qt::NoBrush);
+      painter.drawPolygon(QPolygonF({view.Project({q.x - h, q.y - h}), view.Project({q.x + h, q.y - h}),
+                                     view.Project({q.x + h, q.y + h}), view.Project({q.x - h, q.y + h})}));
+      return;
+    case AlignmentMarkerShape::None: return;
   }
 }
 
@@ -628,17 +678,21 @@ void DrawAlignmentTicksAndMarkers(QPainter& painter, const AlignmentView& view, 
     }
   }
   if (!sty.markers.visible) return;
-  painter.setPen(QPen(ResolvedColor(sty.markers.color, layerColor), 1));
-  const double h = sty.markerHalfSize;
+  const QColor styleColor = ResolvedColor(sty.markers.color, layerColor);
   for (const alignment::GeometryPoint& gp : al.GeometryPoints()) {
     using GC = alignment::GeometryPointCode;
     // Only points on the line are marked; a curve's PI and centre lie off it, as in Civil 3D's default styles.
     if (gp.code == GC::LineMidPt || gp.code == GC::CurveMidPt || gp.code == GC::CurveCenter || gp.code == GC::CurvePI ||
         gp.code == GC::SpiralPI)
       continue;
-    const alignment::Point2 q = gp.point;
-    painter.drawLine(view.Project({q.x - h, q.y}), view.Project({q.x + h, q.y}));
-    painter.drawLine(view.Project({q.x, q.y - h}), view.Project({q.x, q.y + h}));
+    const std::string code = alignment::GeometryPointAbbreviation(gp.code);
+    const auto spec = std::find_if(sty.codeMarkers.begin(), sty.codeMarkers.end(),
+                                   [&](const AlignmentMarkerSpec& m) { return m.code == code; });
+    AlignmentMarkerSpec marker{code, AlignmentMarkerShape::Cross, sty.markerHalfSize, "ByLayer"};
+    if (spec != sty.codeMarkers.end()) marker = *spec;
+    const bool byLayer = marker.color.empty() || marker.color == "ByLayer";
+    painter.setPen(QPen(byLayer ? styleColor : ResolvedColor(marker.color, layerColor), 1));
+    DrawAlignmentMarker(painter, view, gp.point, marker);
   }
 }
 

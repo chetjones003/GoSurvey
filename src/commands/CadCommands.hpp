@@ -4975,6 +4975,8 @@ struct AppCommandState {
   /// the code is entitled to assume cannot happen.
   std::vector<SurfaceStyle> surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
   std::vector<AlignmentStyle> alignmentStyles = AlignmentStyles::DefaultAlignmentStyles();
+  /// REQ-491 current style (the REQ-478 pattern): a new alignment uses it unless another style is named.
+  std::string alignmentStyleCurrent = "Standard";
   std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502
   std::vector<AlignmentLabelSet> alignmentLabelSets = AlignmentLabelSets::DefaultAlignmentLabelSets();
   std::vector<AlignmentLabelStyle> alignmentLabelStyles = AlignmentLabelStyles::DefaultAlignmentLabelStyles();  ///< REQ-492.5

@@ -20,6 +20,12 @@ struct AlignmentTableText {
                                            const AngleDisplaySettings& angles, AlignmentTableText* out, std::string* whyNot,
                                            const StationFormat& station = {});
 
+/// REQ-492.3: true when entity `entity` carries a segment label: every segment does under Multiple Segment labels,
+/// otherwise only the segments picked as Single Segment labels.
+[[nodiscard]] bool SegmentIsLabelled(const Alignment& a, int entity);
+/// True when any segment of the alignment is labelled.
+[[nodiscard]] bool HasSegmentLabels(const Alignment& a);
+
 /// The table tag of every entity in travel order (REQ-493.1): L1, L2, … for lines, C1, … for curves and S1, … for
 /// spirals, as Civil 3D numbers tag labels. A line, curve, spiral or segment table names its rows by these tags.
 [[nodiscard]] std::vector<std::string> SegmentTags(const Alignment& a);

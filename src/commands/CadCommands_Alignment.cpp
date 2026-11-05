@@ -717,7 +717,37 @@ void RefreshDynamicTables(AppCommandState& st, std::vector<std::string>& log) {
 
 }  // namespace
 
-// ALIGNMENTLABEL <name>, SEGMENTS | CLEAR   (REQ-492.3: segment labels; REQ-493.3: a line or curve table needs them)
+namespace {
+
+// ALIGNMENTLABEL <name>, SEGMENT, <entity#>: REQ-492.3 Single Segment label on one picked segment.
+void RunAlignmentSingleSegmentLabel(AppCommandState& st, const std::vector<std::string>& f, std::vector<std::string>& log) {
+  assert(f.size() == 3);
+  assert(st.alignments.size() < 100000000);
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTLABEL", f[0], log);
+  if (a == nullptr) return;
+  double n = 0.0;
+  const int count = static_cast<int>(a->Entities().size());
+  if (!ParseNum(f[2], &n) || n != std::floor(n) || n < 1.0 || n > static_cast<double>(count)) {
+    log.push_back("ALIGNMENTLABEL - \"" + a->name + "\" has entities 1 to " + std::to_string(count) + "; \"" + f[2] +
+                  "\" is not one of them.");
+    return;
+  }
+  const int i = static_cast<int>(n) - 1;
+  if (alignment::SegmentIsLabelled(*a, i)) {
+    log.push_back("ALIGNMENTLABEL - entity " + std::to_string(i + 1) + " of \"" + a->name + "\" is already labelled.");
+    return;
+  }
+  PushUndoSnapshot(st, "Label alignment segment");
+  a = Resolve(st, "ALIGNMENTLABEL", f[0], log);
+  a->segmentLabelStations.push_back(0.5 * (a->EntityStartStation(i) + a->EntityEndStation(i)));
+  BumpCadGpuCache(st);
+  log.push_back("ALIGNMENTLABEL - entity " + std::to_string(i + 1) + " of \"" + a->name + "\" labelled.");
+}
+
+}  // namespace
+
+// ALIGNMENTLABEL <name>, SEGMENTS | SEGMENT, <entity#> | CLEAR   (REQ-492.3 Multiple and Single Segment labels;
+// REQ-493.3: a line, curve, spiral or segment table lists the labelled segments)
 void RunAlignmentStationLabel(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 
 void RunAlignmentLabel(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
@@ -726,29 +756,31 @@ void RunAlignmentLabel(AppCommandState& st, const std::string& args, std::vector
     RunAlignmentStationLabel(st, args, log);
     return;
   }
-  if (f.size() != 2) {
-    log.push_back("ALIGNMENTLABEL - usage: ALIGNMENTLABEL <name>, SEGMENTS | CLEAR.");
+  const char* usage = "ALIGNMENTLABEL - usage: ALIGNMENTLABEL <name>, SEGMENTS | SEGMENT, <entity#> | CLEAR.";
+  const std::string what = f.size() >= 2 ? Lower(f[1]) : std::string{};
+  if (what == "segment" && f.size() == 3) {
+    RunAlignmentSingleSegmentLabel(st, f, log);
+    return;
+  }
+  if (f.size() != 2 || (what != "segments" && what != "clear")) {
+    log.push_back(usage);
     return;
   }
   alignment::Alignment* a = Resolve(st, "ALIGNMENTLABEL", f[0], log);
   if (a == nullptr) return;
-  const std::string what = Lower(f[1]);
-  if (what != "segments" && what != "clear") {
-    log.push_back("ALIGNMENTLABEL - usage: ALIGNMENTLABEL <name>, SEGMENTS | CLEAR.");
-    return;
-  }
   const bool on = what == "segments";
   if (on && a->Empty()) {
     log.push_back("ALIGNMENTLABEL - \"" + a->name + "\" has no geometry to label.");
     return;
   }
-  if (a->segmentLabels == on) {
+  if (a->segmentLabels == on && (on || a->segmentLabelStations.empty())) {
     log.push_back("ALIGNMENTLABEL - the segments of \"" + a->name + "\" are already " + (on ? "labelled." : "unlabelled."));
     return;
   }
   PushUndoSnapshot(st, on ? "Label alignment segments" : "Clear alignment segment labels");
   a = Resolve(st, "ALIGNMENTLABEL", f[0], log);
   a->segmentLabels = on;
+  a->segmentLabelStations.clear();  // Multiple Segment covers every segment; CLEAR removes the single ones too
   log.push_back(on ? "ALIGNMENTLABEL - segments of \"" + a->name + "\" labelled; line, curve and segment tables can now be made."
                    : "ALIGNMENTLABEL - segment labels of \"" + a->name + "\" cleared. Existing line and curve tables stop updating.");
 }
@@ -1597,6 +1629,71 @@ SurfaceComponentStyle* AlignmentComponentByName(AlignmentStyle& s, const std::st
   return nullptr;
 }
 
+namespace {
+
+// Reads space-separated geometry point codes as the labels write them (BP, PI, TS, Mid, ...). False on an unknown one.
+bool ParseGeometryCodes(const std::string& text, std::vector<std::string>* codes, std::string* bad) {
+  assert(codes != nullptr && bad != nullptr);
+  assert(text.size() < 100000);
+  static const std::array<const char*, 14> kCodes{"BP", "EP", "PI", "PC", "PT", "PCC", "PRC",
+                                                  "TS", "ST", "CS", "SC", "SS", "RS", "Mid"};
+  std::istringstream words(text);
+  std::string w;
+  for (int guard = 0; guard < 1000 && (words >> w); ++guard) {
+    const auto it = std::find_if(kCodes.begin(), kCodes.end(), [&](const char* c) { return Lower(c) == Lower(w); });
+    if (it == kCodes.end()) {
+      *bad = w;
+      return false;
+    }
+    if (std::find(codes->begin(), codes->end(), *it) == codes->end()) codes->push_back(*it);
+  }
+  return !codes->empty();
+}
+
+// ALIGNMENTSTYLE MARKER <style>, <code>, CROSS|X|CIRCLE|SQUARE|NONE|DEFAULT[, <size>[, <color>]]  (REQ-491 Markers tab:
+// shape, size and colour per geometry point code; DEFAULT returns the code to the style's cross)
+void RunAlignmentStyleMarker(AppCommandState& st, const std::vector<std::string>& f, std::vector<std::string>& log) {
+  assert(!f.empty());
+  assert(!st.alignmentStyles.empty());
+  const AlignmentStyle* current = f.size() >= 4 && f.size() <= 6 ? AlignmentStyles::Find(st.alignmentStyles, f[1]) : nullptr;
+  std::vector<std::string> codes;
+  std::string bad;
+  if (current == nullptr || !ParseGeometryCodes(f.size() >= 3 ? f[2] : std::string{}, &codes, &bad) || codes.size() != 1) {
+    log.push_back("ALIGNMENTSTYLE - usage: ALIGNMENTSTYLE MARKER <style>, <code>, CROSS|X|CIRCLE|SQUARE|NONE|DEFAULT"
+                  "[, <size>[, <color>]] (one code: BP EP PI PC PT PCC PRC TS ST CS SC SS RS Mid).");
+    return;
+  }
+  static const std::array<std::pair<const char*, AlignmentMarkerShape>, 5> kShapes{{{"cross", AlignmentMarkerShape::Cross},
+      {"x", AlignmentMarkerShape::X}, {"circle", AlignmentMarkerShape::Circle}, {"square", AlignmentMarkerShape::Square},
+      {"none", AlignmentMarkerShape::None}}};
+  AlignmentStyle edited = *current;
+  auto& markers = edited.codeMarkers;
+  markers.erase(std::remove_if(markers.begin(), markers.end(), [&](const AlignmentMarkerSpec& m) { return m.code == codes[0]; }),
+                markers.end());
+  if (Lower(f[3]) != "default") {
+    const auto shape = std::find_if(kShapes.begin(), kShapes.end(), [&](const auto& s) { return Lower(f[3]) == s.first; });
+    AlignmentMarkerSpec spec{codes[0], AlignmentMarkerShape::Cross, edited.markerHalfSize, "ByLayer"};
+    double size = 0.0;
+    std::string color = "ByLayer";
+    if (shape == kShapes.end() || (f.size() >= 5 && (!ParseNum(f[4], &size) || !(size > 0.0))) ||
+        (f.size() == 6 && !CadColorStorageFromTyped(f[5], &color))) {
+      log.push_back("ALIGNMENTSTYLE - MARKER needs a shape (CROSS, X, CIRCLE, SQUARE, NONE or DEFAULT), a positive size "
+                    "and a colour.");
+      return;
+    }
+    spec.shape = shape->second;
+    if (f.size() >= 5) spec.halfSize = size;
+    spec.color = color;
+    markers.push_back(std::move(spec));
+  }
+  PushUndoSnapshot(st, "Alignment style");
+  *AlignmentStyles::Find(st.alignmentStyles, f[1]) = std::move(edited);
+  BumpCadGpuCache(st);
+  log.push_back("ALIGNMENTSTYLE - \"" + f[1] + "\" " + codes[0] + " marker set to " + f[3] + ".");
+}
+
+}  // namespace
+
 void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   AlignmentStyles::EnsureStandard(st.alignmentStyles);
   const auto usage = [&]() {
@@ -1604,7 +1701,8 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
         "ALIGNMENTSTYLE - usage: ALIGNMENTSTYLE LIST | NEW <style> | DELETE <style> | ASSIGN <alignment>, <style> | "
         "SHOW|HIDE <style>, <tangent|curve|spiral> | COLOR <style>, <tangent|curve|spiral>, <color> | "
         "SET <style>, TICKS|MARKERS|ARROWS|LABELS ON|OFF | SET <style>, TICKSIDE BOTH|LEFT|RIGHT | "
-        "SET <style>, MAJORTICK|MINORTICK|MARKERSIZE|ARROWLENGTH <n> | SET <style>, CHECKSET <set>|NONE.");
+        "SET <style>, MAJORTICK|MINORTICK|MARKERSIZE|ARROWLENGTH <n> | SET <style>, CHECKSET <set>|NONE | "
+        "CURRENT <style> | MARKER <style>, <code>, CROSS|X|CIRCLE|SQUARE|NONE|DEFAULT[, <size>[, <color>]].");
   };
   const std::string trimmed = Trim(args);
   if (trimmed.empty()) {
@@ -1656,6 +1754,10 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
     if (users > 0) {
       log.push_back("ALIGNMENTSTYLE - \"" + name + "\" is used by " + std::to_string(users) +
                     " alignment(s) and cannot be deleted.");
+      return;
+    }
+    if (name == st.alignmentStyleCurrent) {
+      log.push_back("ALIGNMENTSTYLE - \"" + name + "\" is the current style and cannot be deleted; make another current first.");
       return;
     }
     const auto it = std::find_if(st.alignmentStyles.begin(), st.alignmentStyles.end(),
@@ -1789,6 +1891,21 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
     log.push_back("ALIGNMENTSTYLE - \"" + s->name + "\" " + f[2] + " color set to " + f[3] + ".");
     return;
   }
+  if (verb == "current" && f.size() == 2) {  // REQ-491 / REQ-478 current style
+    const AlignmentStyle* s = AlignmentStyles::Find(st.alignmentStyles, f[1]);
+    if (s == nullptr) {
+      log.push_back("ALIGNMENTSTYLE - no style named \"" + f[1] + "\".");
+      return;
+    }
+    PushUndoSnapshot(st, "Alignment style");
+    st.alignmentStyleCurrent = f[1];
+    log.push_back("ALIGNMENTSTYLE - \"" + f[1] + "\" is now the current style; new alignments use it.");
+    return;
+  }
+  if (verb == "marker") {
+    RunAlignmentStyleMarker(st, f, log);
+    return;
+  }
   usage();
 }
 
@@ -1836,6 +1953,50 @@ void RunAlignmentLabelSetStyle(AppCommandState& st, const std::vector<std::strin
   log.push_back("ALIGNMENTLABELSET - \"" + s->name + "\" " + f[2] + " labels now use label style \"" + f[3] + "\".");
 }
 
+// ALIGNMENTLABELSET GEOMETRY, <set>, CODES, <codes>|ALL | ADD, <label style>, <codes> | REMOVE, <n>   (REQ-492.1: a
+// Geometry Points item may repeat with different styles, e.g. BP and EP in one and the PIs in another)
+void RunAlignmentLabelSetGeometry(AppCommandState& st, const std::vector<std::string>& f, std::vector<std::string>& log) {
+  assert(!f.empty());
+  assert(!st.alignmentLabelSets.empty());
+  const char* usage = "ALIGNMENTLABELSET - usage: ALIGNMENTLABELSET GEOMETRY, <set>, CODES, <codes>|ALL | "
+                      "ADD, <label style>, <codes> | REMOVE, <item#> (codes: BP EP PI PC PT PCC PRC TS ST CS SC SS RS Mid).";
+  const std::string op = f.size() >= 3 ? Lower(f[2]) : std::string{};
+  const bool shapeOk = (op == "codes" && f.size() == 4) || (op == "add" && f.size() == 5) || (op == "remove" && f.size() == 4);
+  const AlignmentLabelSet* current = shapeOk ? AlignmentLabelSets::Find(st.alignmentLabelSets, f[1]) : nullptr;
+  if (!shapeOk || current == nullptr) {
+    log.push_back(shapeOk ? "ALIGNMENTLABELSET - no label set named \"" + f[1] + "\"." : std::string(usage));
+    return;
+  }
+  AlignmentLabelSet edited = *current;
+  std::vector<std::string> codes;
+  std::string bad;
+  if (op == "codes" && Lower(f[3]) == "all") {
+    edited.geometryCodes.clear();
+  } else if (op == "codes" || op == "add") {
+    if (!ParseGeometryCodes(op == "add" ? f[4] : f[3], &codes, &bad)) {
+      log.push_back("ALIGNMENTLABELSET - \"" + bad + "\" is not a geometry point code. " + usage);
+      return;
+    }
+    if (op == "codes") edited.geometryCodes = codes;
+    else if (AlignmentLabelStyles::Find(st.alignmentLabelStyles, f[3]) == nullptr) {
+      log.push_back("ALIGNMENTLABELSET - no alignment label style named \"" + f[3] + "\".");
+      return;
+    } else edited.extraGeometryItems.push_back({f[3], codes});
+  } else {
+    double n = 0.0;
+    if (!ParseNum(f[3], &n) || n < 1.0 || n > static_cast<double>(edited.extraGeometryItems.size()) || n != std::floor(n)) {
+      log.push_back("ALIGNMENTLABELSET - \"" + edited.name + "\" has " + std::to_string(edited.extraGeometryItems.size()) +
+                    " further geometry item(s); \"" + f[3] + "\" is not one of them.");
+      return;
+    }
+    edited.extraGeometryItems.erase(edited.extraGeometryItems.begin() + static_cast<std::ptrdiff_t>(n) - 1);
+  }
+  PushUndoSnapshot(st, "Alignment label set");
+  *AlignmentLabelSets::Find(st.alignmentLabelSets, f[1]) = std::move(edited);
+  BumpCadGpuCache(st);
+  log.push_back("ALIGNMENTLABELSET - \"" + f[1] + "\" geometry point items updated.");
+}
+
 }  // namespace
 
 void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
@@ -1845,8 +2006,9 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
     log.push_back(
         "ALIGNMENTLABELSET - usage: ALIGNMENTLABELSET LIST | NEW <set> | DELETE <set> | ASSIGN <alignment>, <set> | "
         "MAJORINTERVAL <set>, <interval> | MINORINTERVAL <set>, <interval> | "
-        "SHOW|HIDE <set>, MAJOR|MINOR|EQUATIONS|GEOMETRY|SPEEDS | "
-        "STYLE <set>, MAJOR|GEOMETRY|SPEEDS|EQUATIONS|SEGMENTS|OFFSETS, <label style>.");
+        "SHOW|HIDE <set>, MAJOR|MINOR|EQUATIONS|GEOMETRY|SPEEDS|PROFILE|SUPERELEVATION | "
+        "STYLE <set>, MAJOR|GEOMETRY|SPEEDS|EQUATIONS|SEGMENTS|OFFSETS, <label style> | "
+        "GEOMETRY <set>, CODES, <codes>|ALL | GEOMETRY <set>, ADD, <label style>, <codes> | GEOMETRY <set>, REMOVE, <n>.");
   };
   const std::string trimmed = Trim(args);
   if (trimmed.empty()) {
@@ -1856,13 +2018,23 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
   const std::vector<std::string> f = SplitFields(trimmed);
   const std::string verb = Lower(f[0]);
   if (verb == "list") {
-    for (const AlignmentLabelSet& s : st.alignmentLabelSets)
+    const auto joined = [](const std::vector<std::string>& codes) {
+      std::string text;
+      for (const std::string& c : codes) text += (text.empty() ? "" : " ") + c;
+      return text.empty() ? std::string("all") : text;
+    };
+    for (const AlignmentLabelSet& s : st.alignmentLabelSets) {
       log.push_back("  LABEL SET \"" + s.name + "\"  major=" + Lin(st, s.majorInterval) + " minor=" +
                     Lin(st, s.minorInterval) +
                     "  (used by " +
                     std::to_string(AlignmentLabelSets::CountAlignmentsResolvingTo(st.alignments, st.alignmentLabelSets,
                                                                                   s.name)) +
                     " alignment(s))");
+      log.push_back("    Geometry points 1: " + joined(s.geometryCodes) + " in \"" + s.geometryStyle + "\"");
+      for (size_t k = 0; k < s.extraGeometryItems.size(); ++k)
+        log.push_back("    Geometry points " + std::to_string(k + 2) + ": " + joined(s.extraGeometryItems[k].codes) +
+                      " in \"" + s.extraGeometryItems[k].style + "\"");
+    }
     return;
   }
   if (verb == "new") {
@@ -1877,9 +2049,15 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
     PushUndoSnapshot(st, "Alignment label set");
     AlignmentLabelSet s = AlignmentLabelSets::StandardLabelSet();
     s.name = f[1];
+    const bool metric = st.drawingInsUnits == 4 || st.drawingInsUnits == 6;
+    if (metric) {  // REQ-492.2: 20 m major stations in a metric drawing; minors keep the imperial 1:5 ratio
+      s.majorInterval = 20.0;
+      s.minorInterval = 4.0;
+    }
     st.alignmentLabelSets.push_back(std::move(s));
     BumpCadGpuCache(st);
-    log.push_back("ALIGNMENTLABELSET - created label set \"" + f[1] + "\" (copied from Standard).");
+    log.push_back("ALIGNMENTLABELSET - created label set \"" + f[1] + "\" (copied from Standard" +
+                  (metric ? ", major 20 m, minor 4 m)." : ")."));
     return;
   }
   if (verb == "delete") {
@@ -2001,22 +2179,67 @@ void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vec
       s->geometryPointsOn = show;
     else if (which == "speeds" || which == "speed")  // REQ-492.1 Design Speeds item
       s->designSpeedsOn = show;
+    else if (which == "profile")  // REQ-492.1 placeholder items
+      s->profileGeometryPointsOn = show;
+    else if (which == "superelevation")
+      s->superelevationPointsOn = show;
     else {
-      log.push_back("ALIGNMENTLABELSET - component must be MAJOR, MINOR, EQUATIONS, GEOMETRY or SPEEDS, not \"" + f[2] + "\".");
+      log.push_back("ALIGNMENTLABELSET - component must be MAJOR, MINOR, EQUATIONS, GEOMETRY, SPEEDS, PROFILE or "
+                    "SUPERELEVATION, not \"" + f[2] + "\".");
       return;
     }
     BumpCadGpuCache(st);
     log.push_back("ALIGNMENTLABELSET - \"" + s->name + "\" " + f[2] + " " + (verb == "show" ? "shown." : "hidden."));
+    if (show && (which == "profile" || which == "superelevation"))
+      log.push_back("  NOTE: this item is a placeholder; it labels nothing until alignments have " +
+                    std::string(which == "profile" ? "profiles." : "superelevation."));
     return;
   }
   if (verb == "style") {
     RunAlignmentLabelSetStyle(st, f, log);
     return;
   }
+  if (verb == "geometry") {
+    RunAlignmentLabelSetGeometry(st, f, log);
+    return;
+  }
   usage();
 }
 
 namespace {
+
+// ALIGNMENTLABELSTYLE SET, <style>, PRECISION|PREFIX|SUFFIX|ORIENTATION, <value>: REQ-492.5 formatting. `which` is
+// lower case. Returns false with the reason logged.
+bool EditAlignmentLabelFormat(AlignmentLabelStyle& s, const std::string& which, const std::string& value,
+                              std::vector<std::string>& log) {
+  assert(!which.empty());
+  assert(!s.name.empty());
+  const std::string v = Lower(value);
+  if (which == "precision") {
+    double d = 0.0;
+    if (v == "drawing") {
+      s.precision = -1;
+      return true;
+    }
+    if (!ParseNum(value, &d) || d < 0.0 || d > 8.0 || d != std::floor(d)) {
+      log.push_back("ALIGNMENTLABELSTYLE - precision must be 0 to 8 decimals, or DRAWING, not \"" + value + "\".");
+      return false;
+    }
+    s.precision = static_cast<int>(d);
+    return true;
+  }
+  if (which == "prefix" || which == "suffix") {
+    (which == "prefix" ? s.prefix : s.suffix) = v == "none" ? std::string{} : value;
+    return true;
+  }
+  if (which == "orientation" && (v == "object" || v == "view")) {
+    s.viewOriented = v == "view";
+    return true;
+  }
+  log.push_back("ALIGNMENTLABELSTYLE - property must be HEIGHT, COLOR, TEXTSTYLE, PRECISION, PREFIX, SUFFIX or "
+                "ORIENTATION OBJECT|VIEW, not \"" + which + "\" = \"" + value + "\".");
+  return false;
+}
 
 // ALIGNMENTLABELSTYLE SET, <style>, HEIGHT|COLOR|TEXTSTYLE, <value> (REQ-492.5). Returns false with the reason logged.
 bool EditAlignmentLabelStyle(const AppCommandState& st, AlignmentLabelStyle& s, const std::string& item,
@@ -2051,8 +2274,7 @@ bool EditAlignmentLabelStyle(const AppCommandState& st, AlignmentLabelStyle& s, 
     s.textStyle = value;
     return true;
   }
-  log.push_back("ALIGNMENTLABELSTYLE - property must be HEIGHT, COLOR or TEXTSTYLE, not \"" + item + "\".");
-  return false;
+  return EditAlignmentLabelFormat(s, which, value, log);
 }
 
 // REQ-478 pattern: Standard and a style a label set still uses cannot be deleted.
@@ -2090,12 +2312,16 @@ void RunAlignmentLabelStyle(AppCommandState& st, const std::string& args, std::v
   const std::string verb = f.empty() ? std::string{} : Lower(f[0]);
   const auto usage = [&] {
     log.push_back("ALIGNMENTLABELSTYLE - usage: ALIGNMENTLABELSTYLE LIST | NEW, <style> | DELETE, <style> | "
-                  "SET, <style>, HEIGHT|COLOR|TEXTSTYLE, <value>.");
+                  "SET, <style>, HEIGHT|COLOR|TEXTSTYLE|PRECISION|PREFIX|SUFFIX|ORIENTATION, <value>.");
   };
   if (verb == "list") {
     for (const AlignmentLabelStyle& s : st.alignmentLabelStyles)
       log.push_back("  LABEL STYLE \"" + s.name + "\"  height=" + FormatLinear(s.heightInches, 3) + "in  colour=" +
-                    CadColorDisplayLabel(s.color) + "  text style=" + s.textStyle + "  (used by " +
+                    CadColorDisplayLabel(s.color) + "  text style=" + s.textStyle + "  precision=" +
+                    (s.precision < 0 ? std::string("drawing") : std::to_string(s.precision)) +
+                    (s.prefix.empty() ? "" : "  prefix=\"" + s.prefix + "\"") +
+                    (s.suffix.empty() ? "" : "  suffix=\"" + s.suffix + "\"") +
+                    "  orientation=" + (s.viewOriented ? "view" : "object") + "  (used by " +
                     std::to_string(AlignmentLabelStyles::CountLabelSetsUsing(st.alignmentLabelSets, s.name)) +
                     " label set(s))");
     return;
@@ -3429,6 +3655,7 @@ alignment::Alignment NewAlignment(const AppCommandState& st, const std::string& 
   a.name = name;
   a.layer = MakeNewEntityAttrs(st).layer;
   if (a.layer.empty()) a.layer = "0";
+  if (AlignmentStyles::Find(st.alignmentStyles, st.alignmentStyleCurrent) != nullptr) a.style = st.alignmentStyleCurrent;
   assert(!a.layer.empty());
   return a;
 }

@@ -214,6 +214,7 @@ bool Alignment::Reverse(std::string* note) {
     l.internalStation = flipAbout - l.internalStation;
     l.offset = -l.offset;
   }
+  for (double& s : segmentLabelStations) s = flipAbout - s;  // a single segment label stays on its segment
   if (!designSpeeds.empty()) {  // each speed applied from its station to the next; reversed, from the other end
     std::vector<DesignSpeed> flipped;
     flipped.reserve(designSpeeds.size());

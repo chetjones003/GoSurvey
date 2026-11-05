@@ -282,7 +282,10 @@ class Alignment {
   [[nodiscard]] bool HasOffsetRange() const { return offsetToStation > offsetFromStation; }
 
   // --- REQ-492.3 / REQ-493.3: segments must be labelled before a line or curve table can be made ---
-  bool segmentLabels = false;
+  bool segmentLabels = false;  ///< Multiple Segment: every segment is labelled.
+  /// Single Segment labels: the internal station each picked segment was labelled at, so a label stays on its segment
+  /// when entities before it are inserted or removed.
+  std::vector<double> segmentLabelStations;
   std::vector<AlignmentTableLink> tables;
 
   // --- REQ-492.4: station/offset labels, owned by the alignment and removed with it (REQ-492.6) ---

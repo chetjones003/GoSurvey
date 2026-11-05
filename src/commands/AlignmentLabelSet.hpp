@@ -59,10 +59,31 @@ inline double TextHeight(const AlignmentLabelStyle& style, double modelUnitsPerP
 
 /// Every style reference a label set holds, so delete and rename can check them in one place.
 inline std::vector<std::string*> References(AlignmentLabelSet& set) {
-  return {&set.majorStyle, &set.geometryStyle, &set.speedStyle, &set.equationStyle, &set.segmentStyle, &set.offsetStyle};
+  std::vector<std::string*> refs{&set.majorStyle,    &set.geometryStyle, &set.speedStyle,
+                                 &set.equationStyle, &set.segmentStyle,  &set.offsetStyle};
+  for (AlignmentGeometryLabelItem& item : set.extraGeometryItems) refs.push_back(&item.style);
+  return refs;
 }
 inline std::vector<const std::string*> References(const AlignmentLabelSet& set) {
-  return {&set.majorStyle, &set.geometryStyle, &set.speedStyle, &set.equationStyle, &set.segmentStyle, &set.offsetStyle};
+  std::vector<const std::string*> refs{&set.majorStyle,    &set.geometryStyle, &set.speedStyle,
+                                       &set.equationStyle, &set.segmentStyle,  &set.offsetStyle};
+  for (const AlignmentGeometryLabelItem& item : set.extraGeometryItems) refs.push_back(&item.style);
+  return refs;
+}
+
+/// True when a Geometry Points item with `codes` labels `code` (an empty list labels every code), REQ-492.1.
+inline bool ItemLabelsCode(const std::vector<std::string>& codes, const std::string& code) {
+  return codes.empty() || std::find(codes.begin(), codes.end(), code) != codes.end();
+}
+
+/// The decimals a label in `style` writes: its own precision, else the drawing's (REQ-492.5).
+inline int Precision(const AlignmentLabelStyle& style, int drawingPrecision) {
+  return style.precision >= 0 ? style.precision : drawingPrecision;
+}
+/// The station format a label in `style` writes: the drawing's, with the style's precision when it sets one.
+inline alignment::StationFormat StationFormatFor(const AlignmentLabelStyle& style, alignment::StationFormat drawing) {
+  if (style.precision >= 0) drawing.decimals = style.precision;
+  return drawing;
 }
 inline int CountLabelSetsUsing(const std::vector<AlignmentLabelSet>& sets, const std::string& styleName) {
   int n = 0;

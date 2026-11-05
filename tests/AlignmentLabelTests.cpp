@@ -193,7 +193,7 @@ TEST_CASE("ALIGNMENTLABELSTYLE: create, edit, refuse bad values, delete (REQ-492
   refused("ALIGNMENTLABELSTYLE SET, Red Text, HEIGHT, -1", "positive plotted height");
   refused("ALIGNMENTLABELSTYLE SET, Red Text, COLOR, chartreuse-ish", "is not a colour");
   refused("ALIGNMENTLABELSTYLE SET, Red Text, TEXTSTYLE, NoSuchStyle", "no text style named");
-  refused("ALIGNMENTLABELSTYLE SET, Red Text, WEIGHT, 2", "HEIGHT, COLOR or TEXTSTYLE");
+  refused("ALIGNMENTLABELSTYLE SET, Red Text, WEIGHT, 2", "HEIGHT, COLOR, TEXTSTYLE, PRECISION");
   refused("ALIGNMENTLABELSTYLE NEW, Red Text", "already exists");
 
   Submit(st, "ALIGNMENTLABELSET STYLE, Standard, SPEEDS, Red Text", log);
@@ -281,7 +281,7 @@ TEST_CASE("Geometry Points and Design Speeds label-set items: on by default, swi
   log.clear();
   Submit(st, "ALIGNMENTLABELSET HIDE, Plan, CURVES", log);
   REQUIRE(!log.empty());
-  CHECK(log.back().find("MAJOR, MINOR, EQUATIONS, GEOMETRY or SPEEDS") != std::string::npos);
+  CHECK(log.back().find("MAJOR, MINOR, EQUATIONS, GEOMETRY, SPEEDS, PROFILE or") != std::string::npos);
 
   const std::string json = SerializeGoSurveyJson(st);
   AppCommandState loaded = Drawing();

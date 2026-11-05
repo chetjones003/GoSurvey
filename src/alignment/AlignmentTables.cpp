@@ -51,6 +51,7 @@ void LineRows(const TableInput& in, AlignmentTableText* out) {
   out->cols = 5;
   Row(out, {"Line", "Start station", "End station", "Bearing", "Length"});
   for (int i = 0; i < static_cast<int>(in.tags.size()); ++i) {
+    if (!SegmentIsLabelled(in.a, i)) continue;  // REQ-492.3: only labelled segments are tabulated
     const Entity& e = in.a.Entities()[static_cast<size_t>(i)];
     if (e.kind != EntityKind::Line) continue;
     Row(out, {in.tags[static_cast<size_t>(i)], Sta(in.a, in.a.EntityStartStation(i), in.station),
@@ -64,6 +65,7 @@ void CurveRows(const TableInput& in, AlignmentTableText* out) {
   out->cols = 9;
   Row(out, {"Curve", "Start station", "End station", "Radius", "Delta", "Length", "Tangent", "Chord", "Direction"});
   for (int i = 0; i < static_cast<int>(in.tags.size()); ++i) {
+    if (!SegmentIsLabelled(in.a, i)) continue;  // REQ-492.3: only labelled segments are tabulated
     CurveData cd;
     if (!in.a.CurveDataFor(i, &cd)) continue;
     Row(out, {in.tags[static_cast<size_t>(i)], Sta(in.a, in.a.EntityStartStation(i), in.station),
@@ -79,6 +81,7 @@ void SpiralRows(const TableInput& in, AlignmentTableText* out) {
   out->cols = 9;
   Row(out, {"Spiral", "Start station", "End station", "Length", "A", "Start radius", "End radius", "Deflection", "Direction"});
   for (int i = 0; i < static_cast<int>(in.tags.size()); ++i) {
+    if (!SegmentIsLabelled(in.a, i)) continue;  // REQ-492.3: only labelled segments are tabulated
     SpiralData sd;
     if (in.a.Entities()[static_cast<size_t>(i)].kind != EntityKind::Spiral || !SpiralDataFor(i, in.a, &sd)) continue;
     Row(out, {in.tags[static_cast<size_t>(i)], Sta(in.a, in.a.EntityStartStation(i), in.station),
@@ -94,6 +97,7 @@ void SegmentRows(const TableInput& in, AlignmentTableText* out) {
   out->cols = 9;
   Row(out, {"Entity", "Type", "Start station", "End station", "Length", "Bearing", "Radius", "Delta", "Direction"});
   for (int i = 0; i < static_cast<int>(in.tags.size()); ++i) {
+    if (!SegmentIsLabelled(in.a, i)) continue;  // REQ-492.3: only labelled segments are tabulated
     const Entity& e = in.a.Entities()[static_cast<size_t>(i)];
     const std::string& tag = in.tags[static_cast<size_t>(i)];
     const std::string start = Sta(in.a, in.a.EntityStartStation(i), in.station);
@@ -139,9 +143,29 @@ std::vector<std::string> SegmentTags(const Alignment& a) {
   return tags;
 }
 
+bool SegmentIsLabelled(const Alignment& a, int entity) {
+  assert(entity >= 0);
+  assert(a.segmentLabelStations.size() < 100000000);
+  if (entity < 0 || static_cast<size_t>(entity) >= a.Entities().size()) return false;
+  if (a.segmentLabels) return true;
+  const double s0 = a.EntityStartStation(entity), s1 = a.EntityEndStation(entity);
+  for (const double s : a.segmentLabelStations)
+    if (s >= s0 && s < s1) return true;
+  return false;
+}
+
+bool HasSegmentLabels(const Alignment& a) {
+  assert(a.Entities().size() < 100000000);
+  assert(a.segmentLabelStations.size() < 100000000);
+  if (a.segmentLabels) return !a.Empty();
+  for (int i = 0; i < static_cast<int>(a.Entities().size()); ++i)
+    if (SegmentIsLabelled(a, i)) return true;
+  return false;
+}
+
 bool ShowsTagLabels(const Alignment& a) {
   assert(a.tables.size() < 1000000);
-  if (!a.segmentLabels) return false;
+  if (!HasSegmentLabels(a)) return false;
   for (const AlignmentTableLink& link : a.tables)
     if (link.kind != AlignmentTableKind::StationEquation) return true;
   return false;
@@ -158,7 +182,7 @@ bool BuildAlignmentTableText(const Alignment& a, AlignmentTableKind kind, int li
   *out = AlignmentTableText{};
   if (a.Empty()) return fail("\"" + a.name + "\" has no geometry to tabulate");
   const bool needsLabels = kind != AlignmentTableKind::StationEquation;
-  if (needsLabels && !a.segmentLabels) return fail(MissingLabelsMessage(a));
+  if (needsLabels && !HasSegmentLabels(a)) return fail(MissingLabelsMessage(a));
   const TableInput in{a, linearPrecision, angles, station, SegmentTags(a)};
   switch (kind) {
     case AlignmentTableKind::Line: LineRows(in, out); return true;

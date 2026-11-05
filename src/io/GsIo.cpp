@@ -1364,11 +1364,19 @@ json BuildRoot(const AppCommandState& st) {
         o["arrowLength"] = s.arrowLength;
         o["labelsVisible"] = s.labelsVisible;
         if (!s.checkSetName.empty()) o["checkSet"] = s.checkSetName;  // REQ-502 / D-2026-11-04-b
+        if (!s.codeMarkers.empty()) {  // REQ-491 per-code markers
+          json markers = json::array();
+          for (const AlignmentMarkerSpec& m : s.codeMarkers)
+            markers.push_back({{"code", m.code}, {"shape", static_cast<int>(m.shape)}, {"halfSize", m.halfSize},
+                               {"color", m.color}});
+          o["codeMarkers"] = std::move(markers);
+        }
         styles.push_back(std::move(o));
       }
       doc["alignmentStyles"] = std::move(styles);
     }
   }
+  if (st.alignmentStyleCurrent != AlignmentStyles::kStandardName) doc["alignmentStyleCurrent"] = st.alignmentStyleCurrent;
   {
     const bool onlyUntouchedStandard =
         st.alignmentLabelSets.size() == 1 && st.alignmentLabelSets[0] == AlignmentLabelSets::StandardLabelSet();
@@ -1392,6 +1400,15 @@ json BuildRoot(const AppCommandState& st) {
         styles["segments"] = s.segmentStyle;
         styles["offsets"] = s.offsetStyle;
         o["styles"] = std::move(styles);
+        if (!s.geometryCodes.empty()) o["geometryCodes"] = s.geometryCodes;  // REQ-492.1 repeated items
+        if (!s.extraGeometryItems.empty()) {
+          json items = json::array();
+          for (const AlignmentGeometryLabelItem& item : s.extraGeometryItems)
+            items.push_back({{"style", item.style}, {"codes", item.codes}});
+          o["geometryItems"] = std::move(items);
+        }
+        if (s.profileGeometryPointsOn) o["profileGeometryPointsOn"] = true;  // REQ-492.1 placeholders
+        if (s.superelevationPointsOn) o["superelevationPointsOn"] = true;
         sets.push_back(std::move(o));
       }
       doc["alignmentLabelSets"] = std::move(sets);
@@ -1408,6 +1425,10 @@ json BuildRoot(const AppCommandState& st) {
         o["textStyle"] = s.textStyle;
         o["heightInches"] = s.heightInches;
         o["color"] = s.color;
+        if (s.precision >= 0) o["precision"] = s.precision;  // REQ-492.5 formatting
+        if (!s.prefix.empty()) o["prefix"] = s.prefix;
+        if (!s.suffix.empty()) o["suffix"] = s.suffix;
+        if (s.viewOriented) o["viewOriented"] = true;
         styles.push_back(std::move(o));
       }
       doc["alignmentLabelStyles"] = std::move(styles);
@@ -2342,6 +2363,7 @@ json BuildRoot(const AppCommandState& st) {
         }
       }
       if (a.segmentLabels) o["segmentLabels"] = true;  // REQ-492.3 / REQ-493.3
+      if (!a.segmentLabelStations.empty()) o["segmentLabelStations"] = a.segmentLabelStations;  // single segment labels
       if (!a.checkSetName.empty()) o["checkSet"] = a.checkSetName;  // REQ-502: criteria applied to this alignment
       if (!a.designSpeeds.empty()) {  // REQ-502: design speed by internal station
         json speeds = json::array();
@@ -3558,10 +3580,28 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (o.contains("arrowLength") && o["arrowLength"].is_number()) s.arrowLength = o["arrowLength"].get<double>();
       if (o.contains("labelsVisible") && o["labelsVisible"].is_boolean()) s.labelsVisible = o["labelsVisible"].get<bool>();
       if (o.contains("checkSet") && o["checkSet"].is_string()) s.checkSetName = o["checkSet"].get<std::string>();
+      if (o.contains("codeMarkers") && o["codeMarkers"].is_array()) {
+        for (const auto& m : o["codeMarkers"]) {
+          if (!m.is_object() || !m.contains("code") || !m["code"].is_string()) continue;
+          AlignmentMarkerSpec spec;
+          spec.code = m["code"].get<std::string>();
+          if (m.contains("shape") && m["shape"].is_number_integer())
+            spec.shape = static_cast<AlignmentMarkerShape>(std::clamp(m["shape"].get<int>(), 0, 4));
+          if (m.contains("halfSize") && m["halfSize"].is_number()) spec.halfSize = std::max(0.0, m["halfSize"].get<double>());
+          if (m.contains("color") && m["color"].is_string()) spec.color = m["color"].get<std::string>();
+          s.codeMarkers.push_back(std::move(spec));
+        }
+      }
       st.alignmentStyles.push_back(std::move(s));
     }
   }
   AlignmentStyles::EnsureStandard(st.alignmentStyles);
+  st.alignmentStyleCurrent = AlignmentStyles::kStandardName;  // REQ-491 current style
+  if (doc.contains("alignmentStyleCurrent") && doc["alignmentStyleCurrent"].is_string()) {
+    const std::string current = doc["alignmentStyleCurrent"].get<std::string>();
+    if (AlignmentStyles::Find(st.alignmentStyles, current) != nullptr) st.alignmentStyleCurrent = current;
+    else log.push_back("ALIGNMENTSTYLE — current style \"" + current + "\" is missing; using Standard.");
+  }
 
   st.alignmentLabelSets.clear();
   if (doc.contains("alignmentLabelSets") && doc["alignmentLabelSets"].is_array()) {
@@ -3591,6 +3631,22 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         for (const auto& [key, field] : items)
           if (styles.contains(key) && styles[key].is_string()) *field = styles[key].get<std::string>();
       }
+      if (o.contains("geometryCodes") && o["geometryCodes"].is_array())
+        for (const auto& c : o["geometryCodes"])
+          if (c.is_string()) s.geometryCodes.push_back(c.get<std::string>());
+      if (o.contains("geometryItems") && o["geometryItems"].is_array()) {
+        for (const auto& it : o["geometryItems"]) {
+          if (!it.is_object()) continue;
+          AlignmentGeometryLabelItem item;
+          if (it.contains("style") && it["style"].is_string()) item.style = it["style"].get<std::string>();
+          if (it.contains("codes") && it["codes"].is_array())
+            for (const auto& c : it["codes"])
+              if (c.is_string()) item.codes.push_back(c.get<std::string>());
+          s.extraGeometryItems.push_back(std::move(item));
+        }
+      }
+      s.profileGeometryPointsOn = o.value("profileGeometryPointsOn", false);
+      s.superelevationPointsOn = o.value("superelevationPointsOn", false);
       st.alignmentLabelSets.push_back(std::move(s));
     }
   }
@@ -3606,6 +3662,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (o.contains("heightInches") && o["heightInches"].is_number()) s.heightInches = o["heightInches"].get<double>();
       if (o.contains("color") && o["color"].is_string()) s.color = o["color"].get<std::string>();
       if (!(s.heightInches > 0.0) || !std::isfinite(s.heightInches)) s.heightInches = AlignmentLabelStyle{}.heightInches;
+      if (o.contains("precision") && o["precision"].is_number_integer()) s.precision = std::clamp(o["precision"].get<int>(), -1, 8);
+      if (o.contains("prefix") && o["prefix"].is_string()) s.prefix = o["prefix"].get<std::string>();
+      if (o.contains("suffix") && o["suffix"].is_string()) s.suffix = o["suffix"].get<std::string>();
+      s.viewOriented = o.value("viewOriented", false);
       st.alignmentLabelStyles.push_back(std::move(s));
     }
   }
@@ -4295,6 +4355,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         if (cr >= 0 && cr <= 2) a.continuityRequirement = static_cast<alignment::ContinuityRequirement>(cr);
       }
       if (el.contains("segmentLabels") && el["segmentLabels"].is_boolean()) a.segmentLabels = el["segmentLabels"].get<bool>();
+      if (el.contains("segmentLabelStations") && el["segmentLabelStations"].is_array())
+        for (const auto& s : el["segmentLabelStations"])
+          if (s.is_number()) a.segmentLabelStations.push_back(s.get<double>());
       if (el.contains("checkSet") && el["checkSet"].is_string()) a.checkSetName = el["checkSet"].get<std::string>();
       if (el.contains("designSpeeds") && el["designSpeeds"].is_array()) {
         for (const auto& d : el["designSpeeds"]) {
