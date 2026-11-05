@@ -1860,7 +1860,8 @@ void PdfWindow::ExtractRegion() {
 
 void PdfWindow::ShowExtractReview() {
   if (!m_ExtractResult) return;
-  if (m_ExtractResult->candidates.empty() && m_ExtractAccepted == 0 && m_ExtractDenied == 0) {
+  if (m_ExtractResult->candidates.empty() && m_ExtractResult->skippedTableRows.empty() &&
+      m_ExtractAccepted == 0 && m_ExtractDenied == 0) {
     const QString message = m_ExtractResult->message.empty()
         ? QString("No coordinates were found here. Select a region with a monument block, coordinate table, or northing/easting pair, then try again.")
         : QString::fromUtf8(m_ExtractResult->message.c_str());
@@ -1924,6 +1925,7 @@ void PdfWindow::ShowExtractReview() {
     m_ExtractSkippedTable->setObjectName("pdfCoordinateSkippedRows");
     m_ExtractSkippedTable->setHorizontalHeaderLabels({"Source text", "Reason"});
     m_ExtractSkippedTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    m_ExtractSkippedTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     m_ExtractSkippedTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_ExtractSkippedTable->setWordWrap(true);
     layout->addWidget(m_ExtractSkippedTable);
@@ -1964,6 +1966,7 @@ void PdfWindow::ShowExtractReview() {
   auto* outcome = m_ExtractReview->findChild<QLabel*>("pdfCoordinateReviewOutcome");
   auto* intro = m_ExtractReview->findChild<QLabel*>("pdfCoordinateReviewIntro");
   const bool hasCandidates = !m_ExtractResult->candidates.empty();
+  const bool hasSkippedRows = !m_ExtractResult->skippedTableRows.empty();
   outcome->setText(QString("%1 accepted, %2 denied.").arg(m_ExtractAccepted).arg(m_ExtractDenied));
   const int availableWidth = std::max(360, width() - 32);
   const int dockWidth = m_ThumbDock ? m_ThumbDock->width() : width() / 3;
@@ -1986,7 +1989,7 @@ void PdfWindow::ShowExtractReview() {
     dialogWidth = std::clamp(std::max(leftSpace, rightSpace), 360, dialogWidth);
   }
   if (!wasVisible) {
-    m_ExtractReview->resize(dialogWidth, hasCandidates ? 280 : 156);
+    m_ExtractReview->resize(dialogWidth, hasCandidates ? 280 : hasSkippedRows ? 260 : 156);
     if (m_ExtractReview->layout()) m_ExtractReview->layout()->activate();
   }
   table->setVisible(hasCandidates);
@@ -2081,15 +2084,16 @@ void PdfWindow::ShowExtractReview() {
     // A decision refreshes the candidate rows but must not undo a user's move or resize.
     m_ExtractReview->setGeometry(previousGeometry);
     if (!hasCandidates) {
-      // The completion state needs only its heading, message and footer. Keep the
-      // user's chosen position and width while removing the empty table's dead space.
-      m_ExtractReview->resize(previousGeometry.width(), 156);
+      // Keep skipped-row diagnostics visible while compacting the completed review.
+      // Preserve the user's chosen position and width.
+      m_ExtractReview->resize(previousGeometry.width(), hasSkippedRows ? 260 : 156);
       m_ExtractReview->move(previousPosition);
     }
   } else {
     int rowsHeight = 0;
     for (int row = 0; row < table->rowCount(); ++row) rowsHeight += table->rowHeight(row);
-    const int desiredHeight = hasCandidates ? std::clamp(174 + rowsHeight, 280, 620) : 156;
+    const int desiredHeight = hasCandidates ? std::clamp(174 + rowsHeight, 280, 620)
+                                            : hasSkippedRows ? 260 : 156;
     m_ExtractReview->resize(dialogWidth, desiredHeight);
     if (hasCandidates && m_Scroll && m_Page) {
       const QRect highlight = QRectF(m_ExtractStart, m_ExtractEnd).normalized().toAlignedRect();
@@ -3247,8 +3251,12 @@ void PdfWindow::DrawAuditOverlay(QPainter& painter) {
     label = labelAt(pageRect.adjusted(labelSize.width() / 2 + 4, labelSize.height() / 2 + 4,
                                      -labelSize.width() / 2 - 4, -labelSize.height() / 2 - 4).contains(normalCenter)
                         ? normalCenter : midpoint - normal * 34.0);
-    label.moveLeft(std::clamp(label.left(), pageRect.left() + 4, pageRect.right() - label.width() - 4));
-    label.moveTop(std::clamp(label.top(), pageRect.top() + 4, pageRect.bottom() - label.height() - 4));
+    const double minLeft = pageRect.left() + 4;
+    const double minTop = pageRect.top() + 4;
+    const double maxLeft = pageRect.right() - label.width() - 4;
+    const double maxTop = pageRect.bottom() - label.height() - 4;
+    label.moveLeft(maxLeft < minLeft ? minLeft : std::clamp(label.left(), minLeft, maxLeft));
+    label.moveTop(maxTop < minTop ? minTop : std::clamp(label.top(), minTop, maxTop));
   }
   const bool light = qApp->property("cadLightTheme").toBool();
   painter.setPen(QPen(color.darker(135), 1));

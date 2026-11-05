@@ -266,3 +266,7 @@ None.
 - 2026-11-05 — `PRIVACY.md`: reviewed; no update needed because this work adds no data collection, transmission, or persistence behavior.
 - 2026-11-05 — `resources/wiki/`: reviewed the User Interface, Settings and Options, Properties, PDF Underlays, and Getting Started pages; no update needed because command routes and feature behavior are unchanged.
 - 2026-11-05 — Public user manual: reviewed `https://gosurveycad.com/docs/` and its User Interface, Settings and Options, Properties, and PDF Underlays navigation. The GitHub Wiki URL specified in CLAUDE.md redirects to the repository, so the live site manual was used. No update needed because this PR does not add or rename a user workflow.
+
+## PR #1160 review follow-up
+- 2026-11-05 — Addressed the automated review findings: audit overlay label placement now avoids invalid `std::clamp` bounds when the zoomed page is smaller than the label; skipped-table diagnostics remain accessible when extraction produces no candidates. Regression coverage checks the skipped-only review and renders the audit overlay at 5% zoom.
+- 2026-11-05 — Verification: Release build passed; focused Qt tests `pdfCoordinateReviewShowsSkippedTableRows` and `pdfScaleAuditShowsMatchesAndAppliesConsensusAsOneUndoableChange` passed; `build.output-layout` and `git diff --check` passed. Full six-shard suite was not rerun for this localized follow-up.

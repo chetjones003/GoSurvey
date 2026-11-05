@@ -1375,6 +1375,9 @@ private Q_SLOTS:
   }
 
   void pdfCoordinateReviewShowsSkippedTableRows() {
+    const bool oldLightTheme = qApp->property("cadLightTheme").toBool();
+    auto restoreAppearance = qScopeGuard([&] { ApplyQtAppearance(*qApp, oldLightTheme); });
+    ApplyQtAppearance(*qApp, false);
     QTemporaryDir directory;
     const QString path = Issue905WritePdf(directory, "coordinate-skipped.pdf", pdfview::MakeSyntheticPdf(1, 3, 0));
     EditorWindow editor;
@@ -1416,6 +1419,20 @@ private Q_SLOTS:
     window.ShowExtractReview();
     QVERIFY(!skippedIntro->isVisible());
     QVERIFY(!skippedTable->isVisible());
+
+    window.m_ExtractResult->candidates.clear();
+    window.m_ExtractResult->skippedTableRows.push_back(skip);
+    window.ShowExtractReview();
+    QVERIFY(review->isVisible());
+    QVERIFY(review->findChild<QTableWidget*>("pdfCoordinateCandidates")->isHidden());
+    QCOMPARE(review->findChild<QTableWidget*>("pdfCoordinateCandidates")->rowCount(), 0);
+    QVERIFY(skippedIntro->isVisible());
+    QVERIFY(skippedTable->isVisible());
+    QCOMPARE(skippedTable->rowCount(), 1);
+    QCOMPARE(skippedTable->item(0, 0)->text(), QString("POINT TABLE TO BE REVISED"));
+    QVERIFY(review->grab().save(Issue905Shot("qt-1109-pdf-coordinate-skipped-only-dark.png")));
+    ApplyQtAppearance(*qApp, true);
+    QVERIFY(review->grab().save(Issue905Shot("qt-1109-pdf-coordinate-skipped-only-light.png")));
   }
 
   void pdfCoordinateAcceptAllStopsAtFirstUncreatableCandidate() {
@@ -13023,6 +13040,15 @@ private Q_SLOTS:
     QTRY_VERIFY_WITH_TIMEOUT(window.PageReady(), 10000);
     window.m_Page->repaint();
     QVERIFY(window.grab().save(Issue908Shot("qt-1109-pdf-audit-overlay-light.png")));
+    window.SetZoomPercent(5.0);
+    QTRY_VERIFY_WITH_TIMEOUT(window.PageReady(), 10000);
+    QVERIFY(window.PageWidthPx() < 116);
+    window.m_Page->repaint();
+    QVERIFY(window.grab().save(Issue908Shot("qt-1109-pdf-audit-overlay-small-page-dark.png")));
+    ApplyQtAppearance(*qApp, true);
+    window.m_Page->repaint();
+    QVERIFY(window.grab().save(Issue908Shot("qt-1109-pdf-audit-overlay-small-page-light.png")));
+    ApplyQtAppearance(*qApp, false);
     {
       PdfWindow freshLight(nullptr);
       freshLight.resize(1100, 850); freshLight.show();
