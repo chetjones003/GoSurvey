@@ -76,9 +76,12 @@ renderer (REQ-495.1: never a query or export). The snap re-samples near the curs
 
 - Build: `.\build.bat` Release passed after the changes.
 - Focused run: `[alignment],[angle]` passed (262 cases, 207,044 assertions).
-- Full Release suite: the first `ctest --preset ninja-release` run passed 193/194 tests; the single failure was the
-  pre-existing angle-label expectation for unpadded DMS text, now updated. Re-running `unit.catch.shard-1` passed.
-  The other shards, including all Qt editor shards and headless tests, passed in the full run.
+- Full Release suite before the beta merge: the first `ctest --preset ninja-release` run passed 193/194 tests; the
+  single failure was the angle-label expectation for unpadded DMS text, now updated. Re-running `unit.catch.shard-1`
+  passed. The other shards, including all Qt editor shards and headless tests, passed in that full run.
+- After merging current `origin/beta`, `.\build.bat` Release passed and `ctest --preset ninja-release` passed
+  all 194/194 tests. The merge needed the legacy leader scale context threaded through the tagged-alignment fallback;
+  MSVC also needed `/bigobj` on `LibreDwgCadTests.cpp` after beta's additions.
 - Screenshot capture: `issue121Phase6DesignScreenshots` passed and produced fresh padded-label screenshots in
   `build/artifacts/Release/`. The hidden test runner continued into the full Qt suite and was stopped at its 120-second
   timeout; the capture itself passed. The paired Civil 3D panel at
@@ -91,12 +94,13 @@ renderer (REQ-495.1: never a query or export). The snap re-samples near the curs
   - `qt.editor.*` — `build/debug` has the release Qt DLLs plus `Qt6Testd.dll`, which needs the missing
     `Qt6Cored.dll` (0xC0000135), so no Qt test starts;
   - `headless.block-command-bad-numbers` — did not finish in 45 minutes (likely a hidden Debug assert dialog).
-- Documentation: `resources/wiki/Alignments.md`, `Command-Reference.md`, `Object-Snaps.md`, `Drafting-Aids.md`,
-  `Properties.md` and the command pages for
-  ALIGNMENTTABLE, ALIGNMENTLABEL, ALIGNMENTLABELSTYLE, ALIGNMENTSTYLE, ALIGNMENTEDIT and ALIGNMENTCHECKSET updated.
-  README and PRIVACY reviewed: no change needed (no new data collection, no new top-level feature list entry). The
-  GitHub Wiki URL currently redirects to the repository, and `gosurveycad.com` was inaccessible to the documentation
-  review tool; check the public manual update path before marking the PR ready.
+- Documentation review: `README.md` and `PRIVACY.md` were reviewed; no change was needed (no new data collection or
+  top-level feature-list entry). The in-app help pages in `resources/wiki/` were updated. The public GoSurvey Wiki
+  repository was cloned and reviewed, then updated with the alignment overview, all alignment command pages, command
+  reference, station/angle examples, object snaps and properties pages. Its documentation commit is
+  `435bf55` (`Document alignment workflows and reports`). The website manual at `gosurveycad.com/docs/alignments.html`
+  was also reviewed; its source is not in this checkout, so the GitHub Wiki was updated as directed by the current
+  project instructions.
 
 ## Technical debt
 
