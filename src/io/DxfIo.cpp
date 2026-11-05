@@ -2317,6 +2317,36 @@ void ImportDxfBlockDefinitions(const std::vector<DxfPair>& t,
     ParseEntityRegion(t, begin, end, scratch, layerRgb, plotStyleNamesByHandle, &blockRanges, identity, 0, &mag,
                       &skPaper, &skVp, &skUnknown, &skipCounts, nullptr, &textStyles, &degenerate,
                       /*preserveInsertRefs=*/true);
+    // CadBlockContent has no filled-region collection. Count HATCH records directly from the
+    // block's entity range so unsupported fills are reported even when a malformed or partial
+    // boundary prevents the general entity parser from constructing a scratch filled region.
+    for (size_t entity = begin; entity < end;) {
+      if (t[entity].code != 0) {
+        ++entity;
+        continue;
+      }
+      const std::string type = Trim(t[entity].value);
+      size_t next = entity + 1;
+      while (next < end && t[next].code != 0)
+        ++next;
+      if (EqCiNorm(type, "HATCH")) {
+        bool solid = false;
+        for (size_t field = entity + 1; field < next; ++field) {
+          if (t[field].code == 2 && EqCiStr(Trim(t[field].value), "SOLID"))
+            solid = true;
+          else if (t[field].code == 70) {
+            int flags = 0;
+            if (ParseIntFlexible(t[field].value, &flags) && flags != 0)
+              solid = true;
+          }
+        }
+        if (solid) {
+          ++skUnknown;
+          ++skipCounts["HATCH"];
+        }
+      }
+      entity = next;
+    }
     auto& content = def.content;
     content.lines.assign(scratch.userLinesFlat.begin(), scratch.userLinesFlat.end());
     content.lineAttrs = std::move(scratch.userLineAttrs);
@@ -2340,9 +2370,17 @@ void ImportDxfBlockDefinitions(const std::vector<DxfPair>& t,
       nested.xf = ref.xf;
       def.content.nested.push_back(std::move(nested));
     }
-    if (skUnknown > 0 || degenerate > 0)
+    if (skUnknown > 0 || degenerate > 0) {
+      std::string skippedTypes;
+      for (const auto& skipped : skipCounts) {
+        if (!skippedTypes.empty()) skippedTypes += ", ";
+        skippedTypes += skipped.first + " × " + std::to_string(skipped.second);
+      }
       log.push_back("DXF import — block definition '" + name + "' skipped " + std::to_string(skUnknown) +
-                    " unsupported entity/entities and refused " + std::to_string(degenerate) + " malformed curve(s).");
+                    " unsupported entity/entities" +
+                    (skippedTypes.empty() ? std::string{} : " (" + skippedTypes + ")") +
+                    " and refused " + std::to_string(degenerate) + " malformed curve(s).");
+    }
     st.blockDefs.push_back(std::move(def));
     ++imported;
   }
@@ -2779,13 +2817,6 @@ int ImportDxfPaperSpace(const std::vector<DxfPair>& t, AppCommandState& st,
     AppendScratchToPaperLayout(L, scratch);
     for (size_t refIndex = 0; refIndex < scratch.cadBlockRefs.size(); ++refIndex) {
       const CadBlockRef& ref = scratch.cadBlockRefs[refIndex];
-      const auto duplicate = std::find_if(L.paperBlockRefs.begin(), L.paperBlockRefs.end(), [&](const CadBlockRef& have) {
-        return EqCiStr(have.defName, ref.defName) && have.xf.x == ref.xf.x && have.xf.y == ref.xf.y &&
-               have.xf.z == ref.xf.z && have.xf.sx == ref.xf.sx && have.xf.sy == ref.xf.sy &&
-               have.xf.sz == ref.xf.sz && have.xf.rotZ == ref.xf.rotZ;
-      });
-      if (duplicate != L.paperBlockRefs.end())
-        continue;
       L.paperBlockRefs.push_back(ref);
       if (refIndex < scratch.cadBlockRefAttrs.size())
         L.paperBlockRefAttrs.push_back(scratch.cadBlockRefAttrs[refIndex]);
@@ -3529,9 +3560,11 @@ void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& 
     v.push_back({42, "50.0"});
     v.push_back({45, num(static_cast<double>(gv.paperHIn) * static_cast<double>(gv.safeScale()))});
     v.push_back({51, num(static_cast<double>(gv.camRollDeg) * (kPiD / 180.0))});  // view twist
-    // VIEWPORT status flags: 2048 = hide from plotting, 16384 = display locked, 32768 = on.
+    // VIEWPORT status flags: 2048 = hide from plotting, 16384 = display locked, 32768 = on,
+    // 65536 = nonrectangular clipping enabled.
+    const bool hasNonrectangularClip = !clipBoundaryHandle.empty();
     v.push_back({90, std::to_string(32 | (gv.hidePlot ? 2048 : 0) | (gv.locked ? 16384 : 0) |
-                                      (gv.on ? 32768 : 0))});
+                                      (gv.on ? 32768 : 0) | (hasNonrectangularClip ? 65536 : 0))});
     for (const std::string& frozen : gv.frozenLayers) {
       const auto it = layerHandleHex.find(frozen);
       if (it != layerHandleHex.end())

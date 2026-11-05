@@ -7810,6 +7810,80 @@ std::vector<std::pair<std::string, std::string>> DxfPaperEntities(const std::str
   return out;
 }
 
+int DxfEntityIntGroup(const std::string& dxf, const std::string& entityType, int groupCode) {
+  std::istringstream input(dxf);
+  std::string code, value;
+  std::vector<std::pair<std::string, std::string>> pairs;
+  while (std::getline(input, code) && std::getline(input, value)) {
+    while (!code.empty() && (code.front() == ' ' || code.front() == '\t' || code.front() == '\r'))
+      code.erase(code.begin());
+    while (!code.empty() && (code.back() == ' ' || code.back() == '\t' || code.back() == '\r'))
+      code.pop_back();
+    if (!value.empty() && value.back() == '\r') value.pop_back();
+    pairs.emplace_back(code, value);
+  }
+  int combined = -1;
+  for (size_t i = 0; i + 1 < pairs.size(); ++i) {
+    if (pairs[i].first != "0" || pairs[i].second != entityType)
+      continue;
+    for (size_t j = i + 1; j + 1 < pairs.size() && pairs[j].first != "0"; ++j) {
+      if (pairs[j].first == std::to_string(groupCode)) {
+        try {
+          const int parsed = std::stoi(pairs[j].second);
+          combined = combined < 0 ? parsed : (combined | parsed);
+        } catch (...) {
+        }
+        break;
+      }
+    }
+  }
+  return combined;
+}
+
+std::pair<size_t, size_t> DxfBlockDefinitionRange(const std::string& dxf, const std::string& name) {
+  struct Pair {
+    std::string code;
+    std::string value;
+    size_t offset;
+  };
+  std::istringstream input(dxf);
+  std::vector<Pair> pairs;
+  std::string code, value;
+  size_t offset = 0;
+  while (std::getline(input, code) && std::getline(input, value)) {
+    const size_t pairOffset = offset;
+    offset += code.size() + 1 + value.size() + 1;
+    auto trim = [](std::string& s) {
+      const size_t first = s.find_first_not_of(" \t\r");
+      if (first == std::string::npos) {
+        s.clear();
+        return;
+      }
+      s = s.substr(first, s.find_last_not_of(" \t\r") - first + 1);
+    };
+    trim(code);
+    trim(value);
+    pairs.push_back({std::move(code), std::move(value), pairOffset});
+  }
+  for (size_t i = 0; i + 1 < pairs.size(); ++i) {
+    if (pairs[i].code != "0" || pairs[i].value != "BLOCK")
+      continue;
+    size_t headerEnd = i + 1;
+    bool matches = false;
+    while (headerEnd < pairs.size() && pairs[headerEnd].code != "0") {
+      if (pairs[headerEnd].code == "2" && pairs[headerEnd].value == name)
+        matches = true;
+      ++headerEnd;
+    }
+    if (!matches) continue;
+    for (size_t end = headerEnd; end < pairs.size(); ++end) {
+      if (pairs[end].code == "0" && pairs[end].value == "ENDBLK")
+        return {pairs[i].offset, pairs[end].offset};
+    }
+  }
+  return {std::string::npos, std::string::npos};
+}
+
 PaperLayout MakePaperLayoutWithEveryType(const char* name) {
   PaperLayout L;
   L.name = name;
@@ -7999,6 +8073,11 @@ TEST_CASE("DXF export writes block definitions and model/paper INSERT references
   EntityAttributes paperRefAttr;
   paperRefAttr.layer = "SHEET_INSERTS";
   first.paperBlockRefAttrs.push_back(paperRefAttr);
+  // Identical block transforms are still distinct source entities when their attributes differ.
+  first.paperBlockRefs.push_back(paperRef);
+  EntityAttributes duplicatePaperRefAttr;
+  duplicatePaperRefAttr.layer = "SHEET_INSERTS_ALT";
+  first.paperBlockRefAttrs.push_back(duplicatePaperRefAttr);
   st.paperLayouts.push_back(first);
   PaperLayout second;
   second.name = "Sheet B";
@@ -8018,18 +8097,37 @@ TEST_CASE("DXF export writes block definitions and model/paper INSERT references
     REQUIRE_FALSE(ec);
   }
   const auto entities = DxfPaperEntities(p);
-  CHECK(std::count_if(entities.begin(), entities.end(), [](const auto& e) { return e.first == "INSERT"; }) == 2);
+  CHECK(std::count_if(entities.begin(), entities.end(), [](const auto& e) { return e.first == "INSERT"; }) == 3);
   CHECK_FALSE(LogContains(log, "no matching block definition"));
 
   std::ifstream file(p, std::ios::binary);
-  const std::string text(std::istreambuf_iterator<char>(file), {});
+  std::string text(std::istreambuf_iterator<char>(file), {});
   CHECK(text.find("\r\nTitleBlock\r\n") != std::string::npos);
   CHECK(text.find("\r\nSHEET A\r\n") != std::string::npos);
   CHECK(text.find("\r\n*Paper_Space0\r\n") != std::string::npos);
   CHECK(text.find("\r\nSheet B\r\n") != std::string::npos);
 
+  // A SOLID HATCH inside a block cannot be represented by CadBlockContent today. Import must report
+  // the unsupported fill rather than silently dropping it.
+  const auto [titleBlock, endBlock] = DxfBlockDefinitionRange(text, "TitleBlock");
+  REQUIRE(titleBlock != std::string::npos);
+  REQUIRE(endBlock != std::string::npos);
+  const std::string solidHatch =
+      "0\r\nHATCH\r\n100\r\nAcDbEntity\r\n8\r\n0\r\n100\r\nAcDbHatch\r\n2\r\nSOLID\r\n"
+      "70\r\n1\r\n71\r\n0\r\n91\r\n1\r\n92\r\n2\r\n72\r\n0\r\n73\r\n1\r\n93\r\n4\r\n"
+      "10\r\n0\r\n20\r\n0\r\n10\r\n10\r\n20\r\n0\r\n10\r\n10\r\n20\r\n10\r\n"
+      "10\r\n0\r\n20\r\n10\r\n97\r\n0\r\n75\r\n0\r\n76\r\n1\r\n98\r\n0\r\n";
+  text.insert(endBlock, solidHatch);
+  REQUIRE(text.find(solidHatch, titleBlock) != std::string::npos);
+  {
+    std::ofstream output(p, std::ios::binary | std::ios::trunc);
+    REQUIRE(output.good());
+    output.write(text.data(), static_cast<std::streamsize>(text.size()));
+  }
+
   AppCommandState imported;
   REQUIRE(ImportDxfFile(imported, p.c_str(), log));
+  CHECK(LogContains(log, "block definition 'TitleBlock' skipped 1 unsupported entity/entities (HATCH × 1)"));
   REQUIRE(imported.blockDefs.size() == 1);
   CHECK(imported.blockDefs[0].name == "TitleBlock");
   REQUIRE(imported.cadBlockRefs.size() == 1);
@@ -8041,11 +8139,13 @@ TEST_CASE("DXF export writes block definitions and model/paper INSERT references
   REQUIRE(imported.cadBlockRefAttrs.size() == 1);
   CHECK(imported.cadBlockRefAttrs[0].layer == "MODEL_INSERTS");
   REQUIRE(imported.paperLayouts.size() == 2);
-  REQUIRE(imported.paperLayouts[0].paperBlockRefs.size() == 1);
+  REQUIRE(imported.paperLayouts[0].paperBlockRefs.size() == 2);
   REQUIRE(imported.paperLayouts[1].paperBlockRefs.size() == 1);
-  REQUIRE(imported.paperLayouts[0].paperBlockRefAttrs.size() == 1);
+  REQUIRE(imported.paperLayouts[0].paperBlockRefAttrs.size() == 2);
   CHECK(imported.paperLayouts[0].paperBlockRefAttrs[0].layer == "SHEET_INSERTS");
   CHECK(imported.paperLayouts[0].paperBlockRefs[0].xf.x == Catch::Approx(5.f).margin(0.001f));
+  CHECK(imported.paperLayouts[0].paperBlockRefs[1].xf.x == Catch::Approx(5.f).margin(0.001f));
+  CHECK(imported.paperLayouts[0].paperBlockRefAttrs[1].layer == "SHEET_INSERTS_ALT");
   CHECK(imported.paperLayouts[1].paperBlockRefs[0].xf.x == Catch::Approx(15.f).margin(0.001f));
 }
 
@@ -8426,6 +8526,13 @@ TEST_CASE("DXF round-trips paper-space fills, sheet setup and viewport state (is
   st.paperLayouts.push_back(std::move(second));
   std::vector<std::string> log;
   REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  {
+    std::ifstream input(p, std::ios::binary);
+    const std::string dxf(std::istreambuf_iterator<char>(input), {});
+    const int status = DxfEntityIntGroup(dxf, "VIEWPORT", 90);
+    REQUIRE(status >= 0);
+    CHECK((status & 65536) != 0);  // enables nonrectangular clipping in external CAD readers
+  }
   AppCommandState in;
   REQUIRE(ImportDxfFile(in, p.c_str(), log));
   REQUIRE(in.paperLayouts.size() == 2);

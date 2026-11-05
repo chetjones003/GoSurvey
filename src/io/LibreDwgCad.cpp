@@ -6737,7 +6737,7 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
                                                   (kPi / 360.0)))
                           : 50.0;
     vp->status_flag = (gv.camPerspective ? 1 : 0) | 32 | (gv.hidePlot ? 2048 : 0) |
-                      (gv.locked ? 16384 : 0) | (gv.on ? 32768 : 0);
+                      (gv.locked ? 16384 : 0) | (gv.on ? 32768 : 0) | (vp->clip_boundary != nullptr ? 65536 : 0);
     {
       std::vector<BITCODE_H> frozen;
       for (const std::string& name : gv.frozenLayers)
