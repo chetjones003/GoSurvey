@@ -1257,13 +1257,27 @@ private Q_SLOTS:
     QTimer::singleShot(0, &window, [&] {
       auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
       QVERIFY(dialog && dialog->objectName() == "curveSpiralSettingsDialog");
+      if (!dialog) return;
       settingsDialog = true;
-      QVERIFY(dialog->findChild<QLineEdit*>("curveSettingsSpiralInA"));  // A is a read-only field, as in Civil 3D
-      QVERIFY(dialog->findChild<QLineEdit*>("curveSettingsSpiralInA")->isReadOnly());
-      QVERIFY(dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Help));
+      auto* spiralA = dialog->findChild<QLineEdit*>("curveSettingsSpiralInA");
+      QVERIFY(spiralA);  // A is a read-only field, as in Civil 3D
+      if (!spiralA) return;
+      QVERIFY(spiralA->isReadOnly());
+      auto* buttonBox = dialog->findChild<QDialogButtonBox*>();
+      QVERIFY(buttonBox);
+      if (!buttonBox) return;
+      auto* helpButton = buttonBox->button(QDialogButtonBox::Help);
+      QVERIFY(helpButton);
+      if (!helpButton) return;
       QVERIFY(GrabWithTitle(dialog).save(Issue914Shot("qt-485-curve-spiral-settings.png")));
-      dialog->findChild<QLineEdit*>("curveSettingsRadius")->setText("150");
-      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+      auto* radius = dialog->findChild<QLineEdit*>("curveSettingsRadius");
+      QVERIFY(radius);
+      if (!radius) return;
+      radius->setText("150");
+      auto* okButton = buttonBox->button(QDialogButtonBox::Ok);
+      QVERIFY(okButton);
+      if (!okButton) return;
+      okButton->click();
     });
     tools->findChild<QAction*>("layoutToolsSettings")->trigger();
     QVERIFY(settingsDialog);

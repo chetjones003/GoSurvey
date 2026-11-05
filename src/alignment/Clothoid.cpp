@@ -1,5 +1,6 @@
 #include "alignment/Clothoid.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 
