@@ -9481,14 +9481,7 @@ static void TransformSelectedAlignments(AppCommandState& st, AlignFn fn, bool du
     if (duplicate) {
       a.id = st.nextEntityId++;
       a.parentId = 0;
-      const std::string base = a.name;
-      int n = 2;
-      for (;;) {
-        bool taken = false;
-        for (const alignment::Alignment& o : st.alignments) taken = taken || o.name == a.name;
-        if (!taken) break;
-        a.name = base + " (" + std::to_string(n++) + ")";
-      }
+      a.name = UniqueAlignmentName(st, a.name);
       a.equations = st.alignments[ix].equations;
       st.alignments.push_back(std::move(a));
     } else {

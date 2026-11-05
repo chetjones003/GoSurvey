@@ -271,7 +271,7 @@ void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<
     log.push_back("ALIGNMENT: " + a.name + "  [" + TypeName(a.type) + ", layer " + a.layer + ", style " + a.style + "]");
     if (!a.description.empty()) log.push_back("  Description:   " + a.description);
     if (a.Empty()) {
-      log.push_back("  (no geometry yet)");
+      log.push_back("  Start station: " + alignment::FormatStation(a.startingStation) + "   (no geometry yet)");
       continue;
     }
     double wsx = 0.0, wsy = 0.0, wex = 0.0, wey = 0.0;
@@ -580,8 +580,14 @@ void RefreshLinkedOffsetsImpl(AppCommandState& st, std::vector<std::string>& log
     }
     alignment::Alignment rebuilt = off;
     std::string why;
-    if (alignment::MakeOffset(*parent, off.offsetDistance, &rebuilt, &why)) {
+    alignment::Alignment source = *parent;
+    const bool ranged = off.HasOffsetRange();
+    if ((!ranged || parent->ExtractRange(off.offsetFromStation, off.offsetToStation, &source, &why)) &&
+        alignment::MakeOffset(source, off.offsetDistance, &rebuilt, &why)) {
       rebuilt.startingStation = off.startingStation;
+      rebuilt.parentId = off.parentId;  // an extracted range carries no id of its own
+      rebuilt.offsetFromStation = off.offsetFromStation;
+      rebuilt.offsetToStation = off.offsetToStation;
       off = std::move(rebuilt);
     } else {
       log.push_back("  Offset \"" + off.name + "\" could not follow \"" + parent->name + "\": " + why + ".");
@@ -1048,7 +1054,7 @@ void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vect
   const std::vector<std::string> f = SplitFields(args);
   const char* usage =
       "ALIGNMENTSTATION - usage: ALIGNMENTSTATION <name>, START, <station>[, CLEAR] | <name>, EQ, ADD, <raw station>, <ahead station>, INC|DEC | "
-      "<name>, EQ, REMOVE, <n> | <name>, EQ, LIST.";
+      "<name>, EQ, EDIT, <n>, <raw station>, <ahead station>, INC|DEC | <name>, EQ, REMOVE, <n> | <name>, EQ, LIST.";
   if (f.size() < 3) {
     log.push_back(usage);
     return;
@@ -1063,14 +1069,16 @@ void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vect
       return;
     }
     const bool clear = f.size() == 4 && Lower(f[3]) == "clear";
-    if (!a->equations.empty() && !clear) {
+    if ((!a->equations.empty() || !a->designSpeeds.empty()) && !clear) {  // REQ-483.1: equations and design speeds
       log.push_back("ALIGNMENTSTATION - changing the starting station removes this alignment's " + std::to_string(a->equations.size()) +
-                    " station equation(s); repeat with , CLEAR to confirm.");
+                    " station equation(s) and " + std::to_string(a->designSpeeds.size()) +
+                    " design speed(s); repeat with , CLEAR to confirm.");
       return;
     }
     PushUndoSnapshot(st, "Set starting station");
     a = Resolve(st, "ALIGNMENTSTATION", f[0], log);
     a->equations.clear();
+    a->designSpeeds.clear();
     a->startingStation = sta;
     log.push_back("ALIGNMENTSTATION - \"" + a->name + "\" starts at " + alignment::FormatStation(sta) + " and ends at " + Sta(*a, a->EndStation()) + ".");
     return;
@@ -1111,6 +1119,33 @@ void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vect
                   alignment::FormatStation(target->EndStationWithEquations()) + ".");
     return;
   }
+  if (verb == "edit" && f.size() == 7) {  // REQ-487.3: replace equation n, refused as a whole if the new one does not fit
+    double n = 0.0;
+    alignment::StationEquation q;
+    const std::string dir = Lower(f[6]);
+    if (!ParseNum(f[3], &n) || n < 1.0 || n > static_cast<double>(a->equations.size()) || n != std::floor(n)) {
+      log.push_back("ALIGNMENTSTATION - \"" + f[3] + "\" is not an equation number (1 to " + std::to_string(a->equations.size()) + ").");
+      return;
+    }
+    if (!alignment::ParseStation(f[4], &q.rawBack) || !alignment::ParseStation(f[5], &q.ahead) || (dir != "inc" && dir != "dec")) {
+      log.push_back(usage);
+      return;
+    }
+    q.increasing = dir == "inc";
+    alignment::Alignment trial = *a;
+    trial.equations.erase(trial.equations.begin() + static_cast<std::ptrdiff_t>(n) - 1);
+    std::string why;
+    if (!trial.AddStationEquation(q, &why)) {
+      log.push_back("ALIGNMENTSTATION - refused: " + why + "; equation " + f[3] + " is unchanged.");
+      return;
+    }
+    PushUndoSnapshot(st, "Edit station equation");
+    alignment::Alignment* target = Resolve(st, "ALIGNMENTSTATION", f[0], log);
+    *target = std::move(trial);
+    log.push_back("ALIGNMENTSTATION - equation " + f[3] + " changed; \"" + target->name + "\" now ends at station " +
+                  alignment::FormatStation(target->EndStationWithEquations()) + ".");
+    return;
+  }
   if (verb == "remove" && f.size() == 4) {
     double n = 0.0;
     if (!ParseNum(f[3], &n) || n < 1.0 || n > static_cast<double>(a->equations.size()) || n != std::floor(n)) {
@@ -1126,49 +1161,151 @@ void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vect
   log.push_back(usage);
 }
 
+namespace {
+
+struct OffsetRequest {
+  std::vector<double> distances;  ///< Signed, right positive.
+  std::vector<int> increment;     ///< 1-based number of each distance on its side (the template's {n}).
+  std::string nameTemplate;       ///< Empty: "<parent> - L12".
+  std::string from, to;           ///< Station range on the parent; empty = its whole length.
+};
+
+/// "3x12" (three offsets 12 apart) or "12" (one) for one side; false for anything else.
+bool ParseOffsetSide(const std::string& text, double sign, OffsetRequest* r) {
+  assert(r != nullptr);
+  assert(sign == 1.0 || sign == -1.0);
+  const size_t x = Lower(text).find('x');
+  double count = 1.0, step = 0.0;
+  if (x == std::string::npos ? !ParseNum(text, &step) : !ParseNum(text.substr(0, x), &count) || !ParseNum(text.substr(x + 1), &step))
+    return false;
+  constexpr double kMaxPerSide = 100.0;
+  if (!(step > 0.0) || count < 1.0 || count > kMaxPerSide || count != std::floor(count)) return false;
+  for (int n = 1; n <= static_cast<int>(count); ++n) {
+    r->distances.push_back(sign * step * n);
+    r->increment.push_back(n);
+  }
+  return true;
+}
+
+/// Reads the distance list (12 / R12 right, -12 / L12 left) and the LEFT= / RIGHT= / NAME= / FROM= / TO= fields.
+bool ParseOffsetRequest(const std::vector<std::string>& f, OffsetRequest* r, std::string* bad) {
+  assert(r != nullptr && bad != nullptr);
+  assert(!f.empty());
+  for (size_t i = 1; i < f.size(); ++i) {
+    const size_t eq = f[i].find('=');
+    const std::string key = eq == std::string::npos ? std::string() : Lower(Trim(f[i].substr(0, eq)));
+    const std::string value = eq == std::string::npos ? Trim(f[i]) : Trim(f[i].substr(eq + 1));
+    *bad = f[i];
+    if (key == "left" || key == "right") {
+      if (!ParseOffsetSide(value, key == "left" ? -1.0 : 1.0, r)) return false;
+    } else if (key == "name") {
+      r->nameTemplate = value;
+    } else if (key == "from" || key == "to") {
+      (key == "from" ? r->from : r->to) = value;
+    } else if (key.empty()) {
+      std::string t = value;
+      double sign = 1.0, d = 0.0;
+      if (!t.empty() && (t[0] == 'L' || t[0] == 'l')) { sign = -1.0; t.erase(0, 1); }
+      else if (!t.empty() && (t[0] == 'R' || t[0] == 'r')) { t.erase(0, 1); }
+      if (!ParseNum(t, &d) || d == 0.0) return false;
+      r->distances.push_back(sign * d);
+      r->increment.push_back(1 + static_cast<int>(std::count_if(r->distances.begin(), r->distances.end() - 1,
+                                                                [&](double o) { return (o < 0.0) == (sign * d < 0.0); })));
+    } else {
+      return false;
+    }
+  }
+  bad->clear();
+  return !r->distances.empty();
+}
+
+/// The template with {parent}, {side} (Left / Right), {offset} and {n} filled in; or "<parent> - L12".
+std::string OffsetName(const std::string& tmpl, const std::string& parent, double d, int n) {
+  assert(std::isfinite(d) && d != 0.0);
+  assert(n >= 1);
+  std::array<char, 48> num{};
+  std::snprintf(num.data(), num.size(), "%g", std::fabs(d));
+  if (tmpl.empty()) return parent + " - " + (d < 0.0 ? "L" : "R") + num.data();
+  std::string out = tmpl;
+  const std::array<std::pair<const char*, std::string>, 4> tokens = {{{"{parent}", parent},
+                                                                      {"{side}", d < 0.0 ? "Left" : "Right"},
+                                                                      {"{offset}", num.data()},
+                                                                      {"{n}", std::to_string(n)}}};
+  for (const auto& [token, value] : tokens) {
+    for (size_t at = out.find(token), guard = 0; at != std::string::npos && guard < 64; at = out.find(token), ++guard)
+      out.replace(at, std::strlen(token), value);
+  }
+  return out;
+}
+
+}  // namespace
+
 // OFFSETALIGNMENT <parent>, <distance>[, <distance> ...]    distance: 12 / R12 = right, -12 / L12 = left
+//   [, LEFT=<count>x<increment>][, RIGHT=<count>x<increment>][, NAME=<template>][, FROM=<station>][, TO=<station>]
+//   REQ-488.1: template tokens {parent} {side} {offset} {n}; the range limits the offsets to part of the parent.
 void RunOffsetAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
+  const char* usage = "OFFSETALIGNMENT - usage: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (R12 or 12 = right, "
+                      "L12 or -12 = left) [, LEFT=<count>x<increment>][, RIGHT=<count>x<increment>][, NAME=<template>]"
+                      "[, FROM=<station>][, TO=<station>].";
   if (f.size() < 2) {
-    log.push_back("OFFSETALIGNMENT - usage: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (R12 or 12 = right, L12 or -12 = left).");
+    log.push_back(usage);
     return;
   }
   alignment::Alignment* parent = Resolve(st, "OFFSETALIGNMENT", f[0], log);
   if (parent == nullptr) return;
   const std::uint64_t parentId = parent->id;
   const alignment::Alignment parentCopy = *parent;
-  std::vector<double> dists;
-  for (size_t i = 1; i < f.size(); ++i) {
-    std::string t = f[i];
-    double sign = 1.0;
-    if (!t.empty() && (t[0] == 'L' || t[0] == 'l')) { sign = -1.0; t.erase(0, 1); }
-    else if (!t.empty() && (t[0] == 'R' || t[0] == 'r')) { t.erase(0, 1); }
-    double d = 0.0;
-    if (!ParseNum(t, &d) || d == 0.0) {
-      log.push_back("OFFSETALIGNMENT - \"" + f[i] + "\" is not a non-zero offset distance.");
+  OffsetRequest req;
+  std::string bad;
+  if (!ParseOffsetRequest(f, &req, &bad)) {
+    log.push_back(bad.empty() ? std::string(usage) : "OFFSETALIGNMENT - \"" + bad + "\" is not a non-zero offset distance or field.");
+    return;
+  }
+  alignment::Alignment source = parentCopy;  // the parent, or the part of it in the station range
+  double from = 0.0, to = 0.0;
+  if (!req.from.empty() || !req.to.empty()) {
+    double shownFrom = 0.0, shownTo = 0.0;
+    const bool fromOk = req.from.empty() || alignment::ParseStation(req.from, &shownFrom);
+    const bool toOk = req.to.empty() || alignment::ParseStation(req.to, &shownTo);
+    const std::vector<double> rawFrom = req.from.empty() ? std::vector<double>{parentCopy.StartStation()}
+                                                         : parentCopy.RawStationsForDisplayed(shownFrom);
+    const std::vector<double> rawTo = req.to.empty() ? std::vector<double>{parentCopy.EndStation()}
+                                                     : parentCopy.RawStationsForDisplayed(shownTo);
+    std::string why = "a station is outside \"" + parentCopy.name + "\"";
+    if (!fromOk || !toOk || rawFrom.empty() || rawTo.empty() ||
+        !parentCopy.ExtractRange(rawFrom.front(), rawTo.back(), &source, &why)) {
+      log.push_back("OFFSETALIGNMENT - the station range is not usable: " + why + ".");
       return;
     }
-    dists.push_back(sign * d);
+    source.id = parentCopy.id;
+    from = rawFrom.front();
+    to = rawTo.back();
   }
   // Build everything first so one bad distance creates nothing.
   std::vector<alignment::Alignment> made;
-  for (const double d : dists) {
+  for (size_t k = 0; k < req.distances.size(); ++k) {
+    const double d = req.distances[k];
     alignment::Alignment off;
-    char buf[160];
-    std::snprintf(buf, sizeof buf, "%s - %s%g", parentCopy.name.c_str(), d < 0.0 ? "L" : "R", std::fabs(d));
-    off.name = buf;
-    if (FindAlignment(st, off.name) >= 0) {
-      log.push_back("OFFSETALIGNMENT - an alignment named \"" + off.name + "\" already exists.");
+    off.name = OffsetName(req.nameTemplate, parentCopy.name, d, req.increment[k]);
+    const bool duplicate = std::any_of(made.begin(), made.end(), [&](const alignment::Alignment& m) {
+      return Lower(m.name) == Lower(off.name);
+    });
+    if (off.name.empty() || duplicate || FindAlignment(st, off.name) >= 0) {
+      log.push_back("OFFSETALIGNMENT - an alignment named \"" + off.name + "\" already exists; nothing was created.");
       return;
     }
     off.layer = parentCopy.layer;
     off.style = parentCopy.style;
     off.labelSet = parentCopy.labelSet;
     std::string why;
-    if (!alignment::MakeOffset(parentCopy, d, &off, &why)) {
+    if (!alignment::MakeOffset(source, d, &off, &why)) {
       log.push_back("OFFSETALIGNMENT - refused for " + off.name + ": " + why + ". Nothing was created.");
       return;
     }
+    off.startingStation = source.startingStation;
+    off.offsetFromStation = from;
+    off.offsetToStation = to;
     made.push_back(std::move(off));
   }
   PushUndoSnapshot(st, "Offset alignment");
@@ -1196,12 +1333,15 @@ void RunAlignmentDetach(AppCommandState& st, const std::string& args, std::vecto
   log.push_back("ALIGNMENTDETACH - \"" + a->name + "\" is now independent and can be edited.");
 }
 
-// ALIGNMENTINTERSECT <a>, <b> | <a>, LINE, x1, y1, x2, y2 | <a>, CIRCLE, cx, cy, r   (WORLD coordinates) - REQ-489
+// ALIGNMENTINTERSECT <a>, <b> | <a>, LINE, x1, y1, x2, y2 | <a>, CIRCLE, cx, cy, r | <a>, ARC, cx, cy, r, start, end
+//   [, POINT]   (WORLD coordinates; arc angles in degrees counter-clockwise from east) - REQ-489
 void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
-  const std::vector<std::string> f = SplitFields(args);
+  std::vector<std::string> f = SplitFields(args);
   const char* usage =
       "ALIGNMENTINTERSECT - usage: ALIGNMENTINTERSECT <alignment>, <alignment> | <alignment>, LINE, <x1>, <y1>, <x2>, <y2> | "
-      "<alignment>, CIRCLE, <cx>, <cy>, <r>.";
+      "<alignment>, CIRCLE, <cx>, <cy>, <r> | <alignment>, ARC, <cx>, <cy>, <r>, <start angle>, <end angle> [, POINT].";
+  const bool placePoints = !f.empty() && Lower(f.back()) == "point";  // REQ-489: place a point at each intersection
+  if (placePoints) f.pop_back();
   if (f.size() < 2) {
     log.push_back(usage);
     return;
@@ -1230,6 +1370,13 @@ void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::ve
     CadCoord::LocalFromWorld(st, v[0], v[1], &cx, &cy);
     other = alignment::MakeCircleObject({cx, cy}, v[2], 0.0, alignment::kTwoPi - 1e-9);
     otherName = "the circle";
+  } else if (kind == "arc" && num(2, 5) && v[2] > 0.0) {
+    double cx = 0, cy = 0;
+    CadCoord::LocalFromWorld(st, v[0], v[1], &cx, &cy);
+    double sweep = std::fmod(v[4] - v[3], 360.0);
+    if (sweep <= 0.0) sweep += 360.0;
+    other = alignment::MakeCircleObject({cx, cy}, v[2], v[3] * kDegToRad, std::min(sweep * kDegToRad, alignment::kTwoPi - 1e-9));
+    otherName = "the arc";
   } else if (f.size() == 2) {
     alignment::Alignment* b = Resolve(st, "ALIGNMENTINTERSECT", f[1], log);
     if (b == nullptr) return;
@@ -1246,14 +1393,30 @@ void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::ve
   std::vector<alignment::IntersectionOverlap> overlaps;
   const std::vector<alignment::Intersection> hits = alignment::IntersectAlignments(*a, other, &overlaps);
   log.push_back("ALIGNMENTINTERSECT - \"" + a->name + "\" and " + otherName + ": " + std::to_string(hits.size()) + " intersection(s).");
+  const bool otherIsAlignment = f.size() == 2;
   for (size_t i = 0; i < hits.size(); ++i) {
     const alignment::Intersection& h = hits[i];
+    // The point lies on both, so its offset from each is zero; the station is given on each alignment (REQ-489).
     log.push_back("  " + std::to_string(i + 1) + ": X = " + Lin(st, h.point.x + CadCoord::WorldOriginX(st)) + "  Y = " +
-                  Lin(st, h.point.y + CadCoord::WorldOriginY(st)) + "  Station = " + Sta(*a, h.stationA) + "  Angle = " +
-                  FormatSweptAngle(h.angle / kDegToRad, CadAngleDisplaySettings(st)) + (h.tangential ? "  (tangential)" : ""));
+                  Lin(st, h.point.y + CadCoord::WorldOriginY(st)) + "  Station = " + Sta(*a, h.stationA) + "  Offset = " +
+                  Lin(st, 0.0) + (otherIsAlignment ? "  Station on " + otherName + " = " + Sta(other, h.stationB) : "") +
+                  "  Angle = " + FormatSweptAngle(h.angle / kDegToRad, CadAngleDisplaySettings(st)) +
+                  (h.tangential ? "  (tangential)" : ""));
   }
   for (const alignment::IntersectionOverlap& o : overlaps)
     log.push_back("  Coincident from station " + Sta(*a, o.fromStationA) + " to " + Sta(*a, o.toStationA) + ".");
+  if (placePoints && !hits.empty()) {
+    PushUndoSnapshot(st, "Alignment intersection points");
+    for (const alignment::Intersection& h : hits) {
+      CadPoint p{};
+      p.x = h.point.x;
+      p.y = h.point.y;
+      st.cadPoints.push_back(p);
+      st.cadPointAttrs.push_back(MakeNewEntityAttrs(st));
+    }
+    BumpCadGpuCache(st);
+    log.push_back("ALIGNMENTINTERSECT - " + std::to_string(hits.size()) + " point(s) placed.");
+  }
 }
 
 // EDITALIGNMENT [<name>] - REQ-486.1. Opens the Alignment Layout table in the Qt editor; headless it lists the rows.
@@ -3084,6 +3247,17 @@ alignment::Alignment NewAlignment(const AppCommandState& st, const std::string& 
 }
 
 }  // namespace
+
+std::string UniqueAlignmentName(const AppCommandState& st, const std::string& base) {
+  assert(!base.empty());
+  assert(st.alignments.size() < st.alignments.max_size());
+  if (FindAlignment(st, base) < 0) return base;
+  for (size_t n = 2; n <= st.alignments.size() + 2; ++n) {  // one of these is free: there are only so many names
+    const std::string candidate = base + " (" + std::to_string(n) + ")";
+    if (FindAlignment(st, candidate) < 0) return candidate;
+  }
+  return base + " (" + std::to_string(st.alignments.size() + 3) + ")";
+}
 
 std::string NextAlignmentName(const AppCommandState& st) {
   assert(st.alignments.size() < st.alignments.max_size());

@@ -265,6 +265,9 @@ class Alignment {
   // --- REQ-488: an Offset alignment is real geometry linked to its parent by id. `parentId` 0 = independent. ---
   std::uint64_t parentId = 0;
   double offsetDistance = 0.0;  ///< Signed, right of the parent positive.
+  /// REQ-488.1 station range on the parent (its internal stations); equal values = the whole parent.
+  double offsetFromStation = 0.0, offsetToStation = 0.0;
+  [[nodiscard]] bool HasOffsetRange() const { return offsetToStation > offsetFromStation; }
 
   // --- REQ-492.3 / REQ-493.3: segments must be labelled before a line or curve table can be made ---
   bool segmentLabels = false;
@@ -286,6 +289,11 @@ class Alignment {
   /// Station equations cannot be mirrored unambiguously (open question, REQ-503), so they are CLEARED
   /// and `note` (if given) says how many were dropped.
   bool Reverse(std::string* note = nullptr);
+
+  /// The stretch between two internal stations as its own alignment (entities cut where the range ends; a cut spiral is
+  /// the clothoid between the curvatures there). Its starting station is the range's start. False when the range does
+  /// not run forward within the alignment.
+  bool ExtractRange(double fromStation, double toStation, Alignment* out, std::string* whyNot = nullptr) const;
 
   [[nodiscard]] bool Empty() const { return entities_.empty(); }
   [[nodiscard]] double Length() const { return length_; }

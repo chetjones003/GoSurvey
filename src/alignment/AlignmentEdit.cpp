@@ -624,6 +624,38 @@ bool Alignment::Mirror(double ax, double ay, double bx, double by) {
 
 // ---------------------------------------------------------------- offsets (REQ-488)
 
+bool Alignment::ExtractRange(double fromStation, double toStation, Alignment* out, std::string* whyNot) const {
+  assert(out != nullptr);
+  assert(cumStart_.size() == entities_.size() + 1);
+  auto fail = [&](const std::string& m) {
+    if (whyNot != nullptr) *whyNot = m;
+    return false;
+  };
+  if (out == nullptr) return false;
+  if (entities_.empty()) return fail("the alignment has no geometry");
+  const double d0 = std::max(0.0, fromStation - startingStation), d1 = std::min(length_, toStation - startingStation);
+  if (!(d1 - d0 > 1e-9)) return fail("the station range must run forward within the alignment");
+  Alignment made;
+  for (size_t i = 0; i < entities_.size(); ++i) {
+    const double s0 = std::max(d0, cumStart_[i]) - cumStart_[i], s1 = std::min(d1, cumStart_[i + 1]) - cumStart_[i];
+    if (!(s1 - s0 > 1e-12)) continue;  // outside the range, or only touching it
+    Entity e = entities_[i];
+    e.start = PointInEntity(static_cast<int>(i), s0);
+    e.startAzimuth = AzimuthInEntity(static_cast<int>(i), s0);
+    e.length = s1 - s0;
+    if (e.kind == EntityKind::Spiral) {  // a piece of a clothoid is a clothoid between the curvatures at its ends
+      const double k0 = std::fabs(SignedCurvatureAt(entities_[i], s0)), k1 = std::fabs(SignedCurvatureAt(entities_[i], s1));
+      e.startRadius = k0 > 1e-15 ? 1.0 / k0 : 0.0;
+      e.radius = k1 > 1e-15 ? 1.0 / k1 : 0.0;
+    }
+    e.constraint = made.Empty() ? Entity::Constraint::Fixed : e.constraint;
+    if (!made.AppendRaw(e)) return fail("entity " + std::to_string(i + 1) + " could not be cut at the range");
+  }
+  made.startingStation = startingStation + d0;
+  *out = std::move(made);
+  return true;
+}
+
 bool MakeOffset(const Alignment& parent, double distance, Alignment* out, std::string* whyNot) {
   auto fail = [&](const std::string& m) {
     if (whyNot != nullptr) *whyNot = m;

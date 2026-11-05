@@ -2282,6 +2282,10 @@ json BuildRoot(const AppCommandState& st) {
       if (a.parentId != 0) {  // REQ-488: a linked offset alignment
         o["parentId"] = a.parentId;
         o["offsetDistance"] = a.offsetDistance;
+        if (a.HasOffsetRange()) {  // REQ-488.1: an offset of part of the parent
+          o["offsetFrom"] = a.offsetFromStation;
+          o["offsetTo"] = a.offsetToStation;
+        }
       }
       if (a.segmentLabels) o["segmentLabels"] = true;  // REQ-492.3 / REQ-493.3
       if (!a.checkSetName.empty()) o["checkSet"] = a.checkSetName;  // REQ-502: criteria applied to this alignment
@@ -4269,6 +4273,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       }
       if (el.contains("parentId") && el["parentId"].is_number_unsigned()) a.parentId = el["parentId"].get<std::uint64_t>();
       if (el.contains("offsetDistance") && el["offsetDistance"].is_number()) a.offsetDistance = el["offsetDistance"].get<double>();
+      if (el.contains("offsetFrom") && el["offsetFrom"].is_number() && el.contains("offsetTo") && el["offsetTo"].is_number()) {
+        a.offsetFromStation = el["offsetFrom"].get<double>();
+        a.offsetToStation = el["offsetTo"].get<double>();
+      }
       bool ok = el.contains("entities") && el["entities"].is_array();
       if (ok) {
         for (const auto& q : el["entities"]) {

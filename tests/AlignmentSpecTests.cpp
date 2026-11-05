@@ -438,3 +438,215 @@ TEST_CASE("Degenerate entities are refused by name", "[req499][alignment]") {
     CHECK((LogHas(log, "length") || LogHas(log, "radius") || LogHas(log, "delta")));
   }
 }
+
+// --- REQ-485 AC1: custom metadata, shown by LIST ---
+
+TEST_CASE("A new alignment keeps a custom name, description, layer, style and starting station", "[req485][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENTSTYLE NEW, Haul", log);
+  Submit(st, "ALIGNMENT Haul Road, DESCRIPTION=North pit, LAYER=C-HAUL, STYLE=Haul, START=5+00", log);
+  REQUIRE(st.alignments.size() == 1);
+  CHECK(st.alignments[0].style == "Haul");
+  log.clear();
+  Submit(st, "ALIGNMENTLIST Haul Road", log);
+  CHECK(LogHas(log, "ALIGNMENT: Haul Road"));
+  CHECK(LogHas(log, "layer C-HAUL, style Haul"));
+  CHECK(LogHas(log, "Description:   North pit"));
+  CHECK(LogHas(log, "Start station: 5+00.00"));
+}
+
+// --- REQ-487: whole-object commands, copies, equations ---
+
+namespace {
+AppCommandState RoadWithOneAlignment() {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT Road", log);
+  Submit(st, "ALIGNMENTADD Road, TANGENT, 0, 0, 90, 100", log);  // east from the origin
+  Submit(st, "ALIGNMENTADD Road, CURVE, 200, 30, LEFT", log);
+  REQUIRE(st.alignments.size() == 1);
+  st.selection = {{SelectedEntity::Type::Alignment, 0}};
+  return st;
+}
+}  // namespace
+
+TEST_CASE("COPY makes an independent alignment with its own id and a new name", "[req487][alignment]") {
+  AppCommandState st = RoadWithOneAlignment();
+  std::vector<std::string> log;
+  for (const char* line : {"COPY", "0,0", "0,500", ""}) Submit(st, line, log);
+  REQUIRE(st.alignments.size() == 2);
+  CHECK(st.alignments[1].id != st.alignments[0].id);
+  CHECK(st.alignments[1].name == "Road (2)");
+  CHECK(st.alignments[1].StartPoint().y == Approx(500.0).margin(1e-9));
+  CHECK(st.alignments[1].Length() == Approx(st.alignments[0].Length()).margin(1e-9));
+  // Names are unique ignoring case, so a copy never sits beside one that differs only by case.
+  st.alignments[1].name = "ROAD (3)";
+  CHECK(UniqueAlignmentName(st, "road (3)") == "road (3) (2)");
+  CHECK(UniqueAlignmentName(st, "Road") == "Road (2)");
+}
+
+TEST_CASE("ROTATE, SCALE and MIRROR act on a selected alignment", "[req487][alignment]") {
+  {
+    AppCommandState st = RoadWithOneAlignment();
+    for (double v : {0.0, 0.0, 0.0, 100.0, 0.0, 0.0}) st.userLinesFlat.push_back(v);  // an east line beside it
+    st.userLineAttrs.push_back(EntityAttributes{});
+    st.selection.push_back({SelectedEntity::Type::LineSeg, 0});
+    std::vector<std::string> log;
+    for (const char* line : {"ROTATE", "0,0", "90"}) Submit(st, line, log);
+    // The alignment turns exactly as a line does (the typed angle follows the drawing's angle settings).
+    const double lineAz = std::atan2(st.userLinesFlat[3] - st.userLinesFlat[0], st.userLinesFlat[4] - st.userLinesFlat[1]);
+    CHECK(std::fabs(std::remainder(st.alignments[0].StartAzimuth() - lineAz, alignment::kTwoPi)) <= 1e-6);
+    CHECK(std::fabs(std::remainder(lineAz - 90.0 * kDeg, alignment::kTwoPi)) == Approx(90.0 * kDeg).margin(1e-6));
+    CHECK(st.alignments[0].Entities()[0].length == Approx(100.0).margin(1e-9));
+  }
+  {
+    AppCommandState st = RoadWithOneAlignment();
+    std::vector<std::string> log;
+    for (const char* line : {"SCALE", "0,0", "2"}) Submit(st, line, log);
+    CHECK(st.alignments[0].Entities()[0].length == Approx(200.0).margin(1e-9));
+    CHECK(st.alignments[0].Entities()[1].radius == Approx(400.0).margin(1e-9));
+  }
+  {
+    AppCommandState st = RoadWithOneAlignment();
+    std::vector<std::string> log;
+    for (const char* line : {"MIRROR", "0,0", "100,0", "Y"}) Submit(st, line, log);  // across the X axis, erase source
+    REQUIRE_FALSE(st.alignments.empty());
+    const alignment::Alignment& m = st.alignments.back();
+    CHECK(m.Entities()[1].right);  // the left curve mirrors to a right one
+    CHECK(m.Entities()[1].radius == Approx(200.0).margin(1e-9));
+  }
+}
+
+TEST_CASE("A station equation can be edited, and a bad edit changes nothing", "[req487][req483][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT E", log);
+  Submit(st, "ALIGNMENTADD E, TANGENT, 0, 0, 0, 1000", log);
+  Submit(st, "ALIGNMENTSTATION E, EQ, ADD, 4+00, 5+00, INC", log);
+  REQUIRE(st.alignments[0].equations.size() == 1);
+  log.clear();
+  Submit(st, "ALIGNMENTSTATION E, EQ, EDIT, 1, 6+00, 6+50, INC", log);
+  CHECK(LogHas(log, "equation 1 changed"));
+  REQUIRE(st.alignments[0].equations.size() == 1);
+  CHECK(st.alignments[0].equations[0].rawBack == Approx(600.0));
+  CHECK(st.alignments[0].equations[0].ahead == Approx(650.0));
+  log.clear();
+  Submit(st, "ALIGNMENTSTATION E, EQ, EDIT, 1, 6+00, 5+00, INC", log);  // increasing but goes down
+  CHECK(LogHas(log, "refused"));
+  CHECK(st.alignments[0].equations[0].ahead == Approx(650.0));
+  Submit(st, "UNDO", log);
+  REQUIRE(st.alignments[0].equations.size() == 1);
+  CHECK(st.alignments[0].equations[0].rawBack == Approx(400.0));
+}
+
+TEST_CASE("Changing the starting station removes equations and design speeds, only when confirmed", "[req483][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT S", log);
+  Submit(st, "ALIGNMENTADD S, TANGENT, 0, 0, 0, 1000", log);
+  Submit(st, "ALIGNMENTSPEED S, 1+00, 50", log);
+  REQUIRE(st.alignments[0].designSpeeds.size() == 1);
+  log.clear();
+  Submit(st, "ALIGNMENTSTATION S, START, 2+00", log);
+  CHECK(LogHas(log, "1 design speed(s)"));
+  CHECK(st.alignments[0].startingStation == 0.0);
+  Submit(st, "ALIGNMENTSTATION S, START, 2+00, CLEAR", log);
+  CHECK(st.alignments[0].startingStation == Approx(200.0));
+  CHECK(st.alignments[0].designSpeeds.empty());
+}
+
+// --- REQ-488: offsets ---
+
+TEST_CASE("OFFSETALIGNMENT takes counts and increments per side, a name template and a station range", "[req488][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT CL", log);
+  Submit(st, "ALIGNMENTADD CL, TANGENT, 0, 0, 90, 500", log);
+  Submit(st, "ALIGNMENTADD CL, CURVE, 500, 15, LEFT", log);
+  Submit(st, "ALIGNMENTADD CL, TANGENT, 300", log);
+  log.clear();
+  Submit(st, "OFFSETALIGNMENT CL, LEFT=2x6, RIGHT=1x12, NAME={parent}-{side}-{n}", log);
+  REQUIRE(st.alignments.size() == 4);
+  CHECK(st.alignments[1].name == "CL-Left-1");
+  CHECK(st.alignments[1].offsetDistance == Approx(-6.0));
+  CHECK(st.alignments[2].name == "CL-Left-2");
+  CHECK(st.alignments[2].offsetDistance == Approx(-12.0));
+  CHECK(st.alignments[3].name == "CL-Right-1");
+  CHECK(st.alignments[3].offsetDistance == Approx(12.0));
+  log.clear();
+  Submit(st, "OFFSETALIGNMENT CL, R20, FROM=1+00, TO=6+00", log);
+  REQUIRE(st.alignments.size() == 5);
+  const alignment::Alignment& part = st.alignments[4];
+  CHECK(part.StartStation() == Approx(100.0).margin(1e-9));
+  CHECK(part.Entities().size() == 2);  // the tangent from 1+00, and the curve up to 6+00
+  const Point2 p = part.GetPointAtStation(part.StartStation());
+  CHECK(st.alignments[0].GetStationOffset(p.x, p.y).internalStation == Approx(100.0).margin(1e-6));
+  CHECK(st.alignments[0].GetStationOffset(p.x, p.y).offset == Approx(20.0).margin(1e-6));
+  // The ranged offset follows its parent and keeps its range.
+  Submit(st, "ALIGNMENTEDIT CL, 2, RADIUS, 600", log);
+  CHECK(st.alignments[4].Entities()[1].radius == Approx(620.0).margin(1e-9));  // a left curve: right offset is outside
+  CHECK(st.alignments[4].StartStation() == Approx(100.0).margin(1e-9));
+}
+
+TEST_CASE("An offset station maps to the parent's perpendicular foot", "[req488][alignment]") {
+  Alignment parent;
+  REQUIRE(parent.AppendTangent({0, 0}, 90.0 * kDeg, 500.0));
+  REQUIRE(parent.AppendCurveByDelta(500.0, 15.0 * kDeg, false));  // left: a +12 offset lies outside, R 512
+  REQUIRE(parent.AppendTangent(300.0));
+  Alignment off;
+  std::string why;
+  REQUIRE(alignment::MakeOffset(parent, 12.0, &off, &why));
+  // On the tangent the station difference is zero; on the curve it scales by R'/R.
+  for (const double s : {50.0, 250.0, 499.0}) {
+    const Point2 p = off.GetPointAtStation(s);
+    CHECK(std::fabs(parent.GetStationOffset(p.x, p.y).internalStation - s) <= 1e-6);
+  }
+  const double arcStart = parent.EntityStartStation(1);
+  for (const double along : {10.0, 60.0, 120.0}) {
+    const Point2 p = off.GetPointAtStation(off.EntityStartStation(1) + along);
+    const double footAlong = parent.GetStationOffset(p.x, p.y).internalStation - arcStart;
+    CHECK(footAlong == Approx(along * 500.0 / 512.0).margin(1e-6));
+  }
+}
+
+// --- REQ-489: intersections ---
+
+TEST_CASE("ALIGNMENTINTERSECT gives stations on both alignments, reads arcs and places points", "[req489][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT A1", log);
+  Submit(st, "ALIGNMENTADD A1, TANGENT, 0, 0, 90, 200", log);  // east along y = 0
+  Submit(st, "ALIGNMENT B1, , 1+00", log);
+  Submit(st, "ALIGNMENTADD B1, TANGENT, 50, -100, 0, 300", log);  // north along x = 50
+  log.clear();
+  Submit(st, "ALIGNMENTINTERSECT A1, B1, POINT", log);
+  CHECK(LogHas(log, "Station = 0+50.00"));
+  CHECK(LogHas(log, "Station on \"B1\" = 2+00.00"));
+  CHECK(LogHas(log, "1 point(s) placed"));
+  REQUIRE(st.cadPoints.size() == 1);
+  CHECK(st.cadPoints[0].x == Approx(50.0).margin(1e-9));
+  CHECK(st.cadPoints[0].y == Approx(0.0).margin(1e-9));
+  log.clear();
+  Submit(st, "ALIGNMENTINTERSECT A1, ARC, 100, 0, 30, 0, 180", log);  // the upper half circle: one crossing at each end
+  CHECK(LogHas(log, "2 intersection(s)"));
+  CHECK(LogHas(log, "Station = 0+70.00"));
+  CHECK(LogHas(log, "Station = 1+30.00"));
+  log.clear();
+  Submit(st, "ALIGNMENTINTERSECT A1, ARC, 100, 0, 30, 20, 160", log);  // misses the road
+  CHECK(LogHas(log, "0 intersection(s)"));
+}
+
+TEST_CASE("A tangent through a curve's centre meets it at its analytic stations", "[req489][alignment]") {
+  Alignment a;  // tangent 100 north, then a right R 500 curve of 60 degrees; centre at (500, 100)
+  REQUIRE(a.AppendTangent({0, 0}, 0.0, 100.0));
+  REQUIRE(a.AppendCurveByDelta(500.0, 60.0 * kDeg, true));
+  const Alignment line = alignment::MakeLineObject({500.0 - 600.0 * std::cos(30.0 * kDeg), 100.0 + 600.0 * std::sin(30.0 * kDeg)},
+                                                   {500.0, 100.0});  // along the 30-degree radius into the centre
+  const std::vector<alignment::Intersection> hits = alignment::IntersectAlignments(a, line);
+  REQUIRE(hits.size() == 1);
+  CHECK(hits[0].stationA == Approx(100.0 + 500.0 * 30.0 * kDeg).margin(1e-6));
+  const Alignment through = alignment::MakeLineObject({500.0 - 700.0 * std::cos(30.0 * kDeg), 100.0 + 700.0 * std::sin(30.0 * kDeg)},
+                                                      {500.0 + 700.0 * std::cos(30.0 * kDeg), 100.0 - 700.0 * std::sin(30.0 * kDeg)});
+  CHECK(alignment::IntersectAlignments(a, through).size() == 1);  // the far side is past the curve's 60 degrees
+}

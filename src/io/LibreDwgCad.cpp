@@ -4985,8 +4985,7 @@ void ImportTaggedAlignments(AppCommandState& st, Dwg_Data* dwg, const std::vecto
     opt.pick = g.start;
     alignment::Alignment rebuilt;
     std::string why;
-    const bool unique = std::none_of(st.alignments.begin(), st.alignments.end(),
-                                     [&](const alignment::Alignment& a) { return a.name == g.name; });
+    const bool unique = UniqueAlignmentName(st, g.name) == g.name;
     if (!unique) why = "an alignment of that name was already read";
     if (!unique || !alignment::BuildFromSegments(g.segments, opt, &rebuilt, &why)) {
       log.push_back("DWG import — alignment \"" + g.name + "\" could not be rebuilt from its entities (" + why +
@@ -5113,12 +5112,7 @@ std::unordered_set<BITCODE_RLL> ImportCivilAlignments(AppCommandState& st, Dwg_D
       log.push_back("DWG import — Civil 3D alignment \"" + name + "\" was not imported: " + why + ".");
       continue;
     }
-    const std::string base = name;
-    auto taken = [&](const std::string& candidate) {
-      return std::any_of(st.alignments.begin(), st.alignments.end(),
-                         [&](const alignment::Alignment& a) { return a.name == candidate; });
-    };
-    for (int n = 2; n < 10000 && taken(name); ++n) name = base + " (" + std::to_string(n) + ")";
+    name = UniqueAlignmentName(st, name);
     made.name = name;
     made.layer = AttrFromEnt(dwg, object.tio.entity).layer;
     if (made.layer.empty()) made.layer = "0";
