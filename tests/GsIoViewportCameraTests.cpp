@@ -92,7 +92,11 @@ TEST_CASE("Closed-polyline viewport clipping boundary round-trips through docume
   PaperLayout layout;
   Viewport vp;
   vp.clipBoundary = {{1.f, 2.f, 0.5f}, {8.f, 2.f, 0.f}, {4.f, 9.f, -0.25f}};
-  layout.viewports.push_back(vp);
+  Viewport twoArcCircle;
+  twoArcCircle.clipBoundary = {{2.f, 4.f, 1.f}, {6.f, 4.f, 1.f}};
+  Viewport degenerate;
+  degenerate.clipBoundary = {{1.f, 1.f, 0.f}, {5.f, 1.f, 0.f}};
+  layout.viewports = {vp, twoArcCircle, degenerate};
   st.paperLayouts.push_back(layout);
   const auto path = UniqueGsPath("vpclip");
   std::vector<std::string> log;
@@ -100,13 +104,18 @@ TEST_CASE("Closed-polyline viewport clipping boundary round-trips through docume
   AppCommandState loaded;
   REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
   REQUIRE(loaded.paperLayouts.size() == 1);
-  REQUIRE(loaded.paperLayouts[0].viewports.size() == 1);
+  REQUIRE(loaded.paperLayouts[0].viewports.size() == 3);
   const auto& boundary = loaded.paperLayouts[0].viewports[0].clipBoundary;
   REQUIRE(boundary.size() == 3);
   CHECK(boundary[0].xIn == Approx(1.f));
   CHECK(boundary[0].yIn == Approx(2.f));
   CHECK(boundary[0].bulge == Approx(0.5f));
   CHECK(boundary[2].bulge == Approx(-0.25f));
+  const auto& circleBoundary = loaded.paperLayouts[0].viewports[1].clipBoundary;
+  REQUIRE(circleBoundary.size() == 2);
+  CHECK(circleBoundary[0].bulge == Approx(1.f));
+  CHECK(circleBoundary[1].bulge == Approx(1.f));
+  CHECK(loaded.paperLayouts[0].viewports[2].clipBoundary.empty());
 }
 
 TEST_CASE("A legacy document JSON payload with no camera keys loads every viewport in plan view (REQ-061)", "[payload][req061]") {

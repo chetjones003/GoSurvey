@@ -9,6 +9,7 @@
 #include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
 #include "util/meshgeom.hpp"
+#include "util/geom2d.hpp"
 #include "util/pointcloudcache.hpp"
 #include "BrepJson.hpp"
 
@@ -3084,8 +3085,27 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
               }
               v.clipBoundary.push_back({x, y, bulge});
             }
-            if (v.clipBoundary.size() < 3)
+            if (v.clipBoundary.size() >= 2) {
+              double twiceArea = 0.0;
+              bool validBoundary = true;
+              for (size_t i = 0; i < v.clipBoundary.size(); ++i) {
+                const auto& a = v.clipBoundary[i];
+                const auto& b = v.clipBoundary[(i + 1) % v.clipBoundary.size()];
+                ForEachBulgeChord(a.xIn, a.yIn, b.xIn, b.yIn, a.bulge, 16,
+                                  [&](double x0, double y0, double x1, double y1) {
+                                    if (!std::isfinite(x0) || !std::isfinite(y0) || !std::isfinite(x1) ||
+                                        !std::isfinite(y1)) {
+                                      validBoundary = false;
+                                      return;
+                                    }
+                                    twiceArea += x0 * y1 - y0 * x1;
+                                  });
+              }
+              if (!validBoundary || !std::isfinite(twiceArea) || std::fabs(twiceArea) < 1.e-8)
+                v.clipBoundary.clear();
+            } else if (!v.clipBoundary.empty()) {
               v.clipBoundary.clear();
+            }
           }
           v.modelCenterX = vo.value("modelCenterX", v.modelCenterX);
           v.modelCenterY = vo.value("modelCenterY", v.modelCenterY);
