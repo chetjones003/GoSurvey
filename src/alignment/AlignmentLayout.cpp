@@ -206,7 +206,7 @@ bool BuildFromPis(const std::vector<Point2>& pis, const CurveSettings& s, Alignm
 bool BuildFromPis(const std::vector<Point2>& pis, const std::vector<CurveSettings>& corners, Alignment* out,
                   std::string* error, std::vector<std::string>* warnings) {
   assert(out != nullptr);
-  assert(corners.size() == pis.size());
+  assert(pis.size() < 100000000);
   if (out == nullptr) return false;
   if (corners.size() != pis.size() || DistinctPoints(pis).size() != pis.size()) {
     out->Clear();

@@ -72,7 +72,14 @@ renderer (REQ-495.1: never a query or export). The snap re-samples near the curs
 
 - Build: `.\build.bat` Release, no warnings in changed files.
 - Full Release suite (`ctest --preset ninja-release`, at df69d30c): 194/194 passed.
-- Full Debug suite: run after the check-in commit (see below).
+- Debug: `.\build.bat debug` builds. `[alignment]` in Debug: 257 cases pass (after removing a Debug-only assert in the
+  per-PI `BuildFromPis` that contradicted its own refusal test). The full Debug suite does **not** complete, for
+  reasons outside this work (no commit on this branch touches them; they reproduce on their own):
+  - `LibreDWG TU encoders preserve section and object string conventions` — heap corruption (0xC0000374);
+  - `OnlineMapTests.cpp` REQ-363 and REQ-364 cases — Debug break (0x80000003);
+  - `qt.editor.*` — `build/debug` has the release Qt DLLs plus `Qt6Testd.dll`, which needs the missing
+    `Qt6Cored.dll` (0xC0000135), so no Qt test starts;
+  - `headless.block-command-bad-numbers` — did not finish in 45 minutes (likely a hidden Debug assert dialog).
 - Documentation: `resources/wiki/Alignments.md`, `Command-Reference.md`, `Object-Snaps.md` and the command pages for
   ALIGNMENTTABLE, ALIGNMENTLABEL, ALIGNMENTLABELSTYLE, ALIGNMENTSTYLE, ALIGNMENTEDIT and ALIGNMENTCHECKSET updated.
   README and PRIVACY reviewed: no change needed (no new data collection, no new top-level feature list entry). Public
