@@ -113,10 +113,130 @@ TEST_CASE("Segment table lists every entity in travel order", "[req493][alignmen
   std::string why;
   REQUIRE(alignment::BuildAlignmentTableText(a, AlignmentTableKind::Segment, 2, AngleDisplaySettings{}, &seg, &why));
   CHECK(DataRows(seg) == 3);
-  CHECK(seg.cells[9] == "1");
+  CHECK(seg.cells[9] == "L1");           // rows are named by their tags, as Civil 3D's tables are
   CHECK(seg.cells[10] == "Tangent");
-  CHECK(seg.cells[18] == "2");           // row 2 starts at cell 18
+  CHECK(seg.cells[18] == "C1");          // row 2 starts at cell 18
   CHECK(seg.cells[19] == "Curve");
+  CHECK(seg.cells[27] == "L2");
+}
+
+TEST_CASE("Tags number each entity kind in travel order", "[req493][alignment]") {
+  Alignment a;
+  REQUIRE(a.AppendTangent({0.0, 0.0}, 0.0, 100.0));
+  REQUIRE(a.AppendSpiral(50.0, 0.0, 400.0, true));
+  REQUIRE(a.AppendCurveByDelta(400.0, 10.0 * kDeg, true));
+  REQUIRE(a.AppendSpiral(50.0, 400.0, 0.0, true));
+  REQUIRE(a.AppendTangent(100.0));
+  REQUIRE(a.AppendCurveByDelta(300.0, 8.0 * kDeg, false));
+  CHECK(alignment::SegmentTags(a) == std::vector<std::string>{"L1", "S1", "C1", "S2", "L2", "C2"});
+  CHECK(alignment::SegmentTags(Alignment{}).empty());
+}
+
+TEST_CASE("A spiral table lists each spiral's length, A, radii and deflection", "[req493][alignment]") {
+  Alignment a;
+  a.segmentLabels = true;
+  REQUIRE(a.AppendTangent({0.0, 0.0}, 0.0, 100.0));
+  REQUIRE(a.AppendSpiral(50.0, 0.0, 400.0, true));
+  REQUIRE(a.AppendCurveByDelta(400.0, 10.0 * kDeg, true));
+  alignment::AlignmentTableText t, seg;
+  std::string why;
+  REQUIRE(alignment::BuildAlignmentTableText(a, AlignmentTableKind::Spiral, 2, AngleDisplaySettings{}, &t, &why));
+  REQUIRE(t.cols == 9);
+  REQUIRE(DataRows(t) == 1);
+  CHECK(t.cells[0] == "Spiral");
+  CHECK(t.cells[9] == "S1");
+  CHECK(t.cells[12] == "50.00");                              // length
+  CHECK(t.cells[13] == "141.42");                             // A = sqrt(400 * 50)
+  CHECK(t.cells[14] == "\xE2\x88\x9E");                       // tangent end: infinite radius
+  CHECK(t.cells[15] == "400.00");
+  CHECK(t.cells[17] == "Right");
+  REQUIRE(alignment::BuildAlignmentTableText(a, AlignmentTableKind::Segment, 2, AngleDisplaySettings{}, &seg, &why));
+  CHECK(seg.cells[19] == "Spiral");  // a spiral is not misread as a curve
+  CHECK(seg.cells[22] == "50.00");
+}
+
+TEST_CASE("SPLIT= divides a table into parts side by side; the last part takes rows an edit adds",
+          "[req493][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT SP", log);
+  Submit(st, "ALIGNMENTADD SP, TANGENT, 0, 0, 90, 100", log);
+  for (int i = 0; i < 4; ++i) {
+    Submit(st, "ALIGNMENTADD SP, CURVE, 500, 5, RIGHT", log);
+    Submit(st, "ALIGNMENTADD SP, TANGENT, 100", log);
+  }
+  Submit(st, "ALIGNMENTLABEL SP, SEGMENTS", log);
+  log.clear();
+  Submit(st, "ALIGNMENTTABLE SP, LINE, SPLIT=2, 0, 0", log);  // 5 lines: parts of 2, 2 and 1 rows
+  CHECK(LogHas(log, "in 3 tables"));
+  REQUIRE(st.cadTables.size() == 3);
+  REQUIRE(st.alignments[0].tables.size() == 3);
+  CHECK(st.cadTables[0].cells.size() == 15);
+  CHECK(st.cadTables[1].cells.size() == 15);
+  CHECK(st.cadTables[2].cells.size() == 10);
+  CHECK(st.cadTables[1].cells[0] == "Line");  // each part repeats the header
+  CHECK(st.cadTables[1].cells[5] == "L3");
+  CHECK(st.cadTables[2].cells[5] == "L5");
+  CHECK(st.cadTables[1].insX > st.cadTables[0].insX + st.cadTables[0].width);  // parts sit side by side
+  CHECK(st.cadTables[1].insY == st.cadTables[0].insY);
+  Submit(st, "ALIGNMENTADD SP, CURVE, 500, 5, RIGHT", log);
+  Submit(st, "ALIGNMENTADD SP, TANGENT, 100", log);
+  CHECK(st.cadTables[2].cells.size() == 15);  // L5 and the new L6
+  CHECK(st.cadTables[0].cells.size() == 15);
+
+  const std::string json = SerializeGoSurveyJson(st);
+  AppCommandState back = Drawing();
+  std::vector<std::string> loadLog;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, json, loadLog));
+  REQUIRE(back.alignments[0].tables.size() == 3);
+  CHECK(back.alignments[0].tables[1].firstRow == 2);
+  CHECK(back.alignments[0].tables[1].rowCount == 2);
+  CHECK(back.alignments[0].tables[2].rowCount == 0);
+
+  log.clear();
+  Submit(st, "ALIGNMENTTABLE SP, LINE, SPLIT=0", log);
+  CHECK(LogHas(log, "SPLIT= needs a whole number"));
+  CHECK(st.cadTables.size() == 3);
+}
+
+TEST_CASE("Alignment tables use the current or named data table style", "[req493][alignment]") {
+  AppCommandState st = Drawing();
+  CadTableStyle big = CadTableBuiltinStyles().front();
+  big.name = "Big";
+  big.textHeightInches = 0.25f;
+  st.tableStyles = CadTableBuiltinStyles();
+  st.tableStyles.push_back(big);
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT TS", log);
+  Submit(st, "ALIGNMENTADD TS, TANGENT, 0, 0, 90, 100", log);
+  Submit(st, "ALIGNMENTLABEL TS, SEGMENTS", log);
+  Submit(st, "ALIGNMENTTABLE TS, LINE", log);
+  REQUIRE(st.cadTables.size() == 1);
+  CHECK(st.cadTables[0].styleName == "Standard");
+  st.tablePendingStyle = "Big";
+  Submit(st, "ALIGNMENTTABLE TS, LINE", log);
+  REQUIRE(st.cadTables.size() == 2);
+  CHECK(st.cadTables[1].styleName == "Big");
+  CHECK(st.cadTables[1].plottedHeightInches == 0.25f);
+  Submit(st, "ALIGNMENTTABLE TS, LINE, STYLE=Standard", log);
+  REQUIRE(st.cadTables.size() == 3);
+  CHECK(st.cadTables[2].styleName == "Standard");
+  log.clear();
+  Submit(st, "ALIGNMENTTABLE TS, LINE, STYLE=NameNEZD", log);  // a point table style cannot hold alignment rows
+  CHECK(LogHas(log, "no data table style named"));
+  CHECK(st.cadTables.size() == 3);
+}
+
+TEST_CASE("Segment labels become tags once a segment table lists them", "[req493][alignment]") {
+  Alignment a = Example();
+  a.segmentLabels = true;
+  CHECK_FALSE(alignment::ShowsTagLabels(a));
+  a.tables.push_back({7, AlignmentTableKind::StationEquation, true});
+  CHECK_FALSE(alignment::ShowsTagLabels(a));  // an equation table lists no segments
+  a.tables.push_back({8, AlignmentTableKind::Curve, false});
+  CHECK(alignment::ShowsTagLabels(a));
+  a.segmentLabels = false;
+  CHECK_FALSE(alignment::ShowsTagLabels(a));
 }
 
 TEST_CASE("ALIGNMENTTABLE refuses an unlabelled alignment and names the label command", "[req493][alignment]") {

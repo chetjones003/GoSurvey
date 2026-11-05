@@ -169,7 +169,7 @@ struct ContinuityTolerance {
 };
 
 /// What a table in the drawing shows (REQ-493.1). Equation tables need no segment labels; the rest do.
-enum class AlignmentTableKind : unsigned char { Line = 0, Curve = 1, Segment = 2, StationEquation = 3 };
+enum class AlignmentTableKind : unsigned char { Line = 0, Curve = 1, Segment = 2, StationEquation = 3, Spiral = 4 };
 
 /// A drawing TABLE made from this alignment (REQ-493). `tableId` is the table's stable entity id; a dynamic table is
 /// rebuilt whenever the alignment changes (REQ-493.2), a static one is a frozen snapshot.
@@ -192,6 +192,10 @@ struct AlignmentTableLink {
   std::uint64_t tableId = 0;
   AlignmentTableKind kind = AlignmentTableKind::Line;
   bool dynamic = false;
+  /// Split Table (REQ-493.1): this table shows data rows [firstRow, firstRow + rowCount). rowCount 0 = every row from
+  /// firstRow on, so the last part of a split dynamic table takes the rows an edit adds.
+  int firstRow = 0;
+  int rowCount = 0;
 };
 
 class Alignment {

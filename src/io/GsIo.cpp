@@ -2359,8 +2359,14 @@ json BuildRoot(const AppCommandState& st) {
       }
       if (!a.tables.empty()) {  // REQ-493: the table links, so dynamic tables keep following their alignment
         json links = json::array();
-        for (const alignment::AlignmentTableLink& t : a.tables)
-          links.push_back({{"id", t.tableId}, {"kind", static_cast<int>(t.kind)}, {"dynamic", t.dynamic}});
+        for (const alignment::AlignmentTableLink& t : a.tables) {
+          json link = {{"id", t.tableId}, {"kind", static_cast<int>(t.kind)}, {"dynamic", t.dynamic}};
+          if (t.firstRow != 0 || t.rowCount != 0) {
+            link["firstRow"] = t.firstRow;
+            link["rowCount"] = t.rowCount;
+          }
+          links.push_back(std::move(link));
+        }
         o["tables"] = std::move(links);
       }
       json ents = json::array();
@@ -4317,9 +4323,11 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           if (t.contains("id") && t["id"].is_number_unsigned()) link.tableId = t["id"].get<std::uint64_t>();
           if (t.contains("kind") && t["kind"].is_number_integer()) {
             const int k = t["kind"].get<int>();
-            if (k >= 0 && k <= 3) link.kind = static_cast<alignment::AlignmentTableKind>(k);
+            if (k >= 0 && k <= 4) link.kind = static_cast<alignment::AlignmentTableKind>(k);
           }
           if (t.contains("dynamic") && t["dynamic"].is_boolean()) link.dynamic = t["dynamic"].get<bool>();
+          if (t.contains("firstRow") && t["firstRow"].is_number_integer()) link.firstRow = std::max(0, t["firstRow"].get<int>());
+          if (t.contains("rowCount") && t["rowCount"].is_number_integer()) link.rowCount = std::max(0, t["rowCount"].get<int>());
           if (link.tableId != 0) a.tables.push_back(link);
         }
       }

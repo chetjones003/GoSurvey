@@ -20,6 +20,16 @@ struct AlignmentTableText {
                                            const AngleDisplaySettings& angles, AlignmentTableText* out, std::string* whyNot,
                                            const StationFormat& station = {});
 
+/// The table tag of every entity in travel order (REQ-493.1): L1, L2, … for lines, C1, … for curves and S1, … for
+/// spirals, as Civil 3D numbers tag labels. A line, curve, spiral or segment table names its rows by these tags.
+[[nodiscard]] std::vector<std::string> SegmentTags(const Alignment& a);
+/// True when the alignment's segment labels are drawn as tags: they are on and a line, curve, spiral or segment table
+/// lists them. Civil 3D converts existing segment labels to tag labels when such a table is made.
+[[nodiscard]] bool ShowsTagLabels(const Alignment& a);
+/// One part of a split table (REQ-493.1 Split Table): the header and data rows [firstRow, firstRow + rowCount);
+/// rowCount 0 takes every row from firstRow on.
+[[nodiscard]] AlignmentTableText SliceTableRows(const AlignmentTableText& full, int firstRow, int rowCount);
+
 /// The label text of a circular curve in the layout the spec gives (REQ-492.3): `R = 500.00' Δ = 15°00'00" L = 130.90' T = 65.83'`.
 /// Precision and angle format follow the drawing's settings; the curve's true arc length is used, not the chord.
 [[nodiscard]] std::string CurveLabelText(const CurveData& curve, int linearPrecision, const AngleDisplaySettings& angles);

@@ -547,10 +547,15 @@ void DrawAlignmentSegmentText(QPainter& painter, const AppCommandState& state, c
   assert(state.displayLinearPrecision >= 0);
   const AngleDisplaySettings angles = CadAngleDisplaySettings(state);
   const int n = static_cast<int>(al.Entities().size());
+  const std::vector<std::string> tags = alignment::ShowsTagLabels(al) ? alignment::SegmentTags(al) : std::vector<std::string>{};
   for (int i = 0; i < n; ++i) {
     const alignment::Entity& e = al.Entities()[static_cast<size_t>(i)];
     const double mid = 0.5 * (al.EntityStartStation(i) + al.EntityEndStation(i));
     const AlignmentScreenFrame f = FrameAt(view, al, mid);
+    if (!tags.empty()) {  // REQ-493.1: a table lists these segments, so each label is its tag
+      PlaceStack(painter, face, f, {tags[static_cast<size_t>(i)]}, {1.0, -1.0}, 0.6 * face.px, boxes);
+      continue;
+    }
     alignment::CurveData cd;
     alignment::SpiralData sd;
     std::vector<std::string> lines;

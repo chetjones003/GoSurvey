@@ -68,7 +68,7 @@ inline constexpr Button kButtons[] = {
   {"Home", "Clipboard", "##ClipMatchProps", "Match Properties", "c3d_matchprops", "MATCHPROP", "Match Properties — copy one object's layer, color, linetype and lineweight onto others.\nCommand bar: MATCHPROP or MA", false, false},
   {"Home", "Clipboard", "##ClipPasteSpecial", "Paste Special", "c3d_pastespecial", "", "Paste Special — not implemented yet.", false, true},
   {"Annotate", "Labels & Tables", "##AnnAddLabels", "Add\nLabels", "Annotation_Add", "", "Add Labels — not implemented yet.", true, true},
-  {"Annotate", "Labels & Tables", "##AnnAddTables", "Add\nTables", "Table", "ADDPOINTTABLE", "Add Point Table — a table of survey points in a point table style, chosen in a dialog.", true, false},
+  {"Annotate", "Labels & Tables", "##AnnAddTables", "Add\nTables", "Table", "@addTablesMenu", "Add Tables — a point table, or a line, curve, spiral, segment or station equation table of the selected alignment.\nCommand bar: ADDPOINTTABLE, ALIGNMENTTABLE", true, false},
   {"Annotate", "Text", "##RibbonMtextLarge", "Multiline\nText", "mtext", "MTEXT", "Multiline Text — multiline in a frame; after box, edit in the on-drawing editor (Ctrl+Enter reformats; Save to place). Double-click MTEXT to edit.\nCommand bar: MTEXT or MT", true, false},
   {"Annotate", "Text", "##RibbonText", "Text", "text", "TEXT", "Text — single-line annotation at insertion.\nCommand bar: TEXT", false, false},
   {"Annotate", "Text", "##RibbonFindText", "Find text", "Find", "", "Find text — not implemented yet.", false, true},

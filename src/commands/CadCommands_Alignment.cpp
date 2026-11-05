@@ -24,6 +24,7 @@
 #include "alignment/AlignmentLabels.hpp"
 #include "alignment/AlignmentDesign.hpp"  // REQ-502
 #include "util/cadtable.hpp"
+#include "util/cadtablestyle.hpp"
 #include "SpreadsheetIo.hpp"
 #include "WinFileDialogs.hpp"
 #include "StringUtil.hpp"
@@ -266,6 +267,7 @@ void RunAlignmentAdd(AppCommandState& st, const std::string& args, std::vector<s
   const alignment::Alignment& r = st.alignments[static_cast<size_t>(ix)];
   log.push_back("ALIGNMENTADD - \"" + r.name + "\" now has " + std::to_string(r.Entities().size()) +
                 " entities, length " + Lin(st, r.Length()) + ", ending at station " + Sta(st, r, r.EndStation()) + ".");
+  RefreshAlignmentOffsets(st, log);  // REQ-488 linked offsets and REQ-493.2 dynamic tables follow the new entity
 }
 
 // ALIGNMENTLIST [<name>]  (REQ-501.1 properties, REQ-494 entity list)
@@ -670,6 +672,7 @@ const char* TableKindLabel(alignment::AlignmentTableKind k) {
   switch (k) {
     case alignment::AlignmentTableKind::Line: return "Line";
     case alignment::AlignmentTableKind::Curve: return "Curve";
+    case alignment::AlignmentTableKind::Spiral: return "Spiral";
     case alignment::AlignmentTableKind::Segment: return "Segment";
     case alignment::AlignmentTableKind::StationEquation: return "Station equation";
   }
@@ -679,6 +682,7 @@ const char* TableKindLabel(alignment::AlignmentTableKind k) {
 bool ParseTableKind(const std::string& word, alignment::AlignmentTableKind* k) {
   if (word == "line") *k = alignment::AlignmentTableKind::Line;
   else if (word == "curve") *k = alignment::AlignmentTableKind::Curve;
+  else if (word == "spiral") *k = alignment::AlignmentTableKind::Spiral;
   else if (word == "segment" || word == "segments") *k = alignment::AlignmentTableKind::Segment;
   else if (word == "equation" || word == "equations") *k = alignment::AlignmentTableKind::StationEquation;
   else return false;
@@ -700,6 +704,7 @@ void RefreshDynamicTables(AppCommandState& st, std::vector<std::string>& log) {
         log.push_back("  Table for \"" + a.name + "\" was not updated: " + why + ".");
         continue;
       }
+      if (link.firstRow != 0 || link.rowCount != 0) text = alignment::SliceTableRows(text, link.firstRow, link.rowCount);
       CadTable& tbl = st.cadTables[static_cast<size_t>(ti)];
       tbl.cols = text.cols;
       tbl.cells = text.cells;
@@ -748,40 +753,108 @@ void RunAlignmentLabel(AppCommandState& st, const std::string& args, std::vector
                    : "ALIGNMENTLABEL - segment labels of \"" + a->name + "\" cleared. Existing line and curve tables stop updating.");
 }
 
-// ALIGNMENTTABLE <name>, LINE|CURVE|SEGMENT|EQUATIONS[, STATIC|DYNAMIC][, <x>, <y>]   (REQ-493.1 / .2)
-// Inserts a drawing TABLE at the world point (top-left), default the drawing origin. DYNAMIC (the default) rebuilds the
-// table whenever the alignment changes; STATIC is a frozen snapshot.
+namespace {
+
+struct AlignmentTableOptions {
+  bool dynamic = true;
+  int splitRows = 0;  ///< 0 = one table
+  std::string style;
+  bool hasPoint = false;
+  double wx = 0.0, wy = 0.0;
+};
+
+/// Reads `[STATIC|DYNAMIC][, SPLIT=<rows>][, STYLE=<name>][, <x>, <y>]` in any order. False (with a message) on bad input.
+bool ParseAlignmentTableOptions(const std::vector<std::string>& f, AlignmentTableOptions* o, std::vector<std::string>& log) {
+  assert(o != nullptr);
+  assert(f.size() >= 2);
+  std::vector<std::string> numbers;
+  for (size_t i = 2; i < f.size(); ++i) {
+    const std::string w = Lower(f[i]);
+    if (w == "static" || w == "dynamic") {
+      o->dynamic = w == "dynamic";
+    } else if (w.rfind("split=", 0) == 0) {
+      double rows = 0.0;
+      if (!ParseNum(f[i].substr(6), &rows) || rows < 1.0 || rows > 10000.0 || rows != std::floor(rows)) {
+        log.push_back("ALIGNMENTTABLE - SPLIT= needs a whole number of data rows per table, 1 or more.");
+        return false;
+      }
+      o->splitRows = static_cast<int>(rows);
+    } else if (w.rfind("style=", 0) == 0) {
+      o->style = f[i].substr(6);
+    } else {
+      numbers.push_back(f[i]);
+    }
+  }
+  if (numbers.empty()) return true;
+  if (numbers.size() != 2 || !ParseNum(numbers[0], &o->wx) || !ParseNum(numbers[1], &o->wy)) {
+    log.push_back("ALIGNMENTTABLE - the insertion point must be two numbers.");
+    return false;
+  }
+  o->hasPoint = true;
+  return true;
+}
+
+/// The data table style a new alignment table uses: STYLE= when given, else the current table style, else Standard
+/// (REQ-493.1: the table style is a REQ-478 table style). Null when STYLE= names no data table style.
+const CadTableStyle* AlignmentTableStyle(const AppCommandState& st, const std::string& requested) {
+  assert(st.tableStyles.size() < 100000);
+  assert(requested.size() < 4096);
+  if (!requested.empty()) {
+    const CadTableStyle* s = CadTableFindStyle(st.tableStyles, requested);
+    return s != nullptr && !s->point ? s : nullptr;
+  }
+  const CadTableStyle* current = CadTableFindStyle(st.tableStyles, st.tablePendingStyle);
+  return current != nullptr && !current->point ? current : CadTableFindStyle(st.tableStyles, "Standard");
+}
+
+/// Adds one drawing TABLE holding `text` with its top-left at drawing-local (lx, ly); returns its stable id.
+std::uint64_t InsertAlignmentCadTable(AppCommandState& st, const alignment::AlignmentTableText& text,
+                                      const CadTableStyle* style, double lx, double ly, float* width) {
+  assert(text.cols > 0);
+  assert(width != nullptr);
+  CadTable tbl;
+  tbl.cols = text.cols;
+  tbl.cells = text.cells;
+  if (const TextStyle* ts = ActiveTextStyle(st)) tbl.fontFamily = ts->fontFamily;
+  tbl.plottedHeightInches = st.defaultPlottedTextHeightInches;
+  if (style != nullptr) {
+    tbl.styleName = style->name;
+    tbl.plottedHeightInches = style->textHeightInches;
+    if (const TextStyle* ts = TextStyles::Find(st.textStyles, style->textStyleName)) tbl.fontFamily = ts->fontFamily;
+  }
+  CadTableFitToContent(&tbl, st.modelUnitsPerPlottedInch);
+  tbl.insX = static_cast<float>(lx);
+  tbl.insY = static_cast<float>(ly) + tbl.height;  // top-left, body below it, as VOLTABLE places its table
+  tbl.insZ = CadCommitElevation(st);
+  *width = tbl.width;
+  st.cadTables.push_back(std::move(tbl));
+  AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
+  EnsureAttrCounts(st);
+  st.cadTableAttrs.back().id = st.nextEntityId++;  // the link needs a stable id now, not at the next sweep (REQ-076)
+  return st.cadTableAttrs.back().id;
+}
+
+}  // namespace
+
+// ALIGNMENTTABLE <name>, LINE|CURVE|SPIRAL|SEGMENT|EQUATIONS[, STATIC|DYNAMIC][, SPLIT=<rows>][, STYLE=<name>][, <x>, <y>]
+// (REQ-493.1 / .2). Inserts a drawing TABLE at the world point (top-left), default the drawing origin. DYNAMIC (the
+// default) rebuilds the table whenever the alignment changes; STATIC is a frozen snapshot. SPLIT= puts at most that many
+// data rows in each table and sets the parts side by side, each with the header, as Civil 3D's Split Table does.
 void RunAlignmentTable(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
-  const char* usage =
-      "ALIGNMENTTABLE - usage: ALIGNMENTTABLE <name>, LINE|CURVE|SEGMENT|EQUATIONS[, STATIC|DYNAMIC][, <x>, <y>].";
-  if (f.size() < 2) {
+  const char* usage = "ALIGNMENTTABLE - usage: ALIGNMENTTABLE <name>, LINE|CURVE|SPIRAL|SEGMENT|EQUATIONS[, STATIC|DYNAMIC]"
+                      "[, SPLIT=<rows>][, STYLE=<name>][, <x>, <y>].";
+  alignment::AlignmentTableKind kind{};
+  if (f.size() < 2 || !ParseTableKind(Lower(f[1]), &kind)) {
     log.push_back(usage);
     return;
   }
   alignment::Alignment* a = Resolve(st, "ALIGNMENTTABLE", f[0], log);
-  if (a == nullptr) return;
-  alignment::AlignmentTableKind kind{};
-  if (!ParseTableKind(Lower(f[1]), &kind)) {
-    log.push_back(usage);
-    return;
-  }
-  size_t next = 2;
-  bool dynamic = true;
-  if (f.size() > next && (Lower(f[next]) == "static" || Lower(f[next]) == "dynamic")) {
-    dynamic = Lower(f[next]) == "dynamic";
-    ++next;
-  }
-  bool hasPoint = false;
-  double wx = 0.0, wy = 0.0;
-  if (f.size() == next + 2) {
-    if (!ParseNum(f[next], &wx) || !ParseNum(f[next + 1], &wy)) {
-      log.push_back("ALIGNMENTTABLE - the insertion point must be two numbers.");
-      return;
-    }
-    hasPoint = true;
-  } else if (f.size() != next) {
-    log.push_back(usage);
+  AlignmentTableOptions opt;
+  if (a == nullptr || !ParseAlignmentTableOptions(f, &opt, log)) return;
+  const CadTableStyle* style = AlignmentTableStyle(st, opt.style);
+  if (!opt.style.empty() && style == nullptr) {
+    log.push_back("ALIGNMENTTABLE - no data table style named \"" + opt.style + "\". No table was made.");
     return;
   }
   alignment::AlignmentTableText text;
@@ -790,28 +863,26 @@ void RunAlignmentTable(AppCommandState& st, const std::string& args, std::vector
     log.push_back("ALIGNMENTTABLE - " + why + ". No table was made.");
     return;
   }
+  const int rows = static_cast<int>(text.cells.size() / static_cast<size_t>(text.cols)) - 1;
+  const int parts = opt.splitRows > 0 ? std::max(1, (rows + opt.splitRows - 1) / opt.splitRows) : 1;
   PushUndoSnapshot(st, "Insert alignment table");
   a = Resolve(st, "ALIGNMENTTABLE", f[0], log);
-  CadTable tbl;
-  tbl.cols = text.cols;
-  tbl.cells = text.cells;
-  if (const TextStyle* ts = ActiveTextStyle(st)) tbl.fontFamily = ts->fontFamily;
-  tbl.plottedHeightInches = st.defaultPlottedTextHeightInches;
-  CadTableFitToContent(&tbl, st.modelUnitsPerPlottedInch);
   double lx = 0.0, ly = 0.0;
-  if (hasPoint) CadCoord::LocalFromWorld(st, wx, wy, &lx, &ly);
-  tbl.insX = static_cast<float>(lx);
-  tbl.insY = static_cast<float>(ly) + tbl.height;  // top-left, body below it, as VOLTABLE places its table
-  tbl.insZ = CadCommitElevation(st);
-  st.cadTables.push_back(std::move(tbl));
-  AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
-  EnsureAttrCounts(st);
-  st.cadTableAttrs.back().id = st.nextEntityId++;  // the link needs a stable id now, not at the next sweep (REQ-076)
-  a->tables.push_back({st.cadTableAttrs.back().id, kind, dynamic});
+  if (opt.hasPoint) CadCoord::LocalFromWorld(st, opt.wx, opt.wy, &lx, &ly);
+  for (int part = 0; part < parts && part < 10000; ++part) {
+    const int first = part * opt.splitRows;
+    const int count = part + 1 < parts ? opt.splitRows : 0;  // the last part takes the rest, so it can grow
+    float width = 0.0f;
+    const alignment::AlignmentTableText slice = parts > 1 ? alignment::SliceTableRows(text, first, count) : text;
+    const std::uint64_t id = InsertAlignmentCadTable(st, slice, style, lx, ly, &width);
+    a->tables.push_back({id, kind, opt.dynamic, parts > 1 ? first : 0, parts > 1 ? count : 0});
+    lx += static_cast<double>(width) * 1.05;  // Civil 3D tiles split parts across, a small gap apart
+  }
   BumpCadGpuCache(st);
   log.push_back("ALIGNMENTTABLE - " + std::string(TableKindLabel(kind)) + " table for \"" + a->name + "\" inserted (" +
-                (dynamic ? "dynamic" : "static") + ", " + std::to_string(text.cells.empty() ? 0 : text.cells.size() / static_cast<size_t>(text.cols) - 1) +
-                " row(s)).");
+                (opt.dynamic ? "dynamic" : "static") + ", " + std::to_string(rows) + " row(s)" +
+                (parts > 1 ? " in " + std::to_string(parts) + " tables" : std::string()) + ", style " +
+                (style != nullptr ? style->name : std::string("Standard")) + ").");
 }
 
 void RefreshAlignmentOffsetsOnly(AppCommandState& st, std::vector<std::string>& log) {

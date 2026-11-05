@@ -1073,6 +1073,15 @@ void EditorWindow::BuildRibbonPages() {
             add("Alignment Creation Tools", "CREATEALIGNMENT", "c3d_alignment");
             add("Create Alignment from Objects", "CREATEALIGNMENTFROMOBJECTS", "c3d_alignment");
           }
+          else if (id == "##AnnAddTables") {  // REQ-474, REQ-493: Annotate > Add Tables
+            add("Add Point Table", "ADDPOINTTABLE");
+            menu->addSection("Alignment");
+            add("Add Line", "ALIGNMENTTABLE {alignment}, LINE", "c3d_alignment");
+            add("Add Curve", "ALIGNMENTTABLE {alignment}, CURVE", "c3d_alignment");
+            add("Add Spiral", "ALIGNMENTTABLE {alignment}, SPIRAL", "c3d_alignment");
+            add("Add Segment", "ALIGNMENTTABLE {alignment}, SEGMENT", "c3d_alignment");
+            add("Add Station Equation", "ALIGNMENTTABLE {alignment}, EQUATIONS", "c3d_alignment");
+          }
           else if (id == "##GeoCaptureArea") { add("Capture Area", "@captureViewport"); add("Pick Area", "@captureArea"); menu->addSeparator(); add("Remove Captured Areas", "@removeCaptures"); }
           else if (id == "##TsAddData") {
             add("Breaklines", "@surfaceBreaklines"); add("Contours", "@surfaceContours"); add("Boundary", "@surfaceBoundary"); add("Point Groups", "@surfaceManager");
@@ -1679,7 +1688,11 @@ void EditorWindow::RunRibbonAction(const QString& id) {
   // REQ-486 / REQ-487: the Alignment tab's commands act on the selected alignment.
   const int selectedAlignment = SelectedAlignment(m_State);
   if (command.contains("{alignment}")) {
-    if (selectedAlignment < 0) return;
+    if (selectedAlignment < 0) {
+      m_Log.push_back("Select an alignment first, then choose the command again.");
+      Refresh();
+      return;
+    }
     command.replace("{alignment}", Text(m_State.alignments[static_cast<std::size_t>(selectedAlignment)].name.c_str()));
   }
   if (command == "@alignmentGeometryEditor") {
