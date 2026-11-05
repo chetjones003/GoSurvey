@@ -42,10 +42,7 @@ void EditorWindow::BuildDraftingInput() {
   const auto mode = [this](const char* name, const char* label, int key, bool AppCommandState::*member) {
     auto* button = new QToolButton(this);
     button->setObjectName(name); button->setText(label); button->setCheckable(true);
-    const bool dark = palette().color(QPalette::Window).lightness() < 128;
-    if (dark) button->setStyleSheet(QtApplyAccent("QToolButton { color:#edf1f3; background:#2a3035; border:1px solid #41494e; "
-        "border-radius:4px; padding:2px 8px; } QToolButton:hover { background:#343c41; border-color:@edge@; } "
-        "QToolButton:checked { color:#ffffff; background:@tint@; border-color:@strong@; }", true));
+    button->setProperty("draftingMode", true);
     button->setToolTip(QString("%1 (F%2)").arg(label).arg(key - Qt::Key_F1 + 1));
     button->setProperty("draftingKey", key);
     statusBar()->addWidget(button);
@@ -69,13 +66,6 @@ void EditorWindow::BuildDraftingInput() {
 
   m_DynamicInput = new QFrame(m_Viewport);
   m_DynamicInput->setObjectName("dynamicInput");
-  if (palette().color(QPalette::Window).lightness() < 128) {
-    m_DynamicInput->setStyleSheet(QtApplyAccent("QFrame#dynamicInput { background:transparent; border:none; }"
-        "QLabel { color:#dce2e5; background:transparent; }"
-        "QLineEdit { color:#f1f4f5; background:#30373c; border:0; border-bottom:1px solid #4c575d; "
-        "border-radius:0; min-height:24px; padding:2px 4px; selection-background-color:@fill@; }"
-        "QLineEdit:focus { border:0; border-bottom:2px solid @strong@; }", true));
-  }
   auto* layout = new QVBoxLayout(m_DynamicInput);
   layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(3);
   m_DynamicPrompt = new QLabel(m_DynamicInput);

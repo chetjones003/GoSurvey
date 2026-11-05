@@ -95,6 +95,7 @@ public:
   /// Zoom by a factor keeping the page point under a point of the scroll area's viewport fixed.
   void ZoomBy(double factor, QPoint viewportPoint);
 protected:
+  void changeEvent(QEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;
   void closeEvent(QCloseEvent* event) override;
   void keyPressEvent(QKeyEvent* event) override;
@@ -102,6 +103,8 @@ protected:
 private:
   friend class QtEditorTests;
   struct SaveResult { bool succeeded = false; std::string error; };
+  void ApplyAppearance();
+  void RefreshAppearanceIcons();
   void RequestRender(bool keepPicture = false);
   void PollRender();
   // REQ-387 / REQ-455: layout, zoom and the continuous strip. Page rectangles are in canvas coordinates.
@@ -230,6 +233,8 @@ private:
   QPointF m_ExtractStart;
   QPointF m_ExtractEnd;
   std::optional<pdfview::ExtractResult> m_ExtractResult;
+  int m_ExtractAccepted = 0;
+  int m_ExtractDenied = 0;
   QDialog* m_ExtractReview = nullptr;
   QTableWidget* m_ExtractCandidatesTable = nullptr;
   QLabel* m_ExtractSkippedIntro = nullptr;
@@ -361,7 +366,9 @@ private:
   QTimer* m_AuditPoll = nullptr;
   QDialog* m_AuditDialog = nullptr;
   QTableWidget* m_AuditTable = nullptr;
+  QLabel* m_AuditTableStatus = nullptr;
   QLabel* m_AuditSummary = nullptr;
+  QProgressBar* m_AuditProgress = nullptr;
   QCheckBox* m_AuditAllRows = nullptr;
   QCheckBox* m_AuditShowSheet = nullptr;
   int m_AuditSelected = -1;
@@ -429,6 +436,7 @@ private:
   void StopCompareDetail();
   QTimer* m_ComparePoll = nullptr;
   QWidget* m_ComparePanel = nullptr; ///< the Compare tab of the side panel
+  QScrollArea* m_CompareScroll = nullptr;
   void ShowComparePanel();
   QComboBox* m_CompareMode = nullptr;
   QSlider* m_CompareOpacity = nullptr;

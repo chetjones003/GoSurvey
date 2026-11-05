@@ -77,8 +77,22 @@
 #include "update/UpdateService.hpp"
 #include "util/gizmooverlay.hpp"
 #include "util/surfacevolume.hpp"
+#include "util/PlotScales.hpp"
 #include <E57SimpleData.h>
 #include <E57SimpleWriter.h>
+#include <array>
+#include <QPdfWriter>
+#include <QAbstractItemView>
+#include <QCheckBox>
+#include <QDockWidget>
+#include <QListView>
+#include <QScrollBar>
+#include <QToolBar>
+#include <QWheelEvent>
+#include <QPainter>
+#include <QPainterPath>
+#include <QtTest/QtTest>
+#include <QAction>
 #include <QAbstractButton>
 #include <QAbstractItemView>
 #include <QAction>
@@ -121,6 +135,17 @@
 #include <QSizeGrip>
 #include <QSlider>
 #include <QSpinBox>
+#include <QComboBox>
+#include <QHeaderView>
+#include <QTableWidget>
+#include <QGroupBox>
+#include <QFormLayout>
+#include <QListWidget>
+#include <QPushButton>
+#include <QProgressBar>
+#include <QToolButton>
+#include <QWidgetAction>
+#include <QMenuBar>
 #include <QStackedWidget>
 #include <QStandardItemModel>
 #include <QStatusBar>
@@ -148,6 +173,7 @@
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QTemporaryFile>
+#include <QFile>
 #include <QDir>
 #include <QFileInfo>
 #include <QFontMetricsF>
@@ -460,6 +486,30 @@ std::string Issue908AuditPdf() {
       "<</Type/Catalog/Pages 2 0 R>>", "<</Type/Pages/Kids[3 0 R]/Count 1>>",
       "<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Resources<</Font<</F1 5 0 R>>>>/Contents 4 0 R>>",
       "<</Length " + std::to_string(content.size()) + ">>\nstream\n" + content + "endstream",
+      "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>"};
+  std::string pdf = "%PDF-1.4\n";
+  std::vector<size_t> offsets;
+  for (size_t i = 0; i < objects.size(); ++i) {
+    offsets.push_back(pdf.size());
+    pdf += std::to_string(i + 1) + " 0 obj\n" + objects[i] + "\nendobj\n";
+  }
+  const size_t xref = pdf.size();
+  pdf += "xref\n0 " + std::to_string(objects.size() + 1) + "\n0000000000 65535 f \n";
+  for (size_t offset : offsets) {
+    char line[32]; std::snprintf(line, sizeof(line), "%010zu 00000 n \n", offset); pdf += line;
+  }
+  pdf += "trailer\n<</Size " + std::to_string(objects.size() + 1) + "/Root 1 0 R>>\nstartxref\n" + std::to_string(xref) + "\n%%EOF\n";
+  return pdf;
+}
+std::string Issue907CoordinatePdf() {
+  const std::string content =
+      "BT /F1 12 Tf 1 0 0 1 430 650 Tm (BRASS CAP CONTROL) Tj "
+      "0 -16 Td (N: 303267.23) Tj 0 -16 Td (E: 1887764.63) Tj "
+      "0 -16 Td (EL. 99.35) Tj ET";
+  std::vector<std::string> objects = {
+      "<</Type/Catalog/Pages 2 0 R>>", "<</Type/Pages/Kids[3 0 R]/Count 1>>",
+      "<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Resources<</Font<</F1 5 0 R>>>>/Contents 4 0 R>>",
+      "<</Length " + std::to_string(content.size()) + ">>\nstream\n" + content + "\nendstream",
       "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>"};
   std::string pdf = "%PDF-1.4\n";
   std::vector<size_t> offsets;
@@ -1094,8 +1144,11 @@ private Q_SLOTS:
 
   // ---- Issue #907 / REQ-399: Qt PDF coordinate extraction ----
   void pdfCoordinateReviewAcceptsAndDeniesThroughDrawingWorkflow() {
+    const bool oldLightTheme = qApp->property("cadLightTheme").toBool();
+    auto restoreAppearance = qScopeGuard([&] { ApplyQtAppearance(*qApp, oldLightTheme); });
+    ApplyQtAppearance(*qApp, true);
     QTemporaryDir directory;
-    const QString path = Issue905WritePdf(directory, "coordinate-review.pdf", pdfview::MakeSyntheticPdf(1, 3, 0));
+    const QString path = Issue905WritePdf(directory, "coordinate-review.pdf", Issue907CoordinatePdf());
     EditorWindow editor;
     auto& state = editor.State();
     state.drawingTabs.push_back({"Drawing 1", state.nextTabUid++});
@@ -1103,34 +1156,114 @@ private Q_SLOTS:
     state.activeDrawingIdx = state.prevDrawingIdx = static_cast<int>(state.drawingTabs.size()) - 1;
     PdfWindow window(&editor);
     window.SetEditor(&editor);
-    window.resize(1100, 820); window.show();
+    window.resize(1400, 820); window.show();
     QString error;
     QVERIFY2(window.LoadFile(path, error), qPrintable(error));
     QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
 
+    QTRY_VERIFY_WITH_TIMEOUT(window.PageReady(), 10000);
+    const double scaleX = static_cast<double>(window.PageWidthPx()) / 612.0;
+    const double scaleY = static_cast<double>(window.PageHeightPx()) / 792.0;
+    window.m_ExtractStart = QPointF(420 * scaleX, window.PageHeightPx() - 665 * scaleY);
+    window.m_ExtractEnd = QPointF(600 * scaleX, window.PageHeightPx() - 575 * scaleY);
     pdfview::CoordCandidate candidate;
     candidate.northing = 303267.23; candidate.easting = 1887764.63;
     candidate.elevation = 99.35; candidate.description = "BRASS CAP CONTROL";
     candidate.sourceText = "BRASS CAP CONTROL\nN:303267.23\nE:1887764.63\nEL. 99.35";
     window.m_ExtractResult = pdfview::ExtractResult{pdfview::ExtractStatus::Ok, {candidate}, {}};
-    window.m_ExtractStart = QPointF(350, 120); window.m_ExtractEnd = QPointF(710, 260);
     window.ShowExtractReview();
     auto* review = window.findChild<QDialog*>("pdfCoordinateReview"); QVERIFY(review);
     auto* table = review->findChild<QTableWidget*>("pdfCoordinateCandidates"); QVERIFY(table);
     QCOMPARE(table->rowCount(), 1);
+    QVERIFY(review->width() <= 640);
+    QVERIFY2(review->height() < 340,
+        qPrintable(QString("Review height %1; candidate row height %2").arg(review->height()).arg(table->rowHeight(0))));
+    QCOMPARE(table->columnCount(), 2);
+    QVERIFY(table->verticalHeader()->isHidden());
+    auto* heading = review->findChild<QLabel*>("pdfCoordinateReviewHeading"); QVERIFY(heading);
+    QCOMPARE(heading->text(), QString("Review extracted coordinates"));
+    auto* details = review->findChild<QLabel*>("pdfCoordinateCandidateDetails_0"); QVERIFY(details);
+    QVERIFY(details->text().contains("303267.230"));
+    QVERIFY(details->text().contains("BRASS CAP CONTROL"));
+    QVERIFY(details->text().contains("Description:"));
+    QVERIFY(!details->text().contains("Creates:")); // The candidate type is already in the heading.
+    QVERIFY(details->toolTip().contains('\n'));
+    QCOMPARE(table->horizontalScrollBar()->maximum(), 0);
+    QVERIFY(details->heightForWidth(details->width()) <= table->rowHeight(0));
+    QVERIFY(table->columnViewportPosition(1) + table->columnWidth(1) <= table->viewport()->width());
+    const QPoint reviewOrigin = window.mapFromGlobal(review->mapToGlobal(QPoint(0, 0)));
+    const QPoint pageViewportOrigin = window.mapFromGlobal(window.m_Scroll->viewport()->mapToGlobal(QPoint(0, 0)));
+    QVERIFY(reviewOrigin.x() >= pageViewportOrigin.x() + 8); // Keep the Panels dock unobstructed.
+    QVERIFY(reviewOrigin.x() + review->width() < window.width() - 300);
+    const QRect sourceBox = QRectF(window.m_ExtractStart, window.m_ExtractEnd).normalized().toAlignedRect();
+    const QPoint sourceLeft = window.m_Page->mapTo(window.m_Scroll->viewport(), sourceBox.topLeft());
+    const QPoint sourceRight = window.m_Page->mapTo(window.m_Scroll->viewport(), sourceBox.bottomRight());
+    const int cardRight = window.m_Scroll->viewport()->mapFromGlobal(
+        review->mapToGlobal(QPoint(review->width(), 0))).x();
+    QVERIFY(sourceLeft.x() >= cardRight + 8);
+    QVERIFY(sourceRight.x() <= window.m_Scroll->viewport()->width() - 8);
 
-    // Capture the selected deep navy review with the source PDF and viewer behind it.
-    QTest::qWait(80);
-    QImage composite(window.size(), QImage::Format_ARGB32_Premultiplied);
-    composite.fill(QColor("#101722"));
-    QPainter painter(&composite);
-    painter.drawPixmap(0, 0, window.grab());
-    painter.drawPixmap((window.width() - review->width()) / 2, 180, review->grab());
-    painter.end();
-    QVERIFY(composite.save(Issue907Shot("qt-907-review-deep-navy.png")));
-
+    auto captureReview = [&](const char* filename) {
+      QTest::qWait(80);
+      QImage composite(window.size(), QImage::Format_ARGB32_Premultiplied);
+      composite.fill(QColor("#101722"));
+      QPainter painter(&composite);
+      painter.drawPixmap(0, 0, window.grab());
+      const QPoint origin = window.mapFromGlobal(review->mapToGlobal(QPoint(0, 0)));
+      painter.save();
+      QPainterPath cardPath;
+      cardPath.addRoundedRect(QRectF(origin, review->size()), 8, 8);
+      painter.setClipPath(cardPath);
+      painter.drawPixmap(origin, review->grab());
+      painter.restore();
+      painter.end();
+      return composite.save(Issue907Shot(filename));
+    };
+    QVERIFY(review->styleSheet().contains("#f0f3f6"));
+    QVERIFY(window.styleSheet().contains("#f0f3f6"));
+      ApplyQtAppearance(*qApp, true);
+      window.ApplyAppearance();
+      QTest::qWait(80);
     auto* accept = review->findChild<QPushButton*>("pdfCoordinateAccept_0"); QVERIFY(accept);
+    QVERIFY(accept->property("pdfPrimaryAction").toBool());
+    const QRect chosenGeometry = review->geometry().translated(4, 4);
+    review->setGeometry(chosenGeometry);
+    const QPoint chosenFrameTopLeft = review->frameGeometry().topLeft();
+    const int movedCardRight = window.m_Scroll->viewport()->mapFromGlobal(
+        review->mapToGlobal(QPoint(review->width(), 0))).x();
+    QVERIFY(sourceLeft.x() >= movedCardRight + 16);
+    ApplyQtAppearance(*qApp, true);
+    window.ApplyAppearance();
+    QVERIFY(review->styleSheet().contains("#f0f3f6"));
+    QVERIFY(window.styleSheet().contains("#f0f3f6"));
+    QVERIFY(captureReview("qt-1109-pdf-extract-review-light.png"));
+    ApplyQtAppearance(*qApp, false);
+    window.ApplyAppearance();
+    QTest::qWait(50);
+    QVERIFY(review->styleSheet().contains("#1c2024"));
+    QVERIFY(window.styleSheet().contains("#1c2024"));
+    QVERIFY(captureReview("qt-1109-pdf-extract-review-dark.png"));
     accept->click();
+    QCOMPARE(review->frameGeometry().topLeft(), chosenFrameTopLeft);
+    QCOMPARE(review->width(), chosenGeometry.width());
+    QCOMPARE(review->height(), 156); // The completed card keeps only its heading, outcome, and close action.
+    QVERIFY(review->findChild<QLabel*>("pdfCoordinateReviewEmptyState")->isVisible());
+    auto* emptyState = review->findChild<QLabel*>("pdfCoordinateReviewEmptyState"); QVERIFY(emptyState);
+    auto* outcome = review->findChild<QLabel*>("pdfCoordinateReviewOutcome"); QVERIFY(outcome);
+    QCOMPARE(outcome->text(), QString("1 accepted, 0 denied."));
+    QCOMPARE(emptyState->text(), QString("Close this window to return to the PDF."));
+    QVERIFY(heading->geometry().top() < emptyState->geometry().center().y());
+    QVERIFY(emptyState->geometry().center().y() < review->height() - 48);
+    QVERIFY(table->isHidden());
+    QVERIFY(!review->findChild<QPushButton*>("pdfCoordinateAcceptAll")->isEnabled());
+    QVERIFY(review->findChild<QPushButton*>("pdfCoordinateAcceptAll")->isHidden());
+    QVERIFY(review->findChild<QPushButton*>("pdfCoordinateDenyAll")->isHidden());
+    QVERIFY(review->findChild<QPushButton*>("pdfCoordinateReviewClose")->property("pdfPrimaryAction").toBool());
+    QVERIFY(captureReview("qt-1109-pdf-extract-review-empty-dark.png"));
+    ApplyQtAppearance(*qApp, true);
+    window.ApplyAppearance();
+    QTest::qWait(50);
+    QVERIFY(captureReview("qt-1109-pdf-extract-review-empty-light.png"));
     QCOMPARE(state.surveyPoints.size(), size_t(1));
     QCOMPARE(state.surveyPoints[0].id, 1);
     QCOMPARE(state.surveyPoints[0].easting, candidate.easting);
@@ -1142,11 +1275,58 @@ private Q_SLOTS:
 
     candidate.pointNumber = 7; candidate.sourceText = "N:303000\nE:1887000";
     candidate.description.clear(); candidate.elevation.reset();
+    window.m_ExtractAccepted = 0; window.m_ExtractDenied = 0;
     window.m_ExtractResult = pdfview::ExtractResult{pdfview::ExtractStatus::Ok, {candidate}, {}};
     window.ShowExtractReview();
     auto* deny = review->findChild<QPushButton*>("pdfCoordinateDeny_0"); QVERIFY(deny);
     deny->click();
     QVERIFY(state.surveyPoints.empty()); // Deny never touches the drawing.
+    QVERIFY(review->findChild<QLabel*>("pdfCoordinateReviewEmptyState")->isVisible());
+    QCOMPARE(review->findChild<QLabel*>("pdfCoordinateReviewOutcome")->text(), QString("0 accepted, 1 denied."));
+    ApplyQtAppearance(*qApp, true);
+    QTest::qWait(50);
+    QVERIFY(review->styleSheet().contains("#f0f3f6"));
+    QVERIFY(captureReview("qt-1109-pdf-extract-review-denied-light.png"));
+
+    review->hide();
+    const QString noResultsPath = Issue905WritePdf(directory, "coordinate-no-results.pdf", pdfview::MakeSyntheticPdf(1, 3, 0));
+    QVERIFY2(window.LoadFile(noResultsPath, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(window.PageReady(), 10000);
+    auto captureNoResults = [&](bool light, const char* filename) {
+      ApplyQtAppearance(*qApp, light);
+      window.m_ExtractStart = QPointF(0, 0);
+      window.m_ExtractEnd = QPointF(window.PageWidthPx(), window.PageHeightPx());
+      QString messageText;
+      bool captured = false;
+      QTimer::singleShot(0, [&] {
+        auto* message = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+        if (!message) return;
+        messageText = message->text();
+        captured = message->grab().save(Issue907Shot(filename));
+        message->accept();
+      });
+      window.ExtractRegion(); // The real no-candidate path reports the extractor's message.
+      QVERIFY(captured);
+      QVERIFY(messageText.contains("No coordinates were found here"));
+      QVERIFY(messageText.contains("coordinate table"));
+      QVERIFY(messageText.contains("northing/easting pair"));
+      QVERIFY(!window.m_ExtractResult);
+    };
+    captureNoResults(true, "qt-1109-pdf-extract-no-results-light.png");
+    captureNoResults(false, "qt-1109-pdf-extract-no-results-dark.png");
+    window.m_ExtractAccepted = 0; window.m_ExtractDenied = 0;
+    window.m_ExtractResult = pdfview::ExtractResult{pdfview::ExtractStatus::Ok, {}, {}};
+    QString defensiveMessage;
+    QTimer::singleShot(0, [&] {
+      auto* message = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      if (!message) return;
+      defensiveMessage = message->text();
+      message->accept();
+    });
+    window.ShowExtractReview();
+    QCOMPARE(defensiveMessage, QString("No coordinates were found here. Select a region with a monument block, coordinate table, or northing/easting pair, then try again."));
+    QVERIFY(!window.m_ExtractResult);
   }
 
   void pdfCoordinateReviewAcceptAllAndDenyAll() {
@@ -1178,16 +1358,27 @@ private Q_SLOTS:
     review->findChild<QPushButton*>("pdfCoordinateAcceptAll")->click();
     QCOMPARE(state.surveyPoints.size(), size_t(4));
     QCOMPARE(table->rowCount(), 0);
+    QVERIFY(review->findChild<QLabel*>("pdfCoordinateReviewEmptyState")->isVisible());
+    QCOMPARE(review->findChild<QLabel*>("pdfCoordinateReviewOutcome")->text(), QString("4 accepted, 0 denied."));
+    QVERIFY(review->findChild<QPushButton*>("pdfCoordinateAcceptAll")->isHidden());
 
+    window.m_ExtractAccepted = 0; window.m_ExtractDenied = 0;
     window.m_ExtractResult = pdfview::ExtractResult{pdfview::ExtractStatus::Ok, candidates, {}};
     window.ShowExtractReview();
     QCOMPARE(table->rowCount(), 4);
+    QVERIFY(table->isVisible());
     review->findChild<QPushButton*>("pdfCoordinateDenyAll")->click();
     QCOMPARE(table->rowCount(), 0);
+    QVERIFY(review->findChild<QLabel*>("pdfCoordinateReviewEmptyState")->isVisible());
+    QCOMPARE(review->findChild<QLabel*>("pdfCoordinateReviewOutcome")->text(), QString("0 accepted, 4 denied."));
+    QVERIFY(review->findChild<QPushButton*>("pdfCoordinateDenyAll")->isHidden());
     QCOMPARE(state.surveyPoints.size(), size_t(4)); // Deny all never touches the drawing.
   }
 
   void pdfCoordinateReviewShowsSkippedTableRows() {
+    const bool oldLightTheme = qApp->property("cadLightTheme").toBool();
+    auto restoreAppearance = qScopeGuard([&] { ApplyQtAppearance(*qApp, oldLightTheme); });
+    ApplyQtAppearance(*qApp, false);
     QTemporaryDir directory;
     const QString path = Issue905WritePdf(directory, "coordinate-skipped.pdf", pdfview::MakeSyntheticPdf(1, 3, 0));
     EditorWindow editor;
@@ -1208,8 +1399,8 @@ private Q_SLOTS:
     candidate.sourceText = "1 / 303398.59 / 1887382.33";
     result.candidates.push_back(candidate);
     pdfview::SkippedTableRow skip;
-    skip.sourceText = "POINT TABLE TO BE REVISED";
-    skip.reason = "Missing northing and easting";
+    skip.sourceText = "POINT TABLE TO BE REVISED - coordinate table lacks a valid survey-point identifier, northing value, and easting value";
+    skip.reason = "Missing northing and easting values; source row has no valid coordinate pair to import.";
     result.skippedTableRows.push_back(skip);
     window.m_ExtractResult = std::move(result);
     window.ShowExtractReview();
@@ -1222,13 +1413,55 @@ private Q_SLOTS:
     QVERIFY(skippedIntro->isVisible());
     QVERIFY(skippedTable->isVisible());
     QCOMPARE(skippedTable->rowCount(), 1);
-    QCOMPARE(skippedTable->item(0, 0)->text(), QString("POINT TABLE TO BE REVISED"));
-    QCOMPARE(skippedTable->item(0, 1)->text(), QString("Missing northing and easting"));
+    QCOMPARE(skippedTable->item(0, 0)->text(), QString::fromUtf8(skip.sourceText.c_str()));
+    QCOMPARE(skippedTable->item(0, 1)->text(), QString::fromUtf8(skip.reason.c_str()));
+    QVERIFY(skippedTable->rowHeight(0) > skippedTable->verticalHeader()->defaultSectionSize());
 
     window.m_ExtractResult->skippedTableRows.clear();
     window.ShowExtractReview();
     QVERIFY(!skippedIntro->isVisible());
     QVERIFY(!skippedTable->isVisible());
+
+    window.m_ExtractResult->candidates.clear();
+    window.m_ExtractResult->skippedTableRows.push_back(skip);
+    window.ShowExtractReview();
+    QVERIFY(review->isVisible());
+    QVERIFY(review->findChild<QTableWidget*>("pdfCoordinateCandidates")->isHidden());
+    QCOMPARE(review->findChild<QTableWidget*>("pdfCoordinateCandidates")->rowCount(), 0);
+    QVERIFY(skippedIntro->isVisible());
+    QVERIFY(skippedTable->isVisible());
+    QCOMPARE(skippedTable->rowCount(), 1);
+    QCOMPARE(skippedTable->item(0, 0)->text(), QString::fromUtf8(skip.sourceText.c_str()));
+    QVERIFY(review->grab().save(Issue905Shot("qt-1109-pdf-coordinate-skipped-only-dark.png")));
+    ApplyQtAppearance(*qApp, true);
+    QVERIFY(review->grab().save(Issue905Shot("qt-1109-pdf-coordinate-skipped-only-light.png")));
+
+    pdfview::CoordCandidate longCandidate = candidate;
+    longCandidate.description.clear();
+    for (int index = 0; index < 12; ++index)
+      longCandidate.description += "Monument witness description and recovery note. ";
+    longCandidate.sourceText = "BRASS CAP CONTROL " + longCandidate.description;
+    window.m_ExtractResult->candidates.push_back(longCandidate);
+    ApplyQtAppearance(*qApp, false);
+    review->resize(620, 620);
+    window.ShowExtractReview();
+    auto* candidateTable = review->findChild<QTableWidget*>("pdfCoordinateCandidates");
+    QVERIFY(candidateTable && candidateTable->isVisible());
+    const int wideRowHeight = candidateTable->rowHeight(0);
+    review->resize(360, 620);
+    QTRY_VERIFY_WITH_TIMEOUT(candidateTable->rowHeight(0) > wideRowHeight, 1000);
+    QVERIFY(candidateTable->rowHeight(0) > 240);
+    auto* detailPanel = candidateTable->cellWidget(0, 0);
+    QVERIFY(detailPanel);
+    auto* longDetails = detailPanel->findChild<QLabel*>("pdfCoordinateCandidateDetails_0");
+    QVERIFY(longDetails && longDetails->text().contains("Monument witness"));
+    auto* createAs = detailPanel->findChild<QComboBox*>("pdfCoordinateCreateAs_0");
+    QVERIFY(createAs);
+    QTRY_VERIFY_WITH_TIMEOUT(longDetails->heightForWidth(longDetails->width()) <= longDetails->height(), 1000);
+    QVERIFY(createAs->geometry().bottom() <= detailPanel->height());
+    QVERIFY(review->grab().save(Issue905Shot("qt-1109-pdf-coordinate-long-candidate-dark.png")));
+    ApplyQtAppearance(*qApp, true);
+    QVERIFY(review->grab().save(Issue905Shot("qt-1109-pdf-coordinate-long-candidate-light.png")));
   }
 
   void pdfCoordinateAcceptAllStopsAtFirstUncreatableCandidate() {
@@ -1574,6 +1807,7 @@ private Q_SLOTS:
   }
 
   void pdfCoordinateRegionCancelAndNoTextAreSafe() {
+    ApplyQtAppearance(*qApp, false);
     QTemporaryDir directory;
     const QString path = Issue905WritePdf(directory, "coordinate-scan.pdf",
         pdfview::MakeLineWorkPdf(612, 792, 50, 1, 0));
@@ -1599,7 +1833,7 @@ private Q_SLOTS:
       auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
       QVERIFY(box);
       message = box->text();
-      QVERIFY(box->grab().save(Issue907Shot("qt-907-no-text-message.png")));
+      QVERIFY(box->grab().save(Issue907Shot("qt-1109-pdf-extract-no-text-dark.png")));
       box->accept();
     });
     QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier,
@@ -1607,6 +1841,60 @@ private Q_SLOTS:
     QVERIFY(message.contains("scanned", Qt::CaseInsensitive));
     QVERIFY(message.contains("OCR", Qt::CaseInsensitive));
     QVERIFY(!window.m_ExtractResult.has_value());
+
+    ApplyQtAppearance(*qApp, true);
+    QCoreApplication::processEvents();
+    QString lightNoTextMessage;
+    QTimer::singleShot(0, [&] {
+      auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      QVERIFY(box);
+      lightNoTextMessage = box->text();
+      QVERIFY(box->grab().save(Issue907Shot("qt-1109-pdf-extract-no-text-light.png")));
+      box->accept();
+    });
+    window.ExtractRegion();
+    QVERIFY(lightNoTextMessage.contains("likely a scanned image", Qt::CaseInsensitive));
+
+    // Exercise the page-level unreadable-text branch directly with an invalid page context.
+    // The recovery guidance should name a usable alternative rather than leaving the user stuck.
+    window.m_CtxPage = 7;
+    window.m_ExtractStart = QPointF(2, 2);
+    window.m_ExtractEnd = QPointF(canvas->width() - 2, canvas->height() - 2);
+    ApplyQtAppearance(*qApp, false);
+    QCoreApplication::processEvents();
+    QVERIFY(!qApp->property("cadLightTheme").toBool());
+    QString unreadableMessage;
+    QImage unreadableDarkShot;
+    QTimer::singleShot(0, [&] {
+      auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      QVERIFY(box);
+      unreadableMessage = box->text();
+      unreadableDarkShot = box->grab().toImage();
+      QVERIFY(unreadableDarkShot.save(Issue907Shot("qt-1109-pdf-unreadable-page-dark.png")));
+      box->accept();
+    });
+    window.ExtractRegion();
+    QVERIFY(unreadableMessage.contains("Try another page or a PDF with selectable text"));
+
+    ApplyQtAppearance(*qApp, true);
+    QCoreApplication::processEvents();
+    QVERIFY(qApp->property("cadLightTheme").toBool());
+    QString lightUnreadableMessage;
+    QImage unreadableLightShot;
+    QTimer::singleShot(0, [&] {
+      auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      QVERIFY(box);
+      lightUnreadableMessage = box->text();
+      unreadableLightShot = box->grab().toImage();
+      QVERIFY(unreadableLightShot.save(Issue907Shot("qt-1109-pdf-unreadable-page-light.png")));
+      box->accept();
+    });
+    window.ExtractRegion();
+    QVERIFY(lightUnreadableMessage.contains("Try another page or a PDF with selectable text"));
+    QVERIFY(!unreadableDarkShot.isNull() && !unreadableLightShot.isNull());
+    QVERIFY(unreadableDarkShot.pixelColor(8, 8) != unreadableLightShot.pixelColor(8, 8));
+    window.m_CtxPage = -1;
+    ApplyQtAppearance(*qApp, false);
   }
 
   void pdfCoordinateCommitHonorsReadOnlyAndPointConflicts() {
@@ -1682,7 +1970,54 @@ private Q_SLOTS:
     window.show();
     QVERIFY(QTest::qWaitForWindowExposed(&window));
     auto* tabs = window.findChild<QTabBar*>("drawingTabs"); QVERIFY(tabs);
+    QVERIFY(window.State().activeDrawingIdx == 0);
+    auto* appMenuButton = window.findChild<QToolButton*>("applicationMenu"); QVERIFY(appMenuButton);
+    QVERIFY(appMenuButton->isVisible());
+    auto* appMenu = window.findChild<QMenu*>("goSurveyApplicationMenu"); QVERIFY(appMenu);
+    QCOMPARE(appMenuButton->menu(), appMenu);
+    for (const char* actionName : {"command_NEW", "command_OPEN", "command_NEWPROJECT", "command_OPENPROJECT",
+                                  "command_PDFVIEW", "command_LSA"}) {
+      auto* action = window.findChild<QAction*>(actionName); QVERIFY(action);
+      QVERIFY(action->isEnabled());
+    }
+    auto* viewMenu = window.findChild<QMenu*>("viewMenu"); QVERIFY(viewMenu);
+    auto* propertiesDock = window.findChild<QDockWidget*>("propertiesDock"); QVERIFY(propertiesDock);
+    auto* toolspaceDock = window.findChild<QDockWidget*>("toolspaceDock"); QVERIFY(toolspaceDock);
+    QVERIFY(viewMenu->actions().contains(toolspaceDock->toggleViewAction()));
+    QVERIFY(!propertiesDock->toggleViewAction()->isEnabled());
+    QVERIFY(!toolspaceDock->toggleViewAction()->isEnabled());
+    QCOMPARE(propertiesDock->toggleViewAction()->text(), QString("Properties (open a drawing)"));
+    QCOMPARE(toolspaceDock->toggleViewAction()->text(), QString("Toolspace (open a drawing)"));
+    auto* orientation = viewMenu->findChild<QMenu*>("viewOrientation"); QVERIFY(orientation);
+    QVERIFY(!orientation->isEnabled());
+    QCOMPARE(orientation->title(), QString("Orientation (open a drawing)"));
+    auto* zoomExtents = window.findChild<QAction*>("viewZoomExtents"); QVERIFY(zoomExtents);
+    QVERIFY(!zoomExtents->isEnabled());
+    QCOMPARE(zoomExtents->text(), QString("Zoom extents (open a drawing)"));
+    auto* commandLine = window.findChild<QAction*>("viewCommandLine"); QVERIFY(commandLine);
+    QVERIFY(!commandLine->isEnabled());
+    QCOMPARE(commandLine->text(), QString("Command line (open a drawing)"));
+    viewMenu->popup(appMenuButton->mapToGlobal(QPoint(0, appMenuButton->height())));
+    QTRY_VERIFY(viewMenu->isVisible());
+    QVERIFY(viewMenu->grab().save(Issue886Shot("qt-1109-start-view-menu-docks-disabled.png")));
+    viewMenu->hide();
+    auto* importPointsLink = static_cast<QToolButton*>(nullptr);
+    for (auto* link : window.findChildren<QToolButton*>("startQuickLink")) {
+      QVERIFY(!link->accessibleDescription().isEmpty());
+      QVERIFY(!link->toolTip().isEmpty());
+      if (link->text() == "Import points") importPointsLink = link;
+    }
+    QVERIFY(importPointsLink);
+    QCOMPARE(importPointsLink->accessibleDescription(), QString("Import survey point files"));
     tabs->setCurrentIndex(1);
+    QVERIFY(propertiesDock->toggleViewAction()->isEnabled());
+    QVERIFY(toolspaceDock->toggleViewAction()->isEnabled());
+    QVERIFY(orientation->isEnabled());
+    QCOMPARE(orientation->title(), QString("Orientation"));
+    QVERIFY(zoomExtents->isEnabled());
+    QCOMPARE(zoomExtents->text(), QString("Zoom extents"));
+    QVERIFY(commandLine->isEnabled());
+    QCOMPARE(commandLine->text(), QString("Command line"));
     auto* properties = window.findChild<QDockWidget*>("propertiesDock"); QVERIFY(properties);
     auto* panel = properties->findChild<QScrollArea*>("propertiesPanel"); QVERIFY(panel);
     auto* tree = panel->widget(); QVERIFY(tree);
@@ -1752,10 +2087,26 @@ private Q_SLOTS:
         startAmber += c.red() > 30 && c.red() > c.green() * 1.25 && c.green() > c.blue();
       }
     QVERIFY2(startAmber > 80, "Recent drawings must not cover the Start-page terrain artwork");
-    QVERIFY(window.findChild<QWidget*>("ribbonBar")->isVisible());
-    QVERIFY(window.statusBar()->isVisible());
+    QVERIFY(!window.findChild<QWidget*>("ribbonBar")->isVisible());
+    for (auto* link : window.findChildren<QToolButton*>("startQuickLink")) {
+      QVERIFY(!link->accessibleDescription().isEmpty());
+      QVERIFY(!link->toolTip().isEmpty());
+    }
+    QVERIFY(window.findChild<QWidget*>("recentDrawingColumnHeaders")->isHidden());
+    QVERIFY(window.findChild<QScrollArea*>("recentDrawingsScroll")->maximumHeight() <= 80);
+    QVERIFY(window.findChild<QScrollArea*>("recentProjectsScroll")->maximumHeight() <= 90);
+    QVERIFY(window.findChild<QToolButton*>("recentSeeAll")->isHidden());
+    QVERIFY(window.findChild<QToolButton*>("projectsSeeAll")->isHidden());
+    QVERIFY(!window.statusBar()->isVisible());
+    QVERIFY(window.findChild<QScrollArea*>("recentDrawingsScroll")->y() < 100);
+    auto* recentEmpty = window.findChild<QLabel*>("recentDrawingEmptyState"); QVERIFY(recentEmpty);
+    QVERIFY(recentEmpty->y() < 10);
+    auto* projectsEmpty = window.findChild<QLabel*>("recentProjectsEmptyState"); QVERIFY(projectsEmpty);
+    QVERIFY(projectsEmpty->width() >= window.findChild<QScrollArea*>("recentProjectsScroll")->viewport()->width() - 10);
     tabs->setCurrentIndex(1);
     window.resize(1200, 800); QTest::qWait(150);
+    QVERIFY(window.findChild<QWidget*>("ribbonBar")->isVisible());
+    QVERIFY(window.statusBar()->isVisible());
     // RefreshProperties replaces its tree widget when the active drawing changes. The earlier
     // pointer referred to the outgoing tab's deferred-deleted widget; reacquire it after refresh.
     tree = panel->widget(); QVERIFY(tree);
@@ -2675,6 +3026,7 @@ private Q_SLOTS:
   }
 
   void projectSettingsApplyPersistsAndCancelDiscardsStagedChanges() {
+    ApplyQtAppearance(*qApp, false);
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     gsproj::Project created;
@@ -2692,6 +3044,7 @@ private Q_SLOTS:
     QTimer::singleShot(0, [&] {
       auto* dialog = window.findChild<QDialog*>("projectSettingsDialog");
       QVERIFY(dialog);
+      QVERIFY(dialog->styleSheet().contains("QCheckBox::indicator"));
       auto* units = dialog->findChild<QComboBox*>("projectLinearUnits");
       auto* category = dialog->findChild<QComboBox*>("projectZoneCategory");
       auto* systems = dialog->findChild<QComboBox*>("projectCoordinateSystem");
@@ -2706,7 +3059,40 @@ private Q_SLOTS:
       auto* navigation = dialog->findChild<QListWidget*>("projectSettingsNavigation");
       auto* pages = dialog->findChild<QStackedWidget*>("projectSettingsPages");
       QVERIFY(units && category && systems && angular && foot && scale && customScale && inserted && layer && applyButton && buttons && navigation && pages);
+      auto* defaultsFrame = dialog->findChild<QFrame*>("projectSettingsDefaults");
+      QVERIFY(defaultsFrame && defaultsFrame->layout());
+      QVERIFY(defaultsFrame->layout()->contentsMargins().left() >= 12);
+      QLabel* coordinateHeading = nullptr;
+      QLabel* defaultsHeading = nullptr;
+      for (auto* heading : dialog->findChildren<QLabel*>("projectSectionTitle")) {
+        if (heading->text() == "Coordinate system") coordinateHeading = heading;
+        if (heading->text() == "Defaults for project drawings") defaultsHeading = heading;
+      }
+      QVERIFY(coordinateHeading && defaultsHeading);
+      QCOMPARE(coordinateHeading->font().pointSizeF(), defaultsHeading->font().pointSizeF());
+      const auto enforcedStatuses = dialog->findChildren<QLabel*>("projectSettingStatus");
+      QCOMPARE(enforcedStatuses.size(), 2);
+      QCOMPARE(units->geometry().left(), category->geometry().left());
+      QCOMPARE(category->geometry().left(), systems->geometry().left());
+      QCOMPARE(enforcedStatuses[0]->geometry().left(), enforcedStatuses[1]->geometry().left());
+      auto* unitsPage = pages->widget(0);
+      QCOMPARE(units->mapTo(unitsPage, QPoint(0, 0)).x(), angular->mapTo(unitsPage, QPoint(0, 0)).x());
+      QCOMPARE(angular->width(), foot->width());
+      QCOMPARE(angular->mapTo(unitsPage, QPoint(angular->width(), 0)).x(),
+               customScale->mapTo(unitsPage, QPoint(customScale->width(), 0)).x());
+      QCOMPARE(scale->height(), customScale->height());
+      QVERIFY(!enforcedStatuses[0]->toolTip().isEmpty());
       QVERIFY(dialog->grab().save(Issue886Shot("qt-886-project-settings-units.png")));
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-1109-project-settings-dark.png")));
+      scale->setCurrentIndex(scale->findData(-1.0));
+      QVERIFY(customScale->isEnabled());
+      customScale->setFocus(); QTRY_VERIFY(customScale->hasFocus());
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-1109-project-settings-focused-dark.png")));
+      customScale->clearFocus();
+      int coordinateHeadingCount = 0;
+      for (const auto* label : dialog->findChildren<QLabel*>())
+        coordinateHeadingCount += label->text() == "Coordinate system" ? 1 : 0;
+      QCOMPARE(coordinateHeadingCount, 1);
       navigation->setCurrentRow(1);
       QVERIFY(dialog->grab().save(Issue886Shot("qt-886-project-settings-object-layers.png")));
       navigation->setCurrentRow(0);
@@ -2746,6 +3132,37 @@ private Q_SLOTS:
       QCOMPARE(session.settings->insUnits, 6);
     });
     action->trigger();
+
+    QTemporaryDir lightDirectory;
+    QVERIFY(lightDirectory.isValid());
+    gsproj::Project lightProject;
+    QVERIFY2(gsproj::Create(lightDirectory.path().toStdWString(), "North Ridge Light", &lightProject, &error), error.c_str());
+    ApplyQtAppearance(*qApp, true);
+    EditorWindow lightWindow;
+    const auto lightProjectUid = lightWindow.OpenProject(QString::fromStdWString(lightProject.file.wstring()), true);
+    QVERIFY(lightProjectUid != 0);
+    QTimer::singleShot(0, &lightWindow, [&] {
+      auto* dialog = lightWindow.findChild<QDialog*>("projectSettingsDialog"); QVERIFY(dialog);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-1109-project-settings-light.png")));
+      auto* lightUnits = dialog->findChild<QComboBox*>("projectLinearUnits"); QVERIFY(lightUnits);
+      auto* lightScale = dialog->findChild<QComboBox*>("projectPlotScale"); QVERIFY(lightScale);
+      auto* lightCustomScale = dialog->findChild<QDoubleSpinBox*>("projectCustomScale"); QVERIFY(lightCustomScale);
+      lightScale->setCurrentIndex(lightScale->findData(-1.0));
+      QVERIFY(lightCustomScale->isEnabled());
+      lightCustomScale->setFocus(); QTRY_VERIFY(lightCustomScale->hasFocus());
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-1109-project-settings-focused-light.png")));
+      lightCustomScale->clearFocus();
+      lightUnits->clearFocus();
+      auto* scaleInserted = dialog->findChild<QCheckBox*>("projectScaleInsertedObjects");
+      QVERIFY(scaleInserted);
+      scaleInserted->setChecked(true);
+      QVERIFY(scaleInserted->isChecked());
+      QCoreApplication::processEvents();
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-1109-project-settings-light-checked.png")));
+      dialog->reject();
+    });
+    lightWindow.ShowProjectSettings(lightProjectUid);
+    ApplyQtAppearance(*qApp, false);
   }
 
   void projectHealthPackAndTurnoverDialogsAreNativeAndDismissWithoutChanges() {
@@ -3916,6 +4333,41 @@ private Q_SLOTS:
     auto* trim = dialog->findChild<QComboBox*>("settingsTrimState");
     auto* fillet = dialog->findChild<QDoubleSpinBox*>("settingsFilletRadius");
     QVERIFY(wheel && undo && angle && trim && fillet);
+    auto* displayForm = dialog->findChild<QFormLayout*>("settingsDisplayForm");
+    auto* cursorForm = dialog->findChild<QFormLayout*>("settingsCursorForm");
+    auto* sizeForm = dialog->findChild<QFormLayout*>("settingsSizeForm");
+    auto* crosshairColor = dialog->findChild<QPushButton*>("settingsCrosshairColor");
+    auto* textMinimum = dialog->findChild<QDoubleSpinBox*>("settingsTextMinPx");
+    auto* displayHeading = dialog->findChild<QLabel*>("displaySettingsHeading");
+    auto* cursorHeading = dialog->findChild<QLabel*>("displayCursorHeading");
+    auto* sizesHeading = dialog->findChild<QLabel*>("displaySizesHeading");
+    QVERIFY(displayForm && cursorForm && sizeForm && crosshairColor && textMinimum);
+    QVERIFY(displayHeading && cursorHeading && sizesHeading);
+    QCOMPARE(wheel->mapTo(dialog, QPoint(0, 0)).x(), crosshairColor->mapTo(dialog, QPoint(0, 0)).x());
+    QCOMPARE(crosshairColor->mapTo(dialog, QPoint(0, 0)).x(), textMinimum->mapTo(dialog, QPoint(0, 0)).x());
+    QCOMPARE(displayHeading->font().pointSizeF(), cursorHeading->font().pointSizeF());
+    QCOMPARE(cursorHeading->font().pointSizeF(), sizesHeading->font().pointSizeF());
+    QCOMPARE(displayHeading->font().pointSizeF(), 13.0);
+    QVERIFY(qApp->styleSheet().contains("width:24px; height:16px"));
+    QVERIFY(qApp->styleSheet().contains("width:12px; height:12px"));
+    auto* settingsOk = dialog->findChild<QPushButton*>("settingsOk");
+    QVERIFY(settingsOk);
+    QVERIFY(qApp->styleSheet().contains("QPushButton#settingsOk"));
+    auto* linearPrecision = dialog->findChild<QSpinBox*>("settingsLinearPrecision");
+    auto* anglePrecision = dialog->findChild<QSpinBox*>("settingsAnglePrecision");
+    QVERIFY(linearPrecision && anglePrecision);
+    const int oldLinearPrecision = linearPrecision->value();
+    const int oldAnglePrecision = anglePrecision->value();
+    linearPrecision->setValue(1);
+    anglePrecision->setValue(1);
+    QCOMPARE(linearPrecision->suffix(), QString(" decimal"));
+    QCOMPARE(anglePrecision->suffix(), QString(" decimal"));
+    linearPrecision->setValue(2);
+    anglePrecision->setValue(2);
+    QCOMPARE(linearPrecision->suffix(), QString(" decimals"));
+    QCOMPARE(anglePrecision->suffix(), QString(" decimals"));
+    linearPrecision->setValue(oldLinearPrecision);
+    anglePrecision->setValue(oldAnglePrecision);
     QVERIFY(dialog->findChild<QSpinBox*>("settingsArcSmoothness"));
     QVERIFY(dialog->findChild<QSpinBox*>("settingsLinearPrecision"));
     QVERIFY(dialog->findChild<QDoubleSpinBox*>("settingsSnapAperture"));
@@ -3925,14 +4377,31 @@ private Q_SLOTS:
     {
       const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
       auto* stack = dialog->findChild<QStackedWidget*>("settingsPages");
-      ApplyQtAppearance(*qApp, false);  // the app's real Graphite theme, as a user sees it
-      dialog->resize(780, 600);
-      for (int i = 0; i < categories->count(); ++i) {
-        categories->setCurrentRow(i);
+      const bool oldLightTheme = qApp->property("cadLightTheme").toBool();
+      dialog->resize(780, 820);
+      QCoreApplication::processEvents();
+      const QSize settingsCaptureSize = dialog->size();
+      for (const bool light : {false, true}) {
+        ApplyQtAppearance(*qApp, light);
+        dialog->resize(780, 820);
         QCoreApplication::processEvents();
-        QVERIFY(dialog->grab().save(artifacts + QString("qt-1032-settings-%1.png").arg(i)));
+        QCOMPARE(dialog->size(), settingsCaptureSize);
+        const QString appearance = light ? "light" : "dark";
+        for (int i = 0; i < categories->count(); ++i) {
+          categories->setCurrentRow(i);
+          QCoreApplication::processEvents();
+          QVERIFY(dialog->grab().save(artifacts + QString("qt-1109-settings-%1-%2.png").arg(appearance).arg(i)));
+          if (i == 1) {
+            linearPrecision->setValue(1);
+            QCoreApplication::processEvents();
+            QVERIFY(dialog->grab().save(artifacts + QString("qt-1109-settings-%1-one-decimal.png").arg(appearance)));
+            linearPrecision->setValue(oldLinearPrecision);
+            QCoreApplication::processEvents();
+          }
+        }
       }
       QVERIFY(stack);
+      ApplyQtAppearance(*qApp, oldLightTheme);
       categories->setCurrentRow(0);
       QVERIFY(dialog->grab().save(artifacts + "qt-1102-settings-without-crash-disclosure.png"));
     }
@@ -4811,7 +5280,7 @@ private Q_SLOTS:
     state->drawingInsUnits = 6;
     std::vector<std::string> log;
     AdjustmentWindow window(*state, log, nullptr);
-    Action(window, "Settings")->trigger();
+    Action(window, "Edit settings")->trigger();
     auto* settings = window.findChild<QScrollArea*>("adjustmentSettingsPane");
     QVERIFY(settings);
     QVERIFY(window.findChild<QDoubleSpinBox*>("issue915DistanceConstant"));
@@ -4825,13 +5294,12 @@ private Q_SLOTS:
 
   void issue915SettingsApplyDiscardValidationAndSessionPersistence() {
     auto state = StateWithTraverse();
-    state->drawingInsUnits = 6;
     std::vector<std::string> log;
     AdjustmentWindow window(*state, log, nullptr);
     window.resize(1280, 800);
     window.show();
     QTRY_VERIFY(window.isVisible());
-    Action(window, "Settings")->trigger();
+    Action(window, "Edit settings")->trigger();
     auto* type = window.findChild<QComboBox*>("issue915AdjustmentType");
     auto* iterations = window.findChild<QSpinBox*>("issue915MaxIterations");
     auto* distancePpm = window.findChild<QDoubleSpinBox*>("issue915DistancePpm");
@@ -4840,9 +5308,88 @@ private Q_SLOTS:
     auto* refraction = window.findChild<QDoubleSpinBox*>("issue915RefractionCoefficient");
     auto* status = window.findChild<QLabel*>("issue915SettingsStatus");
     QVERIFY(type); QVERIFY(iterations); QVERIFY(distancePpm); QVERIFY(centering); QVERIFY(convergence); QVERIFY(refraction); QVERIFY(status);
+    QVERIFY(status->isHidden());
     auto* contextTabs = window.findChild<QTabWidget*>("adjustmentContextTabs");
     QVERIFY(contextTabs);
+    auto* adjustmentToolbar = window.findChild<QToolBar*>("adjustmentToolbar");
+    QVERIFY(adjustmentToolbar);
+    QVERIFY(adjustmentToolbar->styleSheet().contains("border:1px solid"));
+    auto* editSettingsAction = window.findChild<QAction*>("adjustmentEditSettingsAction");
+    QVERIFY(editSettingsAction);
+    QCOMPARE(editSettingsAction->text(), QString("Edit settings"));
+    QVERIFY(!editSettingsAction->toolTip().isEmpty());
+    QVERIFY(adjustmentToolbar->widgetForAction(editSettingsAction));
     QVERIFY(contextTabs->grab().save(Issue914Shot("qt-915-settings-pane.png")));
+    QCOMPARE(convergence->text().toLower(), QString::number(convergence->value(), 'g', 3).toLower());
+    QVERIFY(convergence->height() >= 26);
+    contextTabs->setCurrentIndex(1);
+    QTest::qWait(50);
+    auto* settingsPane = window.findChild<QScrollArea*>("adjustmentSettingsPane");
+    QVERIFY(settingsPane);
+    QCOMPARE(settingsPane->verticalScrollBar()->maximum(), 0);
+    QVERIFY(!settingsPane->horizontalScrollBar()->isVisible());
+    auto* settingsViewport = settingsPane->viewport();
+    for (auto* field : settingsPane->findChildren<QAbstractSpinBox*>()) {
+      const QPoint fieldRight = field->mapTo(settingsViewport, QPoint(field->width(), 0));
+      QVERIFY(fieldRight.x() <= settingsViewport->width());
+    }
+    for (const char* name : {"issue915DiscardSettings", "issue915ApplySettings"}) {
+      auto* button = window.findChild<QPushButton*>(name); QVERIFY(button);
+      const QPoint buttonRight = button->mapTo(settingsViewport, QPoint(button->width(), 0));
+      QVERIFY(buttonRight.x() <= settingsViewport->width());
+      QVERIFY(!button->isEnabled());
+    }
+    auto* commandEditor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    QVERIFY(commandEditor);
+    QCOMPARE(commandEditor->lineWrapMode(), QPlainTextEdit::NoWrap);
+    QCOMPARE(commandEditor->horizontalScrollBarPolicy(), Qt::ScrollBarAsNeeded);
+    QVERIFY(commandEditor->minimumWidth() >= 280);
+    QVERIFY(window.grab().save(Issue914Shot("qt-1109-adjustment-settings-dark.png")));
+    distancePpm->setValue(distancePpm->value() + 1.0);
+    QVERIFY(window.findChild<QPushButton*>("issue915ApplySettings")->isEnabled());
+    QVERIFY(window.findChild<QPushButton*>("issue915DiscardSettings")->isEnabled());
+    QVERIFY(status->isVisible());
+    QVERIFY(status->text().contains("Unapplied changes"));
+    auto* applySettingsButton = window.findChild<QPushButton*>("issue915ApplySettings"); QVERIFY(applySettingsButton);
+    const int darkDistanceFieldHeight = distancePpm->height();
+    const int darkSettingsBottomGap = settingsViewport->height() -
+        applySettingsButton->mapTo(settingsViewport, QPoint(0, applySettingsButton->height())).y();
+    QVERIFY(darkSettingsBottomGap >= 8);
+    distancePpm->setFocus(); QTRY_VERIFY(distancePpm->hasFocus());
+    if (auto* edit = distancePpm->findChild<QLineEdit*>()) edit->setCursorPosition(edit->text().size());
+    QVERIFY(window.grab().save(Issue914Shot("qt-1109-adjustment-settings-focused-dark.png")));
+    window.findChild<QPushButton*>("issue915DiscardSettings")->click();
+    QVERIFY(status->isHidden());
+    distancePpm->clearFocus();
+    const bool oldLightTheme = qApp->property("cadLightTheme").toBool();
+    ApplyQtAppearance(*qApp, true);
+    QTest::qWait(50);
+    QCOMPARE(distancePpm->height(), darkDistanceFieldHeight);
+    QVERIFY(adjustmentToolbar->styleSheet().contains("background:#f3f5f7"));
+    QVERIFY(adjustmentToolbar->styleSheet().contains("color:#27313a"));
+    for (const char* name : {"adjustmentImportAction", "adjustmentSaveAction", "adjustmentRunAction"}) {
+      auto* action = window.findChild<QAction*>(name); QVERIFY(action);
+      const QImage icon = action->icon().pixmap(32, 32).toImage().convertToFormat(QImage::Format_ARGB32);
+      int legiblePixels = 0;
+      for (int y = 0; y < icon.height(); ++y) for (int x = 0; x < icon.width(); ++x) {
+        const QColor pixel = icon.pixelColor(x, y);
+        if (pixel.alpha() > 0 && qGray(pixel.rgb()) < 200) ++legiblePixels;
+      }
+      QVERIFY(legiblePixels > 0);
+    }
+    QVERIFY(window.grab().save(Issue914Shot("qt-1109-adjustment-settings-light.png")));
+    distancePpm->setValue(distancePpm->value() + 1.0);
+    QVERIFY(window.findChild<QPushButton*>("issue915ApplySettings")->isEnabled());
+    distancePpm->setFocus(); QTRY_VERIFY(distancePpm->hasFocus());
+    const int lightSettingsBottomGap = settingsViewport->height() -
+        applySettingsButton->mapTo(settingsViewport, QPoint(0, applySettingsButton->height())).y();
+    QVERIFY(lightSettingsBottomGap >= 8);
+    if (auto* edit = distancePpm->findChild<QLineEdit*>()) edit->setCursorPosition(edit->text().size());
+    QVERIFY(window.grab().save(Issue914Shot("qt-1109-adjustment-settings-focused-light.png")));
+    window.findChild<QPushButton*>("issue915DiscardSettings")->click();
+    distancePpm->clearFocus();
+    ApplyQtAppearance(*qApp, oldLightTheme);
+    QTest::qWait(50);
 
     const LsaWeights original = state->traverseLsaWeights;
     distancePpm->setValue(12.5);
@@ -4855,6 +5402,7 @@ private Q_SLOTS:
     distancePpm->setValue(12.5);
     window.findChild<QPushButton*>("issue915ApplySettings")->click();
     QVERIFY(status->text().contains("Settings were not applied"));
+    QVERIFY(status->isVisible());
     QCOMPARE(state->traverseLsaWeights.sigmaDistPpm, original.sigmaDistPpm);
     QVERIFY(contextTabs->grab().save(Issue914Shot("qt-915-settings-validation-error.png")));
     window.findChild<QPlainTextEdit*>("adjustmentCommands")->setPlainText(validText);
@@ -4867,6 +5415,7 @@ private Q_SLOTS:
     refraction->setValue(.21);
     window.findChild<QPushButton*>("issue915ApplySettings")->click();
     QVERIFY(status->text().contains("Save .gstrav"));
+    QVERIFY(status->isVisible());
     QCOMPARE(state->traverseLsaWeights.adjustmentIs3D, true);
     QCOMPARE(state->traverseLsaWeights.maxIterations, 24);
     QCOMPARE(state->traverseLsaWeights.sigmaDistPpm, 12.5);
@@ -4894,6 +5443,9 @@ private Q_SLOTS:
   }
 
   void issue915ReportExportsAndStationPlotFollowSuccessfulAdjustment() {
+    const bool oldLightTheme = qApp->property("cadLightTheme").toBool();
+    auto restoreAppearance = qScopeGuard([&] { ApplyQtAppearance(*qApp, oldLightTheme); });
+    ApplyQtAppearance(*qApp, false);
     auto state = StateWithTraverse();
     state->traverseData.importedFiles = {"survey-a.dat", "survey-b.rw5"};
     std::vector<std::string> log;
@@ -4907,9 +5459,21 @@ private Q_SLOTS:
     auto* plot = static_cast<AdjustmentPlanView*>(plotWidget);
     auto* results = window.findChild<QTabWidget*>("adjustmentResults");
     QVERIFY(output); QVERIFY(plotWidget); QVERIFY(plot); QVERIFY(results);
+    QCOMPARE(output->lineWrapMode(), QPlainTextEdit::NoWrap);
+    QCOMPARE(output->font().pointSize(), 9);
     QVERIFY(state->traverseLsaResult.ok);
     QVERIFY(output->toPlainText().contains("survey-a.dat"));
+    QCOMPARE(output->textCursor().block().text().trimmed(), QString("Adjustment Results"));
+    const QTextCursor firstResultLine = output->document()->find("Stations (unknowns):");
+    QVERIFY(!firstResultLine.isNull());
+    QVERIFY(output->viewport()->rect().contains(output->cursorRect(firstResultLine)));
+    const QTextCursor secondResultLine = output->document()->find("Standard error of unit weight:");
+    QVERIFY(!secondResultLine.isNull());
+    const QRect secondResultRect = output->cursorRect(secondResultLine);
+    QVERIFY(output->viewport()->rect().contains(secondResultRect));
+    QVERIFY(output->viewport()->height() - secondResultRect.bottom() - 1 >= 8);
     const auto text = output->toPlainText();
+    QCOMPARE(output->horizontalScrollBar()->maximum(), 0);
     const qsizetype filesAt = text.indexOf("Data File List:");
     const qsizetype optionsAt = text.indexOf("Project Option Settings");
     const qsizetype errorsAt = text.indexOf("Instrument Standard Error Settings");
@@ -4919,6 +5483,24 @@ private Q_SLOTS:
     QCOMPARE(plot->LegCount(), 4);
     QVERIFY(plot->EllipseCount() > 0);
     QVERIFY(results->grab().save(Issue914Shot("qt-915-report-and-plot.png")));
+    output->moveCursor(QTextCursor::Start);
+    output->verticalScrollBar()->setValue(0);
+    QVERIFY(window.grab().save(Issue914Shot("qt-1109-adjustment-report-dark.png")));
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands"); QVERIFY(editor);
+    auto* contextTabs = window.findChild<QTabWidget*>("adjustmentContextTabs"); QVERIFY(contextTabs);
+    auto* workspaceTabs = window.findChild<QTabWidget*>("adjustmentWorkspace"); QVERIFY(workspaceTabs);
+    QCOMPARE(workspaceTabs->currentWidget(), static_cast<QWidget*>(window.findChild<QTabWidget*>("adjustmentResults")));
+    contextTabs->setCurrentIndex(0);
+    editor->setFocus();
+    workspaceTabs->setCurrentWidget(editor);
+    QVERIFY(editor->width() > 700);
+    QVERIFY(window.grab().save(Issue914Shot("qt-1109-adjustment-commands-dark.png")));
+    workspaceTabs->setCurrentWidget(results);
+    contextTabs->setCurrentIndex(0);
+    results->setCurrentWidget(plotWidget);
+    QTest::qWait(50);
+    QVERIFY(window.grab().save(Issue914Shot("qt-1109-adjustment-plan-dark.png")));
+    results->setCurrentIndex(0);
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -4942,6 +5524,57 @@ private Q_SLOTS:
     QVERIFY(!error.isEmpty());
     QCOMPARE(output->toPlainText(), beforeFailure);
     QVERIFY(state->traverseLsaComputed);
+
+    ApplyQtAppearance(*qApp, true);
+    auto lightState = StateWithTraverse();
+    lightState->traverseData.importedFiles = {"survey-a.dat", "survey-b.rw5"};
+    std::vector<std::string> lightLog;
+    AdjustmentWindow lightWindow(*lightState, lightLog, nullptr);
+    lightWindow.resize(1280, 800); lightWindow.show();
+    QTRY_VERIFY(lightWindow.isVisible());
+    SolveAdjustment(lightWindow);
+    QVERIFY(lightState->traverseLsaResult.ok);
+    auto* lightOutput = lightWindow.findChild<QPlainTextEdit*>("adjustmentOutput");
+    QVERIFY(lightOutput);
+    auto* darkToolbar = window.findChild<QToolBar*>("adjustmentToolbar");
+    auto* lightToolbar = lightWindow.findChild<QToolBar*>("adjustmentToolbar");
+    auto* darkOptions = window.findChild<QWidget*>("adjustmentOptions");
+    auto* lightOptions = lightWindow.findChild<QWidget*>("adjustmentOptions");
+    QVERIFY(darkToolbar && lightToolbar && darkOptions && lightOptions);
+    QCOMPARE(lightToolbar->height(), darkToolbar->height());
+    QCOMPARE(lightOptions->height(), darkOptions->height());
+    lightOutput->moveCursor(QTextCursor::Start);
+    lightOutput->verticalScrollBar()->setValue(0);
+    const QTextCursor lightFirstResultLine = lightOutput->document()->find("Stations (unknowns):");
+    QVERIFY(!lightFirstResultLine.isNull());
+    QVERIFY(lightOutput->viewport()->rect().contains(lightOutput->cursorRect(lightFirstResultLine)));
+    const QTextCursor lightSecondResultLine = lightOutput->document()->find("Standard error of unit weight:");
+    QVERIFY(!lightSecondResultLine.isNull());
+    const QRect lightSecondResultRect = lightOutput->cursorRect(lightSecondResultLine);
+    if (!lightOutput->viewport()->rect().contains(lightSecondResultRect)) {
+      lightOutput->setTextCursor(lightSecondResultLine);
+      lightOutput->ensureCursorVisible();
+      QCoreApplication::processEvents();
+      QVERIFY(lightOutput->verticalScrollBar()->value() > 0);
+    }
+    QVERIFY(lightOutput->viewport()->rect().contains(lightOutput->cursorRect(lightSecondResultLine)));
+    QVERIFY(lightWindow.grab().save(Issue914Shot("qt-1109-adjustment-report-light.png")));
+    auto* lightResults = lightWindow.findChild<QTabWidget*>("adjustmentResults");
+    auto* lightPlot = lightWindow.findChild<QWidget*>("adjustmentResultPlan");
+    auto* lightEditor = lightWindow.findChild<QPlainTextEdit*>("adjustmentCommands");
+    auto* lightWorkspace = lightWindow.findChild<QTabWidget*>("adjustmentWorkspace");
+    auto* lightContextTabs = lightWindow.findChild<QTabWidget*>("adjustmentContextTabs");
+    QVERIFY(lightResults && lightPlot && lightEditor && lightWorkspace && lightContextTabs);
+    lightContextTabs->setCurrentIndex(0);
+    lightEditor->setFocus();
+    lightWorkspace->setCurrentWidget(lightEditor);
+    QVERIFY(lightEditor->width() > 700);
+    QVERIFY(lightWindow.grab().save(Issue914Shot("qt-1109-adjustment-commands-light.png")));
+    lightWorkspace->setCurrentWidget(lightResults);
+    lightContextTabs->setCurrentIndex(0);
+    lightResults->setCurrentWidget(lightPlot);
+    QTest::qWait(50);
+    QVERIFY(lightWindow.grab().save(Issue914Shot("qt-1109-adjustment-plan-light.png")));
   }
 
   // Issue #911: screenshots of the chosen layout (options bar under the toolbar) for review; they are
@@ -5060,7 +5693,7 @@ private Q_SLOTS:
     auto* output = window.findChild<QPlainTextEdit*>("adjustmentOutput");
     QVERIFY(editor); QVERIFY(status); QVERIFY(output);
     QCOMPARE(editor->ErrorLine(), 0);
-    QCOMPARE(status->text(), QString("Command text is valid"));
+    QCOMPARE(status->text(), QString("Traverse commands are valid."));
     const QString good = editor->toPlainText();
     const TraverseData before = state->traverseData;
     const LsaWeights weights = state->traverseLsaWeights;
@@ -5090,7 +5723,7 @@ private Q_SLOTS:
     editor->setPlainText(good);  // fixing the line clears everything
     QTRY_COMPARE_WITH_TIMEOUT(editor->ErrorLine(), 0, 3000);
     QVERIFY(editor->ErrorMessage().isEmpty());
-    QCOMPARE(status->text(), QString("Command text is valid"));
+    QCOMPARE(status->text(), QString("Traverse commands are valid."));
   }
 
   void issue912PlanPreviewBuildsLegsClosingLegShotsAndEllipses() {
@@ -5159,7 +5792,7 @@ private Q_SLOTS:
     window.show();
     auto* files = window.findChild<QLabel*>("adjustmentFiles");
     auto* summary = window.findChild<QLabel*>("adjustmentSummary");
-    auto* plan = static_cast<AdjustmentPlanView*>(window.findChild<QWidget*>("adjustmentPlan"));
+    auto* plan = static_cast<AdjustmentPlanView*>(window.findChild<QWidget*>("adjustmentResultPlan"));
     auto* editor = static_cast<AdjustmentCodeEdit*>(window.findChild<QPlainTextEdit*>("adjustmentCommands"));
     QVERIFY(files); QVERIFY(summary); QVERIFY(plan); QVERIFY(editor);
     QVERIFY(files->text().contains(".gstrav: (unsaved)"));
@@ -5287,7 +5920,7 @@ private Q_SLOTS:
     window.State().userLinesFlat = {-12.0, 0.0, 0.0, 12.0, 0.0, 0.0};
     ++window.State().cadGpuRevision;
     window.m_Viewport->InvalidateGeometry();
-    window.resize(1200, 800);
+    window.resize(1400, 800);
     window.show(); window.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&window));
     QVERIFY(window.windowFlags() & Qt::FramelessWindowHint);
@@ -7026,8 +7659,12 @@ private Q_SLOTS:
     window.resize(1000, 760);
     QCoreApplication::processEvents();
     QVERIFY(ribbon->isVisible());
-    QVERIFY(properties->isVisible());
-    QVERIFY(toolspace->isVisible());
+    QVERIFY(!properties->isVisible());
+    QVERIFY(!toolspace->isVisible());
+    auto* propertiesRail = window.findChild<QToolBar*>("adaptivePropertiesRail"); QVERIFY(propertiesRail);
+    auto* toolspaceRail = window.findChild<QToolBar*>("adaptiveToolspaceRail"); QVERIFY(toolspaceRail);
+    QVERIFY(propertiesRail->isVisible());
+    QVERIFY(toolspaceRail->isVisible());
   }
 
   void frontViewPanMovesInCameraPlane() {
@@ -7341,7 +7978,11 @@ private Q_SLOTS:
       auto* dialog = window.findChild<QDialog*>("layerManager"); QVERIFY(dialog);
       QTimer::singleShot(20000, dialog, &QDialog::reject);
       auto* table = dialog->findChild<QTableWidget*>("layerTable"); QVERIFY(table);
+      QVERIFY(!dialog->findChild<QPushButton*>("layerDelete")->isEnabled());
+      QVERIFY(!dialog->findChild<QPushButton*>("layerSetCurrent")->isEnabled());
       auto* header = table->horizontalHeader();
+      const auto leftHeader = Qt::AlignLeft | Qt::AlignVCenter;
+      for (const int column : {0, 4, 5, 6}) QCOMPARE(table->horizontalHeaderItem(column)->textAlignment(), leftHeader);
       auto names = [&] { QStringList list; for (int row = 0; row < table->rowCount(); ++row) list << table->item(row, 0)->text(); return list; };
       QCOMPARE(names(), QStringList({"0", "Survey", "Alpha"}));
       // Layout: the Name column takes the width the others leave, so the table fills the window.
@@ -7353,16 +7994,38 @@ private Q_SLOTS:
       QCOMPARE(table->item(0, 4)->text(), QString::fromStdString(state.drawingLayerTable[0].color));
       QVERIFY(table->item(0, 4)->data(Qt::DecorationRole).isValid());
       QVERIFY(table->item(0, 5)->data(Qt::DecorationRole).isValid());
+      QCOMPARE(table->item(0, 6)->text(), QString("Default"));
       // The current layer is marked.
       QVERIFY(table->item(1, 0)->font().bold());
       QVERIFY(!table->item(2, 0)->font().bold());
       QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1036-layer-manager-normal.png")));
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-layer-manager-dark.png")));
+      auto* filter = dialog->findChild<QLineEdit*>("layerManagerFilter"); QVERIFY(filter);
+      const int unfilteredHeight = dialog->height();
+      filter->setText("Survey"); filter->setFocus(); QTRY_VERIFY(filter->hasFocus());
+      QCOMPARE(dialog->findChild<QLabel*>("layerManagerCurrent")->text(), QString("Current layer: Survey"));
+      QVERIFY(dialog->findChild<QLabel*>("layerManagerSubtitle")->text().contains("1 of 3 layers"));
+      QVERIFY(table->isRowHidden(0));
+      QVERIFY(!table->isRowHidden(1));
+      QVERIFY(table->isRowHidden(2));
+      QCOMPARE(table->verticalScrollBar()->maximum(), 0);
+      auto* clear = dialog->findChild<QAction*>("layerManagerFilterClear"); QVERIFY(clear);
+      QVERIFY(clear->isVisible());
+      auto* filterIcon = dialog->findChild<QAction*>("layerManagerFilterIcon"); QVERIFY(filterIcon);
+      QVERIFY(!filterIcon->icon().isNull());
+      QVERIFY(!dialog->findChild<QPushButton*>("layerDelete")->isEnabled());
+      QVERIFY(!dialog->findChild<QPushButton*>("layerSetCurrent")->isEnabled());
+      QCOMPARE(dialog->findChild<QLabel*>("layerManagerSubtitle")->text(), QString("1 of 3 layers"));
+      QVERIFY(dialog->height() < unfilteredHeight);
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-layer-manager-filtered-focused-dark.png")));
+      clear->trigger(); QCOMPARE(filter->text(), QString());
       auto clickHeader = [&](int column) { QTest::mouseClick(header->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(header->sectionViewportPosition(column) + 8, header->height() / 2)); };
       clickHeader(0);
       QCOMPARE(names(), QStringList({"0", "Alpha", "Survey"}));
       clickHeader(0);
       QCOMPARE(names(), QStringList({"Survey", "Alpha", "0"}));
       QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1036-layer-manager-sorted.png")));
+      QCOMPARE(table->item(0, 6)->text(), QString("Default"));
       // Row 0 is Survey now: the edit lands on Survey, not on the layer that used to be first.
       table->item(0, 1)->setCheckState(Qt::Unchecked);
       QCOMPARE(names(), QStringList({"Survey", "Alpha", "0"}));
@@ -7387,6 +8050,64 @@ private Q_SLOTS:
     QCOMPARE(state.drawingLayerTable.size(), std::size_t(2));
     QCOMPARE(state.drawingLayerTable[0].name, storedOrder[0]);
     QCOMPARE(state.drawingLayerTable[1].name, storedOrder[1]);
+  }
+
+  void layerManagerLightThemeCaptureUsesFreshPalette() {
+    IsolatedUserData isolated;
+    const auto oldPalette = qApp->palette(); const auto oldFont = qApp->font();
+    const auto oldSheet = qApp->styleSheet(); const auto oldStyle = qApp->style()->objectName();
+    const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
+    auto restoreAppearance = qScopeGuard([&] {
+      qApp->setStyle(oldStyle); qApp->setPalette(oldPalette); qApp->setFont(oldFont); qApp->setStyleSheet(oldSheet);
+      qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
+    });
+    ApplyQtAppearance(*qApp, true);
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    QVERIFY(CadAddDrawingLayer(window.State(), "Survey", nullptr));
+    QVERIFY(CadAddDrawingLayer(window.State(), "Alpha", nullptr));
+    window.State().currentLayer = "Survey";
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("layerManager"); QVERIFY(dialog);
+      auto* table = dialog->findChild<QTableWidget*>("layerTable"); QVERIFY(table);
+      QVERIFY(dialog->palette().color(QPalette::Window).lightness() > 128);
+      auto* hint = dialog->findChild<QLabel*>("layerManagerHint"); QVERIFY(hint);
+      QVERIFY(dialog->styleSheet().contains(QtAccentFor(false).quiet));
+      const QPixmap sample = table->item(0, 5)->data(Qt::DecorationRole).value<QPixmap>();
+      QVERIFY(!sample.isNull());
+      const auto sampleImage = sample.toImage().convertToFormat(QImage::Format_ARGB32);
+      int visibleInk = 0;
+      for (int y = 0; y < sampleImage.height(); ++y) for (int x = 0; x < sampleImage.width(); ++x) {
+        const QColor pixel = sampleImage.pixelColor(x, y);
+        if (pixel.alpha() > 0 && qGray(pixel.rgb()) < 180) ++visibleInk;
+      }
+      QVERIFY(visibleInk > 0);
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-layer-manager-light.png")));
+      ApplyQtAppearance(*qApp, false);
+      QTest::qWait(50);
+      QVERIFY(dialog->palette().color(QPalette::Window).lightness() < 128);
+      QVERIFY(dialog->styleSheet().contains(QtAccentFor(true).quiet));
+      ApplyQtAppearance(*qApp, true);
+      QTest::qWait(50);
+      QVERIFY(dialog->palette().color(QPalette::Window).lightness() > 128);
+      QVERIFY(dialog->styleSheet().contains(QtAccentFor(false).quiet));
+      auto* filter = dialog->findChild<QLineEdit*>("layerManagerFilter"); QVERIFY(filter);
+      filter->setText("Survey"); filter->setFocus(); QTRY_VERIFY(filter->hasFocus());
+      auto* deleteButton = dialog->findChild<QPushButton*>("layerDelete"); QVERIFY(deleteButton);
+      auto* currentButton = dialog->findChild<QPushButton*>("layerSetCurrent"); QVERIFY(currentButton);
+      QVERIFY(!deleteButton->isEnabled());
+      QVERIFY(!currentButton->isEnabled());
+      auto* filterIcon = dialog->findChild<QAction*>("layerManagerFilterIcon"); QVERIFY(filterIcon);
+      QVERIFY(!filterIcon->icon().isNull());
+      auto* clear = dialog->findChild<QAction*>("layerManagerFilterClear"); QVERIFY(clear);
+      QVERIFY(clear->isVisible());
+      QCOMPARE(dialog->findChild<QLabel*>("layerManagerSubtitle")->text(), QString("1 of 3 layers"));
+      QCOMPARE(table->verticalScrollBar()->maximum(), 0);
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-layer-manager-filtered-focused-light.png")));
+      clear->trigger(); QCOMPARE(filter->text(), QString()); filter->clearFocus();
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-layer-manager-live-light.png")));
+      dialog->reject();
+    });
+    window.Submit("LAYER");
   }
 
   void issue1036LayerManagerViewportColumnsEditTheCurrentViewport() {
@@ -7592,6 +8313,7 @@ private Q_SLOTS:
     for (auto* button : window.statusBar()->findChildren<QToolButton*>())
       if (button->text() == "Multi Selection") multi = button;
     QVERIFY(multi);
+    QVERIFY(multi->property("draftingMode").toBool());
     multi->click();
     QVERIFY(window.State().multiSelectionEnabled);
 
@@ -7626,7 +8348,7 @@ private Q_SLOTS:
     window.show();
     auto* viewport = static_cast<EditorViewport*>(window.findChild<QWidget*>("modelViewport"));
     QVERIFY(viewport);
-    QTRY_VERIFY(viewport->width() > 200);
+    QTRY_VERIFY_WITH_TIMEOUT(viewport->width() > 900, 1000);
     QTest::qWait(150);
     const Camera camera = CadViewCamera(state);
     float sx = 0, sy = 0, dx = 0, dy = 0;
@@ -7965,6 +8687,285 @@ private Q_SLOTS:
     window.CancelDraftingInput();
   }
 
+  void issue1109MatchedEditorCapturesUseOpenGlFramebuffer() {
+    const bool oldLightTheme = qApp->property("cadLightTheme").toBool();
+    auto restoreAppearance = qScopeGuard([&] { ApplyQtAppearance(*qApp, oldLightTheme); });
+    for (const bool light : {false, true}) {
+      ApplyQtAppearance(*qApp, light);
+      EditorWindow window;
+      window.CreateDrawingFromTemplate();
+      auto& state = window.State();
+      state.userLinesFlat = {-50.0, 0.0, 0.0, 50.0, 0.0, 0.0};
+      state.userCirclesCxCyZR = {0.0, 0.0, 0.0, 12.0};
+      EnsureAttrCounts(state);
+      window.Refresh();
+      window.resize(822, 540);
+      window.show();
+      QTest::qWait(120);
+      auto* input = window.findChild<QLineEdit*>("commandInput"); QVERIFY(input);
+      auto* transcript = window.findChild<QPlainTextEdit*>("commandConsole"); QVERIFY(transcript);
+      auto* commandBar = window.m_CommandBar; QVERIFY(commandBar);
+      auto* hint = commandBar->findChild<QLabel*>("commandHint"); QVERIFY(hint);
+      auto* grid = window.findChild<QToolButton*>("draftGrid"); QVERIFY(grid);
+      grid->setChecked(false); // Keep the matched drawing visible without the dotted drafting grid.
+      QVERIFY(!window.m_Viewport->grabFramebuffer().isNull());
+      auto capture = [&] {
+        const QPixmap windowPixmap = window.grab();
+        QImage image = windowPixmap.toImage();
+        const QImage framebuffer = window.m_Viewport->grabFramebuffer();
+        const QRect viewportRect(window.m_Viewport->mapTo(&window, QPoint(0, 0)), window.m_Viewport->size());
+        QPainter painter(&image);
+        painter.drawImage(viewportRect, framebuffer);
+        const QPoint commandOrigin = commandBar->mapTo(&window, QPoint(0, 0));
+        painter.drawPixmap(commandOrigin, commandBar->grab()); // QWidget::grab() omits this child of the OpenGL viewport.
+        painter.end();
+        return image;
+      };
+      const QString theme = light ? "light" : "dark";
+      const QString root = QDir(QtTestArtifactDirectory()).filePath("qt-1109-round38-");
+      commandBar->Append("Ready to draw.");
+      input->clear();
+      window.m_Viewport->setFocus();
+      QVERIFY(!input->hasFocus());
+      QVERIFY(capture().save(root + "editor-narrow-" + theme + ".png"));
+      input->setText("LINE");
+      input->setFocus(); QTRY_VERIFY(input->hasFocus());
+      QVERIFY(capture().save(root + "command-entry-" + theme + ".png"));
+      input->setCursorPosition(input->text().size());
+      QTest::keyClick(input, Qt::Key_Return);
+      QTRY_COMPARE(window.State().active, AppCommandState::Kind::Line);
+      QVERIFY(input->text().isEmpty());
+      QTRY_VERIFY_WITH_TIMEOUT(hint->text().contains("first point", Qt::CaseInsensitive), 5000);
+      QTest::keyClick(input, Qt::Key_F2);
+      QTRY_VERIFY(transcript->isVisible());
+      QVERIFY(commandBar->width() <= 380); // Keep more of the drawing and ViewCube visible behind history.
+      QVERIFY(input->text().isEmpty());
+      QVERIFY(hint->isVisible());
+      QVERIFY(hint->text().contains("first point", Qt::CaseInsensitive));
+      QVERIFY(transcript->toPlainText().contains("Command: LINE"));
+      QTRY_COMPARE_WITH_TIMEOUT(transcript->verticalScrollBar()->value(),
+                                transcript->verticalScrollBar()->maximum(), 1000);
+      QVERIFY(capture().save(root + "command-history-" + theme + ".png"));
+    }
+  }
+
+  void adaptiveCanvasCollapsesSideDocksAndKeepsCommandFullWidthAtBaselineSize() {
+    const bool oldLightTheme = qApp->property("cadLightTheme").toBool();
+    auto restoreAppearance = qScopeGuard([&] { ApplyQtAppearance(*qApp, oldLightTheme); });
+    ApplyQtAppearance(*qApp, false);
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.State().userLinesFlat = {-12.0, 0.0, 0.0, 12.0, 0.0, 0.0};
+    window.resize(822, 540);  // Produces the Round 1 1233×810 capture at this desktop's scale.
+    window.show();
+    QTest::qWait(100);
+
+    QWidget* viewport = window.m_Viewport;
+    auto* properties = window.findChild<QDockWidget*>("propertiesDock");
+    auto* toolspace = window.findChild<QDockWidget*>("toolspaceDock");
+    auto* propertiesRail = window.findChild<QToolBar*>("adaptivePropertiesRail");
+    auto* toolspaceRail = window.findChild<QToolBar*>("adaptiveToolspaceRail");
+    auto* commandInput = window.findChild<QLineEdit*>("commandInput");
+    auto* recent = window.findChild<QLabel*>("commandRecent");
+    auto* commandBar = window.findChild<QWidget*>("floatingCommandBar");
+    auto* transcript = window.findChild<QPlainTextEdit*>("commandConsole");
+    QVERIFY(viewport && properties && toolspace && propertiesRail && toolspaceRail && commandInput && commandBar && recent && transcript);
+    QVERIFY(!properties->isVisible());
+    QVERIFY(!toolspace->isVisible());
+    QVERIFY(propertiesRail->isVisible());
+    QVERIFY(toolspaceRail->isVisible());
+    QCOMPARE(propertiesRail->width(), 44);
+    QVERIFY(!propertiesRail->actions().front()->icon().isNull());
+    QVERIFY(!propertiesRail->actions().front()->toolTip().isEmpty());
+    QVERIFY(viewport->width() > 700);
+    QVERIFY(commandInput->isVisible());
+    QVERIFY(commandInput->width() > 300);
+    QVERIFY(recent->isHidden());
+    QVERIFY(recent->wordWrap());
+    QVERIFY(!recent->text().contains("Block library — loaded"));
+    QVERIFY(!transcript->toPlainText().contains("Drawing data was updated for compatibility with this version of GoSurvey."));
+    QVERIFY(!transcript->toPlainText().contains("internal document payload"));
+    QVERIFY(!transcript->toPlainText().contains("REQ-315 loft"));
+    QVERIFY(recent->text().count('\n') <= 2);
+    QVERIFY(transcript->toPlainText().contains("Opened GoSurvey template: default-template.gst"));
+    QVERIFY(!transcript->toPlainText().contains(".t3\\worktrees"));
+    QCOMPARE(transcript->toPlainText().count("Block library — loaded"), 1);
+    QVERIFY(!recent->text().contains(".t3\\worktrees"));
+    QVERIFY(recent->height() < 45);
+    const QString freshDark = QDir(QtTestArtifactDirectory()).filePath("qt-1109-round33-editor-narrow-dark.png");
+    const QString freshLight = QDir(QtTestArtifactDirectory()).filePath("qt-1109-round33-editor-narrow-light.png");
+    const QString focusedDark = QDir(QtTestArtifactDirectory()).filePath("qt-1109-round33-command-entry-dark.png");
+    const QString focusedLight = QDir(QtTestArtifactDirectory()).filePath("qt-1109-round33-command-entry-light.png");
+    commandInput->setText("ZOOM");
+    commandInput->setCursorPosition(commandInput->text().size());
+    commandInput->setFocus(); QTRY_VERIFY(commandInput->hasFocus());
+    viewport->update(); QTest::qWait(80);
+    QVERIFY(window.grab().save(freshDark));
+    QVERIFY(commandBar->grab().save(focusedDark));
+    QVERIFY(!recent->text().contains("Block library — loaded"));
+    ApplyQtAppearance(*qApp, true);
+    window.UpdateChromeIcons(); viewport->update(); QTest::qWait(80);
+    QVERIFY(window.grab().save(freshLight));
+    QVERIFY(commandBar->grab().save(focusedLight));
+    QVERIFY(!recent->text().contains("Block library — loaded"));
+    ApplyQtAppearance(*qApp, false);
+    window.UpdateChromeIcons(); viewport->update(); QTest::qWait(50);
+    commandInput->clearFocus();
+    auto verifyPopulatedPropertiesFit = [&] {
+      auto* body = window.findChild<QWidget*>("propertiesBody"); QVERIFY(body);
+      bool bearingLabelWraps = false;
+      for (auto* label : body->findChildren<QLabel*>())
+        if (label->text() == "Rotation rel. north") bearingLabelWraps = label->wordWrap();
+      QVERIFY(bearingLabelWraps);
+      for (auto* field : body->findChildren<QComboBox*>())
+        QVERIFY(field->mapTo(body, QPoint(field->width(), 0)).x() <= body->width());
+      for (auto* field : body->findChildren<QLineEdit*>())
+        QVERIFY(field->mapTo(body, QPoint(field->width(), 0)).x() <= body->width());
+    };
+    QVERIFY(commandBar->width() >= viewport->width() - 28);
+    auto* ribbon = window.findChild<QToolBar*>("ribbonBar");
+    QVERIFY(ribbon && ribbon->isVisible());
+    QVERIFY(window.grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-adaptive-canvas-narrow.png")));
+    commandInput->setFocus();
+    QTRY_VERIFY(commandInput->hasFocus());
+    QVERIFY(window.grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-command-entry-focused-dark.png")));
+    commandInput->clearFocus();
+    const QSize narrowCaptureSize = window.grab().size();
+    QTest::keyClick(commandInput, Qt::Key_F2);
+    QTRY_VERIFY(transcript->isVisible());
+    QVERIFY(transcript->toPlainText().contains("Opened GoSurvey template: default-template.gst"));
+    const QImage commandHistoryDark = window.grab().toImage();
+    QCOMPARE(commandHistoryDark.size(), narrowCaptureSize);
+    QVERIFY(commandHistoryDark.save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-command-history-narrow-dark.png")));
+    QVERIFY(transcript->height() <= 100);
+    QTest::keyClick(commandInput, Qt::Key_F2);
+    QTRY_VERIFY(transcript->isHidden());
+
+    window.resize(1400, 800); QTest::qWait(100);
+    QVERIFY(properties->isVisible());
+    QVERIFY(toolspace->isVisible());
+    QVERIFY(!propertiesRail->isVisible());
+    QVERIFY(!toolspaceRail->isVisible());
+    QVERIFY(window.grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-adaptive-canvas-wide.png")));
+    window.resize(822, 540); QTest::qWait(100);
+    QVERIFY(!properties->isVisible());
+    QVERIFY(!toolspace->isVisible());
+    QVERIFY(propertiesRail->isVisible());
+    QVERIFY(toolspaceRail->isVisible());
+
+    auto* showProperties = propertiesRail->actions().front();
+    QVERIFY(showProperties->text().contains("Properties"));
+    showProperties->trigger();
+    QTest::qWait(100);
+    QVERIFY(properties->isVisible());
+    QVERIFY(!propertiesRail->isVisible());  // The dock title bar is the close control while this panel is open.
+    QVERIFY(!toolspace->isVisible());  // One expanded dock keeps the opposite side collapsed at compact width.
+    QVERIFY(viewport->width() > 530);  // The Properties dock opens at a compact width to retain more canvas.
+    QVERIFY(commandBar->width() >= viewport->width() - 28);
+    QCOMPARE(properties->geometry().left(), 0);  // Reclaim the collapsed rail width after Qt relayouts.
+    QVERIFY(window.grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-adaptive-canvas-properties-open.png")));
+    QVERIFY(window.grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-properties-panel-open-narrow-dark.png")));
+    Select891Line(window); window.Refresh();
+    verifyPopulatedPropertiesFit();
+    auto* propertiesPanel = window.findChild<QScrollArea*>("propertiesPanel"); QVERIFY(propertiesPanel);
+    QCOMPARE(propertiesPanel->verticalScrollBarPolicy(), Qt::ScrollBarAsNeeded);
+    QVERIFY(propertiesPanel->verticalScrollBar()->isVisible());
+    QVERIFY(propertiesPanel->verticalScrollBar()->maximum() > 0);
+    QVERIFY(properties->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-properties-populated-narrow-dark.png")));
+    if (auto* body = window.findChild<QWidget*>("propertiesBody")) {
+      auto* field = body->findChild<QComboBox*>(); QVERIFY(field);
+      field->setFocus(); QTRY_VERIFY(field->hasFocus());
+      QVERIFY(properties->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-properties-populated-narrow-focused-dark.png")));
+      field->clearFocus();
+    }
+    window.State().selection.clear(); window.Refresh();
+    properties->toggleViewAction()->trigger();
+    QVERIFY(!properties->isVisible());
+    QVERIFY(propertiesRail->isVisible());  // Contextual dock access remains available.
+    toolspaceRail->actions().front()->trigger(); QTest::qWait(100);
+    QVERIFY(toolspace->isVisible() && !toolspaceRail->isVisible());
+    QVERIFY(window.grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-toolspace-open-narrow-dark.png")));
+    toolspace->toggleViewAction()->trigger(); QTest::qWait(100);
+    QVERIFY(toolspaceRail->isVisible());
+
+    ApplyQtAppearance(*qApp, true);
+    window.UpdateChromeIcons();
+    QTest::qWait(50);
+    QCOMPARE(window.palette().color(QPalette::Window).lightness() > 128, true);
+    for (const char* name : {"draftOrtho", "draftPolar", "draftOsnap", "draft3dSnap", "draftGrid"}) {
+      auto* toggle = window.findChild<QToolButton*>(name); QVERIFY(toggle);
+      QVERIFY(toggle->styleSheet().isEmpty());  // Appearance comes from the current application theme.
+      QVERIFY(toggle->property("draftingMode").toBool());
+    }
+    QVERIFY(propertiesRail->isVisible() && toolspaceRail->isVisible());
+    QVERIFY(propertiesRail->actions().front()->property("cadIcon").toString().contains("properties"));
+    QVERIFY(toolspaceRail->actions().front()->property("cadIcon").toString().contains("toolspace"));
+    QCOMPARE(window.grab().size(), narrowCaptureSize);
+    QVERIFY(window.grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-adaptive-canvas-narrow-light.png")));
+    commandInput->setFocus(); QTRY_VERIFY(commandInput->hasFocus());
+    QVERIFY(window.grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-command-entry-focused-light.png")));
+    commandInput->clearFocus();
+    QTest::keyClick(commandInput, Qt::Key_F2);
+    QTRY_VERIFY(transcript->isVisible());
+    const QImage commandHistoryLight = window.grab().toImage();
+    QCOMPARE(commandHistoryLight.size(), narrowCaptureSize);
+    QVERIFY(commandHistoryLight.save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-command-history-narrow-light.png")));
+    QVERIFY(transcript->height() <= 100);
+    QTest::keyClick(commandInput, Qt::Key_F2);
+    QTRY_VERIFY(transcript->isHidden());
+    propertiesRail->actions().front()->trigger();
+    QTest::qWait(100);
+    QVERIFY(properties->isVisible() && !propertiesRail->isVisible());
+    QCOMPARE(properties->geometry().left(), 0);
+    QVERIFY(window.grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-adaptive-canvas-properties-open-light.png")));
+    QVERIFY(window.grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-properties-panel-open-narrow-light.png")));
+    Select891Line(window); window.Refresh();
+    verifyPopulatedPropertiesFit();
+    QVERIFY(properties->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-properties-populated-narrow-light.png")));
+    if (auto* body = window.findChild<QWidget*>("propertiesBody")) {
+      auto* field = body->findChild<QComboBox*>(); QVERIFY(field);
+      field->setFocus(); QTRY_VERIFY(field->hasFocus());
+      QVERIFY(properties->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-properties-populated-narrow-focused-light.png")));
+      field->clearFocus();
+    }
+    window.State().selection.clear(); window.Refresh();
+    properties->toggleViewAction()->trigger();
+    QVERIFY(propertiesRail->isVisible());
+    toolspaceRail->actions().front()->trigger(); QTest::qWait(100);
+    QVERIFY(toolspace->isVisible() && !toolspaceRail->isVisible());
+    QVERIFY(window.grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-toolspace-open-narrow-light.png")));
+    toolspace->toggleViewAction()->trigger(); QTest::qWait(100);
+    QVERIFY(toolspaceRail->isVisible());
+
+    // A current bundled template must not announce a migration on every new drawing. A genuinely
+    // old user template still gets one concise compatibility notice in the command history.
+    const QString compatibilityNotice = "Drawing data was updated for compatibility with this version of GoSurvey.";
+    const QString fieldSurveyTemplate = QString::fromUtf8(GOSURVEY_SOURCE_DIR) +
+        "/resources/drawing-templates/Field Survey.gst";
+    QFile fieldSurvey(fieldSurveyTemplate);
+    QVERIFY(fieldSurvey.open(QIODevice::ReadOnly));
+    const QByteArray fieldSurveyData = fieldSurvey.readAll();
+    QVERIFY(fieldSurveyData.contains("\"version\": 4"));
+    window.CreateDrawingFromTemplate(0, fieldSurveyTemplate);
+    QCOMPARE(transcript->toPlainText().count(compatibilityNotice), 0);
+
+    QFile bundled(QString::fromUtf8(GOSURVEY_SOURCE_DIR) + "/resources/default-template.gst");
+    QVERIFY(bundled.open(QIODevice::ReadOnly));
+    QByteArray legacyTemplate = bundled.readAll();
+    bundled.close();
+    QVERIFY(legacyTemplate.contains("\"version\": 4"));
+    legacyTemplate.replace("\"version\": 4", "\"version\": 1");
+    QTemporaryDir legacyDirectory;
+    QVERIFY(legacyDirectory.isValid());
+    QFile legacyFile(legacyDirectory.filePath("legacy-template.gst"));
+    QVERIFY(legacyFile.open(QIODevice::WriteOnly));
+    QCOMPARE(legacyFile.write(legacyTemplate), static_cast<qint64>(legacyTemplate.size()));
+    legacyFile.close();
+    window.CreateDrawingFromTemplate(0, legacyFile.fileName());
+    QCOMPARE(transcript->toPlainText().count(compatibilityNotice), 1);
+    QVERIFY(!transcript->toPlainText().contains("internal document payload"));
+  }
+
   void ribbonPanelCaptionsHaveBottomSpaceWithoutResizingButtons() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1400, 800); window.show();
     QTest::qWait(100);
@@ -8230,6 +9231,9 @@ private Q_SLOTS:
     QCOMPARE(reopened.namedViews.size(), std::size_t(1));
     QCOMPARE(reopened.namedViews[0].fovDeg, 75.f);
     auto* annotationScale = window.findChild<QComboBox*>("statusAnnotationScale"); QVERIFY(annotationScale);
+    QVERIFY(!annotationScale->isEnabled());
+    QCOMPARE(annotationScale->currentText(), QString::fromUtf8(
+        PlotScaleLabel(state.drawingInsUnits, state.modelUnitsPerPlottedInch).c_str()));
     state.annotationScales = {{"1:50", 1.f, 50.f}, {"1:100", 1.f, 100.f}};
     window.Refresh(); QCOMPARE(annotationScale->count(), 2); QCOMPARE(annotationScale->currentIndex(), -1);
     annotationScale->setCurrentIndex(1); QMetaObject::invokeMethod(annotationScale, "activated", Q_ARG(int, 1));
@@ -10631,6 +11635,7 @@ private Q_SLOTS:
     QVERIFY(viewport);
     viewport->grabFramebuffer();
     QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
+    QVERIFY(viewport->width() > 1100);  // Compact docks must finish relayout before viewport coordinates are sampled.
     auto& state = window.State();
     viewport->SetOrientation(0.f, 90.f);
 
@@ -11991,6 +12996,9 @@ private Q_SLOTS:
 
   // ---- Issue #908 / REQ-392/393/395: Qt PDF comparison and automatic scale audit ----
   void pdfScaleAuditShowsMatchesAndAppliesConsensusAsOneUndoableChange() {
+    const bool oldLightTheme = qApp->property("cadLightTheme").toBool();
+    auto restoreAppearance = qScopeGuard([&] { ApplyQtAppearance(*qApp, oldLightTheme); });
+    ApplyQtAppearance(*qApp, false);
     QTemporaryDir directory;
     const QString path = Issue905WritePdf(directory, "audit-sheet.pdf", Issue908AuditPdf());
     PdfWindow window(nullptr);
@@ -12008,12 +13016,78 @@ private Q_SLOTS:
     auto* summary = window.findChild<QLabel*>("pdfAuditSummary");
     QVERIFY(dialog && table && summary);
     QTRY_VERIFY_WITH_TIMEOUT(window.m_AuditReady, 10000);
+    auto* runAudit = window.findChild<QPushButton*>("pdfAuditRun");
+    auto* cancelAudit = window.findChild<QPushButton*>("pdfAuditCancel");
+    auto* useConsensus = window.findChild<QPushButton*>("pdfAuditUseConsensus");
+    QVERIFY(runAudit && cancelAudit && useConsensus);
+    QVERIFY(runAudit->isEnabled());
+    QVERIFY(!cancelAudit->isVisible());
+    QVERIFY(useConsensus->isEnabled());
+    QVERIFY(useConsensus->property("pdfPrimaryAction").toBool());
     QVERIFY(window.m_AuditResult.consensusValid);
     QCOMPARE(window.m_AuditMatches.matches.size(), size_t(5));
     QVERIFY(summary->text().contains("Current scale"));
+    QVERIFY(summary->text().contains("5 dimensions matched"));
+    QVERIFY(summary->text().contains("5 Blunder"));
+    QVERIFY(!summary->property("pdfAuditRunning").toBool());
+    auto* auditProgress = dialog->findChild<QProgressBar*>("pdfAuditProgress"); QVERIFY(auditProgress);
+    QVERIFY(!auditProgress->isVisible());
     window.findChild<QCheckBox*>("pdfAuditAllRows")->setChecked(true);
     QCOMPARE(table->rowCount(), 5);
+    const auto firstVerdict = window.m_AuditResult.results[static_cast<std::size_t>(window.m_AuditRows.front())].verdict;
+    const QColor darkVerdictColor = firstVerdict == pdfview::Verdict::Good ? QColor("#5fe08a") :
+        firstVerdict == pdfview::Verdict::Check ? QColor("#f5b73a") : QColor("#ff7b72");
+    QCOMPARE(table->item(0, 4)->foreground().color(), darkVerdictColor);
+    QVERIFY(dialog->grab().save(Issue908Shot("qt-1109-pdf-audit-dialog-dark.png")));
     QVERIFY(window.grab().save(Issue908Shot("qt-908-audit-dialog.png")));
+    window.m_AuditSelected = 0;
+    window.findChild<QAction*>("pdfFitPage")->trigger();
+    QTest::qWait(100);
+    window.m_Page->update(); QTest::qWait(100);
+    QVERIFY(window.grab().save(Issue908Shot("qt-1109-pdf-audit-overlay-dark.png")));
+    ApplyQtAppearance(*qApp, true);
+    QTest::qWait(100);
+    const QColor lightVerdictColor = firstVerdict == pdfview::Verdict::Good ? QColor("#1e7d32") :
+        firstVerdict == pdfview::Verdict::Check ? QColor("#7a5800") : QColor("#b42318");
+    QCOMPARE(table->item(0, 4)->foreground().color(), lightVerdictColor);
+    QVERIFY(dialog->styleSheet().contains("#f0f3f6"));
+    QVERIFY(dialog->styleSheet().contains("checkmark_white.svg"));
+    QVERIFY(dialog->grab().save(Issue908Shot("qt-1109-pdf-audit-dialog-light.png")));
+    for (const char* name : {"pdfPreviousPage", "pdfZoomIn", "pdfOpenAction", "pdfFindAction", "pdfThumbnailsAction"}) {
+      auto* action = window.findChild<QAction*>(name); QVERIFY(action);
+      const QImage icon = action->icon().pixmap(48, 48).toImage().convertToFormat(QImage::Format_ARGB32);
+      int legiblePixels = 0;
+      for (int y = 0; y < icon.height(); ++y) for (int x = 0; x < icon.width(); ++x) {
+        const QColor pixel = icon.pixelColor(x, y);
+        if (pixel.alpha() > 0 && qGray(pixel.rgb()) < 190) ++legiblePixels;
+      }
+      QVERIFY(legiblePixels > 0);
+    }
+    QVERIFY(window.m_AuditShowSheet && window.m_AuditShowSheet->isChecked());
+    QVERIFY(window.m_AuditReady);
+    QCOMPARE(window.m_AuditSelected, 0);
+    QTRY_VERIFY_WITH_TIMEOUT(window.PageReady(), 10000);
+    window.m_Page->repaint();
+    QVERIFY(window.grab().save(Issue908Shot("qt-1109-pdf-audit-overlay-light.png")));
+    window.SetZoomPercent(5.0);
+    QTRY_VERIFY_WITH_TIMEOUT(window.PageReady(), 10000);
+    QVERIFY(window.PageWidthPx() < 116);
+    window.m_Page->repaint();
+    QVERIFY(window.grab().save(Issue908Shot("qt-1109-pdf-audit-overlay-small-page-dark.png")));
+    ApplyQtAppearance(*qApp, true);
+    window.m_Page->repaint();
+    QVERIFY(window.grab().save(Issue908Shot("qt-1109-pdf-audit-overlay-small-page-light.png")));
+    ApplyQtAppearance(*qApp, false);
+    {
+      PdfWindow freshLight(nullptr);
+      freshLight.resize(1100, 850); freshLight.show();
+      QString freshError;
+      QVERIFY2(freshLight.LoadFile(path, freshError), qPrintable(freshError));
+      QTRY_VERIFY_WITH_TIMEOUT(!freshLight.IsBusy(), 10000);
+      QVERIFY(freshLight.grab().save(Issue908Shot("qt-1109-pdf-fresh-light.png")));
+    }
+    ApplyQtAppearance(*qApp, oldLightTheme);
+    QTest::qWait(50); window.m_Page->update();
 
     window.findChild<QPushButton*>("pdfAuditUseConsensus")->click();
     QVERIFY(window.EffectiveScale(0));
@@ -12024,17 +13098,47 @@ private Q_SLOTS:
     QCOMPARE(window.EffectiveScale(0)->realValue, originalScale.realValue);
 
     // Cancellation while the worker waits on PDFium must discard its partial result.
+    ApplyQtAppearance(*qApp, false);
     {
       std::unique_lock<std::recursive_mutex> hold(pdfview::PdfiumMutex());
       window.StartScaleAudit();
       QVERIFY(window.m_AuditWork.valid());
-      window.findChild<QPushButton*>("pdfAuditCancel")->click();
+      QVERIFY(summary->property("pdfAuditRunning").toBool());
+      QVERIFY(summary->text().contains("reading dimension text and line work on page 1"));
+      QVERIFY(dialog->styleSheet().contains("pdfAuditRunning=\"true\""));
+      QCOMPARE(window.m_AuditTable->rowCount(), 0);
+      auto* progress = dialog->findChild<QProgressBar*>("pdfAuditProgress"); QVERIFY(progress);
+      auto* tableStatus = dialog->findChild<QLabel*>("pdfAuditTableStatus"); QVERIFY(tableStatus);
+      QVERIFY(progress->isVisible());
+      QCOMPARE(progress->minimum(), 0);
+      QCOMPARE(progress->maximum(), 0);
+      QVERIFY(tableStatus->isVisible());
+      QCOMPARE(tableStatus->text(), QString("Reading dimensions…"));
+      QVERIFY(summary->contentsMargins().left() >= 10);
+      QVERIFY(!runAudit->isEnabled());
+      QVERIFY(cancelAudit->isVisible() && cancelAudit->isEnabled());
+      QVERIFY(!useConsensus->isEnabled());
+      QTest::qWait(40);
+      QVERIFY(dialog->grab().save(Issue908Shot("qt-1109-pdf-audit-running-dark.png")));
+      ApplyQtAppearance(*qApp, true);
+      window.ApplyAppearance();
+      QTest::qWait(80);
+      QVERIFY(dialog->grab().save(Issue908Shot("qt-1109-pdf-audit-running-light.png")));
+      ApplyQtAppearance(*qApp, false);
+      window.ApplyAppearance();
+      cancelAudit->click();
     }
     QTRY_VERIFY_WITH_TIMEOUT(summary->text().contains("cancelled. No partial result"), 10000);
     QVERIFY(!window.m_AuditReady);
+    QVERIFY(runAudit->isEnabled());
+    QVERIFY(!cancelAudit->isVisible());
+    QVERIFY(!summary->property("pdfAuditRunning").toBool());
   }
 
   void pdfCompareRunsDiffAndSupportsManualAlignmentAndFailure() {
+    const bool oldLightTheme = qApp->property("cadLightTheme").toBool();
+    auto restoreAppearance = qScopeGuard([&] { ApplyQtAppearance(*qApp, oldLightTheme); });
+    ApplyQtAppearance(*qApp, false);
     QTemporaryDir directory;
     const QString basePath = Issue905WritePdf(directory, "base.pdf", pdfview::MakeLineWorkPdf(612, 792, 80, 1, 0));
     const QString revisionPath = Issue905WritePdf(directory, "revision.pdf", pdfview::MakeLineWorkPdf(612, 792, 80, 1, 1));
@@ -12052,7 +13156,26 @@ private Q_SLOTS:
     QVERIFY(!window.m_Compare->overlay.isNull());
     QVERIFY(window.m_Compare->haveChanges);
     QVERIFY(!window.m_Compare->changes.empty());
-    QCOMPARE(window.findChild<QTableWidget*>("pdfCompareChanges")->rowCount(), static_cast<int>(window.m_Compare->changes.size()));
+    auto* changeTable = window.findChild<QTableWidget*>("pdfCompareChanges");
+    QCOMPARE(changeTable->rowCount(), static_cast<int>(window.m_Compare->changes.size()));
+    QVERIFY(changeTable->minimumHeight() >= 380);
+    QCOMPARE(window.m_CompareScroll->widget(), window.m_ComparePanel);
+    QCOMPARE(window.m_SidePages->currentWidget(), static_cast<QWidget*>(window.m_CompareScroll));
+    auto* compareStatus = window.findChild<QLabel*>("pdfCompareStatus");
+    QVERIFY(compareStatus);
+    QVERIFY(compareStatus->text().contains("marks on this page are within about 2 pt of a matching mark on the base page"));
+    QVERIFY(compareStatus->text().contains('%'));
+    QVERIFY(compareStatus->text().contains(QString("%1 changes found").arg(window.m_Compare->changes.size())));
+    QVERIFY(compareStatus->toolTip().contains("share of revision-page marks"));
+    auto* resultCount = window.findChild<QLabel*>("pdfCompareResultCount"); QVERIFY(resultCount);
+    QVERIFY(resultCount->text().contains(QString("%1 changes found").arg(window.m_Compare->changes.size())));
+    auto* opacityValue = window.findChild<QLabel*>("pdfCompareOpacityValue"); QVERIFY(opacityValue);
+    QCOMPARE(opacityValue->text(), QString("50%"));
+    QVERIFY(window.findChild<QLabel*>("pdfCompareToleranceLabel")->text().contains("mm"));
+    QVERIFY(window.findChild<QLabel*>("pdfCompareMinimumRegionLabel")->text().contains("mm"));
+    const QRect lastChangeRect = changeTable->visualItemRect(changeTable->item(changeTable->rowCount() - 1, 0));
+    QVERIFY(changeTable->verticalScrollBar()->maximum() > 0 ||
+            (lastChangeRect.isValid() && lastChangeRect.bottom() < changeTable->viewport()->height()));
     // Zoomed well past the comparison images' own resolution, the Revision view gets a sharp picture of what is on screen.
     window.SetZoomPercent(600);
     QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
@@ -12063,7 +13186,30 @@ private Q_SLOTS:
     window.SetZoomPercent(100);
     window.m_CompareMode->setCurrentIndex(0);
     QVERIFY(window.grab().save(Issue908Shot("qt-908-compare-overlay.png")));
-    QVERIFY(window.findChild<QWidget*>("pdfComparePanel")->grab().save(Issue908Shot("qt-908-compare-controls.png")));
+    auto* comparePanel = window.findChild<QWidget*>("pdfComparePanel"); QVERIFY(comparePanel);
+    QVERIFY(window.styleSheet().contains("width:24px; height:16px"));
+    QVERIFY(window.styleSheet().contains("width:12px; height:12px"));
+    QVERIFY(window.styleSheet().contains("spin_up_dark.svg"));
+    QVERIFY(window.findChild<QSpinBox*>("pdfCompareBasePage")->minimumHeight() >= 28);
+    QVERIFY(!window.findChild<QSpinBox*>("pdfCompareBasePage")->keyboardTracking());
+    QVERIFY(!window.findChild<QSpinBox*>("pdfCompareRevisionPage")->keyboardTracking());
+    QVERIFY(!window.findChild<QDoubleSpinBox*>("pdfCompareTolerance")->keyboardTracking());
+    QVERIFY(!window.findChild<QDoubleSpinBox*>("pdfCompareMinRegion")->keyboardTracking());
+    QVERIFY(comparePanel->grab().save(Issue908Shot("qt-1109-pdf-compare-controls-dark.png")));
+    QVERIFY(comparePanel->grab().save(Issue908Shot("qt-908-compare-controls.png")));
+    auto* toleranceField = window.findChild<QDoubleSpinBox*>("pdfCompareTolerance"); QVERIFY(toleranceField);
+    auto* toleranceEdit = toleranceField->findChild<QLineEdit*>(); QVERIFY(toleranceEdit);
+    toleranceField->setFocus(); toleranceEdit->setCursorPosition(toleranceEdit->text().size()); QTest::qWait(40);
+    QVERIFY(comparePanel->grab().save(Issue908Shot("qt-1109-pdf-compare-controls-focused-dark.png")));
+    ApplyQtAppearance(*qApp, true);
+    QTest::qWait(50);
+    QVERIFY(comparePanel->styleSheet().contains("#f0f3f6"));
+    QVERIFY(comparePanel->styleSheet().contains("checkmark_white.svg"));
+    QVERIFY(window.styleSheet().contains("spin_up_light.svg"));
+    QVERIFY(comparePanel->grab().save(Issue908Shot("qt-1109-pdf-compare-controls-light.png")));
+    toleranceField->setFocus(); toleranceEdit->setCursorPosition(toleranceEdit->text().size()); QTest::qWait(40);
+    QVERIFY(comparePanel->grab().save(Issue908Shot("qt-1109-pdf-compare-controls-focused-light.png")));
+    ApplyQtAppearance(*qApp, false);
 
     // One matching point and two matching points both use Qt's Base / Revision page picking sequence.
     window.findChild<QPushButton*>("pdfComparePickOne")->click();
@@ -12183,12 +13329,46 @@ private Q_SLOTS:
     QCOMPARE(label->text(), QString("Unscaled"));
     QVERIFY(!window.HasUnsavedChanges());
 
-    // Cancel changes nothing.
+    // Cancel changes nothing. Capture each appearance of the same scale dialog.
+    const bool oldLightTheme = qApp->property("cadLightTheme").toBool();
+    bool capturedDarkScale = false;
+    Issue906OnDialog(window, "pdfSetScaleDialog", [&](QDialog* dialog) {
+      QVERIFY(!dialog->findChild<QPushButton*>("pdfScaleClear")->isEnabled());
+      QVERIFY(!dialog->findChild<QLineEdit*>("pdfScopeText")->isEnabled());
+      QVERIFY(dialog->findChild<QLabel*>("pdfScalePreview")->text().startsWith("Preview:"));
+      QVERIFY(dialog->grab().save(Issue908Shot("qt-1109-pdf-set-scale-dialog-dark.png")));
+      dialog->findChild<QRadioButton*>("pdfScaleModeTyped")->setChecked(true);
+      QVERIFY(dialog->findChild<QLabel*>("pdfScalePreview")->text().contains("20 feet in reality"));
+      auto* focusedRatio = dialog->findChild<QDoubleSpinBox*>("pdfScaleTypedReal"); QVERIFY(focusedRatio);
+      QVERIFY(dialog->styleSheet().contains("QDoubleSpinBox:focus"));
+      focusedRatio->setFocus(); QTRY_VERIFY(focusedRatio->hasFocus());
+      QVERIFY(dialog->styleSheet().contains("width:24px; height:16px"));
+      QVERIFY(dialog->grab().save(Issue908Shot("qt-1109-pdf-set-scale-focused-dark.png")));
+      focusedRatio->clearFocus();
+      dialog->findChild<QRadioButton*>("pdfScaleModePreset")->setChecked(true);
+      dialog->findChild<QPushButton*>("pdfScaleCancel")->click();
+      capturedDarkScale = true;
+    });
+    setScale->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(capturedDarkScale, 2000);
+    ApplyQtAppearance(*qApp, true);
     Issue906OnDialog(window, "pdfSetScaleDialog", [](QDialog* dialog) {
-      QVERIFY(dialog->findChild<QLabel*>("pdfSetScaleCurrent")->text().contains("unscaled"));
+      QVERIFY(dialog->findChild<QLabel*>("pdfSetScaleCurrent")->text().contains("unscaled", Qt::CaseInsensitive));
+      QVERIFY(dialog->styleSheet().contains("#f0f3f6"));
+      QVERIFY(dialog->grab().save(Issue908Shot("qt-1109-pdf-set-scale-dialog-light.png")));
+      dialog->findChild<QRadioButton*>("pdfScaleModeTyped")->setChecked(true);
+      QVERIFY(dialog->findChild<QLabel*>("pdfScalePreview")->text().contains("20 feet in reality"));
+      auto* focusedRatio = dialog->findChild<QDoubleSpinBox*>("pdfScaleTypedReal"); QVERIFY(focusedRatio);
+      QVERIFY(dialog->styleSheet().contains("QDoubleSpinBox:focus"));
+      focusedRatio->setFocus(); QTRY_VERIFY(focusedRatio->hasFocus());
+      QVERIFY(dialog->styleSheet().contains("width:24px; height:16px"));
+      QVERIFY(dialog->grab().save(Issue908Shot("qt-1109-pdf-set-scale-focused-light.png")));
+      focusedRatio->clearFocus();
+      dialog->findChild<QRadioButton*>("pdfScaleModePreset")->setChecked(true);
       dialog->findChild<QPushButton*>("pdfScaleCancel")->click();
     });
     setScale->trigger();
+    ApplyQtAppearance(*qApp, oldLightTheme);
     QVERIFY(!window.EffectiveScale(0));
     QVERIFY(!window.HasUnsavedChanges());
 
@@ -13149,6 +14329,9 @@ private Q_SLOTS:
   }
 
   void propertiesPanelRefusesBadInputAndCorrectsRadiusWithAMessage() {
+    const bool oldLightTheme = qApp->property("cadLightTheme").toBool();
+    auto restoreAppearance = qScopeGuard([&] { ApplyQtAppearance(*qApp, oldLightTheme); });
+    ApplyQtAppearance(*qApp, false);
     EditorWindow window; window.CreateDrawingFromTemplate();
     auto& st = window.State();
     Select891Line(window);
@@ -13157,6 +14340,7 @@ private Q_SLOTS:
     QCOMPARE(st.userLinesFlat, lineBefore);
     auto* note = window.findChild<QLabel*>("propertiesNote");
     QVERIFY(note); QVERIFY(note->text().contains("number"));
+    QVERIFY(note->styleSheet().contains("#ff7b72"));
     st.selection = {{SelectedEntity::Type::Circle, 0}};
     window.Refresh();
     QCOMPARE(window.findChild<QLineEdit*>("propCircleRadius")->text(), QString("2.0000"));
@@ -13165,6 +14349,10 @@ private Q_SLOTS:
     QVERIFY(window.findChild<QLabel*>("propertiesNote")->text().contains("positive"));
     window.Submit("UNDO");
     QCOMPARE(st.userCirclesCxCyZR[3], 2.0);
+    ApplyQtAppearance(*qApp, true);
+    QTest::qWait(30);
+    window.RefreshProperties();
+    QCOMPARE(window.findChild<QLabel*>("propertiesNote")->styleSheet(), QString("color:#b42318;"));
   }
 
   void propertiesPanelEditsTextContentHeightAndRotation() {
@@ -13223,13 +14411,86 @@ private Q_SLOTS:
     QCOMPARE(window.findChild<QComboBox*>("propLineweight")->currentText(), QString("(varies)"));
   }
 
-  void propertiesPanelWithNothingSelectedShowsDimmedGeneralAndGeometry() {
-    EditorWindow window; window.CreateDrawingFromTemplate();
-    window.State().selection.clear(); window.Refresh();
-    QCOMPARE(window.findChild<QLabel*>("propertiesSummary")->text(), QString("No selection"));
-    QVERIFY(!window.findChild<QComboBox*>("propLayer")->isEnabled());
-    QVERIFY(!window.findChild<QComboBox*>("propTransparency")->isEnabled());
-    QVERIFY(!window.findChild<QLineEdit*>("propLineStartX"));
+  void propertiesPanelNoSelectionShowsActionableEmptyStateBothThemes() {
+    const auto oldPalette = qApp->palette();
+    const auto oldFont = qApp->font();
+    const auto oldSheet = qApp->styleSheet();
+    const auto oldStyle = qApp->style()->objectName();
+    const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
+    auto restoreAppearance = qScopeGuard([&] {
+      qApp->setStyle(oldStyle); qApp->setPalette(oldPalette); qApp->setFont(oldFont); qApp->setStyleSheet(oldSheet);
+      qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
+    });
+    for (const bool light : {false, true}) {
+      ApplyQtAppearance(*qApp, light);
+      EditorWindow window; window.CreateDrawingFromTemplate();
+      window.State().selection.clear(); window.Refresh();
+      window.resize(1672, 1100); window.show(); QTest::qWait(100);
+      QCOMPARE(window.findChild<QLabel*>("propertiesSummary")->text(), QString("No selection"));
+      auto* propertiesDock = window.findChild<QDockWidget*>("propertiesDock");
+      QVERIFY(propertiesDock && propertiesDock->isVisible());
+      auto* empty = window.findChild<QLabel*>("propertiesEmptyState");
+      QVERIFY(empty);
+      QVERIFY(empty->text().contains("Select an object"));
+      auto* selectInDrawing = window.findChild<QPushButton*>("propertiesSelectInDrawingAction");
+      QVERIFY(selectInDrawing && selectInDrawing->isEnabled());
+      QVERIFY(!window.findChild<QComboBox*>("propLayer"));
+      QVERIFY(!window.findChild<QComboBox*>("propTransparency"));
+      QVERIFY(!window.findChild<QLabel*>("propertiesGeometry"));
+      QVERIFY(!window.findChild<QLineEdit*>("propLineStartX"));
+      QTest::mouseClick(selectInDrawing, Qt::LeftButton);
+      QTRY_VERIFY(window.m_Viewport->hasFocus());
+      auto* recentMessage = window.findChild<QLabel*>("commandRecent");
+      auto* commandHistory = window.findChild<QPlainTextEdit*>("commandConsole");
+      QVERIFY(recentMessage && recentMessage->text().contains("Click an object"));
+      QVERIFY(commandHistory && commandHistory->toPlainText().contains("Click an object"));
+      for (const char* name : {"draftOrtho", "draftPolar", "draftOsnap", "draft3dSnap", "draftGrid"}) {
+        auto* toggle = window.findChild<QToolButton*>(name);
+        QVERIFY(toggle && toggle->isVisible());
+      }
+      const auto file = QString("qt-1109-properties-empty-%1.png").arg(light ? "light" : "dark");
+      QVERIFY(propertiesDock->grab().save(QDir(QtTestArtifactDirectory()).filePath(file)));
+    }
+  }
+
+  void populatedPropertiesCapturesBothThemesAndRefreshesHeadingsLive() {
+    const bool oldLightTheme = qApp->property("cadLightTheme").toBool();
+    auto restoreAppearance = qScopeGuard([&] { ApplyQtAppearance(*qApp, oldLightTheme); });
+    ApplyQtAppearance(*qApp, false);
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    Select891Line(window);
+    window.resize(1500, 950); window.show(); QTest::qWait(100);
+    auto* heading = window.findChild<QLabel*>("propertiesSectionHeading");
+    QVERIFY(heading);
+    QVERIFY(heading->styleSheet().contains("#30373c"));
+    QVERIFY(window.findChild<QComboBox*>("propLayer"));
+    auto* propertiesDock = window.findChild<QDockWidget*>("propertiesDock"); QVERIFY(propertiesDock);
+    auto* propertiesScroll = window.findChild<QScrollArea*>("propertiesPanel"); QVERIFY(propertiesScroll);
+    QCOMPARE(propertiesScroll->verticalScrollBar()->maximum(), 0);
+    QVERIFY(!propertiesScroll->verticalScrollBar()->isVisible());
+    QVERIFY(propertiesDock->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-properties-populated-dark.png")));
+
+    ApplyQtAppearance(*qApp, true);
+    QTest::qWait(50);
+    QCOMPARE(window.findChild<QLabel*>("propertiesSectionHeading"), heading);
+    QVERIFY(heading->styleSheet().contains("#fbebd7"));
+    auto* derivedValue = window.findChild<QLabel*>("propDerivedLength"); QVERIFY(derivedValue);
+    QVERIFY(derivedValue->property("propertiesReadOnly").toBool());
+    QVERIFY(derivedValue->styleSheet().contains("#46515a"));
+    const auto badges = window.findChildren<QLabel*>();
+    bool sawX = false, sawY = false, sawZ = false;
+    for (auto* badge : badges) {
+      const QString axis = badge->property("propertiesAxisBadge").toString();
+      if (axis.isEmpty()) continue;
+      QVERIFY(badge->styleSheet().contains(axis == "X" ? "#8f3b35" : axis == "Y" ? "#356648" : "#3b5c83"));
+      sawX |= axis == "X"; sawY |= axis == "Y"; sawZ |= axis == "Z";
+    }
+    QVERIFY(sawX && sawY && sawZ);
+    QVERIFY(window.findChild<QComboBox*>("propLayer"));
+    QCOMPARE(propertiesScroll->verticalScrollBar()->maximum(), 0);
+    QVERIFY(!propertiesScroll->verticalScrollBar()->isVisible());
+    QVERIFY(propertiesDock->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1109-properties-populated-light.png")));
   }
 
   QMenu* RightClick891(EditorWindow& window) {
@@ -14662,13 +15923,20 @@ private Q_SLOTS:
     });
     IsolatedUserData userData;
     const char* oldAccents[] = {"#55d8d0", "#168e8a", "#1ca6a0", "#244846", "#0078d7", "#0066cc", "#438fda", "#347cc3", "#cee1f4", "#dceafb"};
+    QSize round33SettingsCaptureSize;
     for (const bool light : {false, true}) {
       const QString tag = light ? "light" : "dark";
       ApplyQtAppearance(*qApp, light);
       const QtAccent& accent = QtAccentFor(!light);
       QCOMPARE(qApp->palette().color(QPalette::Highlight), QColor(accent.fill));
       QCOMPARE(qApp->palette().color(QPalette::Link), QColor(accent.link));
+      if (light)
+        QVERIFY(contrast(qApp->palette().color(QPalette::Disabled, QPalette::Text), QColor("#f0f0f0")) >= 4.5);
       const QString sheet = qApp->styleSheet();
+      if (light) {
+        QVERIFY(sheet.contains("QPushButton:disabled { background:#eff0f2; color:#5f6871; border-color:#b8c0c7; }"));
+        QVERIFY(contrast(QColor("#5f6871"), QColor("#eff0f2")) >= 4.5);
+      }
       QVERIFY(sheet.contains(accent.strong, Qt::CaseInsensitive));
       QVERIFY(sheet.contains(accent.tint, Qt::CaseInsensitive));
       QVERIFY2(!sheet.contains('@'), "unreplaced accent token");
@@ -14681,17 +15949,102 @@ private Q_SLOTS:
       window.ShowSettings();
       auto* dialog = window.findChild<QDialog*>("applicationSettings");
       QVERIFY(dialog);
-      dialog->resize(780, 600);
+      dialog->resize(780, 820);
+      QCoreApplication::processEvents();
+      if (round33SettingsCaptureSize.isEmpty())
+        round33SettingsCaptureSize = dialog->size();
+      else
+        QCOMPARE(dialog->size(), round33SettingsCaptureSize);
       QVERIFY(dialog->grab().save(Issue886Shot(("qt-1031-" + tag + "-settings.png").toUtf8().constData())));
+      auto* categories = dialog->findChild<QListWidget*>("settingsCategories"); QVERIFY(categories);
+      QVERIFY(categories->styleSheet().contains(light ? "#e3e7eb" : "#202529"));
+      categories->setCurrentRow(1);
+      auto* focusedSetting = dialog->findChild<QDoubleSpinBox*>("settingsWheelZoomFactor"); QVERIFY(focusedSetting);
+      auto* settingsColor = dialog->findChild<QPushButton*>("settingsCrosshairColor"); QVERIFY(settingsColor);
+      auto* settingsTextMin = dialog->findChild<QDoubleSpinBox*>("settingsTextMinPx"); QVERIFY(settingsTextMin);
+      auto* clockwise = dialog->findChild<QCheckBox*>("settingsAngleClockwise"); QVERIFY(clockwise);
+      QCOMPARE(focusedSetting->mapTo(dialog, QPoint(0, 0)).x(), settingsColor->mapTo(dialog, QPoint(0, 0)).x());
+      QCOMPARE(settingsColor->mapTo(dialog, QPoint(0, 0)).x(), settingsTextMin->mapTo(dialog, QPoint(0, 0)).x());
+      QCOMPARE(clockwise->mapTo(dialog, QPoint(0, 0)).x(), settingsTextMin->mapTo(dialog, QPoint(0, 0)).x());
+      focusedSetting->setFocus(); QTRY_VERIFY(focusedSetting->hasFocus());
+      if (auto* edit = focusedSetting->findChild<QLineEdit*>()) edit->setCursorPosition(edit->text().size());
+      QVERIFY(dialog->grab().save(Issue886Shot(("qt-1109-settings-focused-" + tag + ".png").toUtf8().constData())));
+      QVERIFY(dialog->grab().save(Issue886Shot(("qt-1109-round33-app-settings-focused-" + tag + ".png").toUtf8().constData())));
+      focusedSetting->clearFocus();
       for (auto* button : dialog->findChildren<QPushButton*>())
         for (const char* old : oldAccents) QVERIFY2(!button->styleSheet().contains(old, Qt::CaseInsensitive), old);
     }
     {
       EditorWindow startWindow;
-      QVERIFY(startWindow.grab().save(Issue886Shot("qt-1031-light-start.png")));
+      startWindow.resize(1672, 1084);  // Match Round 1 Start capture after work-area clamping.
+      startWindow.show(); QTest::qWait(100);
+      QVERIFY(startWindow.findChild<QLabel*>("recentDrawingEmptyState"));
+      QVERIFY(startWindow.findChild<QLabel*>("recentProjectsEmptyState"));
+      auto* projectSearch = startWindow.findChild<QLineEdit*>("recentProjectSearch"); QVERIFY(projectSearch);
+      auto* projectSearchIcon = projectSearch->findChild<QAction*>("recentProjectSearchIcon"); QVERIFY(projectSearchIcon);
+      QVERIFY(!projectSearchIcon->icon().isNull());
+      auto* clearProjectSearch = projectSearch->findChild<QAction*>("recentProjectSearchClear"); QVERIFY(clearProjectSearch);
+      QVERIFY(!clearProjectSearch->isVisible());
+      projectSearch->setText("unmatched project");
+      projectSearch->setFocus();
+      QVERIFY(projectSearch->hasFocus());
+      QVERIFY(clearProjectSearch->isVisible());
+      QCOMPARE(projectSearch->text(), QString("unmatched project"));
+      QTRY_COMPARE(startWindow.findChild<QLabel*>("recentProjectsEmptyState")->text(),
+                   QString("No recent projects match “unmatched project”. Choose New/Open project, or clear the search."));
+      auto* projectsScroll = startWindow.findChild<QScrollArea*>("recentProjectsScroll"); QVERIFY(projectsScroll);
+      QCOMPARE(projectsScroll->minimumHeight(), 54);
+      QCOMPARE(projectsScroll->maximumHeight(), 54);
+      for (auto* quickLink : startWindow.findChildren<QToolButton*>("startQuickLink")) {
+        QVERIFY(quickLink->styleSheet().contains("background:transparent"));
+        QVERIFY(!quickLink->styleSheet().contains("border-left"));
+      }
+      QVERIFY(startWindow.grab().save(Issue886Shot("qt-1109-start-search-active-light.png")));
+      clearProjectSearch->trigger();
+      QVERIFY(projectSearch->text().isEmpty());
+      QVERIFY(!clearProjectSearch->isVisible());
+      QTRY_COMPARE(startWindow.findChild<QLabel*>("recentProjectsEmptyState")->text(),
+                   QString("No recent projects yet. Choose New project or Open project above to get started."));
+      QVERIFY(startWindow.grab().save(Issue886Shot("qt-1109-light-start.png")));
       ApplyQtAppearance(*qApp, false);
       EditorWindow darkStart;
-      QVERIFY(darkStart.grab().save(Issue886Shot("qt-1031-dark-start.png")));
+      darkStart.resize(1672, 1084);
+      darkStart.show(); QTest::qWait(100);
+      QVERIFY(darkStart.findChild<QLabel*>("recentDrawingEmptyState"));
+      QVERIFY(darkStart.findChild<QLabel*>("recentProjectsEmptyState"));
+      auto* drawingSearch = darkStart.findChild<QLineEdit*>("recentDrawingSearch"); QVERIFY(drawingSearch);
+      QVERIFY(drawingSearch->findChild<QAction*>("recentDrawingSearchClear"));
+      auto* darkProjectSearch = darkStart.findChild<QLineEdit*>("recentProjectSearch"); QVERIFY(darkProjectSearch);
+      auto* darkProjectSearchIcon = darkProjectSearch->findChild<QAction*>("recentProjectSearchIcon"); QVERIFY(darkProjectSearchIcon);
+      QVERIFY(!darkProjectSearchIcon->icon().isNull());
+      auto* darkClearProjectSearch = darkProjectSearch->findChild<QAction*>("recentProjectSearchClear"); QVERIFY(darkClearProjectSearch);
+      QVERIFY(!darkClearProjectSearch->isVisible());
+      for (auto* quickLink : darkStart.findChildren<QToolButton*>("startQuickLink")) {
+        QVERIFY(quickLink->styleSheet().contains("background:transparent"));
+        QVERIFY(!quickLink->styleSheet().contains("border-left"));
+      }
+      darkProjectSearch->setText("unmatched project");
+      darkProjectSearch->setFocus();
+      QVERIFY(darkClearProjectSearch->isVisible());
+      QTRY_COMPARE(darkStart.findChild<QLabel*>("recentProjectsEmptyState")->text(),
+                   QString("No recent projects match “unmatched project”. Choose New/Open project, or clear the search."));
+      QVERIFY(darkStart.grab().save(Issue886Shot("qt-1109-start-search-active-dark.png")));
+      darkClearProjectSearch->trigger();
+      QVERIFY(darkProjectSearch->text().isEmpty());
+      QVERIFY(!darkClearProjectSearch->isVisible());
+      QVERIFY(darkStart.grab().save(Issue886Shot("qt-1109-dark-start.png")));
+    }
+    {
+      ApplyQtAppearance(*qApp, false);
+      EditorWindow liveStart;
+      liveStart.resize(1672, 1084);
+      liveStart.show(); QTest::qWait(100);
+      QVERIFY(liveStart.grab().save(Issue886Shot("qt-1109-start-live-dark.png")));
+      ApplyQtAppearance(*qApp, true);
+      QTest::qWait(100);
+      auto* scroll = liveStart.findChild<QScrollArea*>("startPageScroll"); QVERIFY(scroll);
+      QVERIFY(scroll->styleSheet().contains("palette(mid)"));
+      QVERIFY(liveStart.grab().save(Issue886Shot("qt-1109-start-live-light.png")));
     }
   }
 

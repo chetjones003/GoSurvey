@@ -1,5 +1,6 @@
 #include "AdjustmentEditor.hpp"
 #include <QFontMetrics>
+#include <QFontMetricsF>
 #include <QHelpEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -21,10 +22,10 @@ AdjustmentEditorPalette AdjustmentPalette(bool dark) {
     p.gutterBackground = "#eef1f5"; p.gutterText = "#8a94a3"; p.error = "#c9302c";
     p.planLeg = "#3c64b4"; p.planPoint = "#1e1e1e"; p.planEllipse = "#d24628";
     p.planSide = "#8c8c91"; p.planCheck = "#3c965a";
-  } else {  // the navy of the Qt Dark chrome (REQ-081)
-    p.background = "#0f1b2d"; p.text = "#d6e2f0"; p.keyword = "#5bc0eb"; p.option = "#e3b04b";
-    p.number = "#7fd6a8"; p.comment = "#7088a0"; p.fieldCode = "#e08f62";
-    p.gutterBackground = "#0b1524"; p.gutterText = "#6f86a0"; p.error = "#ff6b6b";
+  } else {
+    p.background = "#171b1e"; p.text = "#dce4ea"; p.keyword = "#65b8d4"; p.option = "#e3b04b";
+    p.number = "#7fd6a8"; p.comment = "#8d9aa5"; p.fieldCode = "#e08f62";
+    p.gutterBackground = "#202529"; p.gutterText = "#8d9aa5"; p.error = "#ff7b72";
     p.planLeg = "#4fa3e0"; p.planPoint = "#e6eef7"; p.planEllipse = "#f28f5c";
     p.planSide = "#8a9bb0"; p.planCheck = "#5dc48a";
   }
@@ -232,7 +233,7 @@ void AdjustmentCodeEdit::paintEvent(QPaintEvent* event) {
 
 namespace {
 constexpr double kPi = 3.14159265358979323846;
-constexpr double kPad = 22.0;
+constexpr double kPad = 56.0;
 constexpr double kMinimumEllipsePixels = 14.0;
 }
 
@@ -347,10 +348,17 @@ int AdjustmentPlanView::EllipseCount() const {
 
 void AdjustmentPlanView::ZoomExtents() {
   if (!m_HavePrevious) return;
+  m_UserNavigated = false;
   m_Center = m_Previous.center();
   const double spanE = std::max(1e-6, m_Previous.width()), spanN = std::max(1e-6, m_Previous.height());
-  m_Scale = std::min(std::max(10.0, width() - 2 * kPad) / spanE, std::max(10.0, height() - 2 * kPad) / spanN);
+  const double margin = std::max(kPad, std::min(width(), height()) * 0.08);
+  m_Scale = std::min(std::max(10.0, width() - 2 * margin) / spanE, std::max(10.0, height() - 2 * margin) / spanN);
   update();
+}
+
+void AdjustmentPlanView::resizeEvent(QResizeEvent* event) {
+  QWidget::resizeEvent(event);
+  if (m_HavePrevious && !m_UserNavigated) ZoomExtents();
 }
 
 QPointF AdjustmentPlanView::ToScreen(double easting, double northing) const {
@@ -358,6 +366,7 @@ QPointF AdjustmentPlanView::ToScreen(double easting, double northing) const {
 }
 
 void AdjustmentPlanView::ZoomAt(const QPointF& at, double steps) {
+  m_UserNavigated = true;
   const double e = m_Center.x() + (at.x() - width() / 2.0) / m_Scale;
   const double n = m_Center.y() - (at.y() - height() / 2.0) / m_Scale;
   m_Scale = std::clamp(m_Scale * std::pow(1.1, steps), 1e-6, 1e9);
@@ -366,6 +375,7 @@ void AdjustmentPlanView::ZoomAt(const QPointF& at, double steps) {
 }
 
 void AdjustmentPlanView::PanBy(const QPointF& pixels) {
+  m_UserNavigated = true;
   m_Center -= QPointF(pixels.x() / m_Scale, -pixels.y() / m_Scale);
   update();
 }
@@ -436,6 +446,11 @@ void AdjustmentPlanView::paintEvent(QPaintEvent*) {
     painter.drawText(rect(), Qt::AlignCenter, "Not enough computed stations yet.");
     return;
   }
+  QColor gridColor = m_Palette.gutterBackground;
+  gridColor.setAlpha(112);
+  painter.setPen(QPen(gridColor, 1.0, Qt::DotLine));
+  for (int x = 32; x < width(); x += 80) painter.drawLine(x, 0, x, height());
+  for (int y = 32; y < height(); y += 80) painter.drawLine(0, y, width(), y);
   for (const auto& segment : m_Segments) {
     if (segment.kind == Segment::Leg) painter.setPen(QPen(m_Palette.planLeg, 1.5));
     else if (segment.kind == Segment::Closing) { QColor c = m_Palette.planLeg; c.setAlpha(140); painter.setPen(QPen(c, 1.0, Qt::DashLine)); }
@@ -465,12 +480,55 @@ void AdjustmentPlanView::paintEvent(QPaintEvent*) {
     painter.setPen(Qt::NoPen);
     painter.setBrush(m_Palette.planPoint);
     painter.drawEllipse(c, &station == hover ? 4.0 : 3.0, &station == hover ? 4.0 : 3.0);
-    painter.setPen(m_Palette.planPoint);
-    painter.drawText(c + QPointF(6, 4), QString::number(station.id));
+    const QString label = QString::number(station.id);
+    const QFontMetricsF metrics(painter.font());
+    const double labelWidth = metrics.horizontalAdvance(label);
+    // Put station numbers beyond the rendered ellipse, not just beyond the station point.
+    // The ellipses are intentionally enlarged for readability and can extend much farther
+    // than the marker at the point itself.
+    const bool onLeft = c.x() < width() / 2.0;
+    QRectF visualBounds(c.x() - 4.0, c.y() - 4.0, 8.0, 8.0);
+    if (station.hasEllipse && (station.semiMajor > 1e-9 || station.semiMinor > 1e-9))
+      visualBounds = visualBounds.united(EllipseOutline(station, factor).boundingRect());
+    QRectF labelBounds(0, 0, labelWidth + 8.0, metrics.height() + 4.0);
+    if (onLeft) labelBounds.moveRight(visualBounds.left() - 5.0);
+    else labelBounds.moveLeft(visualBounds.right() + 5.0);
+    labelBounds.moveCenter(QPointF(labelBounds.center().x(), c.y()));
+    const QRectF scaleAdornment(width() - 190.0, height() - 58.0, 184.0, 54.0);
+    if (labelBounds.intersects(scaleAdornment))
+      labelBounds.moveBottom(visualBounds.top() - 6.0);
+    QColor labelOutline = m_Palette.planEllipse;
+    labelOutline.setAlpha(185);
+    painter.setPen(QPen(labelOutline, 1.0));
+    painter.setBrush(m_Palette.background);
+    painter.drawRoundedRect(labelBounds.adjusted(-4, -2, 4, 2), 3, 3);
+    painter.setPen(m_Palette.text);
+    painter.drawText(QPointF(labelBounds.left() + 4.0, labelBounds.top() + 2.0 + metrics.ascent()), label);
   }
+  // North and a scale bar keep the plan readable as a drawing, not just a shape preview.
+  painter.setPen(QPen(m_Palette.text, 1.4));
+  const QPointF north(width() - 30.0, 43.0);
+  painter.drawText(QPointF(north.x() - 4, 14), "N");
+  painter.drawLine(north + QPointF(0, 8), north + QPointF(0, -13));
+  QPolygonF arrow; arrow << north + QPointF(0, -18) << north + QPointF(-5, -8) << north + QPointF(5, -8);
+  painter.setBrush(m_Palette.text); painter.drawPolygon(arrow); painter.setBrush(Qt::NoBrush);
+  const double target = 110.0 / std::max(1e-9, m_Scale);
+  const double decade = std::pow(10.0, std::floor(std::log10(std::max(1e-9, target))));
+  double scaleValue = decade;
+  for (double step : {1.0, 2.0, 5.0, 10.0}) if (step * decade <= target) scaleValue = step * decade;
+  const double scalePixels = scaleValue * m_Scale;
+  const double scaleY = height() - 20.0;
+  const double scaleRight = width() - 58.0;
+  painter.setPen(QPen(m_Palette.text, 1.4));
+  painter.drawLine(QPointF(scaleRight - scalePixels, scaleY), QPointF(scaleRight, scaleY));
+  painter.drawLine(QPointF(scaleRight - scalePixels, scaleY - 5), QPointF(scaleRight - scalePixels, scaleY + 2));
+  painter.drawLine(QPointF(scaleRight, scaleY - 5), QPointF(scaleRight, scaleY + 2));
+  painter.drawText(QPointF(scaleRight - scalePixels, scaleY - 12), QString("%1 %2").arg(scaleValue, 0, 'g', 3).arg(m_Unit));
   if (factor > 1.0) {
-    painter.setPen(m_Palette.gutterText);
-    painter.drawText(QPointF(8, height() - 8), QString("Ellipses drawn ×%1 (hover for true size)").arg(factor, 0, 'g', 6));
+    painter.setPen(m_Palette.text);
+    const QString caption = QString("Ellipses drawn ×%1 (hover for true size)").arg(factor, 0, 'g', 6);
+    painter.drawText(QRect(8, height() - 36, width() - 16, 32),
+        Qt::AlignLeft | Qt::AlignBottom | Qt::TextWordWrap, caption);
   }
 }
 

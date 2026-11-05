@@ -147,12 +147,14 @@ TEST_CASE("PdfCoordExtract LRP layout table with foot marks and drawing columns"
   CHECK(r.skippedTableRows.empty());
 }
 
-TEST_CASE("PdfCoordExtract no selectable text reports the scanned-document message") {
+TEST_CASE("PdfCoordExtract no selectable text explains the OCR limit and next step") {
   std::vector<DimText> texts; // nothing in the region
   ExtractResult r = ExtractCoordinates(texts, 0, 0, 100, 100);
   REQUIRE(r.status == ExtractStatus::NoText);
   CHECK(r.message.find("scanned") != std::string::npos);
   CHECK(r.message.find("OCR") != std::string::npos);
+  CHECK(r.message.find("likely a scanned image") != std::string::npos);
+  CHECK(r.message.find("Try a region with selectable PDF text") != std::string::npos);
   CHECK(r.candidates.empty());
 }
 
@@ -160,6 +162,9 @@ TEST_CASE("PdfCoordExtract text with no northing or easting is reported unparsed
   std::vector<DimText> texts = {T("RIGHT OF WAY LINE", 10, 10, 100, 20)};
   ExtractResult r = ExtractCoordinates(texts, 0, 0, 200, 50);
   REQUIRE(r.status == ExtractStatus::Unparsed);
+  CHECK(r.message.find("No coordinates were found here") != std::string::npos);
+  CHECK(r.message.find("coordinate table") != std::string::npos);
+  CHECK(r.message.find("northing/easting pair") != std::string::npos);
   CHECK(r.candidates.empty());
 }
 

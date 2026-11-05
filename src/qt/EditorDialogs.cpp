@@ -311,7 +311,7 @@ void EditorWindow::ShowSettings() {
   dialog->setObjectName("applicationSettings");
   dialog->setAttribute(Qt::WA_DeleteOnClose);
   dialog->setWindowTitle("Settings");
-  dialog->resize(760, 560);
+  dialog->resize(780, 820);
   // REQ-449: a category sidebar over a stack of pages. Controls stage their edit as a "commit"
   // closure; Apply/OK run them all, Cancel runs none.
   auto *outer = new QVBoxLayout(dialog);
@@ -323,11 +323,13 @@ void EditorWindow::ShowSettings() {
   sidebar->setFrameShape(QFrame::NoFrame);
   sidebar->setFocusPolicy(Qt::NoFocus);
   sidebar->setSpacing(2);
-  sidebar->setStyleSheet(
-      "QListWidget { background:palette(button); border:1px solid palette(mid); border-radius:10px; padding:8px; outline:0; }"
+  const bool darkTheme = !qApp->property("cadLightTheme").toBool();
+  sidebar->setStyleSheet(QString(
+      "QListWidget { background:%1; border:1px solid %2; border-radius:10px; padding:8px; outline:0; }"
       "QListWidget::item { padding:9px 12px; border-radius:7px; }"
       "QListWidget::item:hover:!selected { background:palette(midlight); }"
-      "QListWidget::item:selected { background:palette(highlight); color:palette(highlighted-text); }");
+      "QListWidget::item:selected { background:palette(highlight); color:palette(highlighted-text); }")
+      .arg(darkTheme ? "#202529" : "#e3e7eb", darkTheme ? "#3a4247" : "#c5cdd5"));
   body->addWidget(sidebar);
   auto *pages = new QStackedWidget(dialog);
   pages->setObjectName("settingsPages");
@@ -350,7 +352,7 @@ void EditorWindow::ShowSettings() {
   auto *updatesHeading = new QLabel("Updates", dialog);
   updatesHeading->setObjectName("updatesSettingsHeading");
   QFont headingFont = updatesHeading->font();
-  headingFont.setPointSize(16);
+  headingFont.setPointSize(13);
   headingFont.setBold(true);
   updatesHeading->setFont(headingFont);
   layout->addWidget(updatesHeading);
@@ -458,12 +460,17 @@ void EditorWindow::ShowSettings() {
   };
   addHeading(layout, "Display", "displaySettingsHeading");
   auto *displayForm = new QFormLayout();
+  displayForm->setObjectName("settingsDisplayForm");
+  displayForm->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+  displayForm->setHorizontalSpacing(10);
+  displayForm->setVerticalSpacing(5);
   layout->addLayout(displayForm);
   // Each helper builds a control from the current preference and registers the closure that writes
   // it back on Apply/OK. Values are range-checked by the control, mirroring the load-time clamps.
   auto intField = [&](QFormLayout *form, const char *name, const QString &title, int *value, int lo, int hi, const QString &suffix = {}) {
     auto *field = new QSpinBox(dialog);
     field->setObjectName(name); field->setRange(lo, hi); field->setValue(*value); field->setSuffix(suffix);
+    field->setMinimumHeight(26);
     field->setKeyboardTracking(false);
     form->addRow(title, field);
     commits->push_back([field, value] { *value = field->value(); });
@@ -472,6 +479,7 @@ void EditorWindow::ShowSettings() {
   auto floatField = [&](QFormLayout *form, const char *name, const QString &title, float *value, double lo, double hi, double step, int decimals, const QString &suffix = {}) {
     auto *field = new QDoubleSpinBox(dialog);
     field->setObjectName(name); field->setRange(lo, hi); field->setDecimals(decimals);
+    field->setMinimumHeight(26);
     field->setSingleStep(step); field->setSuffix(suffix); field->setValue(static_cast<double>(*value));
     field->setKeyboardTracking(false);
     form->addRow(title, field);
@@ -480,22 +488,35 @@ void EditorWindow::ShowSettings() {
   };
   intField(displayForm, "settingsArcSmoothness", "Arc and circle smoothness", &m_State.displayArcCircleSmoothness, 8, 20000, " segments");
   floatField(displayForm, "settingsWheelZoomFactor", "Mouse wheel zoom step", &m_State.displayWheelZoomFactor, 1.01, 3.0, 0.01, 2, " x");
-  intField(displayForm, "settingsLinearPrecision", "Linear precision", &m_State.displayLinearPrecision, 0, 12, " decimals");
+  auto setPrecisionSuffix = [](QSpinBox* field, int value) {
+    field->setSuffix(value == 1 ? " decimal" : " decimals");
+  };
+  auto* linearPrecision = intField(displayForm, "settingsLinearPrecision", "Linear precision",
+                                   &m_State.displayLinearPrecision, 0, 12, " decimals");
+  setPrecisionSuffix(linearPrecision, linearPrecision->value());
+  connect(linearPrecision, &QSpinBox::valueChanged, linearPrecision,
+          [linearPrecision, setPrecisionSuffix](int value) { setPrecisionSuffix(linearPrecision, value); });
   auto *angleType = new QComboBox(dialog);
   angleType->setObjectName("settingsAngleType");
   angleType->addItems({"Decimal degrees", "Degrees / minutes / seconds", "Surveyor units"});
+  angleType->setMinimumHeight(26);
   angleType->setCurrentIndex(m_State.angleDisplayType);
   displayForm->addRow("Angle format", angleType);
   commits->push_back([this, angleType] { m_State.angleDisplayType = angleType->currentIndex(); });
-  intField(displayForm, "settingsAnglePrecision", "Angle precision", &m_State.angleDisplayPrecision, 0, 6, " decimals");
+  auto* anglePrecision = intField(displayForm, "settingsAnglePrecision", "Angle precision",
+                                  &m_State.angleDisplayPrecision, 0, 6, " decimals");
+  setPrecisionSuffix(anglePrecision, anglePrecision->value());
+  connect(anglePrecision, &QSpinBox::valueChanged, anglePrecision,
+          [anglePrecision, setPrecisionSuffix](int value) { setPrecisionSuffix(anglePrecision, value); });
   auto *clockwise = new QCheckBox("Angles run clockwise", dialog);
   clockwise->setObjectName("settingsAngleClockwise");
   clockwise->setChecked(m_State.angleDisplayClockwise);
-  displayForm->addRow(clockwise);
+  displayForm->addRow(new QLabel(QString(), dialog), clockwise);
   commits->push_back([this, clockwise] { m_State.angleDisplayClockwise = clockwise->isChecked(); });
   auto *angleBase = new QDoubleSpinBox(dialog);
   angleBase->setObjectName("settingsAngleBase");
   angleBase->setRange(0.0, 360.0); angleBase->setDecimals(4); angleBase->setSuffix(" deg");
+  angleBase->setMinimumHeight(26);
   angleBase->setValue(m_State.angleDisplayBaseDeg);
   displayForm->addRow("Zero direction (clockwise from north)", angleBase);
   commits->push_back([this, angleBase] { m_State.angleDisplayBaseDeg = angleBase->value(); });
@@ -503,6 +524,10 @@ void EditorWindow::ShowSettings() {
   // are put back by Cancel; the snap aperture is staged like every other control here.
   addHeading(layout, "Cursor", "displayCursorHeading");
   auto *cursorForm = new QFormLayout();
+  cursorForm->setObjectName("settingsCursorForm");
+  cursorForm->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+  cursorForm->setHorizontalSpacing(10);
+  cursorForm->setVerticalSpacing(5);
   layout->addLayout(cursorForm);
   struct CursorLook { float r, g, b, pickHalfPx; int sizePct; };
   const auto readCursorLook = [this] {
@@ -512,6 +537,7 @@ void EditorWindow::ShowSettings() {
   auto savedLook = std::make_shared<CursorLook>(readCursorLook());
   auto *colorButton = new QPushButton(dialog);
   colorButton->setObjectName("settingsCrosshairColor");
+  colorButton->setMinimumHeight(26);
   auto paintSwatch = [this, colorButton] {
     const QColor color = QColor::fromRgbF(m_State.viewportCrosshairR, m_State.viewportCrosshairG, m_State.viewportCrosshairB);
     QPixmap swatch(28, 16);
@@ -534,6 +560,7 @@ void EditorWindow::ShowSettings() {
   });
   auto *armLength = new QSlider(Qt::Horizontal, dialog);
   armLength->setObjectName("settingsCrosshairSize");
+  armLength->setMinimumHeight(26);
   armLength->setRange(1, 100); armLength->setValue(m_State.displayCrosshairSizePct);
   auto *armText = new QLabel(QString("%1%").arg(armLength->value()), dialog);
   armText->setObjectName("settingsCrosshairSizeText");
@@ -550,7 +577,7 @@ void EditorWindow::ShowSettings() {
   auto *pickbox = new QSpinBox(dialog);
   pickbox->setObjectName("settingsPickboxSize");
   pickbox->setRange(2, 20); pickbox->setValue(static_cast<int>(std::lround(m_State.viewportCrosshairPickHalfPxX)));
-  pickbox->setSuffix(" px"); pickbox->setKeyboardTracking(false);
+  pickbox->setSuffix(" px"); pickbox->setKeyboardTracking(false); pickbox->setMinimumHeight(26);
   cursorForm->addRow("Pickbox size (half-width)", pickbox);
   connect(pickbox, &QSpinBox::valueChanged, dialog, [this](int value) {
     m_State.viewportCrosshairPickHalfPxX = m_State.viewportCrosshairPickHalfPxY = static_cast<float>(value);
@@ -568,12 +595,33 @@ void EditorWindow::ShowSettings() {
   });
   addHeading(layout, "Text and dimension sizes on screen", "displaySizesHeading");
   auto *sizeForm = new QFormLayout();
+  sizeForm->setObjectName("settingsSizeForm");
+  sizeForm->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+  sizeForm->setHorizontalSpacing(10);
+  sizeForm->setVerticalSpacing(5);
   layout->addLayout(sizeForm);
   floatField(sizeForm, "settingsTextMinPx", "Text, smallest", &m_State.viewportTextMinPx, 4, 48, 1, 0, " px");
   floatField(sizeForm, "settingsTextMaxPx", "Text, largest", &m_State.viewportTextMaxPx, 24, 320, 1, 0, " px");
   floatField(sizeForm, "settingsMtextMinPx", "MTEXT, smallest", &m_State.viewportMtextMinPx, 4, 48, 1, 0, " px");
   floatField(sizeForm, "settingsMtextMaxPx", "MTEXT, largest", &m_State.viewportMtextMaxPx, 24, 320, 1, 0, " px");
   floatField(sizeForm, "settingsDimArrowScale", "Dimension arrow size", &m_State.viewportDimArrowScale, 0.2, 4.0, 0.1, 2, " x");
+  const std::array<QFormLayout*, 3> displayForms{displayForm, cursorForm, sizeForm};
+  int sharedLabelWidth = 0;
+  for (auto* form : displayForms) {
+    for (int row = 0; row < form->rowCount(); ++row) {
+      auto* item = form->itemAt(row, QFormLayout::LabelRole);
+      auto* label = item ? qobject_cast<QLabel*>(item->widget()) : nullptr;
+      if (label) sharedLabelWidth = std::max(sharedLabelWidth, label->sizeHint().width());
+    }
+  }
+  for (auto* form : displayForms) {
+    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    for (int row = 0; row < form->rowCount(); ++row) {
+      auto* labelItem = form->itemAt(row, QFormLayout::LabelRole);
+      if (auto* label = labelItem ? qobject_cast<QLabel*>(labelItem->widget()) : nullptr)
+        label->setFixedWidth(sharedLabelWidth);
+    }
+  }
   layout->addStretch();
 
   // ---- Drafting page (REQ-449) ---------------------------------------------------------

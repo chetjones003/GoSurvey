@@ -34,6 +34,8 @@ class QDialog;
 class FloatingCommandBar;
 class QFrame;
 class QTimer;
+class QDockWidget;
+class QToolBar;
 
 class EditorWindow final : public QMainWindow {
 public:
@@ -86,6 +88,7 @@ private:
   void BuildTitleBar(QMenu* applicationMenu);
   void UpdateChromeIcons();
   void BuildDocks();
+  void UpdateAdaptiveDocks();
   void BuildDraftingInput();
   void RefreshDraftingInput(const QString& hint = {});
   void ResetDraftingInput();
@@ -104,6 +107,7 @@ private:
   void Refresh();
   void NewDrawing(std::uint32_t projectUid = 0);
   void CreateDrawingFromTemplate(std::uint32_t projectUid = 0, const QString& templatePath = {});
+  void ShowDrawingTemplateChooser();
   void SwitchDrawing(int index);
   void CloseDrawing(int index);
   bool SaveDrawing(bool saveAs = false);
@@ -211,6 +215,12 @@ private:
   ray3d::Vec3 m_DynamicCursor{};
   bool m_DynamicReset = true;
   QLabel* m_WindowTitle = nullptr;
+  QDockWidget* m_PropertiesDock = nullptr;
+  QDockWidget* m_ToolspaceDock = nullptr;
+  QToolBar* m_PropertiesRail = nullptr;
+  QToolBar* m_ToolspaceRail = nullptr;
+  bool m_PropertiesRailInstalled = false;
+  bool m_ToolspaceRailInstalled = false;
   QTreeWidget* m_Toolspace = nullptr;              ///< Prospector tab (REQ-142): the active drawing's objects.
   QTreeWidget* m_ToolspaceProject = nullptr;       ///< Project tab (REQ-142): projects, tracked items and open drawings.
   QTreeWidget* m_ToolspaceSettings = nullptr;      ///< Settings tab (REQ-142): drawing-level style tables.
@@ -222,6 +232,11 @@ private:
   QString m_PropertiesNote;
   QLabel* m_Coordinates = nullptr;
   bool m_Refreshing = false;
+  bool m_UpdatingAdaptiveDocks = false;
+  bool m_PropertiesDockWanted = true;
+  bool m_ToolspaceDockWanted = true;
+  bool m_PropertiesDockExpandedCompact = false;
+  bool m_ToolspaceDockExpandedCompact = false;
   bool m_TextDialogOpen = false;
   bool m_StartupInitialized = false;
   bool m_WhatsNewAutoOpened = false;

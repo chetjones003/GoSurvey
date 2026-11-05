@@ -129,6 +129,8 @@ QString QtAsset(const QString& relative) {
 }
 
 namespace {
+constexpr int kAdaptiveDockWidthThreshold = 1320;
+
 class VisibleSizeGrip final : public QSizeGrip {
 public:
   explicit VisibleSizeGrip(QWidget* parent) : QSizeGrip(parent) {
@@ -203,6 +205,44 @@ class TopographicStartBody final : public QWidget {
 
 };
 
+struct DrawingTemplateChoice {
+  QString label;
+  QString path;
+  bool blank = false;
+};
+
+QVector<DrawingTemplateChoice> DiscoverDrawingTemplates() {
+  QVector<DrawingTemplateChoice> choices;
+  choices.push_back({"Blank Drawing", {}, true});
+
+  const auto bundled = ResolveBundledAssetPath(std::filesystem::path("resources") / "drawing-templates");
+  const auto userData = UserDataDirectory();
+  const std::array<std::pair<std::filesystem::path, QString>, 2> roots{{
+      {bundled, "Bundled"},
+      {userData.empty() ? std::filesystem::path{} : userData / "drawing-templates", "Personal"}}};
+  for (const auto& [root, origin] : roots) {
+    if (root.empty()) continue;
+    std::error_code ec;
+    std::filesystem::directory_iterator it(root, ec), end;
+    if (ec) continue;
+    for (; it != end; it.increment(ec)) {
+      if (ec) { ec.clear(); continue; }
+      std::error_code fileError;
+      if (!it->is_regular_file(fileError) || fileError) continue;
+      QString extension = QString::fromStdWString(it->path().extension().wstring());
+      if (extension.compare(".gst", Qt::CaseInsensitive) != 0) continue;
+      const QString stem = QString::fromStdWString(it->path().stem().wstring());
+      const QString path = QString::fromStdWString(it->path().wstring());
+      choices.push_back({QString("%1 — %2").arg(stem, origin), path, false});
+    }
+  }
+  std::sort(choices.begin() + 1, choices.end(), [](const auto& a, const auto& b) {
+    const int byLabel = QString::compare(a.label, b.label, Qt::CaseInsensitive);
+    return byLabel == 0 ? a.path.compare(b.path, Qt::CaseInsensitive) < 0 : byLabel < 0;
+  });
+  return choices;
+}
+
 template <typename Action>
 void RunUiActionSafely(Action&& action) noexcept {
   try {
@@ -257,9 +297,8 @@ QIcon CadCommandIcon(const QString& icon) {
   if (qApp->palette().color(QPalette::Window).lightness() > 128) {
     for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x) {
       const auto color = image.pixelColor(x, y);
-      if (color.alpha() && color.red() > 210 && color.green() > 210 && color.blue() > 210 &&
-          std::max({color.red(), color.green(), color.blue()}) - std::min({color.red(), color.green(), color.blue()}) < 15)
-        image.setPixelColor(x, y, QColor(64, 64, 64, color.alpha()));
+      if (color.alpha() && std::max({color.red(), color.green(), color.blue()}) - std::min({color.red(), color.green(), color.blue()}) < 28)
+        image.setPixelColor(x, y, QColor(48, 57, 66, color.alpha()));
     }
   } else {
     // Keep command artwork neutral-light on the graphite workspace while preserving semantic colors
@@ -268,11 +307,22 @@ QIcon CadCommandIcon(const QString& icon) {
       const auto color = image.pixelColor(x, y);
       const int high = std::max({color.red(), color.green(), color.blue()});
       const int low = std::min({color.red(), color.green(), color.blue()});
-      if (color.alpha() && high > 150 && high - low < 32)
+      if (color.alpha() && high - low < 32)
         image.setPixelColor(x, y, QColor(226, 230, 234, color.alpha()));
     }
   }
-  return QIcon(QPixmap::fromImage(image));
+  const QPixmap normal = QPixmap::fromImage(image);
+  QIcon result(normal);
+  QImage disabled = image;
+  const QColor disabledInk = qApp->palette().color(QPalette::Window).lightness() > 128
+      ? QColor("#666666") : QColor("#92a6b5");
+  for (int y = 0; y < disabled.height(); ++y) for (int x = 0; x < disabled.width(); ++x) {
+    auto color = disabled.pixelColor(x, y);
+    if (color.alpha()) disabled.setPixelColor(x, y, QColor(disabledInk.red(), disabledInk.green(),
+                                                           disabledInk.blue(), color.alpha()));
+  }
+  result.addPixmap(QPixmap::fromImage(disabled), QIcon::Disabled);
+  return result;
 }
 
 QString NormalizedCommandIconName(QString name) {
@@ -412,22 +462,21 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   auto* startLayout = new QVBoxLayout(start);
   startLayout->setContentsMargins(9, 8, 9, 8);
   startLayout->setSpacing(0);
-  const bool darkStart = palette().color(QPalette::Window).lightness() < 128;
-  const QString panelColor = darkStart ? "#242a2f" : "#f0f1f2";
-  const QString cardColor = darkStart ? "#2a3035" : "#ffffff";
-  const QString edgeColor = darkStart ? "#3c444a" : "#c5c8cb";
-  const QString textColor = darkStart ? "#f0f5fa" : "#303234";
-  const QString mutedColor = darkStart ? "#a5bac9" : "#66696c";
-  const QString aquaColor = QtAccentFor(darkStart).strong;  // primary accent (REQ-436: topo-line amber)
-  const QString amberColor = QtAccentFor(darkStart).quiet;  // secondary emphasis is a calm neutral
+  const QString cardColor = "palette(alternate-base)";
+  const QString edgeColor = "palette(mid)";
+  const QString textColor = "palette(window-text)";
+  const QString mutedColor = "palette(placeholder-text)";
+  const QString primaryAccent = "palette(link)";
+  const QString secondaryAccent = "palette(mid)";
+  const QString searchIcon = qApp->palette().color(QPalette::Window).lightness() < 128
+      ? "icons/search_dark.svg" : "icons/search_light.svg";
 
   auto* pageScroll = new QScrollArea(start);
   pageScroll->setObjectName("startPageScroll");
   pageScroll->setFrameShape(QFrame::NoFrame);
   pageScroll->setWidgetResizable(true);
   pageScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  pageScroll->setStyleSheet(QString("QScrollArea#startPageScroll { border:1px solid %1; border-radius:12px; background:%2; }")
-                                .arg(darkStart ? "#41494e" : "#c5c8cb", darkStart ? "#1c2024" : "#f5f6f7"));
+  pageScroll->setStyleSheet("QScrollArea#startPageScroll { border:1px solid palette(mid); border-radius:12px; background:palette(window); }");
   auto* body = new TopographicStartBody(pageScroll);
   body->setObjectName("startPageBody");
   auto* bodyLayout = new QVBoxLayout(body);
@@ -460,13 +509,15 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
         "QPushButton#%1:hover { background:%5; border-color:%6; }"
         "QPushButton#%1:pressed { background:%7; }")
         .arg(name, cardColor, edgeColor, accent,
-             darkStart ? "#363d42" : QtAccentFor(false).hoverTint, accent,
-             darkStart ? "#22272b" : QtAccentFor(false).tint));
+             "palette(midlight)", accent, "palette(mid)"));
     auto* cardLayout = new QVBoxLayout(card);
     cardLayout->setContentsMargins(16, 10, 16, 10);
     cardLayout->setSpacing(3);
     auto* top = new QHBoxLayout();
     auto* icon = new QLabel(card);
+    icon->setObjectName(name + "Icon");
+    icon->setProperty("cadIcon", iconName);
+    icon->setProperty("cadIconSize", QSize(34, 34));
     icon->setPixmap(CadCommandIcon(iconName).pixmap(34, 34));
     icon->setAttribute(Qt::WA_TransparentForMouseEvents);
     top->addWidget(icon);
@@ -489,16 +540,16 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
     actionRow->addWidget(card, 1);
   };
   addActionCard("startNewDrawing", "New_Drawing.png", "New drawing",
-                "Start a fresh survey drawing with a template.", aquaColor,
+                "Start a fresh survey drawing with a template.", primaryAccent,
                 [this] { NewDrawing(); });
   addActionCard("startOpenDrawing", "Open.png", "Open drawing",
-                "Browse your files and open an existing drawing.", aquaColor,
+                "Browse your files and open an existing drawing.", primaryAccent,
                 [this] { Submit("OPEN"); });
   addActionCard("startNewProject", "New_Drawing.png", "New project",
-                "Create a project and its first drawing.", amberColor,
+                "Create a project and its first drawing.", primaryAccent,
                 [this] { NewProject(); });
   addActionCard("startOpenProject", "Open.png", "Open project",
-                "Open an existing GoSurvey project.", aquaColor,
+                "Open an existing GoSurvey project.", primaryAccent,
                 [this] { Submit("OPENPROJECT"); });
   bodyLayout->addLayout(actionRow);
 
@@ -514,11 +565,28 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   auto* drawingsHeading = new QLabel("Recent drawings", drawingsPanel);
   drawingsHeading->setStyleSheet(QString("font-size:21px; font-weight:650; color:%1;").arg(textColor));
   recentHeader->addWidget(drawingsHeading, 1);
+  m_RecentSearch = new QLineEdit(drawingsPanel);
+  m_RecentSearch->setObjectName("recentDrawingSearch");
+  m_RecentSearch->setAccessibleName("Search recent drawings");
+  m_RecentSearch->setAccessibleDescription("Filter recent drawings by name or file path.");
+  m_RecentSearch->setPlaceholderText("Search drawings");
+  m_RecentSearch->setMaximumWidth(280);
+  auto* drawingSearchIcon = m_RecentSearch->addAction(QIcon(QtAsset(searchIcon)), QLineEdit::LeadingPosition);
+  drawingSearchIcon->setObjectName("recentDrawingSearchIcon");
+  auto* clearDrawingSearch = m_RecentSearch->addAction(style()->standardIcon(QStyle::SP_LineEditClearButton), QLineEdit::TrailingPosition);
+  clearDrawingSearch->setObjectName("recentDrawingSearchClear");
+  clearDrawingSearch->setText("Clear drawing search");
+  clearDrawingSearch->setToolTip("Clear drawing search");
+  clearDrawingSearch->setVisible(false);
+  connect(m_RecentSearch, &QLineEdit::textChanged, clearDrawingSearch,
+          [clearDrawingSearch](const QString& text) { clearDrawingSearch->setVisible(!text.isEmpty()); });
+  connect(clearDrawingSearch, &QAction::triggered, m_RecentSearch, &QLineEdit::clear);
+  recentHeader->addWidget(m_RecentSearch);
   auto* seeAllRecent = new QToolButton(drawingsPanel);
   seeAllRecent->setObjectName("recentSeeAll");
   seeAllRecent->setText("See all  ›");
   seeAllRecent->setCursor(Qt::PointingHandCursor);
-  seeAllRecent->setStyleSheet(QString("QToolButton { color:%1; font-weight:600; border:0; padding:5px; } QToolButton:hover { color:%2; }").arg(aquaColor, QtAccentFor(darkStart).linkHover));
+  seeAllRecent->setStyleSheet(QString("QToolButton { color:%1; font-weight:600; border:0; padding:5px; } QToolButton:hover { color:%2; }").arg(primaryAccent, "palette(link)"));
   recentHeader->addWidget(seeAllRecent);
   drawingsLayout->addLayout(recentHeader);
 
@@ -556,11 +624,6 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   sort->addItems({"Last opened", "Name"});
   sort->setMaximumWidth(120);
   recentOptionsLayout->addWidget(sort);
-  m_RecentSearch = new QLineEdit(drawingsPanel);
-  m_RecentSearch->setObjectName("recentDrawingSearch");
-  m_RecentSearch->setPlaceholderText("Search drawings");
-  m_RecentSearch->setMaximumWidth(250);
-  recentOptionsLayout->addWidget(m_RecentSearch);
   recentOptionsLayout->addStretch();
   recentOptions->hide();
   drawingsLayout->addWidget(recentOptions);
@@ -570,11 +633,13 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
     recentOptions->setVisible(m_RecentShowAll);
     RefreshRecentDrawings();
   });
-  auto* recentColumns = new QHBoxLayout();
+  auto* recentColumnsWidget = new QWidget(drawingsPanel);
+  recentColumnsWidget->setObjectName("recentDrawingColumnHeaders");
+  auto* recentColumns = new QHBoxLayout(recentColumnsWidget);
   recentColumns->setContentsMargins(8, 2, 8, 3);
   auto addRecentColumn = [&](const QString& text, int stretch) {
     auto* label = new QLabel(text, drawingsPanel);
-    label->setStyleSheet(QString("font-size:10px; font-weight:650; letter-spacing:0.5px; color:%1; border:0;").arg(mutedColor));
+    label->setStyleSheet(QString("font-size:11px; font-weight:650; letter-spacing:0.5px; color:%1; border:0;").arg(mutedColor));
     recentColumns->addWidget(label, stretch);
   };
   addRecentColumn("NAME", 2);
@@ -582,7 +647,7 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   addRecentColumn("MODIFIED", 1);
   addRecentColumn("LOCATION", 2);
   recentColumns->addSpacing(30);
-  drawingsLayout->addLayout(recentColumns);
+  drawingsLayout->addWidget(recentColumnsWidget);
   m_RecentTiles = new QWidget(drawingsPanel);
   m_RecentTiles->setObjectName("recentDrawingTiles");
   auto* recentScroll = new QScrollArea(drawingsPanel);
@@ -596,7 +661,8 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   m_RecentTiles->setAutoFillBackground(false);
   recentScroll->viewport()->setAutoFillBackground(false);
   recentScroll->setStyleSheet("QScrollArea#recentDrawingsScroll { background:transparent; border:0; }");
-  recentScroll->setMinimumHeight(300);
+  recentScroll->setMinimumHeight(72);
+  recentScroll->setMaximumHeight(80);
   recentScroll->setMaximumHeight(QWIDGETSIZE_MAX);
   drawingsLayout->addWidget(recentScroll, 1);
   connect(m_RecentSearch, &QLineEdit::textChanged, this, [this] { RefreshRecentDrawings(); });
@@ -625,12 +691,24 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   projectsSeeAll->setObjectName("projectsSeeAll");
   projectsSeeAll->setText("View all  ›");
   projectsSeeAll->setCursor(Qt::PointingHandCursor);
-  projectsSeeAll->setStyleSheet(QString("QToolButton { color:%1; font-weight:600; border:0; padding:4px; } QToolButton:hover { color:%2; }").arg(aquaColor, QtAccentFor(darkStart).linkHover));
+  projectsSeeAll->setStyleSheet(QString("QToolButton { color:%1; font-weight:600; border:0; padding:4px; } QToolButton:hover { color:%2; }").arg(primaryAccent, "palette(link)"));
   projectsHeader->addWidget(projectsSeeAll);
   projectsLayout->addLayout(projectsHeader);
   auto* projectSearch = new QLineEdit(projectsCard);
   projectSearch->setObjectName("recentProjectSearch");
-  projectSearch->setPlaceholderText("⌕  Search projects…");
+  projectSearch->setAccessibleName("Search recent projects");
+  projectSearch->setAccessibleDescription("Filter recent projects by name or folder.");
+  projectSearch->setPlaceholderText("Search projects");
+  auto* projectSearchIcon = projectSearch->addAction(QIcon(QtAsset(searchIcon)), QLineEdit::LeadingPosition);
+  projectSearchIcon->setObjectName("recentProjectSearchIcon");
+  auto* clearProjectSearch = projectSearch->addAction(style()->standardIcon(QStyle::SP_LineEditClearButton), QLineEdit::TrailingPosition);
+  clearProjectSearch->setObjectName("recentProjectSearchClear");
+  clearProjectSearch->setText("Clear project search");
+  clearProjectSearch->setToolTip("Clear project search");
+  clearProjectSearch->setVisible(false);
+  connect(projectSearch, &QLineEdit::textChanged, clearProjectSearch,
+          [clearProjectSearch](const QString& text) { clearProjectSearch->setVisible(!text.isEmpty()); });
+  connect(clearProjectSearch, &QAction::triggered, projectSearch, &QLineEdit::clear);
   projectsLayout->addWidget(projectSearch);
   m_ProjectTiles = new QWidget(projectsCard);
   m_ProjectTiles->setObjectName("recentProjectTiles");
@@ -640,8 +718,11 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   projectsScroll->setWidgetResizable(true);
   projectsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   projectsScroll->setWidget(m_ProjectTiles);
-  projectsScroll->setMinimumHeight(250);
-  projectsScroll->setMaximumHeight(258);
+  projectsScroll->setFrameShape(QFrame::NoFrame);
+  projectsScroll->viewport()->setAutoFillBackground(false);
+  projectsScroll->setStyleSheet("QScrollArea#recentProjectsScroll { background:transparent; border:0; }");
+  projectsScroll->setMinimumHeight(80);
+  projectsScroll->setMaximumHeight(90);
   projectsLayout->addWidget(projectsScroll);
   connect(projectSearch, &QLineEdit::textChanged, this, [this] { RefreshRecentProjects(); });
   connect(projectsSeeAll, &QToolButton::clicked, this, [this, projectsSeeAll] {
@@ -667,28 +748,29 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
     auto* link = new QToolButton(quickCard);
     link->setObjectName("startQuickLink");
     link->setAccessibleName(label);
+    link->setAccessibleDescription(detail);
     link->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     QString linkText = label;
     linkText.replace("&", "&&");
-    QString detailText = detail;
-    detailText.replace("&", "&&");
-    link->setText(linkText + "\n" + detailText);
+    link->setText(linkText);
+    link->setToolTip(label + " — " + detail);
     link->setIcon(CadCommandIcon(icon));
+    link->setProperty("cadIcon", icon);
     link->setIconSize(QSize(23, 23));
-    link->setMinimumHeight(52);
+    link->setMinimumHeight(54);
     link->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    link->setStyleSheet(QString("QToolButton { color:%1; background:%2; border:1px solid %3; border-left:3px solid %4; border-radius:6px; padding:4px 2px; font-size:9px; } QToolButton:hover { background:%5; border-color:%4; }")
-                            .arg(textColor, cardColor, edgeColor, accent, darkStart ? "#30383d" : QtAccentFor(false).hoverTint));
+  link->setStyleSheet(QString("QToolButton { color:%1; background:transparent; border:0; border-radius:6px; padding:5px 3px; font-size:12px; font-weight:600; } QToolButton:hover { background:palette(midlight); border:0; }")
+                            .arg(textColor, accent));
     connect(link, &QToolButton::clicked, this, [action = std::move(action)] { action(); });
     quickGrid->addWidget(link, 0, column);
   };
-  addQuickLink("Templates", "Use a survey template", "New_Drawing.png", 0, amberColor,
+  addQuickLink("Templates", "Use a survey template", "c3d_newfolder.png", 0, secondaryAccent,
                [this] { NewDrawing(); });
-  addQuickLink("Survey setup", "Drawing units & plot scale", "settings.png", 1, aquaColor,
+  addQuickLink("Survey setup", "Drawing units & plot scale", "c3d_dwgsettings.png", 1, secondaryAccent,
                [this] { ShowUnits(); });
-  addQuickLink("Import formats", "Survey point files", "Import.png", 2, aquaColor,
+  addQuickLink("Import points", "Import survey point files", "Import.png", 2, secondaryAccent,
                [this] { Submit("IMPORTPOINTS"); });
-  addQuickLink("Application settings", "Customize GoSurvey", "settings.png", 3, aquaColor,
+  addQuickLink("Application settings", "Customize GoSurvey", "settings.png", 3, secondaryAccent,
                [this] { ShowSettings(); });
   quickLayout->addLayout(quickGrid);
   sideColumn->addWidget(quickCard);
@@ -706,7 +788,7 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   auto* resourcesSeeAll = new QToolButton(resourcesCard);
   resourcesSeeAll->setText("View all  ›");
   resourcesSeeAll->setCursor(Qt::PointingHandCursor);
-  resourcesSeeAll->setStyleSheet(QString("QToolButton { color:%1; border:0; padding:3px; } QToolButton:hover { color:%2; }").arg(aquaColor, QtAccentFor(darkStart).linkHover));
+  resourcesSeeAll->setStyleSheet(QString("QToolButton { color:%1; border:0; padding:3px; } QToolButton:hover { color:%2; }").arg(primaryAccent, "palette(link)"));
   resourcesHeader->addWidget(resourcesSeeAll);
   resourcesLayout->addLayout(resourcesHeader);
   auto addResourceLink = [&](const QString& title, const QString& detail, const QString& icon,
@@ -715,14 +797,18 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
     link->setObjectName(objectName);
     link->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     link->setIcon(CadCommandIcon(icon));
+    link->setProperty("cadIcon", icon);
     link->setIconSize(QSize(16, 16));
     QString linkTitle = title;
     linkTitle.replace("&", "&&");
-    link->setText(linkTitle + "\n" + detail + "    ›");
+    link->setText(linkTitle + "    ›");
+    link->setToolTip(title + " — " + detail);
+    link->setAccessibleName(title);
+    link->setAccessibleDescription(detail);
     link->setMinimumHeight(27);
     link->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    link->setStyleSheet(QString("QToolButton { text-align:left; color:%1; background:transparent; border:0; border-left:3px solid %3; padding:1px 4px; font-size:10px; } QToolButton:hover { background:%2; }")
-                            .arg(textColor, darkStart ? "#30383d" : QtAccentFor(false).hoverTint, QtAccentFor(darkStart).quiet));
+    link->setStyleSheet(QString("QToolButton { text-align:left; color:%1; background:transparent; border:0;  padding:1px 4px; font-size:12px; font-weight:550; } QToolButton:hover { background:%2; }")
+                            .arg(textColor, "palette(midlight)", secondaryAccent));
     connect(link, &QToolButton::clicked, this, [url] { QDesktopServices::openUrl(QUrl(url)); });
     resourcesLayout->addWidget(link);
   };
@@ -802,9 +888,7 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   BuildDraftingInput();
   auto* grid = new QToolButton(this);
   grid->setObjectName("draftGrid"); grid->setText("GRID"); grid->setCheckable(true); grid->setChecked(true);
-  grid->setStyleSheet(QtApplyAccent("QToolButton { color:#edf1f3; background:#2a3035; border:1px solid #41494e; "
-      "border-radius:4px; padding:2px 8px; } QToolButton:hover { background:#343c41; border-color:@edge@; } "
-      "QToolButton:checked { color:#ffffff; background:@tint@; border-color:@strong@; }", true));
+  grid->setProperty("draftingMode", true);
   statusBar()->addWidget(grid);
   connect(grid, &QToolButton::toggled, this, [this](bool on) { m_Viewport->SetGrid(on); });
   auto* annotationScale = new QComboBox(this);
@@ -859,6 +943,7 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   });
   auto* multiSelect = new QToolButton(this);
   multiSelect->setText("Multi Selection"); multiSelect->setCheckable(true);
+  multiSelect->setProperty("draftingMode", true);
   multiSelect->setChecked(m_State.multiSelectionEnabled);
   multiSelect->setToolTip("Disambiguate overlapping linework picks.");
   statusBar()->addWidget(multiSelect);
@@ -982,6 +1067,13 @@ void EditorWindow::MaybeAutoOpenWhatsNew() {
 void EditorWindow::UpdateChromeIcons() {
   for (auto* command : findChildren<QAction*>())
     if (command->property("cadIcon").isValid()) command->setIcon(CadCommandIcon(command->property("cadIcon").toString()));
+  for (auto* button : findChildren<QAbstractButton*>())
+    if (button->property("cadIcon").isValid()) button->setIcon(CadCommandIcon(button->property("cadIcon").toString()));
+  for (auto* label : findChildren<QLabel*>()) if (label->property("cadIcon").isValid()) {
+    QSize size = label->property("cadIconSize").toSize();
+    if (!size.isValid()) size = QSize(24, 24);
+    label->setPixmap(CadCommandIcon(label->property("cadIcon").toString()).pixmap(size));
+  }
   for (auto* dock : findChildren<QDockWidget*>()) for (auto* button : dock->findChildren<QAbstractButton*>()) {
     if (button->objectName() != "qt_dockwidget_closebutton" && button->objectName() != "qt_dockwidget_floatbutton") continue;
     auto glyph = button->icon().pixmap(32, 32);
@@ -990,6 +1082,11 @@ void EditorWindow::UpdateChromeIcons() {
     painter.fillRect(glyph.rect(), palette().color(QPalette::WindowText)); painter.end();
     button->setIcon(QIcon(glyph));
   }
+  for (auto* button : findChildren<QToolButton*>())
+    if (button->objectName().startsWith("collapsed_") && button->menu() && !button->menu()->actions().isEmpty()) {
+      button->setIcon(button->menu()->actions().front()->icon());
+      button->menu()->setIcon(button->icon());
+    }
 }
 
 void EditorWindow::BuildRibbon() {
@@ -1025,13 +1122,18 @@ void EditorWindow::BuildRibbon() {
   edit->addAction(CommandAction("Copy", "Copy.png", "COPYCLIP", QKeySequence::Copy));
   edit->addAction(CommandAction("Paste", "Paste.png", "PASTE", QKeySequence::Paste));
   auto* viewMenu = applicationMenu->addMenu("&View"); viewMenu->setObjectName("viewMenu");
-  connect(viewMenu->addAction("Survey reports"), &QAction::triggered, this, [this] { ShowSurveyReports(); });
+  auto* surveyReports = viewMenu->addAction("Survey reports");
+  surveyReports->setObjectName("viewSurveyReports");
+  connect(surveyReports, &QAction::triggered, this, [this] { ShowSurveyReports(); });
   auto* orientation = viewMenu->addMenu("Orientation");
+  orientation->setObjectName("viewOrientation");
   struct View { const char* name; float azimuth; float elevation; };
   for (const auto& view : {View{"Top", 0, 90}, View{"Front", 0, 0}, View{"Right", 90, 0},
       View{"Back", 180, 0}, View{"Left", -90, 0}, View{"Bottom", 0, -90}, View{"Home", 45, 35.264f}})
     connect(orientation->addAction(view.name), &QAction::triggered, this, [this, view] { m_Viewport->SetOrientation(view.azimuth, view.elevation); });
-  viewMenu->addAction(CommandAction("Zoom extents", "Zoom_Extents.png", "ZOOMEXTENTS"));
+  auto* zoomExtents = CommandAction("Zoom extents", "Zoom_Extents.png", "ZOOMEXTENTS");
+  zoomExtents->setObjectName("viewZoomExtents");
+  viewMenu->addAction(zoomExtents);
   auto* appearance = viewMenu->addMenu("Appearance");
   auto* themes = new QActionGroup(this); themes->setExclusive(true);
   for (bool light : {false, true}) {
@@ -1134,10 +1236,69 @@ void EditorWindow::BuildDocks() {
   toolspaceTabs->setCurrentIndex(ToolspaceTabIndex(AppCommandState::ToolspaceTab::Prospector));
   // Connected after the initial tabs exist, so building the tab bar does not overwrite the saved tab.
   connect(toolspaceTabs, &QTabWidget::currentChanged, this, [this](int index) { m_State.toolspaceTab = ToolspaceTabFromIndex(index); });
-  makeDock("Toolspace", "toolspaceDock", Qt::RightDockWidgetArea, toolspaceTabs);
+  m_ToolspaceDock = makeDock("Toolspace", "toolspaceDock", Qt::RightDockWidgetArea, toolspaceTabs);
   BuildPropertiesPanel();
-  auto* propertiesDock = makeDock("Properties", "propertiesDock", Qt::LeftDockWidgetArea, m_PropertiesScroll);
-  propertiesDock->raise();
+  m_PropertiesScroll->setMinimumWidth(0);
+  m_PropertiesDock = makeDock("Properties", "propertiesDock", Qt::LeftDockWidgetArea, m_PropertiesScroll);
+  m_PropertiesDock->setMinimumWidth(0);
+  m_PropertiesDock->raise();
+
+  auto makeRail = [this](const QString& title, const char* objectName, Qt::ToolBarArea area, QDockWidget* dock) {
+    auto* rail = new QToolBar(title, this);
+    rail->setObjectName(objectName);
+    rail->setMovable(false);
+    rail->setFloatable(false);
+    rail->setAllowedAreas(area);
+    rail->setOrientation(Qt::Vertical);
+    rail->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    rail->setIconSize(QSize(18, 18));
+    rail->setMinimumWidth(44);
+    rail->setMaximumWidth(44);
+    rail->setStyleSheet(
+        "QToolBar#adaptivePropertiesRail, QToolBar#adaptiveToolspaceRail { border:0; padding:3px 1px; spacing:4px; background:palette(window); }"
+        "QToolBar#adaptivePropertiesRail QToolButton, QToolBar#adaptiveToolspaceRail QToolButton { min-width:30px; min-height:34px; padding:5px; border:1px solid palette(mid); border-radius:5px; background:palette(button); }"
+        "QToolBar#adaptivePropertiesRail QToolButton:hover, QToolBar#adaptiveToolspaceRail QToolButton:hover { border-color:palette(highlight); background:palette(midlight); }");
+    auto* toggle = dock->toggleViewAction();
+    const QString iconName = dock == m_PropertiesDock ? "c3d_properties.png" : "toolspace.png";
+    toggle->setText(title);
+    toggle->setProperty("cadIcon", iconName);
+    toggle->setToolTip(QString("Show or hide the %1 panel").arg(title));
+    toggle->setStatusTip(QString("Show or hide the %1 panel").arg(title));
+    QIcon railIcon = CadCommandIcon(iconName);
+    if (railIcon.isNull())
+      railIcon = style()->standardIcon(dock == m_PropertiesDock
+          ? QStyle::SP_FileDialogDetailedView : QStyle::SP_DirOpenIcon);
+    toggle->setIcon(railIcon);
+    rail->addAction(toggle);
+    addToolBar(area, rail);
+    if (dock == m_PropertiesDock) m_PropertiesRailInstalled = true;
+    else m_ToolspaceRailInstalled = true;
+    connect(toggle, &QAction::toggled, this, [this, dock](bool visible) {
+      if (!m_UpdatingAdaptiveDocks) {
+        if (dock == m_PropertiesDock) {
+          m_PropertiesDockWanted = visible;
+          if (width() < kAdaptiveDockWidthThreshold) {
+            m_PropertiesDockExpandedCompact = visible;
+            if (visible) m_ToolspaceDockExpandedCompact = false;
+          }
+        } else {
+          m_ToolspaceDockWanted = visible;
+          if (width() < kAdaptiveDockWidthThreshold) {
+            m_ToolspaceDockExpandedCompact = visible;
+            if (visible) m_PropertiesDockExpandedCompact = false;
+          }
+        }
+        if (visible && width() < kAdaptiveDockWidthThreshold)
+          resizeDocks({dock}, {dock == m_PropertiesDock ? 220 : 260}, Qt::Horizontal);
+        UpdateAdaptiveDocks();
+      }
+    });
+    return rail;
+  };
+  m_PropertiesRail = makeRail("Properties", "adaptivePropertiesRail", Qt::LeftToolBarArea, m_PropertiesDock);
+  m_ToolspaceRail = makeRail("Toolspace", "adaptiveToolspaceRail", Qt::RightToolBarArea, m_ToolspaceDock);
+  m_PropertiesRail->hide();
+  m_ToolspaceRail->hide();
   m_CommandBar = new FloatingCommandBar(m_Viewport);
   m_CommandBar->refreshViewportCursor = [this] { m_Viewport->RefreshCommandCursor(); };
   m_CommandBar->optionSelected = [this](const QString& shortcut) { Submit(shortcut); m_Command->setFocus(); };
@@ -1148,6 +1309,7 @@ void EditorWindow::BuildDocks() {
   toggleCommand->setShortcut(QKeySequence("Ctrl+9")); addAction(toggleCommand);
   connect(toggleCommand, &QAction::triggered, this, [this] { m_CommandBar->ToggleVisible(); });
   if (auto* view = findChild<QMenu*>("viewMenu")) view->addAction(toggleCommand);
+  toggleCommand->setObjectName("viewCommandLine");
   m_Command->setPlaceholderText("Type a command or coordinates");
   m_CommandSuggestions = new QListView(this);
   m_CommandSuggestions->setObjectName("commandSuggestionPopup");
@@ -1266,12 +1428,76 @@ void EditorWindow::BuildDocks() {
   });
 }
 
+void EditorWindow::UpdateAdaptiveDocks() {
+  const bool drawingActive = m_State.activeDrawingIdx > 0;
+  const bool compact = width() < kAdaptiveDockWidthThreshold;
+  // The View-menu dock toggles are unavailable on Start because there is no drawing workspace to show them in.
+  if (m_PropertiesDock) {
+    auto* action = m_PropertiesDock->toggleViewAction();
+    action->setEnabled(drawingActive);
+    action->setText(drawingActive ? "Properties" : "Properties (open a drawing)");
+    action->setToolTip(drawingActive ? "Show or hide the Properties panel." : "Open a drawing to use the Properties panel.");
+  }
+  if (m_ToolspaceDock) {
+    auto* action = m_ToolspaceDock->toggleViewAction();
+    action->setEnabled(drawingActive);
+    action->setText(drawingActive ? "Toolspace" : "Toolspace (open a drawing)");
+    action->setToolTip(drawingActive ? "Show or hide the Toolspace panel." : "Open a drawing to use Toolspace.");
+  }
+  if (auto* view = findChild<QMenu*>("viewMenu")) {
+    if (auto* orientation = view->findChild<QMenu*>("viewOrientation")) {
+      orientation->setEnabled(drawingActive);
+      orientation->setTitle(drawingActive ? "Orientation" : "Orientation (open a drawing)");
+    }
+    if (auto* zoom = findChild<QAction*>("viewZoomExtents")) {
+      zoom->setEnabled(drawingActive);
+      zoom->setText(drawingActive ? "Zoom extents" : "Zoom extents (open a drawing)");
+    }
+    if (auto* commandLine = findChild<QAction*>("viewCommandLine")) {
+      commandLine->setEnabled(drawingActive);
+      commandLine->setText(drawingActive ? "Command line" : "Command line (open a drawing)");
+    }
+  }
+  m_UpdatingAdaptiveDocks = true;
+  if (m_PropertiesDock) m_PropertiesDock->setVisible(drawingActive && m_PropertiesDockWanted && (!compact || m_PropertiesDockExpandedCompact));
+  if (m_ToolspaceDock) m_ToolspaceDock->setVisible(drawingActive && m_ToolspaceDockWanted && (!compact || m_ToolspaceDockExpandedCompact));
+  const bool showPropertiesRail = drawingActive && compact && !m_PropertiesDockExpandedCompact;
+  const bool showToolspaceRail = drawingActive && compact && !m_ToolspaceDockExpandedCompact;
+  auto updateRail = [this](QToolBar* rail, Qt::ToolBarArea area, bool shouldShow, bool& installed) {
+    if (!rail) return;
+    if (shouldShow && !installed) {
+      rail->setMinimumWidth(44);
+      rail->setMaximumWidth(44);
+      addToolBar(area, rail);
+      installed = true;
+    } else if (!shouldShow && installed) {
+      removeToolBar(rail);
+      rail->setMinimumWidth(0);
+      rail->setMaximumWidth(0);
+      installed = false;
+    }
+    rail->setVisible(shouldShow);
+  };
+  updateRail(m_PropertiesRail, Qt::LeftToolBarArea, showPropertiesRail, m_PropertiesRailInstalled);
+  updateRail(m_ToolspaceRail, Qt::RightToolBarArea, showToolspaceRail, m_ToolspaceRailInstalled);
+  m_UpdatingAdaptiveDocks = false;
+  if (compact && m_PropertiesDockExpandedCompact && m_ToolspaceDockExpandedCompact) {
+    if (m_PropertiesDock) m_PropertiesDock->setVisible(false);
+    m_PropertiesDockExpandedCompact = false;
+  }
+  if (m_CommandBar) m_CommandBar->SetAdaptiveFullWidth(compact);
+  // QMainWindow can defer dock/toolbar geometry until the next event pass. Keep
+  // the viewport size current before callers project world coordinates or hit-test it.
+  if (layout()) layout()->activate();
+}
+
 void EditorWindow::Submit(const QString& command) {
   ResetDraftingInput();
   if (!command.trimmed().isEmpty()) {
     if (m_CommandHistory.isEmpty() || m_CommandHistory.last() != command) m_CommandHistory.push_back(command);
     if (m_CommandHistory.size() > 500) m_CommandHistory.removeFirst();
     m_HistoryIndex = static_cast<int>(m_CommandHistory.size());
+    if (m_CommandBar) m_CommandBar->Append("Command: " + command.trimmed());
   }
   const QString verb = command.trimmed().toUpper();
   if (verb == "LAYOUT") { ShowLayoutManager(); return; }
@@ -1871,12 +2097,41 @@ void EditorWindow::showEvent(QShowEvent* event) {
   m_Tabs->updateGeometry();
   if (centralWidget()->layout()) centralWidget()->layout()->activate();
   m_Tabs->update();
+  UpdateAdaptiveDocks();
   RefreshRecentProjects();
   RefreshRecentDrawings();
 }
 
 void EditorWindow::changeEvent(QEvent* event) {
   QMainWindow::changeEvent(event);
+  if (event->type() == QEvent::ApplicationPaletteChange || event->type() == QEvent::StyleChange) {
+    UpdateChromeIcons();
+    RefreshRecentDrawings();
+    RefreshRecentProjects();
+    const bool dark = !qApp->property("cadLightTheme").toBool();
+    const QIcon searchIcon(QtAsset(dark ? "icons/search_dark.svg" : "icons/search_light.svg"));
+    if (auto* search = findChild<QLineEdit*>("recentDrawingSearch"))
+      if (auto* icon = search->findChild<QAction*>("recentDrawingSearchIcon")) icon->setIcon(searchIcon);
+    if (auto* search = findChild<QLineEdit*>("recentProjectSearch"))
+      if (auto* icon = search->findChild<QAction*>("recentProjectSearchIcon")) icon->setIcon(searchIcon);
+    for (auto* heading : findChildren<QLabel*>("propertiesSectionHeading"))
+      heading->setStyleSheet(QtPropertiesSectionHeadingStyle(dark));
+    for (auto* value : findChildren<QLabel*>())
+      if (value->property("propertiesReadOnly").toBool())
+        value->setStyleSheet(QString("color:%1; font-weight:500;").arg(dark ? "#b6c0c6" : "#46515a"));
+    for (auto* badge : findChildren<QLabel*>()) {
+      const QString axis = badge->property("propertiesAxisBadge").toString();
+      if (axis.isEmpty()) continue;
+      const QString background = axis == "X" ? (dark ? "#492d2b" : "#f6ecea")
+          : axis == "Y" ? (dark ? "#294033" : "#edf5ef") : (dark ? "#29384b" : "#edf2f8");
+      const QString color = axis == "X" ? (dark ? "#ff9c91" : "#8f3b35")
+          : axis == "Y" ? (dark ? "#92d9a6" : "#356648") : (dark ? "#9bc2ff" : "#3b5c83");
+      const QString edge = axis == "X" ? (dark ? "#68413e" : "#e1c6c3")
+          : axis == "Y" ? (dark ? "#3b5b45" : "#c5d8ca") : (dark ? "#3b506a" : "#c4d0df");
+      badge->setStyleSheet(QString("background:%1; color:%2; border:1px solid %3; border-radius:3px; font-weight:600;")
+                               .arg(background, color, edge));
+    }
+  }
   if (event->type() == QEvent::WindowStateChange) {
     if (auto* grip = findChild<QSizeGrip*>("editorResizeGrip"))
       grip->setVisible(!isMaximized() && !isFullScreen());
@@ -1886,6 +2141,7 @@ void EditorWindow::changeEvent(QEvent* event) {
 void EditorWindow::resizeEvent(QResizeEvent* event) {
   QMainWindow::resizeEvent(event);
   if (m_Viewport) m_Viewport->UpdateWindowResizePreviewGeometry();
+  UpdateAdaptiveDocks();
   const bool compact = width() < 1120;
   if (auto* columns = findChild<QBoxLayout*>("startContentColumns")) {
     const auto direction = compact ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
@@ -1983,6 +2239,71 @@ void EditorWindow::CreateDrawingFromTemplate(std::uint32_t projectUid, const QSt
   }
   m_Viewport->InvalidateGeometry();
   Refresh();
+}
+
+void EditorWindow::ShowDrawingTemplateChooser() {
+  QDialog dialog(this);
+  dialog.setObjectName("drawingTemplateDialog");
+  dialog.setWindowTitle("New Drawing");
+  dialog.setMinimumSize(720, 430);
+  auto* layout = new QVBoxLayout(&dialog);
+  auto* heading = new QLabel("New Drawing", &dialog);
+  heading->setStyleSheet("font-size:20px; font-weight:600;");
+  layout->addWidget(heading);
+  auto* intro = new QLabel("Choose a blank drawing or start from a template.", &dialog);
+  layout->addWidget(intro);
+  auto* list = new QListWidget(&dialog);
+  list->setObjectName("drawingTemplateList");
+  const auto choices = DiscoverDrawingTemplates();
+  for (const auto& choice : choices) {
+    auto* item = new QListWidgetItem(choice.label, list);
+    item->setData(Qt::UserRole, choice.path);
+    item->setData(Qt::UserRole + 1, choice.blank);
+  }
+  if (list->count()) list->setCurrentRow(0);
+  list->hide();
+  auto* tiles = new QWidget(&dialog);
+  auto* grid = new QGridLayout(tiles);
+  grid->setSpacing(12);
+  // Let the empty-state card fill the viewport so no bare scroll-area strip is left below it.
+  grid->setAlignment(Qt::AlignLeft);
+  auto* group = new QButtonGroup(tiles);
+  group->setExclusive(true);
+  for (int row = 0; row < choices.size(); ++row) {
+    const auto& choice = choices[row];
+    auto* tile = new QPushButton(choice.label + "\n\n" + (choice.blank ?
+        "Start with an empty drawing" : "Use this drawing template"), tiles);
+    tile->setObjectName(QString("drawingTemplateTile%1").arg(row));
+    tile->setCheckable(true);
+    tile->setFixedSize(228, 124);
+    tile->setIcon(style()->standardIcon(choice.blank ? QStyle::SP_FileIcon : QStyle::SP_DirIcon));
+    tile->setIconSize(QSize(34, 34));
+    group->addButton(tile, row);
+    grid->addWidget(tile, row / 3, row % 3);
+    connect(tile, &QPushButton::clicked, &dialog, [list, row] { list->setCurrentRow(row); });
+    if (row == 0) tile->setChecked(true);
+  }
+  connect(list, &QListWidget::currentRowChanged, &dialog, [group](int row) {
+    if (auto* button = group->button(row)) button->setChecked(true);
+  });
+  layout->addWidget(tiles, 1);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel | QDialogButtonBox::Open, &dialog);
+  buttons->setObjectName("drawingTemplateButtons");
+  buttons->button(QDialogButtonBox::Open)->setText("Create Drawing");
+  buttons->button(QDialogButtonBox::Open)->setEnabled(list->currentItem() != nullptr);
+  connect(list, &QListWidget::currentRowChanged, &dialog, [buttons](int row) {
+    buttons->button(QDialogButtonBox::Open)->setEnabled(row >= 0);
+  });
+  connect(list, &QListWidget::itemDoubleClicked, &dialog, [&dialog](QListWidgetItem*) { dialog.accept(); });
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  layout->addWidget(buttons);
+  m_ModalOpen = true;
+  if (dialog.exec() == QDialog::Accepted && list->currentItem()) {
+    const bool blank = list->currentItem()->data(Qt::UserRole + 1).toBool();
+    CreateDrawingFromTemplate(0, blank ? QString{} : list->currentItem()->data(Qt::UserRole).toString());
+  }
+  m_ModalOpen = false;
 }
 
 void EditorWindow::OpenDrawing(const QString& path) {
@@ -2527,6 +2848,7 @@ void EditorWindow::Refresh() {
     annotationScale->clear();
     for (const auto& scale : m_State.annotationScales)
       annotationScale->addItem(QString::fromUtf8(CadAnnotationScaleStatusLabel(scale).c_str()));
+    const bool hasScales = !m_State.annotationScales.empty();
     if (m_State.annotationScales.empty()) {
       // No scale list in this drawing: still show the plot scale it is drawn at, read-only.
       annotationScale->addItem(QString::fromUtf8(PlotScaleLabel(m_State.drawingInsUnits, m_State.modelUnitsPerPlottedInch).c_str()));
@@ -2534,7 +2856,7 @@ void EditorWindow::Refresh() {
     } else {
       annotationScale->setCurrentIndex(m_State.currentAnnotationScaleIndex);
     }
-    annotationScale->setEnabled(!m_State.annotationScales.empty());
+    annotationScale->setEnabled(hasScales);
     annotationScale->setVisible(!modelSpace);
   }
   if (auto* viewportZoom = findChild<QComboBox*>("statusViewportZoom")) {
@@ -2587,20 +2909,29 @@ void EditorWindow::Refresh() {
   const bool drawingActive = m_State.activeDrawingIdx > 0;
   if (auto* drawingSettings = findChild<QAction*>("command_DRAWINGSETTINGS"))
     drawingSettings->setEnabled(drawingActive);
-  if (auto* ribbon = findChild<QToolBar*>("ribbonBar")) ribbon->setVisible(true);
+  if (auto* ribbon = findChild<QToolBar*>("ribbonBar")) ribbon->setVisible(drawingActive);
   m_Tabs->setVisible(true);
-  statusBar()->setVisible(true);
+  statusBar()->setVisible(drawingActive);
   for (auto* button : findChildren<QToolButton*>())
     if (button->objectName().startsWith("quick_")) button->setVisible(drawingActive);
+  UpdateAdaptiveDocks();
+  bool compatibilityNoticeShown = false;
+  while (m_LogShown < m_Log.size()) {
+    QString line = QString::fromUtf8(m_Log[m_LogShown++].c_str());
+    static const QString templatePrefix = "Opened GoSurvey template (.gst): ";
+    if (line.startsWith(templatePrefix))
+      line = "Opened GoSurvey template: " + QFileInfo(line.mid(templatePrefix.size())).fileName();
+    else if (line.startsWith("internal document payload: migrated format version ")) {
+      if (compatibilityNoticeShown) continue;
+      compatibilityNoticeShown = true;
+      line = "Drawing data was updated for compatibility with this version of GoSurvey.";
+    }
+    m_CommandBar->Append(line);
+  }
   if (auto* toolspaceTabs = findChild<QTabWidget*>("toolspaceTabs")) {
     const QSignalBlocker toolspaceBlock(toolspaceTabs);
     toolspaceTabs->setCurrentIndex(ToolspaceTabIndex(m_State.toolspaceTab));
   }
-  if (auto* toolspaceDock = findChild<QDockWidget*>("toolspaceDock"))
-    toolspaceDock->setVisible(drawingActive);
-  if (auto* propertiesDock = findChild<QDockWidget*>("propertiesDock"))
-    propertiesDock->setVisible(drawingActive);
-  while (m_LogShown < m_Log.size()) m_CommandBar->Append(QString::fromUtf8(m_Log[m_LogShown++].c_str()));
   QString commandHint;
   for (const auto* hint : {LineCommandFooterHint(m_State), CircleCommandFooterHint(m_State), ModifyCommandFooterHint(m_State),
       ScaleCommandFooterHint(m_State), RotateCommandFooterHint(m_State), DeleteCommandFooterHint(m_State),
@@ -2726,7 +3057,7 @@ void EditorWindow::RefreshRecentDrawings() {
   rows->setSpacing(3);
   const auto dir = UserDataDirectory().empty() ? std::filesystem::path(".") : UserDataDirectory();
   auto entries = recent::Load(dir / "gosurvey-recent.json");
-  const QString query = m_RecentShowAll && m_RecentSearch ? m_RecentSearch->text().trimmed() : QString();
+  const QString query = m_RecentSearch ? m_RecentSearch->text().trimmed() : QString();
   if (!query.isEmpty())
     entries.erase(std::remove_if(entries.begin(), entries.end(), [&](const auto& entry) {
       return !QString::fromUtf8(entry.name.c_str()).contains(query, Qt::CaseInsensitive) &&
@@ -2736,7 +3067,18 @@ void EditorWindow::RefreshRecentDrawings() {
     std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
   if (auto* gridMode = findChild<QToolButton*>("recentGridMode")) gridMode->setChecked(!m_RecentListView);
   if (auto* listMode = findChild<QToolButton*>("recentListMode")) listMode->setChecked(m_RecentListView);
-  const size_t visibleEntries = m_RecentShowAll ? entries.size() : std::min<size_t>(5, entries.size());
+  const size_t visibleEntries = (m_RecentShowAll || !query.isEmpty()) ? entries.size() : std::min<size_t>(5, entries.size());
+  if (auto* seeAll = findChild<QToolButton*>("recentSeeAll"))
+    seeAll->setVisible(!entries.empty());
+  if (auto* scroll = findChild<QScrollArea*>("recentDrawingsScroll")) {
+    const bool hasVisibleRecentDrawings = visibleEntries > 0;
+    scroll->setMinimumHeight(hasVisibleRecentDrawings ? 300 : 72);
+    scroll->setMaximumHeight(hasVisibleRecentDrawings ? QWIDGETSIZE_MAX : 80);
+    if (auto* panel = findChild<QWidget*>("startRecentDrawingsPanel"); panel && panel->layout())
+      panel->layout()->setAlignment(scroll, hasVisibleRecentDrawings ? Qt::Alignment{} : Qt::AlignTop);
+    if (auto* columnHeaders = findChild<QWidget*>("recentDrawingColumnHeaders"))
+      columnHeaders->setVisible(hasVisibleRecentDrawings);
+  }
   const auto recentDrawingStore = std::make_shared<const std::filesystem::path>(dir / "gosurvey-recent.json");
   const bool dark = qApp->palette().color(QPalette::Window).lightness() < 128;
   const QString cardBg = dark ? "#242a2f" : "#ffffff";
@@ -2905,11 +3247,17 @@ void EditorWindow::RefreshRecentDrawings() {
     ++index;
   }
   if (!index) {
-    auto* empty = new QLabel("Your recent drawings will appear here.", m_RecentTiles);
-    empty->setStyleSheet(QString("color:%1; padding:16px;").arg(dark ? "#9db5c5" : "#6b7884"));
+    auto* empty = new QLabel(!query.isEmpty()
+        ? "No drawings match this search. Clear the search to see recent drawings."
+        : "No recent drawings yet. Choose Open drawing above to get started.", m_RecentTiles);
+    empty->setObjectName("recentDrawingEmptyState");
+    empty->setWordWrap(true);
+    empty->setStyleSheet(QString("color:%1; background:%2; border:1px solid %3; border-radius:7px; padding:16px; font-size:13px;")
+        .arg(dark ? "#c0cbd2" : "#4e5963", cardBg, cardEdge));
     rows->addWidget(empty);
+  } else {
+    rows->addStretch(1);
   }
-  rows->addStretch(1);
 }
 
 void EditorWindow::RefreshRecentProjects() {
@@ -2925,18 +3273,34 @@ void EditorWindow::RefreshRecentProjects() {
   grid->setContentsMargins(0, 0, 0, 0);
   grid->setSpacing(3);
   grid->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+  grid->setColumnStretch(0, 1);
   const auto dataDir = UserDataDirectory();
   const auto store = (dataDir.empty() ? std::filesystem::path(".") : dataDir) /
                      "gosurvey-recent-projects.json";
   const auto recentProjectStore = std::make_shared<const std::filesystem::path>(store);
   auto entries = recent::Load(store);
+  QString query;
   if (auto* search = findChild<QLineEdit*>("recentProjectSearch")) {
-    const auto query = search->text().trimmed();
+    query = search->text().trimmed();
     if (!query.isEmpty())
       entries.erase(std::remove_if(entries.begin(), entries.end(), [&](const auto& entry) {
         return !QString::fromUtf8(entry.name.c_str()).contains(query, Qt::CaseInsensitive) &&
                !QString::fromUtf8(entry.path.c_str()).contains(query, Qt::CaseInsensitive);
       }), entries.end());
+  }
+  if (auto* scroll = findChild<QScrollArea*>("recentProjectsScroll")) {
+    const bool hasRecentProjects = !entries.empty();
+    if (hasRecentProjects) {
+      scroll->setMinimumHeight(120);
+      scroll->setMaximumHeight(258);
+    } else {
+      // The empty-state card itself supplies the guidance; avoid leaving a blank
+      // scroll-area band beneath it when there are no project tiles to scroll.
+      scroll->setMinimumHeight(54);
+      scroll->setMaximumHeight(54);
+    }
+    if (auto* seeAll = findChild<QToolButton*>("projectsSeeAll"))
+      seeAll->setVisible(hasRecentProjects);
   }
   const size_t projectLimit = m_ShowAllProjects ? entries.size() : std::min<size_t>(5, entries.size());
   const int columns = 1;
@@ -2960,7 +3324,7 @@ void EditorWindow::RefreshRecentProjects() {
     tile->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     const bool dark = qApp->palette().color(QPalette::Window).lightness() < 128;
     tile->setStyleSheet(dark
-        ? QtApplyAccent("QToolButton { text-align:left; padding:6px 8px; border:0; border-left:3px solid @quiet@; border-bottom:1px solid #3c444a; border-radius:0; background:transparent; } QToolButton:hover { border-left-color:@strong@; background:#30373c; }", true)
+        ? QtApplyAccent("QToolButton { text-align:left; padding:6px 8px; border:0; border-bottom:1px solid #3c444a; border-radius:0; background:transparent; } QToolButton:hover { background:#30373c; }", true)
         : "QToolButton { text-align:left; padding:6px 8px; border:1px solid #c5c8cb; border-radius:6px; background:#ffffff; } QToolButton:hover { border-color:#92979c; background:#f0f1f2; }");
     tile->setToolTip(name + "\n" + projectFolder + "\n" + lastOpened);
     const auto openRecentProject = [this, path, recentProjectStore]() noexcept {
@@ -2997,8 +3361,19 @@ void EditorWindow::RefreshRecentProjects() {
     grid->addWidget(tile, index / columns, index % columns);
     ++index;
   }
-  if (!index)
-    grid->addWidget(new QLabel("No recent projects. Use New Project or Open Project.", m_ProjectTiles), 0, 0);
+  if (!index) {
+    auto* empty = new QLabel(!query.isEmpty()
+        ? QString("No recent projects match “%1”. Choose New/Open project, or clear the search.").arg(query)
+        : "No recent projects yet. Choose New project or Open project above to get started.", m_ProjectTiles);
+    empty->setObjectName("recentProjectsEmptyState");
+    empty->setWordWrap(true);
+    empty->setMinimumHeight(54);
+    empty->setMaximumHeight(54);
+    empty->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+    empty->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    empty->setStyleSheet("padding:8px; color:palette(text); background:palette(base); border:1px solid palette(mid); border-radius:6px;");
+    grid->addWidget(empty, 0, 0);
+  }
 }
 
 // The viewer is its own top-level window, not an owned child: an owned window is kept above its owner, which stopped
