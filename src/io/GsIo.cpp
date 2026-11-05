@@ -11,6 +11,7 @@
 #include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
 #include "util/meshgeom.hpp"
+#include "util/geom2d.hpp"
 #include "util/pointcloudcache.hpp"
 #include "BrepJson.hpp"
 
@@ -289,6 +290,8 @@ void EntityAttributesToJson(const EntityAttributes& e, json& o) {
   o["id"] = e.id;  // REQ-076 stable identity; additive, no format-version bump (ADR-020 (d))
   o["layer"] = e.layer;
   o["color"] = e.color;
+  if (e.plotStyleName != "Normal")
+    o["plotStyleName"] = e.plotStyleName;
   o["linetype"] = e.linetype;
   o["lineweightMm"] = e.lineweightMm;
   o["transparency"] = e.transparency;
@@ -315,6 +318,7 @@ EntityAttributes EntityAttributesFromJson(const json& o) {
   e.id           = o.value("id",           static_cast<std::uint64_t>(0));
   e.layer        = o.value("layer",        e.layer);
   e.color        = o.value("color",        e.color);
+  e.plotStyleName = o.value("plotStyleName", e.plotStyleName);
   e.linetype     = o.value("linetype",     e.linetype);
   e.lineweightMm = o.value("lineweightMm", e.lineweightMm);
   e.transparency = o.value("transparency", e.transparency);
@@ -569,6 +573,9 @@ json CadBlockContentToJson(const CadBlockContent& c) {
     CadBlockXformToJson(n.xf, xf);
     nj["xf"] = std::move(xf);
     nj["visState"] = n.visState;
+    json attrs;
+    EntityAttributesToJson(n.attrs, attrs);
+    nj["attrs"] = std::move(attrs);
     nested.push_back(std::move(nj));
   }
   o["nested"] = std::move(nested);
@@ -650,6 +657,8 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
       if (nj.contains("xf"))
         n.xf = CadBlockXformFromJson(nj["xf"]);
       n.visState = nj.value("visState", "");
+      if (nj.contains("attrs") && nj["attrs"].is_object())
+        n.attrs = EntityAttributesFromJson(nj["attrs"]);
       c.nested.push_back(std::move(n));
     }
   }
@@ -911,6 +920,8 @@ void CadLayerRowToJson(const CadLayerRow& r, json& o) {
   o["frozen"] = r.frozen;
   o["locked"] = r.locked;
   o["color"] = r.color;
+  if (r.plotStyleName != "Normal")
+    o["plotStyleName"] = r.plotStyleName;
   o["linetype"] = r.linetype;
   o["lineweightMm"] = r.lineweightMm;
   o["transparency"] = r.transparency;
@@ -924,6 +935,7 @@ CadLayerRow CadLayerRowFromJson(const json& o) {
   r.frozen       = o.value("frozen",       r.frozen);
   r.locked       = o.value("locked",       r.locked);
   r.color        = o.value("color",        r.color);
+  r.plotStyleName = o.value("plotStyleName", r.plotStyleName);
   r.linetype     = o.value("linetype",     r.linetype);
   r.lineweightMm = o.value("lineweightMm", r.lineweightMm);
   r.transparency = o.value("transparency", r.transparency);
@@ -1597,6 +1609,8 @@ json BuildRoot(const AppCommandState& st) {
       o["landscape"] = l.landscape;
       o["presetIdx"] = l.presetIdx;
       o["pageSetupName"] = l.pageSetupName;
+      if (!l.plotStyleTablePath.empty())
+        o["plotStyleTablePath"] = l.plotStyleTablePath;
       o["fitToPaper"] = l.fitToPaper;
       o["scaleModelPerPaperIn"] = l.scaleModelPerPaperIn;
       o["plotArea"] = l.plotArea;
@@ -1614,6 +1628,12 @@ json BuildRoot(const AppCommandState& st) {
         vo["paperYIn"] = v.paperYIn;
         vo["paperWIn"] = v.paperWIn;
         vo["paperHIn"] = v.paperHIn;
+        if (!v.clipBoundary.empty()) {
+          json boundary = json::array();
+          for (const Viewport::ClipVertex& vertex : v.clipBoundary)
+            boundary.push_back({vertex.xIn, vertex.yIn, vertex.bulge});
+          vo["clipBoundary"] = std::move(boundary);
+        }
         vo["modelCenterX"] = v.modelCenterX;
         vo["modelCenterY"] = v.modelCenterY;
         vo["scaleModelPerPaperIn"] = v.scaleModelPerPaperIn;
@@ -1632,6 +1652,9 @@ json BuildRoot(const AppCommandState& st) {
         }
         vo["layer"] = v.layer;
         vo["frozenLayers"] = v.frozenLayers;
+        vo["on"] = v.on;  // REQ-482: independent paper viewport display state.
+        vo["locked"] = v.locked;
+        vo["hidePlot"] = v.hidePlot;
         vo["vpColorLayers"] = v.vpColorLayers;    // REQ-046: per-viewport layer color override (parallel arrays)
         vo["vpColorValues"] = v.vpColorValues;
         vps.push_back(vo);
@@ -1776,6 +1799,8 @@ json BuildRoot(const AppCommandState& st) {
       o["offsetXIn"] = ps.offsetXIn;
       o["offsetYIn"] = ps.offsetYIn;
       o["centerPlot"] = ps.centerPlot;
+      if (!ps.plotStyleTablePath.empty())
+        o["plotStyleTablePath"] = ps.plotStyleTablePath;
       setups.push_back(o);
     }
     doc["savedPageSetups"] = setups;
@@ -1932,11 +1957,33 @@ json BuildRoot(const AppCommandState& st) {
       g["cutRun"] = i.grading->cutRun;
       g["fillRun"] = i.grading->fillRun;
       g["sideLeft"] = i.grading->sideLeft;
+      if (i.grading->target != CadGradingDefinition::Target::Surface) {
+        g["target"] = static_cast<int>(i.grading->target);
+        g["targetValue"] = i.grading->targetValue;
+        if (i.grading->target == CadGradingDefinition::Target::Distance)
+          g["distanceGradePercent"] = i.grading->distanceGradePercent;
+      }
       o["grading"] = std::move(g);
     }
     flInfo.push_back(std::move(o));
   }
   doc["featureLineInfo"] = std::move(flInfo);
+  if (!st.gradingPresets.empty()) {
+    json presets = json::array();
+    for (const CadGradingPreset& p : st.gradingPresets) {
+      json o;
+      o["name"] = p.name;
+      o["targetSurfaceId"] = p.targetSurfaceId;
+      o["cutRun"] = p.cutRun;
+      o["fillRun"] = p.fillRun;
+      o["sideLeft"] = p.sideLeft;
+      o["target"] = static_cast<int>(p.target);
+      o["targetValue"] = p.targetValue;
+      o["distanceGradePercent"] = p.distanceGradePercent;
+      presets.push_back(std::move(o));
+    }
+    doc["gradingPresets"] = std::move(presets);
+  }
   json flAttrs = json::array();
   for (const auto& a : st.featureLineAttrs) {
     json o;
@@ -2006,6 +2053,9 @@ json BuildRoot(const AppCommandState& st) {
   for (const CadMultileader& ml : st.cadMultileaders) {
     json o;
     o["path"] = ml.pathXyz;
+    o["arrowSizeWorld"] = ml.arrowSizeWorld;
+    o["labelWidthWorld"] = ml.labelWidthWorld;
+    o["labelHeightWorld"] = ml.labelHeightWorld;
     if (ml.annotative)
       o["annotative"] = true;
     if (ml.splinePath)
@@ -2452,6 +2502,15 @@ json BuildRoot(const AppCommandState& st) {
     for (const CadSurface& s : st.cadSurfaces) {
       json o;
       o["name"] = s.name;
+      if (s.gradingGroup) {
+        o["gradingMembers"] = json::array();
+        for (const auto &member : s.gradingMembers) {
+          json row = {{"gradingId", member.gradingId},
+                      {"strips", member.strips ? json(*member.strips) : json::array()}};
+          if (member.infill) row["infill"] = true;
+          o["gradingMembers"].push_back(std::move(row));
+        }
+      }
       // REQ-070: the style is a reference by name, and it is omitted when empty so a surface that
       // has never been given one writes exactly the bytes it wrote before styles existed.
       if (!s.styleName.empty())
@@ -2858,6 +2917,131 @@ json BuildRoot(const AppCommandState& st) {
 }
 
 bool ValidateDocumentJson(const json& doc, std::vector<std::string>& log) {
+  // Validate before the loader clears the current drawing (REQ-001).
+  if (doc.contains("gradingPresets")) {
+    if (!doc["gradingPresets"].is_array()) {
+      log.push_back("Invalid grading presets in drawing.");
+      return false;
+    }
+    std::vector<std::string> names;
+    for (const auto& p : doc["gradingPresets"]) {
+      if (!p.is_object() || !p.contains("name") || !p["name"].is_string() ||
+          !p.contains("targetSurfaceId") || !p["targetSurfaceId"].is_number_unsigned() ||
+          !p.contains("cutRun") || !p["cutRun"].is_number() ||
+          !p.contains("fillRun") || !p["fillRun"].is_number() ||
+          !p.contains("sideLeft") || !p["sideLeft"].is_boolean() ||
+          !p.contains("target") || !p["target"].is_number_integer() ||
+          !p.contains("targetValue") || !p["targetValue"].is_number() ||
+          !p.contains("distanceGradePercent") || !p["distanceGradePercent"].is_number()) {
+        log.push_back("Invalid grading preset in drawing.");
+        return false;
+      }
+      const std::string name = p["name"].get<std::string>();
+      const double cut = p["cutRun"].get<double>();
+      const double fill = p["fillRun"].get<double>();
+      const double value = p["targetValue"].get<double>();
+      const double grade = p["distanceGradePercent"].get<double>();
+      int target = -1;
+      if (p["target"].is_number_unsigned()) {
+        const auto rawTarget = p["target"].get<std::uint64_t>();
+        if (rawTarget <= 3) target = static_cast<int>(rawTarget);
+      } else {
+        const auto rawTarget = p["target"].get<std::int64_t>();
+        if (rawTarget >= 0 && rawTarget <= 3) target = static_cast<int>(rawTarget);
+      }
+      const std::string folded = [&name] { std::string v = name; std::transform(v.begin(), v.end(), v.begin(),
+          [](unsigned char c) { return static_cast<char>(std::tolower(c)); }); return v; }();
+      if (name.find_first_not_of(" \t\r\n") == std::string::npos || !std::isfinite(cut) || cut <= 0.0 ||
+          !std::isfinite(fill) || fill <= 0.0 || !std::isfinite(value) || !std::isfinite(grade) ||
+          target < 0 || target > 3 || (target == 1 && value <= 0.0) ||
+          (target == static_cast<int>(CadGradingDefinition::Target::Surface) &&
+           p["targetSurfaceId"].get<std::uint64_t>() == 0) ||
+          std::find(names.begin(), names.end(), folded) != names.end()) {
+        log.push_back("Invalid grading preset in drawing.");
+        return false;
+      }
+      names.push_back(folded);
+    }
+  }
+  if (doc.contains("featureLineInfo") && doc["featureLineInfo"].is_array()) {
+    for (const auto& info : doc["featureLineInfo"]) {
+      if (!info.is_object() || !info.contains("grading") || !info["grading"].is_object()) continue;
+      const auto& grading = info["grading"];
+      if (!grading.contains("target")) continue; // legacy REQ-398/997 definition means Surface
+      if (!grading["target"].is_number_integer() ||
+          (grading.contains("targetValue") && !grading["targetValue"].is_number()) ||
+          (grading.contains("distanceGradePercent") && !grading["distanceGradePercent"].is_number())) {
+        log.push_back("Invalid grading target in drawing.");
+        return false;
+      }
+      int target = -1;
+      if (grading["target"].is_number_unsigned()) {
+        const auto raw = grading["target"].get<std::uint64_t>();
+        if (raw <= 3) target = static_cast<int>(raw);
+      } else {
+        const auto raw = grading["target"].get<std::int64_t>();
+        if (raw >= 0 && raw <= 3) target = static_cast<int>(raw);
+      }
+      if (target != static_cast<int>(CadGradingDefinition::Target::Surface) &&
+          !grading.contains("targetValue")) {
+        log.push_back("Invalid grading target in drawing.");
+        return false;
+      }
+      if (target == static_cast<int>(CadGradingDefinition::Target::Distance) &&
+          !grading.contains("distanceGradePercent")) {
+        log.push_back("Invalid grading target in drawing.");
+        return false;
+      }
+      const double value = grading.value("targetValue", 0.0);
+      const double percent = grading.value("distanceGradePercent", 0.0);
+      if (target < 0 || target > 3 || !std::isfinite(value) || !std::isfinite(percent) ||
+          (target == static_cast<int>(CadGradingDefinition::Target::Distance) && value <= 0.0)) {
+        log.push_back("Invalid grading target in drawing.");
+        return false;
+      }
+    }
+  }
+  std::vector<std::uint64_t> gradingIds;
+  if (doc.contains("surfaces") && doc["surfaces"].is_array()) {
+    for (const auto& surface : doc["surfaces"]) {
+      if (!surface.is_object() || !surface.contains("gradingMembers")) continue;
+      const auto& members = surface["gradingMembers"];
+      if (!members.is_array()) {
+        log.push_back("Invalid grading group membership in drawing.");
+        return false;
+      }
+      for (const auto& row : members) {
+        if (!row.is_object() || !row.contains("gradingId") || !row["gradingId"].is_number_unsigned() ||
+            row["gradingId"].get<std::uint64_t>() == 0 || !row.contains("strips") ||
+            !row["strips"].is_array() || row["strips"].empty()) {
+          log.push_back("Invalid grading group member in drawing.");
+          return false;
+        }
+        if (row.contains("infill") && !row["infill"].is_boolean()) {
+          log.push_back("Invalid grading group member in drawing.");
+          return false;
+        }
+        const auto id = row["gradingId"].get<std::uint64_t>();
+        if (std::find(gradingIds.begin(), gradingIds.end(), id) != gradingIds.end()) {
+          log.push_back("A grading belongs to more than one group or occurs twice in its group.");
+          return false;
+        }
+        gradingIds.push_back(id);
+        for (const auto& strip : row["strips"]) {
+          const bool infill = row.value("infill", false);
+          if (!strip.is_array() ||
+              (infill ? (strip.size() < 9 || strip.size() % 3 != 0) : strip.size() != 12) ||
+              !std::all_of(strip.begin(), strip.end(), [](const json& v) {
+                return v.is_number() && std::isfinite(v.get<double>());
+              })) {
+            log.push_back("Invalid baked grading strip in drawing.");
+            return false;
+          }
+        }
+      }
+    }
+  }
+
   if (!doc.contains("lineVerts") || !doc["lineVerts"].is_array()) {
     log.push_back("internal document payload: missing document.lineVerts array.");
     return false;
@@ -3158,6 +3342,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       l.presetIdx = o.value("presetIdx", l.presetIdx);
       if (o.contains("pageSetupName") && o["pageSetupName"].is_string())
         l.pageSetupName = o["pageSetupName"].get<std::string>();
+      l.plotStyleTablePath = o.value("plotStyleTablePath", l.plotStyleTablePath);
       l.fitToPaper = o.value("fitToPaper", l.fitToPaper);
       l.scaleModelPerPaperIn = o.value("scaleModelPerPaperIn", l.scaleModelPerPaperIn);
       l.plotArea = o.value("plotArea", l.plotArea);
@@ -3177,6 +3362,42 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           v.paperYIn = vo.value("paperYIn", v.paperYIn);
           v.paperWIn = vo.value("paperWIn", v.paperWIn);
           v.paperHIn = vo.value("paperHIn", v.paperHIn);
+          if (vo.contains("clipBoundary") && vo["clipBoundary"].is_array()) {
+            for (const auto& item : vo["clipBoundary"]) {
+              if (!item.is_array() || item.size() != 3 || !item[0].is_number() || !item[1].is_number() ||
+                  !item[2].is_number()) {
+                v.clipBoundary.clear();
+                break;
+              }
+              const float x = item[0].get<float>(), y = item[1].get<float>(), bulge = item[2].get<float>();
+              if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(bulge)) {
+                v.clipBoundary.clear();
+                break;
+              }
+              v.clipBoundary.push_back({x, y, bulge});
+            }
+            if (v.clipBoundary.size() >= 2) {
+              double twiceArea = 0.0;
+              bool validBoundary = true;
+              for (size_t i = 0; i < v.clipBoundary.size(); ++i) {
+                const auto& a = v.clipBoundary[i];
+                const auto& b = v.clipBoundary[(i + 1) % v.clipBoundary.size()];
+                ForEachBulgeChord(a.xIn, a.yIn, b.xIn, b.yIn, a.bulge, 16,
+                                  [&](double x0, double y0, double x1, double y1) {
+                                    if (!std::isfinite(x0) || !std::isfinite(y0) || !std::isfinite(x1) ||
+                                        !std::isfinite(y1)) {
+                                      validBoundary = false;
+                                      return;
+                                    }
+                                    twiceArea += x0 * y1 - y0 * x1;
+                                  });
+              }
+              if (!validBoundary || !std::isfinite(twiceArea) || std::fabs(twiceArea) < 1.e-8)
+                v.clipBoundary.clear();
+            } else if (!v.clipBoundary.empty()) {
+              v.clipBoundary.clear();
+            }
+          }
           v.modelCenterX = vo.value("modelCenterX", v.modelCenterX);
           v.modelCenterY = vo.value("modelCenterY", v.modelCenterY);
           v.scaleModelPerPaperIn = vo.value("scaleModelPerPaperIn", v.scaleModelPerPaperIn);
@@ -3203,6 +3424,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           }
           if (vo.contains("layer") && vo["layer"].is_string())
             v.layer = vo["layer"].get<std::string>();
+          v.on = vo.value("on", v.on);
+          v.locked = vo.value("locked", v.locked);
+          v.hidePlot = vo.value("hidePlot", v.hidePlot);
           if (vo.contains("frozenLayers") && vo["frozenLayers"].is_array()) {
             for (const auto& fl : vo["frozenLayers"]) {
               if (fl.is_string())
@@ -3426,6 +3650,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       ps.offsetXIn = o.value("offsetXIn", ps.offsetXIn);
       ps.offsetYIn = o.value("offsetYIn", ps.offsetYIn);
       ps.centerPlot = o.value("centerPlot", ps.centerPlot);
+      ps.plotStyleTablePath = o.value("plotStyleTablePath", ps.plotStyleTablePath);
       st.savedPageSetups.push_back(ps);
     }
   }
@@ -3933,6 +4158,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.featureLineClosed.clear();
   st.featureLineElevPt.clear();
   st.featureLineInfo.clear();
+  st.gradingPresets.clear();
   st.featureLineAttrs.clear();
   if (doc.contains("featureLineOffsets") && doc["featureLineOffsets"].is_array())
     for (const auto& v : doc["featureLineOffsets"])
@@ -3972,12 +4198,32 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           d.cutRun = g->value("cutRun", 0.0);
           d.fillRun = g->value("fillRun", 0.0);
           d.sideLeft = g->value("sideLeft", true);
+          const int target = g->value("target", 0);
+          const bool validTarget = target >= 0 && target <= 3;
+          if (validTarget) d.target = static_cast<CadGradingDefinition::Target>(target);
+          d.targetValue = g->value("targetValue", 0.0);
+          d.distanceGradePercent = g->value("distanceGradePercent", 0.0);
           if (d.baselineId != 0 && std::isfinite(d.cutRun) && d.cutRun > 0.0 &&
-              std::isfinite(d.fillRun) && d.fillRun > 0.0)
+              std::isfinite(d.fillRun) && d.fillRun > 0.0 &&
+              validTarget && std::isfinite(d.targetValue) && std::isfinite(d.distanceGradePercent) &&
+              (d.target != CadGradingDefinition::Target::Distance || d.targetValue > 0.0))
             i.grading = d;
         }
       }
       st.featureLineInfo.push_back(std::move(i));
+    }
+  if (doc.contains("gradingPresets") && doc["gradingPresets"].is_array())
+    for (const auto& o : doc["gradingPresets"]) {
+      CadGradingPreset p;
+      p.name = o.at("name").get<std::string>();
+      p.targetSurfaceId = o.at("targetSurfaceId").get<std::uint64_t>();
+      p.cutRun = o.at("cutRun").get<double>();
+      p.fillRun = o.at("fillRun").get<double>();
+      p.sideLeft = o.at("sideLeft").get<bool>();
+      p.target = static_cast<CadGradingDefinition::Target>(o.at("target").get<int>());
+      p.targetValue = o.at("targetValue").get<double>();
+      p.distanceGradePercent = o.at("distanceGradePercent").get<double>();
+      st.gradingPresets.push_back(std::move(p));
     }
   if (doc.contains("featureLineAttrs") && doc["featureLineAttrs"].is_array())
     for (const auto& o : doc["featureLineAttrs"])
@@ -4036,6 +4282,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (!o.is_object())
         continue;
       CadMultileader ml;
+      ml.arrowSizeWorld = o.value("arrowSizeWorld", ml.arrowSizeWorld);
+      ml.labelWidthWorld = o.value("labelWidthWorld", ml.labelWidthWorld);
+      ml.labelHeightWorld = o.value("labelHeightWorld", ml.labelHeightWorld);
       if (o.contains("path") && o["path"].is_array()) {
         for (const auto& v : o["path"])
           if (v.is_number())
@@ -4512,6 +4761,17 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (!el.is_object())
         continue;
       CadSurface s;
+      if (el.contains("gradingMembers")) {
+        s.gradingGroup = true;
+        for (const auto& row : el["gradingMembers"]) {
+          CadGradingGroupMember member;
+          member.gradingId = row["gradingId"].get<std::uint64_t>();
+          member.infill = row.value("infill", false);
+          member.strips = std::make_shared<const std::vector<std::vector<double>>>(
+              row["strips"].get<std::vector<std::vector<double>>>());
+          s.gradingMembers.push_back(std::move(member));
+        }
+      }
       s.name = el.value("name", std::string());
       if (s.name.empty())
         continue;  // an unnamed surface cannot be referenced or managed

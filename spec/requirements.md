@@ -441,13 +441,16 @@ requirements is a planning failure, not a sign of rigor.
   window onto **model space** with its own **scale** and **pan/center**. Viewports
   can be **created, moved, resized**, and have their scale set (model units per
   paper unit). Model geometry renders inside each viewport clipped to its rectangle
-  at the viewport's scale; the model itself is unchanged.
+  at the viewport's scale; the model itself is unchanged. REQ-490 adds the
+  closed-polyline boundary case without changing these rectangular defaults.
 - Acceptance: the user can add a viewport and set its scale and model geometry
   appears inside it at that scale; a layout can hold ≥2 viewports showing the model
   at **different** scales simultaneously; viewports can be moved and resized.
 - Owner-layer: UI / Domain / Renderer
 - Status: accepted
-- Revisions: 2026-06-15 — initial.
+- Revisions: 2026-06-15 — initial. 2026-11-03 — REQ-490 adds clipped viewports created
+  from closed paper-space polylines; vertex-drawn polygonal viewports remain withdrawn
+  under REQ-034.
 
 ### REQ-028 — Per-viewport layer freeze
 - Purpose: control which layers show in each viewport independently
@@ -1346,15 +1349,21 @@ requirements is a planning failure, not a sign of rigor.
   coordinates: loading may rebase the document origin (large-coordinate rebase), and a local pan would
   silently point somewhere else in the drawing after that. The saved view is an **additive** `.gs` key —
   older files still load, and fall back to framing the drawing.
+  **DWG saved model view.** Opening a DWG restores its saved active model-space VPORT camera (center, height,
+  view direction and twist) and its saved `CANNOSCALE`. The annotation scale selects annotative contexts and
+  remains independent from the model viewport's zoom.
 - Acceptance:
   - File > New shows the new empty drawing immediately, with its tab selected;
   - File > Open shows the opened drawing immediately, with its tab selected, with two or more tabs open;
   - pan and zoom somewhere specific, save, close, reopen — the drawing is at that same pan and zoom;
   - the same holds for a drawing on state-plane coordinates, where opening rebases the document origin;
-  - a `.gs` saved before this requirement still opens, framed to its drawing rather than at a stale view.
+  - a `.gs` saved before this requirement still opens, framed to its drawing rather than at a stale view;
+  - opening a DWG restores the saved active model-space VPORT view and `CANNOSCALE`, while an absent or invalid
+    record falls back to the ordinary framing and annotation-scale defaults.
 - Owner-layer: UI (tab bar selection) / IO (`GsIo` view key)
 - Status: accepted
-- Revisions: 2026-08-11 — initial. Root causes: the tab loop assigned `activeDrawingIdx` and consumed
+- Revisions: 2026-08-11 — initial. 2026-11-03 — DWG open also restores the saved active model-space VPORT and
+  CANNOSCALE, independently of zoom (D-2026-11-03-d). Root causes: the tab loop assigned `activeDrawingIdx` and consumed
   `pendingDrawingTabSwitch` from whichever tab ImGui reported selected, and tabs are submitted in index
   order — so the still-selected old tab always won before the new tab was reached. The `.gs` writer had
   no view state at all.
@@ -10887,22 +10896,32 @@ capability that does not exist. They are recorded here rather than quietly dropp
      (`Kind::Mtext`) for the landing text. Parallel `cadMultileaderAttrs` like other entity stores.
   2. **Persistence:** `.gs` / ADR-044 trailer arrays `multileaders` / `multileaderAttrs` (additive).
   3. **Open:** a decoded `MULTILEADER` with **mtext** content imports into `CadMultileader`. Block-content
-     multileaders are named once in the REQ-201 log, not silently dropped. Legacy `LEADER` import unchanged.
+     multileaders are named once in the REQ-201 log, not silently dropped. A legacy `LEADER` with associated
+     `MTEXT` retains the MTEXT attachment point, rotation, text style and rectangle, plus the arrow size from
+     its entity or DIMSTYLE, when imported into the same domain representation.
   4. **Save:** when the chosen DWG version is **R2010 or newer**, each multileader writes as a native
      `MULTILEADER` linked to a **Standard** `MLEADERSTYLE` (vendored `dwg_add_MULTILEADER` /
      `dwg_add_MLEADERSTYLE`). Older saves still use associated `LEADER` + `MTEXT` (or segment `LINE`s
      if `dwg_add_LEADER` fails). Custom multileader styles in the UI are not editable yet.
-  5. **Display (v1):** leader segments and label render in the viewport like other model annotations.
+  5. **Display (v1):** leader segments and label render in the viewport like other model annotations. The
+     text anchor/rotation and arrow size follow the stored DWG values so zooming and opening in AutoCAD keep
+     the same relationship between the label and its leader.
 - Acceptance:
   - a synthetic multileader with two path points and text survives Export DWG (R2018) → Import via
     `ImportLibreCadFile` with the same path point count and text; the saved R2018 file contains a
     `MULTILEADER` object (not only `LEADER` + `MTEXT`);
   - a DWG containing only block-content multileaders logs the skip reason;
+  - an associated LEADER + rotated middle-right MTEXT imports with that attachment, rotation, text rectangle
+    and DIMSTYLE arrow size; when DXF groups 74/75 mark a hookline, import draws it in group 211's horizontal
+    direction at the scaled DIMASZ length, and its computed bounds contain the transformed text rectangle;
   - multileaders persist through `.gs` save/load when present.
 - Owner-layer: Domain, IO, UI (command later)
 - Status: accepted
 - Revisions: 2026-10-01 — initial (issue #619; D-2026-10-01-g). 2026-10-01 — R2010+ native
-  `MULTILEADER` export (D-2026-10-01-h).
+  `MULTILEADER` export (D-2026-10-01-h). 2026-11-03 — associated legacy `LEADER` + `MTEXT` callouts
+  preserve their stored label attachment, rotation, text rectangle, DIMSTYLE arrow size, and flagged hookline;
+  model-space rendering and DWG export use the stored label rotation and attachment (D-2026-11-03-c,
+  amended 2026-11-03).
 
 ### REQ-368 — Live fields on TEXT/MTEXT and DWG field codes (GitHub issue #617)
 
@@ -11636,11 +11655,22 @@ capability that does not exist. They are recorded here rather than quietly dropp
        into a drawing of a *different project* warns. A paste where either drawing is in a project and
        the coordinate systems differ is **blocked**: the user may **convert** the pasted objects or
        cancel (D-2026-10-07-a); differing units warn, and the same convert is offered. A paste between
-       two standalone drawings (neither in a Project) still warns and offers convert on a **unit**
-       mismatch alone — replicating how AutoCAD scales pasted/inserted content by the source and
-       destination drawings' `INSUNITS` — but never checks or blocks on coordinate system, since no
-       zone concept is attached to a standalone drawing pairing (D-2026-10-11-c, GitHub issue #831).
-       Survey points are not carried by Copy/Paste today, so no point number can collide through paste (issue #782).
+       two standalone drawings (neither in a Project) warns and offers convert on a **unit** mismatch —
+       replicating how AutoCAD scales pasted/inserted content by the source and destination drawings'
+       `INSUNITS`. If both drawings have a defined but different coordinate system, the same
+       **Convert / Cancel** flow applies to every drawing pairing, including standalone and cross-project
+       pastes: pasting without conversion is blocked because it would place the copied content in the wrong
+       place on the ground (D-2026-11-02-b). A drawing with no defined coordinate system has nothing to
+       compare, as before.
+       Copy/Paste carries selected model-space survey points as well as drawing geometry for every
+       source/destination drawing pairing: standalone-to-standalone, within one project, and across
+       projects (D-2026-11-02-a, issue #782). Pasted points join the destination drawing's point
+       store, which is the destination project's shared database when the drawing uses shared project
+       points. A point number already present at the destination is resolved before the paste through
+       the existing **overwrite / renumber / cancel** question: overwrite replaces that numbered
+       destination point with the copied point, renumber assigns a free number, and cancel leaves the
+       destination and clipboard unchanged. This rule applies equally to PASTE and PASTEORIG. Points
+  are model-space data and are not pasted into paper space.
      - **Convert pasted content (3).** The copied objects are transformed into the destination
        drawing's coordinate system and units with the SAME one similarity transform as Add Drawing
        (REQ-378 clause 5): scale, rotation about the vertical axis and shift, computed with CS-MAP at the
@@ -11670,7 +11700,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — P9: clause 7 added
   (D-2026-10-05-k). 2026-10-07 — clause 7: convert for pasted content (D-2026-10-07-a, issue #722).
   2026-10-11 — clause 7: a unit (not coordinate-system) mismatch between two standalone drawings now
-  also warns and offers convert (D-2026-10-11-c, GitHub issue #831).
+  also warns and offers convert (D-2026-10-11-c, GitHub issue #831). 2026-11-02 — clause 7: Copy/Paste
+  carries selected model-space survey points between all drawing pairings, with destination number
+  conflicts resolved by overwrite / renumber / cancel (D-2026-11-02-a, GitHub issue #782), and defined
+  coordinate-system mismatches now use Convert / Cancel for all drawing pairs (D-2026-11-02-b).
 
 ### REQ-384 — AutoCAD annotation context objects DWG interop (GitHub issue #688)
 
@@ -14918,6 +14951,42 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 ---
 
+## Grading toolkit expansion (D-2026-11-02-a)
+
+### REQ-456 — Distance and absolute/relative elevation grading targets
+- Status: accepted (2026-11-02, user selected the full toolkit in stages).
+- Statement and acceptance: [grading-toolkit.md, Stage 1](grading-toolkit.md), Target definitions.
+- Owner-layer: Domain, Commands, IO. Retains REQ-398 surface grading and explicit rebuild.
+
+### REQ-457 — Explicit grading infill and group-aware deletion
+- Status: accepted (2026-11-02, D-2026-11-02-a).
+- Statement and acceptance: [grading-toolkit.md, Stage 1](grading-toolkit.md), Explicit infill
+  and Qt palette/group-aware deletion. Extends REQ-404 without changing automatic-fill behavior.
+- Owner-layer: Domain, Commands, IO.
+
+### REQ-458 — Qt grading creation and editing palette
+- Status: accepted (2026-11-02, D-2026-11-02-a).
+- Statement and acceptance: [grading-toolkit.md, Stage 1](grading-toolkit.md), Qt palette and
+  group-aware deletion. All four grading ribbon controls expose the shared grading services.
+- Owner-layer: UI, Commands. REQ-081 appearance and CLAUDE.md screenshot review apply.
+
+### REQ-459 — Grading reuse and Qt elevation editing
+- Status: accepted (2026-11-03, D-2026-11-03-c; ADR-076).
+- Statement and acceptance: [grading-toolkit.md, Stage 2](grading-toolkit.md). Drawing-local copied presets,
+  independent Copy Create, Qt FLELEV table, grading/group properties and explicit membership transfer.
+- Owner-layer: Domain, Commands, IO, UI.
+
+### REQ-460 — Regional gradings, transitions and explicit bench chains
+- Status: accepted scope (Stage 3; detailed task verification precedes implementation).
+- Statement and acceptance: [grading-toolkit.md, Stage 3](grading-toolkit.md). Interval and
+  compatibility semantics must be resolved before coding this stage.
+- Owner-layer: Domain, Commands, UI, IO.
+
+### REQ-461 — Grading utilities and surface quality controls
+- Status: accepted scope (Stage 4; detailed task verification precedes implementation).
+- Statement and acceptance: [grading-toolkit.md, Stage 4](grading-toolkit.md).
+- Owner-layer: Domain, Commands, UI, IO. Optimizer #813 remains separately scoped.
+
 ## Traceability matrix
 
 > Keep this table current. It is the at-a-glance health check: a requirement with
@@ -14925,6 +14994,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 | Requirement | Layer | Test(s) | Status |
 |-------------|-------|---------|--------|
+| REQ-490 | Commands/Domain/Qt Renderer/IO | `[req490]` MVIEW Fit full-sheet rectangle; 2/3/4 fixed tilings; closed-polyline clipping including cancellation/refusal, undo/redo, render/plot clipping, and DWG/DXF round-trip | accepted |
+| REQ-489 | Commands/Domain/Qt UI/IO | `[req489]` full layout duplication from tab menu and `LAYOUT COPY`; unchanged source/current layout; name collision refusal; undo/redo and DWG/DXF round-trip | accepted |
+| REQ-482 | Commands/Domain/Qt Renderer/Plot/IO | `[req482]` viewport on/off, display lock, hide-plot, and DWG/DXF round-trip | accepted |
+| REQ-483 | Commands/Domain | `[req483]` paper-space ARRAY and active-layout-only OVERKILL with isolation and undo coverage | accepted |
+| REQ-485 | Qt UI/Domain/IO | `[req485]` CTB/STB single and batch vector PDF appearance; STB assignment import/export/persistence; default Normal; invalid-table failure and no-table compatibility | accepted |
+| REQ-486 | Qt UI/IO | `[req486]` Preview plots the active paper layout with saved Page Setup and CTB/STB settings, opens it in the PDF viewer without an export prompt, supports viewer annotation/Save As, leaves the drawing unchanged, and reports failures | accepted |
+| REQ-487 | Qt UI | `[req487]` View Details shows the active paper layout's effective Page Setup in a compact read-only dialog; unavailable outside paper space; works read-only and changes no drawing/undo state | accepted |
 | REQ-454 | Build/Platform/UI | Verify stable-manifest bootstrap; valid and invalid hashes; failed download; fresh silent per-user install; Program Files migration (settings/data and supported shortcuts preserved, one install); in-app update without elevation; output matches `docs/install.md` | accepted |
 | REQ-350 | UI/Commands/Render | `CadPipePaletteTests` (category → part-type grouping incl. the new `Nozzle`; exact size match accepts `2in`/`2 in`/`2.0in` and rejects `1.5in`/`4in`; class-agnostic parts match either class while an exact class wins; a non-fitting library entry never lists; empty-category reason names the filtered size; armed-part placement routes to the splice on a run and to INSERT off one) **Amended 2026-09-25 (D-2026-09-25-a, TASK-277): (f)'s connection-port snapping is now actually performed, and a palette click always places the part.** `CadPipePaletteArmPart` armed a one-click INSERT and never enabled any snap, so the off-run half of (f) was a plain drop at the click point with the identity rotation the part was authored with - reported with screenshots as "the blind flange is not aligning correctly". A blind flange bolts onto another flange's FACE and can never splice into a run, so that path was the only one it had. The click now resolves in three ordered outcomes: **on a run** -> the existing `PIPEFIT` splice, unchanged; **otherwise, within 2 ft of a connection port or pipe end** -> `SubmitInsertBlockConnectorPick` (REQ-107 / issue #496, unchanged, including TASK-269's exact-match-before-default two-pass search - which is what makes a blind flange prefer the flange FACE over the pipe end also in reach, since its only mode targets `flange-face` exactly and accepts `pipe-end` merely as an `isDefault` fallback); **otherwise** -> a free placement at the point, reported as such. A REFUSED splice also falls through to the snap/placement rather than ending the click (D-2026-09-25-a): the bundled blind flange has ONE connection point and `PickElbowPorts` needs two, so a run click used to be consumed with nothing placed at all. `SubmitInsertBlockConnectorPick` gains a defaulted `optional` parameter - when set, the two not-found paths return false WITHOUT logging a refusal, so a caller with a legitimate fallback can take it; every other caller is unchanged and keeps its named refusals (REQ-201). Arming also clears `insertBlockConnectorName` and the stale dialog rotations, so every port on the part is a snap candidate rather than whichever one an earlier INSERT dialog left named. `CadBlockImportTests` gains 3 `[connectorsnap]` cases (a blind flange clicked on a placed flange's gasket face landing ON that face with its own face turned INTO it; nothing within 2 ft still placing, and saying why it is unoriented; a part that cannot splice still landing where it was clicked with the splice's own refusal logged). All three fail against the code they were written for. Full suite green: `GoSurveySnapTests` 437/437 (up from 434), `GoSurveyTests` 1218/1219, ctest 1809/1817 - the same 8 pre-existing failures named under TASK-275/276. **Deliberately out of scope, by name**: enforcing `CadBlockConnectionMode::compatibilityTag` (a CS150 part snapping to a CS300 face is not refused), and the 2 ft `kSnap` tolerance itself, which is REQ-107's existing figure. | accepted |
 | REQ-001 | IO | `<TEST-001>` | accepted |
@@ -14967,6 +15043,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-449 | Qt UI | `QtEditorTests` `issue1032SettingsWindowStagesAndPersists`, `issue1032WheelZoomUsesPreference` | accepted |
 | REQ-450 | Qt UI/Commands/IO | `QtEditorTests` `issue1033CursorSettingsPreviewAndCancel`, `issue1033StoredCursorValuesAreClamped`, `ViewportPickPolicyTests` REQ-450 cursor shape | accepted |
 | REQ-455 | Qt UI/PDF | `GoSurveyQtTests` `issue1037*`: command tabs and side panel (including narrow-width overflow actions), continuous layout and page sync, wheel/Ctrl+wheel pointer-anchored zoom, middle-button and Browse pan, fit/typed zoom, keyboard pages, tools on later pages, tool hotkeys, Callout and Revision cloud save/read-back, box select, previews, compare panel and detail failure, cache bound and render cancellation, top-level ownership | accepted |
+| REQ-456 | Repository governance/CI | Run PR-Agent reviews automatically for pull requests originating in GoSurvey; do not run automatically for fork-originated pull requests. Allow the repository owner to trigger PR-Agent manually on a fork PR with a `/review` pull request comment, without using `pull_request_target` or checking out fork code in a job with secrets. | accepted |
+| REQ-481 | Application / Platform / Qt UI | `GoSurveyQtTests` or Windows process integration: matching executable reuses its editor window, opens the forwarded DWG and activates its tab; a fresh executable opens normally; different worktree paths coexist; helper/test/crash modes remain separate | accepted |
 | REQ-451 | Qt UI | `QtEditorTests` `issue1036LayerManager*` (sort-then-edit, viewport columns, swatches, current layer) + screenshots | accepted |
 | REQ-473 | Application/Qt UI/Build docs | `GoSurveyQtTests` `[req453]` branch label in native/custom titles and retained after title refresh; launcher branch propagation; docs review of worktree-local build/launch rule | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
@@ -15205,6 +15283,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Application / Qt UI / Build documentation
 - Status: accepted (2026-10-23, user approved scope)
 
+### REQ-481 — Windows DWG file-open reuses the matching GoSurvey process
+- Purpose: opening a DWG from Windows while GoSurvey is already running should continue the current editing session instead of creating a second window and process.
+- Priority: should
+- Type: functional (application lifecycle / Windows integration)
+- Decision: D-2026-11-03-e.
+- Depends on: REQ-052 (DWG open), REQ-055 (opened drawing becomes active), REQ-453 (separate worktree executables remain distinguishable).
+- Statement: In a normal desktop launch, when Windows starts GoSurvey with a DWG path and the same executable path already has a running GoSurvey process, the running process receives the path, opens it through the normal drawing-open flow, becomes the foreground window, and activates the opened drawing. When no matching process is running, the new process opens the path normally. Matching is scoped to the executable path, so separately built worktree executables can run side by side. Test, crash-report, and helper-process launch modes keep their own existing behavior.
+- Acceptance:
+  1. With GoSurvey running, opening a DWG from Windows results in the existing process opening the drawing and becoming foreground; no second main GoSurvey process remains.
+  2. The opened drawing becomes the active tab and uses the same load/error behavior as the ordinary File > Open path.
+  3. With no GoSurvey process for that executable path, launching with a DWG path opens it in the new process.
+  4. Running executables from two different worktree paths can each remain open, preserving REQ-453's worktree isolation.
+  5. Test, crash-report, and helper-process modes continue to run without being redirected to the editor process.
+- Owner-layer: Application / Platform / Qt UI
+- Status: accepted (2026-11-02, user approved scope)
 ---
 
 ### REQ-456 — Paper-space command parity for LEADER, SPLINE, POINT, PEDIT, MEASURE, DIVIDE, AREA, LIST (GitHub issue #1019)
@@ -15909,6 +16002,190 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Domain / DWG IO / Civil 3D interoperability.
 - Decision: D-2026-10-31-b (amends D-2026-10-30-c).
 - Status: accepted (2026-10-31, user clarification)
+
+### REQ-489 — Duplicate a paper layout in the current drawing (GitHub issue #1015)
+
+- Purpose: reuse a completed sheet without rebuilding its setup and contents.
+- Priority: should
+- Type: functional
+- Depends on: REQ-025, REQ-027, REQ-031, REQ-113, REQ-201.
+- Statement:
+  1. A layout tab's right-click menu provides `Duplicate`; the command line supports `LAYOUT COPY`.
+  2. Copying duplicates the complete layout value: sheet setup, viewports and their settings, and every paper-space object. The source and other layouts are unchanged.
+  3. Assign a unique name. An explicit name collision is refused before changing drawing or undo state. Copying leaves the previously current layout active.
+  4. Duplicate and undo/redo persist through DWG and DXF save/reopen.
+  5. Copying is within the current drawing. Importing from a template or another drawing is out of scope.
+- Acceptance:
+  1. Both entry points create a complete copy with a unique name.
+  2. Source and other layouts remain unchanged, and the current active layout remains active.
+  3. Undo removes the copy and redo restores it.
+  4. DWG and DXF save/reopen retain the copied layout and its contents/settings.
+  5. A name collision leaves drawing state and undo state unchanged.
+- Owner-layer: Commands / Domain / Qt UI / IO.
+- Decision: D-2026-11-03-g; no new architecture or data-format decision.
+
+### REQ-482 — Paper viewport display, lock, and plot controls (GitHub issue #1007)
+- Purpose: let users protect paper sheets and control which viewport contents appear on screen and in plotted output.
+- Priority: should
+- Type: functional
+- Statement: Each paper viewport supports three independent controls: **on/off**, **display lock**, and **hide-plot**. Off viewports do not render model contents in the paper layout. A display-locked viewport cannot have its model view panned, zoomed, or rescaled, but remains selectable and its paper-space frame remains editable. A hide-plot viewport continues to show its model contents while editing but omits those contents from printed/PDF output. All three values survive DWG and DXF save and reopen.
+- Acceptance:
+  1. Turning a viewport off hides its model contents from paper-space display; turning it on restores them.
+  2. A locked viewport rejects view pan, zoom, and scale changes; an unlocked viewport allows them. The viewport remains selectable and its paper-space frame can still be edited in either state.
+  3. Hide-plot leaves the viewport visible while editing and excludes its model contents from print/PDF; disabling hide-plot restores them to output.
+  4. Each control is independent and can be combined with the other two.
+  5. Each control survives DWG and DXF save/reopen; existing drawings without the new setting default to on, unlocked, and plottable.
+- Owner-layer: Commands / Domain / Qt Renderer / Plot / IO
+- Status: accepted (D-2026-11-03-h)
+- Native storage: DWG/DXF VIEWPORT status flags group 90: 32768 on, 16384 display lock, 2048 hide-plot.
+- Revisions: 2026-11-03 — initial, issue #1007.
+
+### REQ-483 — ARRAY and OVERKILL operate on paper-space objects (GitHub issue #1005)
+- Purpose: let users repeat sheet objects and remove duplicate or degenerate geometry from the active sheet.
+- Priority: should
+- Type: functional
+- Depends on: REQ-039 and REQ-305.
+- Statement:
+  1. When a paper layout is active outside floating model space, ARRAY accepts selected paper-space objects and offers the existing rectangular and polar modes defined by REQ-305. Its generated objects belong only to the active layout; model objects and other layouts remain unchanged.
+  2. Completing a paper-space ARRAY creates the full operation as one undoable action. Undo removes every generated instance and leaves source paper objects unchanged.
+  3. OVERKILL in paper space applies its existing supported cleanup rules only to paper geometry on the active layout. It does not inspect or change model geometry or any other layout and reports its cleanup result.
+  4. From model space or floating model space, existing command behavior is unchanged.
+- Acceptance:
+  1. Rectangular and polar ARRAY each duplicate supported selected paper objects correctly on the active layout.
+  2. A completed array is one undo step; undo removes all instances while preserving the originals.
+  3. ARRAY changes neither model geometry nor other layouts.
+  4. OVERKILL removes supported duplicates/degenerate paper geometry only from the active layout and reports the result.
+  5. OVERKILL changes neither model geometry nor other layouts; existing model-space behavior remains unchanged.
+- Owner-layer: Commands / Domain.
+- Status: accepted (D-2026-11-03-f; user selected support for both commands).
+- Revisions: 2026-11-03 — initial, issue #1005.
+- Evidence: `PaperLayout` owns the complete page setup, viewports, and paper geometry by value; DWG/DXF writers serialize layouts from that value. `MoveOrCopyLayout` already has a copy primitive that duplicates the value but switches active layout and has no undo integration. The layout tab context menu and `LAYOUT` command currently expose no copy action.
+- Status: accepted (2026-11-03, user confirmed feature request and scope).
+
+### REQ-490 — MVIEW fit, viewport presets, and viewport from a closed polyline (GitHub issue #1016)
+
+- Purpose: create useful paper-space viewports without placing each viewport by hand.
+- Priority: should
+- Type: functional
+- Depends on: REQ-027, REQ-031, REQ-033, REQ-113, REQ-201.
+- Statement:
+  1. In paper space, `MVIEW` retains its existing two-click rectangular behavior and adds `Fit`, `2`, `3`, `4`, and `Object` options. Each option creates new viewport(s) on the active layout and leaves existing viewports unchanged.
+  2. `Fit` creates one rectangular viewport spanning the full sheet rectangle, edge to edge. It does not change the model view or scale beyond the normal new-viewport defaults.
+  3. `2` creates two equal side-by-side viewports. `3` creates one full-height viewport on the left and two equal stacked viewports on the right. `4` creates four equal viewports in a 2×2 grid. Each new viewport retains the normal new-viewport defaults and can subsequently be panned or scaled independently (REQ-027).
+  4. `Object` accepts a closed paper-space polyline on the active layout and creates one viewport whose model content is clipped to a copy of that polyline boundary. The selected polyline and other layout objects remain unchanged. The copied boundary is part of the viewport state, not an associative link to the source polyline.
+  5. A non-polyline or open polyline selection is refused by name and creates no viewport. Esc/cancel creates nothing.
+  6. Viewport shape and state persist through DWG and DXF save/reopen (REQ-031/113). New viewports participate in undo/redo.
+  7. PDF output keeps viewport text searchable. A text label whose insertion anchor is outside a polygonal viewport is omitted; glyphs from a label anchored inside may extend past the polygon edge.
+- Acceptance:
+  1. The default two-click MVIEW operation still creates the selected rectangle and its Esc behavior remains unchanged.
+  2. Fit adds one viewport at (0,0) spanning the active layout's complete paper width and height; existing viewports and paper objects are unchanged.
+  3. The `2`, `3`, and `4` options each add exactly the stated count. Their boundary coordinates partition the whole sheet with equal divisions as described, without gaps or overlap except at shared edges.
+  4. Selecting a closed polyline adds a viewport with matching outline, including supported bulge-arc segments; model strokes are clipped to the outline on screen and in plotted output. PDF text remains searchable: labels anchored outside the outline are omitted, while glyphs anchored inside may extend past the edge. The source polyline remains unchanged.
+  5. Selecting an open polyline, another entity type, or cancelling leaves the layout and undo state unchanged and reports the refusal where applicable.
+  6. Undo removes each newly created viewport set; redo restores it. Saving and reopening as DWG and DXF retains viewport count, rectangle/polygon boundary, scale, center, and layout membership.
+- Owner-layer: Commands / Domain / Qt Renderer / IO.
+- Architectural decision: ADR-077 (copied paper-space clip boundary in the viewport value; native viewport clip-boundary references in DWG/DXF).
+- Evidence: `REQ-027` currently stores rectangular viewports; `REQ-034` polygonal viewport work was withdrawn 2026-07-13. `MVIEW` routes to `StartPaperRectViewportCommand` (src/commands/CadCommands.cpp); paper-space viewport composition uses rectangular framebuffer blits (src/qt/EditorViewport.cpp); LibreDWG defines `VIEWPORT.clip_boundary` and `clip_boundary_type` (third_party/libredwg/include/dwg.h), while DXF encodes the clip-boundary reference as group 340 (third_party/libredwg/src/dwg.spec). AutoCAD 2025 accoreconsole confirmed MVIEW is unavailable on the Model tab; the paper-tab scripted query did not yield usable option output. Autodesk Help page fetch and Civil 3D comparison were unavailable in this environment. The user selected closed-polyline outlines and confirmed full-sheet Fit and the three fixed arrangements on 2026-11-03. On 2026-11-03 the user confirmed PDF text should remain searchable, accepting glyph overflow at polygon edges; outside-anchor labels are omitted.
+- Status: accepted (2026-11-03, user confirmed feature request and scope; D-2026-11-03-i).
+
+### REQ-484 — Named scale selection for paper viewports (GitHub issue #1017)
+
+- Purpose: apply a consistent drawing scale to one or more paper viewports without changing their sheet placement.
+- Priority: should
+- Type: functional
+- Depends on: REQ-027, REQ-031, REQ-033, REQ-201.
+- Statement:
+  1. The properties for selected paper viewport(s) provide a dropdown populated from the active drawing's named scale list. Selecting a scale applies its model-to-paper ratio to the selected viewport(s).
+  2. A command accepts a chosen named drawing scale and applies it to all selected paper viewport(s).
+  3. Applying a scale changes only each viewport's model-to-paper scale. Its model center and paper frame position and dimensions remain unchanged.
+  4. Scale changes are undoable. The model editor's existing scale picker behavior is unchanged.
+- Acceptance:
+  1. The properties dropdown lists drawing named scales and applies the chosen scale to selected paper viewport(s).
+  2. The command applies a chosen named scale to every selected paper viewport.
+  3. Applying scales preserves each viewport's model center and frame position/dimensions.
+  4. One undo restores all affected viewport scales; redo reapplies them.
+- Owner-layer: Commands / Domain / Qt UI.
+- Decision: D-2026-11-03-j; no data-model or persistence change.
+- Evidence: `CadAnnotationScaleModelUnitsPerPlottedInch` converts the existing drawing-owned named scale values to model units per plotted inch; `AppCommandState::selectedViewports` provides multi-viewport selection; `VPSCALE` currently edits only the current floating viewport and has undo support. The paper viewport manager currently exposes an annotative-scale picker separately from its free-text actual viewport scale control, so the new dropdown must clearly use the former's named-scale source while changing the latter's model-to-paper value.
+- Status: accepted (2026-11-03, user confirmed the complete feature request and selected properties plus command).
+
+### REQ-485 — Apply CTB/STB plot styles to PDF output (GitHub issue #1009)
+
+- Purpose: control plotted appearance with existing AutoCAD plot-style tables while keeping the current vector PDF workflow.
+- Priority: should
+- Type: functional
+- Depends on: REQ-025, REQ-029, REQ-030, REQ-048, REQ-049, REQ-113, REQ-201, REQ-300.
+- Statement:
+  1. Page Setup allows selecting an existing CTB or STB table for a layout. A selected table is applied when plotting one layout or a batch of layouts to PDF. When no table is selected, current PDF appearance is unchanged.
+  2. CTB output resolves plotted characteristics from the entity's effective color according to the selected color-dependent table. STB output resolves the entity's named plot style, including assignments read from imported DWG/DXF drawings. New GoSurvey-created entities receive the named style `Normal`.
+  3. Imported STB assignments are drawing-owned data and survive GoSurvey drawing save/reopen and DWG/DXF import/export. Existing drawings without an assignment use `Normal`.
+  4. Table selection belongs to the layout's page setup and survives GoSurvey drawing save/reopen. Applying a table changes plotted appearance only; it does not alter entity geometry, entity colors, layer properties, or stored style assignments.
+  5. This requirement covers existing table files only. It does not add a plot-style editor or assignment UI. PNG/raster output, DWF, and direct system-printer output remain out of scope; ADR-007 remains the output-device decision.
+- Acceptance:
+  1. With no table selected, single-layout and batch PDF output retain current behavior.
+  2. A selected CTB changes PDF entity appearance according to the selected color-dependent table; a selected STB changes it according to the entity's named style. Both remain vector PDF.
+  3. Imported STB assignments are observed on the correct entities/layers after DWG and DXF import, remain intact after GoSurvey save/reopen, and are written back on DWG/DXF export. Missing assignment defaults to `Normal`.
+  4. Selecting a table in Page Setup applies it to single-layout plotting and to each selected layout in batch plotting, and persists with the page setup through GoSurvey save/reopen.
+  5. Applying a plot style changes output only; drawing geometry, colors, layers, assignments, and undo state remain unchanged.
+  6. An unavailable or invalid selected table is reported and does not produce a misleading successful PDF.
+- Owner-layer: Qt UI / Domain / IO (DWG/DXF and GoSurvey persistence; PDF plotter).
+- Decision: D-2026-11-04-e and ADR-078; table assignment storage and the existing-file-only scope are explicit architecture decisions.
+- Evidence: REQ-029/030 and ADR-007 define vector PDF; Autodesk documents CTB color-dependent mappings and STB named assignments separately from output devices. The repository has no plot-style name model and DXF currently emits a placeholder `ACAD_PLOTSTYLENAME` dictionary. See `workshop/tasks/TASK-1009-paper-plot-styles-and-output.md`.
+- Status: accepted (2026-11-04, user confirmed feature request; D-2026-11-04-e).
+
+### REQ-486 — Preview the active paper layout in the PDF viewer (GitHub issue #810)
+- Purpose: let users inspect a plotted sheet before choosing whether to save a PDF export.
+- Priority: should
+- Type: functional
+- Depends on: REQ-029, REQ-445, REQ-485, REQ-201.
+- Statement:
+  1. The Output tab's Preview action plots the active paper layout as one vector PDF page, using the existing plot path and that layout's saved paper size, placement options, and selected CTB/STB table.
+  2. The generated preview opens in GoSurvey's existing PDF viewer without asking for an export filename. The PDF viewer's existing annotation and Save As workflows remain available.
+  3. Preview does not modify drawing state. If plotting fails, the user receives the plot error and no successful preview is opened.
+- Acceptance:
+  1. From an active paper layout, Preview opens a one-page PDF showing that layout with its saved paper size, placement, and CTB/STB appearance.
+  2. Preview opens in the existing PDF viewer without an export filename prompt.
+  3. The viewer's existing annotation and Save As workflows work on a preview; saving a copy does not change the drawing.
+  4. Preview leaves drawing contents and undo state unchanged.
+  5. A plot failure is reported and no viewer is opened with a misleading successful result.
+- Owner-layer: Qt UI / IO (existing PDF writer and viewer).
+- Decision: D-2026-11-04-f; reuses the existing vector PDF writer and PDF viewer, with no new output device or file format.
+- Evidence: `REQ-029/030` and `ADR-007` define the existing vector PDF path; `REQ-445` and `REQ-485` define saved placement and CTB/STB appearance. The Output Preview ribbon item is disabled, `PlotLayoutsToPdf` accepts one selected layout and saved settings, and `PdfWindow` already opens PDFs with annotation and Save As workflows. The Autodesk Core Console probe entered its interactive `PREVIEW` prompt but could not display or inspect a preview; this is a Qt UI integration task, not a file-format behavior change.
+- Status: accepted (2026-11-04, user confirmed feature request and scope; D-2026-11-04-f).
+
+### REQ-487 — View active layout Page Setup details (GitHub issue #810)
+- Purpose: let users inspect the settings that determine a sheet's PDF output without entering the Page Setup Manager.
+- Priority: should
+- Type: functional
+- Depends on: REQ-445, REQ-485.
+- Statement: The Output tab's View Details action is available for the active paper layout and opens a compact, read-only dialog summarizing that layout's effective Page Setup. It shows the fixed GoSurvey PDF vector output device; named Page Setup or that layout's unnamed settings; paper preset or custom width and height, and orientation; plot area; fit-to-paper or numeric plot ratio; centering and X/Y offsets; and the selected CTB/STB path or “No plot style table.” The dialog reads the active layout's stored values, remains available for read-only drawings, and does not alter the drawing or undo state. The action is unavailable in model space and floating model space.
+- Acceptance:
+  1. From an active paper layout, View Details opens the compact dialog and every displayed value matches that layout's effective stored setup.
+  2. Preset and custom paper sizes, orientation, plot area, fit/ratio, centering, offsets, named/unnamed setup, and selected/no CTB-STB values are represented accurately.
+  3. The dialog has no editing or apply action; opening and dismissing it leaves layout values, drawing data, and undo depth unchanged.
+  4. View Details is disabled in model space and floating model space.
+  5. A read-only drawing can open and dismiss the dialog; no named Page Setup and no selected plot-style table are shown as such rather than treated as errors.
+- Owner-layer: Qt UI (reads existing drawing-owned `PaperLayout` settings).
+- Decision: D-2026-11-04-g. No data-format, output-device, or settings-editing behavior is added.
+- Evidence: #810 lists View Details as an unimplemented Output tab control but gives no behavior. `PaperLayout` stores all listed effective fields; `PageSetupFromLayout` produces a view value; the Page Setup Manager already presents some fields together with Apply/Create/Modify controls. The user chose a compact read-only active-layout summary. Civil 3D is not installed; the product's View Details control cannot be reproduced here.
+- Status: accepted (2026-11-04, user confirmed the feature request; D-2026-11-04-g).
+
+### REQ-488 — Export the current paper layout to PDF from the Output tab (GitHub issue #810)
+- Purpose: export the active sheet directly from the Output tab using the existing vector PDF path.
+- Priority: should
+- Type: functional
+- Depends on: REQ-029, REQ-445, REQ-485.
+- Statement: The Output tab's Export button in the DWF/PDF group exports the active paper layout to a vector PDF file using the existing `PlotLayoutsToPdf` pipeline. It uses that layout's saved Page Setup and CTB/STB table and opens a filename dialog. It is available only in paper space, changes no drawing or undo state, and leaves existing Plot and Batch Plot behavior unchanged. A failed export must be reported and must not leave a partial final PDF.
+- Acceptance:
+  1. Export from an active paper layout opens a PDF filename dialog and writes one vector PDF page for that layout using its saved paper size, orientation, plot placement, and selected CTB/STB table.
+  2. The Export action is disabled in model space and floating model space.
+  3. Canceling creates no output. A plot or final-write failure is reported and leaves no partial final PDF.
+  4. Success, cancellation, and failure leave layout data, drawing data, and undo depth unchanged.
+  5. Existing Plot and Batch Plot routes continue to work unchanged.
+- Owner-layer: Qt UI (action, filename selection, and final-path publication) over the existing IO PDF plotter.
+- Decision: D-2026-11-04-h. This slice implements Current-layout PDF export only. DWF, Display-area export, Plotter Manager/device configuration, and changes to Display/Current controls remain out of scope.
+- Evidence: #810 identifies the DWF/PDF Export button but supplies no acceptance criteria. REQ-029/030 and ADR-007 establish the existing vector PDF plot path; REQ-445 and REQ-485 supply saved placement and CTB/STB behavior. The Output-tab Plot action already selects a PDF path and calls `PlotLayoutsToPdf`. The plotter writes directly to a destination, so this UI route will stage its result and publish it only after success to satisfy the no-partial-final-file acceptance condition. Civil 3D is unavailable, and no DWF or PC3 backend exists.
+- Status: accepted (2026-11-04, user confirmed the feature request; D-2026-11-04-h).
 
 ## Anti-requirements
 

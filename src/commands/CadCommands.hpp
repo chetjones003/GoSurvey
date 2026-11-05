@@ -257,6 +257,8 @@ struct CadLayerRow {
   bool locked = false;
   /// Layer swatch color (same encoding as \ref EntityAttributes::color except not "ByLayer").
   std::string color = "White";
+  /// Named STB plot style assigned to this layer; defaults to Normal.
+  std::string plotStyleName = "Normal";
   std::string linetype = "Continuous";
   float lineweightMm = -1.f; ///< \c -1 = default (DXF layer 370 -3 on export).
   float transparency = 0.f;  ///< 0 opaque .. 1 fully transparent (layer-wide).
@@ -1016,8 +1018,8 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
 
 /// In-process clipboard for COPYCLIP / PASTECLIP.  Geometry stored at local (storage) coordinates.
 struct CadClipboard {
-  float basePtX = 0.f; ///< Bounding-box center X used as paste anchor (local space).
-  float basePtY = 0.f;
+  double basePtX = 0.0; ///< Bounding-box center X used as paste anchor (local space).
+  double basePtY = 0.0;
 
   std::vector<double>            lines;
   std::vector<EntityAttributes> lineAttrs;
@@ -1050,6 +1052,7 @@ struct CadClipboard {
   std::vector<EntityAttributes> blockRefAttrs;
   std::vector<CadFilledRegion>  filledRegions;     ///< Solid fills enclosed by the copy selection (REQ-038 addendum).
   std::vector<EntityAttributes> filledRegionAttrs;
+  std::vector<SurveyPoint>       surveyPoints; ///< Selected model-space survey points (REQ-383 #782).
   /// Source space of the copy. Text height has different units per space (model: plotted-inches × scale = model
   /// units; paper: paper inches), so a cross-space paste scales annotation height by modelUnitsPerPlottedInch.
   bool fromPaper = false;
@@ -1066,7 +1069,7 @@ struct CadClipboard {
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
            (polyOffsets.size() <= 1) && splines.empty() && points.empty() && annotations.empty() && tables.empty() &&
-           blockRefs.empty() && filledRegions.empty();
+           blockRefs.empty() && filledRegions.empty() && surveyPoints.empty();
   }
 };
 
@@ -1352,6 +1355,7 @@ struct DrawingGeometrySnapshot {
   std::vector<uint8_t>            featureLineClosed;
   std::vector<uint8_t>            featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<CadGradingPreset> gradingPresets;
   std::vector<EntityAttributes>   featureLineAttrs;
   std::vector<CadAnnotation>    cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
@@ -1553,6 +1557,7 @@ struct DrawingDocument {
   std::vector<uint8_t>            featureLineClosed;
   std::vector<uint8_t>            featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<CadGradingPreset> gradingPresets;
   std::vector<EntityAttributes>   featureLineAttrs;
   std::vector<CadAnnotation>    cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
@@ -1721,7 +1726,7 @@ bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, Pape
 void TogglePaperEntitySelection(AppCommandState& st, PaperEntityRef ref, bool additive);
 void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& log);
 void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn, bool copy,
-                                    std::vector<std::string>& log);
+                                    std::vector<std::string>& log, bool pushUndo = true);
 /// #764 - paper-space SCALE: uniform scale of the selected paper entities about a point (paper inches).
 void ScaleSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float factor,
                                 std::vector<std::string>& log);
@@ -1731,7 +1736,7 @@ void FinishPaperMoveCopy(AppCommandState& st, float dxIn, float dyIn, std::vecto
 /// Second-point step of paper MIRROR (click or typed). Refuses a zero-length mirror line.
 void FinishPaperMirror(AppCommandState& st, float x2In, float y2In, std::vector<std::string>& log);
 void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float angRad,
-                                 std::vector<std::string>& log);
+                                 std::vector<std::string>& log, bool pushUndo = true);
 /// REQ-103 MIRROR, pure-paper-space path. Always duplicates and keeps the source (see the
 /// definition's comment for why there is no erase-source toggle here).
 void MirrorSelectedPaperEntities(AppCommandState& st, float x0In, float y0In, float x1In, float y1In,
@@ -1806,6 +1811,9 @@ void ApplyPageSetupToLayout(PaperLayout& layout, const PageSetup& ps);
 PageSetup PageSetupFromLayout(const PaperLayout& layout, const std::string& name);
 /// Reorder/copy a layout to before \p beforeIdx (== size → move to end); copy clones it. Move-or-Copy.
 void MoveOrCopyLayout(AppCommandState& cmd, int layoutIdx, int beforeIdx, bool makeCopy, std::vector<std::string>& log);
+/// Duplicate a layout at the end, leaving the previously active layout selected. Returns the copy index or -1.
+int CopyPaperLayout(AppCommandState& cmd, int layoutIdx, const std::string& requestedName,
+                    std::vector<std::string>& log);
 
 /// REQ-302: top-level ribbon tabs, in display order. UI-layer concept, but the active index is
 /// persisted app state (AppCommandState::activeRibbonTab) so it lives alongside kModelSpaceIndex-
@@ -3368,6 +3376,7 @@ struct AppCommandState {
   std::vector<uint8_t> featureLineClosed;
   std::vector<uint8_t> featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<CadGradingPreset> gradingPresets;
   std::vector<EntityAttributes> featureLineAttrs;
 
   /// GRADING (REQ-398): pick the baseline feature line, then sit on an options prompt offering the
@@ -3381,6 +3390,9 @@ struct AppCommandState {
     WaitFillSlope,
     WaitSurfaceName,
     WaitSide,
+    WaitTargetKind,
+    WaitTargetValue,
+    WaitDistanceGrade,
   } gradingPhase = GradingPhase::WaitBaseline;
   /// The baseline, held by **stable entity id** and never by array index — REQ-076's own words,
   /// which say "never an array index, so an edit that compacts the store cannot silently retarget
@@ -3391,6 +3403,9 @@ struct AppCommandState {
   std::string gradingSurface;      ///< target surface name, remembered between runs
   bool gradingSideLeft = true;     ///< open baselines only; meaningless for a closed one
   bool gradingSideChosen = false;  ///< an open baseline must be told, so this starts false
+  CadGradingDefinition::Target gradingTarget = CadGradingDefinition::Target::Surface;
+  double gradingTargetValue = 0.0;
+  double gradingDistanceGradePercent = 0.0;
   /// Issue #997: the stable id of the grading result being EDITED, or 0 when GRADING is creating a
   /// new one. Set when GRADING starts on a selected result; Enter then rebuilds that line in place.
   std::uint64_t gradingEditId = 0;
@@ -3670,7 +3685,8 @@ struct AppCommandState {
   /// (empty: the selected or first alignment). A headless run only reports it.
   bool alignmentLayoutRequested = false;
   std::string alignmentLayoutName;
-  /// REQ-491: EDITALIGNMENTSTYLE asks the Qt editor to open the style dialog on ef alignmentStyleEditorName.
+  /// REQ-491: EDITALIGNMENTSTYLE asks the Qt editor to open the style dialog on
+  /// ef alignmentStyleEditorName.
   bool alignmentStyleEditorRequested = false;
   std::string alignmentStyleEditorName;
   /// REQ-485: set by the Qt editor. ALIGNMENT / CREATEALIGNMENT with no arguments then ask it for the Create Alignment
@@ -4635,6 +4651,8 @@ struct AppCommandState {
     Polar_WaitAngle,        ///< typed degrees, or click (angle from center to cursor)
     Polar_WaitRotateAnswer, ///< "[Y]es / [N]o"; commits on completion
   } arrayPhase = ArrayPhase::PickSelection;
+  /// True while ARRAY is operating on native entities in the active paper layout.
+  bool arrayOnPaper = false;
 
   int arrayCols = 0;
   int arrayRows = 0;
@@ -5292,8 +5310,8 @@ struct AppCommandState {
   /// COPY placed CAD duplicates; modal collects policy before duplicating selected survey points.
   bool copySurveyDupModalOpen = false;
   bool copySurveyDupModalOpenRequested = false;
-  float pendingCopyDx = 0.f;
-  float pendingCopyDy = 0.f;
+  double pendingCopyDx = 0.0;
+  double pendingCopyDy = 0.0;
   float pendingCopyDz = 0.f;  // REQ-329 increment 1: COPY under a UCS carries a Z delta to survey points
   SurveyDuplicatePolicy copySurveyDuplicatePolicy = SurveyDuplicatePolicy::Renumber;
   /// DXF import merges its embedded survey points with existing ones. Points whose ID collides are held
@@ -5398,6 +5416,7 @@ struct AppCommandState {
     int         othersOpenShowing = 0;   ///< other OPEN drawings of the project that show a deleted point
     int         othersClosedMaybe = 0;   ///< drawings of the project that are not open (rules unread)
     bool        deletePending = false;   ///< the delete question (not only the number-conflict one) is showing
+    bool        clipboardPaste = false;  ///< number conflict came from a pending clipboard paste.
     std::vector<std::string> otherNames; ///< names of those open drawings
     /// The answers. None = not asked yet. Delete: Proceed / HideHere / Cancel. Conflict: Proceed
     /// (overwrite) / Renumber / Cancel.
@@ -5405,6 +5424,9 @@ struct AppCommandState {
     Answer      deleteAnswer = Answer::None;
     Answer      conflictAnswer = Answer::None;
   } pointEditPrompt;
+  bool clipboardPasteResolving = false; ///< the user answered a clipboard point-number question; bypass preflight once.
+  bool clipboardPasteOverwrite = false;
+  bool clipboardPasteOriginal = false;
   /// REQ-383 clauses 1 and 3: a paste that crosses a project / coordinate-system / units boundary.
   /// `block` = coordinate-system mismatch (only Cancel); otherwise Paste anyway / Cancel.
   struct PastePrompt {
@@ -5653,6 +5675,7 @@ struct AppCommandState {
   int   paperVpPhase = 0;
   float paperVpFirstXIn = 0.f;
   float paperVpFirstYIn = 0.f;
+  int   paperVpMode = 0;  ///< REQ-490: 0 = rectangle, 1 = awaiting closed polyline Object pick.
   // Paper-space grip edit (REQ-035): grabbed grip on selectedViewportIndex (click-grab, move, click-commit).
   int   paperGripCorner = -2;                ///< -2 none, -1 move (whole viewport), 0..3 resize corner.
   // Paper-space MOVE/COPY of selected viewports (REQ-035): 0 idle, 1 need base, 2 need destination.
@@ -6687,6 +6710,9 @@ void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vect
 /// Sets `CurrentViewport(st)`'s scale from a typed "1:N" ratio or a bare model-units-per-inch
 /// number; a blank \p args reports the current viewport's scale instead.
 void HandleVpscaleCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
+/// Apply one drawing-owned named annotation scale to every selected paper viewport in the active
+/// layout. Unlike VPSCALE, this does not target a floating viewport or parse a free-form ratio.
+void HandleVpMatchScaleCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
 /// Opens the Page Setup Manager dialog for the active layout (refuses in model space).
 void StartPageSetupCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The candidate wall, optionally including the segment \p cursor is currently proposing.
@@ -8887,7 +8913,9 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
 void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Commit a PASTE: place the clipboard at (x,y) in the ACTIVE space's coordinates (world for model, paper
 /// inches for a paper layout). Routes the write + new selection by active space (REQ-038, ADR-013).
-void CommitClipboardPasteAt(AppCommandState& st, float x, float y, std::vector<std::string>& log);
+void CommitClipboardPasteAt(AppCommandState& st, double x, double y, std::vector<std::string>& log);
+void ResolveClipboardPastePointConflict(AppCommandState& st, AppCommandState::PointEditPrompt::Answer answer,
+                                        std::vector<std::string>& log);
 /// Immediately paste clipboard contents at their original (stored) coordinates without interaction.
 void StartPasteOrigCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Release draft cache and preview texture; resets command state to idle.

@@ -11,6 +11,8 @@
 #include "PlotStroke.hpp"        // pure lineweight/dash-unit helpers for the plot strokes (REQ-446)
 #include "PlotSheetTransform.hpp"  // pure sheet placement: fit, centre, offset and plot ratio (REQ-445)
 #include "CadFontName.hpp"
+#include "CadColor.hpp"
+#include "PlotStyleTable.hpp"
 #include "CadLinetype.hpp"       // dash tessellation shared with the on-screen viewport (REQ-446)
 #include "CadDimStroke.hpp"
 #include "render/ViewportProjection.hpp"  // REQ-061: per-viewport camera projection
@@ -29,6 +31,7 @@
 #include <cstdint>
 #include <fstream>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -52,6 +55,7 @@ plotsheet::Extent SheetContentExtent(const AppCommandState& st, const PaperLayou
   };
   plotsheet::Extent e;
   for (const Viewport& vp : L.viewports) {
+    if (vp.hidePlot) continue;
     e.Add(vp.paperXIn, vp.paperYIn);
     e.Add(vp.paperXIn + vp.paperWIn, vp.paperYIn + vp.paperHIn);
   }
@@ -217,7 +221,53 @@ plotsheet::Extent SheetContentExtent(const AppCommandState& st, const PaperLayou
 // Paper-inch rectangle a model-space stroke is clipped to (a viewport's paper rect).
 struct PlotRect {
   float x0, y0, x1, y1;
+  std::vector<std::array<float, 2>> polygon;
 };
+
+static bool PlotPointInPolygon(const std::vector<std::array<float, 2>>& polygon, float x, float y) {
+  bool inside = false;
+  for (size_t i = 0, j = polygon.size() - 1; i < polygon.size(); j = i++) {
+    const auto& a = polygon[i];
+    const auto& b = polygon[j];
+    if (((a[1] > y) != (b[1] > y)) &&
+        x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0])
+      inside = !inside;
+  }
+  return inside;
+}
+
+static void ClipSegmentToPolygon(const std::vector<std::array<float, 2>>& polygon, float x0, float y0,
+                                float x1, float y1,
+                                const std::function<void(float, float, float, float)>& emit) {
+  if (polygon.size() < 3) {
+    emit(x0, y0, x1, y1);
+    return;
+  }
+  const float dx = x1 - x0, dy = y1 - y0;
+  std::vector<float> cuts{0.f, 1.f};
+  for (size_t i = 0; i < polygon.size(); ++i) {
+    const auto& a = polygon[i];
+    const auto& b = polygon[(i + 1) % polygon.size()];
+    const float ex = b[0] - a[0], ey = b[1] - a[1];
+    const float denominator = dx * ey - dy * ex;
+    if (std::fabs(denominator) < 1.e-8f)
+      continue;
+    const float qx = a[0] - x0, qy = a[1] - y0;
+    const float t = (qx * ey - qy * ex) / denominator;
+    const float u = (qx * dy - qy * dx) / denominator;
+    if (t > 1.e-6f && t < 1.f - 1.e-6f && u >= -1.e-6f && u <= 1.f + 1.e-6f)
+      cuts.push_back(t);
+  }
+  std::sort(cuts.begin(), cuts.end());
+  cuts.erase(std::unique(cuts.begin(), cuts.end(), [](float a, float b) { return std::fabs(a - b) < 1.e-6f; }),
+             cuts.end());
+  for (size_t i = 0; i + 1 < cuts.size(); ++i) {
+    const float t0 = cuts[i], t1 = cuts[i + 1], tm = (t0 + t1) * .5f;
+    if (!PlotPointInPolygon(polygon, x0 + tm * dx, y0 + tm * dy))
+      continue;
+    emit(x0 + t0 * dx, y0 + t0 * dy, x0 + t1 * dx, y0 + t1 * dy);
+  }
+}
 
 // FPDF_FILEWRITE that streams into an ofstream. fw MUST be the first member (PDFium passes &fw back).
 struct PdfWriter {
@@ -299,6 +349,20 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
     return false;
   }
 
+  std::unordered_map<std::string, plotstyle::Table> plotStyleTables;
+  for (int li : layoutIndices) {
+    if (li < 0 || static_cast<size_t>(li) >= st.paperLayouts.size()) continue;
+    const std::string& tablePath = st.paperLayouts[static_cast<size_t>(li)].plotStyleTablePath;
+    if (tablePath.empty() || plotStyleTables.count(tablePath) != 0) continue;
+    plotstyle::Table table;
+    std::string error;
+    if (!plotstyle::Load(fs::u8path(tablePath), &table, &error)) {
+      log.push_back("PLOT — " + error + ". No PDF was written.");
+      return false;
+    }
+    plotStyleTables.emplace(tablePath, std::move(table));
+  }
+
   // Plotting and the PDF viewer's render worker must not be inside PDFium at the same time (REQ-387).
   std::lock_guard<std::recursive_mutex> pdfiumLock(pdfview::PdfiumMutex());
   RefreshSurfaceDisplayGeometry(st);
@@ -366,6 +430,11 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
     if (li < 0 || static_cast<size_t>(li) >= st.paperLayouts.size())
       continue;
     const PaperLayout& L = st.paperLayouts[static_cast<size_t>(li)];
+    const plotstyle::Table* pagePlotStyles = nullptr;
+    if (!L.plotStyleTablePath.empty()) {
+      const auto it = plotStyleTables.find(L.plotStyleTablePath);
+      if (it != plotStyleTables.end()) pagePlotStyles = &it->second;
+    }
     const double wPts = static_cast<double>(L.sheetWidthIn()) * kPtPerIn;
     const double hPts = static_cast<double>(L.sheetHeightIn()) * kPtPerIn;
     // REQ-445: the layout's Page Setup offset, centre, fit and plot ratio place every sheet point and text size.
@@ -397,6 +466,17 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       float mm = a ? a->lineweightMm : -1.f;
       if (mm < 0.f && lr)
         mm = lr->lineweightMm;
+      if (pagePlotStyles != nullptr) {
+        const std::string entityStyle = a ? a->plotStyleName : "ByLayer";
+        const std::string styleName = (entityStyle.empty() || entityStyle == "ByLayer")
+                                          ? (lr ? lr->plotStyleName : std::string("Normal")) : entityStyle;
+        const std::string effectiveColor = CadColorEffectiveStorage(a ? a->color : "ByLayer", lr ? lr->color : "White");
+        int aci = 7;
+        (void)CadColorTryGetAci(effectiveColor, &aci);
+        const plotstyle::Style* style = plotstyle::Find(*pagePlotStyles, aci, styleName);
+        curColor = plotstyle::ApplyColor(*pagePlotStyles, style, curColor);
+        mm = static_cast<float>(plotstyle::LineweightMm(*pagePlotStyles, style, mm));
+      }
       curWidthKey = plotstroke::WidthKey(plotstroke::WidthPt(mm));
       curLinetype = EffectiveEntityLinetypeNameForViewport(a ? *a : EntityAttributes{}, lr);
     };
@@ -425,7 +505,14 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       auto emitPiece = [&](float ax, float ay, float bx, float by) {
         if (clip && !ClipSeg(clip->x0, clip->y0, clip->x1, clip->y1, ax, ay, bx, by))
           return;
-        addSeg(ax, ay, bx, by);
+        if (clip && clip->polygon.size() >= 3) {
+          ClipSegmentToPolygon(clip->polygon, ax, ay, bx, by,
+                               [&](float x0, float y0, float x1, float y1) {
+                                 addSeg(x0, y0, x1, y1);
+                               });
+        } else {
+          addSeg(ax, ay, bx, by);
+        }
       };
       if (CadLinetypeIsSolidCi(curLinetype)) {
         const size_t nSeg = closed ? pts.size() : pts.size() - 1;
@@ -456,15 +543,18 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       std::string text;
       std::string fontFamily;
       uint32_t rgb = 0;
+      std::vector<std::array<float, 2>> clipPolygon;
     };
     std::vector<VpDimLabel> vpDimLabels;
 
     for (const Viewport& vp : L.viewports) {
+      if (!vp.on || vp.hidePlot) continue;  // REQ-482: off/hidden viewports contribute no model output.
       // Per-viewport layer color override → packed 0xRRGGBB (0 = no override → black).
       // REQ-046/048: plot stroke color as packed 0xRRGGBB. A per-viewport VP Color override wins;
       // otherwise the entity's TRUE color (entity color, else layer color) — full-color plot (ADR-007
       // amended). \p entityColor is "ByLayer" for entities with none (e.g. survey points).
-      auto resolveRgb = [&](const std::string& layer, const std::string& entityColor) -> uint32_t {
+      auto resolveRgb = [&](const std::string& layer, const std::string& entityColor,
+                            const std::string& entityPlotStyle = "Normal", bool applyTable = false) -> uint32_t {
         float rgba[4] = {0.f, 0.f, 0.f, 1.f};
         if (const std::string* ov = ViewportLayerColorOverride(vp, layer)) {
           ResolveStoredColorForViewport(*ov, 0.f, 0.f, 0.f, 0.f, rgba);
@@ -476,9 +566,22 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           }
           ResolveStoredColorForViewport(col, 0.f, 0.f, 0.f, 0.f, rgba);
         }
-        AdaptWhiteBlackToBackground(&rgba[0], &rgba[1], &rgba[2], true);  // REQ-048: legible on the white page
-        return (static_cast<uint32_t>(rgba[0] * 255.f) << 16) | (static_cast<uint32_t>(rgba[1] * 255.f) << 8) |
-               static_cast<uint32_t>(rgba[2] * 255.f);
+        uint32_t rgb = (static_cast<uint32_t>(rgba[0] * 255.f) << 16) | (static_cast<uint32_t>(rgba[1] * 255.f) << 8) |
+                       static_cast<uint32_t>(rgba[2] * 255.f);
+        if (pagePlotStyles != nullptr && applyTable) {
+          const CadLayerRow* lr = FindDrawingLayerRowCi(st, layer);
+          const std::string styleName = (entityPlotStyle.empty() || entityPlotStyle == "ByLayer")
+                                            ? (lr ? lr->plotStyleName : std::string("Normal")) : entityPlotStyle;
+          int aci = 7;
+          const std::string effective = CadColorEffectiveStorage(entityColor, lr ? lr->color : "White");
+          (void)CadColorTryGetAci(effective, &aci);
+          rgb = plotstyle::ApplyColor(*pagePlotStyles, plotstyle::Find(*pagePlotStyles, aci, styleName), rgb);
+        } else if (pagePlotStyles == nullptr) {
+          AdaptWhiteBlackToBackground(&rgba[0], &rgba[1], &rgba[2], true);  // REQ-048 legacy no-table behavior
+          rgb = (static_cast<uint32_t>(rgba[0] * 255.f) << 16) | (static_cast<uint32_t>(rgba[1] * 255.f) << 8) |
+                static_cast<uint32_t>(rgba[2] * 255.f);
+        }
+        return rgb;
       };
       const float vx0 = vp.paperXIn, vy0 = vp.paperYIn;
       const float vx1 = vp.paperXIn + vp.paperWIn, vy1 = vp.paperYIn + vp.paperHIn;
@@ -490,7 +593,40 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       };
       auto m2p = [&](double wx, double wy, float* px, float* py) { m2pz(wx, wy, 0.0, px, py); };
       // Projects a model-space chain through this viewport's camera and strokes it, clipped to the viewport.
-      const PlotRect vpRect{vx0, vy0, vx1, vy1};
+      PlotRect vpRect{vx0, vy0, vx1, vy1};
+      if (vp.clipBoundary.size() >= 2) {
+        bool boundaryFinite = true;
+        for (size_t i = 0; i < vp.clipBoundary.size(); ++i) {
+          const auto& a = vp.clipBoundary[i];
+          const auto& b = vp.clipBoundary[(i + 1) % vp.clipBoundary.size()];
+          if (!std::isfinite(a.xIn) || !std::isfinite(a.yIn) || !std::isfinite(a.bulge) ||
+              !std::isfinite(b.xIn) || !std::isfinite(b.yIn)) {
+            boundaryFinite = false;
+            break;
+          }
+          ForEachBulgeChord(a.xIn, a.yIn, b.xIn, b.yIn, a.bulge, 16,
+                            [&](double x0, double y0, double x1, double y1) {
+                              if (vpRect.polygon.empty()) vpRect.polygon.push_back({static_cast<float>(x0), static_cast<float>(y0)});
+                              vpRect.polygon.push_back({static_cast<float>(x1), static_cast<float>(y1)});
+                            });
+        }
+        if (vpRect.polygon.size() > 1 && vpRect.polygon.front() == vpRect.polygon.back())
+          vpRect.polygon.pop_back();
+        double twiceArea = 0.0;
+        if (boundaryFinite) {
+          for (size_t i = 0; i < vpRect.polygon.size(); ++i) {
+            const auto& a = vpRect.polygon[i];
+            const auto& b = vpRect.polygon[(i + 1) % vpRect.polygon.size()];
+            if (!std::isfinite(a[0]) || !std::isfinite(a[1])) {
+              boundaryFinite = false;
+              break;
+            }
+            twiceArea += static_cast<double>(a[0]) * b[1] - static_cast<double>(a[1]) * b[0];
+          }
+        }
+        if (!boundaryFinite || vpRect.polygon.size() < 3 || std::fabs(twiceArea) < 1.e-8)
+          vpRect.polygon.clear();
+      }
       curDashUnit = plotstroke::DashUnitIn(vp.safeScale());
       auto emitModelChain = [&](const std::vector<std::array<double, 3>>& w, bool closed) {
         std::vector<std::array<float, 2>> pp(w.size());
@@ -746,6 +882,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           lab.text = ann.text;
           lab.fontFamily = ann.fontFamily;
           lab.rgb = curColor;
+          lab.clipPolygon = vpRect.polygon;
           vpDimLabels.push_back(std::move(lab));
         }
       }
@@ -778,7 +915,8 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
                 (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
             tlab.text = ann.tableCells[ci];
             tlab.fontFamily = ann.fontFamily;
-            tlab.rgb = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");
+            tlab.rgb = (aa) ? resolveRgb(layer, aa->color, aa->plotStyleName, true) : resolveRgb(layer, "ByLayer", "Normal", true);
+            tlab.clipPolygon = vpRect.polygon;
             vpDimLabels.push_back(std::move(tlab));
           }
           continue;
@@ -805,7 +943,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           float baseY = blockTopY - Hm;
           const float Hin =
               (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
-          const uint32_t rgb = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");
+          const uint32_t rgb = (aa) ? resolveRgb(layer, aa->color, aa->plotStyleName, true) : resolveRgb(layer, "ByLayer", "Normal", true);
           for (const std::string& ln : lines) {
             float x = ann.boxMinX;
             const float estW = static_cast<float>(ln.size()) * Hm * 0.6f;
@@ -824,6 +962,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
               lab.text = ln;
               lab.fontFamily = ann.fontFamily;
               lab.rgb = rgb;
+              lab.clipPolygon = vpRect.polygon;
               vpDimLabels.push_back(std::move(lab));
             }
             baseY -= lineHm;
@@ -841,7 +980,8 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         lab.Hin = (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
         lab.text = ann.text;
         lab.fontFamily = ann.fontFamily;
-        lab.rgb = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");
+        lab.rgb = (aa) ? resolveRgb(layer, aa->color, aa->plotStyleName, true) : resolveRgb(layer, "ByLayer", "Normal", true);
+        lab.clipPolygon = vpRect.polygon;
         vpDimLabels.push_back(std::move(lab));
       }
       for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
@@ -865,7 +1005,8 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           tlab.Hin = (std::max)(0.01f, tbl.plottedHeightInches);
           tlab.text = tbl.cells[ci];
           tlab.fontFamily = tbl.fontFamily;
-          tlab.rgb = (ta) ? resolveRgb(layer, ta->color) : resolveRgb(layer, "ByLayer");
+          tlab.rgb = (ta) ? resolveRgb(layer, ta->color, ta->plotStyleName, true) : resolveRgb(layer, "ByLayer", "Normal", true);
+          tlab.clipPolygon = vpRect.polygon;
           vpDimLabels.push_back(std::move(tlab));
         }
       }
@@ -893,7 +1034,8 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         }
         float rgba[4] = {0.f, 0.f, 0.f, 1.f};
         ResolveStoredColorForViewport(col, 0.f, 0.f, 0.f, 0.f, rgba);
-        AdaptWhiteBlackToBackground(&rgba[0], &rgba[1], &rgba[2], true);  // REQ-048: legible on the white page
+        if (pagePlotStyles == nullptr)
+          AdaptWhiteBlackToBackground(&rgba[0], &rgba[1], &rgba[2], true);  // REQ-048 legacy no-table behavior
         return (static_cast<uint32_t>(rgba[0] * 255.f) << 16) | (static_cast<uint32_t>(rgba[1] * 255.f) << 8) |
                static_cast<uint32_t>(rgba[2] * 255.f);
       };
@@ -924,6 +1066,17 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
             col = (lr && !lr->color.empty() && lr->color != "ByLayer") ? lr->color : "White";
           }
           ResolveStoredColorForViewport(col, 0.f, 0.f, 0.f, 0.f, rgba);
+          uint32_t rgb = (static_cast<uint32_t>(rgba[0] * 255.f) << 16) | (static_cast<uint32_t>(rgba[1] * 255.f) << 8) |
+                         static_cast<uint32_t>(rgba[2] * 255.f);
+          if (pagePlotStyles != nullptr) {
+            const CadLayerRow* lr = FindDrawingLayerRowCi(st, fa.layer);
+            const std::string styleName = (fa.plotStyleName.empty() || fa.plotStyleName == "ByLayer")
+                                              ? (lr ? lr->plotStyleName : std::string("Normal")) : fa.plotStyleName;
+            int aci = 7;
+            (void)CadColorTryGetAci(CadColorEffectiveStorage(fa.color, lr ? lr->color : "White"), &aci);
+            rgb = plotstyle::ApplyColor(*pagePlotStyles, plotstyle::Find(*pagePlotStyles, aci, styleName), rgb);
+          }
+          return rgb;
         }
         return (static_cast<uint32_t>(rgba[0] * 255.f) << 16) | (static_cast<uint32_t>(rgba[1] * 255.f) << 8) |
                static_cast<uint32_t>(rgba[2] * 255.f);
@@ -1253,7 +1406,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
                             : sheetAttr(L.paperTextAttrs, ti);
         if (at && !plottable(at->layer))
           continue;
-        const uint32_t rgb = at ? sheetRgb(at->layer, at->color) : 0x000000u;
+        uint32_t rgb = at ? sheetRgb(at->layer, at->color) : 0x000000u;
         const float H = a.plottedHeightInches < 0.01f ? 0.01f : a.plottedHeightInches;  // avoid win max macro
         const bool wantShx = cadfont::PreferShxStrokes(a.fontFamily, a.text);
         Shx::Font* sfont = wantShx ? Shx::Resolve(a.fontFamily) : nullptr;
@@ -1263,6 +1416,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           continue;
         curColor = rgb;  // stroke color for the SHX branch
         setLineStyle(at, at ? at->layer : std::string("0"));  // SHX strokes take the lineweight, never a dash
+        rgb = curColor;
         curLinetype.clear();
         auto emitLine = [&](const std::string& s, float bx, float by, float rot) {
           if (shx)
@@ -1307,6 +1461,8 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       setDefaultStyle();  // viewport dimension and table labels carry no lineweight of their own
       for (const VpDimLabel& lab : vpDimLabels) {
         if (lab.text.empty())
+          continue;
+        if (lab.clipPolygon.size() >= 3 && !PlotPointInPolygon(lab.clipPolygon, lab.px, lab.py))
           continue;
         curColor = lab.rgb;
         const float H = lab.Hin < 0.01f ? 0.01f : lab.Hin;

@@ -44,12 +44,28 @@ active tab beside `Model`.*
 | **Page Setup Manager…** | Paper size, orientation, plot settings — below |
 | **Viewports…** | The viewport list for this layout |
 | **Delete** | Removes the layout |
+| **Duplicate** | Makes a full copy with a unique name; the current layout remains active |
+
+`LAYOUT COPY` duplicates the current layout. `LAYOUT COPY <source> <new name>` duplicates a named
+layout; the new name must be unused. Copies include sheet setup, viewport settings, and paper-space
+objects. Undo and redo work as usual.
+
+### Editing paper-space geometry
+
+`ARRAY` can duplicate selected objects on the active layout with rectangular or polar spacing. One
+undo restores the sheet before the array. `OVERKILL` cleans supported duplicate and degenerate
+geometry on the active layout. Neither command changes model geometry or other layouts.
 
 ---
 
 ## Page Setup Manager
 
 The per-layout sheet and plot settings.
+
+On the **Output** tab, **View Details** opens a compact read-only summary of the active layout's
+effective Page Setup: output device, named setup (or the layout's own settings), paper size and
+orientation, plot area, scale, centering and offsets, and selected CTB/STB table. It is available
+only while a paper layout is active and does not change the drawing.
 
 **Current layout:** and **Current page setup:** are shown at the top.
 
@@ -143,10 +159,19 @@ Per viewport:
 | **W**, **H** | Size in paper inches |
 | **Center X**, **Center Y** | The model point shown at the viewport centre |
 | **Scale (model/in)** | Model units per paper inch — the AutoCAD viewport scale. `50` gives 1" = 50' |
+| **Viewport drawing scale** | Choose a named drawing scale to change the selected viewport(s)' model-to-paper scale while keeping their centers and paper frames in place |
 | **Annotative scale** | The annotation scale used by this viewport, selected independently from its zoom scale. New viewports start with the drawing's current annotation scale |
+| **On** | Shows model contents through this viewport. Off viewports keep their paper frame but show no model contents |
+| **Display locked** | Prevents pan, zoom, and scale changes to the model view while keeping the viewport selectable and its paper frame editable |
+| **Hide in plots** | Keeps model contents visible while editing but omits them from PDF output |
 | **Layer** | The viewport's own layer. **If that layer is not plottable, the viewport border is omitted from plots** — this is how you get a borderless viewport |
 
 **+ Add viewport** and **Delete viewport** manage the list.
+
+Select one or more viewport rows and choose **Viewport drawing scale** to apply one named scale to
+the selection. The command line equivalent is `VPMATCHSCALE <scale name>` (for example,
+`VPMATCHSCALE 1:50`). The operation is undoable. `VPSCALE` remains available for entering a free-form
+ratio on the current floating or single selected viewport.
 
 The viewport's **Annotative scale** controls which scale-dependent annotations appear through that
 viewport. It is separate from **Scale (model/in)**, which controls the model framing. Choose it from

@@ -218,17 +218,22 @@ void EditorWindow::RefreshDraftingInput(const QString& hint) {
   m_DynamicGroup.showZ = prompt.showZ;
   const bool active = m_State.activeDrawingIdx > 0 && m_State.active != AppCommandState::Kind::None &&
       m_State.active != AppCommandState::Kind::Pan && m_State.active != AppCommandState::Kind::Orbit;
+  const bool bearingPickAwaitingCommand =
+      (m_State.active == AppCommandState::Kind::Line || m_State.active == AppCommandState::Kind::Polyline) &&
+      m_State.segmentAnglePickPhase == AppCommandState::SegmentAnglePickPhase::WaitAdjustOrCommit;
+  if (bearingPickAwaitingCommand && m_DynamicInput->isVisible()) m_Command->clear();
   // REQ-501.2: near an alignment, a point being entered or a grip being dragged reads its station, offset and bearing.
   const QString readout = QString::fromUtf8(m_State.alignmentCursorReadout.c_str());
   const bool gripDrag = m_State.activeDrawingIdx > 0 && m_State.entityGripMoveActive;
-  const bool showReadout = !readout.isEmpty() && ((active && prompt.pointEntry) || gripDrag);
-  m_DynamicInputForCommand = active;
-  m_DynamicInput->setVisible(active || showReadout);
+  const bool showReadout = !readout.isEmpty() && ((active && !bearingPickAwaitingCommand && prompt.pointEntry) || gripDrag);
+  const bool showCommandInput = active && !bearingPickAwaitingCommand;
+  m_DynamicInputForCommand = showCommandInput;
+  m_DynamicInput->setVisible(showCommandInput || showReadout);
   m_DynamicAlignment->setVisible(showReadout);
   if (showReadout && m_DynamicAlignment->text() != readout) m_DynamicAlignment->setText(readout);
-  if (!active && !showReadout) return;
-  m_DynamicPrompt->setVisible(active);
-  if (!active) {  // a grip drag with no command: the readout alone, beside the cursor
+  if (!showCommandInput && !showReadout) return;
+  m_DynamicPrompt->setVisible(showCommandInput);
+  if (!showCommandInput) {  // a grip drag with no command: the readout alone, beside the cursor
     for (int i = 0; i < 3; ++i) {
       m_DynamicFields[i]->hide();
       m_DynamicLabels[i]->hide();
@@ -330,6 +335,13 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
     if (focus->isWindow()) break;
   }
   const bool ctrl = key->modifiers().testFlag(Qt::ControlModifier);
+  if (event->type() == QEvent::KeyPress && ctrl && key->key() == Qt::Key_Z &&
+      widget == m_Command && m_Command->text().isEmpty()) {
+    DoUndo(m_State, m_Log);
+    ResetDraftingInput();
+    Refresh();
+    return true;
+  }
   if ((widget == m_Command || suggestionPopupWidget) &&
       (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
       event->type() == QEvent::ShortcutOverride) {

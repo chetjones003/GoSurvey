@@ -78,6 +78,8 @@ private:
   void RefreshRibbon();
   void RefreshToolspace();
   void RunRibbonAction(const QString& id);
+  void ShowGradingTools();
+  void ShowFeatureLineElevations();
   bool ConfirmDwgExport(const QString& path);
   void EditRibbonHatch(const QString& field, const QString& value);
   void EditRibbonPdf(const QString& field, const QString& value);
@@ -159,6 +161,8 @@ private:
   void ShowToolspaceContextMenu(QTreeWidget* tree, const QPoint& position);
   QMenu* BuildToolspaceMenu(QTreeWidgetItem* item);
   void ShowPdfFile(const QString& path);
+  void PreviewActiveLayout();
+  void ShowActiveLayoutDetails();
   void ShowPasteWarning();
   void ShowAlignResultsDialog();
   void ShowProjectAttachPrompt();
@@ -186,6 +190,7 @@ private:
   void ShowUpdateDialog();
   bool UpdateBlocksLaunch() const;
   QString m_DevelopmentBranchLabel;
+  std::uint64_t m_DocumentGeneration = 0;
   bool m_ModalOpen = false;
   AppCommandState m_State;
   std::vector<std::string> m_Log;

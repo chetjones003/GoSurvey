@@ -91,7 +91,7 @@ public:
                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
                    const CadSnap::Hit* snapOverlay, float snapGlyphHalfPx,
                    const std::vector<float>* previewLines,
-                   const std::vector<float>* previewCircles, const std::vector<float>* highlightLines,
+                   const std::vector<float>* previewCircles, const std::vector<double>* highlightLines,
                    const std::vector<float>* highlightCircles, const std::vector<float>* hoverLines,
                    const std::vector<float>* hoverCircles, const std::vector<float>* surveyMarkers,
                    const std::vector<EntityAttributes>* lineEntityAttrs,

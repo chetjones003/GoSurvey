@@ -219,6 +219,7 @@ Full detail: [[Import and Export]]
 |---|---|
 | **Object snap** | The **Survey point** snap targets marker positions |
 | `MOVE` / `COPY` | Points move with the selection; duplicate IDs trigger the policy dialog |
+| `PASTE` / `PASTEORIG` | Selected model-space points paste with geometry; number collisions offer **Overwrite / Renumber / Cancel** |
 | `DELETE` | Deletes selected points **and** their labels in one step |
 | `ALIGN` | Tags source points ` ADJ` and destination points ` CON` — see [[Coordinate Alignment]] |
 | `INVERSE` | Snap to two points for distance and bearing |

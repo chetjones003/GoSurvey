@@ -1467,19 +1467,26 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
 /// Highlight strokes for one entity, each at the entity's OWN elevation (REQ-058). This used to
 /// take a flat `lineZ` draw depth; with the filled region converted, no type needs one — depth
 /// testing is off, so draw ORDER decides occlusion and the Z is free to mean elevation.
+template<typename LineVert>
+static void AppendFloatLineBatch(const std::vector<float>& batch, std::vector<LineVert>* out) {
+  for (float v : batch)
+    out->push_back(static_cast<LineVert>(v));
+}
+
+template<typename LineVert>
 static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEntity& e,
-                                  std::vector<float>* hlLines, std::vector<float>* hlCircles) {
+                                  std::vector<LineVert>* hlLines, std::vector<float>* hlCircles) {
   if (e.type == SelectedEntity::Type::LineSeg) {
     const size_t k = static_cast<size_t>(e.index) * 6;
     if (k + 5 >= cmd.userLinesFlat.size())
       return;
     for (int i = 0; i < 2; ++i) {
-      hlLines->push_back(cmd.userLinesFlat[k + i * 3]);
-      hlLines->push_back(cmd.userLinesFlat[k + i * 3 + 1]);
+      hlLines->push_back(static_cast<LineVert>(cmd.userLinesFlat[k + i * 3]));
+      hlLines->push_back(static_cast<LineVert>(cmd.userLinesFlat[k + i * 3 + 1]));
       // The entity's OWN Z, not a flat overlay depth (REQ-057/058). Drawing the highlight at a
       // fixed Z put it on the datum while the line sat at its elevation, so an orbited view showed
       // the object twice — once real, once highlighted in the wrong place.
-      hlLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
+      hlLines->push_back(static_cast<LineVert>(cmd.userLinesFlat[k + i * 3 + 2]));
     }
   } else if (e.type == SelectedEntity::Type::Circle) {
     const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
@@ -1491,8 +1498,10 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     float cny = kFlatNormalY;
     float cnz = kFlatNormalZ;
     CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
-    appendPreviewCircle(hlLines, hlCircles, cmd.userCirclesCxCyZR[k], cmd.userCirclesCxCyZR[k + 1],
+    std::vector<float> strip;
+    appendPreviewCircle(&strip, hlCircles, cmd.userCirclesCxCyZR[k], cmd.userCirclesCxCyZR[k + 1],
                         cmd.userCirclesCxCyZR[k + 2], cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
+    AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::Alignment) {  // REQ-480: highlight the exact geometry, sampled for display
     const size_t k = static_cast<size_t>(e.index);
     if (k >= cmd.alignments.size() || cmd.alignments[k].Empty())
@@ -1510,21 +1519,31 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     const size_t k = static_cast<size_t>(e.index);
     if (k >= cmd.userArcs.size())
       return;
-    appendArcPolylineStrip(hlLines, cmd.userArcs[k].z, cmd.userArcs[k], 48);  // arc plane, not a flat depth
+    std::vector<float> strip;
+    appendArcPolylineStrip(&strip, cmd.userArcs[k].z, cmd.userArcs[k], 48);  // arc plane, not a flat depth
+    AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
-    appendSplinePreview(hlLines, cmd, e.index, [&](const spline::Vec3& v) { return v; });
+    std::vector<float> strip;
+    appendSplinePreview(&strip, cmd, e.index, [&](const spline::Vec3& v) { return v; });
+    AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::Ellipse) {
     const size_t k = static_cast<size_t>(e.index);
     if (k >= cmd.userEllipses.size())
       return;
-    appendEllipsePolylineStrip(hlLines, cmd.userEllipses[k].z, cmd.userEllipses[k], 56);
+    std::vector<float> strip;
+    appendEllipsePolylineStrip(&strip, cmd.userEllipses[k].z, cmd.userEllipses[k], 56);
+    AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::Polyline) {
-    appendCommittedPolylineStrip(hlLines, cmd, e.index);
+    std::vector<float> strip;
+    appendCommittedPolylineStrip(&strip, cmd, e.index);
+    AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::FeatureLine) {
     // REQ-087. Without this a selected feature line drew no highlight at all: it would pick, box-
     // select and move correctly while giving the user nothing on screen to confirm what was
     // selected. Identity transform — the highlight traces the committed geometry where it is.
-    appendFeatureLineStrip(hlLines, cmd, e.index, [](float*, float*) {});
+    std::vector<float> strip;
+    appendFeatureLineStrip(&strip, cmd, e.index, [](float*, float*) {});
+    AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::Surface) {
     // REQ-068 / ADR-036 (b). The highlight traces the surface's BORDER, not its 600k triangle edges.
     // Two reasons, and the second is the one that decides it: at REQ-100's profile the whole
@@ -1535,7 +1554,7 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     // Read from the cache (ADR-036 (e)); computing it here would put the O(n log n) walk back on the
     // per-frame path this function is called from.
     if (const std::vector<float>* border = SurfaceBorderEdges(cmd, static_cast<size_t>(e.index)))
-      hlLines->insert(hlLines->end(), border->begin(), border->end());
+      AppendFloatLineBatch(*border, hlLines);
   } else if (e.type == SelectedEntity::Type::Solid) {
     // REQ-318 item 12. Before this, a selected solid drew NO highlight at all — it picked, box-
     // selected and erased correctly while giving the user nothing on screen to confirm what was
@@ -1555,7 +1574,7 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     for (const CadSolidTessellation& t : cmd.solidDisplayCache) {
       if (t.key.lock() != sp)
         continue;
-      hlLines->insert(hlLines->end(), t.edgeVerts.begin(), t.edgeVerts.end());
+      AppendFloatLineBatch(t.edgeVerts, hlLines);
       break;
     }
   } else if (e.type == SelectedEntity::Type::PipeRun) {
@@ -1571,7 +1590,7 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
       for (const CadSolidTessellation& t : cmd.solidDisplayCache) {
         if (t.key.lock() != sp)
           continue;
-        hlLines->insert(hlLines->end(), t.edgeVerts.begin(), t.edgeVerts.end());
+        AppendFloatLineBatch(t.edgeVerts, hlLines);
         break;
       }
       break;
@@ -1592,12 +1611,12 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     std::vector<CadBlockWorldSeg> segs;
     CadBlockCollectWorldLines(cmd.blockDefs, ref, dummy, &segs);
     for (const CadBlockWorldSeg& s : segs) {
-      hlLines->push_back(s.x0);
-      hlLines->push_back(s.y0);
-      hlLines->push_back(s.z0);
-      hlLines->push_back(s.x1);
-      hlLines->push_back(s.y1);
-      hlLines->push_back(s.z1);
+      hlLines->push_back(static_cast<LineVert>(s.x0));
+      hlLines->push_back(static_cast<LineVert>(s.y0));
+      hlLines->push_back(static_cast<LineVert>(s.z0));
+      hlLines->push_back(static_cast<LineVert>(s.x1));
+      hlLines->push_back(static_cast<LineVert>(s.y1));
+      hlLines->push_back(static_cast<LineVert>(s.z1));
     }
     // NOT the tessellation-cache lookup the Solid branch above uses: CadBlockCollectWorldSolids
     // allocates a brand-new transformed brep::Solid (and so a brand-new shared_ptr identity) on
@@ -1614,12 +1633,12 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
         ray3d::Vec3 prev = brep::EdgePointAt(*ws.solid, ed, 0.0);
         for (int i = 1; i <= steps; ++i) {
           const ray3d::Vec3 next = brep::EdgePointAt(*ws.solid, ed, static_cast<double>(i) / steps);
-          hlLines->push_back(static_cast<float>(prev.x));
-          hlLines->push_back(static_cast<float>(prev.y));
-          hlLines->push_back(static_cast<float>(prev.z));
-          hlLines->push_back(static_cast<float>(next.x));
-          hlLines->push_back(static_cast<float>(next.y));
-          hlLines->push_back(static_cast<float>(next.z));
+          hlLines->push_back(static_cast<LineVert>(prev.x));
+          hlLines->push_back(static_cast<LineVert>(prev.y));
+          hlLines->push_back(static_cast<LineVert>(prev.z));
+          hlLines->push_back(static_cast<LineVert>(next.x));
+          hlLines->push_back(static_cast<LineVert>(next.y));
+          hlLines->push_back(static_cast<LineVert>(next.z));
           prev = next;
         }
       }
@@ -1643,18 +1662,18 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
         // in this file still using lineZ. Depth testing is off, so lineZ only ever ordered the draw;
         // once the view can tilt it is simply a wrong elevation, and the highlight detaches from
         // the hatch it is meant to trace.
-        hlLines->push_back(fr.vertsXyz[static_cast<size_t>(a) * 3]);
-        hlLines->push_back(fr.vertsXyz[static_cast<size_t>(a) * 3 + 1]);
-        hlLines->push_back(fr.vertsXyz[static_cast<size_t>(a) * 3 + 2]);
-        hlLines->push_back(fr.vertsXyz[static_cast<size_t>(b) * 3]);
-        hlLines->push_back(fr.vertsXyz[static_cast<size_t>(b) * 3 + 1]);
-        hlLines->push_back(fr.vertsXyz[static_cast<size_t>(b) * 3 + 2]);
+        hlLines->push_back(static_cast<LineVert>(fr.vertsXyz[static_cast<size_t>(a) * 3]));
+        hlLines->push_back(static_cast<LineVert>(fr.vertsXyz[static_cast<size_t>(a) * 3 + 1]));
+        hlLines->push_back(static_cast<LineVert>(fr.vertsXyz[static_cast<size_t>(a) * 3 + 2]));
+        hlLines->push_back(static_cast<LineVert>(fr.vertsXyz[static_cast<size_t>(b) * 3]));
+        hlLines->push_back(static_cast<LineVert>(fr.vertsXyz[static_cast<size_t>(b) * 3 + 1]));
+        hlLines->push_back(static_cast<LineVert>(fr.vertsXyz[static_cast<size_t>(b) * 3 + 2]));
       }
     }
   }
 }
 
-void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<float>* hlLines,
+void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<double>* hlLines,
                              std::vector<float>* hlCircles) {
   hlLines->clear();
   hlCircles->clear();

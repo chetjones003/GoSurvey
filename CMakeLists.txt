@@ -744,6 +744,7 @@ add_library(gosurvey_domain STATIC ${GOSURVEY_DOMAIN_SOURCES})
 # CadCommands.cpp exceeds MSVC's default COFF section limit on current hosted toolchains.
 if(MSVC)
   set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/commands/CadCommands.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/tests/LibreDwgCadTests.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj")
 endif()
 target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -1480,7 +1481,8 @@ if(GOSURVEY_BUILD_TESTS)
     src/pdf/PdfDiff.cpp
     # REQ-445: the PDF plot's Page Setup placement, measured on the PDF it writes.
     tests/PlotSheetPdfTests.cpp
-    src/io/PdfPlot.cpp)
+    src/io/PdfPlot.cpp
+    src/io/PlotStyleTable.cpp)
   target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium Laszip::laszip)
   if(WIN32)
     add_custom_command(TARGET GoSurveyTests POST_BUILD

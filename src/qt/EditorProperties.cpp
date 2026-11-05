@@ -620,6 +620,33 @@ void EditorWindow::RefreshProperties() {
     hint->setWordWrap(true);
     geometryRows->addWidget(hint);
   }
+  if (st.selection.size() == 1 && st.selection.front().type == SelectedEntity::Type::FeatureLine) {
+    const int index = st.selection.front().index;
+    if (index >= 0 && static_cast<size_t>(index) < st.featureLineInfo.size() &&
+        st.featureLineInfo[static_cast<size_t>(index)].grading) {
+      const auto& grading = *st.featureLineInfo[static_cast<size_t>(index)].grading;
+      auto* rows = section("Grading criteria", "propertiesGrading");
+      const int baseline = FindEntityIndexById(st.featureLineAttrs, grading.baselineId);
+      const QString baselineName = baseline >= 0 && static_cast<size_t>(baseline) < st.featureLineInfo.size()
+          ? Text(st.featureLineInfo[static_cast<size_t>(baseline)].name) : QString("Missing baseline");
+      readOnly(rows, "Baseline", baselineName, "propGradingBaseline");
+      static const QStringList targets{"Surface", "Distance", "Absolute elevation", "Relative elevation"};
+      readOnly(rows, "Target kind", targets.value(static_cast<int>(grading.target)), "propGradingTargetKind");
+      QString targetValue = fmt(grading.targetValue);
+      if (grading.target == CadGradingDefinition::Target::Surface) {
+        const int si = FindSurfaceIndexById(st, grading.surfaceId);
+        targetValue = si >= 0 ? Text(st.cadSurfaces[static_cast<size_t>(si)].name) : QString("Missing surface");
+      }
+      readOnly(rows, "Target", targetValue, "propGradingTarget");
+      if (grading.target == CadGradingDefinition::Target::Distance)
+        readOnly(rows, "Distance grade (%)", fmt(grading.distanceGradePercent), "propGradingDistanceGrade");
+      readOnly(rows, "Cut slope (H:V)", fmt(grading.cutRun) + ":1", "propGradingCutSlope");
+      readOnly(rows, "Fill slope (H:V)", fmt(grading.fillRun) + ":1", "propGradingFillSlope");
+      if (static_cast<size_t>(index) < st.featureLineClosed.size() && !st.featureLineClosed[static_cast<size_t>(index)])
+        readOnly(rows, "Open side", grading.sideLeft ? "Left" : "Right", "propGradingOpenSide");
+    }
+  }
+
   // A single TIN surface: read-only, as in 0.7.4 -- every figure is derived from the triangulation or the
   // definition, so an editable copy here would be a second source of truth the next rebuild overwrites.
   int surfaceCount = 0;
@@ -630,6 +657,17 @@ void EditorWindow::RefreshProperties() {
     const CadSurface& surface = st.cadSurfaces[surfaceIndex];
     auto* rows = section("Surface", "propertiesSurface");
     readOnly(rows, "Name", Text(surface.name), "propSurfaceName");
+    if (surface.gradingGroup) {
+      QStringList members;
+      for (const auto& member : surface.gradingMembers) {
+        const int fi = FindEntityIndexById(st.featureLineAttrs, member.gradingId);
+        const QString name = fi >= 0 && static_cast<size_t>(fi) < st.featureLineInfo.size()
+            ? Text(st.featureLineInfo[static_cast<size_t>(fi)].name) : QString("Missing grading");
+        members << name + (member.infill ? " (infill)" : "");
+      }
+      readOnly(rows, "Grading group", "Yes", "propSurfaceGradingGroup");
+      readOnly(rows, "Members", members.join(", "), "propSurfaceGradingMembers");
+    }
     readOnly(rows, "Points", QString::number(surface.vertexCount()), "propSurfacePoints");
     readOnly(rows, "Triangles", QString::number(surface.triangleCount()), "propSurfaceTriangles");
     if (surface.tin && surface.tin->vertsXyz.size() >= 3) {

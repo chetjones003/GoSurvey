@@ -77,6 +77,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorPointTransfer.cpp
   src/qt/EditorBlockAuthoring.cpp
   src/qt/EditorPipePalette.cpp
+  src/qt/EditorGradingPalette.cpp
   src/qt/AdjustmentWindow.cpp
   src/qt/AdjustmentEditor.cpp
   src/qt/PdfWindow.cpp
@@ -97,6 +98,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/pdf/PdfRaw.cpp
   src/pdf/PdfSplit.cpp
   src/io/PdfPlot.cpp
+  src/io/PlotStyleTable.cpp
   src/traverse/TraverseReport.cpp
   src/platform/WinFileDialogs.cpp
   src/platform/MapTilePlatform.cpp

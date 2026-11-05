@@ -76,12 +76,17 @@ void DrawQtLeaderPath(QPainter& painter, const CadMultileader& ml, const std::ve
 }
 
 bool DrawStrokeText(QPainter& painter, const CadAnnotation& annotation, float pixels,
-                     const std::string& text, bool baseline) {
+                     const std::string& text, bool baseline, int attachment = 1) {
   if (!cadfont::PreferShxStrokes(annotation.fontFamily, text)) return false;
   auto* font = Shx::Resolve(annotation.fontFamily);
   if (!font || !font->valid()) return false;
   const float scale = pixels / font->capHeight();
-  float x = 0, y = baseline ? 0 : pixels;
+  const int attach = std::clamp(attachment, 1, 9) - 1;
+  const int column = attach % 3;
+  const int row = attach / 3;
+  const float width = Shx::MeasureWidthPx(*font, MtextRichFlattenToPlain(text), pixels);
+  float x = column == 1 ? -width * 0.5f : column == 2 ? -width : 0.f;
+  float y = baseline ? 0.f : row == 0 ? pixels : row == 1 ? pixels * 0.5f : 0.f;
   const float shear = std::tan(annotation.obliqueDeg * 3.14159265358979323846f / 180.f);
   const std::string plain = MtextRichFlattenToPlain(text);
   for (const unsigned char character : plain) {
@@ -154,7 +159,7 @@ void DrawPointMarkerBlock(QPainter& painter, const AppCommandState& state, const
     painter.translate(x, y);
     painter.rotate(-label.rotationRad * 180.0 / 3.14159265358979323846);
     painter.setPen(color(insert));
-    if (!DrawStrokeText(painter, label, pixels, label.text, true)) {
+    if (!DrawStrokeText(painter, label, pixels, label.text, true, label.mtextAttach)) {
       QFont font(QString::fromUtf8(label.fontFamily.c_str()));
       font.setPixelSize(std::max(1, qRound(pixels)));
       painter.setFont(font);
@@ -1076,7 +1081,8 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     CadMultileader ml = state.cadMultileaders[i];
     const auto* namedStyle = MultileaderStyles::Find(state.multileaderStyles, ml.styleName);
     const MultileaderStyle& style = namedStyle ? *namedStyle : state.activeMultileaderStyle;
-    const float leaderArrow = std::max(style.arrowSizeInches, .001f) * std::max(state.modelUnitsPerPlottedInch, 1.e-6f);
+    const float leaderArrow = ml.arrowSizeWorld > 0.f ? ml.arrowSizeWorld :
+        std::max(style.arrowSizeInches, .001f) * std::max(state.modelUnitsPerPlottedInch, 1.e-6f);
     if (style.props.count("leaderType")) ml.splinePath = StyleProperty(style.props, "leaderType") == "Spline";
     if (StyleProperty(style.props, "arrowSymbol") == "None") ml.showArrow = false;
     const EntityAttributes* attrs = i < state.cadMultileaderAttrs.size() ? &state.cadMultileaderAttrs[i] : nullptr;
@@ -1113,6 +1119,7 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       const float pixels = static_cast<float>(std::hypot(cap.x() - anchor.x(), cap.y() - anchor.y()));
       if (pixels >= .5f) {
         painter.save(); painter.translate(anchor);
+        painter.rotate(-label.rotationRad * 180.0 / 3.14159265358979323846);
         if (!StyleProperty(style.props, "textColor").empty()) {
           float rgbText[3]{1, 1, 1};
           CadColorResolveRgb(CadColorEffectiveStorage(StyleProperty(style.props, "textColor"), layer ? layer->color : "White"), 1, 1, 1, rgbText);
@@ -1120,7 +1127,7 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
         }
         QFont font(QString::fromUtf8(label.fontFamily.c_str())); font.setPixelSize(std::clamp(qRound(pixels), 1, 4096));
         painter.setFont(font);
-        if (!DrawStrokeText(painter, label, pixels, label.text, true)) painter.drawText(QPointF(0, 0), QString::fromUtf8(label.text.c_str()));
+        if (!DrawStrokeText(painter, label, pixels, label.text, true, label.mtextAttach)) painter.drawText(QPointF(0, 0), QString::fromUtf8(label.text.c_str()));
         if (StyleFlag(style.props, "textFrame")) {
           const auto bounds = QFontMetricsF(font).boundingRect(QString::fromUtf8(label.text.c_str())).adjusted(-3, -3, 3, 3);
           painter.drawRect(bounds);

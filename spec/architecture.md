@@ -5174,6 +5174,48 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   and fail if required files are absent. GoSurvey becomes responsible for refreshing and validating
   those DLLs as part of each release. The Store submission continues to carry the shared redist.
 
+### ADR-075 — Extend existing grading metadata and shared commands for the staged toolkit (2026-11-02)
+
+- Status: accepted for Stage 1 under D-2026-11-02-a; later stage details reviewed before coding.
+- Context/decision: REQ-456–458 and [grading-toolkit.md](grading-toolkit.md) define the approved
+  target and infill representation: extend CadGradingDefinition; retain infill/baked polygon
+  members on ordinary CadSurface. Extend additive DWG payload fields, preserving legacy defaults.
+  Use existing constrained TIN construction and volume comparison. Qt adapts shared commands;
+  it does not own numerical rules, and no new geometry entity, group store or live graph is added.
+- Consequences: explicit rebuilds preserve source-edit behavior; infill is an explicit additional
+  bounded face, never an automatic convex hull. Member deletion updates groups in the entity's
+  undo transaction. This extends ADR-070's quadrilateral-only implementation to bounded infill
+  polygons without altering its surface ownership, baked-update or volume-engine decisions.
+
+### ADR-076 — Drawing-owned grading presets and Qt reuse/elevation editing (2026-11-03, accepted)
+
+- Status: accepted by the user for Stage 2 under D-2026-11-03-a.
+- Context: REQ-459 requires named grading presets that copy values into results, DWG persistence,
+  independent Copy Create, and Qt FLELEV editing. Presets are drawing-local by user decision.
+- Decision:
+  (a) A value-owned `CadGradingPreset` collection belongs to each drawing. The active
+      `AppCommandState`, per-tab `DrawingDocument`, and drawing undo snapshot carry the collection
+      using the existing per-document state pattern.
+  (b) A preset stores criteria only: target kind, optional stable target-surface id, cut/fill runs,
+      open-baseline side, target value and distance grade. It stores no baseline/result id. Applying
+      the preset copies criteria into a newly created `CadGradingDefinition`; results do not retain
+      a preset reference.
+  (c) Preset create, explicit update and delete each make one undo step. The collection is an
+      additive optional field in the existing ADR-044 JSON trailer. Missing fields in older
+      drawings mean no presets; malformed preset data is rejected before replacing the open drawing.
+      A deleted target surface is reported on apply, never replaced with a different surface.
+  (d) Copy Create copies criteria from one existing grading into a new result on a selected baseline;
+      it preserves the source and gives the new result an independent stable identity.
+  (e) Qt displays the existing REQ-088 derived elevation table and routes edits through the existing
+      FLELEV services. Grading/group property and membership UI reads and edits the shared drawing
+      state and commands. No automatic grading or preset propagation is added.
+- Alternatives: (1) App-wide/user preferences — rejected because presets are drawing-local by user
+  choice. (2) Link each result to a preset — rejected because changing presets must not change old
+  results. (3) Store preset inputs on a baseline/result entity — rejected because a preset is a
+  reusable named drawing setting, not geometry or a relationship.
+- Consequences: the existing document snapshot, undo snapshot and ADR-044 serializer gain the preset
+  value collection and validation. No new entity kind, global store, third-party dependency, or live
+  dependency graph is introduced.
 ### ADR-074 — Version rolling beta builds from the stable baseline   (2026-11-02, accepted)
 - Context: ADR-029 made all releases manual and used one `project(VERSION)` value for beta and
   stable. The user wants beta to publish automatically when its source changes, with ordinary
@@ -5200,6 +5242,58 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   dependency or stable-release behavior changes.
 - Status: accepted (D-2026-11-02-a); backs REQ-202.
 
+### ADR-077 — Value-owned clipping boundary for MVIEW object viewports   (2026-11-03, accepted)
+- Context: REQ-490 adds a viewport made from a closed paper-space polyline. `Viewport` currently
+  stores only a rectangular paper-space extent; the editor composites each rendered model view as
+  a rectangular framebuffer blit. DWG VIEWPORT and DXF VIEWPORT records already provide a native
+  clip-boundary handle and distinguish polygon clipping, but GoSurvey does not currently retain
+  such a boundary in its viewport value.
+- Decision: Store the copied paper-space polyline boundary as optional value-owned geometry on the
+  viewport, including the polyline's supported straight and bulge-arc segments. Do not keep an
+  entity-index or associative link to the source; leave that source polyline unchanged. The Qt
+  renderer and PDF plotter clip model content to this value boundary. DWG/DXF writers emit a native
+  clipping-boundary entity and link it from the viewport's standard clip-boundary field; readers
+  restore that boundary into the viewport value. Rectangular viewports keep the existing fast path
+  and serialized representation when the optional boundary is absent. No new dependency or
+  rendering abstraction is introduced.
+- Alternatives: (1) Keep Object rectangular by using the source polyline's bounding box — rejected
+  because it does not follow the requested outline. (2) Store an index into `PaperLayout`'s polyline
+  arrays — rejected because array compaction makes indices unstable (architecture §11.9), and the
+  viewport must remain valid if the source is later edited or deleted. (3) Reintroduce a separate
+  user-drawn polygon command — rejected because #1016 only requests an Object option.
+- Consequences: `Viewport` gains optional boundary value state; Qt and PDF rendering gain a polygon
+  clip path; DWG/DXF import/export gains native clip-boundary entity handling. AutoCAD read-back is
+  a required interoperability check. Viewport selection, MOVE/COPY, undo/redo, and paper-space
+  rendering must treat the boundary as part of the viewport state. This supersedes only the
+  closed-object use case of REQ-034's withdrawal; vertex-drawn polygonal creation remains deferred.
+- Status: accepted (D-2026-11-03-i); backs REQ-490.
+
+### ADR-078 — Drawing-owned plot-style names and Page Setup table references   (2026-11-04, accepted)
+- Context: REQ-485 adds CTB/STB evaluation to the existing vector PDF path. Page Setup and
+  `PageSetup` currently own paper size and plot settings, but no style-table reference. Layers and
+  entities currently have no named plot-style assignment, and DXF emits only a placeholder
+  `ACAD_PLOTSTYLENAME` dictionary. The user selected imported STB assignment preservation, but no
+  style editor or assignment UI.
+- Decision: Keep the existing PDFium vector PDF writer and evaluate the selected table there. Extend
+  `PageSetup` with an optional reference to an existing CTB/STB file; persist that reference with
+  GoSurvey drawing data, but do not embed or edit the external table. Preserve native named STB
+  assignment names on imported layers and entities as drawing-owned values, with entity assignment
+  taking precedence over layer assignment and `Normal` as the fallback. New GoSurvey-created
+  entities explicitly use `Normal`. DWG/DXF IO maps those values to the native plot-style table
+  dictionary and object/layer references. Do not add a plot-style editor, assignment UI, output
+  device, or third-party parser dependency in this increment.
+- Alternatives: (1) Drop imported assignments — rejected because it silently changes drawing
+  appearance and conflicts with the user's confirmed requirement. (2) Add assignment/editor UI —
+  deferred; the user selected existing-table application only. (3) Add PNG, DWF, or direct printer
+  paths — rejected for this increment; they are separate output capabilities and ADR-007 remains
+  the PDF output decision.
+- Consequences: the Domain data model and GoSurvey serialization gain optional table-reference and
+  plot-style-name fields; DWG/DXF IO must read and write native named-style references; the PDF
+  plotter must parse and apply the selected existing table while preserving vector output. A missing
+  or invalid table is an explicit plot failure. Table files remain external, so a stored reference
+  may be unavailable on another machine and must be reported rather than silently ignored. No new
+  dependency or renderer abstraction is introduced.
+- Status: accepted (D-2026-11-04-e); backs REQ-485.
 ### ADR-075 — Alignments are a dedicated horizontal-geometry domain object, stored as exact parameters   (2026-11-02, accepted)
 - Context: Issue #121 asks for Civil 3D-style alignments. The existing options are a polyline (cannot hold true
   curves/spirals or stationing) and a feature line (3D, vertex-based; ADR-035). Civil 3D separates horizontal

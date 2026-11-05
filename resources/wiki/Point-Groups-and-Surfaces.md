@@ -194,6 +194,38 @@ Later, after importing a second day of shots coded `EG`:
 
 ---
 
+## Grading groups and earthwork volumes
+
+Create grading results with `GRADING`, then select the daylight feature lines to group.
+Type `GRADINGGROUP Earthwork` to create a named group and add the selected gradings.
+The group appears as an ordinary surface in Surface Manager and supports `SURFELEV`.
+You can also open any ribbon **Grading** tool and type `Group Earthwork` at its prompt;
+`Group Earthwork, Remove` and `Group Earthwork, List` work there too.
+
+- `GRADINGGROUP Earthwork, Add` adds selected grading results, moving them out of any previous group.
+- `GRADINGGROUP Earthwork, Remove` removes selected members and rebuilds the surface.
+- `GRADINGGROUP Earthwork, List` lists the group's members.
+- `VOLUMES Ground, Earthwork` reports cut, fill and net against the existing-ground surface.
+
+The design surface covers the slopes between each baseline and its daylight line. It does not
+fill the interior of a closed pad or bridge the land between separate gradings. A group without
+members has no surface triangles. Membership and the baked surface survive DWG save/reopen.
+
+Baseline and target-surface edits do not automatically regrade a member or change its group's
+surface. Explicitly rebuild a grading with `GRADING`, or re-add it after rebuilding, to refresh
+its contribution. Incomplete daylight lines must be rebuilt before they can be grouped.
+
+The **Grading** palette also supports distance, absolute-elevation and relative-elevation targets.
+Use **Copy criteria to new baseline** to make a separate grading from an existing result's values.
+Named criteria are saved with the drawing; saving, updating or deleting one can be undone. Applying
+a preset creates a new result and does not link it to the preset. If its saved target surface has
+been deleted, GoSurvey reports the missing target instead of choosing another surface.
+
+The same palette can add or remove group members, add a closed feature line as an infill boundary,
+list a group's members and delete a feature line together with its group contribution. The
+**FLELEVEDIT** table shows station, elevation, length ahead and grades; edit elevations or grades,
+raise/lower elevations, and insert or delete elevation points. Each applied edit is one undo step.
+
 ## Common problems
 
 | Problem | Cause | Solution |

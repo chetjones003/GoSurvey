@@ -23,6 +23,7 @@
 #include "AdjustmentWindow.hpp"
 #include "QtText.hpp"
 #include "PdfWindow.hpp"
+#include "PdfPlot.hpp"
 #include "SurveyPoints.hpp"
 #include "CadBlocks.hpp"
 #include "DwgIo.hpp"
@@ -832,7 +833,6 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   viewportZoom->setStyleSheet(PopupComboStyleSheet());
   statusBar()->addWidget(viewportZoom);
   connect(viewportZoom, QOverload<int>::of(&QComboBox::activated), this, [this, viewportZoom](int index) {
-    if (viewportZoom->itemData(index).toString() == QLatin1String("__live__")) return;
     if (viewportZoom->itemData(index).toString() == QLatin1String("__add__")) {
       bool ok = false;
       const QString text = QInputDialog::getText(this, "Viewport zoom scale", "Enter ratio (e.g. 1:75):",
@@ -851,19 +851,13 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
       }
       AddViewportZoomScale(m_State, std::string(utf8.constData(), static_cast<std::size_t>(utf8.size())), paperUnits,
                            drawingUnits);
-      const float dpi = screen() != nullptr ? static_cast<float>(screen()->logicalDotsPerInchY()) : 96.f;
-      ApplyViewportZoomScaleIndex(m_State, m_State.currentViewportZoomScaleIndex,
-                                  static_cast<float>(m_Viewport->height()), dpi);
       Refresh();
-      m_Viewport->update();
       return;
     }
     if (index < 0 || index >= static_cast<int>(m_State.viewportZoomScales.size()) ||
         index == m_State.currentViewportZoomScaleIndex)
       return;
-    const float dpi = screen() != nullptr ? static_cast<float>(screen()->logicalDotsPerInchY()) : 96.f;
-    ApplyViewportZoomScaleIndex(m_State, index, static_cast<float>(m_Viewport->height()), dpi);
-    m_Viewport->update();
+    SetCurrentViewportZoomScaleIndex(m_State, index);
     Refresh();
   });
   auto* multiSelect = new QToolButton(this);
@@ -902,9 +896,17 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
     if (tab <= 0) return;
     const int layoutIndex = tab - 1;
     QMenu menu(this);
+    menu.setObjectName("layoutTabContextMenu");
     menu.addAction("Set Current", this, [this, layoutIndex] { SetActiveSpace(m_State, layoutIndex); Refresh(); });
     menu.addAction("Page Setup Manager…", this, [this, layoutIndex] { ShowPageSetupManager(layoutIndex); });
     menu.addAction("Viewports…", this, [this, layoutIndex] { SetActiveSpace(m_State, layoutIndex); m_State.showViewportsWindow = true; Refresh(); });
+    menu.addSeparator();
+    auto* duplicate = menu.addAction("Duplicate", this, [this, layoutIndex] {
+      if (ActiveDrawingReadOnly() || layoutIndex >= static_cast<int>(m_State.paperLayouts.size())) return;
+      CopyPaperLayout(m_State, layoutIndex, {}, m_Log);
+      Refresh();
+    });
+    duplicate->setEnabled(!ActiveDrawingReadOnly());
     menu.addSeparator();
     menu.addAction("Rename…", this, [this, layoutIndex] {
       if (ActiveDrawingReadOnly()) return;
@@ -1140,6 +1142,7 @@ void EditorWindow::BuildDocks() {
   auto* propertiesDock = makeDock("Properties", "propertiesDock", Qt::LeftDockWidgetArea, m_PropertiesScroll);
   propertiesDock->raise();
   m_CommandBar = new FloatingCommandBar(m_Viewport);
+  m_CommandBar->refreshViewportCursor = [this] { m_Viewport->RefreshCommandCursor(); };
   m_CommandBar->optionSelected = [this](const QString& shortcut) { Submit(shortcut); m_Command->setFocus(); };
   m_Transcript = m_CommandBar->Transcript();
   m_Command = m_CommandBar->Input();
@@ -1518,9 +1521,20 @@ void EditorWindow::ShowPageSetupEditor(int targetIndex) {
   auto* offsetX = new QDoubleSpinBox(&dialog); offsetX->setRange(-1e6, 1e6); offsetX->setDecimals(3); offsetX->setValue(draft.offsetXIn); form->addRow("Offset X (in)", offsetX);
   auto* offsetY = new QDoubleSpinBox(&dialog); offsetY->setRange(-1e6, 1e6); offsetY->setDecimals(3); offsetY->setValue(draft.offsetYIn); form->addRow("Offset Y (in)", offsetY);
   auto* center = new QCheckBox("Center the plot", &dialog); center->setChecked(draft.centerPlot); form->addRow("Placement", center);
+  auto* plotStylePath = new QLineEdit(QString::fromUtf8(draft.plotStyleTablePath.c_str()), &dialog);
+  plotStylePath->setObjectName("pageSetupPlotStyleTablePath");
+  auto* browsePlotStyle = new QPushButton("Browse…", &dialog);
+  auto* plotStyleRow = new QWidget(&dialog); auto* plotStyleRowLayout = new QHBoxLayout(plotStyleRow);
+  plotStyleRowLayout->setContentsMargins(0, 0, 0, 0); plotStyleRowLayout->addWidget(plotStylePath); plotStyleRowLayout->addWidget(browsePlotStyle);
+  form->addRow("Plot style table", plotStyleRow);
+  connect(browsePlotStyle, &QPushButton::clicked, &dialog, [this, plotStylePath] {
+    const QString path = QFileDialog::getOpenFileName(this, "Select plot style table", plotStylePath->text(),
+                                                       "Plot style tables (*.ctb *.stb)");
+    if (!path.isEmpty()) plotStylePath->setText(path);
+  });
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog); form->addRow(buttons);
   const bool writable = !ActiveDrawingReadOnly();
-  for (QWidget* widget : {static_cast<QWidget*>(paper), static_cast<QWidget*>(orientation), static_cast<QWidget*>(customWidth), static_cast<QWidget*>(customHeight), static_cast<QWidget*>(fit), static_cast<QWidget*>(scale), static_cast<QWidget*>(offsetX), static_cast<QWidget*>(offsetY), static_cast<QWidget*>(center)}) widget->setEnabled(writable);
+  for (QWidget* widget : {static_cast<QWidget*>(paper), static_cast<QWidget*>(orientation), static_cast<QWidget*>(customWidth), static_cast<QWidget*>(customHeight), static_cast<QWidget*>(fit), static_cast<QWidget*>(scale), static_cast<QWidget*>(offsetX), static_cast<QWidget*>(offsetY), static_cast<QWidget*>(center), static_cast<QWidget*>(plotStylePath), static_cast<QWidget*>(browsePlotStyle)}) widget->setEnabled(writable);
   auto updateCustom = [paper, customWidth, customHeight, writable] {
     const bool custom = paper->currentData().toInt() < 0;
     customWidth->setEnabled(custom && writable);
@@ -1543,6 +1557,7 @@ void EditorWindow::ShowPageSetupEditor(int targetIndex) {
   else { draft.portraitWidthIn = static_cast<float>(customWidth->value()); draft.portraitHeightIn = static_cast<float>(customHeight->value()); }
   draft.landscape = orientation->currentIndex() == 1; draft.fitToPaper = fit->isChecked(); draft.scaleModelPerPaperIn = static_cast<float>(scale->value());
   draft.offsetXIn = static_cast<float>(offsetX->value()); draft.offsetYIn = static_cast<float>(offsetY->value()); draft.centerPlot = center->isChecked();
+  draft.plotStyleTablePath = plotStylePath->text().trimmed().toUtf8().toStdString();
   if (saved) m_State.savedPageSetups[static_cast<size_t>(targetIndex)] = draft;
   else {
     PushUndoSnapshot(m_State, "Modify page setup");
@@ -1572,7 +1587,12 @@ void EditorWindow::ShowViewportsManager() {
   }
   QDialog dialog(this); dialog.setObjectName("viewportsManager"); dialog.setWindowTitle("Viewports — " + QString::fromUtf8(m_State.paperLayouts[static_cast<size_t>(layoutIndex)].name.c_str())); dialog.resize(450, 350);
   auto* outer = new QVBoxLayout(&dialog);
-  auto* list = new QListWidget(&dialog); list->setObjectName("viewportsList"); outer->addWidget(list, 1);
+  auto* list = new QListWidget(&dialog); list->setObjectName("viewportsList");
+  list->setSelectionMode(QAbstractItemView::ExtendedSelection); outer->addWidget(list, 1);
+  auto* controlRow = new QHBoxLayout(); outer->addLayout(controlRow);
+  auto* viewportOn = new QCheckBox("On", &dialog); viewportOn->setObjectName("viewportOn"); controlRow->addWidget(viewportOn);
+  auto* viewportLock = new QCheckBox("Display locked", &dialog); viewportLock->setObjectName("viewportDisplayLock"); controlRow->addWidget(viewportLock);
+  auto* viewportHidePlot = new QCheckBox("Hide in plots", &dialog); viewportHidePlot->setObjectName("viewportHidePlot"); controlRow->addWidget(viewportHidePlot);
   auto* annotationScaleRow = new QHBoxLayout(); outer->addLayout(annotationScaleRow);
   annotationScaleRow->addWidget(new QLabel("Annotative scale:", &dialog));
   auto* annotationScale = new QComboBox(&dialog); annotationScale->setObjectName("viewportAnnotationScale");
@@ -1583,6 +1603,16 @@ void EditorWindow::ShowViewportsManager() {
     annotationScale->setEnabled(false);
   }
   annotationScaleRow->addWidget(annotationScale, 1);
+  auto* drawingScaleRow = new QHBoxLayout(); outer->addLayout(drawingScaleRow);
+  drawingScaleRow->addWidget(new QLabel("Viewport drawing scale:", &dialog));
+  auto* drawingScale = new QComboBox(&dialog); drawingScale->setObjectName("viewportDrawingScale");
+  for (const CadAnnotationScale& scale : m_State.annotationScales)
+    drawingScale->addItem(QString::fromUtf8(scale.name.c_str()), QString::fromUtf8(scale.name.c_str()));
+  if (drawingScale->count() == 0) {
+    drawingScale->addItem("No drawing scales");
+    drawingScale->setEnabled(false);
+  }
+  drawingScaleRow->addWidget(drawingScale, 1);
   auto* row = new QHBoxLayout(); outer->addLayout(row);
   auto* add = new QPushButton("Add viewport", &dialog); add->setObjectName("viewportAdd");
   auto* scale = new QPushButton("Set scale…", &dialog); scale->setObjectName("viewportScale");
@@ -1599,8 +1629,24 @@ void EditorWindow::ShowViewportsManager() {
           .arg(vp.paperWIn, 0, 'f', 2).arg(vp.paperHIn, 0, 'f', 2));
     }
     if (list->count() > 0) list->setCurrentRow(std::clamp(m_State.selectedViewportIndex, 0, list->count() - 1));
+    if (list->selectedItems().empty() && list->currentItem()) list->currentItem()->setSelected(true);
+    {
+      std::vector<int> selected;
+      for (QListWidgetItem* item : list->selectedItems()) selected.push_back(list->row(item));
+      std::sort(selected.begin(), selected.end());
+      m_State.selectedViewports = selected;
+      m_State.selectedViewportIndex = selected.empty() ? -1 : selected.back();
+      m_State.selectedViewportLayout = selected.empty() ? -1 : layoutIndex;
+    }
     const int selected = list->currentRow();
     const bool hasViewport = selected >= 0 && static_cast<size_t>(selected) < viewports.size();
+    const QSignalBlocker onBlock(viewportOn), lockBlock(viewportLock), hidePlotBlock(viewportHidePlot);
+    viewportOn->setChecked(hasViewport && viewports[static_cast<size_t>(selected)].on);
+    viewportLock->setChecked(hasViewport && viewports[static_cast<size_t>(selected)].locked);
+    viewportHidePlot->setChecked(hasViewport && viewports[static_cast<size_t>(selected)].hidePlot);
+    viewportOn->setEnabled(writable && hasViewport);
+    viewportLock->setEnabled(writable && hasViewport);
+    viewportHidePlot->setEnabled(writable && hasViewport);
     const std::string effectiveScale = hasViewport
         ? CadActiveAnnotationScaleName(&m_State.annotationScales, m_State.currentAnnotationScaleIndex,
                                        &viewports[static_cast<size_t>(selected)], m_State.modelUnitsPerPlottedInch)
@@ -1609,14 +1655,47 @@ void EditorWindow::ShowViewportsManager() {
     const int scaleIndex = annotationScale->findData(QString::fromUtf8(effectiveScale.c_str()));
     annotationScale->setCurrentIndex(scaleIndex);
     annotationScale->setEnabled(writable && hasViewport && scaleIndex >= 0);
-    scale->setEnabled(writable && list->currentRow() >= 0); remove->setEnabled(writable && list->currentRow() >= 0);
+    int drawingScaleIndex = -1;
+    if (hasViewport) {
+      const float actual = viewports[static_cast<size_t>(selected)].scaleModelPerPaperIn;
+      for (int i = 0; i < static_cast<int>(m_State.annotationScales.size()); ++i) {
+        const float ratio = CadAnnotationScaleModelUnitsPerPlottedInch(m_State.annotationScales[static_cast<size_t>(i)]);
+        if (std::fabs(actual - ratio) <= std::max(1.e-5f, std::fabs(ratio) * 1.e-5f)) {
+          drawingScaleIndex = i;
+          break;
+        }
+      }
+    }
+    const QSignalBlocker drawingScaleBlock(drawingScale);
+    drawingScale->setCurrentIndex(drawingScaleIndex);
+    drawingScale->setEnabled(writable && !m_State.annotationScales.empty() && !m_State.selectedViewports.empty());
+    const bool canScale = writable && hasViewport && !viewports[static_cast<size_t>(selected)].locked;
+    scale->setEnabled(canScale); remove->setEnabled(writable && list->currentRow() >= 0);
   };
   refill();
+  auto applyViewportControl = [&](bool Viewport::*field, bool value, const char* description) {
+    const int rowIndex = list->currentRow();
+    auto& viewports = m_State.paperLayouts[static_cast<size_t>(layoutIndex)].viewports;
+    if (!writable || rowIndex < 0 || static_cast<size_t>(rowIndex) >= viewports.size()) return;
+    Viewport& viewport = viewports[static_cast<size_t>(rowIndex)];
+    if (viewport.*field == value) return;
+    PushUndoSnapshot(m_State, description);
+    viewport.*field = value;
+    BumpCadGpuCache(m_State);
+    Refresh();
+    refill();
+  };
+  connect(viewportOn, &QCheckBox::toggled, &dialog,
+          [&, applyViewportControl](bool value) { applyViewportControl(&Viewport::on, value, "Viewport on/off"); });
+  connect(viewportLock, &QCheckBox::toggled, &dialog,
+          [&, applyViewportControl](bool value) { applyViewportControl(&Viewport::locked, value, "Viewport display lock"); });
+  connect(viewportHidePlot, &QCheckBox::toggled, &dialog,
+          [&, applyViewportControl](bool value) { applyViewportControl(&Viewport::hidePlot, value, "Viewport hide plot"); });
   connect(list, &QListWidget::currentRowChanged, &dialog, [&, writable](int rowIndex) {
-    if (rowIndex >= 0) SelectViewport(m_State, rowIndex, false);
-    scale->setEnabled(writable && rowIndex >= 0); remove->setEnabled(writable && rowIndex >= 0);
     const auto& viewports = m_State.paperLayouts[static_cast<size_t>(layoutIndex)].viewports;
     const bool hasViewport = rowIndex >= 0 && static_cast<size_t>(rowIndex) < viewports.size();
+    scale->setEnabled(writable && hasViewport && !viewports[static_cast<size_t>(rowIndex)].locked);
+    remove->setEnabled(writable && rowIndex >= 0);
     const std::string effectiveScale = hasViewport
         ? CadActiveAnnotationScaleName(&m_State.annotationScales, m_State.currentAnnotationScaleIndex,
                                        &viewports[static_cast<size_t>(rowIndex)], m_State.modelUnitsPerPlottedInch)
@@ -1624,6 +1703,35 @@ void EditorWindow::ShowViewportsManager() {
     const QSignalBlocker block(annotationScale);
     annotationScale->setCurrentIndex(annotationScale->findData(QString::fromUtf8(effectiveScale.c_str())));
     annotationScale->setEnabled(writable && hasViewport && annotationScale->currentIndex() >= 0);
+    const QSignalBlocker drawingScaleBlock(drawingScale);
+    int drawingScaleIndex = -1;
+    if (hasViewport) {
+      const float actual = viewports[static_cast<size_t>(rowIndex)].scaleModelPerPaperIn;
+      for (int i = 0; i < static_cast<int>(m_State.annotationScales.size()); ++i) {
+        const float ratio = CadAnnotationScaleModelUnitsPerPlottedInch(m_State.annotationScales[static_cast<size_t>(i)]);
+        if (std::fabs(actual - ratio) <= std::max(1.e-5f, std::fabs(ratio) * 1.e-5f)) { drawingScaleIndex = i; break; }
+      }
+    }
+    drawingScale->setCurrentIndex(drawingScaleIndex);
+    drawingScale->setEnabled(writable && !m_State.annotationScales.empty() && !list->selectedItems().isEmpty());
+  });
+  connect(list, &QListWidget::itemSelectionChanged, &dialog, [&, writable] {
+    std::vector<int> selected;
+    for (QListWidgetItem* item : list->selectedItems()) selected.push_back(list->row(item));
+    std::sort(selected.begin(), selected.end());
+    m_State.selectedViewports = selected;
+    m_State.selectedViewportIndex = selected.empty() ? -1 : selected.back();
+    m_State.selectedViewportLayout = selected.empty() ? -1 : layoutIndex;
+    drawingScale->setEnabled(writable && !m_State.annotationScales.empty() && !selected.empty());
+  });
+  connect(drawingScale, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&, writable](int index) {
+    if (!writable || index < 0 || list->selectedItems().isEmpty()) return;
+    const std::string name = drawingScale->itemData(index).toString().toUtf8().toStdString();
+    HandleVpMatchScaleCommand(name, m_State, m_Log);
+    BumpCadGpuCache(m_State);
+    Refresh();
+    refill();
+    for (QListWidgetItem* item : list->selectedItems()) item->setSelected(true);
   });
   connect(annotationScale, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&, writable](int index) {
     const int viewportIndex = list->currentRow();
@@ -1803,6 +1911,7 @@ void EditorWindow::EndInteractiveResize() {
 }
 
 void EditorWindow::SwitchDrawing(int index) {
+  ++m_DocumentGeneration;
   if (index < 0 || index >= static_cast<int>(m_State.drawingTabs.size()) || index == m_State.activeDrawingIdx) return;
   CancelActiveCommand(m_State, m_Log);
   RefreshProjects();
@@ -1837,6 +1946,7 @@ void EditorWindow::NewDrawing(std::uint32_t projectUid) {
 }
 
 void EditorWindow::CreateDrawingFromTemplate(std::uint32_t projectUid, const QString& templatePath) {
+  ++m_DocumentGeneration;
   RefreshProjects();
   const int previous = m_State.activeDrawingIdx;
   SaveDocumentToSnapshot(m_State, m_State.activeDrawingIdx);
@@ -1879,6 +1989,7 @@ void EditorWindow::CreateDrawingFromTemplate(std::uint32_t projectUid, const QSt
 }
 
 void EditorWindow::OpenDrawing(const QString& path) {
+  ++m_DocumentGeneration;
   const auto found = gsproj::FindProjectFor(std::filesystem::path(path.toStdWString()));
   std::uint32_t uid = 0;
   if (found.state == gsproj::FindState::Damaged) {
@@ -2427,6 +2538,7 @@ void EditorWindow::RefreshToolspace() {
 void EditorWindow::Refresh() {
   if (m_Refreshing) return;
   m_Refreshing = true;
+  const bool modelSpace = m_State.activeSpaceIndex == kModelSpaceIndex && !InFloatingModelSpace(m_State);
   if (auto* annotationScale = findChild<QComboBox*>("statusAnnotationScale")) {
     const QSignalBlocker block(annotationScale);
     annotationScale->clear();
@@ -2440,30 +2552,20 @@ void EditorWindow::Refresh() {
       annotationScale->setCurrentIndex(m_State.currentAnnotationScaleIndex);
     }
     annotationScale->setEnabled(!m_State.annotationScales.empty());
+    annotationScale->setVisible(!modelSpace);
   }
   if (auto* viewportZoom = findChild<QComboBox*>("statusViewportZoom")) {
     EnsureDefaultViewportZoomScales(m_State.viewportZoomScales);
-    const float dpi = screen() != nullptr ? static_cast<float>(screen()->logicalDotsPerInchY()) : 96.f;
-    const float heightPx = m_Viewport != nullptr ? static_cast<float>(m_Viewport->height()) : 800.f;
-    SyncCurrentViewportZoomScaleIndex(m_State, heightPx, dpi);
+    EnsureViewportZoomScaleIndexForDisplay(m_State);
     const QSignalBlocker block(viewportZoom);
     viewportZoom->clear();
     for (const CadAnnotationScale& scale : m_State.viewportZoomScales)
       viewportZoom->addItem(QString::fromUtf8(CadViewportZoomScaleStatusLabel(scale).c_str()));
     viewportZoom->addItem(tr("Add custom scale…"), QStringLiteral("__add__"));
-    if (m_State.currentViewportZoomScaleIndex >= 0) {
+    if (m_State.currentViewportZoomScaleIndex >= 0)
       viewportZoom->setCurrentIndex(m_State.currentViewportZoomScaleIndex);
-    } else {
-      // Between presets (after a wheel zoom): show the actual ratio rather than an empty box.
-      const float screenInches = std::max(heightPx / dpi, 1.e-3f);
-      const float modelUnitsPerInch = 100.f / (std::max(m_State.viewportZoom, 1.e-9f) * screenInches);
-      char buf[48];
-      std::snprintf(buf, sizeof(buf), "1:%.4g", modelUnitsPerInch);
-      viewportZoom->addItem(QString::fromLatin1(buf), QStringLiteral("__live__"));
-      viewportZoom->setCurrentIndex(viewportZoom->count() - 1);
-    }
-    const bool modelSpace = m_State.activeSpaceIndex == kModelSpaceIndex && !InFloatingModelSpace(m_State);
     viewportZoom->setEnabled(modelSpace && !m_State.viewportZoomScales.empty());
+    viewportZoom->setVisible(modelSpace);
   }
   RefreshProjects();
   SyncAlignmentLayout();  // REQ-486: the docked layout table follows undo, grips, commands and tab switches
@@ -2935,6 +3037,94 @@ void EditorWindow::ShowPdfFile(const QString& path) {
   connect(this, &QObject::destroyed, window, [window] { window->SetEditor(nullptr); window->close(); });
   window->show();
   window->Open(path);
+}
+
+// REQ-486: preview the active layout through the same vector PDF path as PLOT. The viewer owns
+// the temporary directory until it closes, so PDFium's source remains available for annotations.
+void EditorWindow::PreviewActiveLayout() {
+  const int layoutIndex = m_State.activeSpaceIndex;
+  if (InFloatingModelSpace(m_State) || layoutIndex < 0 ||
+      static_cast<size_t>(layoutIndex) >= m_State.paperLayouts.size()) {
+    QMessageBox::information(this, "Plot Preview", "Switch to a paper layout first.");
+    return;
+  }
+
+  auto temporary = std::make_unique<QTemporaryDir>(QDir::tempPath() + "/GoSurvey-PlotPreview-XXXXXX");
+  if (!temporary->isValid()) {
+    QMessageBox::warning(this, "Plot Preview", "A temporary PDF preview could not be created.");
+    return;
+  }
+
+  const QString pdfPath = temporary->filePath("preview.pdf");
+  std::vector<std::string> plotLog;
+  if (!PlotLayoutsToPdf(m_State, {layoutIndex}, pdfPath.toUtf8().constData(), plotLog)) {
+    QString message = "The active layout could not be plotted.";
+    if (!plotLog.empty()) {
+      message += "\n\n";
+      for (size_t i = 0; i < plotLog.size(); ++i) {
+        if (i) message += "\n";
+        message += QString::fromUtf8(plotLog[i].c_str());
+      }
+    }
+    QMessageBox::warning(this, "Plot Preview", message);
+    return;
+  }
+
+  auto* window = new PdfWindow(nullptr);
+  window->SetEditor(this);
+  connect(this, &QObject::destroyed, window, [window] { window->SetEditor(nullptr); window->close(); });
+  window->show();
+  window->OpenPlotPreview(pdfPath, std::move(temporary));
+}
+
+// REQ-487: display the active layout's effective settings without entering the mutable setup manager.
+void EditorWindow::ShowActiveLayoutDetails() {
+  const int layoutIndex = m_State.activeSpaceIndex;
+  if (InFloatingModelSpace(m_State) || layoutIndex < 0 ||
+      static_cast<size_t>(layoutIndex) >= m_State.paperLayouts.size())
+    return;
+
+  const PaperLayout& layout = m_State.paperLayouts[static_cast<size_t>(layoutIndex)];
+  const PageSetup setup = PageSetupFromLayout(layout, layout.pageSetupName);
+  const QString paperName = setup.presetIdx >= 0 && setup.presetIdx < kPaperSizePresetCount
+      ? QString::fromUtf8(kPaperSizePresets[setup.presetIdx].name) : QStringLiteral("Custom");
+  const QString pageSetupName = setup.name.empty()
+      ? QStringLiteral("No named Page Setup (layout settings)") : QString::fromUtf8(setup.name.c_str());
+  const QString paperSize = QStringLiteral("%1 — %2 × %3 in")
+      .arg(paperName).arg(layout.sheetWidthIn(), 0, 'f', 2).arg(layout.sheetHeightIn(), 0, 'f', 2);
+  const QString plotArea = setup.plotArea == 0 ? QStringLiteral("Layout")
+      : QStringLiteral("Unknown (%1)").arg(setup.plotArea);
+  const QString plotScale = setup.fitToPaper ? QStringLiteral("Fit to paper")
+      : QStringLiteral("1 : %1").arg(setup.scaleModelPerPaperIn, 0, 'g', 6);
+  const QString placement = QStringLiteral("Center: %1; offsets: X %2 in, Y %3 in")
+      .arg(setup.centerPlot ? QStringLiteral("Yes") : QStringLiteral("No"))
+      .arg(setup.offsetXIn, 0, 'f', 3).arg(setup.offsetYIn, 0, 'f', 3);
+  const QString plotStyle = setup.plotStyleTablePath.empty()
+      ? QStringLiteral("No plot style table") : QString::fromUtf8(setup.plotStyleTablePath.c_str());
+
+  QDialog dialog(this);
+  dialog.setObjectName("activeLayoutDetailsDialog");
+  dialog.setWindowTitle("View Details — " + QString::fromUtf8(layout.name.c_str()));
+  auto* form = new QFormLayout(&dialog);
+  auto addValue = [&](const char* objectName, const QString& title, const QString& value) {
+    auto* label = new QLabel(value, &dialog);
+    label->setObjectName(QString::fromLatin1(objectName));
+    label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    form->addRow(title, label);
+  };
+  addValue("layoutDetailsPageSetup", QStringLiteral("Page Setup"), pageSetupName);
+  addValue("layoutDetailsDevice", QStringLiteral("Output device"), QStringLiteral("GoSurvey PDF (vector)"));
+  addValue("layoutDetailsPaper", QStringLiteral("Paper size"), paperSize);
+  addValue("layoutDetailsOrientation", QStringLiteral("Orientation"),
+           setup.landscape ? QStringLiteral("Landscape") : QStringLiteral("Portrait"));
+  addValue("layoutDetailsPlotArea", QStringLiteral("Plot area"), plotArea);
+  addValue("layoutDetailsScale", QStringLiteral("Scale"), plotScale);
+  addValue("layoutDetailsPlacement", QStringLiteral("Placement"), placement);
+  addValue("layoutDetailsPlotStyle", QStringLiteral("Plot style table"), plotStyle);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+  form->addRow(buttons);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::accept);
+  dialog.exec();
 }
 
 bool EditorWindow::CommitPdfCoordinate(const pdfview::CoordCandidate& c) {

@@ -35,8 +35,9 @@ void BuildBreakRemovalPreview(const AppCommandState& cmd, float cursorWorldX, fl
                               float orthoHalfHeightWorld, std::vector<float>* outSpan,
                               std::vector<float>* outMarkers);
 
-/// Selection highlight geometry for the viewport (slightly raised Z for depth bias).
-void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<float>* outHighlightLines,
+/// Selection highlight geometry for the viewport (world XYZ segments, stride 6).
+/// Line endpoints stay in double so a trim at survey coordinates matches committed linework (REQ-370).
+void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<double>* outHighlightLines,
                              std::vector<float>* outHighlightCircles);
 
 /// The SUB-OBJECT selection's drawable form (REQ-318 item 11, issue #148).
