@@ -332,20 +332,45 @@ struct Candidate {
   bool clampedEnd = false;
 };
 
-/// Moves `s` along the spiral to the foot of the perpendicular from (px, py), local to the spiral's start: each step
-/// adds the point's along-track distance at the current foot. Converges from a grid estimate within a few steps.
-double RefineSpiralFoot(const Entity& e, double px, double py, double s) {
+struct SpiralFootResidual {
+  double along = 0.0;
+  double offset = 0.0;
+  double derivative = 0.0;
+};
+
+/// The stationarity residual for squared distance to a spiral and its curvature-aware derivative.
+SpiralFootResidual EvaluateSpiralFoot(const Entity& e, double px, double py, double s) {
+  const Point2 f = LocalDisplacement(e, s);
+  const double az = e.startAzimuth + SpiralHeadingDelta(e, s);
+  const double fx = px - f.x;
+  const double fy = py - f.y;
+  const double offset = fx * std::cos(az) - fy * std::sin(az);
+  return {fx * std::sin(az) + fy * std::cos(az), offset, -1.0 + SpiralKappaAt(e, s) * offset};
+}
+
+/// Refines a grid minimum only when the interval brackets a perpendicular foot. The bracketed Newton step uses the
+/// derivative -1 + curvature * offset; bisection keeps it convergent near high offsets and inflection cases.
+double RefineSpiralFoot(const Entity& e, double px, double py, double lo, double hi, double s) {
   assert(e.kind == EntityKind::Spiral);
   assert(e.length > 0.0);
-  constexpr int kMaxSteps = 12;
+  assert(lo <= s && s <= hi);
+  if (!(EvaluateSpiralFoot(e, px, py, lo).along >= 0.0 && EvaluateSpiralFoot(e, px, py, hi).along <= 0.0)) return s;
+
+  constexpr int kMaxSteps = 32;
+  const double tolerance = 1e-12 * std::max(1.0, e.length);
   for (int k = 0; k < kMaxSteps; ++k) {
-    const Point2 f = LocalDisplacement(e, s);
-    const double az = e.startAzimuth + SpiralHeadingDelta(e, s);
-    const double along = (px - f.x) * std::sin(az) + (py - f.y) * std::cos(az);
-    const double next = std::clamp(s + along, 0.0, e.length);
-    const bool settled = std::fabs(next - s) <= 1e-14 * std::max(1.0, e.length);
+    const SpiralFootResidual residual = EvaluateSpiralFoot(e, px, py, s);
+    if (std::fabs(residual.along) <= tolerance || hi - lo <= tolerance) break;
+
+    if (residual.along > 0.0)
+      lo = s;
+    else
+      hi = s;
+
+    double next = s - residual.along / residual.derivative;
+    if (!std::isfinite(next) || !(next > lo && next < hi)) next = lo + (hi - lo) * 0.5;
+    if (next == s) break;
     s = next;
-    if (settled) break;
   }
   return s;
 }
@@ -455,7 +480,7 @@ StationOffset Alignment::GetStationOffset(double x, double y) const {
         }
       }
       // The grid finds the right stretch to ~L/1000; Newton steps then find the foot of the perpendicular exactly.
-      const double sFoot = RefineSpiralFoot(e, px, py, sBest);
+      const double sFoot = RefineSpiralFoot(e, px, py, sLo, sHi, sBest);
       const Point2 fFoot = LocalDisplacement(e, sFoot);
       const double dFoot = std::hypot(px - fFoot.x, py - fFoot.y);
       if (dFoot <= dBest) {
@@ -463,8 +488,9 @@ StationOffset Alignment::GetStationOffset(double x, double y) const {
         sBest = sFoot;
       }
       constexpr double kEnd = 1e-9;
-      if (sBest <= kEnd) c.clampedStart = true;
-      if (sBest >= e.length - kEnd) c.clampedEnd = true;
+      const SpiralFootResidual endpoint = EvaluateSpiralFoot(e, px, py, sBest);
+      if (sBest <= kEnd) c.clampedStart = endpoint.along < -kEnd;
+      if (sBest >= e.length - kEnd) c.clampedEnd = endpoint.along > kEnd;
       c.s = sBest;
       c.dist = dBest;
       if (!(c.clampedStart || c.clampedEnd)) {

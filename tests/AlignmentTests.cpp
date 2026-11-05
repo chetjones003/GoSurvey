@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 // REQ-503: every expected value below is computed by hand from closed-form geometry, not by
 // running the code under test a second way, because an alignment that is wrong by a sign or a
@@ -131,6 +132,60 @@ TEST_CASE("Points beyond the ends clamp and are flagged", "[req484][alignment]")
   CHECK(before.outOfRange);
   CHECK(before.internalStation == Approx(0.0));
   CHECK(before.offset == Approx(5.0).margin(kEps));  // 3-4-5 to the start point; right side is positive
+}
+
+TEST_CASE("Spiral station-offset projection converges at large offsets", "[req484][alignment][regression]") {
+  Alignment a;
+  Entity spiral;
+  spiral.kind = EntityKind::Spiral;
+  spiral.start = {0.0, 0.0};
+  spiral.startAzimuth = 0.0;
+  spiral.length = 100.0;
+  spiral.startRadius = 0.0;
+  spiral.radius = 100.0;
+  spiral.right = true;
+  REQUIRE(a.AppendRaw(spiral));
+
+  constexpr double station = 50.03;
+  constexpr double offset = -1000.0;
+  const Point2 point = a.GetPointFromStationOffset(station, offset);
+  const alignment::StationOffset projected = a.GetStationOffset(point.x, point.y);
+  CHECK(projected.internalStation == Approx(station).margin(kEps));
+  CHECK(projected.offset == Approx(offset).margin(kEps));
+  CHECK_FALSE(projected.outOfRange);
+}
+
+TEST_CASE("Spiral endpoint perpendiculars are in range but tangent extensions are not",
+          "[req484][alignment][regression]") {
+  Alignment a;
+  Entity spiral;
+  spiral.kind = EntityKind::Spiral;
+  spiral.start = {0.0, 0.0};
+  spiral.startAzimuth = 0.0;
+  spiral.length = 100.0;
+  spiral.startRadius = 0.0;
+  spiral.radius = 100.0;
+  spiral.right = true;
+  REQUIRE(a.AppendRaw(spiral));
+
+  for (const auto [station, offset] : {std::pair{0.0, 0.0}, std::pair{0.0, 25.0}, std::pair{0.0, -25.0},
+                                       std::pair{100.0, 0.0}, std::pair{100.0, 25.0}, std::pair{100.0, -25.0}}) {
+    const Point2 point = a.GetPointFromStationOffset(station, offset);
+    const alignment::StationOffset projected = a.GetStationOffset(point.x, point.y);
+    CHECK(projected.internalStation == Approx(station).margin(kEps));
+    CHECK(projected.offset == Approx(offset).margin(kEps));
+    CHECK_FALSE(projected.outOfRange);
+  }
+
+  const alignment::StationOffset before = a.GetStationOffset(0.0, -3.0);
+  CHECK(before.internalStation == Approx(a.StartStation()).margin(kEps));
+  CHECK(before.outOfRange);
+  const Point2 end = a.EndPoint();
+  const double endAzimuth = a.EndAzimuth();
+  const alignment::StationOffset after =
+      a.GetStationOffset(end.x + 3.0 * std::sin(endAzimuth), end.y + 3.0 * std::cos(endAzimuth));
+  CHECK(after.internalStation == Approx(a.EndStation()).margin(kEps));
+  CHECK(after.outOfRange);
 }
 
 TEST_CASE("A point radially outside a curve measures to the nearest arc point", "[req484][alignment]") {
