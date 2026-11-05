@@ -63,3 +63,10 @@
 - `git diff --check`: PASS after the merge and again before push.
 - Issues #780, #781, #1005, #1007, #1009, #1015, #1016, and #1017 are closed. #810 remains open for its remaining Output controls. #1016 is closed with the AutoCAD UI and Civil 3D visual verification limitations disclosed in the PR.
 - PR: https://github.com/chetjones003/GoSurvey/pull/1159 (open against `beta`). The final head includes the SPEC ID collision corrections; see GitHub for its current SHA.
+
+## Follow-up review findings — 2026-11-05
+
+- Fixed normalized blue-channel packing for model viewport RGB, legacy no-table RGB, and paper filled-region RGB in `PdfPlot.cpp`. Added PDFium assertions for blue model strokes and filled regions.
+- PDF plotting now tessellates any stored closed clip boundary with at least two vertices, then uses the tessellated polygon only when it has nonzero area. Added measured clipping coverage for a two-vertex, two-semicircle circle outline (REQ-490).
+- The reviewer proposed clipping PDF text glyphs to polygonal viewports. This conflicts with the user-approved REQ-490 behavior: keep PDF text searchable, omit labels whose insertion anchor is outside, and allow glyphs from inside anchors to extend beyond the edge. Preserve the specified behavior; no text clipping change is made.
+- Verification: `.\build.bat` PASS; PDF-tagged GoSurvey tests PASS (134 assertions / 22 cases) on the final source; full `ctest --preset ninja-release --output-on-failure` PASS (194/194) before the final non-finite-coordinate guard, which was then rebuilt and covered by the focused PDF suite; `git diff --check` PASS.

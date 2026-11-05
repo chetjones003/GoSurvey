@@ -566,7 +566,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           ResolveStoredColorForViewport(col, 0.f, 0.f, 0.f, 0.f, rgba);
         }
         uint32_t rgb = (static_cast<uint32_t>(rgba[0] * 255.f) << 16) | (static_cast<uint32_t>(rgba[1] * 255.f) << 8) |
-                       static_cast<uint32_t>(rgba[2]);
+                       static_cast<uint32_t>(rgba[2] * 255.f);
         if (pagePlotStyles != nullptr && applyTable) {
           const CadLayerRow* lr = FindDrawingLayerRowCi(st, layer);
           const std::string styleName = (entityPlotStyle.empty() || entityPlotStyle == "ByLayer")
@@ -578,7 +578,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         } else if (pagePlotStyles == nullptr) {
           AdaptWhiteBlackToBackground(&rgba[0], &rgba[1], &rgba[2], true);  // REQ-048 legacy no-table behavior
           rgb = (static_cast<uint32_t>(rgba[0] * 255.f) << 16) | (static_cast<uint32_t>(rgba[1] * 255.f) << 8) |
-                static_cast<uint32_t>(rgba[2]);
+                static_cast<uint32_t>(rgba[2] * 255.f);
         }
         return rgb;
       };
@@ -593,10 +593,16 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       auto m2p = [&](double wx, double wy, float* px, float* py) { m2pz(wx, wy, 0.0, px, py); };
       // Projects a model-space chain through this viewport's camera and strokes it, clipped to the viewport.
       PlotRect vpRect{vx0, vy0, vx1, vy1};
-      if (vp.clipBoundary.size() >= 3) {
+      if (vp.clipBoundary.size() >= 2) {
+        bool boundaryFinite = true;
         for (size_t i = 0; i < vp.clipBoundary.size(); ++i) {
           const auto& a = vp.clipBoundary[i];
           const auto& b = vp.clipBoundary[(i + 1) % vp.clipBoundary.size()];
+          if (!std::isfinite(a.xIn) || !std::isfinite(a.yIn) || !std::isfinite(a.bulge) ||
+              !std::isfinite(b.xIn) || !std::isfinite(b.yIn)) {
+            boundaryFinite = false;
+            break;
+          }
           ForEachBulgeChord(a.xIn, a.yIn, b.xIn, b.yIn, a.bulge, 16,
                             [&](double x0, double y0, double x1, double y1) {
                               if (vpRect.polygon.empty()) vpRect.polygon.push_back({static_cast<float>(x0), static_cast<float>(y0)});
@@ -605,6 +611,20 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         }
         if (vpRect.polygon.size() > 1 && vpRect.polygon.front() == vpRect.polygon.back())
           vpRect.polygon.pop_back();
+        double twiceArea = 0.0;
+        if (boundaryFinite) {
+          for (size_t i = 0; i < vpRect.polygon.size(); ++i) {
+            const auto& a = vpRect.polygon[i];
+            const auto& b = vpRect.polygon[(i + 1) % vpRect.polygon.size()];
+            if (!std::isfinite(a[0]) || !std::isfinite(a[1])) {
+              boundaryFinite = false;
+              break;
+            }
+            twiceArea += static_cast<double>(a[0]) * b[1] - static_cast<double>(a[1]) * b[0];
+          }
+        }
+        if (!boundaryFinite || vpRect.polygon.size() < 3 || std::fabs(twiceArea) < 1.e-8)
+          vpRect.polygon.clear();
       }
       curDashUnit = plotstroke::DashUnitIn(vp.safeScale());
       auto emitModelChain = [&](const std::vector<std::array<double, 3>>& w, bool closed) {
@@ -1025,7 +1045,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           }
           ResolveStoredColorForViewport(col, 0.f, 0.f, 0.f, 0.f, rgba);
           uint32_t rgb = (static_cast<uint32_t>(rgba[0] * 255.f) << 16) | (static_cast<uint32_t>(rgba[1] * 255.f) << 8) |
-                         static_cast<uint32_t>(rgba[2]);
+                         static_cast<uint32_t>(rgba[2] * 255.f);
           if (pagePlotStyles != nullptr) {
             const CadLayerRow* lr = FindDrawingLayerRowCi(st, fa.layer);
             const std::string styleName = (fa.plotStyleName.empty() || fa.plotStyleName == "ByLayer")

@@ -20,6 +20,7 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <vector>
 #include <fstream>
@@ -466,6 +467,93 @@ TEST_CASE("Closed-polyline viewport boundary clips plotted model strokes as vect
       clippedLineFound = true;
   }
   CHECK(clippedLineFound);
+}
+
+TEST_CASE("Two-vertex bulge viewport clips plotted model strokes to its curved boundary (REQ-490)",
+          "[plot][req490]") {
+  AppCommandState st;
+  PaperLayout layout;
+  layout.name = "Sheet";
+  layout.landscape = true;
+  layout.portraitWidthIn = 8.5f;
+  layout.portraitHeightIn = 11.f;
+  Viewport viewport;
+  viewport.paperXIn = 2.f;
+  viewport.paperYIn = 2.f;
+  viewport.paperWIn = 4.f;
+  viewport.paperHIn = 4.f;
+  viewport.scaleModelPerPaperIn = 1.f;
+  // Two semicircles form a circle centred at (4,4), with radius 2 inches.
+  viewport.clipBoundary = {{2.f, 4.f, 1.f}, {6.f, 4.f, 1.f}};
+  layout.viewports.push_back(viewport);
+  st.paperLayouts.push_back(layout);
+  st.userLinesFlat = {-7.f, -1.5f, 0.f, 7.f, -1.5f, 0.f};
+  st.userLineAttrs.resize(1);
+
+  const auto points = PlotPathPoints(st, "req490-two-bulge-clip");
+  float minX = std::numeric_limits<float>::infinity();
+  float maxX = -minX;
+  for (const auto& point : points) {
+    if (std::fabs(point[1] / kPt - 2.5f) > 0.03f) continue;
+    minX = std::min(minX, point[0] / kPt);
+    maxX = std::max(maxX, point[0] / kPt);
+  }
+  REQUIRE(std::isfinite(minX));
+  CHECK_THAT(minX, WithinAbs(4.f - std::sqrt(4.f - 2.25f), 0.03));
+  CHECK_THAT(maxX, WithinAbs(4.f + std::sqrt(4.f - 2.25f), 0.03));
+}
+
+TEST_CASE("PDF viewport and filled-region RGB packing preserves the blue channel", "[plot][req485]") {
+  AppCommandState st;
+  PaperLayout layout;
+  layout.name = "Sheet";
+  layout.landscape = true;
+  layout.portraitWidthIn = 8.5f;
+  layout.portraitHeightIn = 11.f;
+  Viewport viewport;
+  viewport.paperXIn = 1.f;
+  viewport.paperYIn = 1.f;
+  viewport.paperWIn = 8.f;
+  viewport.paperHIn = 6.f;
+  viewport.scaleModelPerPaperIn = 1.f;
+  layout.viewports.push_back(viewport);
+  CadFilledRegion fill;
+  fill.vertsXyz = {1.0, 1.0, 0.0, 3.0, 1.0, 0.0, 2.0, 3.0, 0.0};
+  fill.loopStart = {0};
+  layout.paperFilledRegions.push_back(fill);
+  EntityAttributes fillAttrs;
+  fillAttrs.color = "#0000FF";
+  layout.paperFilledRegionAttrs.push_back(fillAttrs);
+  st.paperLayouts.push_back(layout);
+  st.userLinesFlat = {-1.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  st.userLineAttrs.resize(1);
+  st.userLineAttrs[0].color = "#0000FF";
+
+  const auto path = std::filesystem::temp_directory_path() / "gosurvey-req485-blue-channel.pdf";
+  std::vector<std::string> log;
+  FPDF_InitLibrary();
+  REQUIRE(PlotLayoutsToPdf(st, {0}, path.string().c_str(), log));
+  FPDF_DOCUMENT document = FPDF_LoadDocument(path.string().c_str(), nullptr);
+  REQUIRE(document != nullptr);
+  FPDF_PAGE page = FPDF_LoadPage(document, 0);
+  REQUIRE(page != nullptr);
+  bool blueStrokeFound = false;
+  bool blueFillFound = false;
+  for (int i = 0; i < FPDFPage_CountObjects(page); ++i) {
+    FPDF_PAGEOBJECT object = FPDFPage_GetObject(page, i);
+    if (FPDFPageObj_GetType(object) != FPDF_PAGEOBJ_PATH) continue;
+    unsigned int r = 0, g = 0, b = 0, a = 0;
+    if (FPDFPageObj_GetStrokeColor(object, &r, &g, &b, &a))
+      blueStrokeFound = blueStrokeFound || (r == 0 && g == 0 && b == 255);
+    if (FPDFPageObj_GetFillColor(object, &r, &g, &b, &a))
+      blueFillFound = blueFillFound || (r == 0 && g == 0 && b == 255);
+  }
+  CHECK(blueStrokeFound);
+  CHECK(blueFillFound);
+  FPDF_ClosePage(page);
+  FPDF_CloseDocument(document);
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
 }
 
 TEST_CASE("Off and hide-plot viewports emit no model content to PDF (REQ-482)", "[plot][req482]") {
