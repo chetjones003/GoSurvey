@@ -1130,6 +1130,17 @@ json BuildRoot(const AppCommandState& st) {
 
   json doc;
   doc["worldDocumentOriginX"] = st.worldDocumentOriginX;
+  {  // REQ-483.4: written only when it differs from the default, so legacy drawings save unchanged
+    const alignment::StationFormat& sf = st.alignmentStationFormat;
+    const alignment::StationFormat def{};
+    if (sf.delimiter != def.delimiter || sf.digitsRight != def.digitsRight || sf.decimals != def.decimals ||
+        sf.prefix != def.prefix || sf.suffix != def.suffix)
+      doc["stationFormat"] = {{"delimiter", sf.delimiter == '\0' ? std::string() : std::string(1, sf.delimiter)},
+                              {"digits", sf.digitsRight},
+                              {"decimals", sf.decimals},
+                              {"prefix", sf.prefix},
+                              {"suffix", sf.suffix}};
+  }
   doc["worldDocumentOriginY"] = st.worldDocumentOriginY;
   // The section plane (REQ-343 amended, GitHub issue #479 acceptance 8). Additive: a reader that
   // does not know the key ignores it, and a file saved before this loads with the clip off — the
@@ -2277,6 +2288,12 @@ json BuildRoot(const AppCommandState& st) {
       if (a.labelSet != AlignmentLabelSets::kStandardName) o["labelSet"] = a.labelSet;
       o["type"] = static_cast<int>(a.type);
       o["startingStation"] = a.startingStation;
+      if (a.hasReference) o["referenceDistance"] = a.referenceDistance;  // REQ-483.1
+      if (!a.metadata.empty()) {  // REQ-480.1
+        json meta = json::array();
+        for (const auto& [key, value] : a.metadata) meta.push_back(json::array({key, value}));
+        o["metadata"] = std::move(meta);
+      }
       if (a.continuityRequirement != alignment::ContinuityRequirement::C1)
         o["continuityRequirement"] = static_cast<int>(a.continuityRequirement);
       if (a.parentId != 0) {  // REQ-488: a linked offset alignment
@@ -2973,6 +2990,16 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
 
 void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std::string>& log) {
   st.worldDocumentOriginX = doc.value("worldDocumentOriginX", 0.0);
+  st.alignmentStationFormat = alignment::StationFormat{};
+  if (doc.contains("stationFormat") && doc["stationFormat"].is_object()) {  // REQ-483.4
+    const json& sf = doc["stationFormat"];
+    const std::string delim = sf.value("delimiter", std::string("+"));
+    st.alignmentStationFormat.delimiter = delim.empty() ? '\0' : delim[0];
+    st.alignmentStationFormat.digitsRight = std::clamp(sf.value("digits", 2), 1, 6);
+    st.alignmentStationFormat.decimals = std::clamp(sf.value("decimals", 2), 0, 6);
+    st.alignmentStationFormat.prefix = sf.value("prefix", std::string());
+    st.alignmentStationFormat.suffix = sf.value("suffix", std::string());
+  }
   st.worldDocumentOriginY = doc.value("worldDocumentOriginY", 0.0);
   // A legacy file has no counter; 1 is correct there because every entity in it also has no id, so
   // the post-load EnsureEntityIds numbers the whole drawing from 1. EnsureEntityIds independently
@@ -4234,6 +4261,15 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       }
       if (el.contains("startingStation") && el["startingStation"].is_number())
         a.startingStation = el["startingStation"].get<double>();
+      if (el.contains("referenceDistance") && el["referenceDistance"].is_number()) {
+        a.hasReference = true;
+        a.referenceDistance = el["referenceDistance"].get<double>();
+      }
+      if (el.contains("metadata") && el["metadata"].is_array()) {
+        for (const auto& kv : el["metadata"])
+          if (kv.is_array() && kv.size() == 2 && kv[0].is_string() && kv[1].is_string())
+            a.metadata.emplace_back(kv[0].get<std::string>(), kv[1].get<std::string>());
+      }
       if (el.contains("continuityRequirement") && el["continuityRequirement"].is_number_integer()) {
         const int cr = el["continuityRequirement"].get<int>();
         if (cr >= 0 && cr <= 2) a.continuityRequirement = static_cast<alignment::ContinuityRequirement>(cr);

@@ -86,6 +86,7 @@ AppCommandState RichRoad(bool spirals) {
   Submit(st, "ALIGNMENTSTATION Main Road, EQ, ADD, 900, 1000, INC", log);
   Submit(st, "ALIGNMENTLABEL Main Road, STATIONLABEL, RELATIVE, 7+00, 10", log);
   Submit(st, "OFFSETALIGNMENT Main Road, 12", log);
+  Submit(st, "ALIGNMENTMETA Main Road, SET, Project, North pit haul", log);
   return st;
 }
 
@@ -101,6 +102,7 @@ void RequireSameAlignment(const alignment::Alignment& a, const alignment::Alignm
   CHECK(b.startingStation == a.startingStation);
   CHECK(b.parentId == a.parentId);
   CHECK(b.offsetDistance == a.offsetDistance);
+  CHECK(b.metadata == a.metadata);  // REQ-480 AC2
   REQUIRE(b.Entities().size() == a.Entities().size());
   for (size_t i = 0; i < a.Entities().size(); ++i) {
     const alignment::Entity& x = a.Entities()[i];

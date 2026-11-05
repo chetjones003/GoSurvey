@@ -195,8 +195,8 @@ void AlignmentLayoutPanel::Populate() {
   summary_->setText(QString("%1   |   %2 to %3   |   length %4%5")
                         .arg(a->parentId != 0 ? QString("Offset (linked: edit the parent)")
                                               : QString(type < kTypeNames.size() ? kTypeNames[type] : ""))
-                        .arg(Q(alignment::FormatStation(a->StartStation())))
-                        .arg(Q(alignment::FormatStation(a->EndStationWithEquations())))
+                        .arg(Q(alignment::FormatStation(a->StartStation(), state_.alignmentStationFormat)))
+                        .arg(Q(alignment::FormatStation(a->EndStationWithEquations(), state_.alignmentStationFormat)))
                         .arg(Q(FormatLinear(a->Length(), state_.displayLinearPrecision)))
                         .arg(a->equations.empty() ? QString() : QString("   |   %1 station equation(s)").arg(a->equations.size())));
   table_->setRowCount(static_cast<int>(a->Entities().size()));
@@ -234,8 +234,8 @@ void AlignmentLayoutPanel::PopulateRow(const alignment::Alignment& a, int row, c
   if (spiral) (void)alignment::SpiralDataFor(row, a, &sd);
   set(ColNo, QString::number(row + 1), false);
   set(ColType, arc ? "Curve" : spiral ? "Spiral" : "Tangent", false);
-  set(ColStart, Q(alignment::FormatStation(a.DisplayedStation(a.EntityStartStation(row), true))), false);
-  set(ColEnd, Q(alignment::FormatStation(a.DisplayedStation(a.EntityEndStation(row), false))), false);
+  set(ColStart, Q(alignment::FormatStation(a.DisplayedStation(a.EntityStartStation(row), true), state_.alignmentStationFormat)), false);
+  set(ColEnd, Q(alignment::FormatStation(a.DisplayedStation(a.EntityEndStation(row), false), state_.alignmentStationFormat)), false);
   set(ColLength, lin(e.length), editable(arc || spiral ? alignment::EditParam::CurveLength : alignment::EditParam::LineLength));
   set(ColRadius, arc || spiral ? lin(e.radius) : Dash(), editable(alignment::EditParam::CurveRadius));
   set(ColStartRadius, spiral ? lin(e.startRadius) : Dash(), editable(alignment::EditParam::SpiralStartRadius));

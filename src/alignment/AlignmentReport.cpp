@@ -37,8 +37,8 @@ std::string Brg(const AlignmentReportFormat& fmt, double azimuthRad) {
   return FormatBearing(azimuthRad / kDegToRad, fmt.angles);
 }
 
-std::string Sta(const Alignment& a, double internalStation) {
-  return FormatStation(a.DisplayedStation(internalStation, true));
+std::string Sta(const Alignment& a, double internalStation, const StationFormat& fmt) {
+  return FormatStation(a.DisplayedStation(internalStation, true), fmt);
 }
 
 std::string KindLabel(EntityKind kind) {
@@ -165,8 +165,8 @@ void BuildAlignmentReportLines(const Alignment& a, const AlignmentReportFormat& 
   lines->push_back("");
   lines->push_back("Type: " + std::string(AlignmentTypeLabel(a.type)));
   if (!a.description.empty()) lines->push_back("Description: " + a.description);
-  lines->push_back("Start Station: " + Sta(a, a.StartStation()));
-  lines->push_back("End Station:   " + FormatStation(a.EndStationWithEquations()));
+  lines->push_back("Start Station: " + Sta(a, a.StartStation(), format.station));
+  lines->push_back("End Station:   " + FormatStation(a.EndStationWithEquations(), format.station));
   lines->push_back("Length:        " + Lin(format.linearPrecision, a.Length()));
   if (!a.Empty()) {
     lines->push_back("Start bearing: " + Brg(format, a.StartAzimuth()));
@@ -182,7 +182,7 @@ void BuildAlignmentReportLines(const Alignment& a, const AlignmentReportFormat& 
   } else {
     for (const StationEquation& eq : a.equations) {
       lines->push_back("  At raw " + FormatLinear(eq.rawBack, format.linearPrecision) + " -> ahead " +
-                       FormatStation(eq.ahead) + (eq.increasing ? " (increasing)" : " (decreasing)"));
+                       FormatStation(eq.ahead, format.station) + (eq.increasing ? " (increasing)" : " (decreasing)"));
     }
   }
   lines->push_back("");
@@ -231,8 +231,8 @@ SheetGrid::Grid BuildAlignmentReportCsv(const Alignment& a, const AlignmentRepor
     PushCsvText(&row, AlignmentTypeLabel(a.type));
     PushCsvNumber(&row, static_cast<double>(i + 1));
     PushCsvText(&row, KindLabel(e.kind));
-    PushCsvText(&row, Sta(a, a.EntityStartStation(ii)));
-    PushCsvText(&row, Sta(a, a.EntityEndStation(ii)));
+    PushCsvText(&row, Sta(a, a.EntityStartStation(ii), format.station));
+    PushCsvText(&row, Sta(a, a.EntityEndStation(ii), format.station));
     PushCsvText(&row, Brg(format, e.startAzimuth));
     if (e.kind == EntityKind::Line) {
       PushCsvNumber(&row, Rounded(e.length, lp));

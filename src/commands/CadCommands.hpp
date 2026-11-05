@@ -2567,6 +2567,8 @@ struct AppCommandState {
   /// at a point prompt also resolves directly. While enabled, uses \ref objectSnapStationDisplayed when valid.
   bool objectSnapStation = false;
   bool objectSnapNode = true;  ///< REQ-490.2: drawing points and alignment PIs.
+  /// REQ-483.4: how this drawing writes and reads alignment stations (STATIONFORMAT).
+  alignment::StationFormat alignmentStationFormat;
   bool objectSnapStationDisplayedValid = false;
   double objectSnapStationDisplayed = 0.0;
   /// Set when a `STATION …` point entry fails; cleared after the active command logs it (REQ-490).
@@ -8148,6 +8150,10 @@ const char* AlignmentCommandPrompt(const AppCommandState& st);
 std::string NextAlignmentName(const AppCommandState& st);
 /// `base`, or "base (2)", "base (3)"... - the first not used; names are unique ignoring case (REQ-480, REQ-487 AC4).
 std::string UniqueAlignmentName(const AppCommandState& st, const std::string& base);
+/// STATIONFORMAT [DELIMITER=][, DIGITS=][, DECIMALS=][, PREFIX=][, SUFFIX=] | DEFAULT - REQ-483.4.
+void RunStationFormat(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// ALIGNMENTMETA <alignment>, SET, <name>, <value> | REMOVE, <name> | LIST - REQ-480.1 metadata.
+void RunAlignmentMeta(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// At the Reverse prompt of CREATEALIGNMENTFROMOBJECTS, the alignment the picks would make (for the direction arrows).
 /// False at other times or when the picks cannot make one.
 bool AlignmentFromObjectsPreview(const AppCommandState& st, alignment::Alignment* out);

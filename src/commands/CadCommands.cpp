@@ -7216,6 +7216,8 @@ const CmdEntry kRegistry[] = {
     {"createalignmentfromobjects", "createalignmententities", "Alignment from lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS (pick them) | <name>[, START=][, FILLET=][, REVERSE][, ERASE]"},
     {"alignmentlayout", "", "Lay out an alignment by PIs: ALIGNMENTLAYOUT <name>[, CURVES|NOCURVES][, FROM=<x> <y>][, DIRECTION=<deg>]"},
     {"alignmentcurvesettings", "", "Curve and spiral settings for the layout: ALIGNMENTCURVESETTINGS [RADIUS=][, SPIRALIN=][, SPIRALOUT=]"},
+    {"alignmentmeta", "", "Alignment metadata: ALIGNMENTMETA <alignment>, SET, <name>, <value> | REMOVE, <name> | LIST"},
+    {"stationformat", "", "How stations are written: STATIONFORMAT [DELIMITER=+|-|_|/|C|K|NONE][, DIGITS=][, DECIMALS=][, PREFIX=][, SUFFIX=] | DEFAULT"},
     {"alignmentedit", "", "Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|STARTRADIUS|DELTA|DIRECTION|CONSTRAINT, <value>"},
     {"alignmentlock", "", "Lock a parameter: ALIGNMENTLOCK <name>, <entity#>, RADIUS|LENGTH|BEARING|STATION, ON|OFF"},
     {"alignmentinsert", "", "Insert a tangent, curve or spiral: ALIGNMENTINSERT <name>, <after#>, TANGENT|CURVE|SPIRAL, ..."},
@@ -47105,7 +47107,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "getstationoffset" ||
         plotTok == "getpointfromstationoffset" || plotTok == "createalignmentfromobjects" ||
         plotTok == "createalignmententities" || plotTok == "createalignmentlayout" ||
-        plotTok == "alignmentlayout" || plotTok == "alignmentcurvesettings" ||
+        plotTok == "alignmentlayout" || plotTok == "alignmentcurvesettings" || plotTok == "stationformat" || plotTok == "alignmentmeta" ||
         plotTok == "alignmentedit" ||
         plotTok == "alignmentlock" ||
         plotTok == "alignmentinsert" ||
@@ -47157,6 +47159,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunAlignmentLayout(st, rest, log);
       else if (plotTok == "alignmentcurvesettings")
         RunAlignmentCurveSettings(st, rest, log);
+      else if (plotTok == "stationformat")  // REQ-483.4
+        RunStationFormat(st, rest, log);
+      else if (plotTok == "alignmentmeta")  // REQ-480.1
+        RunAlignmentMeta(st, rest, log);
       else if (plotTok == "createalignmententities")  // Civil 3D's command name for Create from Objects
         RunCreateAlignmentFromObjects(st, rest, log);
       else if (plotTok == "alignmentadd")

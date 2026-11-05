@@ -15,6 +15,7 @@
 
 #include "CadCommands.hpp"
 #include "CadSnap.hpp"
+#include "GsIo.hpp"
 #include "alignment/Alignment.hpp"
 #include "alignment/AlignmentDesign.hpp"
 #include "alignment/AlignmentReport.hpp"
@@ -796,4 +797,122 @@ TEST_CASE("The CSV report file re-reads to the numbers at the display precision"
   CHECK(number(grid[2][10]) == Approx(shown(cd.arcLength)).epsilon(0).margin(1e-9));
   CHECK(number(grid[2][11]) == Approx(shown(cd.tangentLength)).epsilon(0).margin(1e-9));
   CHECK(number(grid[2][12]) == Approx(shown(cd.chord)).epsilon(0).margin(1e-9));
+}
+
+// --- REQ-483: station format, reference point, orphaned equations ---
+
+TEST_CASE("Every station format writes and parses back", "[req483][alignment]") {
+  for (const char delim : {'+', '-', '_', '/', 'C', 'K', '\0'}) {
+    for (const int digits : {2, 3}) {
+      alignment::StationFormat f;
+      f.delimiter = delim;
+      f.digitsRight = digits;
+      f.decimals = 3;
+      f.prefix = "STA ";
+      f.suffix = " (CL)";
+      for (const double v : {0.0, 12.345, 1245.32, 98765.432}) {
+        const std::string text = alignment::FormatStation(v, f);
+        double back = -1.0;
+        INFO("'" << (delim == '\0' ? '0' : delim) << "' digits " << digits << ": " << text);
+        REQUIRE(alignment::ParseStation(text, &back, f));
+        CHECK(back == Approx(v).epsilon(0).margin(5e-4));
+      }
+    }
+  }
+  alignment::StationFormat metric;
+  metric.digitsRight = 3;
+  metric.decimals = 3;
+  CHECK(alignment::FormatStation(1245.32, metric) == "1+245.320");
+}
+
+TEST_CASE("STATIONFORMAT sets how this drawing writes stations, and is saved with it", "[req483][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT F1", log);
+  Submit(st, "ALIGNMENTADD F1, TANGENT, 0, 0, 0, 1245.32", log);
+  Submit(st, "STATIONFORMAT DELIMITER=K, DIGITS=3, DECIMALS=3, PREFIX=KM-", log);
+  log.clear();
+  Submit(st, "ALIGNMENTLIST F1", log);
+  CHECK(LogHas(log, "End station: KM-1K245.320"));
+  log.clear();
+  Submit(st, "GETPOINTFROMSTATIONOFFSET F1, KM-1K000.000, 0", log);  // typed in the drawing's format
+  CHECK(LogHas(log, "Y = 1000.0"));
+  const std::string json = SerializeGoSurveyJson(st);
+  AppCommandState back = Drawing();
+  std::vector<std::string> loadLog;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, json, loadLog));
+  CHECK(back.alignmentStationFormat.delimiter == 'K');
+  CHECK(back.alignmentStationFormat.digitsRight == 3);
+  CHECK(back.alignmentStationFormat.prefix == "KM-");
+  Submit(st, "STATIONFORMAT DEFAULT", log);
+  CHECK(st.alignmentStationFormat.delimiter == '+');
+  CHECK(SerializeGoSurveyJson(st).find("\"stationFormat\"") == std::string::npos);  // the default is not written
+}
+
+TEST_CASE("A reference point sets the stationing, after confirmation when equations exist", "[req483][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT RP", log);
+  Submit(st, "ALIGNMENTADD RP, TANGENT, 0, 0, 0, 1000", log);  // north from the origin
+  Submit(st, "ALIGNMENTSTATION RP, EQ, ADD, 8+00, 8+50, INC", log);
+  REQUIRE(st.alignments[0].equations.size() == 1);
+  log.clear();
+  Submit(st, "ALIGNMENTSTATION RP, REFERENCE, 0, 300, 10+00", log);
+  CHECK(LogHas(log, "repeat with , CLEAR"));
+  CHECK(st.alignments[0].equations.size() == 1);  // not without the confirmation (AC6)
+  Submit(st, "ALIGNMENTSTATION RP, REFERENCE, 0, 300, 10+00, CLEAR", log);
+  const alignment::Alignment& a = st.alignments[0];
+  CHECK(a.hasReference);
+  CHECK(a.startingStation == Approx(700.0).margin(1e-9));  // 300 along is 10+00
+  CHECK(a.equations.empty());
+  const std::string json = SerializeGoSurveyJson(st);
+  AppCommandState back = Drawing();
+  std::vector<std::string> loadLog;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, json, loadLog));
+  CHECK(back.alignments[0].hasReference);
+  CHECK(back.alignments[0].referenceDistance == Approx(300.0).margin(1e-9));
+  log.clear();
+  Submit(st, "ALIGNMENTSTATION RP, REFERENCE, 0, 1500, 10+00", log);  // beyond the end
+  CHECK(LogHas(log, "not beyond its ends"));
+}
+
+TEST_CASE("Equations an edit leaves beyond the end are listed as they are removed", "[req483][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT OE", log);
+  Submit(st, "ALIGNMENTADD OE, TANGENT, 0, 0, 0, 1000", log);
+  Submit(st, "ALIGNMENTSTATION OE, EQ, ADD, 9+00, 9+50, INC", log);
+  log.clear();
+  Submit(st, "ALIGNMENTEDIT OE, 1, LENGTH, 500", log);
+  CHECK(LogHas(log, "Station equation at raw station 9+00.00"));
+  CHECK(LogHas(log, "UNDO restores it"));
+  CHECK(st.alignments[0].equations.empty());
+  Submit(st, "UNDO", log);
+  CHECK(st.alignments[0].equations.size() == 1);
+}
+
+// --- REQ-480.1: metadata ---
+
+TEST_CASE("Alignment metadata is set, listed, removed and saved", "[req480][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT MD", log);
+  Submit(st, "ALIGNMENTMETA MD, SET, Owner, County roads", log);
+  Submit(st, "ALIGNMENTMETA MD, SET, Phase, 2", log);
+  Submit(st, "ALIGNMENTMETA MD, SET, owner, State DOT", log);  // the same name, ignoring case: replaced
+  REQUIRE(st.alignments[0].metadata.size() == 2);
+  CHECK(st.alignments[0].metadata[0].second == "State DOT");
+  log.clear();
+  Submit(st, "ALIGNMENTLIST MD", log);
+  CHECK(LogHas(log, "Owner: State DOT"));
+  CHECK(LogHas(log, "Phase: 2"));
+  const std::string json = SerializeGoSurveyJson(st);
+  AppCommandState back = Drawing();
+  std::vector<std::string> loadLog;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, json, loadLog));
+  CHECK(back.alignments[0].metadata == st.alignments[0].metadata);
+  Submit(st, "ALIGNMENTMETA MD, REMOVE, Phase", log);
+  CHECK(st.alignments[0].metadata.size() == 1);
+  Submit(st, "UNDO", log);
+  CHECK(st.alignments[0].metadata.size() == 2);
 }

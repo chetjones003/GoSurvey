@@ -182,6 +182,8 @@ bool Alignment::Reverse(std::string* note) {
   for (const ContinuityIssue& c : CheckContinuity()) {
     if (!c.c0) return false;
   }
+  hasReference = false;  // the new start is the reference point; the starting station is kept (D-2026-11-04-n)
+  referenceDistance = 0.0;
   std::vector<Entity> rev;
   rev.reserve(entities_.size());
   for (int i = static_cast<int>(entities_.size()) - 1; i >= 0; --i) {

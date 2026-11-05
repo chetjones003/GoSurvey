@@ -98,8 +98,16 @@ const char* TypeName(alignment::AlignmentType t) {
   return "?";
 }
 
-std::string Sta(const alignment::Alignment& a, double internalStation) {
-  return alignment::FormatStation(a.DisplayedStation(internalStation, true));
+std::string StaFmt(const AppCommandState& st, double displayed) {
+  return alignment::FormatStation(displayed, st.alignmentStationFormat);  // REQ-483.4: the drawing's station format
+}
+
+bool ParseSta(const AppCommandState& st, const std::string& text, double* displayed) {
+  return alignment::ParseStation(text, displayed, st.alignmentStationFormat);
+}
+
+std::string Sta(const AppCommandState& st, const alignment::Alignment& a, double internalStation) {
+  return StaFmt(st, a.DisplayedStation(internalStation, true));
 }
 
 std::string Lin(const AppCommandState& st, double v) { return FormatLinear(v, st.displayLinearPrecision); }
@@ -255,7 +263,7 @@ void RunAlignmentAdd(AppCommandState& st, const std::string& args, std::vector<s
   st.alignments[static_cast<size_t>(ix)] = std::move(edited);
   const alignment::Alignment& r = st.alignments[static_cast<size_t>(ix)];
   log.push_back("ALIGNMENTADD - \"" + r.name + "\" now has " + std::to_string(r.Entities().size()) +
-                " entities, length " + Lin(st, r.Length()) + ", ending at station " + Sta(r, r.EndStation()) + ".");
+                " entities, length " + Lin(st, r.Length()) + ", ending at station " + Sta(st, r, r.EndStation()) + ".");
 }
 
 // ALIGNMENTLIST [<name>]  (REQ-501.1 properties, REQ-494 entity list)
@@ -270,8 +278,9 @@ void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<
     const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.alignmentStyles, a);
     log.push_back("ALIGNMENT: " + a.name + "  [" + TypeName(a.type) + ", layer " + a.layer + ", style " + a.style + "]");
     if (!a.description.empty()) log.push_back("  Description:   " + a.description);
+    for (const auto& [key, value] : a.metadata) log.push_back("  " + key + ": " + value);  // REQ-480.1
     if (a.Empty()) {
-      log.push_back("  Start station: " + alignment::FormatStation(a.startingStation) + "   (no geometry yet)");
+      log.push_back("  Start station: " + StaFmt(st, a.startingStation) + "   (no geometry yet)");
       continue;
     }
     double wsx = 0.0, wsy = 0.0, wex = 0.0, wey = 0.0;
@@ -279,8 +288,11 @@ void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<
     wsy = a.StartPoint().y + CadCoord::WorldOriginY(st);
     wex = a.EndPoint().x + CadCoord::WorldOriginX(st);
     wey = a.EndPoint().y + CadCoord::WorldOriginY(st);
-    log.push_back("  Start station: " + Sta(a, a.StartStation()) + "   End station: " +
-                  alignment::FormatStation(a.EndStationWithEquations()) + "   Length: " + Lin(st, a.Length()));
+    log.push_back("  Start station: " + Sta(st, a, a.StartStation()) + "   End station: " +
+                  StaFmt(st, a.EndStationWithEquations()) + "   Length: " + Lin(st, a.Length()));
+    if (a.hasReference)  // REQ-483.1
+      log.push_back("  Reference point: " + Lin(st, a.referenceDistance) + " along, station " +
+                    StaFmt(st, a.startingStation + a.referenceDistance));
     log.push_back("  Start: " + Lin(st, wsx) + ", " + Lin(st, wsy) + "  bearing " + Brg(st, a.StartAzimuth()));
     log.push_back("  End:   " + Lin(st, wex) + ", " + Lin(st, wey) + "  bearing " + Brg(st, a.EndAzimuth()));
     log.push_back("  Entities: " + std::to_string(a.Entities().size()) + "   Curves: " + std::to_string(a.CurveCount()) +
@@ -290,8 +302,8 @@ void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<
     for (size_t i = 0; i < a.Entities().size(); ++i) {
       const alignment::Entity& e = a.Entities()[i];
       const int ii = static_cast<int>(i);
-      std::string row = "  ENTITY " + std::to_string(i + 1) + "  " + Sta(a, a.EntityStartStation(ii)) + " - " +
-                        Sta(a, a.EntityEndStation(ii)) + "  ";
+      std::string row = "  ENTITY " + std::to_string(i + 1) + "  " + Sta(st, a, a.EntityStartStation(ii)) + " - " +
+                        Sta(st, a, a.EntityEndStation(ii)) + "  ";
       if (e.kind == alignment::EntityKind::Line) {
         row += "Tangent  bearing " + Brg(st, e.startAzimuth) + "  length " + Lin(st, e.length);
       } else if (e.kind == alignment::EntityKind::Arc) {
@@ -373,7 +385,7 @@ void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vect
   double lx = 0.0, ly = 0.0;
   CadCoord::LocalFromWorld(st, x, y, &lx, &ly);
   const alignment::StationOffset so = a->GetStationOffset(lx, ly);
-  std::string line = "GETSTATIONOFFSET - \"" + a->name + "\": Station = " + Sta(*a, so.internalStation) +
+  std::string line = "GETSTATIONOFFSET - \"" + a->name + "\": Station = " + Sta(st, *a, so.internalStation) +
                      "  Offset = " + Lin(st, so.offset) + (so.offset < 0.0 ? " (left)" : so.offset > 0.0 ? " (right)" : "") +
                      "  Bearing = " + Brg(st, so.azimuth) + ".";
   if (so.outOfRange) line += " The point lies beyond the end of the alignment; the nearest end is reported.";
@@ -397,7 +409,7 @@ void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vect
 void RunGetPointFromStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
   double displayed = 0.0, offset = 0.0;
-  if (f.size() != 3 || !alignment::ParseStation(f[1], &displayed) || !ParseNum(f[2], &offset)) {
+  if (f.size() != 3 || !ParseSta(st, f[1], &displayed) || !ParseNum(f[2], &offset)) {
     log.push_back("GETPOINTFROMSTATIONOFFSET - usage: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset> (station like 12+45.32).");
     return;
   }
@@ -409,8 +421,8 @@ void RunGetPointFromStationOffset(AppCommandState& st, const std::string& args, 
   }
   const std::vector<double> raws = a->RawStationsForDisplayed(displayed);
   if (raws.empty()) {
-    log.push_back("GETPOINTFROMSTATIONOFFSET - station " + alignment::FormatStation(displayed) + " is outside \"" + a->name +
-                  "\" (" + Sta(*a, a->StartStation()) + " to " + alignment::FormatStation(a->EndStationWithEquations()) + ").");
+    log.push_back("GETPOINTFROMSTATIONOFFSET - station " + StaFmt(st, displayed) + " is outside \"" + a->name +
+                  "\" (" + Sta(st, *a, a->StartStation()) + " to " + StaFmt(st, a->EndStationWithEquations()) + ").");
     return;
   }
   for (const double raw : raws) {
@@ -428,7 +440,7 @@ namespace {
 std::string ReadoutText(const AppCommandState& st, const alignment::Alignment& a, const alignment::StationOffset& so) {
   assert(!a.Empty());
   assert(std::isfinite(so.internalStation));
-  return a.name + "  STA " + alignment::FormatStation(a.DisplayedStation(so.internalStation, true)) + "  OFF " +
+  return a.name + "  STA " + StaFmt(st, a.DisplayedStation(so.internalStation, true)) + "  OFF " +
          FormatLinear(so.offset, st.displayLinearPrecision) + "  BRG " + Brg(st, so.azimuth);
 }
 
@@ -533,13 +545,13 @@ bool TryParseAlignmentStationSnapStoragePoint(AppCommandState& st, const std::st
     return false;
   }
   double displayed = 0.0;
-  if (!alignment::ParseStation(staText, &displayed)) {
+  if (!ParseSta(st, staText, &displayed)) {
     st.alignmentStationSnapRejectReason = "STATION snap â€” \"" + staText + "\" is not a station.";
     return false;
   }
   if (!ResolveAlignmentStationSnapPoint(st, displayed, baseLocalX, baseLocalY, lx, ly)) {
     st.alignmentStationSnapRejectReason =
-        "STATION snap â€” station " + alignment::FormatStation(displayed) + " is not on any alignment.";
+        "STATION snap â€” station " + StaFmt(st, displayed) + " is not on any alignment.";
     return false;
   }
   st.objectSnapStationDisplayedValid = true;
@@ -613,6 +625,20 @@ bool IsLinkedOffset(const alignment::Alignment& a, const std::string& cmd, std::
   return true;
 }
 
+/// REQ-483.5: equations a geometry edit left beyond the new end are listed by name; UNDO brings them back.
+void ReportDroppedEquations(const AppCommandState& st, const alignment::Alignment& before, const alignment::Alignment& after,
+                            std::vector<std::string>& log) {
+  assert(after.equations.size() <= before.equations.size() + after.equations.size());
+  assert(before.equations.size() < 100000);
+  for (const alignment::StationEquation& q : before.equations) {
+    const bool kept = std::any_of(after.equations.begin(), after.equations.end(),
+                                  [&](const alignment::StationEquation& o) { return o.rawBack == q.rawBack; });
+    if (!kept)
+      log.push_back("  Station equation at raw station " + StaFmt(st, q.rawBack) + " (ahead " + StaFmt(st, q.ahead) +
+                    ") now lies beyond the end of \"" + after.name + "\" and was removed; UNDO restores it.");
+  }
+}
+
 void ReportContinuity(const AppCommandState& st, const alignment::Alignment& r, std::vector<std::string>& log) {
   assert(r.Entities().size() < std::numeric_limits<int>::max());
   for (const alignment::ContinuityIssue& c : r.CheckContinuity()) {
@@ -668,7 +694,7 @@ void RefreshDynamicTables(AppCommandState& st, std::vector<std::string>& log) {
       if (ti < 0 || static_cast<size_t>(ti) >= st.cadTables.size()) continue;
       alignment::AlignmentTableText text;
       std::string why;
-      if (!alignment::BuildAlignmentTableText(a, link.kind, st.displayLinearPrecision, CadAngleDisplaySettings(st), &text, &why)) {
+      if (!alignment::BuildAlignmentTableText(a, link.kind, st.displayLinearPrecision, CadAngleDisplaySettings(st), &text, &why, st.alignmentStationFormat)) {
         log.push_back("  Table for \"" + a.name + "\" was not updated: " + why + ".");
         continue;
       }
@@ -758,7 +784,7 @@ void RunAlignmentTable(AppCommandState& st, const std::string& args, std::vector
   }
   alignment::AlignmentTableText text;
   std::string why;
-  if (!alignment::BuildAlignmentTableText(*a, kind, st.displayLinearPrecision, CadAngleDisplaySettings(st), &text, &why)) {
+  if (!alignment::BuildAlignmentTableText(*a, kind, st.displayLinearPrecision, CadAngleDisplaySettings(st), &text, &why, st.alignmentStationFormat)) {
     log.push_back("ALIGNMENTTABLE - " + why + ". No table was made.");
     return;
   }
@@ -861,10 +887,11 @@ void RunAlignmentEdit(AppCommandState& st, const std::string& args, std::vector<
     return;
   }
   PushUndoSnapshot(st, "Edit alignment");
+  ReportDroppedEquations(st, *Resolve(st, "ALIGNMENTEDIT", f[0], log), trial, log);
   alignment::Alignment* target = Resolve(st, "ALIGNMENTEDIT", f[0], log);
   *target = std::move(trial);
   log.push_back("ALIGNMENTEDIT - \"" + target->name + "\" entity " + std::to_string(idx + 1) + " updated; length now " + Lin(st, target->Length()) +
-                ", ending at station " + Sta(*target, target->EndStation()) + ".");
+                ", ending at station " + Sta(st, *target, target->EndStation()) + ".");
   ReportContinuity(st, *target, log);
   RefreshAlignmentOffsets(st, log);
 }
@@ -952,6 +979,7 @@ void RunAlignmentInsert(AppCommandState& st, const std::string& args, std::vecto
     return;
   }
   PushUndoSnapshot(st, "Insert alignment entity");
+  ReportDroppedEquations(st, *Resolve(st, "ALIGNMENTINSERT", f[0], log), trial, log);
   alignment::Alignment* target = Resolve(st, "ALIGNMENTINSERT", f[0], log);
   *target = std::move(trial);
   log.push_back("ALIGNMENTINSERT - \"" + target->name + "\" now has " + std::to_string(target->Entities().size()) + " entities, length " +
@@ -977,6 +1005,7 @@ void RunAlignmentRemove(AppCommandState& st, const std::string& args, std::vecto
     return;
   }
   PushUndoSnapshot(st, "Remove alignment entity");
+  ReportDroppedEquations(st, *Resolve(st, "ALIGNMENTREMOVE", f[0], log), trial, log);
   alignment::Alignment* target = Resolve(st, "ALIGNMENTREMOVE", f[0], log);
   *target = std::move(trial);
   log.push_back("ALIGNMENTREMOVE - entity " + std::to_string(idx + 1) + " removed; \"" + target->name + "\" has " +
@@ -1034,8 +1063,8 @@ void RunReverseAlignment(AppCommandState& st, const std::string& args, std::vect
   alignment::Alignment* target = Resolve(st, "REVERSEALIGNMENT", name, log);
   *target = std::move(trial);
   const std::uint64_t parentId = target->id;
-  log.push_back("REVERSEALIGNMENT - \"" + target->name + "\" now runs from " + Sta(*target, target->StartStation()) + " (was the end) to " +
-                Sta(*target, target->EndStation()) + "." + (note.empty() ? "" : " " + note + "."));
+  log.push_back("REVERSEALIGNMENT - \"" + target->name + "\" now runs from " + Sta(st, *target, target->StartStation()) + " (was the end) to " +
+                Sta(st, *target, target->EndStation()) + "." + (note.empty() ? "" : " " + note + "."));
   // REQ-487.2: a linked offset keeps its side on the ground; facing the other way, right becomes left.
   int followed = 0;
   for (alignment::Alignment& child : st.alignments) {
@@ -1054,7 +1083,8 @@ void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vect
   const std::vector<std::string> f = SplitFields(args);
   const char* usage =
       "ALIGNMENTSTATION - usage: ALIGNMENTSTATION <name>, START, <station>[, CLEAR] | <name>, EQ, ADD, <raw station>, <ahead station>, INC|DEC | "
-      "<name>, EQ, EDIT, <n>, <raw station>, <ahead station>, INC|DEC | <name>, EQ, REMOVE, <n> | <name>, EQ, LIST.";
+      "<name>, EQ, EDIT, <n>, <raw station>, <ahead station>, INC|DEC | <name>, EQ, REMOVE, <n> | <name>, EQ, LIST | "
+      "<name>, REFERENCE, <x>, <y>, <station>[, CLEAR].";
   if (f.size() < 3) {
     log.push_back(usage);
     return;
@@ -1064,7 +1094,7 @@ void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vect
   const std::string sub = Lower(f[1]);
   if (sub == "start") {
     double sta = 0.0;
-    if (!alignment::ParseStation(f[2], &sta)) {
+    if (!ParseSta(st, f[2], &sta)) {
       log.push_back("ALIGNMENTSTATION - \"" + f[2] + "\" is not a station.");
       return;
     }
@@ -1080,7 +1110,45 @@ void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vect
     a->equations.clear();
     a->designSpeeds.clear();
     a->startingStation = sta;
-    log.push_back("ALIGNMENTSTATION - \"" + a->name + "\" starts at " + alignment::FormatStation(sta) + " and ends at " + Sta(*a, a->EndStation()) + ".");
+    a->hasReference = false;  // the start is the reference point again
+    a->referenceDistance = 0.0;
+    log.push_back("ALIGNMENTSTATION - \"" + a->name + "\" starts at " + StaFmt(st, sta) + " and ends at " + Sta(st, *a, a->EndStation()) + ".");
+    return;
+  }
+  if (sub == "reference" && (f.size() == 5 || f.size() == 6)) {  // REQ-483.1: <x>, <y>, <station>[, CLEAR]
+    double wx = 0.0, wy = 0.0, sta = 0.0;
+    if (!ParseNum(f[2], &wx) || !ParseNum(f[3], &wy) || !ParseSta(st, f[4], &sta)) {
+      log.push_back(usage);
+      return;
+    }
+    if (a->Empty()) {
+      log.push_back("ALIGNMENTSTATION - \"" + a->name + "\" has no geometry to put a reference point on.");
+      return;
+    }
+    double lx = 0.0, ly = 0.0;
+    CadCoord::LocalFromWorld(st, wx, wy, &lx, &ly);
+    const alignment::StationOffset so = a->GetStationOffset(lx, ly);
+    if (so.outOfRange) {
+      log.push_back("ALIGNMENTSTATION - the reference point must lie along \"" + a->name + "\", not beyond its ends.");
+      return;
+    }
+    const bool clear = f.size() == 6 && Lower(f[5]) == "clear";
+    if ((!a->equations.empty() || !a->designSpeeds.empty()) && !clear) {
+      log.push_back("ALIGNMENTSTATION - changing the reference point removes this alignment's " +
+                    std::to_string(a->equations.size()) + " station equation(s) and " +
+                    std::to_string(a->designSpeeds.size()) + " design speed(s); repeat with , CLEAR to confirm.");
+      return;
+    }
+    const double along = so.internalStation - a->startingStation;
+    PushUndoSnapshot(st, "Set reference point");
+    a = Resolve(st, "ALIGNMENTSTATION", f[0], log);
+    a->equations.clear();
+    a->designSpeeds.clear();
+    a->hasReference = true;
+    a->referenceDistance = along;
+    a->startingStation = sta - along;
+    log.push_back("ALIGNMENTSTATION - the point " + Lin(st, along) + " along \"" + a->name + "\" is station " +
+                  StaFmt(st, sta) + "; it now starts at " + StaFmt(st, a->startingStation) + ".");
     return;
   }
   if (sub != "eq" && sub != "equation") {
@@ -1092,16 +1160,16 @@ void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vect
     if (a->equations.empty()) log.push_back("ALIGNMENTSTATION - \"" + a->name + "\" has no station equations.");
     for (size_t i = 0; i < a->equations.size(); ++i) {
       const alignment::StationEquation& q = a->equations[i];
-      log.push_back("  EQUATION " + std::to_string(i + 1) + "  back " + alignment::FormatStation(a->DisplayedStation(q.rawBack, false)) + "  ahead " +
-                    alignment::FormatStation(q.ahead) + "  " + (q.increasing ? "increasing" : "decreasing") + "  (raw station " +
-                    alignment::FormatStation(q.rawBack) + ")");
+      log.push_back("  EQUATION " + std::to_string(i + 1) + "  back " + StaFmt(st, a->DisplayedStation(q.rawBack, false)) + "  ahead " +
+                    StaFmt(st, q.ahead) + "  " + (q.increasing ? "increasing" : "decreasing") + "  (raw station " +
+                    StaFmt(st, q.rawBack) + ")");
     }
     return;
   }
   if (verb == "add" && f.size() == 6) {
     alignment::StationEquation q;
     const std::string dir = Lower(f[5]);
-    if (!alignment::ParseStation(f[3], &q.rawBack) || !alignment::ParseStation(f[4], &q.ahead) || (dir != "inc" && dir != "dec")) {
+    if (!ParseSta(st, f[3], &q.rawBack) || !ParseSta(st, f[4], &q.ahead) || (dir != "inc" && dir != "dec")) {
       log.push_back(usage);
       return;
     }
@@ -1116,7 +1184,7 @@ void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vect
     alignment::Alignment* target = Resolve(st, "ALIGNMENTSTATION", f[0], log);
     *target = std::move(trial);
     log.push_back("ALIGNMENTSTATION - equation added; \"" + target->name + "\" now ends at station " +
-                  alignment::FormatStation(target->EndStationWithEquations()) + ".");
+                  StaFmt(st, target->EndStationWithEquations()) + ".");
     return;
   }
   if (verb == "edit" && f.size() == 7) {  // REQ-487.3: replace equation n, refused as a whole if the new one does not fit
@@ -1127,7 +1195,7 @@ void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vect
       log.push_back("ALIGNMENTSTATION - \"" + f[3] + "\" is not an equation number (1 to " + std::to_string(a->equations.size()) + ").");
       return;
     }
-    if (!alignment::ParseStation(f[4], &q.rawBack) || !alignment::ParseStation(f[5], &q.ahead) || (dir != "inc" && dir != "dec")) {
+    if (!ParseSta(st, f[4], &q.rawBack) || !ParseSta(st, f[5], &q.ahead) || (dir != "inc" && dir != "dec")) {
       log.push_back(usage);
       return;
     }
@@ -1143,7 +1211,7 @@ void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vect
     alignment::Alignment* target = Resolve(st, "ALIGNMENTSTATION", f[0], log);
     *target = std::move(trial);
     log.push_back("ALIGNMENTSTATION - equation " + f[3] + " changed; \"" + target->name + "\" now ends at station " +
-                  alignment::FormatStation(target->EndStationWithEquations()) + ".");
+                  StaFmt(st, target->EndStationWithEquations()) + ".");
     return;
   }
   if (verb == "remove" && f.size() == 4) {
@@ -1266,8 +1334,8 @@ void RunOffsetAlignment(AppCommandState& st, const std::string& args, std::vecto
   double from = 0.0, to = 0.0;
   if (!req.from.empty() || !req.to.empty()) {
     double shownFrom = 0.0, shownTo = 0.0;
-    const bool fromOk = req.from.empty() || alignment::ParseStation(req.from, &shownFrom);
-    const bool toOk = req.to.empty() || alignment::ParseStation(req.to, &shownTo);
+    const bool fromOk = req.from.empty() || ParseSta(st, req.from, &shownFrom);
+    const bool toOk = req.to.empty() || ParseSta(st, req.to, &shownTo);
     const std::vector<double> rawFrom = req.from.empty() ? std::vector<double>{parentCopy.StartStation()}
                                                          : parentCopy.RawStationsForDisplayed(shownFrom);
     const std::vector<double> rawTo = req.to.empty() ? std::vector<double>{parentCopy.EndStation()}
@@ -1398,13 +1466,13 @@ void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::ve
     const alignment::Intersection& h = hits[i];
     // The point lies on both, so its offset from each is zero; the station is given on each alignment (REQ-489).
     log.push_back("  " + std::to_string(i + 1) + ": X = " + Lin(st, h.point.x + CadCoord::WorldOriginX(st)) + "  Y = " +
-                  Lin(st, h.point.y + CadCoord::WorldOriginY(st)) + "  Station = " + Sta(*a, h.stationA) + "  Offset = " +
-                  Lin(st, 0.0) + (otherIsAlignment ? "  Station on " + otherName + " = " + Sta(other, h.stationB) : "") +
+                  Lin(st, h.point.y + CadCoord::WorldOriginY(st)) + "  Station = " + Sta(st, *a, h.stationA) + "  Offset = " +
+                  Lin(st, 0.0) + (otherIsAlignment ? "  Station on " + otherName + " = " + Sta(st, other, h.stationB) : "") +
                   "  Angle = " + FormatSweptAngle(h.angle / kDegToRad, CadAngleDisplaySettings(st)) +
                   (h.tangential ? "  (tangential)" : ""));
   }
   for (const alignment::IntersectionOverlap& o : overlaps)
-    log.push_back("  Coincident from station " + Sta(*a, o.fromStationA) + " to " + Sta(*a, o.toStationA) + ".");
+    log.push_back("  Coincident from station " + Sta(st, *a, o.fromStationA) + " to " + Sta(st, *a, o.toStationA) + ".");
   if (placePoints && !hits.empty()) {
     PushUndoSnapshot(st, "Alignment intersection points");
     for (const alignment::Intersection& h : hits) {
@@ -2042,6 +2110,7 @@ void RunAlignmentReport(AppCommandState& st, const std::string& args, std::vecto
   alignment::AlignmentReportFormat fmt;
   fmt.linearPrecision = st.displayLinearPrecision;
   fmt.angles = CadAngleDisplaySettings(st);
+  fmt.station = st.alignmentStationFormat;
 
   if (exportKind.empty()) {
     for (size_t i = 0; i < targets.size(); ++i) {
@@ -2161,7 +2230,7 @@ void RunAlignmentSurface(AppCommandState& st, const std::string& args, std::vect
     log.push_back("ALIGNMENTSURFACE - \"" + a->name + "\": " + std::to_string(samples.size()) + " sample(s), " +
                   std::to_string(withGround) + " with ground" + unit + ".");
     for (const alignment::GroundPoint& g : samples) {
-      const std::string sta = Sta(*a, g.internalStation);
+      const std::string sta = Sta(st, *a, g.internalStation);
       log.push_back("  STA " + sta + "  " + (g.hasGround ? "EG = " + Lin(st, g.ground) : std::string("no ground")));
     }
     return;
@@ -2171,7 +2240,7 @@ void RunAlignmentSurface(AppCommandState& st, const std::string& args, std::vect
     return;
   }
   double displayed = 0.0, offset = 0.0;
-  if (!alignment::ParseStation(station, &displayed)) {
+  if (!ParseSta(st, station, &displayed)) {
     log.push_back("ALIGNMENTSURFACE - \"" + station + "\" is not a station.");
     return;
   }
@@ -2181,12 +2250,12 @@ void RunAlignmentSurface(AppCommandState& st, const std::string& args, std::vect
   }
   const std::vector<double> raws = a->RawStationsForDisplayed(displayed);
   if (raws.empty()) {
-    log.push_back("ALIGNMENTSURFACE - station " + alignment::FormatStation(displayed) + " is outside \"" + a->name + "\".");
+    log.push_back("ALIGNMENTSURFACE - station " + StaFmt(st, displayed) + " is outside \"" + a->name + "\".");
     return;
   }
   for (const double raw : raws) {
     const alignment::GroundPoint g = alignment::GroundAt(*a, *ground, raw, offset);
-    const std::string head = "ALIGNMENTSURFACE - STA " + alignment::FormatStation(displayed) + "  OFF " + Lin(st, offset);
+    const std::string head = "ALIGNMENTSURFACE - STA " + StaFmt(st, displayed) + "  OFF " + Lin(st, offset);
     if (g.hasGround) {
       log.push_back(head + "  EG = " + Lin(st, g.ground) + unit + ".");
     } else {
@@ -2260,13 +2329,13 @@ void RunAlignmentStationLabel(AppCommandState& st, const std::string& args, std:
     label.fixedPoint = {lx, ly};
   } else if (mode == "relative") {
     double station = 0.0, offset = 0.0;
-    if (!alignment::ParseStation(f[3], &station) || !ParseNum(f[4], &offset)) {
+    if (!ParseSta(st, f[3], &station) || !ParseNum(f[4], &offset)) {
       log.push_back("ALIGNMENTLABEL - the station must be a station (12+45.32) and the offset a number.");
       return;
     }
     const std::vector<double> raws = a->RawStationsForDisplayed(station);
     if (raws.empty()) {
-      log.push_back("ALIGNMENTLABEL - station " + alignment::FormatStation(station) + " is outside \"" + a->name + "\".");
+      log.push_back("ALIGNMENTLABEL - station " + StaFmt(st, station) + " is outside \"" + a->name + "\".");
       return;
     }
     label.internalStation = raws.front();  // a station that occurs twice (REQ-483.3) takes the first place
@@ -2411,7 +2480,7 @@ bool BuildFeatureLineVerts(const AppCommandState& st, const alignment::Alignment
       if (!g.hasGround) {
         if (why) {
           *why = "there is no ground on \"" + info.surfaceName + "\" at station " +
-                 alignment::FormatStation(a.DisplayedStation(internal, true));
+                 StaFmt(st, a.DisplayedStation(internal, true));
         }
         return false;
       }
@@ -2654,7 +2723,7 @@ void RunAlignmentProps(AppCommandState& st, const std::string& args, std::vector
     edited.layer = value;
   } else if (field == "start") {
     double sta = 0.0;
-    if (!alignment::ParseStation(value, &sta)) {
+    if (!ParseSta(st, value, &sta)) {
       log.push_back("ALIGNMENTPROPS - \"" + value + "\" is not a station.");
       return;
     }
@@ -2879,7 +2948,7 @@ void RunAlignmentSpeed(AppCommandState& st, const std::string& args, std::vector
   const alignment::Alignment* a = Resolve(st, "ALIGNMENTSPEED", f[0], log);
   if (a == nullptr) return;
   double displayed = 0.0;
-  if (!alignment::ParseStation(f[1], &displayed)) {
+  if (!ParseSta(st, f[1], &displayed)) {
     log.push_back("ALIGNMENTSPEED - \"" + f[1] + "\" is not a station.");
     return;
   }
@@ -2893,7 +2962,7 @@ void RunAlignmentSpeed(AppCommandState& st, const std::string& args, std::vector
   // Design speeds are stored at internal stations, like every other station on the alignment.
   const std::vector<double> raws = a->RawStationsForDisplayed(displayed);
   if (raws.empty()) {
-    log.push_back("ALIGNMENTSPEED - station " + alignment::FormatStation(displayed) + " is outside \"" + a->name + "\".");
+    log.push_back("ALIGNMENTSPEED - station " + StaFmt(st, displayed) + " is outside \"" + a->name + "\".");
     return;
   }
   const double internal = raws.front();
@@ -2903,17 +2972,17 @@ void RunAlignmentSpeed(AppCommandState& st, const std::string& args, std::vector
   const auto found = std::find_if(current.begin(), current.end(), sameStation);
   if (clear) {
     if (found == current.end()) {
-      log.push_back("ALIGNMENTSPEED - no design speed is set at " + alignment::FormatStation(displayed) + ".");
+      log.push_back("ALIGNMENTSPEED - no design speed is set at " + StaFmt(st, displayed) + ".");
       return;
     }
     PushUndoSnapshot(st, "Clear design speed");
     auto& after = st.alignments[ai].designSpeeds;
     after.erase(std::remove_if(after.begin(), after.end(), sameStation), after.end());
-    log.push_back("ALIGNMENTSPEED - design speed cleared at " + alignment::FormatStation(displayed) + ".");
+    log.push_back("ALIGNMENTSPEED - design speed cleared at " + StaFmt(st, displayed) + ".");
     return;
   }
   if (found != current.end() && found->speed == speed) {
-    log.push_back("ALIGNMENTSPEED - the design speed at " + alignment::FormatStation(displayed) + " is already " +
+    log.push_back("ALIGNMENTSPEED - the design speed at " + StaFmt(st, displayed) + " is already " +
                   FormatLinear(speed, 2) + ".");
     return;
   }
@@ -2929,7 +2998,7 @@ void RunAlignmentSpeed(AppCommandState& st, const std::string& args, std::vector
     return x.internalStation < y.internalStation;
   });
   log.push_back("ALIGNMENTSPEED - design speed " + FormatLinear(speed, 2) + " from station " +
-                alignment::FormatStation(displayed) + ".");
+                StaFmt(st, displayed) + ".");
 }
 
 // ALIGNMENTCHECK <alignment>: every failed check against the alignment's criteria, in travel order.
@@ -2989,7 +3058,7 @@ void RunAlignmentInverse(AppCommandState& st, const std::string& args, std::vect
   double px1 = 0.0, py1 = 0.0, px2 = 0.0, py2 = 0.0;
   if (mode == "sta" && (f.size() == 4 || (f.size() == 5 && chordWanted))) {
     double s1 = 0.0, s2 = 0.0;
-    if (!alignment::ParseStation(f[2], &s1) || !alignment::ParseStation(f[3], &s2)) {
+    if (!ParseSta(st, f[2], &s1) || !ParseSta(st, f[3], &s2)) {
       log.push_back("ALIGNMENTINVERSE - the stations must be stations (12+45.32).");
       return;
     }
@@ -3023,8 +3092,8 @@ void RunAlignmentInverse(AppCommandState& st, const std::string& args, std::vect
   const double chord = std::hypot(px2 - px1, py2 - py1);
   const int p = st.displayLinearPrecision;
   std::string line = "ALIGNMENTINVERSE - \"" + a->name + "\" from station " +
-                     alignment::FormatStation(a->DisplayedStation(internal1, true)) + " to " +
-                     alignment::FormatStation(a->DisplayedStation(internal2, true)) + ": distance along " + FormatLinear(arc, p);
+                     StaFmt(st, a->DisplayedStation(internal1, true)) + " to " +
+                     StaFmt(st, a->DisplayedStation(internal2, true)) + ": distance along " + FormatLinear(arc, p);
   if (chordWanted) line += ", chord " + FormatLinear(chord, p);
   log.push_back(line + ".");
 }
@@ -3039,17 +3108,17 @@ void RunAlignmentBearing(AppCommandState& st, const std::string& args, std::vect
   alignment::Alignment* a = Resolve(st, "ALIGNMENTBEARING", f[0], log);
   if (a == nullptr) return;
   double displayed = 0.0;
-  if (!alignment::ParseStation(f[1], &displayed)) {
+  if (!ParseSta(st, f[1], &displayed)) {
     log.push_back("ALIGNMENTBEARING - \"" + f[1] + "\" is not a station.");
     return;
   }
   const std::vector<double> raws = a->RawStationsForDisplayed(displayed);
   if (raws.empty()) {
-    log.push_back("ALIGNMENTBEARING - station " + alignment::FormatStation(displayed) + " is outside \"" + a->name + "\".");
+    log.push_back("ALIGNMENTBEARING - station " + StaFmt(st, displayed) + " is outside \"" + a->name + "\".");
     return;
   }
   const double az = a->GetBearingAtStation(raws.front());
-  log.push_back("ALIGNMENTBEARING - \"" + a->name + "\" at " + alignment::FormatStation(displayed) + ": " +
+  log.push_back("ALIGNMENTBEARING - \"" + a->name + "\" at " + StaFmt(st, displayed) + ": " +
                 FormatBearing(az * 180.0 / alignment::kPi, CadAngleDisplaySettings(st)) + ".");
 }
 
@@ -3071,7 +3140,7 @@ void RunAlignmentDistance(AppCommandState& st, const std::string& args, std::vec
   CadCoord::LocalFromWorld(st, x, y, &lx, &ly);
   const alignment::StationOffset so = a->GetStationOffset(lx, ly);
   log.push_back("ALIGNMENTDISTANCE - \"" + a->name + "\": " + FormatLinear(a->GetDistanceAlongAlignment(lx, ly), st.displayLinearPrecision) +
-                " along from the start, nearest at station " + alignment::FormatStation(a->DisplayedStation(so.internalStation, true)) +
+                " along from the start, nearest at station " + StaFmt(st, a->DisplayedStation(so.internalStation, true)) +
                 (so.outOfRange ? " (beyond an end)" : "") + ".");
 }
 
@@ -3246,6 +3315,101 @@ alignment::Alignment NewAlignment(const AppCommandState& st, const std::string& 
 
 }  // namespace
 
+void RunAlignmentMeta(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  assert(st.alignments.size() < st.alignments.max_size());
+  assert(args.size() < 65536);
+  const std::vector<std::string> f = SplitFields(args);
+  const char* usage = "ALIGNMENTMETA - usage: ALIGNMENTMETA <alignment>, SET, <name>, <value> | <alignment>, REMOVE, <name> | "
+                      "<alignment>, LIST.";
+  if (f.size() < 2) {
+    log.push_back(usage);
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTMETA", f[0], log);
+  if (a == nullptr) return;
+  const std::string verb = Lower(f[1]);
+  auto find = [&](const std::string& key) {
+    return std::find_if(a->metadata.begin(), a->metadata.end(), [&](const auto& kv) { return Lower(kv.first) == Lower(key); });
+  };
+  if (verb == "list" && f.size() == 2) {
+    if (a->metadata.empty()) log.push_back("ALIGNMENTMETA - \"" + a->name + "\" has no metadata.");
+    for (const auto& [key, value] : a->metadata) log.push_back("  " + key + " = " + value);
+    return;
+  }
+  if (verb == "set" && f.size() == 4 && !Trim(f[2]).empty()) {
+    PushUndoSnapshot(st, "Alignment metadata");
+    a = Resolve(st, "ALIGNMENTMETA", f[0], log);
+    const auto it = find(Trim(f[2]));
+    if (it != a->metadata.end()) it->second = f[3];
+    else a->metadata.emplace_back(Trim(f[2]), f[3]);
+    log.push_back("ALIGNMENTMETA - \"" + a->name + "\": " + Trim(f[2]) + " = " + f[3] + ".");
+    return;
+  }
+  if (verb == "remove" && f.size() == 3) {
+    if (find(Trim(f[2])) == a->metadata.end()) {
+      log.push_back("ALIGNMENTMETA - \"" + a->name + "\" has no \"" + Trim(f[2]) + "\".");
+      return;
+    }
+    PushUndoSnapshot(st, "Alignment metadata");
+    a = Resolve(st, "ALIGNMENTMETA", f[0], log);
+    a->metadata.erase(find(Trim(f[2])));
+    log.push_back("ALIGNMENTMETA - \"" + Trim(f[2]) + "\" removed from \"" + a->name + "\".");
+    return;
+  }
+  log.push_back(usage);
+}
+
+void RunStationFormat(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  assert(st.alignmentStationFormat.decimals >= 0);
+  assert(args.size() < 4096);
+  const std::vector<std::string> f = SplitFields(args);
+  alignment::StationFormat fmt = st.alignmentStationFormat;
+  const char* usage = "STATIONFORMAT - usage: STATIONFORMAT [DELIMITER=+|-|_|/|C|K|NONE][, DIGITS=1..6][, DECIMALS=0..6]"
+                      "[, PREFIX=<text>][, SUFFIX=<text>] | DEFAULT.";
+  if (f.size() == 1 && Lower(Trim(f[0])) == "default") fmt = alignment::StationFormat{};
+  for (const std::string& field : f) {
+    if (Trim(field).empty() || Lower(Trim(field)) == "default") continue;
+    const size_t eq = field.find('=');
+    if (eq == std::string::npos) {
+      log.push_back(usage);
+      return;
+    }
+    const std::string key = Lower(Trim(field.substr(0, eq)));
+    const std::string value = field.substr(eq + 1);  // prefix and suffix keep their spaces ("STA ")
+    double n = 0.0;
+    if (key == "delimiter" || key == "delim") {
+      const std::string v = Trim(value);
+      if (Lower(v) == "none") fmt.delimiter = '\0';
+      else if (v.size() == 1 && std::string("+-_/CcKk").find(v[0]) != std::string::npos)
+        fmt.delimiter = static_cast<char>(std::toupper(static_cast<unsigned char>(v[0])));
+      else {
+        log.push_back("STATIONFORMAT - the delimiter must be +, -, _, /, C, K or NONE.");
+        return;
+      }
+    } else if (key == "digits" && ParseNum(value, &n) && n >= 1 && n <= 6 && n == std::floor(n)) {
+      fmt.digitsRight = static_cast<int>(n);
+    } else if (key == "decimals" && ParseNum(value, &n) && n >= 0 && n <= 6 && n == std::floor(n)) {
+      fmt.decimals = static_cast<int>(n);
+    } else if (key == "prefix") {
+      fmt.prefix = value;
+    } else if (key == "suffix") {
+      fmt.suffix = value;
+    } else {
+      log.push_back(usage);
+      return;
+    }
+  }
+  if (!f.empty() && !(f.size() == 1 && Trim(f[0]).empty())) {
+    PushUndoSnapshot(st, "Station format");
+    st.alignmentStationFormat = fmt;
+  }
+  log.push_back("STATIONFORMAT - stations are written like " + StaFmt(st, 1245.32) + " (delimiter " +
+                (st.alignmentStationFormat.delimiter == '\0' ? std::string("none")
+                                                             : std::string(1, st.alignmentStationFormat.delimiter)) +
+                ", " + std::to_string(st.alignmentStationFormat.digitsRight) + " digit(s) after it, " +
+                std::to_string(st.alignmentStationFormat.decimals) + " decimal(s)).");
+}
+
 std::string UniqueAlignmentName(const AppCommandState& st, const std::string& base) {
   assert(!base.empty());
   assert(st.alignments.size() < st.alignments.max_size());
@@ -3318,7 +3482,7 @@ void RunAlignmentCreate(AppCommandState& st, const std::string& args, std::vecto
   st.alignments.push_back(std::move(a));
   const alignment::Alignment& made = st.alignments.back();
   log.push_back("ALIGNMENT - created \"" + made.name + "\" (" + TypeName(made.type) + ", starting station " +
-                alignment::FormatStation(made.startingStation) + "). Lay it out with ALIGNMENTLAYOUT or ALIGNMENTADD.");
+                StaFmt(st, made.startingStation) + "). Lay it out with ALIGNMENTLAYOUT or ALIGNMENTADD.");
 }
 
 namespace {
@@ -3529,7 +3693,7 @@ void RunCreateAlignmentFromObjects(AppCommandState& st, const std::string& args,
   for (const std::string& w : warn) log.push_back(cmd + w + ".");
   log.push_back(cmd + "created \"" + r.name + "\": " + std::to_string(r.Entities().size()) + " entities (" +
                 std::to_string(r.CurveCount()) + " curves), length " + Lin(st, r.Length()) + ", starting at station " +
-                alignment::FormatStation(r.startingStation) + "." +
+                StaFmt(st, r.startingStation) + "." +
                 (o.erase ? " " + std::to_string(sources) + " source object(s) erased." : ""));
   for (const alignment::ContinuityIssue& c : r.CheckContinuity()) {
     if (!c.c1 && c.c0) log.push_back("  Note: direction changes after entity " + std::to_string(c.afterEntity + 1) + " (not tangent).");
@@ -3618,7 +3782,7 @@ void FinishLayout(AppCommandState& st, std::vector<std::string>& log) {
   }
   log.push_back("ALIGNMENTLAYOUT - \"" + a.name + "\": " + std::to_string(a.Entities().size()) + " entities (" +
                 std::to_string(a.CurveCount()) + " curves, " + std::to_string(a.SpiralCount()) + " spirals), length " +
-                Lin(st, a.Length()) + ", ending at station " + Sta(a, a.EndStation()) + ".");
+                Lin(st, a.Length()) + ", ending at station " + Sta(st, a, a.EndStation()) + ".");
 }
 
 bool SubmitLayoutPoint(AppCommandState& st, alignment::Point2 p, std::vector<std::string>& log) {
@@ -3880,7 +4044,7 @@ void RunAlignmentLayout(AppCommandState& st, const std::string& args, std::vecto
   if (!base.Empty()) {
     st.alignmentLayout.pis = {base.EndPoint()};
     log.push_back("ALIGNMENTLAYOUT - Tangent-Tangent (" + std::string(mode) + ") continues \"" + name + "\" from station " +
-                  Sta(base, base.EndStation()) + ". Specify the next point or [Undo]:");
+                  Sta(st, base, base.EndStation()) + ". Specify the next point or [Undo]:");
     return;
   }
   if (from) {

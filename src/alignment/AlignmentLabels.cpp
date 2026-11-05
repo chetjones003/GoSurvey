@@ -61,7 +61,7 @@ std::vector<EquationLabel> CollectEquationLabels(const Alignment& al) {
 }
 
 StationOffsetLabelPlacement PlaceStationOffsetLabel(const Alignment& al, const StationOffsetLabel& label,
-                                                    int linearPrecision) {
+                                                    int linearPrecision, const StationFormat& fmt) {
   StationOffsetLabelPlacement r;
   if (al.Empty()) {
     r.onAlignment = false;
@@ -81,7 +81,7 @@ StationOffsetLabelPlacement PlaceStationOffsetLabel(const Alignment& al, const S
     r.onAlignment = label.internalStation >= al.StartStation() - 1e-9 && label.internalStation <= al.EndStation() + 1e-9;
     r.point = al.GetPointFromStationOffset(label.internalStation, label.offset);
   }
-  r.text = FormatStation(al.DisplayedStation(r.internalStation, true)) + "  OFF " + FormatLinear(r.offset, linearPrecision);
+  r.text = FormatStation(al.DisplayedStation(r.internalStation, true), fmt) + "  OFF " + FormatLinear(r.offset, linearPrecision);
   return r;
 }
 
@@ -113,27 +113,27 @@ const char* GeometryPointAbbreviation(GeometryPointCode code) {
   return "";
 }
 
-std::vector<GeometryPointLabel> CollectGeometryPointLabels(const Alignment& al) {
+std::vector<GeometryPointLabel> CollectGeometryPointLabels(const Alignment& al, const StationFormat& fmt) {
   std::vector<GeometryPointLabel> out;
   if (al.Empty()) return out;
   for (const GeometryPoint& gp : al.GeometryPoints()) {
     const std::string abbreviation = GeometryPointAbbreviation(gp.code);
     if (abbreviation.empty()) continue;
     // The ahead value at an equation point, like the station labels (REQ-492.2).
-    const std::string station = FormatStation(al.DisplayedStation(gp.internalStation, true));
+    const std::string station = FormatStation(al.DisplayedStation(gp.internalStation, true), fmt);
     out.push_back(GeometryPointLabel{gp.point, gp.internalStation, gp.code, abbreviation + ": " + station});
   }
   return out;
 }
 
-std::vector<DesignSpeedLabel> CollectDesignSpeedLabels(const Alignment& al, bool metric) {
+std::vector<DesignSpeedLabel> CollectDesignSpeedLabels(const Alignment& al, bool metric, const StationFormat& fmt) {
   std::vector<DesignSpeedLabel> out;
   if (al.Empty()) return out;
   for (const DesignSpeed& d : al.designSpeeds) {
     if (!(d.speed > 0.0)) continue;
     const bool whole = std::fabs(d.speed - std::round(d.speed)) < 1e-9;
     const std::string speed = FormatLinear(d.speed, whole ? 0 : 2);
-    out.push_back(DesignSpeedLabel{d.internalStation, "STA " + FormatStation(al.DisplayedStation(d.internalStation, true)) +
+    out.push_back(DesignSpeedLabel{d.internalStation, "STA " + FormatStation(al.DisplayedStation(d.internalStation, true), fmt) +
                                                           " DESIGN SPEED = " + speed + (metric ? " km/h" : " mi/h")});
   }
   return out;

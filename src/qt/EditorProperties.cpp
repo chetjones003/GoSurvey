@@ -698,9 +698,9 @@ void EditorWindow::RefreshProperties() {
         const double ox = CadCoord::WorldOriginX(st), oy = CadCoord::WorldOriginY(st);
         const AngleDisplaySettings angles = CadAngleDisplaySettings(st);
         constexpr double kRadToDeg = 180.0 / alignment::kPi;
-        editableAlignmentField(rows, "Start station", Text(alignment::FormatStation(al.StartStation())), "propAlignmentStartStation",
+        editableAlignmentField(rows, "Start station", Text(alignment::FormatStation(al.StartStation(), st.alignmentStationFormat)), "propAlignmentStartStation",
                                "START", al.name);
-        readOnly(rows, "End station", Text(alignment::FormatStation(al.EndStationWithEquations())), "propAlignmentEndStation");
+        readOnly(rows, "End station", Text(alignment::FormatStation(al.EndStationWithEquations(), st.alignmentStationFormat)), "propAlignmentEndStation");
         readOnly(rows, "Length", fmt(al.Length()), "propAlignmentLength");
         readOnly(rows, "Start coordinate", fmt(al.StartPoint().x + ox) + ", " + fmt(al.StartPoint().y + oy),
                  "propAlignmentStart");

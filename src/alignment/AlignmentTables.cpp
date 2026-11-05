@@ -15,8 +15,8 @@ std::string Brg(const AngleDisplaySettings& angles, double azimuthRad) {
   return FormatBearing(azimuthRad / kDegToRad, angles);
 }
 
-std::string Sta(const Alignment& a, double internalStation) {
-  return FormatStation(a.DisplayedStation(internalStation, true));
+std::string Sta(const Alignment& a, double internalStation, const StationFormat& fmt) {
+  return FormatStation(a.DisplayedStation(internalStation, true), fmt);
 }
 
 std::string Dir(const Entity& e) { return e.right ? "Right" : "Left"; }
@@ -30,7 +30,8 @@ std::string MissingLabelsMessage(const Alignment& a) {
 }  // namespace
 
 bool BuildAlignmentTableText(const Alignment& a, AlignmentTableKind kind, int linearPrecision,
-                             const AngleDisplaySettings& angles, AlignmentTableText* out, std::string* whyNot) {
+                             const AngleDisplaySettings& angles, AlignmentTableText* out, std::string* whyNot,
+                             const StationFormat& station) {
   auto fail = [&](const std::string& why) {
     if (whyNot != nullptr) *whyNot = why;
     return false;
@@ -52,7 +53,7 @@ bool BuildAlignmentTableText(const Alignment& a, AlignmentTableKind kind, int li
       for (int i = 0; i < n; ++i) {
         const Entity& e = a.Entities()[static_cast<size_t>(i)];
         if (e.kind != EntityKind::Line) continue;
-        row({std::to_string(i + 1), Sta(a, a.EntityStartStation(i)), Sta(a, a.EntityEndStation(i)),
+        row({std::to_string(i + 1), Sta(a, a.EntityStartStation(i), station), Sta(a, a.EntityEndStation(i), station),
              Brg(angles, e.startAzimuth), Lin(linearPrecision, e.length)});
       }
       return true;
@@ -63,7 +64,7 @@ bool BuildAlignmentTableText(const Alignment& a, AlignmentTableKind kind, int li
       for (int i = 0; i < n; ++i) {
         CurveData cd;
         if (!a.CurveDataFor(i, &cd)) continue;
-        row({std::to_string(i + 1), Sta(a, a.EntityStartStation(i)), Sta(a, a.EntityEndStation(i)),
+        row({std::to_string(i + 1), Sta(a, a.EntityStartStation(i), station), Sta(a, a.EntityEndStation(i), station),
              Lin(linearPrecision, cd.radius), FormatSweptAngle(cd.delta / kDegToRad, angles),
              Lin(linearPrecision, cd.arcLength), Lin(linearPrecision, cd.tangentLength),
              Lin(linearPrecision, cd.chord), Dir(a.Entities()[static_cast<size_t>(i)])});
@@ -76,7 +77,7 @@ bool BuildAlignmentTableText(const Alignment& a, AlignmentTableKind kind, int li
       for (int i = 0; i < n; ++i) {
         const Entity& e = a.Entities()[static_cast<size_t>(i)];
         const std::string num = std::to_string(i + 1);
-        const std::string start = Sta(a, a.EntityStartStation(i)), end = Sta(a, a.EntityEndStation(i));
+        const std::string start = Sta(a, a.EntityStartStation(i), station), end = Sta(a, a.EntityEndStation(i), station);
         if (e.kind == EntityKind::Line) {
           row({num, "Tangent", start, end, Lin(linearPrecision, e.length), Brg(angles, e.startAzimuth), "", "", ""});
         } else {
@@ -92,8 +93,8 @@ bool BuildAlignmentTableText(const Alignment& a, AlignmentTableKind kind, int li
       out->cols = 4;
       row({"Back station", "Ahead station", "Type", "Raw station"});
       for (const StationEquation& q : a.equations) {
-        row({FormatStation(a.DisplayedStation(q.rawBack, false)), FormatStation(q.ahead),
-             q.increasing ? "Increasing" : "Decreasing", FormatStation(q.rawBack)});
+        row({FormatStation(a.DisplayedStation(q.rawBack, false), station), FormatStation(q.ahead, station),
+             q.increasing ? "Increasing" : "Decreasing", FormatStation(q.rawBack, station)});
       }
       return true;
     }

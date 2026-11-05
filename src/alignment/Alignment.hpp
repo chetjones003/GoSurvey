@@ -208,6 +208,12 @@ class Alignment {
 
   // --- station domain (REQ-483) ---
   double startingStation = 0.0;
+  /// REQ-483.1 reference point: the place `referenceDistance` along the alignment carries `startingStation +
+  /// referenceDistance`. Without one, the start is the reference point.
+  bool hasReference = false;
+  double referenceDistance = 0.0;
+  /// REQ-480.1 metadata: named text values the user attaches (project, owner, ...), kept in order (GoSurvey rule).
+  std::vector<std::pair<std::string, std::string>> metadata;
   std::vector<StationEquation> equations;
 
   // --- geometry ---

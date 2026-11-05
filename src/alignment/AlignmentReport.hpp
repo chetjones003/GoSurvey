@@ -1,5 +1,6 @@
 #pragma once
 
+#include "alignment/Alignment.hpp"  // StationFormat
 #include "util/AngleFormat.hpp"
 #include "util/SheetGrid.hpp"
 
@@ -17,6 +18,7 @@ struct AlignmentReportFormat {
   AngleDisplaySettings angles{};
   /// REQ-502: the check set the alignment is designed against, or null for none. Owned by the caller.
   const AlignmentCheckSet* checkSet = nullptr;
+  StationFormat station{};  ///< REQ-483.4: the drawing's station format.
 };
 
 /// Builds the multi-line ALIGNMENTREPORT text (on-screen and `.txt` export).

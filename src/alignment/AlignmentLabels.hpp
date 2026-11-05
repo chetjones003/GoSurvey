@@ -44,7 +44,7 @@ struct StationOffsetLabelPlacement {
   std::string text;         ///< "12+45.32  OFF -15.42" in the drawing's precision.
 };
 [[nodiscard]] StationOffsetLabelPlacement PlaceStationOffsetLabel(const Alignment& al, const StationOffsetLabel& label,
-                                                                  int linearPrecision);
+                                                                  int linearPrecision, const StationFormat& fmt = {});
 
 /// The abbreviation a geometry-point label shows for a code (D-2026-11-04-c), or "" when the code is not labelled
 /// (line midpoint, curve centre, curve PI).
@@ -57,14 +57,15 @@ struct GeometryPointLabel {
   GeometryPointCode code = GeometryPointCode::Begin;
   std::string text;
 };
-[[nodiscard]] std::vector<GeometryPointLabel> CollectGeometryPointLabels(const Alignment& al);
+[[nodiscard]] std::vector<GeometryPointLabel> CollectGeometryPointLabels(const Alignment& al, const StationFormat& fmt = {});
 
 /// One design-speed label (REQ-492.1 Design Speeds item), e.g. "STA 5+00.00 DESIGN SPEED = 30 mi/h".
 struct DesignSpeedLabel {
   double internalStation = 0.0;
   std::string text;
 };
-[[nodiscard]] std::vector<DesignSpeedLabel> CollectDesignSpeedLabels(const Alignment& al, bool metric);
+[[nodiscard]] std::vector<DesignSpeedLabel> CollectDesignSpeedLabels(const Alignment& al, bool metric,
+                                                                   const StationFormat& fmt = {});
 
 /// Segment label lines (REQ-492.3, stacked per REQ-492.5). Line: bearing, then length. Spiral: A, Ls, then the start and
 /// end radius (∞ = tangent). Curves use CurveLabelLines (AlignmentTables.hpp).

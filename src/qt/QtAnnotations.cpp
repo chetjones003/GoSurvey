@@ -508,13 +508,13 @@ void DrawAlignmentStationText(QPainter& painter, const AppCommandState& state, c
   const LabelFace major = MakeLabelFace(state, ls.majorStyle, ppu, layerColor);
   for (const alignment::StationTickLabel& tick : ticks) {
     if (!tick.major) continue;
-    PlaceStack(painter, major, FrameAt(view, al, tick.rawStation), {alignment::FormatStation(tick.displayedStation)},
+    PlaceStack(painter, major, FrameAt(view, al, tick.rawStation), {alignment::FormatStation(tick.displayedStation, state.alignmentStationFormat)},
                {1.0, -1.0}, rowPx + 0.3 * major.px, boxes);
   }
   if (!ls.equationsOn) return;
   const LabelFace equation = MakeLabelFace(state, ls.equationStyle, ppu, layerColor);
   for (const alignment::EquationLabel& eq : alignment::CollectEquationLabels(al)) {
-    const std::string text = "EQ " + alignment::FormatStation(eq.backDisplayed) + " = " + alignment::FormatStation(eq.aheadDisplayed);
+    const std::string text = "EQ " + alignment::FormatStation(eq.backDisplayed, state.alignmentStationFormat) + " = " + alignment::FormatStation(eq.aheadDisplayed, state.alignmentStationFormat);
     PlaceStack(painter, equation, FrameAt(view, al, eq.rawStation), {text}, {1.0, -1.0}, rowPx + 0.3 * equation.px, boxes);
   }
 }
@@ -580,13 +580,13 @@ void DrawAlignmentLabels(QPainter& painter, const AppCommandState& state, const 
   LabelBoxes& boxes = *claimed;
   if (ls.geometryPointsOn) {
     const LabelFace face = MakeLabelFace(state, ls.geometryStyle, ppu, layerColor);
-    for (const alignment::GeometryPointLabel& gp : alignment::CollectGeometryPointLabels(al))
+    for (const alignment::GeometryPointLabel& gp : alignment::CollectGeometryPointLabels(al, state.alignmentStationFormat))
       DrawLeaderLabel(painter, face, FrameAt(view, al, gp.internalStation), 1.0, gp.text, &boxes);
   }
   if (ls.designSpeedsOn) {
     const LabelFace face = MakeLabelFace(state, ls.speedStyle, ppu, layerColor);
     const bool metric = state.drawingInsUnits == 4 || state.drawingInsUnits == 6;
-    for (const alignment::DesignSpeedLabel& d : alignment::CollectDesignSpeedLabels(al, metric))
+    for (const alignment::DesignSpeedLabel& d : alignment::CollectDesignSpeedLabels(al, metric, state.alignmentStationFormat))
       DrawLeaderLabel(painter, face, FrameAt(view, al, d.internalStation), -1.0, d.text, &boxes);
   }
   if (al.segmentLabels)
@@ -596,7 +596,8 @@ void DrawAlignmentLabels(QPainter& painter, const AppCommandState& state, const 
   // REQ-492.4: station/offset labels, fixed or relative, drawn where they resolve on the current geometry.
   const LabelFace offsetFace = MakeLabelFace(state, ls.offsetStyle, ppu, layerColor);
   for (const alignment::StationOffsetLabel& sl : al.stationLabels) {
-    const alignment::StationOffsetLabelPlacement placed = alignment::PlaceStationOffsetLabel(al, sl, state.displayLinearPrecision);
+    const alignment::StationOffsetLabelPlacement placed = alignment::PlaceStationOffsetLabel(al, sl, state.displayLinearPrecision,
+                                                                                             state.alignmentStationFormat);
     if (placed.onAlignment && offsetFace.Drawable()) offsetFace.Draw(painter, view.Project(placed.point), placed.text);
   }
 }
