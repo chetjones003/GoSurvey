@@ -8,6 +8,7 @@
 // Geometry is built from typed arguments, from selected objects, and interactively by layout (ALIGNMENTLAYOUT) and
 // by picking objects (REQ-485). The dialogs and the layout toolbar live in the Qt editor and submit these commands.
 
+#include "GsIo.hpp"  // REQ-502 criteria files
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
 #include "CadCoordinateFrame.hpp"
@@ -36,6 +37,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -2771,7 +2773,8 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
   const std::vector<std::string> f = SplitFields(args);
   const char* usage =
       "ALIGNMENTCHECKSET - usage: ALIGNMENTCHECKSET NEW, <name>[, ROAD|RAIL] | DELETE, <name> | LIST | "
-      "SET, <name>, RADIUS, <speed>, <minRadius> | SET, <name>, MINTANGENT|MINSPIRAL|MINA|MAXA|MINLINE|SUPERELEVATION|SIGHT, <value>.";
+      "SET, <name>, RADIUS, <speed>, <minRadius> | SET, <name>, MINTANGENT|MINSPIRAL|MINA|MAXA|MINLINE|MAXDEFLECTION|"
+      "SUPERELEVATION|SIGHT, <value> | LOAD, <file> | SAVE, <name>, <file>.";
   if (f.empty()) {
     log.push_back(usage);
     return;
@@ -2872,7 +2875,7 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
       std::sort(table.begin(), table.end(),
                 [](const alignment::RadiusRequirement& x, const alignment::RadiusRequirement& y) { return x.speed < y.speed; });
     } else if (what == "mintangent" || what == "minspiral" || what == "mina" || what == "maxa" ||
-               what == "minline" || what == "superelevation" || what == "sight") {
+               what == "minline" || what == "maxdeflection" || what == "superelevation" || what == "sight") {
       double value = 0.0;
       if (f.size() != 4 || !ParseNum(f[3], &value) || value < 0.0) {
         log.push_back("ALIGNMENTCHECKSET - " + what + " takes one value, zero or more.");
@@ -2883,6 +2886,7 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
       else if (what == "mina") edited.minA = value;
       else if (what == "maxa") edited.maxA = value;
       else if (what == "minline") edited.minLineLength = value;
+      else if (what == "maxdeflection") edited.maxTangentDeflection = value;  // degrees, at a curveless PI
       else if (what == "superelevation") edited.maxSuperelevation = value;  // REQ-502 stub
       else edited.minSightDistance = value;  // REQ-502 stub
     } else {
@@ -2896,6 +2900,51 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
     PushUndoSnapshot(st, "Edit check set");
     st.alignmentCheckSets[static_cast<size_t>(idx)] = std::move(edited);
     log.push_back("ALIGNMENTCHECKSET - \"" + st.alignmentCheckSets[static_cast<size_t>(idx)].name + "\" updated.");
+    return;
+  }
+  if (verb == "load" && f.size() == 2) {  // REQ-502: reference values loaded from a user file
+    std::ifstream in(Trim(f[1]), std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::vector<alignment::AlignmentCheckSet> loaded;
+    std::string err = "the file could not be read";
+    if (!in.good() && text.empty()) {
+      log.push_back("ALIGNMENTCHECKSET - \"" + Trim(f[1]) + "\": " + err + ".");
+      return;
+    }
+    if (!AlignmentCheckSetsFromJsonText(text, &loaded, &err) || loaded.empty()) {
+      log.push_back("ALIGNMENTCHECKSET - \"" + Trim(f[1]) + "\": " + (loaded.empty() && err.empty() ? "no check sets" : err) + ".");
+      return;
+    }
+    PushUndoSnapshot(st, "Load check sets");
+    int added = 0, replaced = 0;
+    for (alignment::AlignmentCheckSet& s : loaded) {
+      const int at = FindCheckSetIndex(st, s.name);
+      if (at >= 0) {
+        st.alignmentCheckSets[static_cast<size_t>(at)] = std::move(s);
+        ++replaced;
+      } else {
+        st.alignmentCheckSets.push_back(std::move(s));
+        ++added;
+      }
+    }
+    log.push_back("ALIGNMENTCHECKSET - loaded " + std::to_string(added) + " new and " + std::to_string(replaced) +
+                  " replaced check set(s) from \"" + Trim(f[1]) + "\".");
+    return;
+  }
+  if (verb == "save" && f.size() == 3) {
+    const int idx = FindCheckSetIndex(st, f[1]);
+    if (idx < 0) {
+      log.push_back("ALIGNMENTCHECKSET - no check set named \"" + Trim(f[1]) + "\".");
+      return;
+    }
+    std::ofstream out(Trim(f[2]), std::ios::binary | std::ios::trunc);
+    out << AlignmentCheckSetsToJsonText({st.alignmentCheckSets[static_cast<size_t>(idx)]});
+    if (!out.good()) {
+      log.push_back("ALIGNMENTCHECKSET - could not write \"" + Trim(f[2]) + "\".");
+      return;
+    }
+    log.push_back("ALIGNMENTCHECKSET - \"" + st.alignmentCheckSets[static_cast<size_t>(idx)].name + "\" saved to \"" +
+                  Trim(f[2]) + "\".");
     return;
   }
   log.push_back(usage);

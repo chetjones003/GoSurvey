@@ -3,8 +3,10 @@
 #include "util/NumFormat.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 
 namespace alignment {
 namespace {
@@ -102,6 +104,17 @@ std::vector<DesignFinding> CheckDesign(const Alignment& a, const AlignmentCheckS
       if (set.minTangent > 0.0 && betweenCurves && e.length < set.minTangent - 1e-9) {
         out.push_back({number, "Tangent " + Lin(linearPrecision, e.length) + " is shorter than the minimum tangent of " +
                                    Lin(linearPrecision, set.minTangent) + "."});
+      }
+      // The tangent intersection check: two tangents meeting at a PI with no curve between them.
+      if (set.maxTangentDeflection > 0.0 && i > 0 && a.Entities()[static_cast<size_t>(i) - 1].kind == EntityKind::Line) {
+        const double turn = std::fabs(std::remainder(e.startAzimuth - a.Entities()[static_cast<size_t>(i) - 1].startAzimuth, kTwoPi));
+        const double degrees = turn * 180.0 / kPi;
+        if (degrees > set.maxTangentDeflection + 1e-9) {
+          std::array<char, 96> text{};
+          std::snprintf(text.data(), text.size(), "Tangent intersection deflection %.4f%s exceeds the maximum of %.4f%s.",
+                        degrees, "\xC2\xB0", set.maxTangentDeflection, "\xC2\xB0");
+          out.push_back({number, text.data()});
+        }
       }
     } else if (e.kind == EntityKind::Spiral) {
       SpiralData sd;

@@ -1123,6 +1123,59 @@ static CadSpline CadSplineFromJson(const json& o) {
   return s;
 }
 
+/// One REQ-502 check set as the drawing (and a criteria file) stores it.
+json CheckSetToJson(const alignment::AlignmentCheckSet& s) {
+  assert(!s.name.empty());
+  assert(s.radiusTable.size() < 100000);
+  json o;
+  o["name"] = s.name;
+  o["kind"] = static_cast<int>(s.kind);
+  json table = json::array();
+  for (const alignment::RadiusRequirement& r : s.radiusTable) table.push_back({{"speed", r.speed}, {"minRadius", r.minRadius}});
+  o["radiusTable"] = std::move(table);
+  o["minTangent"] = s.minTangent;
+  o["minSpiralLength"] = s.minSpiralLength;
+  o["minA"] = s.minA;
+  o["maxA"] = s.maxA;
+  o["maxSuperelevation"] = s.maxSuperelevation;  // REQ-502 stub
+  o["minLineLength"] = s.minLineLength;
+  o["minSightDistance"] = s.minSightDistance;    // REQ-502 stub
+  if (s.maxTangentDeflection > 0.0) o["maxTangentDeflection"] = s.maxTangentDeflection;
+  return o;
+}
+
+/// Reads one check set; false (and `s` untouched) for anything without a name.
+bool CheckSetFromJson(const json& o, alignment::AlignmentCheckSet* s) {
+  assert(s != nullptr);
+  if (s == nullptr || !o.is_object() || !o.contains("name") || !o["name"].is_string() || o["name"].get<std::string>().empty())
+    return false;
+  alignment::AlignmentCheckSet r;
+  r.name = o["name"].get<std::string>();
+  if (o.contains("kind") && o["kind"].is_number_integer() && o["kind"].get<int>() == 1) r.kind = alignment::CheckSetKind::Rail;
+  if (o.contains("radiusTable") && o["radiusTable"].is_array()) {
+    for (const auto& row : o["radiusTable"]) {
+      if (!row.is_object() || !row.contains("speed") || !row.contains("minRadius")) continue;
+      if (!row["speed"].is_number() || !row["minRadius"].is_number()) continue;
+      r.radiusTable.push_back({row["speed"].get<double>(), row["minRadius"].get<double>()});
+    }
+    std::sort(r.radiusTable.begin(), r.radiusTable.end(),
+              [](const alignment::RadiusRequirement& x, const alignment::RadiusRequirement& y) { return x.speed < y.speed; });
+  }
+  const auto number = [&](const char* key, double* v) {
+    if (o.contains(key) && o[key].is_number()) *v = o[key].get<double>();
+  };
+  number("minTangent", &r.minTangent);
+  number("minSpiralLength", &r.minSpiralLength);
+  number("minA", &r.minA);
+  number("maxA", &r.maxA);
+  number("maxSuperelevation", &r.maxSuperelevation);
+  number("minLineLength", &r.minLineLength);
+  number("minSightDistance", &r.minSightDistance);
+  number("maxTangentDeflection", &r.maxTangentDeflection);
+  *s = std::move(r);
+  return true;
+}
+
 json BuildRoot(const AppCommandState& st) {
   json root;
   root["format"] = "gosurvey";
@@ -1363,23 +1416,7 @@ json BuildRoot(const AppCommandState& st) {
   {  // REQ-502: drawing-owned check sets (omitted when there are none)
     if (!st.alignmentCheckSets.empty()) {
       json sets = json::array();
-      for (const alignment::AlignmentCheckSet& s : st.alignmentCheckSets) {
-        json o;
-        o["name"] = s.name;
-        o["kind"] = static_cast<int>(s.kind);
-        json table = json::array();
-        for (const alignment::RadiusRequirement& r : s.radiusTable)
-          table.push_back({{"speed", r.speed}, {"minRadius", r.minRadius}});
-        o["radiusTable"] = std::move(table);
-        o["minTangent"] = s.minTangent;
-        o["minSpiralLength"] = s.minSpiralLength;
-        o["minA"] = s.minA;
-        o["maxA"] = s.maxA;
-        o["maxSuperelevation"] = s.maxSuperelevation;  // REQ-502 stub
-        o["minLineLength"] = s.minLineLength;
-        o["minSightDistance"] = s.minSightDistance;    // REQ-502 stub
-        sets.push_back(std::move(o));
-      }
+      for (const alignment::AlignmentCheckSet& s : st.alignmentCheckSets) sets.push_back(CheckSetToJson(s));
       doc["alignmentCheckSets"] = std::move(sets);
     }
   }
@@ -3579,31 +3616,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.alignmentCheckSets.clear();  // REQ-502
   if (doc.contains("alignmentCheckSets") && doc["alignmentCheckSets"].is_array()) {
     for (const auto& o : doc["alignmentCheckSets"]) {
-      if (!o.is_object() || !o.contains("name") || !o["name"].is_string()) continue;
       alignment::AlignmentCheckSet s;
-      s.name = o["name"].get<std::string>();
-      if (o.contains("kind") && o["kind"].is_number_integer() && o["kind"].get<int>() == 1)
-        s.kind = alignment::CheckSetKind::Rail;
-      if (o.contains("radiusTable") && o["radiusTable"].is_array()) {
-        for (const auto& r : o["radiusTable"]) {
-          if (!r.is_object() || !r.contains("speed") || !r.contains("minRadius")) continue;
-          if (!r["speed"].is_number() || !r["minRadius"].is_number()) continue;
-          s.radiusTable.push_back({r["speed"].get<double>(), r["minRadius"].get<double>()});
-        }
-        std::sort(s.radiusTable.begin(), s.radiusTable.end(),
-                  [](const alignment::RadiusRequirement& x, const alignment::RadiusRequirement& y) { return x.speed < y.speed; });
-      }
-      if (o.contains("minTangent") && o["minTangent"].is_number()) s.minTangent = o["minTangent"].get<double>();
-      if (o.contains("minSpiralLength") && o["minSpiralLength"].is_number()) s.minSpiralLength = o["minSpiralLength"].get<double>();
-      if (o.contains("minA") && o["minA"].is_number()) s.minA = o["minA"].get<double>();
-      if (o.contains("maxA") && o["maxA"].is_number()) s.maxA = o["maxA"].get<double>();
-      if (o.contains("maxSuperelevation") && o["maxSuperelevation"].is_number())
-        s.maxSuperelevation = o["maxSuperelevation"].get<double>();
-      if (o.contains("minLineLength") && o["minLineLength"].is_number())
-        s.minLineLength = o["minLineLength"].get<double>();
-      if (o.contains("minSightDistance") && o["minSightDistance"].is_number())
-        s.minSightDistance = o["minSightDistance"].get<double>();
-      st.alignmentCheckSets.push_back(std::move(s));
+      if (CheckSetFromJson(o, &s)) st.alignmentCheckSets.push_back(std::move(s));
     }
   }
 
@@ -5080,6 +5094,29 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
 } // namespace
 
 std::string DrawingSettingsToJsonText(const DrawingSettings& ds) { return DrawingSettingsToJson(ds).dump(); }
+
+std::string AlignmentCheckSetsToJsonText(const std::vector<alignment::AlignmentCheckSet>& sets) {
+  json out = json::array();
+  for (const alignment::AlignmentCheckSet& s : sets) out.push_back(CheckSetToJson(s));
+  return out.dump(2);
+}
+
+bool AlignmentCheckSetsFromJsonText(const std::string& jsonText, std::vector<alignment::AlignmentCheckSet>* out,
+                                    std::string* err) {
+  assert(out != nullptr);
+  assert(jsonText.size() < (std::size_t{1} << 30));
+  const json parsed = json::parse(jsonText, nullptr, false);
+  if (parsed.is_discarded() || !parsed.is_array()) {
+    if (err != nullptr) *err = "the file is not a JSON list of check sets";
+    return false;
+  }
+  out->clear();
+  for (const json& o : parsed) {
+    alignment::AlignmentCheckSet s;
+    if (CheckSetFromJson(o, &s)) out->push_back(std::move(s));
+  }
+  return true;
+}
 
 bool DrawingSettingsFromJsonText(const std::string& jsonText, DrawingSettings* out) {
   const json o = json::parse(jsonText, nullptr, false);

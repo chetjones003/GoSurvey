@@ -916,3 +916,84 @@ TEST_CASE("Alignment metadata is set, listed, removed and saved", "[req480][alig
   Submit(st, "UNDO", log);
   CHECK(st.alignments[0].metadata.size() == 2);
 }
+
+// --- REQ-502: the other checks, and criteria files ---
+
+TEST_CASE("Minimum tangent, spiral length and A limits are checked; compound spirals are not length-checked",
+          "[req502][alignment]") {
+  alignment::AlignmentCheckSet set;
+  set.name = "Set";
+  set.minTangent = 100.0;
+  set.minSpiralLength = 80.0;
+  set.minA = 150.0;
+  set.maxA = 160.0;
+  Alignment a;  // tangent, curve, short tangent, curve; then spiral-curve-spiral pieces
+  REQUIRE(a.AppendTangent({0, 0}, 0.0, 200.0));
+  REQUIRE(a.AppendCurveByDelta(300.0, 10.0 * kDeg, true));
+  REQUIRE(a.AppendTangent(50.0));                     // entity 3: between curves, below 100
+  REQUIRE(a.AppendCurveByDelta(300.0, 10.0 * kDeg, false));
+  REQUIRE(a.AppendTangent(200.0));
+  REQUIRE(a.AppendSpiral(60.0, 0.0, 300.0, true));    // entity 6: Ls 60 < 80; A = sqrt(300 * 60) = 134 < 150
+  REQUIRE(a.AppendCurveByDelta(300.0, 5.0 * kDeg, true));
+  const std::vector<alignment::DesignFinding> found = alignment::CheckDesign(a, set, 2);
+  Alignment compound;  // two spirals in a row between tangent and curve: neither is length-checked
+  REQUIRE(compound.AppendTangent({0, 0}, 0.0, 100.0));
+  REQUIRE(compound.AppendSpiral(40.0, 0.0, 600.0, true));
+  REQUIRE(compound.AppendSpiral(40.0, 600.0, 300.0, true));
+  REQUIRE(compound.AppendCurveByDelta(300.0, 5.0 * kDeg, true));
+  for (const alignment::DesignFinding& f : alignment::CheckDesign(compound, set, 2))
+    CHECK(f.text.find("spiral length") == std::string::npos);
+  auto has = [&](int entity, const std::string& part) {
+    return std::any_of(found.begin(), found.end(),
+                       [&](const alignment::DesignFinding& f) { return f.entity == entity && f.text.find(part) != std::string::npos; });
+  };
+  CHECK(has(3, "shorter than the minimum tangent of 100.00'"));
+  CHECK_FALSE(has(1, "minimum tangent"));  // the first tangent is not between curves
+  CHECK(has(6, "below the minimum spiral length of 80.00'"));
+  CHECK(has(6, "below the minimum A of 150.00'"));
+  set.minA = 0.0;
+  set.maxA = 100.0;
+  CHECK(alignment::CheckDesign(a, set, 2).size() >= 1);
+  const std::vector<alignment::DesignFinding> tooBig = alignment::CheckDesign(a, set, 2);
+  CHECK(std::any_of(tooBig.begin(), tooBig.end(),
+                    [](const alignment::DesignFinding& f) { return f.text.find("above the maximum A of 100.00'") != std::string::npos; }));
+}
+
+TEST_CASE("A tangent intersection with too much deflection is flagged", "[req502][alignment]") {
+  alignment::AlignmentCheckSet set;
+  set.name = "Set";
+  set.maxTangentDeflection = 5.0;
+  Alignment a;
+  REQUIRE(a.AppendTangent({0, 0}, 0.0, 100.0));
+  REQUIRE(a.AppendTangent({0, 100}, 3.0 * kDeg, 100.0));  // 3 degrees: within
+  REQUIRE(a.AppendTangent(a.EndPoint(), 15.0 * kDeg, 100.0));  // 12 degrees more: over
+  const std::vector<alignment::DesignFinding> found = alignment::CheckDesign(a, set, 2);
+  REQUIRE(found.size() == 1);
+  CHECK(found[0].entity == 3);
+  CHECK(found[0].text.find("Tangent intersection deflection 12.0000") != std::string::npos);
+}
+
+TEST_CASE("Check sets are saved to and loaded from a criteria file", "[req502][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENTCHECKSET NEW, County", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, County, RADIUS, 40, 400", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, County, MINLINE, 120", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, County, MAXDEFLECTION, 2.5", log);
+  const std::string path = (std::filesystem::temp_directory_path() / "gosurvey-req502-criteria.json").string();
+  log.clear();
+  Submit(st, "ALIGNMENTCHECKSET SAVE, County, " + path, log);
+  REQUIRE(LogHas(log, "saved to"));
+  AppCommandState other = Drawing();
+  log.clear();
+  Submit(other, "ALIGNMENTCHECKSET LOAD, " + path, log);
+  CHECK(LogHas(log, "loaded 1 new"));
+  REQUIRE(other.alignmentCheckSets.size() == 1);
+  CHECK(other.alignmentCheckSets[0] == st.alignmentCheckSets[0]);
+  Submit(other, "ALIGNMENTCHECKSET LOAD, " + path, log);  // again: replaced, not duplicated
+  CHECK(other.alignmentCheckSets.size() == 1);
+  std::filesystem::remove(path);
+  log.clear();
+  Submit(other, "ALIGNMENTCHECKSET LOAD, " + path, log);  // gone
+  CHECK(LogHas(log, "could not be read"));
+}

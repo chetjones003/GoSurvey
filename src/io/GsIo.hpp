@@ -22,3 +22,10 @@ bool LoadGoSurveyFromJsonUtf8(AppCommandState& st, std::string_view jsonUtf8, st
 /// The reader returns false when the text is not a JSON object; absent members keep the defaults.
 std::string DrawingSettingsToJsonText(const DrawingSettings& ds);
 bool DrawingSettingsFromJsonText(const std::string& jsonText, DrawingSettings* out);
+
+namespace alignment { struct AlignmentCheckSet; }
+/// REQ-502 design criteria files: check sets as JSON text, the same schema the drawing stores. The reader returns false
+/// with `err` when the text is not a JSON array of check sets; entries without a name are skipped.
+std::string AlignmentCheckSetsToJsonText(const std::vector<alignment::AlignmentCheckSet>& sets);
+bool AlignmentCheckSetsFromJsonText(const std::string& jsonText, std::vector<alignment::AlignmentCheckSet>* out,
+                                    std::string* err);

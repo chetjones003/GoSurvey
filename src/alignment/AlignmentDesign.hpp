@@ -31,9 +31,12 @@ struct AlignmentCheckSet {
   double maxSuperelevation = 0.0;  ///< Stub (REQ-502): stored and reported, not checked in this epic.
   double minSightDistance = 0.0;   ///< Stub (REQ-502): stored and reported, not checked in this epic.
   double minLineLength = 0.0;      ///< Shortest tangent (Line entity) allowed. Decision 2026-11-04 (user).
+  /// Tangent intersection check (REQ-502): the largest deflection, degrees, where two tangents meet with no curve.
+  double maxTangentDeflection = 0.0;
 
   bool operator==(const AlignmentCheckSet& o) const {
     return name == o.name && kind == o.kind && minTangent == o.minTangent && minSpiralLength == o.minSpiralLength &&
+           maxTangentDeflection == o.maxTangentDeflection &&
            minA == o.minA && maxA == o.maxA && maxSuperelevation == o.maxSuperelevation &&
            minSightDistance == o.minSightDistance && minLineLength == o.minLineLength && radiusTable.size() == o.radiusTable.size() &&
            std::equal(radiusTable.begin(), radiusTable.end(), o.radiusTable.begin(),
