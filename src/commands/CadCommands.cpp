@@ -13398,19 +13398,17 @@ static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>
   if (st.arrayOnPaper) {
     const std::vector<PaperEntityRef> source = st.selectedPaperEntities;
     std::vector<std::string> transformLog;
-    for (int lv = 0; lv < levels; ++lv) {
-      for (int r = 0; r < rows; ++r) {
-        for (int c = 0; c < cols; ++c) {
-          if (lv == 0 && r == 0 && c == 0)
-            continue;
-          st.selectedPaperEntities = source;
-          TranslateSelectedPaperEntities(st, static_cast<float>(c) * st.arrayColSpacing,
-                                         static_cast<float>(r) * st.arrayRowSpacing, true, transformLog, false);
-        }
+    for (int r = 0; r < rows; ++r) {
+      for (int c = 0; c < cols; ++c) {
+        if (r == 0 && c == 0)
+          continue;
+        st.selectedPaperEntities = source;
+        TranslateSelectedPaperEntities(st, static_cast<float>(c) * st.arrayColSpacing,
+                                       static_cast<float>(r) * st.arrayRowSpacing, true, transformLog, false);
       }
     }
     st.selectedPaperEntities = source;
-    FinishArrayCommand(st, log, cols * rows * levels,
+    FinishArrayCommand(st, log, cols * rows,
                        (std::to_string(cols) + " x " + std::to_string(rows)).c_str());
     return;
   }
@@ -13568,6 +13566,13 @@ bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector
       return false;
     }
     st.arrayRowSpacing = v;
+    if (st.arrayOnPaper) {
+      // Paper layouts are 2D sheets; a third UCS level has no supported placement transform here.
+      // Commit the 2D grid instead of accepting a level count that would stack coincident copies.
+      st.arrayLevels = 1;
+      CommitArrayRectangular(st, log);
+      return true;
+    }
     st.arrayPhase = AP::Rect_WaitLevels;
     log.push_back("ARRAY Rectangular — number of levels <1 = 2D>:");
     return true;
@@ -16023,6 +16028,11 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
       const ucs::Ucs frame = CadWorkPlaneAnchoredAt(st, st.arrayAnchorX, st.arrayAnchorY, st.arrayAnchorZ);
       const ucs::Point2D local = ucs::WorldToPlane(frame, {px, py, static_cast<double>(pz)});
       st.arrayRowSpacing = static_cast<float>(local.y);
+      if (st.arrayOnPaper) {
+        st.arrayLevels = 1;
+        CommitArrayRectangular(st, log);
+        return;
+      }
       // GitHub issue #400 increment 2: advance to the levels prompt, same as the typed path —
       // this click-driven branch committing directly (skipping levels entirely) was a bug in
       // increment 2, caught while adding increment 3's test coverage.

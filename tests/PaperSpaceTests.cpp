@@ -1105,8 +1105,9 @@ TEST_CASE("Paper ARRAY rectangular copies are isolated and undo as one operation
   SubmitText(state, "3", log);
   SubmitText(state, "1", log);
   SubmitText(state, "0", log);
-  SubmitText(state, "1", log);
 
+  CHECK(state.active == AppCommandState::Kind::None);
+  CHECK(log.back() == "ARRAY — 2 total instance(s) (2 x 1).");
   REQUIRE(state.paperLayouts[0].paperLines.size() == 12);
   CHECK(state.paperLayouts[0].paperLines[0] == Catch::Approx(0.f));
   CHECK(state.paperLayouts[0].paperLines[6] == Catch::Approx(3.f));

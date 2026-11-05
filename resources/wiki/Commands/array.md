@@ -9,7 +9,8 @@ Creates rectangular or polar arrays of selected objects. Choose the array type, 
 spacing or center and fill angle, then choose whether polar copies rotate with the pattern. The
 original objects stay in place, and the completed array is one undoable operation.
 
-In a paper layout, `ARRAY` works on selected objects on the active sheet. Its copies remain in that
+In a paper layout, `ARRAY` works on selected objects on the active sheet. Rectangular arrays use
+columns and rows on the sheet plane; the model-space levels option is omitted. Copies remain in that
 layout; model geometry and other layouts are unchanged.
 
 See [[Modify Tools]] for related tools and workflows.

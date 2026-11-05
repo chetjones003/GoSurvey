@@ -47,6 +47,7 @@
 
 - 2026-11-03: User chose to support both commands. Added D-2026-11-03-f and REQ-483 before Workshop.
 - 2026-11-03: Implemented paper ARRAY selection, rectangular and polar copy placement, and a single undo snapshot per completed array. Paper copies use the existing paper translate/rotate primitives; polar rotation preserves each copy's correct center placement.
+- 2026-11-05: PR review found that paper rectangular ARRAY accepted 3D levels but had no sheet-plane level transform, creating coincident copies. Paper rectangular arrays now commit as 2D grids after row spacing and omit the model-space levels prompt; their total count and undo snapshot cover only the distinct sheet-plane instances. Updated the ARRAY help page to state this boundary.
 - 2026-11-03: Routed paper OVERKILL through the existing cleanup rules using only the active layout's line, circle, arc, and polyline stores, with one undo snapshot on the drawing. Model geometry and sibling layouts are not passed to the cleanup operation.
 - 2026-11-03: Updated ARRAY and OVERKILL in-app help and the paper-space guide.
 - 2026-11-04: Updated `regression-issue02-editing-respects-space.txt` to match the approved active-paper-layout OVERKILL behavior. The earlier transcript expected a paper-space refusal and was stale; it now verifies duplicate cleanup on paper and that model geometry remains unchanged. Removed an obsolete JOIN refusal assertion because paper JOIN is covered by issue #973.
