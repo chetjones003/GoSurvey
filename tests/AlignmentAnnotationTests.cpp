@@ -67,7 +67,7 @@ TEST_CASE("The fixture's curve label reads as the spec writes it", "[req492][ali
   // REQ-492 acceptance 3: R, Δ (degrees-minutes-seconds), true arc length and tangent, in the drawing's format.
   AngleDisplaySettings whole;
   whole.precision = 0;
-  CHECK(alignment::CurveLabelText(cd, 2, whole) == "R = 500.00' \xCE\x94 = 15\xC2\xB0" "0'0\" L = 130.90' T = 65.83'");
+  CHECK(alignment::CurveLabelText(cd, 2, whole) == "R = 500.00' \xCE\x94 = 15\xC2\xB0" "00'00\" L = 130.90' T = 65.83'");
 }
 
 TEST_CASE("Label style precision, prefix, suffix and orientation are set, listed and saved", "[req492][alignment]") {

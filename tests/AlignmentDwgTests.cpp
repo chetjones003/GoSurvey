@@ -176,6 +176,11 @@ std::string TrailerJson(const std::string& path) {
   return json;
 }
 
+std::string FileBytes(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
 }  // namespace
 
 TEST_CASE("Alignments survive a DWG save and reopen with every stored value", "[req496][alignment][dwg]") {
@@ -401,12 +406,13 @@ TEST_CASE("A drawing saved before alignments re-saves with the same data", "[req
     INFO(change.dump());
     CHECK(change["path"].get<std::string>().find("lignment") == std::string::npos);
   }
-  // And a second save of the re-saved drawing changes nothing (REQ-079).
+  // The second save is stable as a complete DWG, not only in GoSurvey's trailer (REQ-496).
   AppCommandState again = Drawing();
   REQUIRE(OpenDrawingDocument(again, path.c_str(), log));
   const std::string path2 = (dir.path / "font-demo-2.dwg").string();
   REQUIRE(SaveDrawingDocument(again, path2.c_str(), log));
   CHECK(TrailerJson(path2) == TrailerJson(path));
+  CHECK(FileBytes(path2) == FileBytes(path));
 }
 
 TEST_CASE("A Civil 3D alignment imports as an editable alignment on Civil 3D's ground positions",

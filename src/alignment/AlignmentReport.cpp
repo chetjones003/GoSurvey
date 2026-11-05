@@ -5,9 +5,7 @@
 
 #include "util/NumFormat.hpp"
 
-#include <algorithm>
 #include <cassert>
-#include <cmath>
 #include <string>
 
 namespace alignment {
@@ -82,14 +80,6 @@ std::string CriteriaMark(const AlignmentReportFormat& fmt, const std::vector<Des
   return broken.empty() ? std::string("meets") : "violates: " + broken;
 }
 
-/// A value as the display precision shows it, so the CSV re-reads to the numbers on screen (REQ-494).
-double Rounded(double v, int decimals) {
-  assert(decimals >= 0 && decimals <= 12);
-  assert(std::isfinite(v));
-  const double scale = std::pow(10.0, std::clamp(decimals, 0, 12));
-  return std::round(v * scale) / scale;
-}
-
 void AppendEntityTextBlock(const Alignment& a, int entityIndex, const AlignmentReportFormat& fmt,
                            const std::vector<DesignFinding>& findings, std::vector<std::string>* lines) {
   assert(lines != nullptr);
@@ -141,11 +131,6 @@ void PushCsvNumber(SheetGrid::Row* row, double v) {
 }
 
 /// Decimals of an angle in degrees at the display precision (DMS / surveyor show seconds: four more places).
-int AngleDecimals(const AngleDisplaySettings& angles) {
-  assert(angles.precision >= 0);
-  return std::clamp(angles.type == AngleDisplayType::DecimalDegrees ? angles.precision : angles.precision + 4, 0, 12);
-}
-
 void PushCsvText(SheetGrid::Row* row, std::string v) {
   assert(row != nullptr);
   row->push_back(std::move(v));
@@ -222,7 +207,6 @@ SheetGrid::Grid BuildAlignmentReportCsv(const Alignment& a, const AlignmentRepor
   if (a.Empty()) return grid;
   const std::vector<DesignFinding> findings =
       format.checkSet == nullptr ? std::vector<DesignFinding>{} : CheckDesign(a, *format.checkSet, format.linearPrecision);
-  const int lp = format.linearPrecision, ap = AngleDecimals(format.angles);
   for (size_t i = 0; i < a.Entities().size(); ++i) {
     const int ii = static_cast<int>(i);
     const Entity& e = a.Entities()[i];
@@ -235,33 +219,33 @@ SheetGrid::Grid BuildAlignmentReportCsv(const Alignment& a, const AlignmentRepor
     PushCsvText(&row, Sta(a, a.EntityEndStation(ii), format.station));
     PushCsvText(&row, Brg(format, e.startAzimuth));
     if (e.kind == EntityKind::Line) {
-      PushCsvNumber(&row, Rounded(e.length, lp));
+      PushCsvNumber(&row, e.length);
       for (int n = 0; n < 9; ++n) PushCsvEmpty(&row);  // radius .. end_radius (9 columns)
       PushCsvText(&row, e.right ? "Right" : "Left");
     } else if (e.kind == EntityKind::Arc) {
       CurveData cd;
       (void)a.CurveDataFor(ii, &cd);
       PushCsvEmpty(&row);
-      PushCsvNumber(&row, Rounded(cd.radius, lp));
-      PushCsvNumber(&row, Rounded(cd.delta / kDegToRad, ap));
-      PushCsvNumber(&row, Rounded(cd.arcLength, lp));
-      PushCsvNumber(&row, Rounded(cd.tangentLength, lp));
-      PushCsvNumber(&row, Rounded(cd.chord, lp));
+      PushCsvNumber(&row, cd.radius);
+      PushCsvNumber(&row, cd.delta / kDegToRad);
+      PushCsvNumber(&row, cd.arcLength);
+      PushCsvNumber(&row, cd.tangentLength);
+      PushCsvNumber(&row, cd.chord);
       for (int n = 0; n < 4; ++n) PushCsvEmpty(&row);  // spiral_a .. end_radius (4 columns)
       PushCsvText(&row, e.right ? "Right" : "Left");
     } else {
       SpiralData sd;
       (void)SpiralDataFor(ii, a, &sd);
       PushCsvEmpty(&row);
-      PushCsvNumber(&row, Rounded(sd.endRadius, lp));
-      PushCsvNumber(&row, Rounded(sd.deflection / kDegToRad, ap));
+      PushCsvNumber(&row, sd.endRadius);
+      PushCsvNumber(&row, sd.deflection / kDegToRad);
       PushCsvEmpty(&row);
       PushCsvEmpty(&row);
       PushCsvEmpty(&row);
-      PushCsvNumber(&row, Rounded(sd.parameterA, lp));
-      PushCsvNumber(&row, Rounded(sd.length, lp));
-      PushCsvNumber(&row, Rounded(sd.startRadius, lp));
-      PushCsvNumber(&row, Rounded(sd.endRadius, lp));
+      PushCsvNumber(&row, sd.parameterA);
+      PushCsvNumber(&row, sd.length);
+      PushCsvNumber(&row, sd.startRadius);
+      PushCsvNumber(&row, sd.endRadius);
       PushCsvText(&row, e.right ? "Right" : "Left");
     }
     PushCsvText(&row, CriteriaMark(format, findings, ii));

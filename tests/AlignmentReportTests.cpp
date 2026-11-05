@@ -85,7 +85,7 @@ TEST_CASE("Text report of an empty alignment says so and stops", "[req494][align
   CHECK_FALSE(HasLineContaining(lines, "ENTITY 1"));
 }
 
-TEST_CASE("CSV report has a header and one row per entity at the display precision", "[req494][alignment]") {
+TEST_CASE("CSV report has a header and one row per entity at full precision", "[req494][alignment]") {
   const alignment::Alignment a = ExampleAlignment();
   alignment::AlignmentReportFormat fmt;
   const SheetGrid::Grid grid = alignment::BuildAlignmentReportCsv(a, fmt);
@@ -108,7 +108,11 @@ TEST_CASE("CSV report has a header and one row per entity at the display precisi
   REQUIRE(std::holds_alternative<double>(curve[8]));
   CHECK(std::get<double>(curve[8]) == Approx(500.0).margin(1e-9));
   CHECK(std::get<double>(curve[9]) == Approx(15.0).margin(1e-9));
-  CHECK(std::get<double>(curve[10]) == Approx(130.90).epsilon(0).margin(1e-9));  // 500 x 15 degrees = 130.8997, shown 130.90
+  alignment::CurveData cd;
+  REQUIRE(a.CurveDataFor(1, &cd));
+  CHECK(std::get<double>(curve[10]) == cd.arcLength);
+  CHECK(std::get<double>(curve[11]) == cd.tangentLength);
+  CHECK(std::get<double>(curve[12]) == cd.chord);
   CHECK(std::get<std::string>(curve[17]) == "Right");
 }
 
@@ -118,8 +122,8 @@ TEST_CASE("Report values are the same numbers the geometry gives", "[req494][ali
   const SheetGrid::Grid grid = alignment::BuildAlignmentReportCsv(a, fmt);
   alignment::CurveData cd;
   REQUIRE(a.CurveDataFor(1, &cd));
-  CHECK(std::get<double>(grid[2][11]) == Approx(cd.tangentLength).margin(0.005));  // to the display precision
-  CHECK(std::get<double>(grid[2][12]) == Approx(cd.chord).margin(0.005));
+  CHECK(std::get<double>(grid[2][11]) == cd.tangentLength);
+  CHECK(std::get<double>(grid[2][12]) == cd.chord);
 }
 
 TEST_CASE("CSV report of an empty alignment is just the header", "[req494][alignment]") {

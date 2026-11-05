@@ -36,9 +36,10 @@ leaves a detail open are listed under "Decisions needed" for the user to confirm
 
 ## Tests
 
-Domain: `tests/AlignmentSpecTests.cpp`, `tests/AlignmentAnnotationTests.cpp` (new), `tests/AlignmentTableTests.cpp`,
-`tests/AlignmentDwgTests.cpp`, `tests/AlignmentLabelTests.cpp`. `[alignment]`: 257 cases, 207 006 assertions, all pass
-(Release). Full Release suite: see "Verification".
+Domain: `tests/AlignmentSpecTests.cpp`, `tests/AlignmentAnnotationTests.cpp`, `tests/AlignmentTableTests.cpp`,
+`tests/AlignmentDwgTests.cpp`, `tests/AlignmentLabelTests.cpp`. This continuation adds the full-DWG byte comparison
+for a stable second save, checks CSV values at full precision, and updates DMS expected strings for zero-padded
+minutes and seconds. The label drag interaction already has live-move, commit/undo and cancel coverage.
 
 ## Architectural-boundary check
 
@@ -46,32 +47,42 @@ Domain code stays in `src/alignment` (sampling, cache, tables, definitions); com
 drawing in `QtAnnotations.cpp` / `ViewportRenderer.cpp`; persistence in `GsIo.cpp`. The display cache feeds only the
 renderer (REQ-495.1: never a query or export). The snap re-samples near the cursor from the exact geometry.
 
-## Decisions needed (raised at check-in)
+## Decisions confirmed (user choices, 2026-11-05)
 
-1. REQ-487 AC2 says reverse-twice is byte-identical; tests hold it to 1e-9 (floating point).
-2. REQ-496 AC4 says a re-save is byte-identical; tests compare GoSurvey's trailer, not the whole DWG.
-3. REQ-494: the CSV now writes at display precision (D-2026-11-04-a) — confirm for CSV as well as text.
-4. REQ-483.4 "station index" format: undefined; not built.
-5. REQ-483.5 orphaned equations: listed in the log and undoable instead of a blocking confirmation.
-6. REQ-481.5a minimum transition length: needs a criteria rule (speed / rate of change); not built.
-7. ALIGNMENTMETA (REQ-480.1) metadata model is a GoSurvey rule (named text values).
-8. REQ-502 tangent-intersection check is a GoSurvey rule (maximum deflection at a curveless PI).
-9. REQ-503 Q3: GoSurvey's and Civil 3D's clothoids agree to about 7e-6 ft, not 1e-8.
-10. REQ-499 acceptance cites REQ-500 (typo).
-11. REQ-492 AC3 writes `Δ = 15°00'00"`; GoSurvey's angle format does not zero-pad minutes and seconds
-    (`15°0'0"` at 0 decimals). Changing the shared formatter affects every angle in the program.
-12. REQ-492.2 metric default: major 20 m (SPEC); minor 4 m is a GoSurvey rule (the imperial 1:5 ratio).
-13. REQ-493 Split Table: parts tile across, the last part of a dynamic table takes new rows (GoSurvey rule).
-14. REQ-481.4: the Civil 3D record's spiral type is not decoded, so imported spirals are read as clothoids and the log
-    says so; the SPEC asks for a user confirmation before treating another type as a clothoid.
-15. REQ-492.5 labels are not draggable objects yet (station/offset labels can be moved with a command).
-16. Qt UI changes need the three-reviewer Civil 3D screenshot panel: Node snap glyph, Properties design status row,
+1. D-2026-11-05-a (already recorded): reverse twice returns the original geometry within 1e-9 drawing units,
+   preserving entity kinds, directions, constraints and locks.
+2. REQ-496: no alignment data is added to drawings without alignments; a subsequent save is byte-identical.
+3. REQ-494: CSV numeric fields use full available precision.
+4. REQ-483: StationIndex uses Civil 3D notation, such as `1+23.45`.
+5. REQ-483: orphaned equations are removed, logged and included in undo with the edit.
+6. REQ-481: spiral length must be positive; only numerically degenerate length is refused as geometry. Criteria
+   minimum length remains a warning check.
+7. REQ-480: ALIGNMENTMETA stores arbitrary named strings.
+8. REQ-502: tangent intersections are reported when they exceed the configured maximum deflection.
+9. REQ-503: accept Civil 3D spiral agreement within about 7e-6 ft.
+10. REQ-499: correct the incorrect REQ cross-reference.
+11. REQ-492: zero-pad angle minutes and seconds.
+12. REQ-492: retain the derived metric minor station interval of 4 m.
+13. REQ-493: split tables continue in adjacent sections with repeated headers.
+14. REQ-481: assume an unidentified imported spiral is a clothoid and log the assumption.
+15. REQ-492: keep draggable labels. The viewport drag, one-step undo and cancel behavior are implemented and covered by
+    `AlignmentLabelOffsetTests.cpp` and `QtEditorTests.cpp`.
+16. The required three-reviewer Civil 3D screenshot panel for alignment surfaces has passed; see
+    `build/artifacts/panel-121-dms-padding/RESULT.md` and prior panel evidence in `build/artifacts/panel-followups/`.
+    Reviewed surfaces include the Node snap glyph, Properties design status row,
     tag labels, Add Tables menu, marker shapes, label orientation.
 
 ## Verification
 
-- Build: `.\build.bat` Release, no warnings in changed files.
-- Full Release suite (`ctest --preset ninja-release`, at df69d30c): 194/194 passed.
+- Build: `.\build.bat` Release passed after the changes.
+- Focused run: `[alignment],[angle]` passed (262 cases, 207,044 assertions).
+- Full Release suite: the first `ctest --preset ninja-release` run passed 193/194 tests; the single failure was the
+  pre-existing angle-label expectation for unpadded DMS text, now updated. Re-running `unit.catch.shard-1` passed.
+  The other shards, including all Qt editor shards and headless tests, passed in the full run.
+- Screenshot capture: `issue121Phase6DesignScreenshots` passed and produced fresh padded-label screenshots in
+  `build/artifacts/Release/`. The hidden test runner continued into the full Qt suite and was stopped at its 120-second
+  timeout; the capture itself passed. The paired Civil 3D panel at
+  `build/artifacts/panel-121-dms-padding/` passed: all rubric medians are 1 or higher, with no blockers.
 - Debug: `.\build.bat debug` builds. `[alignment]` in Debug: 257 cases pass (after removing a Debug-only assert in the
   per-PI `BuildFromPis` that contradicted its own refusal test). The full Debug suite does **not** complete, for
   reasons outside this work (no commit on this branch touches them; they reproduce on their own):
@@ -80,10 +91,12 @@ renderer (REQ-495.1: never a query or export). The snap re-samples near the curs
   - `qt.editor.*` — `build/debug` has the release Qt DLLs plus `Qt6Testd.dll`, which needs the missing
     `Qt6Cored.dll` (0xC0000135), so no Qt test starts;
   - `headless.block-command-bad-numbers` — did not finish in 45 minutes (likely a hidden Debug assert dialog).
-- Documentation: `resources/wiki/Alignments.md`, `Command-Reference.md`, `Object-Snaps.md` and the command pages for
+- Documentation: `resources/wiki/Alignments.md`, `Command-Reference.md`, `Object-Snaps.md`, `Drafting-Aids.md`,
+  `Properties.md` and the command pages for
   ALIGNMENTTABLE, ALIGNMENTLABEL, ALIGNMENTLABELSTYLE, ALIGNMENTSTYLE, ALIGNMENTEDIT and ALIGNMENTCHECKSET updated.
-  README and PRIVACY reviewed: no change needed (no new data collection, no new top-level feature list entry). Public
-  wiki and gosurveycad.com: not yet pushed (waiting for the check-in).
+  README and PRIVACY reviewed: no change needed (no new data collection, no new top-level feature list entry). The
+  GitHub Wiki URL currently redirects to the repository, and `gosurveycad.com` was inaccessible to the documentation
+  review tool; check the public manual update path before marking the PR ready.
 
 ## Technical debt
 

@@ -15971,7 +15971,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Statement:
   1. An **Alignment** is a drawing-owned domain object with: stable id, unique name, description, layer, style
      (REQ-491), **type**, ordered entity list (REQ-481), starting station and station equations (REQ-483),
-     reference point, design criteria (REQ-502), label set (REQ-492) and metadata. Types are Centerline, Offset,
+     reference point, design criteria (REQ-502), label set (REQ-492) and metadata; `ALIGNMENTMETA` stores arbitrary
+     named string values (D-2026-11-05-g). Types are Centerline, Offset,
      Curb Return, Rail and Miscellaneous `[A:6C5C6DC0]` (the API names the last one `Utility`; enum values 1..5 = Centerline,
      Offset, CurbReturn, Utility, Rail `[M]`); Offset and Curb Return may be independent or linked to a
      parent alignment (REQ-488). Rail and road design-criteria files do not cross types and Miscellaneous accepts
@@ -16023,7 +16024,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      256, SineHalfWave 257, JapaneseCubic 258, Bloss 259, CubicParabola 260, Sinusoidal 261, BiQuadratic 262,
      NSWCubic 264, and an *offset* variant of each, e.g. OffsetClothoid `[M]`) are **not** in this epic. An
      imported alignment containing one is logged by type and count (REQ-201) and its spiral is represented as the
-     equivalent-length clothoid **only if the user confirms**; otherwise import refuses that alignment by name.
+     equivalent-length clothoid, logging that the type was assumed (D-2026-11-05-n).
   5. Entities are ordered by internal station; consecutive entities share an endpoint (REQ-482). The entity
      vocabulary follows Autodesk's: Line, Arc, Spiral, Spiral-Curve-Spiral (SCS), Spiral-Line-Spiral,
      Spiral-Line, Line-Spiral, Spiral-Curve, Curve-Spiral, Spiral-Spiral, Spiral-Spiral-Curve,
@@ -16036,6 +16037,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      by `A` or by `Length` `[M]`. The stored form is canonical (radius + delta); the other definitions are
      input/derivation modes that decide which fields are editable (REQ-486). Spirals additionally expose `A`, `K`, `P`,
      `TotalX`, `TotalY`, long tangent, short tangent, SPI point and angle, and minimum transition length `[M]`.
+     Spiral length must be positive; only numerically degenerate lengths are refused as geometry. A configured
+     design-criteria minimum remains a warning check, not a geometry validity floor (D-2026-11-05-f).
   6. Each entity carries a **constraint state**: Fixed, Floating (always tangent to the entity it is attached to;
      the API distinguishes `FloatOnPrev` and `FloatOnNext`, i.e. which neighbour it follows `[M]`) or Free (always tangent to the entity before and after; needs at least two other entities; cannot be attached
      to a free entity as floating) `[A:3F377231]`. Lines and spirals attach only to fixed or floating entities;
@@ -16102,10 +16105,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
      delimiter position = digits from the right 10 ... 100000, format types Station / StationIndex / Decimal `[M]`;
      the alignment also has a station-index increment `[M]`): station character `+` (default), `-`, `_`, none, `/`, `C`, `K`
      `[A:C2CAF36B]`; digits before the character (2 for feet "10+50.00", 3 for metric "1+050.000"); decimal
-     precision; prefix; suffix (e.g. `STA `). Parse and format round-trip.
+     precision; prefix; suffix (e.g. `STA `). Parse and format round-trip. StationIndex values use the same
+     Civil 3D station notation as Station values (D-2026-11-05-d).
   5. Station equations do not move geometry. Editing geometry recomputes internal stations and re-evaluates
      displayed stations; equations stay at their physical locations unless they fall beyond the new end, in which
-     case they are listed as orphaned and removed on confirmation.
+     case they are removed, logged, and included in the same undo step as the edit (D-2026-11-05-e).
 - Acceptance:
   1. Start 0+00 on a 1 000-unit tangent ends 10+00.00; start 1+50 ends 11+50.00.
   2. Increasing equation: back 10+00 = ahead 12+00 at internal 1000; internal 1000 → "10+00.00" back / "12+00.00"
@@ -16411,17 +16415,18 @@ capability that does not exist. They are recorded here rather than quietly dropp
      (placeholder) `[A:9BD36DE7, C2CAF36B]`. A geometry-point item can occur more than once with different styles
      (e.g. Alignment Beginning/End in one style, PIs and Tangent–Curve intersects in another) `[A:9BD36DE7]`.
   2. Major stations require an interval (default 100 ft / 20 m, user-set); minor stations require a major item and
-     an interval (e.g. 20); a major station that has a minor cannot be deleted `[A:C2CAF36B]`. Start and end
+     an interval (default 20 ft imperial / 4 m metric; user-set) (D-2026-11-05-l); a major station that has a minor cannot be deleted `[A:C2CAF36B]`. Start and end
      default to the alignment's start and end. Station labels use the displayed (equation-adjusted) station and the
      REQ-483 format.
   3. **Segment labels**: single (pick a segment) or multiple (all segments) labels for Line, Curve and Spiral
      `[A:AD356DE5]`. Curve label content is configurable and by default offers `R`, `Δ`, `L`, `T` (e.g. `R = 500.00'`,
-     `Δ = 15°00'00"`, `L = 130.90'`, `T = 65.83'`); line labels show bearing and length; spiral labels show A, Ls,
+     `Δ = 15°00'00"`, `L = 130.90'`, `T = 65.83'`); angle minutes and seconds are zero-padded
+     (D-2026-11-05-k); line labels show bearing and length; spiral labels show A, Ls,
      start/end radius. A curve label shows the **true curve length, not the chord**, unless an expression asks for the
      chord `[A:AD356DE5]`.
   4. **Station/offset labels**: *fixed* (point stays; station/offset update) and *relative* (moves with the alignment,
      keeping station/offset) `[A:7D1378C5]`.
-  5. Labels are drawing-owned objects: movable (drag), stackable text, text style, height and orientation from the
+  5. Labels are drawing-owned objects: movable by dragging in the drawing, stackable text, text style, height and orientation from the
      label style; formatting (precision, units, angle format, prefix/suffix) is configurable and survives save.
   6. Label placement is dynamic: editing the alignment moves labels; deleting the alignment removes them.
   7. **Decision D-2026-11-04-c:** label text, and ByLayer ticks, markers and arrows, draw in the alignment layer's
@@ -16452,7 +16457,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Depends on: REQ-492, REQ-367/REQ-479 table model.
 - Statement: `ALIGNMENTTABLE` (Annotate → Add Tables → Alignment) offers Line, Curve, Spiral, Segment (all) tables,
   plus a Station Equation table. As in Civil 3D, segments must be labelled first and the labels become tags in the
-  table `[A:AB82BF27]`; the table style is a REQ-478 table style. Options: Split Table and Behaviour **Static**
+  table `[A:AB82BF27]`; the table style is a REQ-478 table style. Split tables continue in adjacent sections with
+  repeated headers (D-2026-11-05-m). Options: Split Table and Behaviour **Static**
   (frozen) or **Dynamic** (rebuilds when the alignment changes). The table is an ordinary drawing table object so it
   exports to DWG.
 - Acceptance:
@@ -16472,12 +16478,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Statement: `ALIGNMENTREPORT` produces: name, type, start and end station, total length, start/end bearing, entity
   list with per-entity data (tangent bearing/length; curve radius, delta, length, tangent length, chord; spiral
   A, Ls, radii), station equations and any C0/C1/C2 or design-criteria findings. Export formats: on-screen
-  report, `.txt`, and `.csv` (one row per entity, UTF-8, `.`-decimal, quoted fields). Numeric precision follows the
-  display precision setting (`NumFormat.hpp`). Design-criteria findings reuse REQ-502 and mark each entity as meeting
+  report, `.txt`, and `.csv` (one row per entity, UTF-8, `.`-decimal, quoted fields). Text report precision follows
+  the display precision setting (`NumFormat.hpp`); CSV numeric fields use full available precision
+  (D-2026-11-05-c). Design-criteria findings reuse REQ-502 and mark each entity as meeting
   or violating the criteria `[A:888F1041]`.
 - Acceptance:
   1. The issue's example report is reproduced for the fixture (header, 2 tangent entities, 1 curve).
-  2. CSV re-parses to the same numbers to display precision.
+  2. CSV re-parses to the same numbers at full available precision.
   3. A criteria violation appears in the report.
 - Owner-layer: Domain, Commands.
 - Status: accepted (2026-11-02, user approval)
@@ -16536,7 +16543,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      fixture `samples/civil3d-alignment-fixture.dwg` (tangents, a spiral-curve-spiral, free curves, a station
      equation) checked against Civil 3D's own station coordinates, with `civil3d-alignment-equations.dwg` for
      decreasing equations; alignments using other sub-entity kinds are named in the log and not imported.
-  4. A legacy drawing with no alignments is byte-identical on re-save apart from the format version.
+  4. Saving a drawing with no alignments adds no alignment data; saving that result again produces a byte-identical
+     file (D-2026-11-05-b).
 - Owner-layer: DWG IO, Domain.
 - Status: accepted (2026-11-02, user approval)
 
@@ -16592,7 +16600,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   with cached curve parameters; evaluation never rebuilds the whole chain. Near-tangent curves (|Δ| down to 1e-9 rad),
   very small radii (0.01) and very large radii (1e7), alignments to 1e6 units and offsets down to 1e-6 are required
   to work, degenerate cases (zero length, zero radius, Δ ≥ 2π) are refused by name.
-- Acceptance: tests in REQ-500 pass; `GetPointAtStation` ≤ 20 µs median on a 100 000-entity alignment.
+- Acceptance: tests in REQ-503 pass; `GetPointAtStation` ≤ 20 µs median on a 100 000-entity alignment.
 - Owner-layer: Domain.
 - Status: accepted (2026-11-02, user approval)
 
@@ -16672,6 +16680,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      the style, as REQ-491 requires for per-object overrides.
   7. **Decision D-2026-11-04-d:** the drawing marker is an amber warning triangle with "!" centred on the failing
      entity's midpoint, one label text height on paper (never under 10 pixels), as Civil 3D marks a violation.
+  8. **Decision D-2026-11-05-h:** a tangent-intersection finding is reported when its deflection exceeds the
+     maximum configured in the check set; it remains a non-blocking warning.
 - Owner-layer: Domain.
 - Status: accepted (2026-11-02, user approval)
 
@@ -16689,14 +16699,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
   100 000-unit alignments, R from 0.01 to 1e7, offsets down to 1e-6); clothoid vs. an independent Fresnel reference;
   create-from-objects including refusals; reverse (twice = identity); offset; intersections; persistence; and
   performance counters. Test names are ASCII.
-- Acceptance: all above pass in Release and Debug; failures are reported individually (no "mostly green").
+- Acceptance: all above pass in Release and Debug; failures are reported individually (no "mostly green"). Civil 3D
+  spiral endpoint comparison accepts a difference of at most approximately 7e-6 ft (D-2026-11-05-i).
 - Owner-layer: Tests.
 - Open evidence questions (to be closed before the named phase by a recorded decision or a further evidence pass;
   none blocks Phase 1 except item 1): (1) what a displayed station means when it occurs twice under a decreasing
-  equation (REQ-483); (2) default fillet radius of Create-from-Objects (REQ-485); (3) whether GoSurvey's clothoid
-  positions agree with Civil 3D's for the same A and R to 1e-6 (REQ-481, phase 3: a Civil 3D-saved DWG with a
-  spiral, read through the Object Enabler API, can supply truth values) — evidence 2026-11-04 (D-2026-11-04-m):
-  they agree to ~1e-5 ft, not 1e-6, on the Civil 3D fixture; still open whether to match Civil 3D's formula; (4) offset-spiral model (REQ-488);
-  (5) exact label formats of each geometry-point and segment label (REQ-492); (6) the DWG object layout of an
+  equation (REQ-483); (2) default fillet radius of Create-from-Objects (REQ-485); (3) offset-spiral model (REQ-488);
+  (4) exact label formats of each geometry-point and segment label (REQ-492); (5) the DWG object layout of an
   alignment for decode (REQ-496, shared with the ADR-074 decoder).
 - Status: accepted (2026-11-02, user approval)

@@ -789,14 +789,12 @@ TEST_CASE("The CSV report file re-reads to the numbers at the display precision"
     double v = 0.0;
     return std::sscanf(std::get<std::string>(c).c_str(), "%lf", &v) == 1 ? v : -1.0;
   };
-  const double scale = std::pow(10.0, st.displayLinearPrecision);
-  auto shown = [&](double v) { return std::round(v * scale) / scale; };
   const alignment::CurveData cd = alignment::ComputeCurveData({0, 0}, 0.0, 500.0, 500.0 * 15.0 * kDeg, true);
   CHECK(number(grid[1][7]) == Approx(250.0).epsilon(0).margin(1e-9));
   CHECK(number(grid[2][8]) == Approx(500.0).epsilon(0).margin(1e-9));
-  CHECK(number(grid[2][10]) == Approx(shown(cd.arcLength)).epsilon(0).margin(1e-9));
-  CHECK(number(grid[2][11]) == Approx(shown(cd.tangentLength)).epsilon(0).margin(1e-9));
-  CHECK(number(grid[2][12]) == Approx(shown(cd.chord)).epsilon(0).margin(1e-9));
+  CHECK(number(grid[2][10]) == Approx(cd.arcLength).epsilon(0).margin(1e-9));
+  CHECK(number(grid[2][11]) == Approx(cd.tangentLength).epsilon(0).margin(1e-9));
+  CHECK(number(grid[2][12]) == Approx(cd.chord).epsilon(0).margin(1e-9));
 }
 
 // --- REQ-483: station format, reference point, orphaned equations ---
