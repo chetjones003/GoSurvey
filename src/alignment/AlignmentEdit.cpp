@@ -69,6 +69,13 @@ bool Valid(const Entity& e) {
 
 std::string Row(int i) { return "entity " + std::to_string(i + 1); }
 
+/// "entity 3 is a Free curve between entity 2 and entity 4": a Free curve's refusal names its tangents (D-2026-11-04-g).
+std::string FreeCurveRow(int i) {
+  assert(i >= 0);
+  assert(i < std::numeric_limits<int>::max());
+  return Row(i) + " is a Free curve between " + Row(i - 1) + " and " + Row(i + 1);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------- solver
@@ -190,7 +197,7 @@ bool Alignment::EditEntity(int i, EditParam param, double value, std::string* wh
     case EditParam::CurveLength:
       if (!arc && !spiral) return fail(row + " is a tangent, not a curve or spiral");
       if (arc && e.constraint == Entity::Constraint::Free)
-        return fail(row + " is a Free curve: its length comes from its radius and its two tangents; edit the radius");
+        return fail(FreeCurveRow(i) + ": its length comes from its radius and those tangents; edit the radius");
       if ((e.locks & Entity::kLockLength) != 0) return fail(row + " has a fixed length");
       if (!(value > 0.0)) return fail("the length must be positive");
       e.length = value;
@@ -199,7 +206,7 @@ bool Alignment::EditEntity(int i, EditParam param, double value, std::string* wh
     case EditParam::CurveDelta:
       if (!arc) return fail(row + " is not a circular curve");
       if (e.constraint == Entity::Constraint::Free)
-        return fail(row + " is a Free curve: its delta comes from its two tangents; edit a tangent's bearing");
+        return fail(FreeCurveRow(i) + ": its delta comes from those tangents; edit a tangent's bearing");
       if ((e.locks & Entity::kLockLength) != 0) return fail(row + " has a fixed length, so its delta cannot change");
       if (!(value > 0.0) || value >= kTwoPi) return fail("the delta must be between 0 and 360 degrees");
       e.length = e.radius * value;  // the radius is kept
@@ -208,7 +215,7 @@ bool Alignment::EditEntity(int i, EditParam param, double value, std::string* wh
     case EditParam::CurveDirection:
       if (!arc && !spiral) return fail(row + " is a tangent, not a curve or spiral");
       if (arc && e.constraint == Entity::Constraint::Free)
-        return fail(row + " is a Free curve: it turns the way its two tangents turn");
+        return fail(FreeCurveRow(i) + ": it turns the way those tangents turn");
       e.right = value != 0.0;
       break;
     case EditParam::SpiralStartRadius:

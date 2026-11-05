@@ -103,7 +103,13 @@ bool Alignment::AppendRaw(const Entity& e) {
   Entity c = e;
   c.startAzimuth = NormAz(c.startAzimuth);
   entities_.push_back(c);
-  Rebuild();
+  if (cumStart_.size() == entities_.size()) {  // the index is current: extend it, so building n entities is O(n)
+    cumStart_.push_back(cumStart_.back() + c.length);
+    length_ = cumStart_.back();
+  } else {
+    Rebuild();
+  }
+  assert(cumStart_.size() == entities_.size() + 1);
   return true;
 }
 
@@ -254,12 +260,27 @@ int Alignment::SpiralCount() const {
 // ---------------------------------------------------------------- queries
 
 int Alignment::GetEntityAtStation(double internalStation) const {
+  int steps = 0;
+  return EntityAtStationCounted(internalStation, &steps);
+}
+
+int Alignment::EntityAtStationCounted(double internalStation, int* steps) const {
+  assert(steps != nullptr);
+  assert(cumStart_.size() == entities_.size() + 1 || entities_.empty());
+  *steps = 0;
   if (entities_.empty()) return -1;
   const double d = std::clamp(internalStation - startingStation, 0.0, length_);
-  // First entity whose END is at or beyond d: the earlier entity wins at a junction. O(log n).
-  const auto it = std::lower_bound(cumStart_.begin() + 1, cumStart_.end(), d);
-  const size_t idx = static_cast<size_t>(it - (cumStart_.begin() + 1));
-  return static_cast<int>(std::min(idx, entities_.size() - 1));
+  // First entity whose END is at or beyond d: the earlier entity wins at a junction. Binary search over the entity
+  // end distances (REQ-484.5); `steps` counts the entities it looks at.
+  size_t lo = 0, hi = entities_.size() - 1;
+  constexpr int kMaxSteps = 64;  // log2 of any vector size
+  while (lo < hi && *steps < kMaxSteps) {
+    const size_t mid = lo + (hi - lo) / 2;
+    ++*steps;
+    if (cumStart_[mid + 1] < d) lo = mid + 1;
+    else hi = mid;
+  }
+  return static_cast<int>(lo);
 }
 
 Point2 Alignment::GetPointAtStation(double internalStation) const {
@@ -481,6 +502,23 @@ StationOffset Alignment::GetStationOffset(double x, double y) const {
   return r;
 }
 
+StationOffset Alignment::GetStationOffset(double x, double y, bool extrapolate) const {
+  StationOffset r = GetStationOffset(x, y);
+  if (!extrapolate || !r.outOfRange || entities_.empty()) return r;
+  assert(std::isfinite(x) && std::isfinite(y));
+  const bool atStart = std::fabs(r.internalStation - StartStation()) < std::fabs(r.internalStation - EndStation());
+  const Point2 end = atStart ? StartPoint() : EndPoint();
+  const double az = atStart ? StartAzimuth() : EndAzimuth();
+  const double dx = x - end.x, dy = y - end.y;
+  const double along = dx * std::sin(az) + dy * std::cos(az);  // negative before the start, positive past the end
+  r.internalStation = (atStart ? StartStation() : EndStation()) + along;
+  r.offset = dx * std::cos(az) - dy * std::sin(az);  // right of travel = (cos az, -sin az)
+  r.closest = {end.x + along * std::sin(az), end.y + along * std::cos(az)};
+  r.azimuth = az;
+  assert(r.outOfRange);
+  return r;
+}
+
 Point2 Alignment::GetClosestPoint(double x, double y) const { return GetStationOffset(x, y).closest; }
 
 double Alignment::GetDistanceAlongAlignment(double x, double y) const {
@@ -525,9 +563,11 @@ bool Alignment::AddStationEquation(const StationEquation& eq, std::string* whyNo
 
 double Alignment::DisplayedStation(double rawStation, bool ahead) const {
   double offset = 0.0;
+  // "At" an equation is rounding only: stations 1e-9 apart either side of it are distinct (REQ-483 AC4).
+  const double atTolerance = std::max(1e-11, 4.0 * std::numeric_limits<double>::epsilon() * std::fabs(rawStation));
   for (size_t j = 0; j < equations.size(); ++j) {
     const StationEquation& q = equations[j];
-    const bool atEq = std::fabs(rawStation - q.rawBack) < 1e-9;
+    const bool atEq = std::fabs(rawStation - q.rawBack) < atTolerance;
     if (rawStation < q.rawBack && !atEq) break;
     if (atEq && !ahead) break;
     offset += EquationDifference(static_cast<int>(j));
@@ -662,6 +702,9 @@ std::vector<ContinuityIssue> Alignment::CheckContinuity(ContinuityTolerance tol)
     } else {
       c.c2 = true;
     }
+    // REQ-482 AC3: a reverse curve changes the sign of the curvature; informational, never a failure.
+    const double kLeft = SignedCurvatureAt(left, left.length), kRight = SignedCurvatureAt(right, 0.0);
+    c.curvatureSignChange = std::fabs(kLeft) > tol.curvature && std::fabs(kRight) > tol.curvature && kLeft * kRight < 0.0;
     out.push_back(c);
   }
   return out;
@@ -1164,6 +1207,26 @@ bool SpiralDataFor(int entityIndex, const Alignment& a, SpiralData* out) {
   const double rFinite = IsInfiniteSpiralRadius(e.radius) ? e.startRadius : e.radius;
   if (IsInfiniteSpiralRadius(rFinite)) return true;
   out->parameterA = std::sqrt(rFinite * e.length);
+  const bool fromStart = IsInfiniteSpiralRadius(e.startRadius);
+  if (!fromStart && !IsInfiniteSpiralRadius(e.radius)) return true;  // between two curves: no tangent end
+  // Measure from the tangent end towards the curve end, along the tangent's direction of travel into the spiral.
+  const double s0 = a.EntityStartStation(entityIndex), s1 = a.EntityEndStation(entityIndex);
+  const Point2 origin = a.GetPointAtStation(fromStart ? s0 : s1);
+  const Point2 curveEnd = a.GetPointAtStation(fromStart ? s1 : s0);
+  const double az = fromStart ? e.startAzimuth : NormAz(a.GetBearingAtStation(s1) + kPi);
+  const double ux = std::sin(az), uy = std::cos(az);
+  const double dx = curveEnd.x - origin.x, dy = curveEnd.y - origin.y;
+  const double theta = std::fabs(out->deflection);
+  assert(theta > 0.0 && theta < kPi);
+  out->tangentEnd = true;
+  out->totalX = dx * ux + dy * uy;
+  out->totalY = std::fabs(dx * uy - dy * ux);
+  out->p = out->totalY - rFinite * (1.0 - std::cos(theta));
+  out->k = out->totalX - rFinite * std::sin(theta);
+  out->longTangent = out->totalX - out->totalY / std::tan(theta);
+  out->shortTangent = out->totalY / std::sin(theta);
+  out->spi = {origin.x + out->longTangent * ux, origin.y + out->longTangent * uy};
+  out->spiAngle = theta;
   return true;
 }
 

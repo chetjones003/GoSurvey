@@ -123,6 +123,9 @@ alignment::Alignment* Resolve(AppCommandState& st, const std::string& cmd, const
   return &st.alignments[static_cast<size_t>(ix)];
 }
 
+/// Continuity warnings at the alignment's requirement level, and reverse-curve notes (REQ-482).
+void ReportContinuity(const AppCommandState& st, const alignment::Alignment& r, std::vector<std::string>& log);
+
 }  // namespace
 
 // ALIGNMENTADD <name>, TANGENT, <x>, <y>, <azimuth deg>, <length>     first tangent, WORLD x/y
@@ -303,6 +306,9 @@ void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<
         row += std::string("Spiral ") + (e.right ? "right" : "left") + "  Ls " + Lin(st, sd.length) + "  R " +
                Lin(st, sd.endRadius) + "  theta " + FormatSweptAngle(sd.deflection / kDegToRad, CadAngleDisplaySettings(st));
         if (sd.parameterA > 0.0) row += "  A " + Lin(st, sd.parameterA);
+        if (sd.tangentEnd)  // REQ-481.5a
+          row += "  X " + Lin(st, sd.totalX) + "  Y " + Lin(st, sd.totalY) + "  P " + Lin(st, sd.p) + "  K " +
+                 Lin(st, sd.k) + "  LT " + Lin(st, sd.longTangent) + "  ST " + Lin(st, sd.shortTangent);
       }
       log.push_back(row);
     }
@@ -312,18 +318,7 @@ void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<
           log.push_back("  WARNING: design check, entity " + std::to_string(fd.entity) + ": " + fd.text);
       }
     }
-    for (const alignment::ContinuityIssue& c : a.CheckContinuity()) {
-      if (c.FailsRequirement(a.continuityRequirement)) {
-        if (!c.c0)
-          log.push_back("  WARNING: gap of " + Lin(st, c.gap) + " after entity " + std::to_string(c.afterEntity + 1) +
-                        " (C0).");
-        else if (!c.c1)
-          log.push_back("  WARNING: direction changes after entity " + std::to_string(c.afterEntity + 1) + " (C1).");
-        else if (!c.c2)
-          log.push_back("  WARNING: curvature mismatch of " + Lin(st, c.curvatureGap) + " after entity " +
-                        std::to_string(c.afterEntity + 1) + " (C2).");
-      }
-    }
+    ReportContinuity(st, a, log);
   }
 }
 
@@ -340,9 +335,14 @@ void RunAlignmentDelete(AppCommandState& st, const std::string& args, std::vecto
   log.push_back("ALIGNMENTDELETE - removed \"" + name + "\".");
 }
 
-// GETSTATIONOFFSET <alignment>, <x>, <y>  (WORLD x/y) - REQ-484.4
+// GETSTATIONOFFSET <alignment>, <x>, <y>[, SURFACE=<surface>]  (WORLD x/y) - REQ-484.4
 void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
-  const std::vector<std::string> f = SplitFields(args);
+  std::vector<std::string> f = SplitFields(args);
+  std::string surfaceName;  // REQ-484.4 / REQ-497: the ground elevation at the point, from a chosen surface
+  if (!f.empty() && Lower(f.back()).rfind("surface=", 0) == 0) {
+    surfaceName = Trim(f.back().substr(8));
+    f.pop_back();
+  }
   double x = 0.0, y = 0.0;
   if (f.size() == 3 && Lower(f[1]) == "point") {  // REQ-501.3: a survey point, by its point number
     double number = 0.0;
@@ -359,7 +359,8 @@ void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vect
     x = point->easting;  // the survey point's coordinates are world, and so is the query
     y = point->northing;
   } else if (f.size() != 3 || !ParseNum(f[1], &x) || !ParseNum(f[2], &y)) {
-    log.push_back("GETSTATIONOFFSET - usage: GETSTATIONOFFSET <alignment>, <x>, <y> | <alignment>, POINT, <number>.");
+    log.push_back("GETSTATIONOFFSET - usage: GETSTATIONOFFSET <alignment>, <x>, <y> | <alignment>, POINT, <number>"
+                  " [, SURFACE=<surface>].");
     return;
   }
 
@@ -377,7 +378,18 @@ void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vect
                      "  Bearing = " + Brg(st, so.azimuth) + ".";
   if (so.outOfRange) line += " The point lies beyond the end of the alignment; the nearest end is reported.";
   if (so.ambiguous) line += " Another location is equally close; the lowest station is reported.";
-  line += " Elevation: no profile.";  // REQ-500: profiles are a separate feature
+  if (surfaceName.empty()) {
+    line += " Elevation: no profile.";  // REQ-500: profiles are a separate feature
+  } else {
+    const int si = FindSurfaceIndex(st, surfaceName);
+    std::unique_ptr<ISurfaceQuery> ground =
+        si < 0 ? nullptr : MakeSurfaceQueryForCommands(st, st.cadSurfaces[static_cast<size_t>(si)]);
+    double z = 0.0;
+    if (si < 0) line += " There is no surface named \"" + surfaceName + "\".";
+    else if (!ground) line += " \"" + surfaceName + "\" is not a built surface.";
+    else if (ground->elevationAt(lx, ly, &z)) line += " Elevation = " + Lin(st, z) + " (surface \"" + surfaceName + "\").";
+    else line += " Elevation: the point is off the surface \"" + surfaceName + "\".";
+  }
   log.push_back(line);
 }
 
@@ -596,7 +608,11 @@ bool IsLinkedOffset(const alignment::Alignment& a, const std::string& cmd, std::
 }
 
 void ReportContinuity(const AppCommandState& st, const alignment::Alignment& r, std::vector<std::string>& log) {
+  assert(r.Entities().size() < std::numeric_limits<int>::max());
   for (const alignment::ContinuityIssue& c : r.CheckContinuity()) {
+    if (c.curvatureSignChange && c.c0 && c.c1)
+      log.push_back("  NOTE: reverse curve after entity " + std::to_string(c.afterEntity + 1) +
+                    ": the curvature changes sign (informational).");
     if (!c.FailsRequirement(r.continuityRequirement)) continue;
     if (!c.c0)
       log.push_back("  WARNING: gap of " + Lin(st, c.gap) + " after entity " + std::to_string(c.afterEntity + 1) + " (C0).");

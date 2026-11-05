@@ -155,6 +155,7 @@ struct ContinuityIssue {
   double gap = 0.0;             ///< End-to-start distance.
   double angleDelta = 0.0;      ///< Absolute azimuth difference, radians (0..pi).
   double curvatureGap = 0.0;    ///< |κ_end − κ_start| at the junction.
+  bool curvatureSignChange = false;  ///< A reverse curve: the curve turns the other way here (informational).
   /// True when this junction fails the alignment's `continuityRequirement` (C2 checks only spiral junctions).
   [[nodiscard]] bool FailsRequirement(ContinuityRequirement level) const;
 };
@@ -308,7 +309,14 @@ class Alignment {
   [[nodiscard]] double GetCurvatureAtStation(double internalStation) const;
   /// Index of the entity containing the station; the earlier entity wins at a junction.
   [[nodiscard]] int GetEntityAtStation(double internalStation) const;
+  /// GetEntityAtStation's binary search (REQ-484.5), reporting how many entities it looked at.
+  [[nodiscard]] int EntityAtStationCounted(double internalStation, int* steps) const;
+  /// Closest point on the alignment. Beyond an end the station is clamped and `outOfRange` set; with `extrapolate` a
+  /// point beyond an end is measured along that end's tangent instead, so its station runs past the end (REQ-484.2).
   [[nodiscard]] StationOffset GetStationOffset(double x, double y) const;
+  [[nodiscard]] StationOffset GetStationOffset(double x, double y, bool extrapolate) const;
+  [[nodiscard]] double GetStation(double x, double y) const { return GetStationOffset(x, y).internalStation; }
+  [[nodiscard]] double GetOffset(double x, double y) const { return GetStationOffset(x, y).offset; }
   [[nodiscard]] Point2 GetPointFromStationOffset(double internalStation, double offset,
                                                  double* azimuthOut = nullptr) const;
   [[nodiscard]] Point2 GetClosestPoint(double x, double y) const;
@@ -394,6 +402,17 @@ struct SpiralData {
   double parameterA = 0.0;
   double deflection = 0.0;  ///< Total heading change, radians.
   bool right = true;
+  /// REQ-481.5a, measured from the spiral's tangent end (TS for a spiral in, ST for a spiral out) along that tangent.
+  /// Zero, with `tangentEnd` false, for a spiral between two curves.
+  bool tangentEnd = false;
+  double totalX = 0.0;        ///< Along the tangent to the curve end.
+  double totalY = 0.0;        ///< Off the tangent to the curve end (the tangent offset).
+  double p = 0.0;             ///< Shift of the curve from the tangent: TotalY - R (1 - cos θ).
+  double k = 0.0;             ///< Abscissa of the shifted curve's centre: TotalX - R sin θ.
+  double longTangent = 0.0;   ///< Tangent end to the SPI.
+  double shortTangent = 0.0;  ///< SPI to the curve end.
+  Point2 spi;                 ///< Spiral point of intersection, drawing-local.
+  double spiAngle = 0.0;      ///< Angle between the two tangents at the SPI (= θ), radians.
 };
 [[nodiscard]] bool SpiralDataFor(int entityIndex, const Alignment& a, SpiralData* out);
 
