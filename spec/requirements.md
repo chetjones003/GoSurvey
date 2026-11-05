@@ -16277,7 +16277,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Acceptance:
   1. Reversing a tangent-curve-tangent alignment swaps start/end, flips curve left↔right, and makes each station
      S → L − S + start; points at the same physical location have the same XY.
-  2. Reverse twice → byte-identical entity data.
+  2. Reverse twice returns the original geometry to within 1e-9 drawing units, with the same entity kinds, directions, constraints and locks (D-2026-11-05-a).
   3. Dragging a PI grip changes the adjacent tangents and curve and keeps C1; readout shows station/offset/bearing.
   4. Copying produces a distinct id and name.
 - Owner-layer: Commands, Domain, Qt UI.

@@ -353,6 +353,13 @@ TEST_CASE("Reverse keeps the physical geometry and twice is the identity", "[req
     CHECK(a.Entities()[i].start.y == Approx(orig.Entities()[i].start.y).margin(1e-9));
     CHECK(a.Entities()[i].startAzimuth == Approx(orig.Entities()[i].startAzimuth).margin(1e-9));
     CHECK(a.Entities()[i].right == orig.Entities()[i].right);
+    // D-2026-11-05-a: within 1e-9, with the same kinds, directions, constraints and locks.
+    CHECK(a.Entities()[i].kind == orig.Entities()[i].kind);
+    CHECK(a.Entities()[i].length == Approx(orig.Entities()[i].length).margin(1e-9));
+    CHECK(a.Entities()[i].radius == Approx(orig.Entities()[i].radius).margin(1e-9));
+    CHECK(a.Entities()[i].startRadius == Approx(orig.Entities()[i].startRadius).margin(1e-9));
+    CHECK(a.Entities()[i].constraint == orig.Entities()[i].constraint);
+    CHECK(a.Entities()[i].locks == orig.Entities()[i].locks);
   }
 }
 
