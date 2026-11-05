@@ -169,36 +169,38 @@ for a compact list inside the program.
 | `ALIGNMENTADD` | — | Add tangent, curve or spiral: ALIGNMENTADD <name>, TANGENT\|TANGENTTO\|CURVE\|CURVELEN\|SPIRAL, ... | [[Commands/alignmentadd]] |
 | `ALIGNMENTLIST` | — | Report alignments, stations and entities: ALIGNMENTLIST [<name>] | [[Commands/alignmentlist]] |
 | `ALIGNMENTDELETE` | — | Delete an alignment: ALIGNMENTDELETE <name> | [[Commands/alignmentdelete]] |
-| `GETSTATIONOFFSET` | — | Station and offset of a point: GETSTATIONOFFSET <alignment>, <x>, <y> | [[Commands/getstationoffset]] |
+| `GETSTATIONOFFSET` | — | Station and offset of a point: GETSTATIONOFFSET <alignment>[, <x>, <y> \| , POINT, <number>][, SURFACE=<surface>] (alignment alone: pick until ESC) | [[Commands/getstationoffset]] |
 | `GETPOINTFROMSTATIONOFFSET` | — | Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset> | [[Commands/getpointfromstationoffset]] |
 | `CREATEALIGNMENTFROMOBJECTS` | `CREATEALIGNMENTENTITIES` | Alignment from lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS (pick them) \| <name>[, START=][, FILLET=][, REVERSE][, ERASE] | [[Commands/createalignmentfromobjects]] |
-| `ALIGNMENTEDIT` | — | Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING\|LENGTH\|RADIUS\|STARTRADIUS\|DELTA\|DIRECTION\|CONSTRAINT, <value> | [[Commands/alignmentedit]] |
+| `ALIGNMENTEDIT` | — | Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING\|LENGTH\|RADIUS\|STARTRADIUS\|DELTA\|DIRECTION\|CONSTRAINT\|DEGREE\|TANGENTLENGTH\|CHORD\|EXTERNAL\|MIDORDINATE\|A, <value> \| THROUGH, <x>, <y> | [[Commands/alignmentedit]] |
 | `ALIGNMENTLOCK` | — | Lock a parameter: ALIGNMENTLOCK <name>, <entity#>, RADIUS\|LENGTH\|BEARING\|STATION, ON\|OFF | [[Commands/alignmentlock]] |
 | `ALIGNMENTINSERT` | — | Insert tangent, curve or spiral: ALIGNMENTINSERT <name>, <after#>, TANGENT\|CURVE\|SPIRAL, ... | [[Commands/alignmentinsert]] |
 | `ALIGNMENTREMOVE` | — | Remove an entity: ALIGNMENTREMOVE <name>, <entity#> | [[Commands/alignmentremove]] |
 | `ALIGNMENTCONTINUITY` | — | Continuity check level: ALIGNMENTCONTINUITY <name>, C0\|C1\|C2 \| LIST | [[Commands/alignmentcontinuity]] |
 | `REVERSEALIGNMENT` | `REVERSEALIGNDIRECTION` | Reverse alignment direction and stationing: REVERSEALIGNMENT <name> | [[Commands/reversealignment]] |
-| `ALIGNMENTSTATION` | — | Starting station and station equations: ALIGNMENTSTATION <name>, START\|EQ, ... | [[Commands/alignmentstation]] |
+| `ALIGNMENTSTATION` | — | Starting station, reference point and station equations: ALIGNMENTSTATION <name>, START\|REFERENCE\|EQ, ... | [[Commands/alignmentstation]] |
 | `OFFSETALIGNMENT` | — | Create offset alignments: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (L12 left, R12 right) | [[Commands/offsetalignment]] |
 | `ALIGNMENTDETACH` | — | Make a linked offset independent: ALIGNMENTDETACH <name> | [[Commands/alignmentdetach]] |
 | `ALIGNMENTINTERSECT` | — | Intersections: ALIGNMENTINTERSECT <a>, <b> \| <a>, LINE, ... \| <a>, CIRCLE, ... | [[Commands/alignmentintersect]] |
-| `ALIGNMENTSTYLE` | — | Alignment display styles: ALIGNMENTSTYLE LIST\|NEW\|DELETE\|ASSIGN\|SHOW\|HIDE\|COLOR, ... | [[Commands/alignmentstyle]] |
+| `ALIGNMENTSTYLE` | — | Alignment display styles: ALIGNMENTSTYLE LIST\|NEW\|DELETE\|ASSIGN\|SHOW\|HIDE\|COLOR\|SET\|CURRENT\|MARKER, ... | [[Commands/alignmentstyle]] |
 | `EDITALIGNMENT` | — | Open the Alignment Layout table: EDITALIGNMENT [<name>] | [[Commands/editalignment]] |
 | `ALIGNMENTREPORT` | — | Report an alignment as text or CSV: ALIGNMENTREPORT [<name>][, TXT\|CSV[, <path>]] | [[Commands/alignmentreport]] |
 | `ALIGNMENTSURFACE` | — | Ground elevation along an alignment from a surface: ALIGNMENTSURFACE <alignment>, <surface>, STATION=<sta>[, OFFSET=<off>] \| INTERVAL=<n> | [[Commands/alignmentsurface]] |
-| `ALIGNMENTLABEL` | — | Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS \| CLEAR | [[Commands/alignmentlabel]] |
-| `ALIGNMENTLABELSET` | — | Alignment label sets: ALIGNMENTLABELSET LIST\|NEW\|DELETE\|ASSIGN\|MAJORINTERVAL\|MINORINTERVAL\|SHOW\|HIDE\|STYLE, ... | [[Alignments]] |
-| `ALIGNMENTLABELSTYLE` | — | Alignment label styles (text style, height, colour): ALIGNMENTLABELSTYLE LIST\|NEW\|DELETE\|SET, ... | [[Commands/alignmentlabelstyle]] |
-| `ALIGNMENTTABLE` | — | Insert a line, curve, segment or equation table: ALIGNMENTTABLE <name>, LINE\|CURVE\|SEGMENT\|EQUATIONS[, STATIC\|DYNAMIC][, <x>, <y>] | [[Commands/alignmenttable]] |
+| `ALIGNMENTLABEL` | — | Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS \| SEGMENT, <entity#> \| CLEAR | [[Commands/alignmentlabel]] |
+| `ALIGNMENTLABELSET` | — | Alignment label sets: ALIGNMENTLABELSET LIST\|NEW\|DELETE\|ASSIGN\|MAJORINTERVAL\|MINORINTERVAL\|SHOW\|HIDE\|STYLE\|GEOMETRY, ... | [[Alignments]] |
+| `ALIGNMENTLABELSTYLE` | — | Alignment label styles (text style, height, colour, precision, prefix/suffix, orientation): ALIGNMENTLABELSTYLE LIST\|NEW\|DELETE\|SET, ... | [[Commands/alignmentlabelstyle]] |
+| `ALIGNMENTTABLE` | — | Insert a line, curve, spiral, segment or equation table: ALIGNMENTTABLE <name>, LINE\|CURVE\|SPIRAL\|SEGMENT\|EQUATIONS[, STATIC\|DYNAMIC][, SPLIT=<rows>][, STYLE=<name>][, <x>, <y>] | [[Commands/alignmenttable]] |
 | `FEATURELINEFROMALIGNMENT` | — | Feature line from an alignment: FEATURELINEFROMALIGNMENT <alignment>[, INTERVAL=<n>][, TOL=<n>][, SURFACE=<name> \| Z=<value>] | [[Commands/featurelinefromalignment]] |
 | `ALIGNMENTPROPS` | — | Alignment properties: ALIGNMENTPROPS <alignment>, NAME\|DESCRIPTION\|STYLE\|LAYER\|START, <value> | [[Commands/alignmentprops]] |
 | `ALIGNMENTINVERSE` | — | Distance along an alignment: ALIGNMENTINVERSE <alignment>, STA\|PT, ... [, CHORD] | [[Commands/alignmentinverse]] |
 | `ALIGNMENTBEARING` | — | Bearing at a station: ALIGNMENTBEARING <alignment>, <station> | [[Commands/alignmentbearing]] |
 | `ALIGNMENTDISTANCE` | — | Distance along an alignment to a point: ALIGNMENTDISTANCE <alignment>, <x>, <y> | [[Commands/alignmentdistance]] |
-| `ALIGNMENTCHECKSET` | — | Design check sets: ALIGNMENTCHECKSET NEW\|DELETE\|LIST\|SET, ... | [[Commands/alignmentcheckset]] |
+| `ALIGNMENTCHECKSET` | — | Design check sets: ALIGNMENTCHECKSET NEW\|DELETE\|LIST\|SET\|LOAD\|SAVE, ... | [[Commands/alignmentcheckset]] |
 | `ALIGNMENTCRITERIA` | — | Apply a check set to an alignment: ALIGNMENTCRITERIA <alignment>, <set>\|NONE | [[Commands/alignmentcriteria]] |
 | `ALIGNMENTSPEED` | — | Design speed from a station: ALIGNMENTSPEED <alignment>, <station>, <speed>\|CLEAR | [[Commands/alignmentspeed]] |
 | `ALIGNMENTCHECK` | — | Check an alignment against its design criteria: ALIGNMENTCHECK <alignment> | [[Commands/alignmentcheck]] |
+| `ALIGNMENTMETA` | — | Alignment metadata: ALIGNMENTMETA <alignment>, SET, <name>, <value> \| REMOVE, <name> \| LIST | [[Alignments]] |
+| `STATIONFORMAT` | — | How stations are written: STATIONFORMAT [DELIMITER=+\|-\|_\|/\|C\|K\|NONE][, DIGITS=][, DECIMALS=][, PREFIX=][, SUFFIX=] \| DEFAULT | [[Alignments]] |
 
 ### Surfaces and volumes
 

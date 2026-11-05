@@ -3,9 +3,16 @@
 **Command:** `ALIGNMENTLABEL`
 **Category overview:** [[Alignments]]
 
-Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS | CLEAR
+Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS | SEGMENT, <entity#> | CLEAR
 
-Labels the segments of an alignment. Line, curve and segment tables need the segments labelled first: until then ALIGNMENTTABLE refuses and names this command. CLEAR removes the labels; existing dynamic tables then stop updating and say so.
+`SEGMENTS` labels every segment of an alignment (Civil 3D's Multiple Segment). `SEGMENT, <entity#>` labels one segment
+(Single Segment); the label stays on that segment when entities before it are inserted or removed, and follows it when
+the alignment is reversed. Line, curve, spiral and segment tables list the labelled segments: with none labelled,
+ALIGNMENTTABLE refuses and names this command. CLEAR removes every segment label; existing dynamic tables then stop
+updating and say so.
+
+Once a table lists the segments, each segment label shows just its tag (`L1`, `C1`, `S1`, …), as Civil 3D converts
+labels to tag labels when a table is made.
 
 Labelled segments show their values at their middle. A tangent shows its bearing on one side and its length on the
 other. A curve stacks `R`, `Δ`, `L` and `T` on the inside of the turn. A spiral stacks `A`, `Ls` and its start and end

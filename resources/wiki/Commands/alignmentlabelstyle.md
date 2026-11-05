@@ -3,7 +3,7 @@
 **Command:** `ALIGNMENTLABELSTYLE`
 **Category overview:** [[Alignments]]
 
-Alignment label styles (text style, height, colour): ALIGNMENTLABELSTYLE LIST|NEW|DELETE|SET, ...
+Alignment label styles (text style, height, colour, precision, prefix/suffix, orientation): ALIGNMENTLABELSTYLE LIST|NEW|DELETE|SET, ...
 
 An alignment label style says how one kind of alignment label is written: its **text style** (the font), its
 **height** on paper, and its **colour**. Every drawing has a built-in **Standard** style: the Standard text style,
@@ -16,6 +16,9 @@ An alignment label style says how one kind of alignment label is written: its **
 | `ALIGNMENTLABELSTYLE SET, <style>, HEIGHT, <inches>` | Plotted text height, for example `0.12`. Drawing units = this × the plot scale. |
 | `ALIGNMENTLABELSTYLE SET, <style>, COLOR, <colour>` | `ByLayer`, an index `1`–`255`, a name such as `red`, or `#RRGGBB`. |
 | `ALIGNMENTLABELSTYLE SET, <style>, TEXTSTYLE, <text style>` | A text style made with `STYLE`; its font is used. |
+| `ALIGNMENTLABELSTYLE SET, <style>, PRECISION, <0-8>\|DRAWING` | Decimals of the lengths, radii and stations the label writes. DRAWING (the default) uses the drawing's precision and station format. |
+| `ALIGNMENTLABELSTYLE SET, <style>, PREFIX\|SUFFIX, <text>\|NONE` | Text written before or after each line of the label. Spaces at the ends of the typed text are trimmed. |
+| `ALIGNMENTLABELSTYLE SET, <style>, ORIENTATION, OBJECT\|VIEW` | Civil 3D's orientation reference: OBJECT (the default) writes text along the alignment; VIEW keeps it level on the screen. |
 | `ALIGNMENTLABELSTYLE DELETE, <style>` | Deletes a style. Standard, and a style a label set still uses, cannot be deleted. |
 
 Assign a style to the labels of a label set with
