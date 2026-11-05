@@ -1434,6 +1434,30 @@ private Q_SLOTS:
     QVERIFY(review->grab().save(Issue905Shot("qt-1109-pdf-coordinate-skipped-only-dark.png")));
     ApplyQtAppearance(*qApp, true);
     QVERIFY(review->grab().save(Issue905Shot("qt-1109-pdf-coordinate-skipped-only-light.png")));
+
+    pdfview::CoordCandidate longCandidate = candidate;
+    longCandidate.description.clear();
+    for (int index = 0; index < 12; ++index)
+      longCandidate.description += "Monument witness description and recovery note. ";
+    longCandidate.sourceText = "BRASS CAP CONTROL " + longCandidate.description;
+    window.m_ExtractResult->candidates.push_back(longCandidate);
+    ApplyQtAppearance(*qApp, false);
+    review->resize(360, 620);
+    window.ShowExtractReview();
+    auto* candidateTable = review->findChild<QTableWidget*>("pdfCoordinateCandidates");
+    QVERIFY(candidateTable && candidateTable->isVisible());
+    QVERIFY(candidateTable->rowHeight(0) > 240);
+    auto* detailPanel = candidateTable->cellWidget(0, 0);
+    QVERIFY(detailPanel);
+    auto* longDetails = detailPanel->findChild<QLabel*>("pdfCoordinateCandidateDetails_0");
+    QVERIFY(longDetails && longDetails->text().contains("Monument witness"));
+    auto* createAs = detailPanel->findChild<QComboBox*>("pdfCoordinateCreateAs_0");
+    QVERIFY(createAs);
+    QVERIFY(longDetails->heightForWidth(longDetails->width()) <= longDetails->height());
+    QVERIFY(createAs->geometry().bottom() <= detailPanel->height());
+    QVERIFY(review->grab().save(Issue905Shot("qt-1109-pdf-coordinate-long-candidate-dark.png")));
+    ApplyQtAppearance(*qApp, true);
+    QVERIFY(review->grab().save(Issue905Shot("qt-1109-pdf-coordinate-long-candidate-light.png")));
   }
 
   void pdfCoordinateAcceptAllStopsAtFirstUncreatableCandidate() {

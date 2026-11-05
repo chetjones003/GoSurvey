@@ -2049,8 +2049,11 @@ void PdfWindow::ShowExtractReview() {
     detailDocument.setDefaultFont(details->font());
     detailDocument.setDocumentMargin(0);
     detailDocument.setHtml(details->text());
-    detailDocument.setTextWidth(std::max(220, dialogWidth - 126 - 54));
-    table->setRowHeight(row, std::clamp(static_cast<int>(std::ceil(detailDocument.size().height()) + 30), 100, 240));
+    const int detailTextWidth = std::max(120, table->columnWidth(0) - details->margin() * 2 - 8);
+    detailDocument.setTextWidth(detailTextWidth);
+    const int detailHeight = static_cast<int>(std::ceil(detailDocument.size().height())) + details->margin() * 2;
+    const int decisionHeight = createAs->sizeHint().height() + detailLayout->spacing() + 8;
+    table->setRowHeight(row, std::max(100, detailHeight + decisionHeight));
     connect(accept, &QPushButton::clicked, this, [this, row] { DecideExtractCandidate(row, true); });
     connect(deny, &QPushButton::clicked, this, [this, row] { DecideExtractCandidate(row, false); });
   }
