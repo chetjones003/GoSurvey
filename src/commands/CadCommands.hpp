@@ -2566,6 +2566,7 @@ struct AppCommandState {
   /// Snap to a typed displayed station on an alignment (REQ-490). Default OFF; `STATION 12+45.32`
   /// at a point prompt also resolves directly. While enabled, uses \ref objectSnapStationDisplayed when valid.
   bool objectSnapStation = false;
+  bool objectSnapNode = true;  ///< REQ-490.2: drawing points and alignment PIs.
   bool objectSnapStationDisplayedValid = false;
   double objectSnapStationDisplayed = 0.0;
   /// Set when a `STATION …` point entry fails; cleared after the active command logs it (REQ-490).

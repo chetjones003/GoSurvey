@@ -255,6 +255,7 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   b  ("objectSnapCenter",          &st.objectSnapCenter);
   b  ("objectSnapQuadrant",        &st.objectSnapQuadrant);
   b  ("objectSnapStation",         &st.objectSnapStation);
+  b  ("objectSnapNode",            &st.objectSnapNode);
   b  ("objectSnapPerpendicular",   &st.objectSnapPerpendicular);
   b  ("objectSnapSurveyPoint",     &st.objectSnapSurveyPoint);
   b  ("objectSnapGeometricCenter", &st.objectSnapGeometricCenter);
@@ -494,6 +495,7 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["objectSnapCenter"]           = st.objectSnapCenter;
   s["objectSnapQuadrant"]         = st.objectSnapQuadrant;
   s["objectSnapStation"]          = st.objectSnapStation;
+  s["objectSnapNode"]             = st.objectSnapNode;
   s["objectSnapPerpendicular"]    = st.objectSnapPerpendicular;
   s["objectSnapSurveyPoint"]      = st.objectSnapSurveyPoint;
   s["objectSnapGeometricCenter"]  = st.objectSnapGeometricCenter;

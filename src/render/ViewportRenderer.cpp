@@ -692,6 +692,10 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
     AppendSnapSquareOutline(out, f, mh);
     AppendSnapDiagonalCross(out, f, mh * 0.35f);
     break;
+  case CadSnap::Kind::Node:  // AutoCAD's node marker: a circle with a diagonal cross
+    AppendSnapCircle(out, f, mh * 0.85f, snapCircSegs);
+    AppendSnapDiagonalCross(out, f, mh * 0.6f);
+    break;
   case CadSnap::Kind::SurveyCenter: {
     const float R = mh * 0.62f;
     AppendSnapCircle(out, f, R, snapCircSegs);

@@ -665,9 +665,11 @@ std::vector<GeometryPoint> Alignment::GeometryPoints() const {
         if (prev->kind == EntityKind::Arc)
           startCode = GeometryPointCode::CurveSpiral;
         else if (prev->kind == EntityKind::Spiral)
-          startCode = GeometryPointCode::SpiralSpiral;
+          startCode = prev->right == e.right ? GeometryPointCode::SpiralSpiral : GeometryPointCode::RevSpiral;
       }
       push(startCode, e.start, EntityStartStation(i), i);
+      SpiralData sd;
+      if (SpiralDataFor(i, *this, &sd) && sd.tangentEnd) push(GeometryPointCode::SpiralPI, sd.spi, EntityStartStation(i), i);
       if (next == nullptr || next->kind == EntityKind::Line)
         push(GeometryPointCode::SpiralTan, PointInEntity(i, e.length), EntityEndStation(i), i);
       else if (next != nullptr && next->kind == EntityKind::Arc)

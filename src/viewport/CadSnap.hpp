@@ -55,7 +55,10 @@ enum class Kind {
   Nearest,
   /// A typed displayed station on an alignment (REQ-490). The value comes from `STATION 12+45.32`
   /// at a point prompt or from the latched station used while this snap mode runs.
-  Station
+  Station,
+  /// AutoCAD NODE: a POINT entity, and on an alignment every PI and spiral PI - points no geometry passes through
+  /// (REQ-490.2).
+  Node
 };
 
 struct Hit {
@@ -162,6 +165,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     return 2; ///< Same tier as Center (REQ-330); distance breaks ties
   case Kind::Station:
     return 2; ///< Named station on an alignment (REQ-490)
+  case Kind::Node:
+    return 2; ///< A point or PI (REQ-490.2); an Endpoint on the same spot wins the tie
   case Kind::Intersection:
     return 3; ///< As precise a feature as an endpoint — a real crossing of two objects (REQ-062)
   case Kind::GeometricCenter:

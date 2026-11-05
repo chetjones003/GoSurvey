@@ -627,7 +627,8 @@ void DrawAlignmentTicksAndMarkers(QPainter& painter, const AlignmentView& view, 
   for (const alignment::GeometryPoint& gp : al.GeometryPoints()) {
     using GC = alignment::GeometryPointCode;
     // Only points on the line are marked; a curve's PI and centre lie off it, as in Civil 3D's default styles.
-    if (gp.code == GC::LineMidPt || gp.code == GC::CurveMidPt || gp.code == GC::CurveCenter || gp.code == GC::CurvePI)
+    if (gp.code == GC::LineMidPt || gp.code == GC::CurveMidPt || gp.code == GC::CurveCenter || gp.code == GC::CurvePI ||
+        gp.code == GC::SpiralPI)
       continue;
     const alignment::Point2 q = gp.point;
     painter.drawLine(view.Project({q.x - h, q.y}), view.Project({q.x + h, q.y}));

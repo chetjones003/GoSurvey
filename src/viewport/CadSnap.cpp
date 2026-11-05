@@ -566,9 +566,18 @@ void AppendPerpendicularFromRef(float refX, float refY, float wx, float wy, floa
 struct IsectSeg {
   double x0 = 0.0, y0 = 0.0, z0 = 0.0;
   double x1 = 0.0, y1 = 0.0, z1 = 0.0;
+  /// A display chord of alignment `owner` (-1 for real linework), `seq` along it. Neighbouring chords of one alignment
+  /// meet at a sample vertex, which is not an intersection (REQ-490).
+  int owner = -1;
+  int seq = 0;
   [[nodiscard]] curveisect::Seg xy() const { return curveisect::Seg{{x0, y0}, {x1, y1}}; }
   [[nodiscard]] double zAt(double t) const { return z0 + (z1 - z0) * t; }
 };
+
+/// Two chords of the same alignment that touch end to end (REQ-490): their shared vertex is a sample, not a crossing.
+[[nodiscard]] bool NeighbourChords(const IsectSeg& a, const IsectSeg& b) {
+  return a.owner >= 0 && a.owner == b.owner && std::abs(a.seq - b.seq) <= 1;
+}
 
 /// A circle, arc or ellipse in a plane parallel to XY, so one elevation describes it.
 ///
@@ -682,16 +691,18 @@ void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double t
   // REQ-490: alignments participate in INT/APPINT with lines, arcs and other alignments (exact geometry sampled to
   // segments only for display tolerance — same chord height as the viewport uses at this aperture).
   const double alignChord = std::max(tol * 0.25, 1e-6);
-  for (const alignment::Alignment& al : cmd.alignments) {
+  for (size_t ai = 0; ai < cmd.alignments.size(); ++ai) {
+    const alignment::Alignment& al = cmd.alignments[ai];
     if (al.Empty())
       continue;
     const int nEnt = static_cast<int>(al.Entities().size());
+    int seq = 0;
     for (int ei = 0; ei < nEnt; ++ei) {
       const std::vector<alignment::Point2> pts = al.SampleEntityForDisplay(ei, alignChord);
       if (pts.size() < 2)
         continue;
-      for (size_t k = 1; k < pts.size(); ++k) {
-        IsectSeg s{pts[k - 1].x, pts[k - 1].y, 0.0, pts[k].x, pts[k].y, 0.0};
+      for (size_t k = 1; k < pts.size(); ++k, ++seq) {
+        IsectSeg s{pts[k - 1].x, pts[k - 1].y, 0.0, pts[k].x, pts[k].y, 0.0, static_cast<int>(ai), seq};
         const double mx = 0.5 * (s.x0 + s.x1);
         const double my = 0.5 * (s.y0 + s.y1);
         const double r = 0.5 * std::hypot(s.x1 - s.x0, s.y1 - s.y0);
@@ -718,6 +729,8 @@ void ComputeTrueIntersections(const std::vector<IsectSeg>& segs, const std::vect
 
   for (size_t i = 0; i < segs.size(); ++i) {
     for (size_t j = i + 1; j < segs.size(); ++j) {
+      if (NeighbourChords(segs[i], segs[j]))
+        continue;
       hits.clear();
       curveisect::IntersectSegSeg(segs[i].xy(), segs[j].xy(), &hits);
       for (const auto& h : hits) {
@@ -788,6 +801,8 @@ void ComputeApparentIntersections(const Camera& cam, const std::vector<IsectSeg>
     const curveisect::Seg pi = curveisect::ProjectSeg(segs[i].x0, segs[i].y0, segs[i].z0, segs[i].x1, segs[i].y1,
                                                       segs[i].z1, right, up);
     for (size_t j = i + 1; j < segs.size(); ++j) {
+      if (NeighbourChords(segs[i], segs[j]))
+        continue;
       const curveisect::Seg pj = curveisect::ProjectSeg(segs[j].x0, segs[j].y0, segs[j].z0, segs[j].x1, segs[j].y1,
                                                         segs[j].z1, right, up);
       hits.clear();
@@ -1058,6 +1073,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   const bool wantQuadrant = want(Kind::Quadrant, cmd.objectSnapQuadrant);
   const bool wantStation =
       want(Kind::Station, cmd.objectSnapStation && cmd.objectSnapStationDisplayedValid);
+  const bool wantNode = want(Kind::Node, cmd.objectSnapNode);
   const bool wantGeometricCenter = want(Kind::GeometricCenter, cmd.objectSnapGeometricCenter);
   const bool wantIntersection = want(Kind::Intersection, cmd.objectSnapIntersection);
   const bool wantApparentIntersection = want(Kind::ApparentIntersection, cmd.objectSnapApparentIntersection);
@@ -1466,9 +1482,13 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   for (const alignment::Alignment& al : cmd.alignments) {
     if (al.Empty())
       continue;
-    if (wantEndpoint || wantMidpoint || wantCenter) {
+    if (wantEndpoint || wantMidpoint || wantCenter || wantNode) {
       for (const alignment::GeometryPoint& gp : al.GeometryPoints()) {
         using GC = alignment::GeometryPointCode;
+        const bool pi = gp.code == GC::TanTan || gp.code == GC::CurvePI || gp.code == GC::SpiralPI;
+        if (pi && wantNode)  // REQ-490.2: the PIs are Node points; Endpoint keeps offering them too
+          Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(gp.point.x),
+                   SnapFloatCoordinate(gp.point.y), Kind::Node, tolWorld, 0.0f);
         Kind k = Kind::Endpoint;
         if (gp.code == GC::CurveCenter) {
           if (!wantCenter) continue;
@@ -1505,14 +1525,18 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     }
   }
 
-  if (wantEndpoint) {
+  if (wantEndpoint || wantNode) {
     for (size_t pi = 0; pi < cmd.cadPoints.size(); ++pi) {
       if (exclude.valid && exclude.type == SelectedEntity::Type::Point &&
           exclude.index == static_cast<int>(pi))
         continue;
       const CadPoint& p = cmd.cadPoints[pi];
-      Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(p.x),
-               SnapFloatCoordinate(p.y), Kind::Endpoint, tolWorld, SnapFloatCoordinate(p.z));
+      if (wantEndpoint)
+        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(p.x),
+                 SnapFloatCoordinate(p.y), Kind::Endpoint, tolWorld, SnapFloatCoordinate(p.z));
+      if (wantNode)
+        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(p.x),
+                 SnapFloatCoordinate(p.y), Kind::Node, tolWorld, SnapFloatCoordinate(p.z));
     }
   }
 
@@ -2394,6 +2418,19 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         const alignment::Point2 p = al.GetPointAtStation(raw);
         PushSnapPickerEntry(static_cast<float>(p.x), static_cast<float>(p.y), Kind::Station, sortWorldX, sortWorldY,
                             out, 0.f);
+      }
+    }
+    break;
+  case Kind::Node:  // REQ-490.2: drawing points, and every PI and spiral PI of an alignment
+    for (const CadPoint& p : cmd.cadPoints)
+      PushSnapPickerEntry(static_cast<float>(p.x), static_cast<float>(p.y), Kind::Node, sortWorldX, sortWorldY, out,
+                          static_cast<float>(p.z));
+    for (const alignment::Alignment& al : cmd.alignments) {
+      for (const alignment::GeometryPoint& gp : al.GeometryPoints()) {
+        using GC = alignment::GeometryPointCode;
+        if (gp.code != GC::TanTan && gp.code != GC::CurvePI && gp.code != GC::SpiralPI) continue;
+        PushSnapPickerEntry(static_cast<float>(gp.point.x), static_cast<float>(gp.point.y), Kind::Node, sortWorldX,
+                            sortWorldY, out, 0.f);
       }
     }
     break;

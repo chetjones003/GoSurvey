@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "CadCommands.hpp"
+#include "CadSnap.hpp"
 #include "alignment/Alignment.hpp"
 
 using alignment::Alignment;
@@ -649,4 +650,95 @@ TEST_CASE("A tangent through a curve's centre meets it at its analytic stations"
   const Alignment through = alignment::MakeLineObject({500.0 - 700.0 * std::cos(30.0 * kDeg), 100.0 + 700.0 * std::sin(30.0 * kDeg)},
                                                       {500.0 + 700.0 * std::cos(30.0 * kDeg), 100.0 - 700.0 * std::sin(30.0 * kDeg)});
   CHECK(alignment::IntersectAlignments(a, through).size() == 1);  // the far side is past the curve's 60 degrees
+}
+
+// --- REQ-490: geometry points and snaps ---
+
+TEST_CASE("Node snaps to an alignment's PI, and Nearest lands on the true curve", "[req490][alignment]") {
+  AppCommandState st = Drawing();
+  st.objectSnapEnabled = true;
+  st.objectSnapEndpoint = false;
+  st.objectSnapMidpoint = false;
+  st.objectSnapCenter = false;
+  st.objectSnapNode = true;
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT N1", log);
+  Submit(st, "ALIGNMENTADD N1, TANGENT, 0, 0, 0, 100", log);   // north to (0, 100)
+  Submit(st, "ALIGNMENTADD N1, CURVE, 100, 90, RIGHT", log);   // centre (100, 100); PI at (0, 200)
+  const CadSnap::Hit node = CadSnap::FindBest(0.6, 199.5, st, true, 2.0f);
+  REQUIRE(node.valid);
+  CHECK(node.kind == CadSnap::Kind::Node);
+  CHECK(node.x == Approx(0.0).margin(1e-3));
+  CHECK(node.y == Approx(200.0).margin(1e-3));
+  const CadSnap::Kind nearest = CadSnap::Kind::Nearest;
+  const double a = 30.0 * kDeg;  // a point 3 outside the curve, 30 degrees along it
+  const CadSnap::Hit n = CadSnap::FindBest(100.0 - 103.0 * std::cos(a), 100.0 + 103.0 * std::sin(a), st, true, 5.0f, {},
+                                           nullptr, &nearest);
+  REQUIRE(n.valid);
+  CHECK(n.kind == CadSnap::Kind::Nearest);
+  CHECK(std::hypot(n.x - 100.0, n.y - 100.0) == Approx(100.0).margin(1e-3));  // on the arc, not a chord
+}
+
+TEST_CASE("TS, SC, CS and ST snap to the spiral junctions, and SPI is a Node point", "[req490][alignment]") {
+  alignment::CurveSettings s{true, 200.0, 60.0, 60.0};
+  Alignment road;
+  std::string why;
+  REQUIRE(alignment::BuildFromPis({{0, 0}, {0, 600}, {500, 900}}, s, &road, &why));
+  REQUIRE(road.Entities().size() == 5);  // T, S, C, S, T
+  AppCommandState st = Drawing();
+  st.alignments.push_back(road);
+  st.objectSnapEnabled = true;
+  st.objectSnapEndpoint = true;
+  st.objectSnapNode = true;
+  using GC = alignment::GeometryPointCode;
+  int junctions = 0, spis = 0;
+  for (const alignment::GeometryPoint& gp : road.GeometryPoints()) {
+    const bool junction = gp.code == GC::TanSpiral || gp.code == GC::SpiralCurve || gp.code == GC::CurveSpiral ||
+                          gp.code == GC::SpiralTan;
+    if (!junction && gp.code != GC::SpiralPI) continue;
+    const CadSnap::Hit h = CadSnap::FindBest(gp.point.x + 0.3, gp.point.y - 0.2, st, true, 1.0f);
+    REQUIRE(h.valid);
+    INFO("code " << static_cast<int>(gp.code) << " hit kind " << static_cast<int>(h.kind));
+    CHECK(h.x == Approx(gp.point.x).margin(1e-3));
+    CHECK(h.y == Approx(gp.point.y).margin(1e-3));
+    (junction ? junctions : spis) += 1;
+  }
+  CHECK(junctions == 4);
+  CHECK(spis == 2);
+}
+
+TEST_CASE("A reversing spiral-to-spiral junction is coded RevSpiral", "[req490][alignment]") {
+  Alignment a;
+  REQUIRE(a.AppendTangent({0, 0}, 0.0, 100.0));
+  REQUIRE(a.AppendSpiral(50.0, 0.0, 300.0, true));
+  REQUIRE(a.AppendSpiral(50.0, 300.0, 0.0, true));
+  REQUIRE(a.AppendSpiral(50.0, 0.0, 300.0, false));
+  int same = 0, reverse = 0;
+  for (const alignment::GeometryPoint& gp : a.GeometryPoints()) {
+    same += gp.code == alignment::GeometryPointCode::SpiralSpiral ? 1 : 0;
+    reverse += gp.code == alignment::GeometryPointCode::RevSpiral ? 1 : 0;
+  }
+  CHECK(same == 1);
+  CHECK(reverse == 1);
+}
+
+TEST_CASE("Intersection snap ignores an alignment's own sample vertices but finds real crossings", "[req490][alignment]") {
+  alignment::CurveSettings s{true, 200.0, 60.0, 60.0};
+  Alignment road;
+  std::string why;
+  REQUIRE(alignment::BuildFromPis({{0, 0}, {0, 600}, {500, 900}}, s, &road, &why));
+  AppCommandState st = Drawing();
+  st.alignments.push_back(road);
+  st.objectSnapEnabled = true;
+  const CadSnap::Kind isect = CadSnap::Kind::Intersection;
+  const double sta = road.EntityStartStation(1) + 30.0;  // halfway along the first spiral
+  const Point2 on = road.GetPointAtStation(sta);
+  CHECK_FALSE(CadSnap::FindBest(on.x + 0.2, on.y, st, true, 1.0f, {}, nullptr, &isect).valid);
+  for (double v : {on.x - 50.0, on.y, 0.0, on.x + 50.0, on.y, 0.0}) st.userLinesFlat.push_back(v);  // a line across it
+  st.userLineAttrs.push_back(EntityAttributes{});
+  const CadSnap::Hit cross = CadSnap::FindBest(on.x + 0.2, on.y, st, true, 1.0f, {}, nullptr, &isect);
+  REQUIRE(cross.valid);
+  CHECK(cross.kind == CadSnap::Kind::Intersection);
+  CHECK(std::fabs(cross.y - on.y) <= 1e-3);
+  CHECK(std::fabs(road.GetStationOffset(cross.x, cross.y).offset) <= 1e-3);
 }

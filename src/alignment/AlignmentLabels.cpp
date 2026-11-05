@@ -103,6 +103,8 @@ const char* GeometryPointAbbreviation(GeometryPointCode code) {
     case GeometryPointCode::CurveSpiral: return "CS";
     case GeometryPointCode::SpiralCurve: return "SC";
     case GeometryPointCode::SpiralSpiral: return "SS";
+    case GeometryPointCode::RevSpiral: return "RS";
+    case GeometryPointCode::SpiralPI: return "";
     case GeometryPointCode::CurveMidPt: return "Mid";
     case GeometryPointCode::CurvePI:
     case GeometryPointCode::CurveCenter:

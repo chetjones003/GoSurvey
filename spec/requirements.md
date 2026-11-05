@@ -16282,7 +16282,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. Copying produces a distinct id and name.
 - Owner-layer: Commands, Domain, Qt UI.
 - Status: accepted (2026-11-02, user approval)
-- Revisions: Phase 2 delivered 2026-11-02: grips (start, tangent end, curve radius), MOVE/COPY/ROTATE/SCALE/MIRROR, REVERSEALIGNMENT, ALIGNMENTSTATION. Reverse clears station equations.
+- Revisions: Phase 2 delivered 2026-11-02: grips (start, tangent end, curve radius), MOVE/COPY/ROTATE/SCALE/MIRROR, REVERSEALIGNMENT, ALIGNMENTSTATION. Reverse clears station equations
+  (D-2026-11-04-n: as Civil 3D; reversing twice restores the geometry and the starting station, not the equations).
   2026-11-04, **Decision D-2026-11-04-j (grips and reverse):** grips follow Civil 3D's on a tangent / Free curve /
   tangent alignment — a triangle at each PI (a corner, or the tangents' intersection over a Free curve) moves it and
   the curve keeps its radius; circles at a Free curve's PC and PT slide along the tangents and its midpoint is a

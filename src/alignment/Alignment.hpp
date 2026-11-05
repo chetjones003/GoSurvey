@@ -122,7 +122,9 @@ enum class GeometryPointCode {
   CurveMidPt,
   CurvePI,     ///< Intersection of the two tangents a curve joins.
   CurveCenter,
-  LineMidPt
+  LineMidPt,
+  SpiralPI,    ///< SPI: intersection of a spiral's tangents at its two ends (REQ-490.1).
+  RevSpiral    ///< Spiral to spiral where the turning direction reverses (REQ-490.1).
 };
 
 struct GeometryPoint {

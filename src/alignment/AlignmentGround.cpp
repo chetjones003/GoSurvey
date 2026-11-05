@@ -16,6 +16,7 @@ bool LiesOnAlignment(GeometryPointCode code) {
     case GeometryPointCode::CurveMidPt:
     case GeometryPointCode::CurveCenter:
     case GeometryPointCode::CurvePI:
+    case GeometryPointCode::SpiralPI:
       return false;
     default:
       return true;
