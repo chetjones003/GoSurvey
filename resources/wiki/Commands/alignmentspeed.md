@@ -1,6 +1,7 @@
 # ALIGNMENTSPEED
 
-**Command:** `ALIGNMENTSPEED`  
+**Command:** `ALIGNMENTSPEED`
+
 **Category overview:** [[Alignments]]
 
 Design speed from a station: ALIGNMENTSPEED <alignment>, <station>, <speed>|CLEAR

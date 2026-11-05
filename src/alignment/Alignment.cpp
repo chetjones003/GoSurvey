@@ -2,6 +2,7 @@
 #include "alignment/Clothoid.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cctype>
 #include <cmath>
@@ -729,17 +730,83 @@ bool Alignment::Bounds(Point2* mn, Point2* mx) const {
     const Entity& e = entities_[i];
     take(e.start);
     take(PointInEntity(static_cast<int>(i), e.length));
-    if (e.kind != EntityKind::Arc) continue;
-    CurveData cd;
-    (void)CurveDataFor(static_cast<int>(i), &cd);
-    const double sgn = e.right ? 1.0 : -1.0;
-    const double a0 = std::atan2(e.start.x - cd.center.x, e.start.y - cd.center.y);
-    const double sweep = e.length / e.radius;
-    for (int q = 0; q < 4; ++q) {  // the four cardinal azimuths about the centre
-      const double target = q * kPi * 0.5;
-      double phi = std::fmod(sgn * (target - a0), kTwoPi);
-      if (phi < 0.0) phi += kTwoPi;
-      if (phi <= sweep) take({cd.center.x + e.radius * std::sin(target), cd.center.y + e.radius * std::cos(target)});
+    if (e.kind == EntityKind::Arc) {
+      CurveData cd;
+      (void)CurveDataFor(static_cast<int>(i), &cd);
+      const double sgn = e.right ? 1.0 : -1.0;
+      const double a0 = std::atan2(e.start.x - cd.center.x, e.start.y - cd.center.y);
+      const double sweep = e.length / e.radius;
+      for (int q = 0; q < 4; ++q) {  // the four cardinal azimuths about the centre
+        const double target = q * kPi * 0.5;
+        double phi = std::fmod(sgn * (target - a0), kTwoPi);
+        if (phi < 0.0) phi += kTwoPi;
+        if (phi <= sweep)
+          take({cd.center.x + e.radius * std::sin(target), cd.center.y + e.radius * std::cos(target)});
+      }
+      continue;
+    }
+    if (e.kind != EntityKind::Spiral) continue;
+
+    // A clothoid's heading is quadratic in station. Its X/Y extrema occur where that heading
+    // reaches a cardinal azimuth; test every root, splitting at an inflection if curvature changes sign.
+    const double k0 = SpiralKappaStart(e);
+    const double dk = (SpiralKappaEnd(e) - k0) / e.length;
+    const auto heading = [&](double s) { return e.startAzimuth + k0 * s + 0.5 * dk * s * s; };
+    std::array<double, 3> cuts{0.0, e.length, e.length};
+    size_t cutCount = 2;
+    if (dk != 0.0) {
+      const double inflection = -k0 / dk;
+      if (inflection > 0.0 && inflection < e.length) {
+        cuts[1] = inflection;
+        cuts[2] = e.length;
+        cutCount = 3;
+      }
+    }
+    bool conservativeBounds = false;
+    size_t roots = 0;
+    for (size_t segment = 0; segment + 1 < cutCount; ++segment) {
+      const double a = cuts[segment], b = cuts[segment + 1];
+      const double ha = heading(a), hb = heading(b);
+      if (!std::isfinite(ha) || !std::isfinite(hb)) {
+        conservativeBounds = true;
+        break;
+      }
+      const double low = std::min(ha, hb), high = std::max(ha, hb);
+      const double first = std::floor(low / (kPi * 0.5)) + 1.0;
+      const double last = std::ceil(high / (kPi * 0.5)) - 1.0;
+      if (!std::isfinite(first) || !std::isfinite(last) || std::fabs(first) > 9.0e15 || std::fabs(last) > 9.0e15) {
+        conservativeBounds = true;
+        break;
+      }
+      if (last < first) continue;
+      if (last - first + 1.0 > 65536.0) {
+        conservativeBounds = true;
+        break;
+      }
+      for (double ordinal = first; ordinal <= last; ordinal += 1.0) {
+        const double target = ordinal * (kPi * 0.5);
+        double lo = a, hi = b;
+        const bool increasing = hb > ha;
+        for (int iteration = 0; iteration < 56; ++iteration) {
+          const double mid = lo + (hi - lo) * 0.5;
+          if ((heading(mid) < target) == increasing)
+            lo = mid;
+          else
+            hi = mid;
+        }
+        take(PointInEntity(static_cast<int>(i), lo + (hi - lo) * 0.5));
+        if (++roots > 65536) {
+          conservativeBounds = true;
+          break;
+        }
+      }
+      if (conservativeBounds) break;
+    }
+    if (conservativeBounds) {
+      // The path cannot travel farther than its arc length from its start. This safe fallback
+      // avoids unbounded work on a numerically valid spiral with an extreme number of turns.
+      take({e.start.x - e.length, e.start.y - e.length});
+      take({e.start.x + e.length, e.start.y + e.length});
     }
   }
   if (mn != nullptr) *mn = {x0, y0};
@@ -1221,9 +1288,10 @@ bool SpiralDataFor(int entityIndex, const Alignment& a, SpiralData* out) {
   out->endRadius = e.radius;
   out->right = e.right;
   out->deflection = SpiralHeadingDelta(e, e.length);
+  const double curvatureChange = std::fabs(SpiralKappaEnd(e) - SpiralKappaStart(e));
+  if (curvatureChange > 0.0) out->parameterA = std::sqrt(e.length / curvatureChange);
   const double rFinite = IsInfiniteSpiralRadius(e.radius) ? e.startRadius : e.radius;
   if (IsInfiniteSpiralRadius(rFinite)) return true;
-  out->parameterA = std::sqrt(rFinite * e.length);
   const bool fromStart = IsInfiniteSpiralRadius(e.startRadius);
   if (!fromStart && !IsInfiniteSpiralRadius(e.radius)) return true;  // between two curves: no tangent end
   // Measure from the tangent end towards the curve end, along the tangent's direction of travel into the spiral.
@@ -1234,7 +1302,7 @@ bool SpiralDataFor(int entityIndex, const Alignment& a, SpiralData* out) {
   const double ux = std::sin(az), uy = std::cos(az);
   const double dx = curveEnd.x - origin.x, dy = curveEnd.y - origin.y;
   const double theta = std::fabs(out->deflection);
-  assert(theta > 0.0 && theta < kPi);
+  if (!(theta > 0.0 && theta < kPi) || !std::isfinite(theta)) return true;
   out->tangentEnd = true;
   out->totalX = dx * ux + dy * uy;
   out->totalY = std::fabs(dx * uy - dy * ux);

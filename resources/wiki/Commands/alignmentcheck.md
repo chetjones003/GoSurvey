@@ -1,6 +1,7 @@
 # ALIGNMENTCHECK
 
-**Command:** `ALIGNMENTCHECK`  
+**Command:** `ALIGNMENTCHECK`
+
 **Category overview:** [[Alignments]]
 
 Check an alignment against its design criteria: ALIGNMENTCHECK <alignment>

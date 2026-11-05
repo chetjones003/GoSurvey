@@ -3,7 +3,9 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 // REQ-503: every expected value below is computed by hand from closed-form geometry, not by
 // running the code under test a second way, because an alignment that is wrong by a sign or a
@@ -599,6 +601,47 @@ TEST_CASE("Clothoid spiral deflection and end curvature", "[req481][alignment]")
   REQUIRE(alignment::SpiralDataFor(1, a, &sd));
   CHECK(sd.parameterA == Approx(std::sqrt(500.0 * 100.0)).margin(1e-6));
   CHECK(sd.deflection == Approx(0.1).margin(1e-9));
+}
+
+TEST_CASE("Spiral bounds include interior extrema", "[req481][alignment][regression]") {
+  Alignment a;
+  REQUIRE(a.AppendTangent({0.0, 0.0}, 0.0, 10.0));
+  REQUIRE(a.AppendSpiral(400.0, 0.0, 100.0, true));
+
+  Point2 mn{}, mx{};
+  REQUIRE(a.Bounds(&mn, &mx));
+  const auto samples = a.SampleForDisplay(0.01);
+  REQUIRE(samples.size() > 2);
+  double sampledMaxY = -std::numeric_limits<double>::infinity();
+  for (const Point2 p : samples) sampledMaxY = std::max(sampledMaxY, p.y);
+
+  const double endpointMaxY = std::max(a.StartPoint().y, a.EndPoint().y);
+  CHECK(sampledMaxY > endpointMaxY + 1e-3);
+  CHECK(mx.y >= sampledMaxY - 1e-6);
+}
+
+TEST_CASE("Spiral A uses curvature change for finite to finite spirals", "[req481][alignment][regression]") {
+  Alignment a;
+  REQUIRE(a.AppendTangent({0.0, 0.0}, 0.0, 10.0));
+  REQUIRE(a.AppendSpiral(100.0, 500.0, 250.0, true));
+
+  alignment::SpiralData sd;
+  REQUIRE(alignment::SpiralDataFor(1, a, &sd));
+  CHECK(sd.parameterA == Approx(std::sqrt(100.0 / std::fabs(1.0 / 250.0 - 1.0 / 500.0))).margin(1e-9));
+}
+
+TEST_CASE("Spiral over half-turn omits undefined tangent intersection", "[req481][req490][alignment][regression]") {
+  Alignment a;
+  REQUIRE(a.AppendTangent({0.0, 0.0}, 0.0, 10.0));
+  REQUIRE(a.AppendSpiral(1000.0, 0.0, 100.0, true));
+
+  alignment::SpiralData sd;
+  REQUIRE(alignment::SpiralDataFor(1, a, &sd));
+  CHECK_FALSE(sd.tangentEnd);
+  const auto geometry = a.GeometryPoints();
+  CHECK(std::none_of(geometry.begin(), geometry.end(), [](const alignment::GeometryPoint& p) {
+    return p.code == alignment::GeometryPointCode::SpiralPI;
+  }));
 }
 
 TEST_CASE("Tangent-spiral-curve junction is C2 when radii match", "[req481][req482][alignment]") {

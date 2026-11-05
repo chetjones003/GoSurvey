@@ -1,6 +1,7 @@
 # ALIGNMENTCRITERIA
 
-**Command:** `ALIGNMENTCRITERIA`  
+**Command:** `ALIGNMENTCRITERIA`
+
 **Category overview:** [[Alignments]]
 
 Apply a check set to an alignment: ALIGNMENTCRITERIA <alignment>, <set>|NONE

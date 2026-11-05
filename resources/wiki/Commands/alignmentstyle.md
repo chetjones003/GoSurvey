@@ -1,6 +1,7 @@
 # ALIGNMENTSTYLE
 
-**Command:** `ALIGNMENTSTYLE` — no alias  
+**Command:** `ALIGNMENTSTYLE` — no alias
+
 **Category overview:** [[Alignments]]
 
 Manage **alignment display styles** (REQ-491): tangent, curve and spiral components with color,

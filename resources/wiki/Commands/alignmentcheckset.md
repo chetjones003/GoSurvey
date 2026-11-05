@@ -1,6 +1,7 @@
 # ALIGNMENTCHECKSET
 
-**Command:** `ALIGNMENTCHECKSET`  
+**Command:** `ALIGNMENTCHECKSET`
+
 **Category overview:** [[Alignments]]
 
 Design check sets: ALIGNMENTCHECKSET NEW|DELETE|LIST|SET|LOAD|SAVE, ...

@@ -6592,7 +6592,7 @@ void StartPolysolidCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The prompt line, computed rather than literal: it echoes the height, width and justification in
 /// force, which is what makes them discoverable without a separate report command (REQ-304).
 [[nodiscard]] std::string CadPolysolidPromptText(const AppCommandState& st);
-/// Handle one typed line: a coordinate, or one of `A L C U H W J O`. \return false if not consumed.
+/// Handle one typed line: a coordinate, or one of `A L C U H W J O`. \neturn false if not consumed.
 bool HandlePolysolidTextInput(const std::string& line, AppCommandState& st,
                               std::vector<std::string>& log);
 /// Handle a viewport click: a path point, or — at the `O`bject prompt — the entity to sweep along.
@@ -6610,7 +6610,7 @@ void CancelPolysolidCommand(AppCommandState& st);
 void StartRevcloudCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The prompt line, echoing the arc length and options in force.
 [[nodiscard]] std::string CadRevcloudPromptText(const AppCommandState& st);
-/// Handle one typed line: a coordinate, Enter, or one of `A R D O C U`. \return false if not consumed.
+/// Handle one typed line: a coordinate, Enter, or one of `A R D O C U`. \neturn false if not consumed.
 bool HandleRevcloudTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
 /// Handle a viewport click: a corner, or — at the `O`bject prompt — the shape to convert.
 void SubmitRevcloudViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
@@ -6641,7 +6641,7 @@ void StartPipeRunAtCurrentSize(AppCommandState& st, std::vector<std::string>& lo
 void ChoosePipeRunNominalSize(AppCommandState& st, const std::string& size);
 /// The prompt line, computed rather than literal: it echoes the phase and the size/class in force.
 [[nodiscard]] std::string CadPipeRunPromptText(const AppCommandState& st);
-/// Handle one typed line: the size/class line, a coordinate, or one of `U UNDO END`. \return false
+/// Handle one typed line: the size/class line, a coordinate, or one of `U UNDO END`. \neturn false
 /// if not consumed.
 bool HandlePipeRunTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
 /// Handle a viewport click: the run's start point, or a further vertex.
@@ -6677,7 +6677,7 @@ bool CadPipeFitNamedAtPick(AppCommandState& st, int runIdx, const std::string& b
 /// Handle a viewport click: the station point to splice the fitting in at. Always ends the command,
 /// success or refusal — there is nothing left to pick after one point.
 void SubmitPipeFitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
-/// Handle one typed line as a station point (`X,Y,Z`). \return false if not consumed.
+/// Handle one typed line as a station point (`X,Y,Z`). \neturn false if not consumed.
 bool HandlePipeFitTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
 
 // --- PIPESPLIT / PIPEJOIN / PIPEPROP (issue #486 increment B8 / REQ-345) --------------------------
@@ -6685,7 +6685,7 @@ bool HandlePipeFitTextInput(const std::string& line, AppCommandState& st, std::v
 void StartPipeSplitCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Handle a viewport click: the station point to split at. Always ends the command.
 void SubmitPipeSplitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
-/// Handle one typed line as a station point (`X,Y,Z`). \return false if not consumed.
+/// Handle one typed line as a station point (`X,Y,Z`). \neturn false if not consumed.
 bool HandlePipeSplitTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
 /// Merge the two selected `CadPipeRun`s into one — they must share the same nominal size and
 /// pressure class and have exactly one coincident endpoint between them. One-shot, no `Kind` state

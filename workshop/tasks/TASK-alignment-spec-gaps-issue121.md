@@ -101,6 +101,11 @@ renderer (REQ-495.1: never a query or export). The snap re-samples near the curs
   `435bf55` (`Document alignment workflows and reports`). The website manual at `gosurveycad.com/docs/alignments.html`
   was also reviewed; its source is not in this checkout, so the GitHub Wiki was updated as directed by the current
   project instructions.
+- PR #1152 follow-up: the PR gate's whitespace check exposed trailing Markdown hard-break spaces in five new command
+  pages and carriage returns embedded in the merged `CadCommands.hpp`; both were corrected. The reviewer regressions
+  now cover interior spiral bounds extrema, finite-to-finite spiral A, and spirals with deflection at least π. They
+  failed before the fix and pass afterward: Release `[alignment]` passes 260 cases / 207,048 assertions, and Debug
+  `[alignment][regression]` passes all three cases with assertions enabled.
 
 ## Technical debt
 
