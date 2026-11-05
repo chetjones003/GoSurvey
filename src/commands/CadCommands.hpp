@@ -3686,7 +3686,7 @@ struct AppCommandState {
   bool alignmentLayoutRequested = false;
   std::string alignmentLayoutName;
   /// REQ-491: EDITALIGNMENTSTYLE asks the Qt editor to open the style dialog on
-  /// ef alignmentStyleEditorName.
+  /// The alignment style name is stored in alignmentStyleEditorName.
   bool alignmentStyleEditorRequested = false;
   std::string alignmentStyleEditorName;
   /// REQ-485: set by the Qt editor. ALIGNMENT / CREATEALIGNMENT with no arguments then ask it for the Create Alignment
