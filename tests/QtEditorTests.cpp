@@ -1398,8 +1398,8 @@ private Q_SLOTS:
     candidate.sourceText = "1 / 303398.59 / 1887382.33";
     result.candidates.push_back(candidate);
     pdfview::SkippedTableRow skip;
-    skip.sourceText = "POINT TABLE TO BE REVISED";
-    skip.reason = "Missing northing and easting";
+    skip.sourceText = "POINT TABLE TO BE REVISED - coordinate table lacks a valid survey-point identifier, northing value, and easting value";
+    skip.reason = "Missing northing and easting values; source row has no valid coordinate pair to import.";
     result.skippedTableRows.push_back(skip);
     window.m_ExtractResult = std::move(result);
     window.ShowExtractReview();
@@ -1412,8 +1412,9 @@ private Q_SLOTS:
     QVERIFY(skippedIntro->isVisible());
     QVERIFY(skippedTable->isVisible());
     QCOMPARE(skippedTable->rowCount(), 1);
-    QCOMPARE(skippedTable->item(0, 0)->text(), QString("POINT TABLE TO BE REVISED"));
-    QCOMPARE(skippedTable->item(0, 1)->text(), QString("Missing northing and easting"));
+    QCOMPARE(skippedTable->item(0, 0)->text(), QString::fromUtf8(skip.sourceText.c_str()));
+    QCOMPARE(skippedTable->item(0, 1)->text(), QString::fromUtf8(skip.reason.c_str()));
+    QVERIFY(skippedTable->rowHeight(0) > skippedTable->verticalHeader()->defaultSectionSize());
 
     window.m_ExtractResult->skippedTableRows.clear();
     window.ShowExtractReview();
@@ -1429,7 +1430,7 @@ private Q_SLOTS:
     QVERIFY(skippedIntro->isVisible());
     QVERIFY(skippedTable->isVisible());
     QCOMPARE(skippedTable->rowCount(), 1);
-    QCOMPARE(skippedTable->item(0, 0)->text(), QString("POINT TABLE TO BE REVISED"));
+    QCOMPARE(skippedTable->item(0, 0)->text(), QString::fromUtf8(skip.sourceText.c_str()));
     QVERIFY(review->grab().save(Issue905Shot("qt-1109-pdf-coordinate-skipped-only-dark.png")));
     ApplyQtAppearance(*qApp, true);
     QVERIFY(review->grab().save(Issue905Shot("qt-1109-pdf-coordinate-skipped-only-light.png")));

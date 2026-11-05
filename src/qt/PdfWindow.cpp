@@ -2062,6 +2062,7 @@ void PdfWindow::ShowExtractReview() {
       m_ExtractSkippedTable->setItem(row, 0, new QTableWidgetItem(QString::fromUtf8(item.sourceText.c_str())));
       m_ExtractSkippedTable->setItem(row, 1, new QTableWidgetItem(QString::fromUtf8(item.reason.c_str())));
     }
+    m_ExtractSkippedTable->resizeRowsToContents();
     const bool showSkipped = !skipped.empty();
     m_ExtractSkippedIntro->setVisible(showSkipped);
     m_ExtractSkippedTable->setVisible(showSkipped);
