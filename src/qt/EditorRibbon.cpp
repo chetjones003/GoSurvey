@@ -1764,10 +1764,10 @@ void EditorWindow::RunRibbonAction(const QString& id) {
             if (!source.open(QIODevice::ReadOnly) || !destination.open(QIODevice::WriteOnly)) {
               failure = "PDF Export — could not open the final output file.";
             } else {
-              char buffer[64 * 1024];
+              QByteArray buffer(64 * 1024, Qt::Uninitialized);
               while (!source.atEnd()) {
-                const qint64 bytesRead = source.read(buffer, sizeof(buffer));
-                if (bytesRead <= 0 || destination.write(buffer, bytesRead) != bytesRead) {
+                const qint64 bytesRead = source.read(buffer.data(), buffer.size());
+                if (bytesRead <= 0 || destination.write(buffer.constData(), bytesRead) != bytesRead) {
                   failure = "PDF Export — could not publish the completed PDF.";
                   break;
                 }

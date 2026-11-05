@@ -72,6 +72,7 @@ See `verification/reviews/TASK-810-export-current-layout-pdf-plan-review.md`.
 - Assumptions: none.
 - Architectural decisions made by Workshop: none; D-2026-11-04-h is the accepted authority.
 - Technical debt: none identified in this slice. DWF, Display-area export, Plotter Manager/device configuration, and Display/Current controls remain explicitly excluded; #810 stays open for the other controls.
+- 2026-11-05 CI follow-up: MSVC `/analyze` flagged `RunRibbonAction` for 65,976 bytes of stack use due to its local 64 KiB PDF transfer buffer (C6262). The buffer now uses heap-backed `QByteArray`, preserving chunked publication while reducing handler stack use. Release build passed after the change; the PR analysis job will rerun on the pushed commit.
 - Product docs: updated the in-app Plotting guide. README and PRIVACY have no affected content. The public manual update and remaining documentation review are recorded in `TASK-paper-space-issue-batch-pr.md`.
 
 ## 9. Self-verification
