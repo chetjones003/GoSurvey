@@ -7218,7 +7218,7 @@ const CmdEntry kRegistry[] = {
     {"alignmentcurvesettings", "", "Curve and spiral settings for the layout: ALIGNMENTCURVESETTINGS [RADIUS=][, SPIRALIN=][, SPIRALOUT=]"},
     {"alignmentmeta", "", "Alignment metadata: ALIGNMENTMETA <alignment>, SET, <name>, <value> | REMOVE, <name> | LIST"},
     {"stationformat", "", "How stations are written: STATIONFORMAT [DELIMITER=+|-|_|/|C|K|NONE][, DIGITS=][, DECIMALS=][, PREFIX=][, SUFFIX=] | DEFAULT"},
-    {"alignmentedit", "", "Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|STARTRADIUS|DELTA|DIRECTION|CONSTRAINT, <value>"},
+    {"alignmentedit", "", "Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|STARTRADIUS|DELTA|DIRECTION|CONSTRAINT|DEGREE|TANGENTLENGTH|CHORD|EXTERNAL|MIDORDINATE|A, <value> | THROUGH, <x>, <y>"},
     {"alignmentlock", "", "Lock a parameter: ALIGNMENTLOCK <name>, <entity#>, RADIUS|LENGTH|BEARING|STATION, ON|OFF"},
     {"alignmentinsert", "", "Insert a tangent, curve or spiral: ALIGNMENTINSERT <name>, <after#>, TANGENT|CURVE|SPIRAL, ..."},
     {"alignmentremove", "", "Remove an entity: ALIGNMENTREMOVE <name>, <entity#>"},

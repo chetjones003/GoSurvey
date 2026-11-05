@@ -4,6 +4,7 @@
 #include "alignment/Clothoid.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <limits>
@@ -11,6 +12,19 @@
 
 namespace alignment {
 namespace {
+
+/// The curve definition an edit of `param` enters (REQ-481.5a).
+Entity::SizeBy SizeByFor(EditParam param) {
+  switch (param) {
+    case EditParam::CurveDegree: return Entity::SizeBy::DegreeOfCurve;
+    case EditParam::CurveTangent: return Entity::SizeBy::TangentLength;
+    case EditParam::CurveChord: return Entity::SizeBy::ChordLength;
+    case EditParam::CurveExternal: return Entity::SizeBy::External;
+    case EditParam::CurveMiddleOrdinate: return Entity::SizeBy::MiddleOrdinate;
+    case EditParam::SpiralA: return Entity::SizeBy::SpiralA;
+    default: return Entity::SizeBy::Radius;
+  }
+}
 
 double NormAz(double a) {
   a = std::fmod(a, kTwoPi);
@@ -240,7 +254,37 @@ bool Alignment::EditEntity(int i, EditParam param, double value, std::string* wh
       work.entities_[static_cast<size_t>(i)] = e;
       *this = std::move(work);  // locks never move geometry
       return true;
+    case EditParam::CurveDegree:
+    case EditParam::CurveTangent:
+    case EditParam::CurveChord:
+    case EditParam::CurveExternal:
+    case EditParam::CurveMiddleOrdinate: {
+      if (!arc) return fail(row + " is not a circular curve");
+      double radius = 0.0;
+      if (!RadiusForCurveParameter(param, value, e.length / e.radius, &radius))
+        return fail("no curve with that central angle has that value; it must be positive (and a chord or middle "
+                    "ordinate small enough for the angle)");
+      if ((e.locks & Entity::kLockRadius) != 0) return fail(row + " has a fixed radius");
+      if ((e.locks & Entity::kLockLength) != 0 && e.constraint != Entity::Constraint::Free)
+        return fail(row + " has a fixed length, and keeping its delta would change it; unlock the length first");
+      if (e.constraint != Entity::Constraint::Free) e.length = radius * (e.length / e.radius);  // the delta is kept
+      e.radius = radius;
+      e.definedByLength = false;
+      e.sizeBy = SizeByFor(param);
+      break;
+    }
+    case EditParam::SpiralA: {
+      if (!spiral) return fail(row + " is not a spiral");
+      const double dk = std::fabs((e.radius > 0.0 ? 1.0 / e.radius : 0.0) - (e.startRadius > 0.0 ? 1.0 / e.startRadius : 0.0));
+      if (!(value > 0.0) || !(dk > 0.0)) return fail("A must be positive, on a spiral whose radius changes");
+      if ((e.locks & Entity::kLockLength) != 0) return fail(row + " has a fixed length");
+      e.length = value * value * dk;  // A^2 = Ls / |change of curvature|
+      e.sizeBy = Entity::SizeBy::SpiralA;
+      break;
+    }
   }
+  if (param == EditParam::CurveRadius || param == EditParam::CurveDelta) e.sizeBy = Entity::SizeBy::Radius;
+  if (spiral && param == EditParam::CurveLength) e.sizeBy = Entity::SizeBy::Radius;  // a spiral entered by length
   std::string why;
   if (!work.Resolve(&why)) return fail(why);
   work.Rebuild();
@@ -253,29 +297,97 @@ bool Alignment::EditEntity(int i, EditParam param, double value, std::string* wh
 bool ParameterEditable(const Entity& e, EditParam param) {
   if (param == EditParam::Constraint || param == EditParam::Locks) return true;
   const bool free = e.constraint == Entity::Constraint::Free;
+  const bool sizeParam = param == EditParam::CurveDegree || param == EditParam::CurveTangent ||
+                         param == EditParam::CurveChord || param == EditParam::CurveExternal ||
+                         param == EditParam::CurveMiddleOrdinate;
   switch (e.kind) {
     case EntityKind::Line:
       return param == EditParam::LineLength || (param == EditParam::LineAzimuth && e.constraint == Entity::Constraint::Fixed);
     case EntityKind::Arc:
-      if (param == EditParam::CurveRadius) return true;
+      if (param == EditParam::CurveRadius || sizeParam) return true;  // REQ-481.5a: any of them sets the size
       if (free) return false;  // its length, delta and direction come from its two tangents
       return param == EditParam::CurveDirection || (param == EditParam::CurveLength && e.definedByLength) ||
              (param == EditParam::CurveDelta && !e.definedByLength);
     case EntityKind::Spiral:
-      return param == EditParam::CurveLength || param == EditParam::CurveRadius || param == EditParam::SpiralStartRadius;
+      return param == EditParam::CurveLength || param == EditParam::CurveRadius || param == EditParam::SpiralStartRadius ||
+             param == EditParam::SpiralA;
   }
   return false;
 }
 
 const char* ParameterConstraintName(const Entity& e) {
+  // REQ-481.5a: the parameter the size was entered by, then what else fixes the curve.
+  static const std::array<const char*, 7> kFixed{"Radius, delta",           "Degree of curve, delta",
+                                                 "Tangent length, delta",   "Chord length, delta",
+                                                 "External, delta",         "Middle ordinate, delta",
+                                                 "Through point, delta"};
+  static const std::array<const char*, 7> kFree{"Radius (between tangents)",          "Degree of curve (between tangents)",
+                                                "Tangent length (between tangents)",  "Chord length (between tangents)",
+                                                "External (between tangents)",        "Middle ordinate (between tangents)",
+                                                "Through point (between tangents)"};
+  const size_t size = std::min<size_t>(static_cast<size_t>(e.sizeBy), kFixed.size() - 1);
   switch (e.kind) {
     case EntityKind::Line: return e.constraint == Entity::Constraint::Fixed ? "Length, bearing" : "Length";
     case EntityKind::Arc:
-      if (e.constraint == Entity::Constraint::Free) return "Radius (between tangents)";
-      return e.definedByLength ? "Radius, length" : "Radius, delta";
-    case EntityKind::Spiral: return "Length, radii";
+      if (e.constraint == Entity::Constraint::Free) return kFree[size];
+      return e.definedByLength ? "Radius, length" : kFixed[size];
+    case EntityKind::Spiral: return e.sizeBy == Entity::SizeBy::SpiralA ? "A, radii" : "Length, radii";
   }
   return "";
+}
+
+bool RadiusForCurveParameter(EditParam param, double value, double delta, double* radius) {
+  assert(radius != nullptr);
+  assert(std::isfinite(delta));
+  if (!(value > 0.0) || !std::isfinite(value) || !(delta > 0.0) || delta >= kTwoPi) return false;
+  const double half = 0.5 * delta;
+  double r = 0.0;
+  switch (param) {
+    case EditParam::CurveRadius: r = value; break;
+    case EditParam::CurveLength: r = value / delta; break;
+    case EditParam::CurveDegree: r = 100.0 * 180.0 / (kPi * value); break;  // arc definition, per 100 units of arc
+    case EditParam::CurveTangent: r = std::fabs(std::cos(half)) > 1e-12 ? value / std::tan(half) : 0.0; break;
+    case EditParam::CurveChord: r = std::sin(half) > 1e-12 ? value / (2.0 * std::sin(half)) : 0.0; break;
+    case EditParam::CurveExternal: r = std::cos(half) > 1e-12 && 1.0 / std::cos(half) - 1.0 > 1e-15 ? value / (1.0 / std::cos(half) - 1.0) : 0.0; break;
+    case EditParam::CurveMiddleOrdinate: r = 1.0 - std::cos(half) > 1e-15 ? value / (1.0 - std::cos(half)) : 0.0; break;
+    default: return false;
+  }
+  if (!(r > 0.0) || !std::isfinite(r)) return false;
+  *radius = r;
+  return true;
+}
+
+bool Alignment::EditCurveThroughPoint(int i, Point2 p, std::string* whyNot) {
+  assert(std::isfinite(p.x) && std::isfinite(p.y));
+  assert(entities_.size() < 100000000);
+  auto fail = [&](const std::string& m) {
+    if (whyNot != nullptr) *whyNot = m;
+    return false;
+  };
+  if (i < 0 || static_cast<size_t>(i) >= entities_.size()) return fail("no such entity");
+  const Entity& e = entities_[static_cast<size_t>(i)];
+  if (e.kind != EntityKind::Arc || e.constraint != Entity::Constraint::Free)
+    return fail(Row(i) + " is not a Free curve between two tangents; only such a curve can be fitted through a point");
+  // The PI and the incoming direction are fixed by the tangents. The centre is PI + R w with w = n - tan(Δ/2) u, so
+  // |PI + R w - p| = R is the quadratic tan²(Δ/2) R² + 2 (d·w) R + |d|² = 0 with d = PI - p.
+  const double delta = e.length / e.radius, t = std::tan(0.5 * delta);
+  const Point2 u{std::sin(e.startAzimuth), std::cos(e.startAzimuth)};
+  const Point2 n = e.right ? Point2{u.y, -u.x} : Point2{-u.y, u.x};
+  const Point2 pi{e.start.x + e.radius * t * u.x, e.start.y + e.radius * t * u.y};
+  const Point2 w{n.x - t * u.x, n.y - t * u.y}, d{pi.x - p.x, pi.y - p.y};
+  const double b = d.x * w.x + d.y * w.y, c = d.x * d.x + d.y * d.y, a = t * t, disc = b * b - a * c;
+  if (!(a > 1e-18) || disc < 0.0) return fail("no curve tangent to both tangents passes through that point");
+  for (const double r : {(-b - std::sqrt(disc)) / a, (-b + std::sqrt(disc)) / a}) {
+    Alignment trial = *this;
+    if (!(r > 0.0) || !trial.EditEntity(i, EditParam::CurveRadius, r, nullptr)) continue;
+    const StationOffset so = trial.GetStationOffset(p.x, p.y);
+    const bool onArc = so.entityIndex == i && std::fabs(so.offset) <= 1e-6 * std::max(1.0, r);
+    if (!onArc) continue;
+    trial.entities_[static_cast<size_t>(i)].sizeBy = Entity::SizeBy::ThroughPoint;
+    *this = std::move(trial);
+    return true;
+  }
+  return fail("no curve tangent to both tangents passes through that point between them");
 }
 
 bool Alignment::StationLocksHold(const Alignment& before, int inserted, int removed, std::string* whyNot) const {

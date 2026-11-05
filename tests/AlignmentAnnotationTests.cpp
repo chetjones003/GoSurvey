@@ -347,3 +347,83 @@ TEST_CASE("BENCH ALIGNMENT installs the alignment scene and restores the drawing
   CHECK(st.alignments[0].name == "KEEP");
   CHECK(LogHas(log, "BENCH (alignments)"));
 }
+
+// --- REQ-481.5a: curve and spiral definitions ---
+
+TEST_CASE("A curve can be sized by degree, tangent, chord, external or middle ordinate, keeping its delta",
+          "[req481][alignment]") {
+  struct Case {
+    alignment::EditParam param;
+    double value;
+    const char* name;
+  };
+  const std::vector<Case> cases{{alignment::EditParam::CurveDegree, 10.0, "Degree of curve, delta"},
+                                {alignment::EditParam::CurveTangent, 80.0, "Tangent length, delta"},
+                                {alignment::EditParam::CurveChord, 150.0, "Chord length, delta"},
+                                {alignment::EditParam::CurveExternal, 6.0, "External, delta"},
+                                {alignment::EditParam::CurveMiddleOrdinate, 5.0, "Middle ordinate, delta"}};
+  for (const Case& c : cases) {
+    Alignment a;
+    REQUIRE(a.AppendTangent({0.0, 0.0}, 45.0 * kDeg, 250.0));
+    REQUIRE(a.AppendCurveByDelta(500.0, 15.0 * kDeg, true));
+    REQUIRE(a.AppendTangent(200.0));
+    REQUIRE(a.EditEntity(1, c.param, c.value));
+    alignment::CurveData cd;
+    REQUIRE(a.CurveDataFor(1, &cd));
+    CHECK(cd.delta == Catch::Approx(15.0 * kDeg).epsilon(1e-12));
+    const double got = c.param == alignment::EditParam::CurveDegree    ? cd.degreeOfCurveArc
+                       : c.param == alignment::EditParam::CurveTangent ? cd.tangentLength
+                       : c.param == alignment::EditParam::CurveChord   ? cd.chord
+                       : c.param == alignment::EditParam::CurveExternal ? cd.external
+                                                                        : cd.midOrdinate;
+    CHECK(got == Catch::Approx(c.value).epsilon(1e-10));
+    CHECK(std::string(alignment::ParameterConstraintName(a.Entities()[1])) == c.name);
+    CHECK(alignment::ParameterEditable(a.Entities()[1], c.param));
+  }
+  double r = 0.0;
+  CHECK_FALSE(alignment::RadiusForCurveParameter(alignment::EditParam::CurveTangent, -1.0, 0.2, &r));
+  CHECK_FALSE(alignment::RadiusForCurveParameter(alignment::EditParam::LineLength, 10.0, 0.2, &r));
+}
+
+TEST_CASE("A free curve is fitted through a point and keeps that definition when saved", "[req481][alignment]") {
+  AppCommandState st = Drawing();
+  Alignment a;
+  std::string built;
+  REQUIRE(alignment::BuildFromPis({{0, 0}, {0, 500}, {400, 800}}, alignment::CurveSettings{true, 200.0, 0.0, 0.0}, &a, &built));
+  a.name = "FC";
+  REQUIRE(a.Entities()[1].constraint == alignment::Entity::Constraint::Free);
+  // The middle of the same curve at a larger radius: the fit must find that radius again.
+  alignment::Alignment bigger = a;
+  REQUIRE(bigger.EditEntity(1, alignment::EditParam::CurveRadius, 260.0));
+  const alignment::Point2 target = bigger.GetPointAtStation(bigger.EntityStartStation(1) + 0.5 * bigger.Entities()[1].length);
+  REQUIRE(a.EditCurveThroughPoint(1, target));
+  CHECK(a.Entities()[1].radius == Catch::Approx(260.0).epsilon(1e-9));
+  CHECK(std::fabs(a.GetStationOffset(target.x, target.y).offset) <= 1e-7);
+  CHECK(std::string(alignment::ParameterConstraintName(a.Entities()[1])) == "Through point (between tangents)");
+
+  st.alignments.push_back(a);
+  CHECK(Reopened(st).alignments[0].Entities()[1].sizeBy == alignment::Entity::SizeBy::ThroughPoint);
+
+  std::string why;
+  CHECK_FALSE(a.EditCurveThroughPoint(0, target, &why));  // a tangent
+  CHECK(why.find("not a Free curve") != std::string::npos);
+  CHECK_FALSE(a.EditCurveThroughPoint(1, {target.x + 5000.0, target.y - 5000.0}, &why));
+}
+
+TEST_CASE("A spiral can be entered by A", "[req481][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT SA", log);
+  Submit(st, "ALIGNMENTADD SA, TANGENT, 0, 0, 0, 100", log);
+  Submit(st, "ALIGNMENTADD SA, SPIRAL, 60, 300, RIGHT", log);
+  Submit(st, "ALIGNMENTEDIT SA, 2, A, 150", log);
+  const Alignment& a = st.alignments[0];
+  CHECK(a.Entities()[1].length == Catch::Approx(75.0).epsilon(1e-12));  // 150^2 / 300
+  alignment::SpiralData sd;
+  REQUIRE(alignment::SpiralDataFor(1, a, &sd));
+  CHECK(sd.parameterA == Catch::Approx(150.0).epsilon(1e-12));
+  CHECK(std::string(alignment::ParameterConstraintName(a.Entities()[1])) == "A, radii");
+  log.clear();
+  Submit(st, "ALIGNMENTEDIT SA, 1, A, 150", log);
+  CHECK(LogHas(log, "is not a spiral"));
+}

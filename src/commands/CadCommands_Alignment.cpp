@@ -931,9 +931,11 @@ void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log)
 void RunAlignmentEdit(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
   const char* usage =
-      "ALIGNMENTEDIT - usage: ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|STARTRADIUS|DELTA|DIRECTION|CONSTRAINT, "
-      "<value> (DIRECTION LEFT|RIGHT; CONSTRAINT FIXED|FLOATPREV|FLOATNEXT|FREE; spiral RADIUS/STARTRADIUS 0 = tangent).";
-  if (f.size() != 4) {
+      "ALIGNMENTEDIT - usage: ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|STARTRADIUS|DELTA|DIRECTION|CONSTRAINT|"
+      "DEGREE|TANGENTLENGTH|CHORD|EXTERNAL|MIDORDINATE|A, <value> | <name>, <entity#>, THROUGH, <x>, <y> "
+      "(DIRECTION LEFT|RIGHT; CONSTRAINT FIXED|FLOATPREV|FLOATNEXT|FREE; spiral RADIUS/STARTRADIUS 0 = tangent).";
+  const bool through = f.size() == 5 && Lower(f[2]) == "through";
+  if (f.size() != 4 && !through) {
     log.push_back(usage);
     return;
   }
@@ -941,6 +943,25 @@ void RunAlignmentEdit(AppCommandState& st, const std::string& args, std::vector<
   if (a == nullptr || IsLinkedOffset(*a, "ALIGNMENTEDIT", log)) return;
   int idx = 0;
   if (!ParseEntityIndex(*a, "ALIGNMENTEDIT", f[1], &idx, log)) return;
+  if (through) {  // REQ-481.5a Curve through a point
+    double wx = 0.0, wy = 0.0, lx = 0.0, ly = 0.0;
+    if (!ParseNum(f[3], &wx) || !ParseNum(f[4], &wy)) {
+      log.push_back("ALIGNMENTEDIT - THROUGH needs the point as two numbers, <x>, <y>.");
+      return;
+    }
+    CadCoord::LocalFromWorld(st, wx, wy, &lx, &ly);
+    alignment::Alignment trial = *a;
+    std::string why;
+    if (!trial.EditCurveThroughPoint(idx, {lx, ly}, &why)) {
+      log.push_back("ALIGNMENTEDIT - refused: " + why + ". Nothing changed.");
+      return;
+    }
+    PushUndoSnapshot(st, "Edit alignment");
+    *Resolve(st, "ALIGNMENTEDIT", f[0], log) = std::move(trial);
+    log.push_back("ALIGNMENTEDIT - entity " + f[1] + " of \"" + f[0] + "\" now passes through (" + f[3] + ", " + f[4] + ").");
+    RefreshAlignmentOffsets(st, log);
+    return;
+  }
   const alignment::EntityKind kind = a->Entities()[static_cast<size_t>(idx)].kind;
   const bool isArc = kind == alignment::EntityKind::Arc;
   const bool isSpiral = kind == alignment::EntityKind::Spiral;
@@ -981,6 +1002,15 @@ void RunAlignmentEdit(AppCommandState& st, const std::string& args, std::vector<
     else if (c == "floatnext" || c == "floatonnext") v = 2.0;
     else if (c == "free") v = 3.0;
     else { log.push_back("ALIGNMENTEDIT - the constraint must be FIXED, FLOATPREV, FLOATNEXT or FREE."); return; }
+  } else if (what == "degree" || what == "tangentlength" || what == "chord" || what == "external" ||
+             what == "midordinate" || what == "middleordinate" || what == "a") {  // REQ-481.5a definitions
+    if (!ParseNum(f[3], &v)) { log.push_back("ALIGNMENTEDIT - the " + f[2] + " must be a number."); return; }
+    param = what == "degree"          ? alignment::EditParam::CurveDegree
+            : what == "tangentlength" ? alignment::EditParam::CurveTangent
+            : what == "chord"         ? alignment::EditParam::CurveChord
+            : what == "external"      ? alignment::EditParam::CurveExternal
+            : what == "a"             ? alignment::EditParam::SpiralA
+                                      : alignment::EditParam::CurveMiddleOrdinate;
   } else {
     log.push_back(usage);
     return;

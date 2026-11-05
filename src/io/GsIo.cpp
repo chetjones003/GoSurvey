@@ -2411,6 +2411,7 @@ json BuildRoot(const AppCommandState& st) {
         q["c"] = static_cast<int>(e.constraint);
         if (e.locks != 0) q["lk"] = static_cast<int>(e.locks);
         if (e.kind == alignment::EntityKind::Arc && e.definedByLength) q["dl"] = true;  // D-2026-11-04-f
+        if (e.sizeBy != alignment::Entity::SizeBy::Radius) q["sz"] = static_cast<int>(e.sizeBy);  // REQ-481.5a
         ents.push_back(std::move(q));
       }
       o["entities"] = std::move(ents);
@@ -4423,6 +4424,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           // D-2026-11-04-f: absent in older files, which read as radius-and-delta curves.
           e.definedByLength = e.kind == alignment::EntityKind::Arc && q.contains("dl") && q["dl"].is_boolean() &&
                               q["dl"].get<bool>();
+          if (q.contains("sz") && q["sz"].is_number_integer())  // REQ-481.5a
+            e.sizeBy = static_cast<alignment::Entity::SizeBy>(std::clamp(q["sz"].get<int>(), 0, 7));
           if (!a.AppendRaw(e)) {
             ok = false;
             break;

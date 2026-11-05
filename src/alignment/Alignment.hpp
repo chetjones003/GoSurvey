@@ -57,6 +57,12 @@ struct Entity {
   /// Arc only (D-2026-11-04-f): entered by radius and length, so a radius edit keeps the length. False = entered by
   /// radius and delta (also curves from objects and from older files), so a radius edit keeps the delta.
   bool definedByLength = false;
+  /// REQ-481.5a: the parameter a curve's size was entered by (a spiral: by length or by A). Storage stays radius and
+  /// delta (or length); this only names the definition. The integer values are persisted - never reorder.
+  enum class SizeBy : unsigned char {
+    Radius = 0, DegreeOfCurve = 1, TangentLength = 2, ChordLength = 3, External = 4, MiddleOrdinate = 5,
+    ThroughPoint = 6, SpiralA = 7
+  } sizeBy = SizeBy::Radius;
 };
 
 /// Which stored parameter an edit changes (REQ-486.1). Derived values (delta, chord, ...) are edited by
@@ -70,8 +76,19 @@ enum class EditParam {
   CurveDirection,
   SpiralStartRadius,
   Constraint,
-  Locks
+  Locks,
+  // REQ-481.5a curve definitions: each sets the radius that gives the value at the curve's delta.
+  CurveDegree,          ///< Degree of curve, arc definition: degrees per 100 units of arc.
+  CurveTangent,         ///< Tangent length T = R tan(Δ/2).
+  CurveChord,           ///< Chord C = 2R sin(Δ/2).
+  CurveExternal,        ///< External E = R (sec(Δ/2) - 1).
+  CurveMiddleOrdinate,  ///< Middle ordinate M = R (1 - cos(Δ/2)).
+  SpiralA               ///< A of a spiral: its length becomes A² |1/R2 - 1/R1|.
 };
+
+/// REQ-481.5a: the radius at which a curve of central angle `delta` (radians) has `value` as its `param` (one of the
+/// curve-definition parameters above, or CurveRadius). False for a value or delta that gives no positive radius.
+[[nodiscard]] bool RadiusForCurveParameter(EditParam param, double value, double delta, double* radius);
 
 /// REQ-486.1: whether `param` took part in how entity `e` is defined, so the layout table offers it for editing; a
 /// derived value is shown read-only. Constraint and locks are always editable.
@@ -249,6 +266,9 @@ class Alignment {
   /// defined by (D-2026-11-04-f): its delta, or its length when `definedByLength`; editing a delta or a length keeps the
   /// radius. Derived (floating) azimuths cannot be edited directly.
   bool EditEntity(int i, EditParam param, double value, std::string* whyNot = nullptr);
+  /// REQ-481.5a Curve through a point: sizes the Free curve `i` so it passes through `p` (drawing-local) while staying
+  /// tangent to the tangents either side. Refused for any other entity or a point no such curve reaches.
+  bool EditCurveThroughPoint(int i, Point2 p, std::string* whyNot = nullptr);
   /// Inserts a tangent / curve after entity `i` (continuing tangent-continuously, FloatOnPrev) and shifts what follows.
   bool InsertTangentAfter(int i, double length, std::string* whyNot = nullptr);
   bool InsertCurveAfter(int i, double radius, double arcLength, bool right, std::string* whyNot = nullptr);
