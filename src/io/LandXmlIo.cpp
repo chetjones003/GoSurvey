@@ -6,14 +6,18 @@
 #include <pugixml.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <set>
 #include <sstream>
+#include <string_view>
+#include <system_error>
 
 namespace {
 
@@ -340,6 +344,297 @@ bool ExportLandXmlFile(const AppCommandState& st, const char* pathUtf8, std::vec
     return true;
   } catch (const std::exception& error) {
     log.push_back(std::string("EXPORTLANDXML — failed: ") + error.what() + ".");
+    return false;
+  }
+}
+
+// --- Import (issue #1003, REQ-506) ---------------------------------------------------------------
+
+namespace {
+
+/// Meters per LandXML `linearUnit` value, or 0 for a value this reader does not know.
+double MetersPerLandXmlUnit(const std::string& unit) {
+  if (unit == "meter") return 1.0;
+  if (unit == "millimeter") return 0.001;
+  if (unit == "inch") return 0.0254;
+  if (unit == "foot") return 0.3048;
+  if (unit == "USSurveyFoot") return 1200.0 / 3937.0;
+  return 0.0;
+}
+
+/// Meters per drawing unit (INSUNITS, as UnitsFor reads it), or 0 for a unitless drawing.
+double MetersPerDrawingUnit(const AppCommandState& st) {
+  switch (st.drawingInsUnits) {
+    case 1: return 0.0254;
+    case 2:
+      return st.drawingSettings.footDefinition == DrawingSettings::FootDefinition::UsSurvey ? 1200.0 / 3937.0 : 0.3048;
+    case 4: return 0.001;
+    case 6: return 1.0;
+    default: return 0.0;
+  }
+}
+
+/// Exactly three finite decimal numbers separated by white space; anything else is rejected.
+bool ParseTriple(const char* text, double out[3]) {
+  if (!text) return false;
+  const std::string_view view(text);
+  const char* p = view.data();
+  const char* end = p + view.size();
+  auto skipSpace = [&] {
+    while (p < end && std::isspace(static_cast<unsigned char>(*p))) ++p;
+  };
+  for (int i = 0; i < 3; ++i) {
+    skipSpace();
+    const auto [next, ec] = std::from_chars(p, end, out[i]);
+    if (ec != std::errc() || !std::isfinite(out[i])) return false;
+    p = next;
+  }
+  skipSpace();
+  return p == end;
+}
+
+/// True when two WORLD points coincide to within the chord tolerance used for chaining segments.
+bool SamePoint(const double* a, const double* b) {
+  constexpr double kChainTolerance = 1e-6;
+  return std::fabs(a[0] - b[0]) <= kChainTolerance && std::fabs(a[1] - b[1]) <= kChainTolerance &&
+         std::fabs(a[2] - b[2]) <= kChainTolerance;
+}
+
+/// One feature line ready to append: WORLD x,y,z triples, already unit-converted.
+struct PendingFeatureLine {
+  std::string name;
+  std::string description;
+  std::vector<double> worldXyz;
+  bool closed = false;
+};
+
+}  // namespace
+
+bool ImportLandXmlFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+  try {
+    if (!pathUtf8 || !*pathUtf8) {
+      log.push_back("IMPORTLANDXML — no file was given.");
+      return false;
+    }
+    const std::string shownPath = pathUtf8;
+    std::ifstream in(std::filesystem::u8path(pathUtf8), std::ios::binary);
+    if (!in) {
+      log.push_back("IMPORTLANDXML — could not open " + shownPath + ".");
+      return false;
+    }
+    const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    pugi::xml_document document;
+    const pugi::xml_parse_result parsed = document.load_buffer(bytes.data(), bytes.size());
+    if (!parsed) {
+      log.push_back(std::string("IMPORTLANDXML — not a readable XML file: ") + parsed.description() + ".");
+      return false;
+    }
+    const pugi::xml_node root = document.child("LandXML");
+    if (!root) {
+      log.push_back("IMPORTLANDXML — " + shownPath + " has no LandXML root element.");
+      return false;
+    }
+
+    // Units: values are multiplied by file unit / drawing unit. A missing unit on either side keeps the
+    // values as written and says so (REQ-506 item 4).
+    const std::string fileUnit = root.child("Units").first_child().attribute("linearUnit").as_string();
+    const double fileMeters = MetersPerLandXmlUnit(fileUnit);
+    const double drawingMeters = MetersPerDrawingUnit(st);
+    double factor = 1.0;
+    if (fileMeters > 0.0 && drawingMeters > 0.0) {
+      factor = fileMeters / drawingMeters;
+    } else if (drawingMeters <= 0.0) {
+      log.push_back("IMPORTLANDXML — the drawing is unitless, so values are taken as written.");
+    } else {
+      log.push_back("IMPORTLANDXML — the file declares no known linear unit, so values are taken as drawing units.");
+    }
+    const double originX = st.worldDocumentOriginX;
+    const double originY = st.worldDocumentOriginY;
+
+    // Points. LandXML stores northing first; the survey point model keeps easting first.
+    std::set<int> existingIds;
+    for (const SurveyPoint& point : st.surveyPoints) existingIds.insert(point.id);
+    const std::string layer = CreatePointsLayer(st);
+    std::set<int> seenIds;
+    std::vector<SurveyPoint> newPoints, conflicts;
+    for (pugi::xml_node group : root.children("CgPoints")) {
+      for (pugi::xml_node node : group.children("CgPoint")) {
+        const std::string name = node.attribute("name").as_string();
+        int id = 0;
+        const char* nameEnd = name.data() + name.size();
+        const auto [idEnd, idEc] = std::from_chars(name.data(), nameEnd, id);
+        if (idEc != std::errc() || idEnd != nameEnd || id <= 0) {
+          log.push_back("IMPORTLANDXML — skipped point \"" + name + "\": its name is not a positive point number.");
+          continue;
+        }
+        double v[3] = {0.0, 0.0, 0.0};
+        if (!ParseTriple(node.text().as_string(), v)) {
+          log.push_back("IMPORTLANDXML — skipped point " + name + ": its coordinates are not three numbers.");
+          continue;
+        }
+        if (!seenIds.insert(id).second) {
+          log.push_back("IMPORTLANDXML — skipped point " + name + ": repeated in the file; the first one is kept.");
+          continue;
+        }
+        SurveyPoint point;
+        point.id = id;
+        point.northing = v[0] * factor;
+        point.easting = v[1] * factor;
+        point.elevation = v[2] * factor;
+        point.description = node.attribute("desc").as_string();
+        point.rawDescription = node.attribute("code").as_string();
+        point.layer = layer;
+        (existingIds.count(id) ? conflicts : newPoints).push_back(std::move(point));
+      }
+    }
+
+    // Surfaces: rebuilt from their points (REQ-144 added points), so the source triangle faces are not kept.
+    std::set<std::string> surfaceNames;
+    for (const CadSurface& surface : st.cadSurfaces) surfaceNames.insert(surface.name);
+    std::vector<CadSurface> newSurfaces;
+    for (pugi::xml_node group : root.children("Surfaces")) {
+      for (pugi::xml_node node : group.children("Surface")) {
+        const std::string name = node.attribute("name").as_string();
+        if (name.empty()) {
+          log.push_back("IMPORTLANDXML — skipped a surface with no name.");
+          continue;
+        }
+        if (surfaceNames.count(name)) {
+          log.push_back("IMPORTLANDXML — skipped surface \"" + name + "\": a surface with that name already exists.");
+          continue;
+        }
+        const pugi::xml_node definition = node.child("Definition");
+        const std::string type = definition.attribute("surfType").as_string();
+        if (type != "TIN") {
+          log.push_back("IMPORTLANDXML — skipped surface \"" + name + "\": only TIN surfaces are imported (surfType \"" +
+                        type + "\").");
+          continue;
+        }
+        CadSurface surface;
+        surface.name = name;
+        surface.description = node.attribute("desc").as_string();
+        for (pugi::xml_node pnt : definition.child("Pnts").children("P")) {
+          double v[3] = {0.0, 0.0, 0.0};
+          if (!ParseTriple(pnt.text().as_string(), v)) {
+            log.push_back("IMPORTLANDXML — skipped a point of surface \"" + name +
+                          "\": its coordinates are not three numbers.");
+            continue;
+          }
+          surface.addedPointXyz.push_back(v[1] * factor - originX);  // local = world - origin
+          surface.addedPointXyz.push_back(v[0] * factor - originY);
+          surface.addedPointXyz.push_back(v[2] * factor);
+        }
+        if (surface.addedPointXyz.size() < 9) {
+          log.push_back("IMPORTLANDXML — skipped surface \"" + name + "\": it has fewer than three usable points.");
+          continue;
+        }
+        if (definition.child("Faces"))
+          log.push_back("IMPORTLANDXML — surface \"" + name +
+                        "\": its triangle faces are not kept; GoSurvey triangulates the imported points.");
+        surfaceNames.insert(name);
+        newSurfaces.push_back(std::move(surface));
+      }
+    }
+
+    // Feature lines: consecutive Line segments that share an end form one line; a gap starts a new one; a
+    // closing segment back to the first point marks it closed. Curves and other geometry are skipped.
+    std::vector<PendingFeatureLine> newLines;
+    for (pugi::xml_node group : root.children("PlanFeatures")) {
+      for (pugi::xml_node feature : group.children("PlanFeature")) {
+        const std::string name = feature.attribute("name").as_string();
+        const std::string label = name.empty() ? std::string("feature line") : "feature line \"" + name + "\"";
+        std::vector<std::vector<double>> runs;
+        bool skippedGeometry = false;
+        for (pugi::xml_node geometry : feature.child("CoordGeom").children()) {
+          if (std::string_view(geometry.name()) != "Line") {
+            skippedGeometry = true;
+            continue;
+          }
+          double a[3] = {0.0, 0.0, 0.0}, b[3] = {0.0, 0.0, 0.0};
+          if (!ParseTriple(geometry.child("Start").text().as_string(), a) ||
+              !ParseTriple(geometry.child("End").text().as_string(), b)) {
+            log.push_back("IMPORTLANDXML — skipped a segment of " + label + ": its coordinates are not three numbers.");
+            continue;
+          }
+          // World x = easting, y = northing; scaled to drawing units.
+          const double start[3] = {a[1] * factor, a[0] * factor, a[2] * factor};
+          const double end[3] = {b[1] * factor, b[0] * factor, b[2] * factor};
+          if (runs.empty() || !SamePoint(&runs.back()[runs.back().size() - 3], start))
+            runs.push_back({start[0], start[1], start[2]});
+          runs.back().insert(runs.back().end(), end, end + 3);
+        }
+        if (skippedGeometry)
+          log.push_back("IMPORTLANDXML — skipped curve or other non-line geometry in " + label + ".");
+        if (runs.size() > 1)
+          log.push_back("IMPORTLANDXML — " + label + " has gaps; it is imported as " + std::to_string(runs.size()) +
+                        " feature lines.");
+        for (std::vector<double>& run : runs) {
+          const size_t count = run.size() / 3;
+          if (count < 2) {
+            log.push_back("IMPORTLANDXML — skipped part of " + label + ": it has fewer than two points.");
+            continue;
+          }
+          PendingFeatureLine line;
+          line.name = name;
+          line.description = feature.attribute("desc").as_string();
+          if (count >= 3 && SamePoint(&run[0], &run[run.size() - 3])) {
+            line.closed = true;
+            run.resize(run.size() - 3);  // the closing point repeats the first; the closed flag carries it
+          }
+          line.worldXyz = std::move(run);
+          newLines.push_back(std::move(line));
+        }
+      }
+    }
+
+    // Apply. One undo step covers every point, surface and line from this file; a point-number answer is a
+    // separate step (see the Qt editor).
+    const bool changes = !newPoints.empty() || !newSurfaces.empty() || !newLines.empty();
+    if (changes)
+      PushUndoSnapshot(st, "Import LandXML");
+    if (!newPoints.empty())
+      ResolveConflictingWorldSurveyPoints(st, newPoints, false, 0, &log);
+    for (CadSurface& surface : newSurfaces) {
+      (void)BuildSurfaceFromSources(st, surface, log);
+      st.cadSurfaces.push_back(std::move(surface));
+      AppendNewObjectAttrs(st, st.cadSurfaceAttrs, st.cadSurfaces.size(), ObjectLayerKind::Surface,
+                           st.cadSurfaces.back().name);  // REQ-361
+    }
+    for (const PendingFeatureLine& line : newLines) {
+      if (st.featureLineOffsets.empty())
+        st.featureLineOffsets.push_back(0);
+      const int base = st.featureLineOffsets.back();
+      const int count = static_cast<int>(line.worldXyz.size() / 3);
+      for (int v = 0; v < count; ++v) {
+        const size_t b = static_cast<size_t>(v) * 3;
+        st.featureLineVerts.push_back(line.worldXyz[b] - originX);
+        st.featureLineVerts.push_back(line.worldXyz[b + 1] - originY);
+        st.featureLineVerts.push_back(line.worldXyz[b + 2]);
+        st.featureLineElevPt.push_back(0);
+      }
+      st.featureLineOffsets.push_back(base + count);
+      st.featureLineClosed.push_back(line.closed ? 1 : 0);
+      CadFeatureLineInfo info;
+      info.name = line.name;
+      info.description = line.description;
+      st.featureLineInfo.push_back(std::move(info));
+      AppendNewObjectAttrs(st, st.featureLineAttrs, st.featureLineInfo.size(), ObjectLayerKind::FeatureLine,
+                           st.featureLineInfo.back().name);  // REQ-361
+    }
+    if (!newSurfaces.empty() || !newLines.empty())
+      BumpCadGpuCache(st);
+    EnsureAttrCounts(st);
+
+    st.pendingLandXmlConflictPoints = conflicts;
+    log.push_back("IMPORTLANDXML — imported " + std::to_string(newPoints.size()) + " point(s), " +
+                  std::to_string(newSurfaces.size()) + " surface(s) and " + std::to_string(newLines.size()) +
+                  " feature line(s) from " + shownPath + ".");
+    if (!conflicts.empty())
+      log.push_back("IMPORTLANDXML — " + std::to_string(conflicts.size()) +
+                    " point number(s) already exist in this drawing; choose Overwrite or Offset to add them.");
+    return true;
+  } catch (const std::exception& error) {
+    log.push_back(std::string("IMPORTLANDXML — failed: ") + error.what() + ".");
     return false;
   }
 }

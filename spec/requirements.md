@@ -13293,7 +13293,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      (a grid surface, a surface with no built triangulation, a feature line under two vertices, a
      non-finite coordinate) is skipped and named in the log. Names and descriptions are written as
      valid XML text; characters XML cannot hold are replaced and counted in the log.
-  6. **Out of scope** (separate requirements if wanted): importing LandXML (GitHub #1003), grid
+  6. **Out of scope** (separate requirements if wanted): importing LandXML (GitHub #1003; see REQ-506), grid
      surfaces, the coordinate-system/zone element, surface source data (breaklines, boundaries,
      point files), feature-line elevation-point flags, and alignments, profiles or corridors.
 - Acceptance:
@@ -13315,6 +13315,75 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Decision: D-2026-10-20-i.
 - Status: accepted
 - Revisions: 2026-10-20 — proposed from GitHub #1002 as implemented; accepted by the user the same day (D-2026-10-20-i).
+
+
+### REQ-506 — LandXML import (GitHub issue #1003, part of #802)
+
+- Purpose: ground data arrives from engineers and other software as LandXML. REQ-448 lets GoSurvey send
+  it out; this requirement brings it in, so the round trip works and Insert → Import → LandXML stops being
+  a placeholder.
+- Priority: should
+- Type: functional
+- Depends on: REQ-448 (the file contract this reads back), REQ-068 (TIN surfaces), REQ-144 (added surface
+  points), REQ-087 (feature lines), REQ-022 and REQ-357 (drawing unit and foot definition), REQ-101
+  (coordinate precision), REQ-201 (failures are observable), REQ-300 (no new dependency: the vendored
+  pugixml reader that REQ-448 already uses), REQ-400 (survey point numbers and conflict answers).
+- Statement:
+  1. A typed `IMPORTLANDXML "<file>"` command and the Insert → Import → LandXML ribbon button read a
+     LandXML 1.2 file into the **current drawing**. Typed without a file, the Qt editor opens an open
+     dialog and then runs the same command. A read-only project refuses the import before any change.
+  2. **Contents.** `CgPoints/CgPoint` become survey points (`name` is the point number, `desc` the
+     description, `code` the field code). `Surfaces/Surface` with a `TIN` definition become TIN surfaces.
+     `PlanFeatures/PlanFeature` become feature lines. All three are imported in one command.
+  3. **Coordinates** are read northing first, as world coordinates, and stored local
+     (local = world − document origin, in double). Z is the absolute elevation.
+  4. **Units.** The file's linear unit (`Units`) is converted to the drawing's unit when both are known
+     (inch, foot, US survey foot, millimeter, meter). A file with no `Units`, or a unitless drawing, takes
+     the values as written and the log names the unit it assumed.
+  5. **Point number conflicts.** A point whose number already exists in the drawing is not written at
+     once. In the Qt editor the user chooses **Overwrite** or **Offset**, using the same resolver as Extract
+     Coordinates and the DXF import (`ResolveConflictingWorldSurveyPoints`); the offset defaults to the
+     highest existing number. A headless run writes no conflicting point and logs each one as waiting for an
+     answer. A number repeated inside the file keeps its first occurrence and logs the rest as skipped.
+  6. **Surfaces.** A surface name already in use is skipped and logged. Each surface's `Pnts` become its own
+     added points (REQ-144) and GoSurvey triangulates them. The source triangle `Faces` are not kept,
+     because surfaces are definitions rebuilt from their sources (ADR-039). The log says so once per surface.
+  7. **Feature lines.** A `PlanFeature`'s `Line` segments form one feature line when they chain end to start.
+     A closing segment that returns to the first point marks the line closed. A gap splits the feature into
+     one feature line per run. Curves and any other geometry are skipped and logged. Each feature line keeps
+     its per-vertex elevations.
+  8. **Failure is visible (REQ-201).** A file that cannot be read, is not XML, or has no `LandXML` root logs
+     the reason and changes nothing. Every skipped item is named in the log. Points, surfaces and feature
+     lines from one file are one undo step; the point-conflict answer is a separate undo step.
+  9. **Out of scope** (separate requirements if wanted): alignments, profiles and corridors (REQ-480..503),
+     breaklines, boundaries, contours, point files linked from a surface, and the coordinate-system element.
+- Acceptance:
+  - Exporting a drawing with survey points (with `desc` and `code`), a built TIN and a feature line
+    (REQ-448), then importing that file into an empty drawing restores the same point numbers, descriptions,
+    codes and coordinates; the surface's vertex set and elevations; and the feature line's vertices, name and
+    closed flag.
+  - A drawing whose document origin is far from zero imports world coordinates equal to the file values
+    exactly in double.
+  - A US-survey-foot file imported into a meter drawing gives coordinates converted by the exact factor, and
+    a file with no `Units` is taken as written with a logged note.
+  - Overwrite replaces the existing point; Offset keeps both; a headless run leaves the existing point
+    unchanged and logs the conflict.
+  - A surface named like an existing surface, a repeated point number, a curve, and a gap in a feature line
+    each produce a log line; the rest of the file still imports.
+  - An unreadable file, a non-XML file and a file with no `LandXML` root leave the drawing unchanged and log why.
+  - A read-only project refuses the command and changes nothing.
+  - The Insert → Import → LandXML button is enabled and runs `IMPORTLANDXML`; its "not implemented yet"
+    tooltip is gone.
+- Frontend: **Qt only.** The reader and command live in the shared IO and Commands layers
+  (`src/io/LandXmlIo.*`); the open dialog and the conflict question are in the Qt editor (`src/qt/`).
+- Owner-layer: IO/Commands/Qt UI
+- Decision: D-2026-11-06-a. The user chose all three contents, the existing point-conflict handling, and
+  report-and-skip for unsupported items. Two points were proposed by Claude and are open for the user to
+  confirm: surface source faces are re-triangulated rather than kept (item 6), and a headless run stores no
+  conflicting point (item 5).
+- Status: accepted (2026-11-06) — D-2026-11-06-a, GitHub issue #1003; items 5 (headless) and 6 (faces) to be
+  confirmed by the user at PR review.
+- Revisions: 2026-11-06 — initial, D-2026-11-06-a, GitHub issue #1003.
 
 
 ### REQ-100 — Frame budget

@@ -1552,6 +1552,14 @@ void EditorWindow::Submit(const QString& command) {
       }
     }
   }
+  else if (verb == "IMPORTLANDXML") {
+    if (m_State.activeDrawingIdx == 0) QMessageBox::information(this, "Import LandXML", "Open a drawing to import into first.");
+    else if (ActiveDrawingReadOnly()) QMessageBox::information(this, "Read-only drawing", "LandXML cannot be imported into a read-only drawing.");
+    else {
+      QString path = QFileDialog::getOpenFileName(this, "Import LandXML", {}, "LandXML (*.xml *.landxml)");
+      if (!path.isEmpty()) Submit("IMPORTLANDXML \"" + QDir::toNativeSeparators(path) + "\"");
+    }
+  }
   else if (verb == "PROJECTHEALTH" || verb == "PACKPROJECT" || verb == "TURNOVER" || verb == "REFRESH") {
     const auto idx = m_State.activeDrawingIdx;
     const std::uint32_t uid = idx > 0 && idx < static_cast<int>(m_State.drawingTabs.size())
@@ -1579,7 +1587,40 @@ void EditorWindow::Submit(const QString& command) {
     buffer.push_back('\0');
     ProcessCommandLineSubmit(buffer.data(), static_cast<int>(buffer.size()), m_State, m_Log);
     if (m_State.blockEditPickerOpen) ShowBlockEditorPicker();
+    if (!m_State.pendingLandXmlConflictPoints.empty()) AskLandXmlPointConflicts();
   }
+  Refresh();
+}
+
+void EditorWindow::AskLandXmlPointConflicts() {
+  auto& pending = m_State.pendingLandXmlConflictPoints;
+  QStringList numbers;
+  for (const SurveyPoint& point : pending) numbers << QString::number(point.id);
+  QMessageBox box(QMessageBox::Question, "LandXML point numbers already exist",
+                  QString("%1 imported point number(s) already exist in this drawing: %2.\n"
+                          "Overwrite replaces the existing points. Offset keeps both.")
+                      .arg(pending.size()).arg(numbers.join(", ")),
+                  QMessageBox::NoButton, this);
+  auto* overwrite = box.addButton("Overwrite", QMessageBox::DestructiveRole);
+  auto* offset = box.addButton("Offset", QMessageBox::AcceptRole);
+  box.addButton(QMessageBox::Cancel);
+  box.exec();
+  int offsetBy = 0;
+  bool answered = box.clickedButton() == overwrite || box.clickedButton() == offset;
+  if (box.clickedButton() == offset) {
+    int maxId = 0;
+    for (const SurveyPoint& point : m_State.surveyPoints) maxId = std::max(maxId, point.id);
+    bool ok = false;
+    offsetBy = QInputDialog::getInt(this, "Offset point numbers", "ID offset", std::max(maxId, 1), 0, 1000000, 1, &ok);
+    answered = ok;
+  }
+  if (!answered) {
+    m_Log.push_back("IMPORTLANDXML — " + std::to_string(pending.size()) + " conflicting point(s) not written.");
+  } else {
+    PushUndoSnapshot(m_State, "Import LandXML points");
+    ResolveConflictingWorldSurveyPoints(m_State, pending, box.clickedButton() == overwrite, offsetBy, &m_Log);
+  }
+  pending.clear();
   Refresh();
 }
 

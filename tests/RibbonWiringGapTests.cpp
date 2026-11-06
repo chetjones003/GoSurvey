@@ -42,3 +42,10 @@ TEST_CASE("Issue #762 Qt ribbon does not create an unsupported Manage panel", "[
   for (const auto& button : qtribbon::kButtons)
     CHECK(std::string(button.tab) != "Manage");
 }
+
+TEST_CASE("Issue #1003 Import LandXML is wired to its command", "[ribbon][issue1003]") {
+  const auto* landXml = FindButton("##RibbonInsLandXml");
+  REQUIRE(landXml != nullptr);
+  CHECK(std::string(landXml->command) == "IMPORTLANDXML");
+  CHECK_FALSE(landXml->placeholder);
+}

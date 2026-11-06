@@ -7681,6 +7681,9 @@ const CmdEntry kRegistry[] = {
     {"exportlandxml", "",
      "Export survey points, TIN surfaces and feature lines to LandXML 1.2: "
      "EXPORTLANDXML [<path>]"},
+    {"importlandxml", "",
+     "Import survey points, TIN surfaces and feature lines from LandXML 1.2: "
+     "IMPORTLANDXML [<path>]"},
     {"traverse", "trav, traverseeditor", "Open the LSA Editor"},
     {"select", "", "Build a selection set"},
     {"help", "", "Show command help"},
@@ -47686,6 +47689,24 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         log.push_back("EXPORTLANDXML — type a destination, e.g. EXPORTLANDXML \"site.xml\".");
       else
         ExportLandXmlFile(st, path.c_str(), log);
+      return;
+    }
+    // `IMPORTLANDXML "<path>"` (issue #1003, REQ-506). Like EXPORTLANDXML the file is part of the command;
+    // the Qt window asks for it with an open dialog when none is typed, then submits this form.
+    if (plotTok == "importlandxml") {
+      std::string path;
+      std::getline(issIdle, path);
+      path = StringUtil::trimCopy(path);
+      if (path.size() >= 2 && path.front() == '"' && path.back() == '"')
+        path = path.substr(1, path.size() - 2);
+      if (st.activeDrawingIdx <= 0 || st.activeDrawingIdx >= static_cast<int>(st.drawingTabs.size()))
+        log.push_back("IMPORTLANDXML — open a drawing first.");
+      else if (path.empty())
+        log.push_back("IMPORTLANDXML — type a file, e.g. IMPORTLANDXML \"site.xml\".");
+      else if (ActiveProjectPointsReadOnly(st))
+        log.push_back("IMPORTLANDXML — this project is read-only; nothing was imported.");
+      else
+        ImportLandXmlFile(st, path.c_str(), log);
       return;
     }
     // `VS SHADED` in one line; a bare `VISUALSTYLE` reports the current value and lists the options,

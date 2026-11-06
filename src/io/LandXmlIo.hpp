@@ -18,3 +18,11 @@ struct AppCommandState;
 /// an unbuilt TIN, a feature line with fewer than two vertices, a non-finite coordinate) are skipped
 /// and named in \p log (REQ-201).
 bool ExportLandXmlFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
+
+/// Reads a LandXML 1.2 file into the current drawing (issue #1003, REQ-506). CgPoints become survey
+/// points, TIN surfaces become surfaces built from their points (their triangle faces are not kept),
+/// and PlanFeatures become feature lines. A point number that already exists is not written: it is
+/// held in `st.pendingLandXmlConflictPoints` (world coordinates) until the user answers Overwrite or
+/// Offset. Unsupported items are skipped and named in \p log. Returns false, logging why and changing
+/// nothing, when the file cannot be read or is not a LandXML document.
+bool ImportLandXmlFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
