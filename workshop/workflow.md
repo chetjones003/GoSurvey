@@ -155,8 +155,8 @@ end at a Verification submission.
    the Acceptance condition (they fail initially).
 5. **Implement.** Smallest sufficient change, inside the owning subsystem, to
    `implementation-rules.md`.
-6. **Self-verify.** Run `build-project`, `code-review`, `architecture-review`,
-   `testing` checklists from `verification/skills/`. Fix findings.
+6. **Self-verify.** Run the configured `build-project`, `code-review`,
+   `architecture-review`, and `testing` checklists. Fix findings.
 7. **Submit** to Verification with the task log + REQ IDs.
 8. **Resolve.** PASS → record deliverable, mark done. FAIL → back to step 5 with
    findings. SPEC GAP → blocked, escalate.

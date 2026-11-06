@@ -121,7 +121,7 @@ These are the standards from `spec/coding-standards.md`, phrased as things to do
 
 ## 10. Self-verify before submitting
 
-Before handing the task to Verification, run the relevant `verification/skills/`
+Before handing the task to Verification, run the relevant configured verification
 checklists yourself and fix what they catch:
 
 - `build-project` (clean, warning-free, deterministic)

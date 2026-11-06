@@ -68,7 +68,7 @@ ASSUMPTION-1: <what you assumed>
 ## 8. Implementation log  (append as you work)
 - <date> <status change / decision within boundary / finding fixed>
 
-## 9. Self-verification  (run BEFORE submitting — verification/skills/)
+## 9. Self-verification  (run BEFORE submitting — configured verification skills)
 - [ ] build-project        — PASS
 - [ ] architecture-review  — PASS (no Workshop architectural decision)
 - [ ] code-review          — PASS (correctness, simplicity, ownership, readability)
