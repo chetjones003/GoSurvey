@@ -38,26 +38,28 @@ None. User choices and existing release behavior are recorded in D-2026-11-05-p,
 - Files/functions to touch: `.github/workflows/release.yml`, release helper scripts/tests as needed, `src/update/UpdateCheck.cpp` only if manifest parsing requires explicit support, workflow docs if affected.
 - Test approach: workflow/helper happy path covers beta-range selection, metadata-only prompt, output parity, authored-content/image preservation, same-commit byte-identical reuse, and stable-path isolation. Failure cases cover unavailable metadata/API, malformed/injected Markdown, and manifest write failure blocking packaging/publication. Use no application C++ tests unless client parsing must change.
 - Steps:
-  - [ ] Add a deterministic PR metadata and source-range helper.
-  - [ ] Add AI generation with strict structured output and Markdown validation.
-  - [ ] Apply generated section to a runner-only resource copy and persist outputs to beta manifest.
-  - [ ] Reuse manifest outputs on reruns and leave stable publishing unchanged.
-  - [ ] Add workflow/helper tests for all REQ-505 acceptance cases.
-  - [ ] Complete release/build/review/testing verification and product documentation review before PR.
+  - [x] Add a deterministic PR metadata and source-range helper.
+  - [x] Add AI generation with strict structured output and Markdown validation.
+  - [x] Apply generated section to a runner-only resource copy and persist outputs to beta manifest.
+  - [x] Reuse manifest outputs on reruns and leave stable publishing unchanged.
+  - [x] Add workflow/helper tests for all REQ-505 acceptance cases.
+  - [x] Complete release/build/review/testing verification and product documentation review before PR.
 
 ## 7. Workflow-specific notes
 - Feature: user decisions are recorded; test-first for deterministic helper/validation logic.
 
 ## 8. Implementation log
 - 2026-11-05: User selected `gpt-6-luna`. Official OpenAI model docs confirm Responses API and strict structured-output support; current official price listing is substantially lower than Sol. Repository secret listing confirms `OPENAI_KEY` exists; secret value was not read. Implementing direct REST call and non-publishing API smoke/full workflow validation inputs.
+- 2026-11-06: Live non-publishing smoke workflow succeeded against OpenAI Responses API with `gpt-6-luna`, low reasoning effort, strict structured output, and synthetic examples. Full workflow-dispatch validation on the feature branch passed release version resolution, generated content from 36 merged beta PRs, the hosted Windows release build and all 194 CTest cases, and the package job. The run uploaded installer and beta-content artifacts only; it did not publish a release. Run: https://github.com/chetjones003/GoSurvey/actions/runs/42151754796.
+- 2026-11-06: Pre-PR product documentation review: `README.md` reviewed; no change needed. `PRIVACY.md` reviewed; no change needed because CI sends only already-public merged PR titles/descriptions and no app/runtime user data. `resources/wiki/` reviewed; no release-note procedure is affected. The public wiki linked from `gosurveycad.com` was checked; its GitHub Wiki URL redirects to the repository and no accessible manual page was found. This automation does not change product instructions, so no external documentation update is needed.
 
 ## 9. Self-verification
-- [ ] build-project        — PASS
-- [ ] architecture-review  — PASS (no Workshop architectural decision)
-- [ ] code-review          — PASS (correctness, simplicity, ownership, readability)
-- [ ] dependency-audit     — PASS / n-a
-- [ ] performance-review   — PASS / n-a
-- [ ] testing              — PASS
+- [x] build-project        — PASS (hosted Windows release workflow)
+- [x] architecture-review  — PASS (no Workshop architectural decision)
+- [x] code-review          — PASS (correctness, simplicity, ownership, readability)
+- [x] dependency-audit     — PASS / n-a (no new dependency)
+- [x] performance-review   — PASS / n-a (release-time only)
+- [x] testing              — PASS
 
 ## 10. Verification result
 - Submitted: 2026-11-05 (Specification/Verification gate)
@@ -71,7 +73,7 @@ None. User choices and existing release behavior are recorded in D-2026-11-05-p,
 - Runner boundary: ✓ — hosted-runner assignments preserved; self-hosted runners prohibited.
 
 ## 11. Outcome
-- Requirements satisfied: pending
-- Tests added:            pending
-- Docs updated:           pending
-- Done:                   pending
+- Requirements satisfied: yes; beta-only generated notes are kept out of the source tree, persisted in the rolling manifest, and reused for same-source reruns; stable publication is unchanged.
+- Tests added:            12 deterministic Python helper tests; all passed. Live OpenAI smoke test and full non-publishing release build/test/package workflow passed.
+- Docs updated:           spec requirements, project decision, architecture decision, and task record. Product documentation review recorded above; no product docs required changes.
+- Done:                   implementation and verification complete; PR submitted separately.
