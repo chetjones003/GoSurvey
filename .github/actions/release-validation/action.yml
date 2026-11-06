@@ -21,15 +21,12 @@ runs:
   using: composite
   steps:
     - name: Set up MSVC
-      if: runner.environment != 'self-hosted'
       uses: ilammy/msvc-dev-cmd@v1
 
     - name: Set up Qt
-      if: runner.environment != 'self-hosted'
       uses: ./.github/actions/setup-qt
 
     - name: Set up Mesa OpenGL for hosted tests
-      if: runner.environment != 'self-hosted'
       shell: pwsh
       run: |
         $version = '26.2.4'
@@ -71,7 +68,6 @@ runs:
       run: ./.github/scripts/record_ci_runner.ps1
 
     - name: Set up sccache
-      if: runner.environment != 'self-hosted'
       uses: mozilla-actions/sccache-action@v0.0.11
 
     - name: Register MSVC /analyze problem matcher
@@ -103,7 +99,6 @@ runs:
         if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
 
     - name: Stage Mesa runtime dependencies for tests
-      if: runner.environment != 'self-hosted'
       shell: pwsh
       run: |
         $runtime = Join-Path $env:GITHUB_WORKSPACE 'build'
@@ -123,7 +118,6 @@ runs:
         }
 
     - name: Prepare hosted display for Qt tests
-      if: runner.environment != 'self-hosted'
       shell: pwsh
       run: ./tools/prepare-qt-test-display.ps1
 
@@ -131,7 +125,7 @@ runs:
       shell: pwsh
       env:
         QT_OPENGL: desktop
-        GALLIUM_DRIVER: ${{ runner.environment != 'self-hosted' && 'llvmpipe' || '' }}
+        GALLIUM_DRIVER: llvmpipe
       run: |
         $env:GOSURVEY_TEST_RUN_ID = "ci-${{ github.run_id }}-${{ github.run_attempt }}"
         "GOSURVEY_TEST_RUN_ID=$env:GOSURVEY_TEST_RUN_ID" | Add-Content $env:GITHUB_ENV
@@ -142,7 +136,7 @@ runs:
         if ($LASTEXITCODE -ne 0) { throw 'CTest failed.' }
 
     - name: Restore Qt OpenGL runtime files
-      if: always() && runner.environment != 'self-hosted'
+      if: always()
       shell: pwsh
       run: |
         $runtime = Join-Path $env:GITHUB_WORKSPACE 'build'
