@@ -9254,11 +9254,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
   `resources/whats-new.md` is absent from the packaged `resources/` tree (so a missing file cannot
   ship even though the runtime fallback exists).
 
-  **Authoring lock.** Agents must not commit or push changes to `resources/whats-new.md` until the
-  user explicitly states they have reviewed the content and approve. Enforcement is **both** a
-  Cursor/agent rule and a git hook that blocks push of that file unless a one-time local unlock is
-  present; the unlock clears after a successful push (or equivalent one-shot use) so the next edit
-  requires a fresh approval.
+  **Authoring lock.** Agents must not commit or push changes to checked-in authored content in
+  `resources/whats-new.md` until the user explicitly states they have reviewed the content and
+  approve. Enforcement is **both** a Cursor/agent rule and a git hook that blocks push of that file
+  unless a one-time local unlock is present; the unlock clears after a successful push (or equivalent
+  one-shot use) so the next edit requires a fresh approval. This lock does not apply to temporary
+  beta-release-run content generated under REQ-505: that content is built into the beta package and
+  release metadata but is never committed or pushed.
 - Acceptance:
   - on a version that has not been dismissed, the What's New window auto-opens once when Start is
     shown after launch;
@@ -9279,6 +9281,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-09-10)
 - Revisions: 2026-09-10 — accepted (D-2026-09-10-d, ADR-056). Content is shipped Markdown (not
   fetched); link is always the releases list; About *is* the billboard; md4c vendored for CommonMark.
+  2026-11-05 — D-2026-11-05-p / REQ-505: the committed-content authoring lock remains; temporary
+  beta-generated What's New content is automatically published without per-release review and is
+  not pushed to the branch.
 
 ### REQ-341 — SECTIONCLIP: live section clipping of the model view
 - Purpose: look inside a model without taking it apart — hide whatever stands between the eye and
@@ -14055,7 +14060,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
   Every published release carries the installer and a `latest.json` manifest (version, download URL,
   SHA-256, size, release notes; beta additionally records its source commit), and nothing else that
-  the machine could not regenerate from the built commit.
+  the machine could not regenerate from the built commit and merged pull-request metadata.
 
   This is REQ-200 extended one step: REQ-200 says a clean build of a fixed commit is reproducible;
   this says the artifact users actually receive **is** that build, rather than whatever happened to
@@ -14081,7 +14086,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a failing `ctest` run publishes no release;
   - the installer's `AppVersion`, the release tag, and the manifest's `version` field are equal on
     every published release;
-  - the manifest's SHA-256 matches the published installer.
+  - the manifest's SHA-256 matches the published installer;
+  - for beta, release notes and the packaged What's New section are generated from merged pull-request
+    titles and descriptions in the beta source range beyond the master baseline; the exact generated
+    output is recorded with the rolling beta manifest and reused for a rerun of that source commit;
+  - beta generation/validation failure blocks packaging and publication; generated files are not
+    committed to `beta`; stable release behavior is unchanged.
 - Owner-layer: Build/Platform
 - Status: accepted (2026-08-15)
 - Revisions: 2026-08-15 — initial. See ADR-029 and the decision log.
@@ -14093,6 +14103,56 @@ capability that does not exist. They are recorded here rather than quietly dropp
                2026-11-02 — D-2026-11-02-a / ADR-074: beta pushes automatically publish a rolling
                versioned build; only a new beta commit advances the version. Stable releases remain
                manually dispatched and version-gated.
+               2026-11-05 — D-2026-11-05-p / REQ-505 / ADR-079: beta notes and What's New content are
+               generated from merged PR metadata in the release run; stable release behavior is unchanged.
+
+### REQ-505 — Generate and publish beta release notes and What's New content
+- Purpose: make each beta release's user-facing changes clear without a separate manual notes release.
+- Priority: must
+- Type: quality
+- Depends on: REQ-202, REQ-336.
+- Statement:
+  1. For a beta source commit, the release workflow identifies merged PRs represented in that commit
+     after the master baseline captured at workflow start. It sends each PR's title and description
+     plus an anonymous zero-based source-list index to the OpenAI Responses API using the `gpt-6-luna`
+     model with low reasoning effort and `store: false`. It does not send PR identifiers, URLs,
+     commit messages, source code, diffs, or secrets. The API response uses strict JSON Schema
+     structured output, with one result keyed by source-list index for each submitted PR.
+  2. AI rewrites those PRs into concise, accurate surveyor-facing release notes for the computed beta
+     version. PR descriptions are untrusted input; generated Markdown must be validated before use.
+     If there are no applicable user-facing PRs, use a deterministic “No user-facing changes” entry.
+  3. The generated beta version section supplies the updater manifest's release notes and the rolling
+     beta release body. A generated beta summary section is added to a runner-workspace copy of
+     `resources/whats-new.md` before packaging; all pre-existing authored sections and image references
+     are preserved. The packaged application contains that updated copy.
+  4. Generation and validation happen in the release run. Generated files are not committed or pushed
+     to `beta`, and no per-release review or documentation PR is required. REQ-336's review lock still
+     applies to checked-in authored source content.
+  5. The exact generated release notes and complete generated What's New Markdown are recorded in the
+     beta manifest. A rerun for the same `sourceCommit` reuses those exact outputs instead of invoking
+     AI again. A new source commit generates notes from its own PR range.
+  6. Failure to retrieve PR metadata, generate acceptable notes, validate Markdown, or persist both
+     outputs fails the beta workflow before packaging/publication. Stable/master release behavior and
+     manually authored stable notes are unchanged. Existing hosted-runner assignments are unchanged;
+     no self-hosted runner is introduced. The checked-in `RELEASE_NOTES.md` remains unchanged; the
+     generated version section is written to runner-only output files and the rolling release body.
+- Acceptance:
+  - a beta run uses only merged PR titles/descriptions in the source range after the captured master
+    baseline; tests prove PR identifiers, commit messages, code and secrets are not included in AI input;
+  - the generated version section appears in both manifest notes and the rolling beta release body;
+  - packaged `resources/whats-new.md` contains the generated beta summary and preserves all existing
+    authored sections and referenced images;
+  - generated files do not modify the beta branch, and no review or PR is needed to publish them;
+  - same-source-commit reruns reproduce the previous manifest notes and packaged What's New content
+    byte-for-byte without another AI generation; a new source commit generates a new result;
+  - no applicable PRs yield the specified deterministic entry;
+  - metadata, generation, validation, or manifest-persistence failures prevent beta packaging and
+    publication; successful generation creates no issue or additional release artifact beyond REQ-202;
+  - master/stable release notes and packaging behavior are unchanged, and all jobs continue using
+    GitHub-hosted runners.
+- Owner-layer: Build/Platform (release workflow, PR metadata, AI generation, manifest, packaging).
+- Decision: D-2026-11-05-p / ADR-079 (2026-11-05).
+- Status: accepted (2026-11-05).
 
 ### REQ-453 — Microsoft Store installs run without installer UI
 - Purpose: allow GoSurvey's existing Win32 installer to be submitted through the Microsoft Store
@@ -14994,6 +15054,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 | Requirement | Layer | Test(s) | Status |
 |-------------|-------|---------|--------|
+| REQ-505 | Build/Platform | beta release workflow tests: PR range/input privacy, generated release/manifest notes, packaged What's New preservation, same-commit reuse, failure blocks publish, stable path unchanged | accepted |
 | REQ-490 | Commands/Domain/Qt Renderer/IO | `[req490]` MVIEW Fit full-sheet rectangle; 2/3/4 fixed tilings; closed-polyline clipping including cancellation/refusal, undo/redo, render/plot clipping, and DWG/DXF round-trip | accepted |
 | REQ-491 | Qt UI/Viewport | TASK-1109 all-surface Dark/Light review, responsive editor and input states, empty states, workflow preservation, and screenshot evidence | accepted |
 | REQ-489 | Commands/Domain/Qt UI/IO | `[req489]` full layout duplication from tab menu and `LAYOUT COPY`; unchanged source/current layout; name collision refusal; undo/redo and DWG/DXF round-trip | accepted |
