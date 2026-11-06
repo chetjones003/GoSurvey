@@ -5320,6 +5320,9 @@ struct AppCommandState {
   bool dxfPointConflictModalOpen = false;
   bool dxfPointConflictModalOpenRequested = false;
   int  dxfPointConflictOffset = 0;
+  /// LandXML import (REQ-506) holds point numbers that already exist in the drawing, in WORLD coordinates,
+  /// until the Qt editor asks Overwrite or Offset. A headless run leaves them here and logs them.
+  std::vector<SurveyPoint> pendingLandXmlConflictPoints;
   /// True while the viewport command palette should mirror the command line (hover latched until idle / mouse away).
   bool viewportCmdPaletteEngaged = false;
   /// True when the viewport command palette is visible — command line defers its InputText to avoid duplicate focus.

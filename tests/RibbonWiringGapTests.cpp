@@ -43,6 +43,13 @@ TEST_CASE("Issue #762 Qt ribbon does not create an unsupported Manage panel", "[
     CHECK(std::string(button.tab) != "Manage");
 }
 
+TEST_CASE("Issue #1003 Import LandXML is wired to its command", "[ribbon][issue1003]") {
+  const auto* landXml = FindButton("##RibbonInsLandXml");
+  REQUIRE(landXml != nullptr);
+  CHECK(std::string(landXml->command) == "IMPORTLANDXML");
+  CHECK_FALSE(landXml->placeholder);
+}
+
 TEST_CASE("Issue #802 decided-out Civil 3D placeholders are removed from the Qt ribbon", "[ribbon][issue802]") {
   for (const char* id : {"##CdParcel", "##CdIntersections", "##CdAssembly", "##CdPond", "##CdUgStorage", "##CdChannel"})
     CHECK(FindButton(id) == nullptr);

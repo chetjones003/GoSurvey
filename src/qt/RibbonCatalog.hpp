@@ -213,7 +213,7 @@ inline constexpr Button kButtons[] = {
   {"Insert", "Import", "##RibbonImportDxf", "Import DXF", "Import", "@importDxf", "Import a DXF drawing into the current session.\nSame as File menu → Import DXF...", false, false},
   {"Insert", "Import", "##RibbonImportDwg", "Import DWG", "Import", "@importDwg", "Import a DWG drawing (LibreDWG, no converter).\nSame as File menu → Import DWG...", false, false},
   {"Insert", "Import", "##RibbonImportPdf", "Import PDF", "PDF_Import", "PDFATTACH", "Attach a PDF page as a raster underlay.\nCommand bar: PDFATTACH", false, false},
-  {"Insert", "Import", "##RibbonInsLandXml", "LandXML", "DGN_Import", "", "LandXML — not implemented yet.", false, true},
+  {"Insert", "Import", "##RibbonInsLandXml", "LandXML", "DGN_Import", "IMPORTLANDXML", "LandXML — read survey points, TIN surfaces and feature lines from a LandXML 1.2 file.\nCommand bar: IMPORTLANDXML", false, false},
   {"Insert", "Import", "##RibbonInsPointsFile", "Points From File", "Import", "IMPORTPOINTS", "Import Points — load a point file.\nCommand bar: IMPORTPOINTS", false, false},
   {"Insert", "Import", "##RibbonInsSurveyData", "Import Survey Data", "svytripod", "", "Import Survey Data — not implemented yet.", false, true},
   {"Insert", "Block", "##RibbonInsInsert", "Insert", "Insert_Block", "INSERT", "Insert a block. Opens the Insert dialog (same as INSERT).", false, false},

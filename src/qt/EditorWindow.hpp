@@ -162,6 +162,8 @@ private:
   void ShowViewportScale();
   void ShowViewportsManager();
   bool ActiveDrawingReadOnly() const;
+  /// LandXML import (REQ-506): asks Overwrite or Offset for point numbers that already exist.
+  void AskLandXmlPointConflicts();
   void ShowToolspaceContextMenu(QTreeWidget* tree, const QPoint& position);
   QMenu* BuildToolspaceMenu(QTreeWidgetItem* item);
   void ShowPdfFile(const QString& path);

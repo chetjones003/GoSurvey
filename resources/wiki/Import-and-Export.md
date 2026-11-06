@@ -13,6 +13,7 @@
 | **JobXML** — Trimble raw field data | ✔ | — | Traverse Editor → Import JobXML… |
 | **.gstrav** — GoSurvey traverse | ✔ | ✔ | Traverse Editor → Save / Load… |
 | **PDF** | ✔ *(as underlay)* | ✔ *(as a plot)* | `PDFATTACH` / Layout ribbon → Plot |
+| **LandXML 1.2** — points, TIN surfaces, feature lines | ✔ | ✔ | Insert → Import → LandXML / Output → Export → Export to LandXML; `IMPORTLANDXML` / `EXPORTLANDXML` |
 | **glTF / GLB** | ✔ | — | `IMPORTMODEL` |
 | **STL** | ✔ | — | `IMPORTMODEL` |
 
@@ -190,6 +191,27 @@ gap: [[Traverse Editor]].
 
 ---
 
+## LandXML 1.2 — `IMPORTLANDXML` / `EXPORTLANDXML`
+
+**Command:** `IMPORTLANDXML "<file>"` (import) and `EXPORTLANDXML "<file>"` (export). Typed without a file,
+the Qt editor opens a file dialog.
+
+Import reads the three kinds of ground data that LandXML carries:
+
+| LandXML | GoSurvey | Notes |
+|---|---|---|
+| `CgPoints/CgPoint` | Survey points | The `name` must be a positive whole number (the point number). `desc` and `code` are kept. |
+| `Surfaces/Surface` with `surfType="TIN"` | TIN surface | Rebuilt from the surface's points. The source triangle faces are **not** kept, so the triangulation can differ. A surface whose name already exists is skipped. |
+| `PlanFeatures/PlanFeature` | Feature lines | Consecutive `Line` segments become one feature line. A gap starts a new feature line. A closing segment marks it closed. |
+
+- **Units.** The file's `linearUnit` is converted to the drawing's unit (inch, foot, US survey foot, millimeter, meter). A file with no unit, or a unitless drawing, keeps the values as written and says so in the log.
+- **Point numbers that already exist.** Those points are not written at once. The Qt editor asks **Overwrite** (replace the existing point) or **Offset** (keep both, adding the number you enter). Cancel writes none of them.
+- **Skipped items.** Curves, grid or non-TIN surfaces, repeated point numbers, and non-numeric coordinates are skipped. Each one is named in the log, and the rest of the file still imports.
+- **Failures.** A file that cannot be read, is not XML, or is not LandXML changes nothing.
+- **Undo.** The import is one undo step. A point-number answer is a separate step.
+
+Export writes the drawing's survey points, built TIN surfaces and feature lines as LandXML 1.2, in northing-easting-elevation order.
+
 ## 3D models — `IMPORTMODEL`
 
 **Command:** `IMPORTMODEL`, `GLTF`, `IMPORT3D`
@@ -255,6 +277,8 @@ Set the visual style to **Shaded** and use `ORBIT` to look at an imported model.
 | DWG export lost blocks | Block definitions and inserts are written as exploded geometry | Recreate blocks in the receiving program if needed |
 | `IMPORTMODEL` refuses the scale | Zero or non-finite | Give a non-zero finite number |
 | A DXF import zoomed out to nothing | An outlier entity at a wild coordinate | The log prints both the full and the outlier-excluded bounding box — find and delete it, then `ZE` |
+| LandXML import asked about point numbers | The file has point numbers already used in this drawing | Choose Overwrite to replace them, or Offset to keep both |
+| A LandXML surface looks different from the source | GoSurvey rebuilds the surface from its points, not the source triangles | Check the log for the note; the points and elevations are kept |
 
 ---
 

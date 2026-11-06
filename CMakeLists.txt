@@ -1509,6 +1509,8 @@ if(GOSURVEY_BUILD_TESTS)
     # Issue #916: shared point-cloud export and import-progress behavior.
     tests/PointCloudExportTests.cpp
     tests/LandXmlExportTests.cpp
+    # Issue #1003: LandXML import (REQ-506) reads what the export writes.
+    tests/LandXmlImportTests.cpp
     # PADSOLID needs the surface stores, the brep kernel and ProcessCommandLineSubmit, so it rides
     # with GoSurveyTests like the other command tests above.
     tests/PadSolidCommandTests.cpp
