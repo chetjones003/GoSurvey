@@ -49,3 +49,8 @@ TEST_CASE("Issue #1003 Import LandXML is wired to its command", "[ribbon][issue1
   CHECK(std::string(landXml->command) == "IMPORTLANDXML");
   CHECK_FALSE(landXml->placeholder);
 }
+
+TEST_CASE("Issue #802 decided-out Civil 3D placeholders are removed from the Qt ribbon", "[ribbon][issue802]") {
+  for (const char* id : {"##CdParcel", "##CdIntersections", "##CdAssembly", "##CdPond", "##CdUgStorage", "##CdChannel"})
+    CHECK(FindButton(id) == nullptr);
+}

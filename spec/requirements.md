@@ -12762,6 +12762,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   2. The Qt Home → Create Ground Data → Feature Line and Create Design → Feature Line actions start the existing `FEATURELINE` workflow.
   3. The Qt workflows are complete user workflows, using the existing shared command and drawing services. Preserve their current prompts, viewport interaction, preview, validation, cancel behavior, failure reporting, commit and undo behavior, and project read-only rules. Starting a command does not itself mutate drawing geometry.
   4. Unsupported ribbon placeholders in these affected groups remain visibly disabled.
+  5. **Revision (issue #802, 2026-10-09 decision):** the Create Design placeholders Parcel, Intersections, Assembly, Pond, Underground Storage and Channel are removed from the ribbon entirely, not left disabled, because they are not planned. Other placeholders in these groups (for example Profile and Corridor) remain visibly disabled.
 - Acceptance:
   - Qt ribbon workflow tests establish that each supported action starts its intended command and that unsupported affected placeholders cannot start a command.
   - Focused Qt workflow coverage exercises `PIPERUN` validation, cancel, point entry, completion, and one-step undo; failures leave existing drawing state intact.
@@ -12771,7 +12772,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - Update `docs/qt-074-parity-ledger.md` with implemented routes, focused evidence, and remaining gaps.
 - Owner-layer: Qt UI (`src/qt/`); shared command and drawing behavior remain in their existing services.
 - Status: accepted (2026-10-18) — D-2026-10-18-c, GitHub issue #896.
-- Revisions: 2026-10-18 — initial, D-2026-10-18-c, GitHub issue #896.
+- Revisions: 2026-10-18 — initial, D-2026-10-18-c, GitHub issue #896. 2026-11-06 — statement 5 added for the six removed placeholders (GitHub issue #802).
 
 ### REQ-428 — Qt survey-point display controls (GitHub issue #904)
 
