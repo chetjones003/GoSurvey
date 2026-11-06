@@ -16863,3 +16863,33 @@ capability that does not exist. They are recorded here rather than quietly dropp
   equation (REQ-483); (2) default fillet radius of Create-from-Objects (REQ-485); (3) offset-spiral model (REQ-488);
   (4) exact label formats of each geometry-point and segment label (REQ-492); (5) the DWG object layout of an
   alignment for decode (REQ-496, shared with the ADR-074 decoder).
+
+### REQ-504 — Shared PR/release validation and failed release alerts
+- Purpose: make PR validation exercise the same build and full test path used by beta and stable releases, and make post-merge release failures visible.
+- Priority: must
+- Type: quality
+- Statement: PRs targeting `beta` or `master` and release runs targeting either branch use one shared Release configure/build/full-CTest validation path, including matching compiler, Qt kit, CMake options, Qt test sharding, CTest parallelism, Mesa runtime staging, hosted display preparation, and runtime cleanup. Release version metadata is supplied by the caller. Existing static analysis, security checks, PR coverage/performance evidence, and release packaging stay in their existing workflows. If the build or package job fails on a beta/master release run, CI creates one GitHub issue labeled `bug` and `needs-triage`, mentions the repository owner, identifies the branch and failed jobs/steps, and links the run and job logs. Reruns reuse or reopen that issue. Successful runs create no issue. Existing release triggers and package/publish behavior remain governed by REQ-202: beta push remains automatic; stable release remains manual.
+- Acceptance:
+  - PRs targeting `beta` and `master` invoke the same shared configure/build/full-CTest action as release runs targeting those branches.
+  - Both callers use the same compiler setup, Qt kit, CMake options, 6 Qt editor shards, 8-way hosted CTest parallelism, Mesa runtime, hosted display preparation, and cleanup; release version metadata is supplied by the release caller.
+  - Existing clang-tidy, MSVC `/analyze`, security scans, PR coverage/performance evidence, and release package/publish steps remain active.
+  - A failed beta/master release build or package job creates one issue labeled `bug` and `needs-triage`, mentions the repository owner, and includes the branch, failed job/step names, and run/job log links.
+  - A rerun updates or reopens the same issue instead of creating another; successful runs create no issue.
+  - Beta push and stable manual release triggers and all package/publish outcomes are unchanged (REQ-202).
+- Owner-layer: Build/Platform (GitHub Actions)
+- Status: accepted (2026-11-05, user approved scope and GitHub issue alert route)
+
+### REQ-504 — Shared PR/release validation and failed release alerts
+- Purpose: make PR validation exercise the same build and full test path used by beta and stable releases, and make post-merge release failures visible.
+- Priority: must
+- Type: quality
+- Statement: PRs targeting `beta` or `master` and release runs targeting either branch use one shared Release configure/build/full-CTest validation path, including matching compiler, Qt kit, CMake options, Qt test sharding, CTest parallelism, Mesa runtime staging, hosted display preparation, and runtime cleanup. Release version metadata is supplied by the caller. Existing static analysis, security checks, PR coverage/performance evidence, and release packaging stay in their existing workflows. If the build or package job fails on a beta/master release run, CI creates one GitHub issue labeled `bug` and `needs-triage`, mentions the repository owner, identifies the branch and failed jobs/steps, and links the run and job logs. Reruns reuse or reopen that issue. Successful runs create no issue. Existing release triggers and package/publish behavior remain governed by REQ-202: beta push remains automatic; stable release remains manual.
+- Acceptance:
+  - PRs targeting `beta` and `master` invoke the same shared configure/build/full-CTest action as release runs targeting those branches.
+  - Both callers use the same compiler setup, Qt kit, CMake options, 6 Qt editor shards, 8-way hosted CTest parallelism, Mesa runtime, hosted display preparation, and cleanup; release version metadata is supplied by the release caller.
+  - Existing clang-tidy, MSVC `/analyze`, security scans, PR coverage/performance evidence, and release package/publish steps remain active.
+  - A failed beta/master release build or package job creates one issue labeled `bug` and `needs-triage`, mentions the repository owner, and includes the branch, failed job/step names, and run/job log links.
+  - A rerun updates or reopens the same issue instead of creating another; successful runs create no issue.
+  - Beta push and stable manual release triggers and all package/publish outcomes are unchanged (REQ-202).
+- Owner-layer: Build/Platform (GitHub Actions)
+- Status: accepted (2026-11-05, user approved scope and GitHub issue alert route)
