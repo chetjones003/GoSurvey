@@ -7504,20 +7504,18 @@ private Q_SLOTS:
     const QString dir = QtTestArtifactDirectory() + "/task-078-ui-comparison/gosurvey";
     QVERIFY(QDir().mkpath(dir));
     QVERIFY(window.statusBar()->grab().save(dir + "/01-status-bar-idle.png"));
-    if (auto* viewportZoom = window.findChild<QComboBox*>("statusViewportZoom")) {
-      EnsureDefaultViewportZoomScales(st.viewportZoomScales);
-      int index50 = -1;
-      for (int i = 0; i < static_cast<int>(st.viewportZoomScales.size()); ++i) {
-        if (st.viewportZoomScales[static_cast<std::size_t>(i)].name == "1:50") {
-          index50 = i;
-          break;
-        }
-      }
-      QVERIFY(index50 >= 0);
-      const float dpi = window.screen() != nullptr ? static_cast<float>(window.screen()->logicalDotsPerInchY()) : 96.f;
-      ApplyViewportZoomScaleIndex(st, index50, static_cast<float>(window.m_Viewport->height()), dpi);
-      window.Refresh();
-      QVERIFY(viewportZoom->grab().save(dir + "/02-status-bar-viewport-zoom-1-50.png"));
+    // D-2026-11-06-a: the model-space control is the annotation scale, and choosing a scale never moves the view.
+    if (auto* annotationScale = window.findChild<QComboBox*>("statusAnnotationScale")) {
+      QVERIFY(annotationScale->isEnabled());
+      QVERIFY(annotationScale->count() > 4);
+      const float zoomBefore = st.viewportZoom;
+      const float panBefore = st.viewportPanX;
+      annotationScale->setCurrentIndex(4);
+      QMetaObject::invokeMethod(annotationScale, "activated", Q_ARG(int, 4));
+      QCOMPARE(st.currentAnnotationScaleIndex, 4);
+      QCOMPARE(st.viewportZoom, zoomBefore);
+      QCOMPARE(st.viewportPanX, panBefore);
+      QVERIFY(annotationScale->grab().save(dir + "/02-status-bar-annotation-scale.png"));
     }
     DrawWideLine(window);
     window.Submit("MOVE");
@@ -9974,10 +9972,11 @@ private Q_SLOTS:
     QCOMPARE(reopened.namedViews.size(), std::size_t(1));
     QCOMPARE(reopened.namedViews[0].fovDeg, 75.f);
     auto* annotationScale = window.findChild<QComboBox*>("statusAnnotationScale"); QVERIFY(annotationScale);
-    QVERIFY(!annotationScale->isEnabled());
-    QCOMPARE(annotationScale->currentText(), QString::fromUtf8(
-        PlotScaleLabel(state.drawingInsUnits, state.modelUnitsPerPlottedInch).c_str()));
+    // D-2026-11-06-a: a drawing with no annotation scale list is given AutoCAD's standard list.
+    QVERIFY(annotationScale->isEnabled());
+    QVERIFY(annotationScale->count() > 0);
     state.annotationScales = {{"1:50", 1.f, 50.f}, {"1:100", 1.f, 100.f}};
+    state.currentAnnotationScaleIndex = -1;  // a drawing's own list starts with nothing chosen (the standard list sets 0)
     window.Refresh(); QCOMPARE(annotationScale->count(), 2); QCOMPARE(annotationScale->currentIndex(), -1);
     annotationScale->setCurrentIndex(1); QMetaObject::invokeMethod(annotationScale, "activated", Q_ARG(int, 1));
     QCOMPARE(state.currentAnnotationScaleIndex, 1);

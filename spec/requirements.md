@@ -4556,7 +4556,9 @@ requirements is a planning failure, not a sign of rigor.
 - Acceptance (sketch): a non-annotative object's height is unchanged by a scale change (today's behavior, preserved); an annotative object's on-screen size changes to hold plotted height constant; the flag persists in DXF/`.gs`; REQ-101 fidelity on stored coordinates is untouched.
 - Owner-layer: Domain/UI/Renderer
 - Status: accepted
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-11-06 — amended by D-2026-11-06-a: survey points,
+  point markers and survey point labels are annotative by default; every text style has an Annotative checkbox;
+  annotative size follows the current annotation scale, not the view zoom.
 
 ### REQ-111 — Associative DIMENSION entity
 - Purpose: GoSurvey has no dimension object; EVERY dimension kind exports as exploded lines plus text, which is not associative and doesn't round-trip as a dimension. (Corrected 2026-09-03, issue #252: this line said "an aligned dimension", and an angular one exported as the text ALONE - no arc, no rays, no vertex - because the DXF writer rebuilt dimension geometry by hand and its branch covered the aligned and linear kinds only. That is fixed; the inaccuracy is recorded because it is what let the gap sit unnoticed.)
@@ -12762,7 +12764,6 @@ capability that does not exist. They are recorded here rather than quietly dropp
   2. The Qt Home → Create Ground Data → Feature Line and Create Design → Feature Line actions start the existing `FEATURELINE` workflow.
   3. The Qt workflows are complete user workflows, using the existing shared command and drawing services. Preserve their current prompts, viewport interaction, preview, validation, cancel behavior, failure reporting, commit and undo behavior, and project read-only rules. Starting a command does not itself mutate drawing geometry.
   4. Unsupported ribbon placeholders in these affected groups remain visibly disabled.
-  5. **Revision (issue #802, 2026-10-09 decision):** the Create Design placeholders Parcel, Intersections, Assembly, Pond, Underground Storage and Channel are removed from the ribbon entirely, not left disabled, because they are not planned. Other placeholders in these groups (for example Profile and Corridor) remain visibly disabled.
 - Acceptance:
   - Qt ribbon workflow tests establish that each supported action starts its intended command and that unsupported affected placeholders cannot start a command.
   - Focused Qt workflow coverage exercises `PIPERUN` validation, cancel, point entry, completion, and one-step undo; failures leave existing drawing state intact.
@@ -12772,7 +12773,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - Update `docs/qt-074-parity-ledger.md` with implemented routes, focused evidence, and remaining gaps.
 - Owner-layer: Qt UI (`src/qt/`); shared command and drawing behavior remain in their existing services.
 - Status: accepted (2026-10-18) — D-2026-10-18-c, GitHub issue #896.
-- Revisions: 2026-10-18 — initial, D-2026-10-18-c, GitHub issue #896. 2026-11-06 — statement 5 added for the six removed placeholders (GitHub issue #802).
+- Revisions: 2026-10-18 — initial, D-2026-10-18-c, GitHub issue #896.
 
 ### REQ-428 — Qt survey-point display controls (GitHub issue #904)
 
@@ -16011,6 +16012,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Priority: should
 - Type: functional
 - Decision: D-2026-10-29-h (user direction 2026-10-29, TASK-0.7.8).
+- Superseded in part by D-2026-11-06-a: in model space the status-bar control is the annotation scale, not a
+  viewport zoom preset. Statement items 1, 2 and 4 below no longer apply; picking a scale never moves the view.
 - Depends on: REQ-027, REQ-101.
 - Statement:
   1. While **model space** is active, the Qt status bar shows a **viewport zoom** control listing ratio

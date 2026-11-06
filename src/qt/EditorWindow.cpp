@@ -908,42 +908,8 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
     SetCurrentAnnotationScaleIndex(m_State, index);
     Refresh();
   });
-  auto* viewportZoom = new QComboBox(this);
-  viewportZoom->setObjectName("statusViewportZoom");
-  viewportZoom->setMinimumWidth(110);
-  viewportZoom->setAccessibleName("Viewport zoom scale");
-  viewportZoom->setToolTip("Model viewport zoom ratio (REQ-458)");
-  viewportZoom->setMaxVisibleItems(14);
-  viewportZoom->setStyleSheet(PopupComboStyleSheet());
-  statusBar()->addWidget(viewportZoom);
-  connect(viewportZoom, QOverload<int>::of(&QComboBox::activated), this, [this, viewportZoom](int index) {
-    if (viewportZoom->itemData(index).toString() == QLatin1String("__add__")) {
-      bool ok = false;
-      const QString text = QInputDialog::getText(this, "Viewport zoom scale", "Enter ratio (e.g. 1:75):",
-          QLineEdit::Normal, QStringLiteral("1:50"), &ok);
-      if (!ok) {
-        Refresh();
-        return;
-      }
-      float paperUnits = 1.f, drawingUnits = 1.f;
-      const QByteArray utf8 = text.toUtf8();
-      if (!TryParseViewportZoomRatio(std::string(utf8.constData(), static_cast<std::size_t>(utf8.size())), &paperUnits,
-                                     &drawingUnits)) {
-        QMessageBox::warning(this, "Viewport zoom scale", "Enter a ratio like 1:50.");
-        Refresh();
-        return;
-      }
-      AddViewportZoomScale(m_State, std::string(utf8.constData(), static_cast<std::size_t>(utf8.size())), paperUnits,
-                           drawingUnits);
-      Refresh();
-      return;
-    }
-    if (index < 0 || index >= static_cast<int>(m_State.viewportZoomScales.size()) ||
-        index == m_State.currentViewportZoomScaleIndex)
-      return;
-    SetCurrentViewportZoomScaleIndex(m_State, index);
-    Refresh();
-  });
+  // The model-space zoom presets (REQ-458) are replaced by the annotation scale control (D-2026-11-06-a):
+  // choosing a scale resizes annotative objects and never moves the view.
   auto* multiSelect = new QToolButton(this);
   multiSelect->setText("Multi Selection"); multiSelect->setCheckable(true);
   multiSelect->setProperty("draftingMode", true);
@@ -2902,6 +2868,13 @@ void EditorWindow::Refresh() {
   m_Refreshing = true;
   const bool modelSpace = m_State.activeSpaceIndex == kModelSpaceIndex && !InFloatingModelSpace(m_State);
   if (auto* annotationScale = findChild<QComboBox*>("statusAnnotationScale")) {
+    // AutoCAD's Default Scale List, imperial or metric by the drawing's units (D-2026-11-06-a). Only a drawing
+    // that has no list gets one; a list the user or a file defined is kept.
+    if (m_State.activeDrawingIdx > 0 && m_State.annotationScales.empty()) {
+      const int units = m_State.drawingInsUnits;
+      EnsureStandardAnnotationScales(m_State.annotationScales, units == 1 || units == 2);
+      m_State.currentAnnotationScaleIndex = m_State.annotationScales.empty() ? -1 : 0;
+    }
     const QSignalBlocker block(annotationScale);
     annotationScale->clear();
     for (const auto& scale : m_State.annotationScales)
@@ -2915,20 +2888,7 @@ void EditorWindow::Refresh() {
       annotationScale->setCurrentIndex(m_State.currentAnnotationScaleIndex);
     }
     annotationScale->setEnabled(hasScales);
-    annotationScale->setVisible(!modelSpace);
-  }
-  if (auto* viewportZoom = findChild<QComboBox*>("statusViewportZoom")) {
-    EnsureDefaultViewportZoomScales(m_State.viewportZoomScales);
-    EnsureViewportZoomScaleIndexForDisplay(m_State);
-    const QSignalBlocker block(viewportZoom);
-    viewportZoom->clear();
-    for (const CadAnnotationScale& scale : m_State.viewportZoomScales)
-      viewportZoom->addItem(QString::fromUtf8(CadViewportZoomScaleStatusLabel(scale).c_str()));
-    viewportZoom->addItem(tr("Add custom scale…"), QStringLiteral("__add__"));
-    if (m_State.currentViewportZoomScaleIndex >= 0)
-      viewportZoom->setCurrentIndex(m_State.currentViewportZoomScaleIndex);
-    viewportZoom->setEnabled(modelSpace && !m_State.viewportZoomScales.empty());
-    viewportZoom->setVisible(modelSpace);
+    annotationScale->setVisible(true);  // AutoCAD shows the annotation scale in model space and paper space
   }
   RefreshProjects();
   SyncAlignmentLayout();  // REQ-486: the docked layout table follows undo, grips, commands and tab switches

@@ -129,3 +129,29 @@ TEST_CASE("Native DWG and DXF preserve zoom presets independently from annotatio
                       [](const auto& scale) { return scale.name == "1:25"; }));
   }
 }
+
+TEST_CASE("Standard annotation scale list is AutoCAD's default list", "[req458]") {
+  // D-2026-11-06-a: a drawing with no annotation scales gets AutoCAD's Default Scale List, in AutoCAD's order.
+  std::vector<CadAnnotationScale> metric;
+  EnsureStandardAnnotationScales(metric, false);
+  REQUIRE(metric.size() == 17);
+  CHECK(metric.front().name == "1:1");
+  CHECK(metric[10].name == "1:50");
+  CHECK(metric.back().name == "100:1");
+  CHECK(CadAnnotationScaleModelUnitsPerPlottedInch(metric[10]) == Catch::Approx(50.0f));
+  CHECK(CadAnnotationScaleModelUnitsPerPlottedInch(metric.back()) == Catch::Approx(0.01f));
+
+  std::vector<CadAnnotationScale> imperial;
+  EnsureStandardAnnotationScales(imperial, true);
+  REQUIRE(imperial.size() == 19);
+  CHECK(imperial.front().name == "1\" = 1\"");
+  CHECK(imperial[1].name == "1\" = 5'");
+  CHECK(CadAnnotationScaleModelUnitsPerPlottedInch(imperial[1]) == Catch::Approx(60.0f));
+  CHECK(imperial.back().name == "1\" = 5000'");
+
+  // A list that already has entries is kept as it is.
+  std::vector<CadAnnotationScale> kept{{"1:25", 1.f, 25.f}};
+  EnsureStandardAnnotationScales(kept, true);
+  REQUIRE(kept.size() == 1);
+  CHECK(kept.front().name == "1:25");
+}

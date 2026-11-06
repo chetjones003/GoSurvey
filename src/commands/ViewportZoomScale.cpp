@@ -85,6 +85,33 @@ float ViewportZoomForModelUnitsPerInch(float modelUnitsPerInch, float viewportHe
   return 100.f / std::max(visibleWorld, 1.e-6f);
 }
 
+void EnsureStandardAnnotationScales(std::vector<CadAnnotationScale>& scales, bool imperial) {
+  if (!scales.empty())
+    return;
+  // AutoCAD's Default Scale List in AutoCAD's order. Each entry is paper units : drawing units, so the
+  // model units per plotted inch is drawing / paper. Imperial drawings are in inches: 1" = 5' is 60.
+  static const CadAnnotationScale kImperial[] = {
+      {"1\" = 1\"", 1.f, 1.f},        {"1\" = 5'", 1.f, 60.f},        {"1\" = 10'", 1.f, 120.f},
+      {"1\" = 20'", 1.f, 240.f},      {"1\" = 30'", 1.f, 360.f},      {"1\" = 40'", 1.f, 480.f},
+      {"1\" = 50'", 1.f, 600.f},      {"1\" = 60'", 1.f, 720.f},      {"1\" = 70'", 1.f, 840.f},
+      {"1\" = 75'", 1.f, 900.f},      {"1\" = 80'", 1.f, 960.f},      {"1\" = 100'", 1.f, 1200.f},
+      {"1\" = 150'", 1.f, 1800.f},    {"1\" = 200'", 1.f, 2400.f},    {"1\" = 250'", 1.f, 3000.f},
+      {"1\" = 500'", 1.f, 6000.f},    {"1\" = 1000'", 1.f, 12000.f},  {"1\" = 2000'", 1.f, 24000.f},
+      {"1\" = 5000'", 1.f, 60000.f},
+  };
+  static const CadAnnotationScale kMetric[] = {
+      {"1:1", 1.f, 1.f},     {"1:2", 1.f, 2.f},     {"1:4", 1.f, 4.f},     {"1:5", 1.f, 5.f},
+      {"1:8", 1.f, 8.f},     {"1:10", 1.f, 10.f},   {"1:16", 1.f, 16.f},   {"1:20", 1.f, 20.f},
+      {"1:30", 1.f, 30.f},   {"1:40", 1.f, 40.f},   {"1:50", 1.f, 50.f},   {"1:100", 1.f, 100.f},
+      {"2:1", 2.f, 1.f},     {"4:1", 4.f, 1.f},     {"8:1", 8.f, 1.f},     {"10:1", 10.f, 1.f},
+      {"100:1", 100.f, 1.f},
+  };
+  if (imperial)
+    scales.assign(std::begin(kImperial), std::end(kImperial));
+  else
+    scales.assign(std::begin(kMetric), std::end(kMetric));
+}
+
 void SetCurrentViewportZoomScaleIndex(AppCommandState& st, int index) {
   EnsureDefaultViewportZoomScales(st.viewportZoomScales);
   if (index < 0 || index >= static_cast<int>(st.viewportZoomScales.size()))
