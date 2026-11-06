@@ -1,7 +1,7 @@
 # ISSUE-807 — Surface contextual ribbon controls
 
 - Type: feature
-- Status: implementation in progress; plan verification PASS (`verification/reviews/ISSUE-807-plan-review.md`)
+- Status: implementation complete; final review and PR pending
 - Opened: 2026-11-06
 - GitHub: https://github.com/chetjones003/GoSurvey/issues/807
 
@@ -71,7 +71,7 @@ Visibility, Drape Image, Move to Surface, Create Profile, and Data Shortcut.
 | Reduced/High LOD is render-only. | Preserve full TIN accuracy for queries, picks, plots and exports; persist the display choice per surface (REQ-508/ADR-080). |
 | Other controls follow documented surface workflows adapted to GoSurvey. | REQ-506/507 cover supported labels and analysis tables; REQ-509 resolves crossings without changing shared geometry; REQ-510 offers point and area visibility checks; REQ-511 attaches external rasters; REQ-514 creates read-only project surface references. |
 
-## 5. Verification state
+## 5. Initial slice verification (superseded)
 
 - Research: PASS; official Autodesk source URLs and limitations are recorded in the source note.
 - Plan: PASS (`verification/reviews/ISSUE-807-plan-review.md`).
@@ -89,4 +89,41 @@ Visibility, Drape Image, Move to Surface, Create Profile, and Data Shortcut.
 - Product documentation review: README and PRIVACY reviewed; no updates needed. In-app wiki updated
   in `resources/wiki/Point-Groups-and-Surfaces.md`; public manual wiki updated in commit `34d8749`
   and refreshed with typed command forms before this slice's PR.
-  Final review of both wiki sources will be repeated after the remaining controls are implemented.
+  The implementation and checks below supersede this first-slice snapshot.
+
+## 6. Final implementation and verification
+
+- All eleven controls are implemented: Add Labels, Add Legend, Point Files, Reduced/High LOD,
+  Crossing BL, Visibility, Drape Image, Move to Surface, Create Profile, and Data Shortcut. Saved
+  surface profiles and profile views are separate from the existing session-only `QUICKPROFILE`;
+  data shortcut consumers are read-only references with source/destination-origin handling.
+  Unsupported unrelated controls remain disabled per REQ-143.
+- Four Sol review rounds have completed; all findings were fixed. The fourth round found and the
+  implementation now validates contour-label associations after terrain changes, clips ZVI cells
+  to the requested circular footprint and refuses empty results before taking undo state, and
+  excludes attached model images from templates. Regression tests cover single and guide contour
+  labels after a surface elevation change, ZVI boundary and uncovered-area behavior, and template
+  export with a draped raster. Earlier third-round findings found and the
+  implementation now covers the drawing-switch drape cache key, profile selection remapping, legend
+  local coordinates, shortcut-dependent refresh, unavailable profile sources, fixed-TIN alignment
+  profile refresh, and raster attachment repointing. Earlier findings included terrain texture
+  vertex layout and PDF layout restoration, profile gap persistence, project-origin transforms,
+  read-only reference rebuild guards, asynchronous label/profile refresh and worker generation
+  invalidation, world/local crossing conversions, face-intersection sight analysis, guide-path contour
+  labels, unavailable linked labels, and content-sensitive legend refresh.
+- Proof: `.\build.bat` PASS (Release); focused Issue #807 and project-file tests PASS (3,736 assertions
+  in 16 test cases); final `ctest --preset ninja-release` PASS (194/194, including six Qt editor shards,
+  `build.output-layout`, `qt.deployment`, and `qt.parity-ledger`); `git diff --check` PASS.
+- Hidden-desktop Qt screenshots are in
+  `build/artifacts/qt-editor/manual/shard-5/artifacts/`: `issue807-surface-context.png`,
+  `issue807-no-surface-selection.png`, and `issue807-surface-visibility-menu.png`. They are grouped
+  in the T3 visualizer; test artifacts are not committed.
+- Product documentation review (REQ-453): README and PRIVACY inspected; no updates needed. All pages
+  under `resources/wiki/` inspected; `Point-Groups-and-Surfaces.md` updated. The public manual wiki
+  was inspected and updated in commit `35ce287` (GoSurvey wiki repository); its surface page and
+  command forms were checked against this implementation. No other manual pages needed changes.
+- Autodesk visual comparison: INCONCLUSIVE because Civil 3D is not installed (only its Object Enabler
+  is present); see `build/artifacts/issue807/visual-comparison.md`. No comparison pass is claimed.
+- Final implementation verification: PASS. All findings from four review rounds are fixed and
+  covered by regressions. The fifth and final diff review approved the implementation with no findings. PR checks and merge remain. The recorded
+  Civil 3D comparison is inconclusive; no comparison pass is claimed.

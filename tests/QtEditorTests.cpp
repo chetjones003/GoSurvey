@@ -9740,6 +9740,8 @@ private Q_SLOTS:
     QCOMPARE(ribbon->currentIndex(), index("SurveyPointCtx")); QVERIFY(ribbon->tabText(index("SurveyPointCtx")).contains("42"));
     state.selectedSurveyPointIndices.clear(); window.Submit("");
     QVERIFY(!ribbon->isTabVisible(index("SurveyPointCtx"))); QCOMPARE(ribbon->currentIndex(), index("Modeling"));
+    QTest::qWait(100);
+    QVERIFY(window.grab().save(Issue914Shot("issue807-no-surface-selection.png")));
     state.cadSurfaces.emplace_back(); state.cadSurfaces.back().name = "Existing Ground";
     state.selection.push_back({SelectedEntity::Type::Surface, 0}); window.Submit("");
     QCOMPARE(ribbon->currentIndex(), index("SurfaceCtx")); QVERIFY(ribbon->tabText(index("SurfaceCtx")).contains("Existing Ground"));

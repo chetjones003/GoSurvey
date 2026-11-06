@@ -98,6 +98,11 @@ inline void CadAnnotationToJson(const CadAnnotation& a, nlohmann::json& o) {
   if (a.kind == CadAnnotation::Kind::DimLinear)
     o["dimLinearVertical"] = a.dimLinearVertical;
   o["surveyPointLabelForId"] = a.surveyPointLabelForId;
+  if (a.surfaceLabelForId != 0) {
+    o["surfaceLabelForId"] = a.surfaceLabelForId;
+    o["surfaceLabelKind"] = a.surfaceLabelKind;
+    o["surfaceLabelValues"] = a.surfaceLabelValues;
+  }
   if (a.surveyLabelHasUserOffset) {
     o["surveyLabelHasUserOffset"] = true;
     o["surveyLabelUserOffsetEast"] = a.surveyLabelUserOffsetEast;
@@ -153,6 +158,10 @@ inline CadAnnotation CadAnnotationFromJson(const nlohmann::json& o) {
   a.surveyPointLabelForId = o.contains("surveyPointLabelForId")
                                 ? o.value("surveyPointLabelForId", -1)
                                 : o.value("surveyPointLabelFor", -1);
+  a.surfaceLabelForId = o.value("surfaceLabelForId", a.surfaceLabelForId);
+  a.surfaceLabelKind = o.value("surfaceLabelKind", a.surfaceLabelKind);
+  if (o.contains("surfaceLabelValues") && o["surfaceLabelValues"].is_array())
+    a.surfaceLabelValues = o["surfaceLabelValues"].get<std::vector<double>>();
   a.surveyLabelHasUserOffset = o.value("surveyLabelHasUserOffset", a.surveyLabelHasUserOffset);
   a.surveyLabelUserOffsetEast = o.value("surveyLabelUserOffsetEast", a.surveyLabelUserOffsetEast);
   a.surveyLabelUserOffsetNorth = o.value("surveyLabelUserOffsetNorth", a.surveyLabelUserOffsetNorth);
@@ -185,6 +194,10 @@ inline void CadTableToJson(const CadTable& t, nlohmann::json& o) {
   if (t.mergeTitleRow) o["mergeTitleRow"] = true;
   if (t.centerText) o["centerText"] = true;
   if (t.surveyPointDataRows) o["surveyPointDataRows"] = true;
+  if (t.surfaceLegendForId != 0) {
+    o["surfaceLegendForId"] = t.surfaceLegendForId;
+    o["surfaceLegendKind"] = t.surfaceLegendKind;
+  }
 }
 
 [[nodiscard]] inline CadTable CadTableFromJson(const nlohmann::json& o) {
@@ -208,5 +221,7 @@ inline void CadTableToJson(const CadTable& t, nlohmann::json& o) {
   t.mergeTitleRow = o.value("mergeTitleRow", t.mergeTitleRow);
   t.centerText = o.value("centerText", t.centerText);
   t.surveyPointDataRows = o.value("surveyPointDataRows", t.surveyPointDataRows);
+  t.surfaceLegendForId = o.value("surfaceLegendForId", t.surfaceLegendForId);
+  t.surfaceLegendKind = o.value("surfaceLegendKind", t.surfaceLegendKind);
   return t;
 }

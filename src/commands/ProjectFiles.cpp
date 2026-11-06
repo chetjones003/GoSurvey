@@ -3,6 +3,9 @@
 #include "io/ProjectTurnover.hpp"
 #include "pdf/PdfAttach.hpp"
 #include "util/pointcloudcache.hpp"
+#include "io/DwgIo.hpp"
+#include "io/GsIo.hpp"
+#include "CadCommands.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -91,6 +94,53 @@ bool SamePath(const std::string& a, const std::string& b) {
   return fs::equivalent(fs::u8path(a), fs::u8path(b), ec);
 }
 
+bool SameProjectRel(const std::string& a, const std::string& b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    const unsigned char ac = static_cast<unsigned char>(a[i] == '\\' ? '/' : a[i]);
+    const unsigned char bc = static_cast<unsigned char>(b[i] == '\\' ? '/' : b[i]);
+    if (std::tolower(ac) != std::tolower(bc)) return false;
+  }
+  return true;
+}
+
+CadSurface MakeLocalSurfaceReference(const CadSurface& source, const AppCommandState& sourceState,
+                                     const AppCommandState& destinationState, const std::string& name,
+                                     const std::string& sourceRel, std::uint64_t sourceId) {
+  CadSurface reference = source;
+  if (source.tin) {
+    auto localTin = std::make_shared<CadTin>(*source.tin);
+    const double dx = sourceState.worldDocumentOriginX - destinationState.worldDocumentOriginX;
+    const double dy = sourceState.worldDocumentOriginY - destinationState.worldDocumentOriginY;
+    for (size_t i = 0; i + 2 < localTin->vertsXyz.size(); i += 3) {
+      localTin->vertsXyz[i] += dx;
+      localTin->vertsXyz[i + 1] += dy;
+    }
+    reference.tin = std::move(localTin);
+  }
+  reference.name = name;
+  reference.sourcePointGroups.clear();
+  reference.sourcePointFiles.clear();
+  reference.addedPointXyz.clear();
+  reference.deletedPointPicks.clear();
+  reference.movedPoints.clear();
+  reference.breaklines.clear();
+  reference.crossingCorrections.clear();
+  reference.contourSources.clear();
+  reference.boundaries.clear();
+  reference.swappedEdgePicks.clear();
+  reference.deletedEdgePicks.clear();
+  reference.corridorFeatureLines.clear();
+  reference.gradingGroup = false;
+  reference.gradingMembers.clear();
+  reference.volumeBaseName.clear();
+  reference.volumeComparisonName.clear();
+  reference.dataShortcutReadOnly = true;
+  reference.dataShortcutDrawing = sourceRel;
+  reference.dataShortcutSurfaceId = sourceId;
+  return reference;
+}
+
 /// "Copy links into the project" moved files: every open drawing of project \p uid that still holds
 /// the old path takes the copy. Without this the next save of such a drawing records the old path as a
 /// link again and the file never travels (issue #724). The active tab's data lives in \p st, the others'
@@ -106,7 +156,8 @@ void RepointOpenDrawings(AppCommandState& st, std::uint32_t uid,
     return nullptr;
   };
   const auto repoint = [&](std::vector<PdfAttachment>& pdfs,
-                           std::vector<std::shared_ptr<const CadPointCloud>>& clouds) {
+                           std::vector<std::shared_ptr<const CadPointCloud>>& clouds,
+                           std::vector<CadRasterImage>& rasters) {
     for (PdfAttachment& a : pdfs)
       if (const std::string* np = newPathFor(a.filePath))
         a.filePath = *np;
@@ -114,14 +165,19 @@ void RepointOpenDrawings(AppCommandState& st, std::uint32_t uid,
       if (pc && !pc->sourcePath.empty())
         if (const std::string* np = newPathFor(pc->sourcePath))
           pc = PointCloudAt(*pc, *np, log);
+    for (CadRasterImage& image : rasters)
+      if (!image.path.empty())
+        if (const std::string* np = newPathFor(image.path))
+          image.path = *np;
   };
   for (size_t i = 1; i < st.drawingTabs.size(); ++i) {
     if (st.drawingTabs[i].projectUid != uid)
       continue;
     if (static_cast<int>(i) == st.activeDrawingIdx)
-      repoint(st.pdfAttachments, st.cadPointClouds);
+      repoint(st.pdfAttachments, st.cadPointClouds, st.cadRasterImages);
     else if (i < st.documents.size())
-      repoint(st.documents[i].pdfAttachments, st.documents[i].cadPointClouds);
+      repoint(st.documents[i].pdfAttachments, st.documents[i].cadPointClouds,
+              st.documents[i].cadRasterImages);
   }
 }
 
@@ -304,6 +360,10 @@ void SyncProjectFilesOnSave(AppCommandState& st, int tabIdx, const std::string& 
   for (const auto& pc : st.cadPointClouds)
     if (pc && !pc->sourcePath.empty())
       clouds.push_back({fs::u8path(pc->sourcePath), {}});
+  // REQ-511 image paths use the same project-file association lifecycle as point-cloud sources;
+  // their placements remain in the drawing trailer's modelImages array.
+  for (const CadRasterImage& image : st.cadRasterImages)
+    if (!image.path.empty()) clouds.push_back({fs::u8path(image.path), {}});
   for (const PdfAttachment& a : st.pdfAttachments)
     if (!a.filePath.empty())
       pdfs.push_back({fs::u8path(a.filePath), PlacementOf(st, a).dump()});
@@ -343,6 +403,19 @@ void ApplyProjectFilesOnOpen(AppCommandState& st, std::uint32_t projectUid, cons
     if (found == pc->sourcePath)
       continue;
     st.cadPointClouds[i] = PointCloudAt(*pc, found, log);
+  }
+
+  // Model images are tracked with the drawing just like other external attachments. Resolve their
+  // project-owned copy before the viewport tries to decode the path saved by the source machine.
+  for (CadRasterImage& image : st.cadRasterImages) {
+    if (image.path.empty()) continue;
+    const std::string found = projfiles::FindAttachedFile(s->project, rel, image.path);
+    if (found.empty()) {
+      log.push_back("Model image " + fs::u8path(image.path).filename().u8string() +
+                    " is missing from the project; its drape is unavailable.");
+      continue;
+    }
+    image.path = found;
   }
 
   // PDFs: put each recorded placement back.
@@ -444,4 +517,123 @@ bool CreateProjectTurnover(AppCommandState& st, std::uint32_t projectUid, const 
   log.push_back("Turnover - recorded " + std::to_string(rec.items.size()) + " file(s) for " + rec.recipient + " on " +
                 rec.date + " (" + rec.file + ").");
   return true;
+}
+
+bool CreateSurfaceDataShortcut(AppCommandState& st, size_t surfaceIndex, std::vector<std::string>& log) {
+  const std::uint32_t uid = ActiveProjectUid(st);
+  Session* session = FindSessionMut(st, uid);
+  if (!session) { log.push_back("Data Shortcut — open a project drawing first."); return false; }
+  if (session->readOnly) { log.push_back("Data Shortcut — this project is read-only; no shortcut was created."); return false; }
+  if (surfaceIndex >= st.cadSurfaces.size() || surfaceIndex >= st.cadSurfaceAttrs.size()) {
+    log.push_back("Data Shortcut — the selected surface no longer exists."); return false;
+  }
+  if (st.activeDocFilePath.empty()) { log.push_back("Data Shortcut — save the source drawing inside the project first."); return false; }
+  const std::string rel = DrawingRel(session->project, st.activeDocFilePath);
+  if (rel.empty()) { log.push_back("Data Shortcut — the source drawing must be inside this project."); return false; }
+  EnsureEntityIds(st);
+  const std::uint64_t surfaceId = st.cadSurfaceAttrs[surfaceIndex].id;
+  if (!surfaceId) { log.push_back("Data Shortcut — the surface has no stable identity."); return false; }
+  json extra = json::parse(session->project.extraJson, nullptr, false);
+  if (!extra.is_object()) extra = json::object();
+  json shortcuts = extra.value("surfaceShortcuts", json::array());
+  if (!shortcuts.is_array()) shortcuts = json::array();
+  for (auto it = shortcuts.begin(); it != shortcuts.end(); ++it)
+    if (it->is_object() && it->value("drawing", std::string()) == rel &&
+        it->value("surfaceId", std::uint64_t{0}) == surfaceId) { *it = {{"drawing", rel}, {"surfaceId", surfaceId}, {"name", st.cadSurfaces[surfaceIndex].name}}; goto save_shortcut; }
+  shortcuts.push_back({{"drawing", rel}, {"surfaceId", surfaceId}, {"name", st.cadSurfaces[surfaceIndex].name}});
+save_shortcut:
+  extra["surfaceShortcuts"] = std::move(shortcuts);
+  session->project.extraJson = extra.dump();
+  (void)projfiles::TrackFile(&session->project, fs::u8path(st.activeDocFilePath));
+  std::string error;
+  if (!gsproj::Save(session->project, &error)) { log.push_back("Data Shortcut — project file could not be saved: " + error); return false; }
+  log.push_back("Data Shortcut — surface \"" + st.cadSurfaces[surfaceIndex].name + "\" is available to drawings in this project.");
+  return true;
+}
+
+bool CreateSurfaceReference(AppCommandState& st, const std::string& requestedSourceRel,
+                            std::uint64_t sourceSurfaceId,
+                            const std::string& referenceName, std::vector<std::string>& log) {
+  Session* session = FindSessionMut(st, ActiveProjectUid(st));
+  if (!session) { log.push_back("Create Surface Reference — open a project drawing first."); return false; }
+  if (session->readOnly) { log.push_back("Create Surface Reference — this project is read-only; no reference was created."); return false; }
+  if (!sourceSurfaceId || !gsproj::IsSafeRelativePath(requestedSourceRel) || referenceName.empty() ||
+      FindSurfaceIndex(st, referenceName) >= 0) {
+    log.push_back("Create Surface Reference — provide a registered source drawing, surface ID, and unique reference name."); return false;
+  }
+  json extra = json::parse(session->project.extraJson, nullptr, false);
+  const json shortcuts = extra.is_object() ? extra.value("surfaceShortcuts", json::array()) : json::array();
+  std::string sourceRel;
+  if (shortcuts.is_array()) for (const auto& shortcut : shortcuts)
+    if (shortcut.is_object() && shortcut.value("surfaceId", std::uint64_t{0}) == sourceSurfaceId &&
+        SameProjectRel(shortcut.value("drawing", std::string()), requestedSourceRel)) {
+      sourceRel = shortcut.value("drawing", std::string()); break;
+    }
+  if (!gsproj::IsSafeRelativePath(sourceRel)) { log.push_back("Create Surface Reference — that surface ID is not registered in this project."); return false; }
+  const fs::path sourcePath = session->project.Folder() / fs::u8path(sourceRel);
+  if (!fs::exists(sourcePath)) { log.push_back("Create Surface Reference — source drawing \"" + sourceRel + "\" is missing."); return false; }
+  AppCommandState source;
+  source.activeDrawingIdx = 1;
+  source.documents.resize(2);
+  source.drawingTabs.resize(2);
+  const std::string sourceUtf8 = sourcePath.u8string();
+  if (!OpenDrawingDocument(source, sourceUtf8.c_str(), log)) {
+    log.push_back("Create Surface Reference — source drawing could not be opened; no reference was created."); return false;
+  }
+  const auto sourceAttr = std::find_if(source.cadSurfaceAttrs.begin(), source.cadSurfaceAttrs.end(),
+      [&](const EntityAttributes& attr) { return attr.id == sourceSurfaceId; });
+  if (sourceAttr == source.cadSurfaceAttrs.end()) { log.push_back("Create Surface Reference — source surface is missing from its drawing."); return false; }
+  const size_t sourceIndex = static_cast<size_t>(sourceAttr - source.cadSurfaceAttrs.begin());
+  if (sourceIndex >= source.cadSurfaces.size() || !source.cadSurfaces[sourceIndex].tin) {
+    log.push_back("Create Surface Reference — source surface has no saved built TIN."); return false;
+  }
+  CadSurface reference = MakeLocalSurfaceReference(source.cadSurfaces[sourceIndex], source, st,
+                                                    referenceName, sourceRel, sourceSurfaceId);
+  PushUndoSnapshot(st, "Create surface reference");
+  st.cadSurfaces.push_back(std::move(reference));
+  EntityAttributes attrs;
+  attrs.layer = "0";
+  st.cadSurfaceAttrs.push_back(std::move(attrs));
+  BumpCadGpuCache(st);
+  EnsureEntityIds(st);
+  log.push_back("Create Surface Reference — read-only reference \"" + referenceName + "\" created from " + sourceRel + ".");
+  return true;
+}
+
+void RefreshProjectSurfaceReferences(AppCommandState& st, std::uint32_t projectUid,
+                                     std::vector<std::string>& log) {
+  const Session* session = FindSession(st, projectUid);
+  if (!session) return;
+  if (session->readOnly) {
+    log.push_back("Project surface references were not refreshed because the project is read-only.");
+    return;
+  }
+  for (size_t i = 0; i < st.cadSurfaces.size(); ++i) {
+    CadSurface& surface = st.cadSurfaces[i];
+    if (!surface.dataShortcutReadOnly || !gsproj::IsSafeRelativePath(surface.dataShortcutDrawing)) continue;
+    const std::string sourceRel = surface.dataShortcutDrawing;
+    const std::uint64_t sourceId = surface.dataShortcutSurfaceId;
+    const fs::path path = session->project.Folder() / fs::u8path(sourceRel);
+    AppCommandState source;
+    source.activeDrawingIdx = 1; source.documents.resize(2); source.drawingTabs.resize(2);
+    const std::string sourceUtf8 = path.u8string();
+    if (!fs::exists(path) || !OpenDrawingDocument(source, sourceUtf8.c_str(), log)) {
+      log.push_back("Surface reference \"" + surface.name + "\" — source drawing is unavailable; last saved display retained.");
+      continue;
+    }
+    const auto attr = std::find_if(source.cadSurfaceAttrs.begin(), source.cadSurfaceAttrs.end(),
+        [&](const EntityAttributes& candidate) { return candidate.id == sourceId; });
+    const size_t sourceIndex = attr == source.cadSurfaceAttrs.end() ? source.cadSurfaces.size()
+        : static_cast<size_t>(attr - source.cadSurfaceAttrs.begin());
+    if (sourceIndex >= source.cadSurfaces.size() || !source.cadSurfaces[sourceIndex].tin) {
+      log.push_back("Surface reference \"" + surface.name + "\" — source surface is unavailable; last saved display retained.");
+      continue;
+    }
+    const std::string name = surface.name, style = surface.styleName;
+    const bool reduced = surface.reducedDisplayLod;
+    surface = MakeLocalSurfaceReference(source.cadSurfaces[sourceIndex], source, st,
+                                        name, sourceRel, sourceId);
+    surface.styleName = style; surface.reducedDisplayLod = reduced;
+    RefreshSurfaceDependentsAfterReplacement(st, i, log);
+  }
 }

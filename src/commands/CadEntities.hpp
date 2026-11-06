@@ -594,6 +594,11 @@ struct CadAnnotation {
   /// of its ~35 read sites into a compile error rather than letting an index-shaped assumption
   /// survive as silently wrong data (the ADR-025 (a) lesson).
   int surveyPointLabelForId = -1;
+  /// Surface-derived label link (REQ-506). A stable surface id plus the stored query values lets
+  /// surface rebuilds refresh the annotation without moving it.
+  std::uint64_t surfaceLabelForId = 0;
+  std::uint8_t surfaceLabelKind = 0;  ///< 1=spot, 2=slope, 3=contour.
+  std::vector<double> surfaceLabelValues;
   /// When true, the label was manually dragged and these world-unit offsets from the point override the global defaults.
   bool surveyLabelHasUserOffset = false;
   float surveyLabelUserOffsetEast = 0.f;
@@ -1389,6 +1394,21 @@ struct CadSurfaceCrossingCorrection {
   Kind kind = Kind::Average;
 };
 
+/// Saved existing-ground profile and its placed graph view (REQ-513). Source references are stable
+/// drawing entity ids; sampled gaps remain explicit as NaN elevations.
+struct CadSurfaceProfile {
+  std::uint64_t id = 0;
+  std::string name;
+  std::uint64_t surfaceId = 0;
+  std::uint64_t alignmentId = 0;
+  double sampleInterval = 10.0;
+  double viewX = 0.0, viewY = 0.0, horizontalScale = 1.0, verticalScale = 1.0;
+  std::vector<double> stations;
+  std::vector<double> elevations;
+  std::vector<std::uint64_t> viewEntityIds;
+  std::string sourceStatus; ///< transient missing-source report, regenerated from stable source IDs
+};
+
 /// Per-feature-line descriptive data (REQ-087), one entry per line, parallel to
 /// \c featureLineAttrs.
 ///
@@ -1494,6 +1514,10 @@ struct CadGradingGroupMember {
 /// Grading groups additionally own per-member baked strips.
 struct CadSurface {
   bool gradingGroup = false;
+  /// REQ-514: a project data shortcut is a local read-only reference to another drawing's surface.
+  bool dataShortcutReadOnly = false;
+  std::string dataShortcutDrawing;  ///< safe project-relative source drawing path
+  std::uint64_t dataShortcutSurfaceId = 0;
   /// REQ-508: viewport-only triangle reduction; source/query TIN data is never changed.
   bool reducedDisplayLod = false;
   std::vector<CadGradingGroupMember> gradingMembers;

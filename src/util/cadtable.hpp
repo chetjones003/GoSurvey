@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -42,6 +43,9 @@ struct CadTable {
   bool centerText = false;
   /// When true, data rows are filled from survey points; cell text must not be edited in place.
   bool surveyPointDataRows = false;
+  /// Live surface-analysis legend link (REQ-507). Rows are refreshed from the referenced surface.
+  std::uint64_t surfaceLegendForId = 0;
+  std::string surfaceLegendKind;
 };
 
 [[nodiscard]] inline int CadTableRowCount(int cols, const std::vector<std::string>& cells) {

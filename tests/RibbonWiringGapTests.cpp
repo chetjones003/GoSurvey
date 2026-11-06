@@ -59,7 +59,9 @@ TEST_CASE("Issue #807 implemented surface controls are wired", "[ribbon][issue80
                                     std::pair{"##TsLodHigh", "@surfaceLodHigh"},
                                     std::pair{"##TsMoveTo", "@moveBlocksToSurface"},
                                     std::pair{"##TsVisCheck", "@surfaceVisibilityMenu"},
-                                    std::pair{"##TsXBreak", "@surfaceCrossingsMenu"}}) {
+                                    std::pair{"##TsXBreak", "@surfaceCrossingsMenu"},
+                                    std::pair{"##TsAddLabels", "@surfaceLabelsMenu"},
+                                    std::pair{"##TsAddLegend", "@surfaceLegendMenu"}}) {
     const auto* button = FindButton(id);
     REQUIRE(button != nullptr);
     CHECK(std::string(button->command) == command);

@@ -9,11 +9,17 @@
 #include <catch2/catch_approx.hpp>
 
 #include <memory>
+#include <filesystem>
+#include <chrono>
+#include <thread>
 #include <string>
 #include <vector>
 
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
+#include "DwgIo.hpp"
+#include "commands/ProjectFiles.hpp"
+#include "Project.hpp"
 
 using Catch::Approx;
 
@@ -160,6 +166,133 @@ TEST_CASE("Surface LOD choice persists in the drawing document", "[surface][req5
   CHECK(reopened.cadSurfaces[0].reducedDisplayLod);
 }
 
+TEST_CASE("Drape Image refuses unreadable files and persists a stable surface association", "[surface][req511]") {
+  AppCommandState st;
+  AddGround(st, "EG");
+  st.cadSurfaceAttrs[0].id = 42;
+  std::vector<std::string> log;
+  CHECK_FALSE(AttachModelRasterImage(st, "missing-issue-807-image.png", 0, 0, 10, 10, 0, log));
+  CHECK(st.cadRasterImages.empty());
+  st.currentLayer = "Imagery";
+  const std::string validImage = std::string(GOSURVEY_SAMPLES_DIR) + "/01-main-window.png";
+  REQUIRE(AttachModelRasterImage(st, validImage, 2, 3, 40, 30, 0.25f, log));
+  REQUIRE(st.cadRasterImages.size() == 1);
+  REQUIRE(st.cadRasterImages[0].id != 0);
+  REQUIRE(SetModelRasterDrape(st, 0, 0, log));
+  REQUIRE(st.cadSurfaceAttrs[0].id != 0);
+  CHECK(st.cadRasterImages[0].surfaceId == st.cadSurfaceAttrs[0].id);
+
+  AppCommandState reopened;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(reopened, SerializeGoSurveyJson(st), log));
+  REQUIRE(reopened.cadRasterImages.size() == 1);
+  CHECK(reopened.cadRasterImages[0].id == st.cadRasterImages[0].id);
+  CHECK(reopened.cadRasterImages[0].surfaceId == st.cadSurfaceAttrs[0].id);
+  CHECK(reopened.cadRasterImages[0].path == validImage);
+  CHECK(reopened.cadRasterImages[0].layer == "Imagery");
+  CHECK(reopened.cadRasterImages[0].insX == Approx(2.f));
+  CHECK(reopened.cadRasterImages[0].width == Approx(40.f));
+  CHECK(reopened.cadRasterImages[0].rotationRad == Approx(0.25f));
+}
+
+TEST_CASE("Project data shortcuts create read-only references and refresh from saved source drawings", "[surface][req514]") {
+  namespace fs = std::filesystem;
+  const fs::path root = fs::temp_directory_path() / "gosurvey-issue807-shortcut-tests";
+  std::error_code ec;
+  fs::remove_all(root, ec);
+  fs::create_directories(root, ec);
+  gsproj::Project project;
+  std::string error;
+  REQUIRE(gsproj::Create(root, "Issue807", &project, &error));
+  const fs::path drawingPath = project.Folder() / "drawings" / "Source.dwg";
+  fs::create_directories(drawingPath.parent_path(), ec);
+
+  AppCommandState source;
+  source.activeDrawingIdx = 1;
+  source.activeDocFilePath = drawingPath.u8string();
+  source.worldDocumentOriginX = 10000.0;
+  source.worldDocumentOriginY = 20000.0;
+  AddGround(source, "EG");
+  source.cadSurfaceAttrs[0].id = 4200;
+  std::vector<std::string> log;
+  REQUIRE(SaveDrawingDocument(source, drawingPath.u8string().c_str(), log));
+
+  AppCommandState::ProjectSession session;
+  session.uid = 7;
+  session.project = project;
+  source.openProjects.push_back(session);
+  source.drawingTabs[1].projectUid = 7;
+  REQUIRE(CreateSurfaceDataShortcut(source, 0, log));
+
+  AppCommandState reference;
+  reference.activeDrawingIdx = 1;
+  reference.worldDocumentOriginX = 5000.0;
+  reference.worldDocumentOriginY = 7000.0;
+  reference.drawingTabs[1].projectUid = 7;
+  reference.openProjects.push_back(source.openProjects[0]);
+  const bool referenceCreated = CreateSurfaceReference(reference, "drawings/Source.dwg", 4200, "Existing Ground", log);
+  if (!referenceCreated) for (const std::string& entry : log) UNSCOPED_INFO(entry);
+  REQUIRE(referenceCreated);
+  REQUIRE(reference.cadSurfaces.size() == 1);
+  CHECK(reference.cadSurfaces[0].dataShortcutReadOnly);
+  CHECK(reference.cadSurfaces[0].tin->vertsXyz[0] == Approx(5000.0));
+  CHECK(reference.cadSurfaces[0].tin->vertsXyz[1] == Approx(13000.0));
+  CHECK(reference.cadSurfaces[0].tin->vertsXyz[2] == Approx(2.0));
+  CHECK(reference.cadSurfaces[0].breaklines.empty());
+  Type(reference, "SURFLABEL Existing Ground, SPOT, 10050, 20050", log);
+  REQUIRE(reference.cadAnnotations.size() == 1);
+  CHECK(reference.cadAnnotations[0].text == "Elev 7.0000");
+  alignment::Alignment referenceAlignment;
+  referenceAlignment.id = 7301;
+  referenceAlignment.name = "BASELINE";
+  REQUIRE(referenceAlignment.AppendTangent({5000.0, 13050.0}, 90.0 * alignment::kPi / 180.0, 100.0));
+  reference.alignments.push_back(referenceAlignment);
+  Type(reference, "CREATEPROFILEFROMSURFACE Existing Ground, BASELINE, Reference Profile, 25, 10000, 20000, 1, 2", log);
+  REQUIRE(reference.surfaceProfiles.size() == 1);
+  CHECK(reference.surfaceProfiles[0].elevations[2] == Approx(7.0));
+  CadTable staleLegend;
+  staleLegend.cols = 1;
+  staleLegend.surfaceLegendForId = reference.cadSurfaceAttrs[0].id;
+  staleLegend.surfaceLegendKind = "watershed";
+  staleLegend.cells = {"stale"};
+  reference.cadTables.push_back(staleLegend);
+  reference.cadTableAttrs.push_back(EntityAttributes{});
+  AddFlatPolylineAcross(reference, {5025.0, 5050.0, 5075.0});
+  for (size_t i = 1; i < reference.userPolylineVerts.size(); i += 3) reference.userPolylineVerts[i] += 13000.0f;
+  reference.selection.push_back({SelectedEntity::Type::Polyline, 0});
+  Type(reference, "DRAPE Existing Ground, LINK", log);
+  CHECK(reference.userPolylineVerts[5] == Approx(7.0));
+  const auto heldTin = reference.cadSurfaces[0].tin;
+  CHECK_FALSE(BuildSurfaceFromSources(reference, reference.cadSurfaces[0], log));
+  CHECK(reference.cadSurfaces[0].tin == heldTin);
+
+  source.cadSurfaces[0].tin = std::make_shared<CadTin>(*source.cadSurfaces[0].tin);
+  auto changedTin = std::const_pointer_cast<CadTin>(source.cadSurfaces[0].tin);
+  changedTin->vertsXyz[2] = 12.0;
+  REQUIRE(SaveDrawingDocument(source, drawingPath.u8string().c_str(), log));
+  reference.openProjects[0].readOnly = true;
+  RefreshProjectSurfaceReferences(reference, 7, log);
+  CHECK(reference.cadSurfaces[0].tin->vertsXyz[2] == Approx(2.0));
+  CHECK(LogHas(log, "project is read-only"));
+  reference.openProjects[0].readOnly = false;
+  RefreshProjectSurfaceReferences(reference, 7, log);
+  CHECK(reference.cadSurfaces[0].name == "Existing Ground");
+  CHECK(reference.cadSurfaces[0].dataShortcutReadOnly);
+  CHECK(reference.cadSurfaces[0].tin->vertsXyz[0] == Approx(5000.0));
+  CHECK(reference.cadSurfaces[0].tin->vertsXyz[2] == Approx(12.0));
+  CHECK(reference.cadAnnotations[0].text == "Elev 12.0000");
+  CHECK(reference.surfaceProfiles[0].elevations[2] == Approx(12.0));
+  CHECK(reference.cadTables[0].cells[0] == "Range");
+  CHECK(reference.userPolylineVerts[5] == Approx(12.0));
+  TickSurfaceRebuilds(reference, log);
+  CHECK(reference.cadSurfaces[0].tin->vertsXyz[2] == Approx(12.0));
+  const double lastGoodElevation = reference.cadSurfaces[0].tin->vertsXyz[2];
+  fs::remove(drawingPath, ec);
+  RefreshProjectSurfaceReferences(reference, 7, log);
+  CHECK(reference.cadSurfaces[0].tin->vertsXyz[2] == Approx(lastGoodElevation));
+  CHECK(LogHas(log, "last saved display retained"));
+  fs::remove_all(root, ec);
+}
+
 TEST_CASE("Surface LOD and Move to Surface have typed command routes", "[surface][req508][req512]") {
   AppCommandState st;
   AddGround(st, "EG");
@@ -198,10 +331,46 @@ TEST_CASE("Surface visibility commands draw LOS and ZVI results without changing
   CHECK(st.cadFilledRegions.size() > before);
   CHECK(LogHas(log, "ZVI"));
   CHECK(st.cadSurfaces[0].tin == tin);
+  for (const CadFilledRegion& region : st.cadFilledRegions)
+    for (size_t i = 0; i + 2 < region.vertsXyz.size(); i += 3)
+      CHECK(std::hypot(region.vertsXyz[i] - 50.0, region.vertsXyz[i + 1] - 50.0) <= 10.0 + 1.e-8);
+}
+
+TEST_CASE("ZVI refuses when no clipped cell has complete surface coverage", "[surface][req510]") {
+  AppCommandState st;
+  AddGround(st, "EG");
+  auto tiny = std::make_shared<CadTin>();
+  tiny->vertsXyz = {49.9,49.9,2, 50.1,49.9,2, 50.1,50.1,2, 49.9,50.1,2};
+  tiny->indices = {0,1,2, 0,2,3};
+  st.cadSurfaces[0].tin = tiny;
+  const std::uint32_t revision = st.cadGpuRevision;
+  std::vector<std::string> log;
+  Type(st, "SURFACEVISIBILITY EG, ZVI, 50, 50, 2, 1, 100", log);
+  CHECK(st.cadFilledRegions.empty());
+  CHECK(st.cadGpuRevision == revision);
+  CHECK(LogHas(log, "requested area has no surface coverage"));
+}
+
+TEST_CASE("Surface LOS reports the first terrain intersection on a TIN face", "[surface][req510]") {
+  AppCommandState st;
+  CadSurface surface;
+  surface.name = "Ridge";
+  auto tin = std::make_shared<CadTin>();
+  tin->vertsXyz = {0,0,0, 50.1,0,1, 50.1,100,1, 0,100,0, 100,0,0, 100,100,0};
+  tin->indices = {0,1,2, 0,2,3, 1,4,5, 1,5,2};
+  surface.tin = tin;
+  st.cadSurfaces.push_back(surface);
+  st.cadSurfaceAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  Type(st, "SURFACEVISIBILITY Ridge, LOS, 0, 50, 0.5, 100, 50, 0.5", log);
+  REQUIRE(st.userLinesFlat.size() == 12);
+  CHECK(st.userLinesFlat[3] == Approx(25.1502).margin(0.003));
 }
 
 TEST_CASE("Crossing breakline decisions are local, undoable and persistent", "[surface][req509]") {
   AppCommandState st;
+  st.worldDocumentOriginX = 10000.0;
+  st.worldDocumentOriginY = 20000.0;
   st.userLinesFlat = {0, 50, 0, 100, 50, 0, 50, 0, 10, 50, 100, 10};
   st.userLineAttrs.resize(2);
   EnsureEntityIds(st);
@@ -215,12 +384,17 @@ TEST_CASE("Crossing breakline decisions are local, undoable and persistent", "[s
   const auto sourceLines = st.userLinesFlat;
   Type(st, "SURFCROSSBL EG, LIST", log);
   CHECK(LogHas(log, "breakline IDs"));
+  CHECK(LogHas(log, "10050.000000, 20050.000000"));
 
-  Type(st, "SURFCROSSBL EG, RESOLVE, 50, 50, AVERAGE", log);
+  Type(st, "SURFCROSSBL EG, RESOLVE, 10050, 20050, AVERAGE", log);
   REQUIRE(st.cadSurfaces[0].crossingCorrections.size() == 1);
   CHECK(st.cadSurfaces[0].crossingCorrections[0].kind == CadSurfaceCrossingCorrection::Kind::Average);
   CHECK(st.userLinesFlat == sourceLines);
   CHECK(st.cadSurfaces[0].tin != nullptr);
+  double crossingElevation = 0.0;
+  REQUIRE(TinElevationAt(st.cadSurfaces[0].tin->vertsXyz, st.cadSurfaces[0].tin->indices,
+                         50.0, 50.0, &crossingElevation));
+  CHECK(crossingElevation == Approx(5.0).margin(0.002));
 
   const std::string json = SerializeGoSurveyJson(st);
   AppCommandState reopened;
@@ -228,6 +402,247 @@ TEST_CASE("Crossing breakline decisions are local, undoable and persistent", "[s
   REQUIRE(reopened.cadSurfaces.size() == 1);
   REQUIRE(reopened.cadSurfaces[0].crossingCorrections.size() == 1);
   CHECK(reopened.cadSurfaces[0].crossingCorrections[0].x == Approx(50.0));
+}
+
+TEST_CASE("Surface labels query and track their source surface", "[surface][req506]") {
+  AppCommandState st;
+  AddGround(st, "EG");
+  std::vector<std::string> log;
+  Type(st, "SURFLABEL EG, SPOT, 25, 50", log);
+  REQUIRE(st.cadAnnotations.size() == 1);
+  CHECK(st.cadAnnotations[0].text == "Elev 4.5000");
+  CHECK(st.cadAnnotations[0].surfaceLabelForId != 0);
+  Type(st, "SURFLABEL EG, SLOPE, 10, 50, 90, 50", log);
+  REQUIRE(st.cadAnnotations.size() == 2);
+  CHECK(st.cadAnnotations[1].text == "Slope 10.0000%");
+  Type(st, "SURFLABEL EG, WATERSHED", log);
+  REQUIRE(st.cadAnnotations.size() >= 3);
+  CHECK(LogHas(log, "linked label(s) added"));
+
+  const std::string json = SerializeGoSurveyJson(st);
+  AppCommandState reopened;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(reopened, json, log));
+  CHECK(reopened.cadAnnotations[0].surfaceLabelForId == st.cadAnnotations[0].surfaceLabelForId);
+  CHECK(reopened.cadAnnotations[0].surfaceLabelValues == st.cadAnnotations[0].surfaceLabelValues);
+}
+
+TEST_CASE("Contour labels can repeat where a guide crosses the requested contour", "[surface][req506]") {
+  AppCommandState st;
+  AddGround(st, "EG");
+  std::vector<std::string> log;
+  Type(st, "SURFLABEL EG, CONTOUR, 7, 50, 50", log);
+  REQUIRE(st.cadAnnotations.size() == 1);
+  CHECK(st.cadAnnotations[0].text == "Elev 7.0000");
+  Type(st, "SURFLABEL EG, CONTOUR, 7, GUIDE, 0, 50, 100, 50, 0, 30", log);
+  REQUIRE(st.cadAnnotations.size() == 3);
+  for (const CadAnnotation& label : st.cadAnnotations) {
+    CHECK(label.surfaceLabelKind == 3);
+    CHECK(label.surfaceLabelValues[0] == Approx(7.0));
+  }
+  auto raisedTin = std::make_shared<CadTin>(*st.cadSurfaces[0].tin);
+  for (size_t i = 2; i < raisedTin->vertsXyz.size(); i += 3) raisedTin->vertsXyz[i] += 1.0;
+  st.cadSurfaces[0].tin = std::move(raisedTin);
+  BumpCadGpuCache(st);
+  TickSurfaceRebuilds(st, log);
+  for (const CadAnnotation& label : st.cadAnnotations)
+    CHECK(label.text == "Surface value unavailable");
+}
+
+TEST_CASE("Templates omit attached model images and their surface links", "[io][template][req424][req511]") {
+  namespace fs = std::filesystem;
+  AppCommandState st;
+  AddGround(st, "EG");
+  EnsureEntityIds(st);
+  CadRasterImage image;
+  image.id = 8001;
+  image.path = "source-drawing-ortho.png";
+  image.surfaceId = st.cadSurfaceAttrs[0].id;
+  st.cadRasterImages.push_back(image);
+  const fs::path path = fs::temp_directory_path() /
+      ("gosurvey-issue807-template-modelimages-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".gst");
+  std::vector<std::string> log;
+  REQUIRE(SaveGoSurveyTemplateFile(st, path.string().c_str(), log));
+  AppCommandState reopened;
+  REQUIRE(LoadGoSurveyTemplateFile(reopened, path.string().c_str(), log));
+  CHECK(reopened.cadRasterImages.empty());
+  CHECK(reopened.cadSurfaces.empty());
+  std::error_code ec;
+  fs::remove(path, ec);
+}
+
+TEST_CASE("Surface labels show unavailable after their TIN is removed", "[surface][req506]") {
+  AppCommandState st;
+  AddGround(st, "EG");
+  std::vector<std::string> log;
+  Type(st, "SURFLABEL EG, SPOT, 25, 50", log);
+  REQUIRE(st.cadAnnotations.size() == 1);
+  st.cadSurfaces[0].tin.reset();
+  const std::uint32_t drawingRevision = st.cadGpuRevision;
+  TickSurfaceRebuilds(st, log);
+  CHECK(st.cadAnnotations[0].text == "Surface value unavailable");
+  CHECK(st.cadGpuRevision == drawingRevision);
+}
+
+TEST_CASE("Surface analysis legends reflect configured ranges and persist their link", "[surface][req507]") {
+  AppCommandState st;
+  st.worldDocumentOriginX = 10000.0;
+  st.worldDocumentOriginY = 20000.0;
+  AddGround(st, "EG");
+  st.surfaceStyles[0].analysisMode = SurfaceAnalysisMode::Elevation;
+  st.surfaceStyles[0].bands = {{5.0, "#00ff00"}, {10.0, "#ff0000"}};
+  st.cadSurfaces[0].styleName = st.surfaceStyles[0].name;
+  std::vector<std::string> log;
+  Type(st, "SURFACELEGEND EG, ELEVATION, 10005, 20005", log);
+  REQUIRE(st.cadTables.size() == 1);
+  CHECK(st.cadTables[0].insX == Approx(5.f));
+  CHECK(st.cadTables[0].insY == Approx(5.f));
+  CHECK(st.cadTables[0].cells.size() == 9);
+  CHECK(st.cadTables[0].cells[4] == "5.0000");
+  CHECK(st.cadTables[0].surfaceLegendForId != 0);
+  st.surfaceStyles[0].bands = {{2.0, "#00ff00"}, {4.0, "#ff0000"}};
+  RefreshSurfaceLegendTablesForStyle(st, st.surfaceStyles[0].name);
+  CHECK(st.cadTables[0].cells[4] == "2.0000");
+  CHECK(st.cadTables[0].cells[7] == "4.0000");
+  const std::string json = SerializeGoSurveyJson(st);
+  AppCommandState reopened;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(reopened, json, log));
+  REQUIRE(reopened.cadTables.size() == 1);
+  CHECK(reopened.cadTables[0].surfaceLegendForId == st.cadTables[0].surfaceLegendForId);
+}
+
+TEST_CASE("Create Profile samples an alignment and persists its placed graph", "[surface][req513]") {
+  AppCommandState st;
+  AddGround(st, "EG");
+  alignment::Alignment baseline;
+  baseline.id = 7001;
+  baseline.name = "BASELINE";
+  REQUIRE(baseline.AppendTangent({0.0, 50.0}, 90.0 * alignment::kPi / 180.0, 100.0));
+  st.alignments.push_back(baseline);
+  std::vector<std::string> log;
+  Type(st, "CREATEPROFILEFROMSURFACE EG, BASELINE, EG Profile, 25, 0, 0, 1, 2", log);
+  REQUIRE(st.surfaceProfiles.size() == 1);
+  const CadSurfaceProfile& profile = st.surfaceProfiles[0];
+  REQUIRE(profile.stations.size() == 5);
+  CHECK(profile.elevations[0] == Approx(GroundZ(0)).margin(0.002));
+  CHECK(profile.elevations[2] == Approx(GroundZ(50)).margin(0.002));
+  CHECK(profile.elevations[4] == Approx(GroundZ(100)).margin(0.002));
+  CHECK(profile.viewEntityIds.size() >= 6);
+  CHECK(st.userLineAttrs.size() == profile.viewEntityIds.size());
+
+  st.userLinesFlat.insert(st.userLinesFlat.end(), {200.f, 200.f, 0.f, 210.f, 200.f, 0.f});
+  EntityAttributes unrelated;
+  unrelated.id = st.nextEntityId++;
+  const std::uint64_t unrelatedId = unrelated.id;
+  st.userLineAttrs.push_back(unrelated);
+  st.selection.push_back({SelectedEntity::Type::LineSeg, static_cast<int>(st.userLineAttrs.size() - 1)});
+
+  auto rebuiltTin = SlopingGround();
+  for (size_t i = 2; i < rebuiltTin->vertsXyz.size(); i += 3) rebuiltTin->vertsXyz[i] += 1.0;
+  st.cadSurfaces[0].tin = rebuiltTin;
+  Type(st, "PROFILEVIEW EG Profile, 0, 0, 1, 2", log);
+  CHECK(st.surfaceProfiles[0].elevations[2] == Approx(GroundZ(50) + 1.0).margin(0.002));
+  REQUIRE(st.selection.size() == 1);
+  CHECK(st.selection[0].index == 0);
+  CHECK(st.userLineAttrs[static_cast<size_t>(st.selection[0].index)].id == unrelatedId);
+
+  // Alignment edits refresh saved profiles even when the source is a fixed imported TIN.
+  Type(st, "ALIGNMENTADD BASELINE, TANGENT, 10", log);
+  CHECK(st.surfaceProfiles[0].stations.back() == Approx(110.0));
+
+  st.alignments.clear();
+  const size_t oldSampleCount = st.surfaceProfiles[0].stations.size();
+  TickSurfaceRebuilds(st, log);
+  CHECK(st.surfaceProfiles[0].stations.size() == oldSampleCount);
+  CHECK(st.surfaceProfiles[0].sourceStatus == "Source alignment unavailable.");
+  CHECK(LogHas(log, "Profile \"EG Profile\" unavailable"));
+  st.alignments.push_back(baseline);
+  TickSurfaceRebuilds(st, log);
+  CHECK(st.surfaceProfiles[0].sourceStatus.empty());
+  CHECK(LogHas(log, "source is available again"));
+
+  const std::string json = SerializeGoSurveyJson(st);
+  AppCommandState reopened;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(reopened, json, log));
+  REQUIRE(reopened.surfaceProfiles.size() == 1);
+  CHECK(reopened.surfaceProfiles[0].alignmentId == 7001);
+  CHECK(reopened.surfaceProfiles[0].stations.size() == 5);
+  CHECK(reopened.surfaceProfiles[0].viewEntityIds == profile.viewEntityIds);
+}
+
+TEST_CASE("Surface profile gaps survive save and reopen as gaps", "[surface][req513]") {
+  AppCommandState st;
+  AddGround(st, "EG");
+  alignment::Alignment baseline;
+  baseline.id = 7001;
+  baseline.name = "BASELINE";
+  REQUIRE(baseline.AppendTangent({0.0, 50.0}, 90.0 * alignment::kPi / 180.0, 150.0));
+  st.alignments.push_back(baseline);
+  std::vector<std::string> log;
+  Type(st, "CREATEPROFILEFROMSURFACE EG, BASELINE, Partial, 25, 0, 0, 1, 2", log);
+  REQUIRE(st.surfaceProfiles.size() == 1);
+  REQUIRE(st.surfaceProfiles[0].elevations.size() == 7);
+  CHECK(std::isfinite(st.surfaceProfiles[0].elevations[4]));
+  CHECK_FALSE(std::isfinite(st.surfaceProfiles[0].elevations[5]));
+  const std::string json = SerializeGoSurveyJson(st);
+  AppCommandState reopened;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(reopened, json, log));
+  REQUIRE(reopened.surfaceProfiles.size() == 1);
+  CHECK(std::isfinite(reopened.surfaceProfiles[0].elevations[4]));
+  CHECK_FALSE(std::isfinite(reopened.surfaceProfiles[0].elevations[5]));
+}
+
+TEST_CASE("Asynchronous surface rebuild refreshes linked labels and profiles", "[surface][req506][req513]") {
+  AppCommandState st;
+  CadSurface surface;
+  surface.name = "EG";
+  surface.addedPointXyz = {0,0,2, 100,0,12, 100,100,12, 0,100,2};
+  st.cadSurfaces.push_back(surface);
+  st.cadSurfaceAttrs.push_back(EntityAttributes{});
+  EnsureEntityIds(st);
+  std::vector<std::string> log;
+  REQUIRE(BuildSurfaceFromSources(st, st.cadSurfaces[0], log));
+  alignment::Alignment baseline;
+  baseline.id = 7001;
+  baseline.name = "BASELINE";
+  REQUIRE(baseline.AppendTangent({0.0, 50.0}, 90.0 * alignment::kPi / 180.0, 100.0));
+  st.alignments.push_back(baseline);
+  Type(st, "SURFLABEL EG, SPOT, 25, 50", log);
+  Type(st, "CREATEPROFILEFROMSURFACE EG, BASELINE, EG Profile, 25, 0, 0, 1, 2", log);
+  REQUIRE(st.cadAnnotations.size() == 1);
+  REQUIRE(st.surfaceProfiles.size() == 1);
+  CHECK(st.cadAnnotations[0].text == "Elev 4.5000");
+  CHECK(st.surfaceProfiles[0].elevations[2] == Approx(7.0).margin(0.002));
+
+  for (size_t i = 2; i < st.cadSurfaces[0].addedPointXyz.size(); i += 3)
+    st.cadSurfaces[0].addedPointXyz[i] += 5.0;
+  CadSurface second;
+  second.name = "FG";
+  for (int row = 0; row <= 12; ++row)
+    for (int column = 0; column <= 12; ++column)
+      second.addedPointXyz.insert(second.addedPointXyz.end(),
+                                  {column * (100.0 / 12.0), row * (100.0 / 12.0),
+                                   20.0 + column * (10.0 / 12.0)});
+  st.cadSurfaces.push_back(std::move(second));
+  st.cadSurfaceAttrs.push_back(EntityAttributes{});
+  EnsureEntityIds(st);
+  REQUIRE(BuildSurfaceFromSources(st, st.cadSurfaces[1], log));
+  Type(st, "SURFLABEL FG, SPOT, 25, 50", log);
+  for (size_t i = 2; i < st.cadSurfaces[1].addedPointXyz.size(); i += 3)
+    st.cadSurfaces[1].addedPointXyz[i] += 5.0;
+  BumpCadGpuCache(st);
+  for (int attempt = 0; attempt < 400; ++attempt) {
+    TickSurfaceRebuilds(st, log);
+    if (st.surfaceRebuildAsync.empty() &&
+        st.cadSurfaces[0].builtAtRevision == st.cadGpuRevision &&
+        st.cadSurfaces[1].builtAtRevision == st.cadGpuRevision) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  CHECK(st.surfaceRebuildAsync.empty());
+  CHECK(st.cadAnnotations[0].text == "Elev 9.5000");
+  REQUIRE(st.cadAnnotations.size() == 2);
+  CHECK(st.cadAnnotations[1].text == "Elev 27.5000");
+  CHECK(st.surfaceProfiles[0].elevations[2] == Approx(12.0).margin(0.002));
 }
 
 TEST_CASE("A vertex off the surface refuses its whole entity, by name and count",

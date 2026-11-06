@@ -118,18 +118,17 @@ void main() {
 }
 )";
 
-// Textured quad — used for PDF underlay rendering
-// The PDF underlay's aPos is a vec2 in model XY at Z = 0, so its clip term takes the same
-// vec3(aPos, 0.0) the position does. An underlay is model content and clips with the rest of it.
+// Textured geometry — used for PDF underlays and terrain drapes. The VAO chooses vec2 XY for
+// underlays/map tiles (Z defaults to zero) or vec3 XYZ for draped TIN triangles.
 const char* kTexVs = R"(#version 330 core
-layout(location = 0) in vec2 aPos;
+layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec2 aUV;
 uniform mat4 uMVP;
 uniform vec4 uClipPlane;
 out vec2 vUV;
 void main() {
-  gl_Position = uMVP * vec4(aPos, 0.0, 1.0);
-  gl_ClipDistance[0] = dot(uClipPlane.xyz, vec3(aPos, 0.0)) + uClipPlane.w;
+  gl_Position = uMVP * vec4(aPos, 1.0);
+  gl_ClipDistance[0] = dot(uClipPlane.xyz, aPos) + uClipPlane.w;
   vUV = aUV;
 }
 )";
@@ -1499,6 +1498,9 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // not geometry that hides what is below the plane in an orbited view.
   if (tuning.mapTiles && !tuning.mapTiles->empty() && texProgram_ && vaoTex_ && vboTex_) {
     const GLboolean depthWasOn = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean depthWriteWasOn = GL_TRUE;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &depthWriteWasOn);
+    const GLboolean blendWasOn = glIsEnabled(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
     glUseProgram(texProgram_);
@@ -1510,28 +1512,59 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(vaoTex_);
     glBindBuffer(GL_ARRAY_BUFFER, vboTex_);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                          reinterpret_cast<const void*>(2 * sizeof(float)));
     std::vector<float>& verts = mapTileScratch_;
     for (const MapTileDraw& d : *tuning.mapTiles) {
       if (!d.texture || !d.xyuv || d.xyuv->empty())
         continue;
       const std::vector<double>& src = *d.xyuv;
       verts.resize(src.size());
-      for (size_t i = 0; i + 3 < src.size(); i += 4) {
+      const size_t stride = d.terrain ? 5 : 4;
+      if (src.size() % stride != 0) continue;
+      if (d.terrain) {
+        glEnable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      } else {
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_BLEND);
+      }
+      glVertexAttribPointer(0, d.terrain ? 3 : 2, GL_FLOAT, GL_FALSE,
+                            static_cast<GLsizei>(stride * sizeof(float)), nullptr);
+      glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(stride * sizeof(float)),
+                            reinterpret_cast<const void*>(static_cast<std::uintptr_t>((d.terrain ? 3 : 2) * sizeof(float))));
+      for (size_t i = 0; i + stride - 1 < src.size(); i += stride) {
         // Local → view-relative in double before narrowing, as every other pass does (REQ-101).
         verts[i] = static_cast<float>(src[i] - viewAnchorX);
         verts[i + 1] = static_cast<float>(src[i + 1] - viewAnchorY);
-        verts[i + 2] = static_cast<float>(src[i + 2]);
-        verts[i + 3] = static_cast<float>(src[i + 3]);
+        if (d.terrain) {
+          verts[i + 2] = static_cast<float>(src[i + 2]);
+          verts[i + 3] = static_cast<float>(src[i + 3]);
+          verts[i + 4] = static_cast<float>(src[i + 4]);
+        } else {
+          verts[i + 2] = static_cast<float>(src[i + 2]);
+          verts[i + 3] = static_cast<float>(src[i + 3]);
+        }
       }
       glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(float)), verts.data(),
                    GL_STREAM_DRAW);
       glBindTexture(GL_TEXTURE_2D, d.texture);
-      glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(verts.size() / 4));
+      glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(verts.size() / stride));
     }
     glBindVertexArray(0);
     glBindTexture(GL_TEXTURE_2D, 0);
+    glDepthMask(depthWriteWasOn);
     if (depthWasOn)
       glEnable(GL_DEPTH_TEST);
+    else
+      glDisable(GL_DEPTH_TEST);
+    if (blendWasOn)
+      glEnable(GL_BLEND);
+    else
+      glDisable(GL_BLEND);
   }
 
   // --- PDF underlays (rendered first, behind all CAD geometry) ---
@@ -1549,6 +1582,9 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(vaoTex_);
     glBindBuffer(GL_ARRAY_BUFFER, vboTex_);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                          reinterpret_cast<const void*>(2 * sizeof(float)));
 
     for (const PdfAttachment& att : *pdfAttachments) {
       if (!att.glTexId || att.pageWidthPts <= 0.f || att.pageHeightPts <= 0.f)

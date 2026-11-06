@@ -953,6 +953,8 @@ void RefreshAlignmentOffsetsOnly(AppCommandState& st, std::vector<std::string>& 
 void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log) {
   RefreshAlignmentOffsetsOnly(st, log);
   RefreshFeatureLineLinks(st, log);  // REQ-498.2: feature lines made from an alignment follow it
+  for (const alignment::Alignment& alignment : st.alignments)
+    RefreshSurfaceProfilesForAlignment(st, alignment.id, log);
 }
 
 // ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|DELTA|DIRECTION|CONSTRAINT, <value>

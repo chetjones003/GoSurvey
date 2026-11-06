@@ -9,6 +9,7 @@
 #include "DwgIo.hpp"
 #include "PdfAttach.hpp"
 #include "PdfPlot.hpp"
+#include "ProjectFiles.hpp"
 #include "cadpiperun.hpp"
 #include "HatchPat.hpp"
 #include <QColorDialog>
@@ -1096,6 +1097,13 @@ void EditorWindow::BuildRibbonPages() {
           } else if (id == "##TsVisCheck") {
             add("Line of Sight", "@surfaceVisibilityLos");
             add("Zone of Visual Influence", "@surfaceVisibilityZvi");
+          } else if (id == "##TsAddLabels") {
+            add("Spot Elevation", "@surfaceLabelSpot"); add("Slope", "@surfaceLabelSlope");
+            add("Contour Elevation", "@surfaceLabelContour"); add("Watershed Areas", "@surfaceLabelWatershed");
+          } else if (id == "##TsAddLegend") {
+            add("Elevation Ranges", "@surfaceLegendElevation"); add("Slope Ranges", "@surfaceLegendSlope");
+            add("Slope Arrows", "@surfaceLegendSlopeArrow"); add("Contour Values", "@surfaceLegendContour");
+            add("Watershed Areas", "@surfaceLegendWatershed");
           } else if (id == "##TsXBreak") {
             add("List Crossings", "@surfaceCrossingsList");
             add("Resolve Crossing...", "@surfaceCrossingsResolve");
@@ -1788,6 +1796,20 @@ void EditorWindow::RunRibbonAction(const QString& id) {
     const QString values = QInputDialog::getText(this, "Zone of visual influence", "observerX, observerY, eye height, target height, radius",
                                                   QLineEdit::Normal, {}, &accepted);
     if (accepted) Submit(Text(("SURFACEVISIBILITY " + surfaceName + ", ZVI, " + values.toStdString()).c_str()));
+  } else if (command.startsWith("@surfaceLabel") && surface >= 0) {
+    const QString kind = command.mid(QString("@surfaceLabel").size()).toUpper();
+    if (kind == "WATERSHED") Submit(Text(("SURFLABEL " + surfaceName + ", WATERSHED").c_str()));
+    else {
+      const QString prompt = kind == "SPOT" ? "X, Y" : kind == "SLOPE" ? "X1, Y1, X2, Y2" : "contour elevation, X, Y";
+      bool accepted = false;
+      const QString values = QInputDialog::getText(this, "Surface label", prompt, QLineEdit::Normal, {}, &accepted);
+      if (accepted) Submit(Text(("SURFLABEL " + surfaceName + ", " + kind.toStdString() + ", " + values.toStdString()).c_str()));
+    }
+  } else if (command.startsWith("@surfaceLegend") && surface >= 0) {
+    const QString kind = command.mid(QString("@surfaceLegend").size()).toUpper();
+    bool accepted = false;
+    const QString values = QInputDialog::getText(this, "Surface legend", "table insertion X, Y", QLineEdit::Normal, "0, 0", &accepted);
+    if (accepted) Submit(Text(("SURFACELEGEND " + surfaceName + ", " + kind.toStdString() + ", " + values.toStdString()).c_str()));
   } else if (command == "@surfaceCrossingsList" && surface >= 0) {
     Submit(Text(("SURFCROSSBL " + surfaceName + ", LIST").c_str()));
   } else if (command == "@surfaceCrossingsResolve" && surface >= 0) {
@@ -1810,6 +1832,63 @@ void EditorWindow::RunRibbonAction(const QString& id) {
   else if (command == "@surfaceAddPoint" && surface >= 0) StartSurfAddPointCommand(m_State, surfaceName, m_Log);
   else if (command == "@surfaceDeletePoint" && surface >= 0) StartSurfDelPointCommand(m_State, surfaceName, m_Log);
   else if (command == "@surfaceMovePoint" && surface >= 0) StartSurfMovePointCommand(m_State, surfaceName, m_Log);
+  else if (command == "@surfaceCreateProfile" && surface >= 0) {
+    bool accepted = false;
+    const QString values = QInputDialog::getText(this, "Create surface profile",
+        "alignment name, profile name, interval, view X, view Y, horizontal scale, vertical scale",
+        QLineEdit::Normal, {}, &accepted);
+    if (accepted) Submit(Text(("CREATEPROFILEFROMSURFACE " + surfaceName + ", " + values.toStdString()).c_str()));
+  }
+  else if (command == "@surfaceDataShortcut") {
+    QMessageBox chooser(QMessageBox::Question, "Surface data shortcut", "Choose a project shortcut action",
+                        QMessageBox::NoButton, this);
+    auto* create = chooser.addButton("Create Shortcut from Selected Surface", QMessageBox::AcceptRole);
+    auto* reference = chooser.addButton("Create Surface Reference", QMessageBox::AcceptRole);
+    chooser.addButton(QMessageBox::Cancel);
+    chooser.exec();
+    if (chooser.clickedButton() == create && surface >= 0)
+      CreateSurfaceDataShortcut(m_State, static_cast<size_t>(surface), m_Log);
+    else if (chooser.clickedButton() == reference) {
+      bool accepted = false;
+      const QString values = QInputDialog::getText(this, "Create surface reference",
+          "project-relative source drawing, surface ID, reference name", QLineEdit::Normal, {}, &accepted);
+      if (accepted) {
+        const QStringList fields = values.split(',');
+        bool idOk = false;
+        const qulonglong id = fields.size() == 3 ? fields[1].trimmed().toULongLong(&idOk) : 0;
+        if (!idOk || fields[0].trimmed().isEmpty() || fields[2].trimmed().isEmpty())
+          m_Log.push_back("Create Surface Reference — enter a registered source drawing, surface ID, and reference name.");
+        else
+          CreateSurfaceReference(m_State, fields[0].trimmed().toStdString(), static_cast<std::uint64_t>(id),
+                                 fields[2].trimmed().toStdString(), m_Log);
+      }
+    }
+  }
+  else if (command == "@surfaceDrapeImage" && surface >= 0) {
+    const QString path = QFileDialog::getOpenFileName(this, "Attach image to surface", {},
+        "Images (*.png *.jpg *.jpeg *.bmp)");
+    if (!path.isEmpty()) {
+      bool accepted = false;
+      const QString values = QInputDialog::getText(this, "Drape image", "lower-left X, Y, width, height, rotation degrees",
+          QLineEdit::Normal, "0, 0, 100, 100, 0", &accepted);
+      if (accepted) {
+        const QStringList fields = values.split(',');
+        float v[5]{};
+        bool valid = fields.size() == 5;
+        for (int i = 0; valid && i < 5; ++i) {
+          bool parsed = false;
+          v[i] = fields[i].trimmed().toFloat(&parsed);
+          valid = parsed && std::isfinite(v[i]);
+        }
+        if (!valid || v[2] <= 0.f || v[3] <= 0.f) {
+          m_Log.push_back("Drape Image — enter finite coordinates, positive width and height, and a finite rotation.");
+        } else if (AttachModelRasterImage(m_State, path.toUtf8().constData(), v[0], v[1], v[2], v[3],
+                      v[4] * static_cast<float>(3.14159265358979323846 / 180.0), m_Log)) {
+          SetModelRasterDrape(m_State, m_State.cadRasterImages.size() - 1, static_cast<size_t>(surface), m_Log);
+        }
+      }
+    }
+  }
   else if (command == "@surfaceDeleteLine" && surface >= 0) StartSurfDelLineCommand(m_State, surfaceName, m_Log);
   else if (command == "@surfaceSwapEdge" && surface >= 0) StartSurfSwapEdgeCommand(m_State, surfaceName, m_Log);
   else if (command == "@surfaceRebuild" && surface >= 0) Submit(Text(("SURFACEREBUILD " + surfaceName).c_str()));

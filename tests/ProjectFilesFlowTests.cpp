@@ -415,34 +415,50 @@ TEST_CASE("req379 Copy Links In repoints open drawings so the next save does not
 
   const fs::path outPdf = root.path / "outside" / "plan.pdf";
   const fs::path outCloud = root.path / "outside" / "site.e57";
+  const fs::path outRaster = root.path / "outside" / "ortho.png";
   WriteText(outPdf, "%PDF-1.4 stand-in");
   WriteText(outCloud, "scan");
+  WriteText(outRaster, "png stand-in");
   PdfAttachment pdf;
   pdf.filePath = outPdf.u8string();
   st.pdfAttachments.push_back(pdf);  // active tab
   st.cadPointClouds.push_back(Cloud(outCloud.u8string()));
+  CadRasterImage raster;
+  raster.path = outRaster.u8string();
+  st.cadRasterImages.push_back(raster);
   st.documents[2].pdfAttachments.push_back(pdf);  // the other tab holds the same link
   st.documents[2].cadPointClouds.push_back(Cloud(outCloud.u8string()));
+  st.documents[2].cadRasterImages.push_back(raster);
 
   const std::string egDwg = (s.project.Folder() / "Drawings" / "EG.dwg").u8string();
   WriteText(fs::u8path(egDwg), "dwg");
   SyncProjectFilesOnSave(st, 1, egDwg, log);
-  REQUIRE(ProjectHealthFor(st, 7).linked.size() == 2);
+  REQUIRE(ProjectHealthFor(st, 7).linked.size() == 3);
 
   size_t converted = 0;
   REQUIRE(CopyProjectLinksIn(st, 7, log, &converted));
-  CHECK(converted == 2);
+  CHECK(converted == 3);
 
   const std::string pdfCopy = (s.project.Folder() / "PDFs" / "plan.pdf").u8string();
   const std::string cloudCopy = (s.project.Folder() / "PointClouds" / "site.e57").u8string();
+  const std::string rasterCopy = (s.project.Folder() / "Points" / "ortho.png").u8string();
   REQUIRE(st.pdfAttachments.size() == 1);
   CHECK(st.pdfAttachments[0].filePath == pdfCopy);  // active tab
   REQUIRE(st.cadPointClouds.size() == 1);
   CHECK(st.cadPointClouds[0]->sourcePath == cloudCopy);
+  REQUIRE(st.cadRasterImages.size() == 1);
+  CHECK(fs::u8path(st.cadRasterImages[0].path) == fs::u8path(rasterCopy));
   REQUIRE(st.documents[2].pdfAttachments.size() == 1);
   CHECK(st.documents[2].pdfAttachments[0].filePath == pdfCopy);  // the tab that is not showing
   REQUIRE(st.documents[2].cadPointClouds.size() == 1);
   CHECK(st.documents[2].cadPointClouds[0]->sourcePath == cloudCopy);
+  REQUIRE(st.documents[2].cadRasterImages.size() == 1);
+  CHECK(fs::u8path(st.documents[2].cadRasterImages[0].path) == fs::u8path(rasterCopy));
+
+  // Reopening a packaged drawing resolves the source-machine path through its project attachment.
+  st.cadRasterImages[0].path = outRaster.u8string();
+  ApplyProjectFilesOnOpen(st, 7, egDwg, log);
+  CHECK(fs::u8path(st.cadRasterImages[0].path) == fs::u8path(rasterCopy));
 
   // The point of the fix: saving afterwards must not turn the copies back into links.
   SyncProjectFilesOnSave(st, 1, egDwg, log);

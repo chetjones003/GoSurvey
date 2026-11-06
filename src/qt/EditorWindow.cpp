@@ -2345,7 +2345,10 @@ void EditorWindow::OpenDrawing(const QString& path) {
     QMessageBox::warning(this, "Open drawing", "The drawing could not be opened. See the command log.");
   } else {
     m_State.activeDocFilePath = path.toUtf8().toStdString();
-    if (uid) ApplyProjectFilesOnOpen(m_State, uid, m_State.activeDocFilePath, m_Log);
+    if (uid) {
+      ApplyProjectFilesOnOpen(m_State, uid, m_State.activeDocFilePath, m_Log);
+      RefreshProjectSurfaceReferences(m_State, uid, m_Log);
+    }
     m_State.activeDocSavedRevision = m_State.cadGpuRevision;
     m_State.drawingTabs[m_State.activeDrawingIdx].name = QFileInfo(path).completeBaseName().toUtf8().toStdString();
     std::error_code ec;
