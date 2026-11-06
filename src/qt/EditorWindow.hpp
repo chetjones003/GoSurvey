@@ -101,7 +101,8 @@ private:
   void CancelDraftingInput();
   void ShowPolarSettings();
   void ShowSnapOverride(const QPoint& position);
-  void ShowContextualHelp();
+  /// The user manual, open at `topicCommand`'s page (empty: the running or last command's).
+  void ShowContextualHelp(const QString& topicCommand = {});
   void BuildPropertiesPanel();
   void RefreshProperties();
   void Refresh();
@@ -142,6 +143,14 @@ private:
   void ShowProjectPointWarning();
   void ShowPointTransfer(bool importing);
   void ShowSurveyReports();
+  /// REQ-486: the Alignment Layout table, docked like Civil 3D's Panorama, showing `name` (empty: keep the current one).
+  void ShowAlignmentLayout(const std::string& name);
+  /// Refills the docked Alignment Layout table when the drawing changed (called from Refresh).
+  void SyncAlignmentLayout();
+  /// REQ-485.1: shows, retitles or hides the Alignment Layout Tools window (called from Refresh).
+  void SyncAlignmentLayoutTools();
+  /// REQ-485: runs the Create Alignment dialog a command asked for and submits what it collected.
+  void ShowCreateAlignmentDialog(bool fromObjects);
   // Issue #893: surface and surface-style dialogs (EditorSurfaces / EditorSurfaceManager / EditorSurfaceStyles).
   void ShowCreateSurface();
   void ShowSurfaceProperties(int surfaceIndex);
@@ -205,6 +214,11 @@ private:
   FloatingCommandBar* m_CommandBar = nullptr;
   QFrame* m_DynamicInput = nullptr;
   QLabel* m_DynamicPrompt = nullptr;
+  QLabel* m_DynamicAlignment = nullptr;  ///< REQ-501.2: station / offset / bearing near an alignment
+  /// The dynamic input is showing for a command (its fields take typing and Enter). During a grip drag with no command
+  /// it may show only the alignment readout, and then takes no input.
+  bool m_DynamicInputForCommand = false;
+  [[nodiscard]] bool DynamicInputAcceptsInput() const;
   QLabel* m_DynamicLabels[3]{};
   QLineEdit* m_DynamicFields[3]{};
   dyninput::Group m_DynamicGroup;

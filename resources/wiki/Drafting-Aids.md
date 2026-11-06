@@ -52,6 +52,11 @@ current **world** X and Y at the display precision from `UNITS`. The active fiel
 
 Prompts that expect a bearing, angle, distance, option, or command name show a **single** field.
 
+**Near an alignment**, the dynamic input adds a line with the alignment's name and the cursor's station, offset
+(right of travel positive) and bearing, for example `Main Road  STA 2+83.70  OFF 7.6470  BRG 90°00'00.0"`. It shows
+while a point is being picked, and on its own while you drag an alignment's grip (then it reads the alignment as it
+was when you picked the grip). The status bar shows the same line.
+
 ---
 
 ## Elevation and the work plane — `ELEV` / `UCS`

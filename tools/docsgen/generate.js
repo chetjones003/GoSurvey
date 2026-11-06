@@ -23,7 +23,7 @@ const outDir = path.resolve(outDirArg);
 const GROUPS = [
   { title: "Start", pages: ["Getting Started", "User Interface", "Command Reference", "Keyboard Shortcuts"] },
   { title: "Draw & Edit", pages: ["Drawing Tools", "Modify Tools", "Object Selection", "Object Snaps", "Coordinate Input", "Drafting Aids", "Annotation", "Layers", "Properties"] },
-  { title: "Survey", pages: ["Survey Points", "Point Groups and Surfaces", "Traverse Editor", "Coordinate Alignment", "Inquiry Commands"] },
+  { title: "Survey", pages: ["Survey Points", "Point Groups and Surfaces", "Traverse Editor", "Alignments", "Coordinate Alignment", "Inquiry Commands"] },
   { title: "Output", pages: ["Views and Navigation", "Paper Space and Layouts", "Plotting", "PDF Underlays", "Import and Export", "Files and Drawings"] },
   { title: "Reference", pages: ["Settings and Options", "Command Line", "Workflows", "Troubleshooting", "FAQ", "Known Limitations"] },
 ];

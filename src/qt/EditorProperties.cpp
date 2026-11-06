@@ -11,7 +11,10 @@
 #include <QApplication>
 #include <QPainter>
 
+#include "AlignmentStyle.hpp"
+#include "alignment/AlignmentDesign.hpp"
 #include "CadColor.hpp"
+#include "CadCoordinateFrame.hpp"
 #include "CadLinetype.hpp"
 #include "CadPropertyEdit.hpp"
 #include "CadUiStyleWidgets.hpp"
@@ -19,6 +22,8 @@
 #include "util/NumFormat.hpp"
 
 #include <QColorDialog>
+#include <QTimer>
+#include <cstdio>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDockWidget>
@@ -128,6 +133,17 @@ void EditorWindow::RefreshProperties() {
   mix(st.annotationScales.size());
   mix(st.drawingLayerTable.size()); mix(static_cast<std::uint64_t>(st.activeDrawingIdx));
   mix(qHash(m_PropertiesNote));
+  // A selected alignment's own fields change without a geometry revision (criteria, name, station) - REQ-501.1.
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Alignment || e.index < 0 || static_cast<size_t>(e.index) >= st.alignments.size())
+      continue;
+    const alignment::Alignment& al = st.alignments[static_cast<size_t>(e.index)];
+    mix(std::hash<std::string>{}(al.name + '\n' + al.description + '\n' + al.layer + '\n' + al.style + '\n' + al.checkSetName));
+    mix(static_cast<std::uint64_t>(std::llround(al.startingStation * 1e6)));
+    mix(al.equations.size());
+    mix(al.designSpeeds.size());
+    mix(st.alignmentCheckSets.size());
+  }
   if (fp == m_PropertiesFingerprint && m_PropertiesScroll->widget()) return;
   m_PropertiesFingerprint = fp;
 
@@ -150,12 +166,16 @@ void EditorWindow::RefreshProperties() {
   auto fmt = [precision](double v) { return QString::fromStdString(FormatLinear(v, precision)); };
 
   // --- selection summary ------------------------------------------------------------------------
-  int nLine = 0, nCirc = 0, nText = 0, nOther = 0, nSurface = 0;
+  int nLine = 0, nCirc = 0, nText = 0, nOther = 0, nSurface = 0, nAlignment = 0;
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) ++nLine;
     else if (e.type == SelectedEntity::Type::Circle) ++nCirc;
     else if (e.type == SelectedEntity::Type::Annotation) ++nText;
-    else { ++nOther; if (e.type == SelectedEntity::Type::Surface) ++nSurface; }
+    else {
+      ++nOther;
+      if (e.type == SelectedEntity::Type::Surface) ++nSurface;
+      if (e.type == SelectedEntity::Type::Alignment) ++nAlignment;
+    }
   }
   const int total = static_cast<int>(st.selection.size());
   body->setProperty("propertiesPopulated", total > 0);
@@ -175,7 +195,9 @@ void EditorWindow::RefreshProperties() {
     else if (nLine) what = nLine == 1 ? "Line" : QString("%1 lines").arg(nLine);
     else if (nCirc) what = nCirc == 1 ? "Circle" : QString("%1 circles").arg(nCirc);
     else if (nText) what = nText == 1 ? "Text" : QString("%1 annotations").arg(nText);
-    else what = nSurface == nOther ? (nSurface == 1 ? QString("TIN Surface") : QString("%1 surfaces").arg(nSurface)) : QString("Other objects");
+    else if (nSurface == nOther) what = nSurface == 1 ? QString("TIN Surface") : QString("%1 surfaces").arg(nSurface);
+    else if (nAlignment == nOther) what = nAlignment == 1 ? QString("Alignment") : QString("%1 alignments").arg(nAlignment);
+    else what = "Other objects";
     summary = QString("Selected: %1 object%2 — %3").arg(total).arg(total == 1 ? "" : "s").arg(what);
   }
   auto* header = new QLabel(summary, body);
@@ -269,6 +291,23 @@ void EditorWindow::RefreshProperties() {
     grid->addWidget(row);
     return row;
   };
+  // REQ-501.1: an editable Properties field. Committing runs ALIGNMENTPROPS, so validation and undo match the command line.
+  // The panel is rebuilt on the next event-loop turn, not inside the edit's own signal.
+  auto editableAlignmentField = [&](QVBoxLayout* grid, const QString& label, const QString& value, const char* name,
+                                    const char* field, const std::string& alignmentName) {
+    auto* edit = new QLineEdit(value, body);
+    edit->setObjectName(name);
+    QObject::connect(edit, &QLineEdit::editingFinished, body, [this, edit, field, alignmentName]() {
+      const std::string command = "ALIGNMENTPROPS " + alignmentName + ", " + field + ", " + edit->text().toUtf8().toStdString();
+      char buf[1024];
+      std::snprintf(buf, sizeof buf, "%s", command.c_str());
+      std::vector<std::string> out;
+      ProcessCommandLineSubmit(buf, sizeof buf, m_State, out);
+      for (const std::string& line : out) m_Log.push_back(line);
+      QTimer::singleShot(0, this, [this]() { RefreshProperties(); });
+    });
+    addRow(grid, label, edit);
+  };
   auto readOnly = [&](QVBoxLayout* grid, const QString& label, const QString& value, const char* name) {
     auto* text = new QLabel(value, body);
     text->setObjectName(name);
@@ -332,9 +371,22 @@ void EditorWindow::RefreshProperties() {
     layer->addItems(layers);
     layer->setCurrentText(none ? QString::fromUtf8("\xE2\x80\x94") : general.layerMixed ? "(varies)" : Text(general.layer));
     layer->setEnabled(!none && general.count > 0);
-    connect(layer, &QComboBox::textActivated, layer, [this, finish](const QString& value) {
+    // An alignment keeps its layer on itself, not in the entity attributes: show it and set it with ALIGNMENTPROPS.
+    const bool oneAlignment = total == 1 && nAlignment == 1 && st.selection[0].index >= 0 &&
+                              static_cast<size_t>(st.selection[0].index) < st.alignments.size();
+    const std::string alignmentName = oneAlignment ? st.alignments[static_cast<size_t>(st.selection[0].index)].name : std::string();
+    if (oneAlignment) {
+      layer->setCurrentText(Text(st.alignments[static_cast<size_t>(st.selection[0].index)].layer));
+      layer->setEnabled(true);
+    }
+    connect(layer, &QComboBox::textActivated, layer, [this, finish, alignmentName](const QString& value) {
       const QString name = value.trimmed();
       if (name.isEmpty() || name == "(varies)") return;
+      if (!alignmentName.empty()) {  // the panel is rebuilt by the command, so not inside this combo's own signal
+        const QString command = Text(("ALIGNMENTPROPS " + alignmentName + ", LAYER, " + name.toUtf8().toStdString()).c_str());
+        QTimer::singleShot(0, this, [this, command] { Submit(command); });
+        return;
+      }
       const int n = CadApplyLayerToSelection(m_State, name.toUtf8().toStdString());
       if (n > 0) m_Log.push_back("LAYER — " + std::to_string(n) + " object(s) moved to layer \"" + name.toStdString() + "\".");
       finish({});
@@ -503,6 +555,11 @@ void EditorWindow::RefreshProperties() {
       dash->setEnabled(false);
       addRow(geometryRows, label, dash);
     }
+  } else if (nAlignment > 0 && nAlignment == total) {  // REQ-487: an alignment's geometry is edited with grips and its table
+    auto* note = new QLabel("Alignment geometry: see the Alignment section below, drag its grips, or open the Alignment Layout table (EDITALIGNMENT).", body);
+    note->setObjectName("propertiesAlignmentGeometryNote");
+    note->setWordWrap(true);
+    geometryRows->addWidget(note);
   } else if (!pure) {
     auto* mixed = new QLabel("Mixed object types — geometry is read-only here. Edit General above, or select only lines, circles, or text.", body);
     mixed->setObjectName("propertiesMixedNote");
@@ -719,6 +776,63 @@ void EditorWindow::RefreshProperties() {
       readOnly(rows, "Closed", sp.periodic ? "Yes" : "No", "propSplineClosed");
       readOnly(rows, "Point count", QString::number(spline::EditablePointCount(sp)), "propSplinePointCount");
       readOnly(rows, "Length", fmt(spline::Length(sp)), "propSplineLength");
+    }
+  }
+  if (st.selection.size() == 1 && st.selection.front().type == SelectedEntity::Type::Alignment) {  // REQ-501.1
+    const int index = st.selection.front().index;
+    if (index >= 0 && static_cast<size_t>(index) < st.alignments.size()) {
+      const alignment::Alignment& al = st.alignments[static_cast<size_t>(index)];
+      auto* rows = section("Alignment", "propertiesAlignment");
+      static const char* const kTypeNames[] = {"", "Centerline", "Offset", "Curb Return", "Miscellaneous", "Rail"};
+      editableAlignmentField(rows, "Name", Text(al.name), "propAlignmentName", "NAME", al.name);
+      editableAlignmentField(rows, "Description", Text(al.description), "propAlignmentDescription", "DESCRIPTION", al.name);
+      readOnly(rows, "Type", kTypeNames[static_cast<int>(al.type)], "propAlignmentType");
+      editableAlignmentField(rows, "Style", Text(al.style), "propAlignmentStyle", "STYLE", al.name);
+      editableAlignmentField(rows, "Layer", Text(al.layer), "propAlignmentLayer", "LAYER", al.name);
+      // Offsets name their parent by id (REQ-488).
+      QString parentName = QStringLiteral("(none)");
+      if (al.parentId != 0) {
+        for (const alignment::Alignment& other : st.alignments) {
+          if (other.id == al.parentId) parentName = Text(other.name);
+        }
+      }
+      readOnly(rows, "Parent alignment", parentName, "propAlignmentParent");
+      const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.alignmentStyles, al);
+      readOnly(rows, "Design criteria", criteriaName.empty() ? QStringLiteral("none") : Text(criteriaName),
+               "propAlignmentDesignCriteria");
+      // REQ-501.1 design criteria status: meets, or how many checks the alignment fails (REQ-502).
+      if (const alignment::AlignmentCheckSet* set = alignment::FindCheckSet(st.alignmentCheckSets, criteriaName)) {
+        const size_t findings = alignment::CheckDesign(al, *set, st.displayLinearPrecision).size();
+        readOnly(rows, "Design criteria status", findings == 0 ? QStringLiteral("Meets criteria")
+                                                               : QString("%1 violation(s)").arg(findings),
+                 "propAlignmentDesignStatus");
+      }
+      if (!al.Empty()) {
+        const double ox = CadCoord::WorldOriginX(st), oy = CadCoord::WorldOriginY(st);
+        const AngleDisplaySettings angles = CadAngleDisplaySettings(st);
+        constexpr double kRadToDeg = 180.0 / alignment::kPi;
+        editableAlignmentField(rows, "Start station", Text(alignment::FormatStation(al.StartStation(), st.alignmentStationFormat)), "propAlignmentStartStation",
+                               "START", al.name);
+        readOnly(rows, "End station", Text(alignment::FormatStation(al.EndStationWithEquations(), st.alignmentStationFormat)), "propAlignmentEndStation");
+        readOnly(rows, "Length", fmt(al.Length()), "propAlignmentLength");
+        readOnly(rows, "Start coordinate", fmt(al.StartPoint().x + ox) + ", " + fmt(al.StartPoint().y + oy),
+                 "propAlignmentStart");
+        readOnly(rows, "End coordinate", fmt(al.EndPoint().x + ox) + ", " + fmt(al.EndPoint().y + oy), "propAlignmentEnd");
+        readOnly(rows, "Start bearing", Text(FormatBearing(al.StartAzimuth() * kRadToDeg, angles)), "propAlignmentStartBearing");
+        readOnly(rows, "End bearing", Text(FormatBearing(al.EndAzimuth() * kRadToDeg, angles)), "propAlignmentEndBearing");
+      }
+      readOnly(rows, "Entity count", QString::number(al.Entities().size()), "propAlignmentEntities");
+      readOnly(rows, "Curve count", QString::number(al.CurveCount()), "propAlignmentCurves");
+      readOnly(rows, "Spiral count", QString::number(al.SpiralCount()), "propAlignmentSpirals");
+      readOnly(rows, "Continuity requirement", alignment::ContinuityRequirementLabel(al.continuityRequirement),
+                 "propAlignmentContinuityReq");
+      int continuityWarnings = 0;
+      for (const alignment::ContinuityIssue& c : al.CheckContinuity()) {
+        if (c.FailsRequirement(al.continuityRequirement)) ++continuityWarnings;
+      }
+      readOnly(rows, "Continuity status", continuityWarnings == 0 ? "OK" : QString("%1 warning(s)").arg(continuityWarnings),
+               "propAlignmentContinuityStatus");
+      readOnly(rows, "Station equations", QString::number(al.equations.size()), "propAlignmentEquations");
     }
   }
   if (!st.selectedSurveyPointIndices.empty()) {

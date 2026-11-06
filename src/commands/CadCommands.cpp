@@ -164,6 +164,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.pdSize                 = cmd.pdSize;
   doc.cadPipeRuns            = cmd.cadPipeRuns;      // pipe runs are per-drawing (issue #486 / REQ-345)
   doc.cadPipeRunAttrs        = cmd.cadPipeRunAttrs;
+  doc.alignments             = cmd.alignments;       // REQ-480: per-drawing
   doc.cadPipingSystems       = cmd.cadPipingSystems;  // indices into cadPipeRuns — travels with it
   doc.blockDefs              = cmd.blockDefs;
   doc.cadBlockRefs           = cmd.cadBlockRefs;
@@ -181,6 +182,10 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.pointVisibility        = cmd.pointVisibility;
   doc.textStyles             = cmd.textStyles;
   doc.surfaceStyles          = cmd.surfaceStyles;
+  doc.alignmentStyles        = cmd.alignmentStyles;
+  doc.alignmentCheckSets     = cmd.alignmentCheckSets;  // REQ-502
+  doc.alignmentLabelSets     = cmd.alignmentLabelSets;
+  doc.alignmentLabelStyles   = cmd.alignmentLabelStyles;  // REQ-492.5
   doc.dimensionStyle         = cmd.activeDimensionStyle;
   doc.dimensionStyles        = cmd.dimensionStyles;
   doc.multileaderStyle       = cmd.activeMultileaderStyle;
@@ -286,6 +291,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.pdSize                     = doc.pdSize;
   cmd.cadPipeRuns                = doc.cadPipeRuns;      // issue #486 / REQ-345
   cmd.cadPipeRunAttrs            = doc.cadPipeRunAttrs;
+  cmd.alignments                 = doc.alignments;       // REQ-480
   cmd.cadPipingSystems           = doc.cadPipingSystems;
   // The derived swept solids belong to the drawing we are leaving. Their rebuild is gated on a
   // signature over the runs alone, and the incoming drawing can legitimately hash the same (two
@@ -310,6 +316,13 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.pointVisibility            = doc.pointVisibility;
   cmd.textStyles                 = doc.textStyles;
   cmd.surfaceStyles              = doc.surfaceStyles;
+  cmd.alignmentCheckSets         = doc.alignmentCheckSets;  // REQ-502
+  cmd.alignmentStyles            = doc.alignmentStyles.empty() ? AlignmentStyles::DefaultAlignmentStyles()
+                                                               : doc.alignmentStyles;
+  cmd.alignmentLabelSets         = doc.alignmentLabelSets.empty() ? AlignmentLabelSets::DefaultAlignmentLabelSets()
+                                                                  : doc.alignmentLabelSets;
+  cmd.alignmentLabelStyles       = doc.alignmentLabelStyles.empty() ? AlignmentLabelStyles::DefaultAlignmentLabelStyles()
+                                                                    : doc.alignmentLabelStyles;  // REQ-492.5
   cmd.activeDimensionStyle       = doc.dimensionStyle;
   cmd.dimensionStyles            = doc.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : doc.dimensionStyles;
   cmd.activeMultileaderStyle     = doc.multileaderStyle;
@@ -1825,6 +1838,13 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
       }
       break;
     }
+    case SelectedEntity::Type::Alignment: {  // REQ-487.1: start, tangent ends, curve radius grips
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.alignments.size()) {
+        for (const alignment::Grip& g : alignment::GripPoints(cmd.alignments[static_cast<size_t>(sel.index)]))
+          tryGrip(sel, static_cast<float>(g.point.x), static_cast<float>(g.point.y), g.which);
+      }
+      break;
+    }
     default:
       break;
     }
@@ -1906,6 +1926,9 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
   }
   case SelectedEntity::Type::Spline:  // REQ-443
     cmd.entityGripOrigSpline = cmd.cadSplines[static_cast<size_t>(bestSel.index)];
+    break;
+  case SelectedEntity::Type::Alignment:  // REQ-487.1
+    cmd.entityGripOrigAlignment = cmd.alignments[static_cast<size_t>(bestSel.index)];
     break;
   default:
     break;
@@ -2131,6 +2154,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.pdSize               = st.pdSize;
   snap.cadPipeRuns          = st.cadPipeRuns;      // issue #486 / REQ-345
   snap.cadPipeRunAttrs      = st.cadPipeRunAttrs;
+  snap.alignments           = st.alignments;       // REQ-480
   snap.cadPipingSystems     = st.cadPipingSystems; // issue #486 increment B3 / REQ-345
   snap.blockDefs            = st.blockDefs;
   snap.cadBlockRefs         = st.cadBlockRefs;
@@ -2168,6 +2192,10 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.drawingLayerTable    = st.drawingLayerTable;
   snap.textStyles           = st.textStyles;  // style edits are undoable (REQ-044)
   snap.surfaceStyles        = st.surfaceStyles;  // and surface-style edits (REQ-070)
+  snap.alignmentStyles      = st.alignmentStyles;  // REQ-491
+  snap.alignmentCheckSets   = st.alignmentCheckSets;  // REQ-502
+  snap.alignmentLabelSets   = st.alignmentLabelSets;
+  snap.alignmentLabelStyles = st.alignmentLabelStyles;  // REQ-492.5
   snap.dimensionStyle       = st.activeDimensionStyle;  // dimension-style edits are undoable (issue #99)
   snap.dimensionStyles      = st.dimensionStyles;
   snap.multileaderStyle     = st.activeMultileaderStyle;
@@ -2252,6 +2280,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.pdSize               = snap.pdSize;
   st.cadPipeRuns          = snap.cadPipeRuns;      // issue #486 / REQ-345
   st.cadPipeRunAttrs      = snap.cadPipeRunAttrs;
+  st.alignments           = snap.alignments;       // REQ-480
   st.cadPipingSystems     = snap.cadPipingSystems; // issue #486 increment B3 / REQ-345
   st.pipeRunWorldSolidsSig = 0;  // force RebuildPipeRunWorldSolids to re-derive from the swap
   st.blockDefs            = snap.blockDefs;
@@ -2264,6 +2293,12 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.drawingLayerTable    = snap.drawingLayerTable;
   st.textStyles           = snap.textStyles;
   st.surfaceStyles        = snap.surfaceStyles;
+  st.alignmentStyles      = snap.alignmentStyles;
+  st.alignmentCheckSets   = snap.alignmentCheckSets;  // REQ-502
+  st.alignmentLabelSets   = snap.alignmentLabelSets.empty() ? AlignmentLabelSets::DefaultAlignmentLabelSets()
+                                                            : snap.alignmentLabelSets;
+  st.alignmentLabelStyles = snap.alignmentLabelStyles.empty() ? AlignmentLabelStyles::DefaultAlignmentLabelStyles()
+                                                              : snap.alignmentLabelStyles;  // REQ-492.5
   st.activeDimensionStyle = snap.dimensionStyle;
   st.dimensionStyles = snap.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : snap.dimensionStyles;
   st.activeMultileaderStyle = snap.multileaderStyle;
@@ -4866,6 +4901,8 @@ void RunQuickProfile(AppCommandState& st, const std::string& args, std::vector<s
     StartQuickProfileCommand(st, f[0], log);
     return;
   }
+  if (f.size() == 2 && !f[0].empty() && RunQuickProfileAlongAlignment(st, f[0], f[1], log))  // REQ-500 AC3
+    return;
   if (f.size() != 5 || f[0].empty()) {
     log.push_back("QUICKPROFILE — usage: QUICKPROFILE <surface>[, <x1>, <y1>, <x2>, <y2>].");
     return;
@@ -6348,6 +6385,10 @@ void RunCatchmentCommand(AppCommandState& st, const std::string& args, std::vect
 
 } // namespace
 
+std::unique_ptr<ISurfaceQuery> MakeSurfaceQueryForCommands(const AppCommandState& st, const CadSurface& surf) {
+  return MakeSurfaceQuery(st, surf);  // REQ-497: alignment commands read the same ground the QUICKPROFILE command does
+}
+
 void EnsureEntityIds(AppCommandState& st) {
   // Geometry has not changed since the last sweep, so nothing can be missing an id. This is what
   // lets callers invoke it unconditionally — including once a frame — without paying for a walk.
@@ -7527,6 +7568,45 @@ const CmdEntry kRegistry[] = {
     {"quickprofile", "qprof",
      "Quick profile along two points: QUICKPROFILE <surface>[, <x1>, <y1>, "
      "<x2>, <y2>]"},
+    {"alignment", "createalignment", "Create an alignment (no arguments: the Create Alignment dialog): ALIGNMENT <name>[, <description>[, <station>[, <layer>[, <style>]]]][, TYPE=][, LABELSET=]"},
+    {"alignmentadd", "", "Add tangent, curve or spiral: ALIGNMENTADD <name>, TANGENT|TANGENTTO|CURVE|CURVELEN|SPIRAL, ..."},
+    {"alignmentlist", "", "Report alignments, stations and entities: ALIGNMENTLIST [<name>]"},
+    {"alignmentdelete", "", "Delete an alignment: ALIGNMENTDELETE <name>"},
+    {"getstationoffset", "", "Station and offset of a point: GETSTATIONOFFSET <alignment>[, <x>, <y> | , POINT, <number>][, SURFACE=<surface>] (alignment alone: pick until ESC)"},
+    {"getpointfromstationoffset", "", "Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset>"},
+    {"createalignmentfromobjects", "createalignmententities", "Alignment from lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS (pick them) | <name>[, START=][, FILLET=][, REVERSE][, ERASE]"},
+    {"alignmentlayout", "", "Lay out an alignment by PIs: ALIGNMENTLAYOUT <name>[, CURVES|NOCURVES][, FROM=<x> <y>][, DIRECTION=<deg>]"},
+    {"alignmentcurvesettings", "", "Curve and spiral settings for the layout: ALIGNMENTCURVESETTINGS [RADIUS=][, SPIRALIN=][, SPIRALOUT=]"},
+    {"alignmentmeta", "", "Alignment metadata: ALIGNMENTMETA <alignment>, SET, <name>, <value> | REMOVE, <name> | LIST"},
+    {"stationformat", "", "How stations are written: STATIONFORMAT [DELIMITER=+|-|_|/|C|K|NONE][, DIGITS=][, DECIMALS=][, PREFIX=][, SUFFIX=] | DEFAULT"},
+    {"alignmentedit", "", "Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|STARTRADIUS|DELTA|DIRECTION|CONSTRAINT|DEGREE|TANGENTLENGTH|CHORD|EXTERNAL|MIDORDINATE|A, <value> | THROUGH, <x>, <y>"},
+    {"alignmentlock", "", "Lock a parameter: ALIGNMENTLOCK <name>, <entity#>, RADIUS|LENGTH|BEARING|STATION, ON|OFF"},
+    {"alignmentinsert", "", "Insert a tangent, curve or spiral: ALIGNMENTINSERT <name>, <after#>, TANGENT|CURVE|SPIRAL, ..."},
+    {"alignmentremove", "", "Remove an entity: ALIGNMENTREMOVE <name>, <entity#>"},
+    {"alignmentcontinuity", "", "Set or list continuity checks: ALIGNMENTCONTINUITY <name>, C0|C1|C2 | LIST"},
+    {"reversealignment", "", "Reverse alignment direction and stationing: REVERSEALIGNMENT <name>"},
+    {"alignmentstation", "", "Starting station, reference point and station equations: ALIGNMENTSTATION <name>, START|REFERENCE|EQ, ..."},
+    {"alignmentstyle", "", "Alignment display styles: ALIGNMENTSTYLE LIST|NEW|DELETE|ASSIGN|SHOW|HIDE|COLOR|SET|CURRENT|MARKER, ..."},
+    {"alignmentlabelset", "", "Alignment label sets: ALIGNMENTLABELSET LIST|NEW|DELETE|ASSIGN|MAJORINTERVAL|MINORINTERVAL|SHOW|HIDE|STYLE|GEOMETRY, ..."},
+    {"alignmentlabelstyle", "", "Alignment label styles (text style, height, colour, precision, prefix/suffix, orientation): ALIGNMENTLABELSTYLE LIST|NEW|DELETE|SET, ..."},
+    {"alignmentreport", "", "Alignment report (text/CSV): ALIGNMENTREPORT [<name>][, TXT|CSV[, <path>]]"},
+    {"offsetalignment", "", "Create offset alignments: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (L12 left, R12 right)"},
+    {"alignmentdetach", "", "Make a linked offset independent: ALIGNMENTDETACH <name>"},
+    {"alignmentintersect", "", "Intersections: ALIGNMENTINTERSECT <a>, <b> | <a>, LINE, ... | <a>, CIRCLE, ..."},
+    {"editalignment", "", "Open the Alignment Layout table: EDITALIGNMENT [<name>]"},
+    {"alignmentsurface", "", "Ground elevation along an alignment: ALIGNMENTSURFACE <alignment>, <surface>, STATION=<sta>[, OFFSET=<off>] | INTERVAL=<n>"},
+    {"alignmentlabel", "", "Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS | SEGMENT, <entity#> | CLEAR"},
+    {"featurelinefromalignment", "", "Feature line from an alignment: FEATURELINEFROMALIGNMENT <alignment>[, INTERVAL=<n>][, TOL=<n>][, SURFACE=<name> | Z=<value>]"},
+    {"alignmentprops", "", "Alignment properties: ALIGNMENTPROPS <alignment>, NAME|DESCRIPTION|STYLE|LAYER|START, <value>"},
+    {"alignmentinverse", "", "Distance along an alignment: ALIGNMENTINVERSE <alignment>, STA|PT, ... [, CHORD]"},
+    {"alignmentbearing", "", "Bearing at a station: ALIGNMENTBEARING <alignment>, <station>"},
+    {"alignmentdistance", "", "Distance along an alignment to a point: ALIGNMENTDISTANCE <alignment>, <x>, <y>"},
+    {"alignmentcheckset", "", "Design check sets: ALIGNMENTCHECKSET NEW|DELETE|LIST|SET|LOAD|SAVE, ..."},
+    {"alignmentcriteria", "", "Apply a check set to an alignment: ALIGNMENTCRITERIA <alignment>, <set>|NONE"},
+    {"alignmentspeed", "", "Design speed from a station: ALIGNMENTSPEED <alignment>, <station>, <speed>|CLEAR"},
+    {"alignmentcheck", "", "Check an alignment against its design criteria: ALIGNMENTCHECK <alignment>"},
+    {"editalignmentstyle", "", "Open the Alignment Style editor: EDITALIGNMENTSTYLE [<style>]"},
+    {"alignmenttable", "", "Insert a line, curve, spiral, segment or equation table: ALIGNMENTTABLE <name>, LINE|CURVE|SPIRAL|SEGMENT|EQUATIONS[, STATIC|DYNAMIC][, SPLIT=<rows>][, STYLE=<name>][, <x>, <y>]"},
     {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT [TABLE]"},
     {"voltable", "", "Insert a TABLE of the last volume report: VOLTABLE"},
     {"volcsv", "", "Write CSV of volume results: VOLCSV [<path>]"},
@@ -9036,6 +9116,21 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       hits.push_back(e);
     }
   }
+  // REQ-480: an alignment is tested as the curve it draws (sampled to a hundredth of a unit), by the same rule as
+  // the arc and spline above.
+  for (size_t ai = 0; ai < st.alignments.size(); ++ai) {
+    if (st.alignments[ai].Empty())
+      continue;
+    curvePts.clear();
+    for (const alignment::Point2& p : st.alignments[ai].SampleForDisplay(0.01))
+      curvePts.push_back(ray3d::Vec3{p.x, p.y, 0.0});
+    if (CurveHitsRect(curvePts)) {
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::Alignment;
+      e.index = static_cast<int>(ai);
+      hits.push_back(e);
+    }
+  }
   for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
     const CadPoint& p = st.cadPoints[pi];
     bool hit = false;
@@ -9778,9 +9873,56 @@ static void TransformSelectedPipeRuns(AppCommandState& st, PointFn pt, bool dupl
   }
 }
 
+/// REQ-487.1: map every selected alignment through \p fn (an Alignment transform that returns false to refuse), in place or,
+/// with \p duplicate, as a new INDEPENDENT alignment with a unique name and a fresh id. A linked offset that is moved is
+/// rebuilt from its parent afterwards, so it can never be left displaced from the geometry it is defined by.
+template <typename AlignFn>
+static void TransformSelectedAlignments(AppCommandState& st, AlignFn fn, bool duplicate) {
+  std::set<int> seen;
+  bool changed = false;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Alignment || e.index < 0 || static_cast<size_t>(e.index) >= st.alignments.size())
+      continue;
+    if (!seen.insert(e.index).second)
+      continue;
+    const size_t ix = static_cast<size_t>(e.index);
+    alignment::Alignment a = st.alignments[ix];
+    if (!fn(a))
+      continue;
+    if (duplicate) {
+      a.id = st.nextEntityId++;
+      a.parentId = 0;
+      a.name = UniqueAlignmentName(st, a.name);
+      a.equations = st.alignments[ix].equations;
+      st.alignments.push_back(std::move(a));
+    } else {
+      st.alignments[ix] = std::move(a);
+      changed = true;
+    }
+  }
+  if (changed) {
+    std::vector<std::string> quiet;
+    RefreshAlignmentOffsets(st, quiet);
+  }
+}
+
+static void TranslateSelectedAlignments(AppCommandState& st, double dx, double dy, bool duplicate) {
+  TransformSelectedAlignments(st, [&](alignment::Alignment& a) { a.Translate(dx, dy); return true; }, duplicate);
+}
+
 static void TranslateSelectedPipeRuns(AppCommandState& st, float dx, float dy, float dz, bool duplicate) {
   const ray3d::Vec3 d{static_cast<double>(dx), static_cast<double>(dy), static_cast<double>(dz)};
   TransformSelectedPipeRuns(st, [&](const ray3d::Vec3& p) { return ray3d::Add(p, d); }, duplicate);
+  if (dx != 0.f || dy != 0.f)
+    TranslateSelectedAlignments(st, static_cast<double>(dx), static_cast<double>(dy), duplicate);  // REQ-487.1
+}
+
+static void RotateSelectedAlignments(AppCommandState& st, const ray3d::Vec3& axisPoint, const ray3d::Vec3& axisUnit,
+                                     double angleRad, bool duplicate) {
+  if (std::fabs(axisUnit.z) < 1.0 - 1e-9)
+    return;  // an alignment is horizontal: only a vertical axis keeps it so
+  const double cw = -angleRad * (axisUnit.z > 0.0 ? 1.0 : -1.0);  // ray3d rotates counter-clockwise; azimuths run clockwise
+  TransformSelectedAlignments(st, [&](alignment::Alignment& a) { a.Rotate(axisPoint.x, axisPoint.y, cw); return true; }, duplicate);
 }
 
 static void RotateSelectedPipeRuns(AppCommandState& st, const ray3d::Vec3& axisPoint,
@@ -9789,6 +9931,7 @@ static void RotateSelectedPipeRuns(AppCommandState& st, const ray3d::Vec3& axisP
   TransformSelectedPipeRuns(
       st, [&](const ray3d::Vec3& p) { return ray3d::RotatePointAboutAxis(p, axisPoint, axisUnit, rad); },
       duplicate);
+  RotateSelectedAlignments(st, axisPoint, axisUnit, rad, duplicate);  // REQ-487.1
 }
 
 /// MIRROR's solids and pipe runs, across the plane through \p planePoint with unit normal
@@ -9802,6 +9945,11 @@ static void MirrorSelectedSolidsAndPipeRuns(AppCommandState& st, const ray3d::Ve
   TransformSelectedPipeRuns(
       st, [&](const ray3d::Vec3& p) { return ray3d::ReflectPointAcrossPlane(p, planePoint, planeUnit); },
       /*duplicate=*/true);
+  if (std::fabs(planeUnit.z) < 1e-9) {  // REQ-487.1: a vertical mirror plane keeps an alignment horizontal
+    const double px = planePoint.x, py = planePoint.y;
+    TransformSelectedAlignments(
+        st, [&](alignment::Alignment& a) { return a.Mirror(px, py, px - planeUnit.y, py + planeUnit.x); }, /*duplicate=*/true);
+  }
 }
 
 // dz defaults to 0 so every existing 2D caller (COPY, ARRAY rectangular under the World UCS) is
@@ -12283,6 +12431,8 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
     TransformSelectedPipeRuns(
         st, [&](const ray3d::Vec3& p) { return ray3d::Add(base, ray3d::Scale(ray3d::Sub(p, base), k)); },
         /*duplicate=*/false);
+    TransformSelectedAlignments(  // REQ-487.1: the plan scale; an alignment has no elevation to scale
+        st, [&](alignment::Alignment& a) { return a.Scale(static_cast<double>(bx), static_cast<double>(by), k); }, /*duplicate=*/false);
   }
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
@@ -15527,10 +15677,19 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     CommitIdPointAt(st, static_cast<float>(wx), static_cast<float>(wy), log);
     return;
   }
+  if (st.active == K::StationOffsetPick) {  // REQ-484.4
+    CommitStationOffsetPick(st, wx, wy, log);
+    return;
+  }
 
   if (st.active == K::GeoMarkPoint || st.active == K::GeoReorientMarker ||
       st.active == K::DrawingSettingsPick || st.active == K::GeoCaptureArea) {  // REQ-359 / 360 / 364
     SubmitGeoCommandPoint(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::AlignmentLayout || st.active == K::AlignmentFromObjects) {  // REQ-485
+    (void)SubmitAlignmentCommandPoint(st, wx, wy, log);
     return;
   }
 
@@ -23477,6 +23636,15 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
         consider(v.x, v.y);
     }
   }
+  // REQ-480 alignments: the exact geometry's bounds (arcs bounded by their extreme points), so ZOOM EXTENTS
+  // frames a drawing that holds only an alignment, grown to take in its labels (D-2026-11-04-c).
+  for (const alignment::Alignment& al : st.alignments) {
+    alignment::Point2 mn{}, mx{};
+    if (!AlignmentLabelSets::LabelledBounds(al, CadAlignmentLabelContext(st), &mn, &mx))
+      continue;
+    consider(mn.x, mn.y);
+    consider(mx.x, mx.y);
+  }
   for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
     if (EntityHiddenInViewport(vpFilter, st.cadPointAttrs, pi))
       continue;
@@ -23864,6 +24032,20 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       b.cy = 0.5 * (b.mnY + b.mxY);
       out.push_back(b);
     }
+  }
+  for (const alignment::Alignment& al : st.alignments) {  // REQ-480, with its labels (D-2026-11-04-c)
+    alignment::Point2 mn{}, mx{};
+    if (!AlignmentLabelSets::LabelledBounds(al, CadAlignmentLabelContext(st), &mn, &mx))
+      continue;
+    EntityBox b{};
+    EntityBoxGrowZ(b, 0.0, true);
+    b.mnX = mn.x;
+    b.mxX = mx.x;
+    b.mnY = mn.y;
+    b.mxY = mx.y;
+    b.cx = 0.5 * (b.mnX + b.mxX);
+    b.cy = 0.5 * (b.mnY + b.mxY);
+    out.push_back(b);
   }
   for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
     if (EntityHiddenInViewport(vpFilter, st.cadPointAttrs, pi))
@@ -24404,6 +24586,10 @@ bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, 
     st.resolvedPointZValid = false;
     st.resolvedPointZTyped = false;
   }
+  if (TryParseAlignmentStationSnapStoragePoint(st, raw, lx, ly, outWorldZ, allowRelative, baseLocalX, baseLocalY))
+    return true;
+  if (!st.alignmentStationSnapRejectReason.empty())
+    return false;
   std::string xy;
   double typedZ = 0.0;
   bool hasZ = false;
@@ -28657,6 +28843,16 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
     }
     return;
   }
+  case SelectedEntity::Type::Alignment: {  // REQ-487.1: re-derive from the grabbed shape every move, through the solver
+    if (static_cast<size_t>(idx) >= st.alignments.size())
+      return;
+    alignment::Alignment moved;
+    (void)alignment::DragGrip(st.entityGripOrigAlignment, st.entityGripWhich, {static_cast<double>(x), static_cast<double>(y)}, &moved);
+    st.alignments[static_cast<size_t>(idx)] = std::move(moved);
+    std::vector<std::string> quiet;
+    RefreshAlignmentOffsets(st, quiet);
+    return;
+  }
   case SelectedEntity::Type::Circle: {
     if (static_cast<size_t>(idx) * 4 + 3 >= st.userCirclesCxCyZR.size())
       return;
@@ -29049,6 +29245,7 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadSplineAttrs.clear();
   st.cadPoints.clear();  // REQ-456
   st.cadPointAttrs.clear();
+  st.alignments.clear();  // REQ-480
   st.pdMode = 0;
   st.pdSize = 0.0;
   // Pipe runs are CAD geometry too (issue #486 / REQ-345). Left behind, an import into a drawing
@@ -29613,6 +29810,22 @@ static void EraseSelectedSolidsAndPipeRuns(AppCommandState& st) {
       }
     }
   }
+  // Alignments (REQ-480): erased with the solids and pipe runs, so MIRROR's delete-source takes them too. The
+  // caller's one undo snapshot already covers this removal. Offsets of an erased parent become independent.
+  {
+    std::set<int> alignIx;
+    for (const auto& e : st.selection) {
+      if (e.type == SelectedEntity::Type::Alignment && e.index >= 0 &&
+          static_cast<size_t>(e.index) < st.alignments.size())
+        alignIx.insert(e.index);
+    }
+    for (auto it = alignIx.rbegin(); it != alignIx.rend(); ++it)
+      st.alignments.erase(st.alignments.begin() + static_cast<std::ptrdiff_t>(*it));
+    if (!alignIx.empty()) {
+      std::vector<std::string> quiet;
+      RefreshAlignmentOffsetsOnly(st, quiet);  // feature links are checked by ExecuteDeleteSelection, which logs drops
+    }
+  }
 }
 
 void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) {
@@ -29825,6 +30038,8 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   }
 
   EraseSelectedSolidsAndPipeRuns(st);  // REQ-313 / issue #486; shared with MIRROR's erase-source
+  RefreshFeatureLineLinks(st, log);    // REQ-498.2: a feature line whose alignment was just erased says so here
+
 
   // TIN surfaces (REQ-068: "erasing a surface is undoable in one step" — the caller has already
   // pushed one snapshot for this whole erase, so removing it here is that one step).
@@ -31232,6 +31447,21 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
         bestD2 = std::min(bestD2, d2Segment(sp[i - 1].x, sp[i - 1].y, sp[i - 1].z, sp[i].x, sp[i].y, sp[i].z));
       consider(e, bestD2);
     }
+  }
+  // REQ-480: an alignment is measured against the chords of its display sampling, the metric the spline uses.
+  for (size_t ai = 0; ai < st.alignments.size(); ++ai) {
+    if (st.alignments[ai].Empty())
+      continue;
+    const std::vector<alignment::Point2> ap = st.alignments[ai].SampleForDisplay(0.01);
+    if (ap.size() < 2)
+      continue;
+    SelectedEntity e{};
+    e.type = SelectedEntity::Type::Alignment;
+    e.index = static_cast<int>(ai);
+    double bestD2 = 1e300;
+    for (size_t i = 1; i < ap.size(); ++i)
+      bestD2 = std::min(bestD2, d2Segment(ap[i - 1].x, ap[i - 1].y, 0.0, ap[i].x, ap[i].y, 0.0));
+    consider(e, bestD2);
   }
   for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
     const CadPoint& p = st.cadPoints[pi];
@@ -45827,11 +46057,16 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("OFFSET canceled.");
   else if (st.active == AppCommandState::Kind::IdPoint)
     log.push_back("ID canceled.");
+  else if (st.active == AppCommandState::Kind::StationOffsetPick)
+    log.push_back("GETSTATIONOFFSET ended.");
   else if (st.active == AppCommandState::Kind::GeoMarkPoint || st.active == AppCommandState::Kind::GeoMarkLatLong ||
            st.active == AppCommandState::Kind::GeoReorientMarker ||
            st.active == AppCommandState::Kind::DrawingSettingsPick ||
            st.active == AppCommandState::Kind::GeoCaptureArea)  // REQ-359 / REQ-360 / REQ-364
     log.push_back(std::string(AppCommandState::KindName(st.active)) + " canceled.");
+  else if (st.active == AppCommandState::Kind::AlignmentLayout ||
+           st.active == AppCommandState::Kind::AlignmentFromObjects)  // REQ-485
+    CancelAlignmentCommand(st, log);
   else if (st.active == AppCommandState::Kind::SurveyInverse)
     log.push_back("INVERSE canceled.");
   else if (st.active == AppCommandState::Kind::Dist)
@@ -46935,6 +47170,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       ProcessGradingCommandLine(st, line, log);
       return;
     }
+    // REQ-485: Enter finishes a layout, ends object picking and accepts the direction - consumed here for the reason
+    // every note in this block gives.
+    if (st.active == K::AlignmentLayout || st.active == K::AlignmentFromObjects) {
+      (void)HandleAlignmentCommandText(st, line, log);
+      return;
+    }
     // UCS / PLAN (REQ-154). A bare Enter is *meaningful* at several of their prompts — it takes the
     // <World> default, accepts an origin without an X-axis point, or accepts an X axis without a
     // third point — and it has to be handled HERE for the same reason FEATURELINE's is above: a
@@ -47837,6 +48078,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       st.bench.meshTriangleCount = 0;
       st.bench.solidCount = 0;
       st.bench.solidTriangleCount = 0;
+      st.bench.alignmentCount = 0;
+      st.bench.alignmentEntityCount = 0;
 
       // `BENCH SURFACE [points] [frames]` selects the surface cost profile (REQ-100 as amended,
       // ADR-028), `BENCH MESH [triangles] [frames]` the shaded-mesh one (REQ-100 (b)). All three
@@ -47870,6 +48113,21 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           if (issIdle >> v)
             frames = v;
           st.bench.solidCount = count;
+          StartFrameBudgetBench(st, 1, frames, log);
+          return;
+        }
+        // `BENCH ALIGNMENT [count] [entities] [frames]` — REQ-495 acceptance 4: 1 000 alignments of 100 entities.
+        if (lower == "alignment" || lower == "alignments") {
+          int count = 1000, entities = 100;
+          int v = 0;
+          if (issIdle >> v)
+            count = v;
+          if (issIdle >> v)
+            entities = v;
+          if (issIdle >> v)
+            frames = v;
+          st.bench.alignmentCount = std::clamp(count, 1, 100000);
+          st.bench.alignmentEntityCount = std::clamp(entities, 1, 100000);
           StartFrameBudgetBench(st, 1, frames, log);
           return;
         }
@@ -48294,6 +48552,32 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "surfacedelpoint" || plotTok == "sfdelpt" || plotTok == "surfacemovepoint" ||
         plotTok == "sfmovept" || plotTok == "surfdelline" || plotTok == "sfdelline" ||
         plotTok == "quickprofile" || plotTok == "qprof" ||
+        plotTok == "alignment" || plotTok == "createalignment" || plotTok == "alignmentadd" ||
+        plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "getstationoffset" ||
+        plotTok == "getpointfromstationoffset" || plotTok == "createalignmentfromobjects" ||
+        plotTok == "createalignmententities" || plotTok == "createalignmentlayout" ||
+        plotTok == "alignmentlayout" || plotTok == "alignmentcurvesettings" || plotTok == "stationformat" || plotTok == "alignmentmeta" ||
+        plotTok == "alignmentedit" ||
+        plotTok == "alignmentlock" ||
+        plotTok == "alignmentinsert" ||
+        plotTok == "alignmentremove" ||
+        plotTok == "alignmentcontinuity" ||
+        plotTok == "reversealignment" ||
+        plotTok == "reversealigndirection" ||
+        plotTok == "alignmentstation" ||
+        plotTok == "alignmentstyle" ||
+        plotTok == "alignmentlabelset" ||
+        plotTok == "alignmentlabelstyle" ||
+        plotTok == "alignmentreport" ||
+        plotTok == "offsetalignment" ||
+        plotTok == "alignmentdetach" ||
+        plotTok == "alignmentintersect" ||
+        plotTok == "editalignment" || plotTok == "alignmentsurface" || plotTok == "alignmentlabel" ||
+        plotTok == "alignmenttable" || plotTok == "editalignmentstyle" || plotTok == "featurelinefromalignment" ||
+        plotTok == "alignmentprops" || plotTok == "alignmentinverse" || plotTok == "alignmentbearing" ||
+        plotTok == "alignmentdistance" ||
+        plotTok == "alignmentcheckset" || plotTok == "alignmentcriteria" || plotTok == "alignmentspeed" ||
+        plotTok == "alignmentcheck" ||
         plotTok == "volreport" || plotTok == "voltable" || plotTok == "volcsv") {
       std::string rest;
       std::getline(issIdle, rest);
@@ -48318,6 +48602,88 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunSurfDelLine(st, rest, log);
       else if (plotTok == "quickprofile" || plotTok == "qprof")
         RunQuickProfile(st, rest, log);
+      else if (plotTok == "alignment" || plotTok == "createalignment" || plotTok == "createalignmentlayout")  // REQ-480 / 485
+        RunAlignmentCreate(st, rest, log);
+      else if (plotTok == "alignmentlayout")  // REQ-485.1
+        RunAlignmentLayout(st, rest, log);
+      else if (plotTok == "alignmentcurvesettings")
+        RunAlignmentCurveSettings(st, rest, log);
+      else if (plotTok == "stationformat")  // REQ-483.4
+        RunStationFormat(st, rest, log);
+      else if (plotTok == "alignmentmeta")  // REQ-480.1
+        RunAlignmentMeta(st, rest, log);
+      else if (plotTok == "createalignmententities")  // Civil 3D's command name for Create from Objects
+        RunCreateAlignmentFromObjects(st, rest, log);
+      else if (plotTok == "alignmentadd")
+        RunAlignmentAdd(st, rest, log);
+      else if (plotTok == "alignmentlist")
+        RunAlignmentList(st, rest, log);
+      else if (plotTok == "alignmentdelete")
+        RunAlignmentDelete(st, rest, log);
+      else if (plotTok == "getstationoffset")
+        RunGetStationOffset(st, rest, log);
+      else if (plotTok == "getpointfromstationoffset")
+        RunGetPointFromStationOffset(st, rest, log);
+      else if (plotTok == "createalignmentfromobjects")
+        RunCreateAlignmentFromObjects(st, rest, log);
+      else if (plotTok == "alignmentedit")
+        RunAlignmentEdit(st, rest, log);
+      else if (plotTok == "alignmentlock")
+        RunAlignmentLock(st, rest, log);
+      else if (plotTok == "alignmentinsert")
+        RunAlignmentInsert(st, rest, log);
+      else if (plotTok == "alignmentremove")
+        RunAlignmentRemove(st, rest, log);
+      else if (plotTok == "alignmentcontinuity")
+        RunAlignmentContinuity(st, rest, log);
+      else if (plotTok == "reversealignment")
+        RunReverseAlignment(st, rest, log);
+      else if (plotTok == "reversealigndirection")
+        RunReverseAlignment(st, rest, log);
+      else if (plotTok == "alignmentstation")
+        RunAlignmentStation(st, rest, log);
+      else if (plotTok == "alignmentstyle")
+        RunAlignmentStyle(st, rest, log);
+      else if (plotTok == "alignmentlabelset")
+        RunAlignmentLabelSet(st, rest, log);
+      else if (plotTok == "alignmentlabelstyle")
+        RunAlignmentLabelStyle(st, rest, log);
+      else if (plotTok == "alignmentreport")
+        RunAlignmentReport(st, rest, log);
+      else if (plotTok == "offsetalignment")
+        RunOffsetAlignment(st, rest, log);
+      else if (plotTok == "alignmentdetach")
+        RunAlignmentDetach(st, rest, log);
+      else if (plotTok == "alignmentintersect")
+        RunAlignmentIntersect(st, rest, log);
+      else if (plotTok == "editalignment")
+        RunEditAlignment(st, rest, log);
+      else if (plotTok == "alignmentsurface")
+        RunAlignmentSurface(st, rest, log);
+      else if (plotTok == "alignmentlabel")
+        RunAlignmentLabel(st, rest, log);
+      else if (plotTok == "alignmenttable")
+        RunAlignmentTable(st, rest, log);
+      else if (plotTok == "editalignmentstyle")
+        RunEditAlignmentStyle(st, rest, log);
+      else if (plotTok == "featurelinefromalignment")
+        RunFeatureLineFromAlignment(st, rest, log);
+      else if (plotTok == "alignmentprops")
+        RunAlignmentProps(st, rest, log);
+      else if (plotTok == "alignmentinverse")
+        RunAlignmentInverse(st, rest, log);
+      else if (plotTok == "alignmentbearing")
+        RunAlignmentBearing(st, rest, log);
+      else if (plotTok == "alignmentdistance")
+        RunAlignmentDistance(st, rest, log);
+      else if (plotTok == "alignmentcheckset")
+        RunAlignmentCheckSet(st, rest, log);
+      else if (plotTok == "alignmentcriteria")
+        RunAlignmentCriteria(st, rest, log);
+      else if (plotTok == "alignmentspeed")
+        RunAlignmentSpeed(st, rest, log);
+      else if (plotTok == "alignmentcheck")
+        RunAlignmentCheck(st, rest, log);
       else if (plotTok == "volreport")
         RunVolReport(st, rest, log);
       else if (plotTok == "voltable")
@@ -48556,6 +48922,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
 
   if (HandleGeoCommandText(st, line, log))  // REQ-359: GEOMARKLATLONG / GEOMARKPOINT / GEOREORIENTMARKER
     return;
+  if (HandleAlignmentCommandText(st, line, log))  // REQ-485: ALIGNMENTLAYOUT / CREATEALIGNMENTFROMOBJECTS
+    return;
 
   if (st.active == K::IdPoint) {
     float px = 0.f;
@@ -48565,6 +48933,16 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     CommitIdPointAt(st, px, py, log);
+    return;
+  }
+  if (st.active == K::StationOffsetPick) {  // REQ-484.4: a typed X,Y instead of a pick
+    float px = 0.f;
+    float py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
+      log.push_back("GETSTATIONOFFSET - pick in the viewport or type X,Y; ESC ends.");
+      return;
+    }
+    CommitStationOffsetPick(st, px, py, log);
     return;
   }
 
@@ -49426,6 +49804,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       SubmitLineVertex(st, px, py, log);
       return;
     }
+    if (!st.alignmentStationSnapRejectReason.empty()) {
+      log.push_back(st.alignmentStationSnapRejectReason);
+      st.alignmentStationSnapRejectReason.clear();
+      return;
+    }
 
     if (allowRel && st.segmentAngleLockActive) {
       float dist = 0.f;
@@ -50007,6 +50390,10 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
 
   if (st.active == K::IdPoint)
     return "ID: Pick point (OSNAP when enabled) or type X,Y — logs UCS World | ESC cancel";
+  if (st.active == K::StationOffsetPick)
+    return "GETSTATIONOFFSET: Pick point (OSNAP when enabled) or type X,Y — reports station and offset | ESC ends";
+  if (const char* alignmentPrompt = AlignmentCommandPrompt(st))  // REQ-485
+    return alignmentPrompt;
   if (st.active == K::GeoMarkPoint)  // REQ-359
     return "GEOMARKPOINT: Pick the position or type X,Y | ESC cancel";
   if (st.active == K::GeoMarkLatLong)
@@ -50896,6 +51283,7 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
     for (int i = 0; i < (int)cmd.userEllipses.size(); ++i)  addCad({SelectedEntity::Type::Ellipse, i});
     for (int i = 0; i < (int)cmd.cadSplines.size(); ++i)    addCad({SelectedEntity::Type::Spline, i});
     for (int i = 0; i < (int)cmd.cadPoints.size(); ++i)     addCad({SelectedEntity::Type::Point, i});
+    for (int i = 0; i < (int)cmd.alignments.size(); ++i)    addCad({SelectedEntity::Type::Alignment, i});  // REQ-480
     const int nPoly = std::max(0, (int)cmd.userPolylineOffsets.size() - 1);
     for (int i = 0; i < nPoly; ++i)   addCad({SelectedEntity::Type::Polyline, i});
     for (int i = 0; i < (int)cmd.cadAnnotations.size(); ++i) addCad({SelectedEntity::Type::Annotation, i});

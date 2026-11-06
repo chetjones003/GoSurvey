@@ -17,6 +17,8 @@
 #include "RecentDrawings.hpp"
 #include "ThumbnailCache.hpp"
 #include "MapTileService.hpp"
+#include <array>
+
 #include <QDateTime>
 #include <QKeyEvent>
 #include <QLineF>
@@ -520,6 +522,11 @@ void EditorViewport::CancelSelectionBox() {
 // Escape or right-click during a grip drag puts the object back exactly as it was. Returns whether a grip
 // edit was in progress, so the caller can stop there rather than also cancelling the command.
 bool EditorViewport::CancelGripEdit() {
+  if (m_State.alignLabelDragActive) {  // REQ-492.5: put a dragged station label back where it was
+    std::vector<std::string> cancelLog;
+    FinishAlignmentLabelDrag(m_State, false, cancelLog);
+    return true;
+  }
   if (m_State.entityGripMoveActive) {
     RestoreEntityGripOriginal(m_State);
     ClearEntityGripInteraction(m_State);
@@ -676,6 +683,8 @@ void EditorViewport::paintGL() {
     ext.circleNormals = &m_State.userCircleNormals;
     ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
     ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
+    ext.alignments = &m_State.alignments;
+    ext.alignmentStyles = &m_State.alignmentStyles;
     ext.points = &m_State.cadPoints; ext.pointAttrs = &m_State.cadPointAttrs;
     ext.pdMode = m_State.pdMode;
     ext.pdSize = m_State.pdSize;
@@ -814,6 +823,8 @@ void EditorViewport::paintGL() {
     ext.circleNormals = &m_State.userCircleNormals;
     ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
     ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
+    ext.alignments = &m_State.alignments;
+    ext.alignmentStyles = &m_State.alignmentStyles;
     ext.points = &m_State.cadPoints; ext.pointAttrs = &m_State.cadPointAttrs;
     ext.pdMode = m_State.pdMode;
     ext.pdSize = m_State.pdSize;
@@ -854,6 +865,7 @@ void EditorViewport::paintGL() {
       RenderTuning tuning;
       tuning.bgR = 0.f; tuning.bgG = 0.f; tuning.bgB = 0.f;
       tuning.visualStyle = viewport.visualStyle;
+      ext.viewportFrozenLayers = &viewport.frozenLayers;
       m_Renderer->SetSize(viewW, viewH);
       m_Renderer->RenderScene(camera, viewW, viewH, m_State.userLinesFlat, m_State.userCirclesCxCyZR,
           m_State.cadGpuRevision + m_RenderRevision, {}, nullptr, 6.f, nullptr, nullptr, nullptr, nullptr,
@@ -1213,8 +1225,14 @@ void EditorViewport::paintGL() {
     DrawQtTransformAnnotationPreviews(painter, m_State, static_cast<float>(m_Cursor.x),
         static_cast<float>(m_Cursor.y), static_cast<float>(width()), static_cast<float>(height()));
     const Camera gripCamera = CadViewCamera(m_State);
+    // Objects picked for Create Alignment from Objects are highlighted, not offered for grip editing (as Civil 3D).
+    const bool pickingSources = m_State.active == AppCommandState::Kind::AlignmentFromObjects;
     for (const SelectedEntity& selected : m_State.selection) {
+      if (pickingSources) break;
       std::vector<ray3d::Vec3> grips;
+      // REQ-487.1: alignment grips carry their own id and Civil 3D's shape (0 square, 1 circle, 2 triangle).
+      std::vector<int> gripIds;
+      std::vector<int> gripShapes;
       switch (selected.type) {
         case SelectedEntity::Type::LineSeg: {
           const std::size_t k = static_cast<std::size_t>(selected.index) * 6;
@@ -1284,6 +1302,19 @@ void EditorViewport::paintGL() {
           }
           break;
         }
+        case SelectedEntity::Type::Alignment: {  // REQ-487.1
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.alignments.size()) {
+            for (const alignment::Grip& g : alignment::GripPoints(m_State.alignments[static_cast<std::size_t>(selected.index)])) {
+              grips.push_back({g.point.x, g.point.y, 0.0});
+              gripIds.push_back(g.which);
+              using GK = alignment::GripKind;
+              const bool circle = g.kind == GK::CurvePc || g.kind == GK::CurvePt || g.kind == GK::CurveMid ||
+                                  g.kind == GK::CurveCentre || g.kind == GK::SpiralMid;
+              gripShapes.push_back(g.kind == GK::Pi ? 2 : circle ? 1 : 0);
+            }
+          }
+          break;
+        }
         case SelectedEntity::Type::BlockRef: {
           if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.cadBlockRefs.size()) {
             const auto& ref = m_State.cadBlockRefs[static_cast<std::size_t>(selected.index)];
@@ -1320,13 +1351,36 @@ void EditorViewport::paintGL() {
         }
         default: break;
       }
+      if (selected.type == SelectedEntity::Type::Alignment && selected.index >= 0 &&
+          static_cast<std::size_t>(selected.index) < m_State.alignments.size()) {
+        // Like Civil 3D: dashed tangent extensions from each Free curve's PC and PT to its PI.
+        const alignment::Alignment& al = m_State.alignments[static_cast<std::size_t>(selected.index)];
+        painter.setPen(QPen(QColor("#3b82f6"), 1, Qt::DashLine));
+        painter.setBrush(Qt::NoBrush);
+        for (std::size_t e = 0; e < al.Entities().size(); ++e) {
+          alignment::CurveData cd;
+          if (al.Entities()[e].constraint != alignment::Entity::Constraint::Free ||
+              !al.CurveDataFor(static_cast<int>(e), &cd) || !cd.hasPI)
+            continue;
+          std::array<QPointF, 3> s{};
+          const std::array<alignment::Point2, 3> w{cd.pc, cd.pi, cd.pt};
+          for (std::size_t k = 0; k < w.size(); ++k) {
+            float sx = 0.f, sy = 0.f;
+            gripCamera.WorldToScreen(w[k].x, w[k].y, 0.0, static_cast<float>(width()), static_cast<float>(height()), &sx, &sy);
+            s[k] = QPointF(sx, sy);
+          }
+          painter.drawPolyline(s.data(), static_cast<int>(s.size()));
+        }
+      }
       for (std::size_t i = 0; i < grips.size(); ++i) {
         float x = 0.f, y = 0.f;
         gripCamera.WorldToScreen(grips[i].x, grips[i].y, grips[i].z,
             static_cast<float>(width()), static_cast<float>(height()), &x, &y);
         if (!std::isfinite(x) || !std::isfinite(y)) continue;
+        const int gripId = i < gripIds.size() ? gripIds[i] : static_cast<int>(i);
+        const int shape = i < gripShapes.size() ? gripShapes[i] : 0;
         const bool entityHot = m_State.entityGripMoveActive && m_State.entityGripType == selected.type &&
-            m_State.entityGripEntityIndex == selected.index && m_State.entityGripWhich == static_cast<int>(i);
+            m_State.entityGripEntityIndex == selected.index && m_State.entityGripWhich == gripId;
         const bool dimHot = selected.type == SelectedEntity::Type::Annotation && m_State.dimGripMoveActive &&
             m_State.dimGripAnnotationIndex == selected.index && m_State.dimGripWhich == static_cast<int>(i);
         const bool mtextHot = selected.type == SelectedEntity::Type::Annotation && m_State.mtextGripMoveActive &&
@@ -1334,7 +1388,14 @@ void EditorViewport::paintGL() {
         const bool hot = entityHot || dimHot || mtextHot;
         painter.setPen(QPen(Qt::white, 1));
         painter.setBrush(hot ? QColor("#f57842") : QColor("#3b82f6"));
-        painter.drawRect(QRectF(x - 4, y - 4, 8, 8));
+        if (shape == 1) {
+          painter.drawEllipse(QPointF(x, y), 4.5, 4.5);
+        } else if (shape == 2) {
+          const std::array<QPointF, 3> tri{QPointF(x, y - 6), QPointF(x - 5.5, y + 4), QPointF(x + 5.5, y + 4)};
+          painter.drawPolygon(tri.data(), static_cast<int>(tri.size()));
+        } else {
+          painter.drawRect(QRectF(x - 4, y - 4, 8, 8));
+        }
       }
     }
   }
@@ -1622,6 +1683,7 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     m_State.uiCursorWorldX = static_cast<float>(CadCoord::WorldXFromLocal(m_State, m_Cursor.x));
     m_State.uiCursorWorldY = static_cast<float>(CadCoord::WorldYFromLocal(m_State, m_Cursor.y));
     m_State.uiCursorWorldZ = static_cast<float>(m_Cursor.z);
+    m_State.alignmentCursorReadout = AlignmentCursorReadout(m_State, m_Cursor.x, m_Cursor.y, camera.orthoHalfH * 0.1);
     if (cursorChanged) cursorChanged(m_Cursor.x, m_Cursor.y, m_Cursor.z);
     if (submitLockedInput && submitLockedInput()) { event->accept(); update(); return; }
     if (m_State.active == AppCommandState::Kind::None && paperModifyActive &&
@@ -1743,6 +1805,15 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
           }
         }
       }
+    }
+    if (m_State.active == AppCommandState::Kind::None && !(event->modifiers() & Qt::ShiftModifier) &&
+        !projectReadOnly() &&
+        TryBeginAlignmentLabelDrag(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y),
+                                   camera.orthoHalfH * 12.f / static_cast<float>(std::max(1, height())))) {
+      m_GripMovedWithButton = false;  // REQ-492.5: a station label was grabbed, so the drag moves it
+      if (changed) changed();
+      update();
+      return;
     }
     if (m_State.active == AppCommandState::Kind::None && !m_State.selection.empty() &&
         !(event->modifiers() & Qt::ShiftModifier)) {
@@ -2240,6 +2311,10 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
                            static_cast<float>(m_Cursor.z));
       BumpCadGpuCache(m_State);
     }
+    if (m_State.alignLabelDragActive) {  // REQ-492.5: the label follows the cursor
+      if (event->buttons() & Qt::LeftButton) m_GripMovedWithButton = true;
+      ApplyAlignmentLabelDrag(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y));
+    }
     if (m_State.mtextGripMoveActive && m_State.mtextGripAnnotationIndex >= 0 &&
         static_cast<std::size_t>(m_State.mtextGripAnnotationIndex) < m_State.cadAnnotations.size()) {
       CadAnnotation& ann = m_State.cadAnnotations[static_cast<std::size_t>(m_State.mtextGripAnnotationIndex)];
@@ -2276,6 +2351,7 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
       if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &length)) ann.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
       BumpCadGpuCache(m_State);
     }
+    m_State.alignmentCursorReadout = AlignmentCursorReadout(m_State, m_Cursor.x, m_Cursor.y, camera.orthoHalfH * 0.1);
     if (cursorChanged) cursorChanged(m_Cursor.x, m_Cursor.y, m_Cursor.z);
   }
   update();
@@ -2284,6 +2360,14 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
 void EditorViewport::mouseReleaseEvent(QMouseEvent* event) {
   if (m_CubePressed && event->button() != Qt::MiddleButton) {  // the press was the ViewCube's
     m_CubePressed = false;
+    event->accept();
+    return;
+  }
+  if (event->button() == Qt::LeftButton && m_State.alignLabelDragActive) {  // REQ-492.5
+    FinishAlignmentLabelDrag(m_State, m_GripMovedWithButton, m_Log);
+    m_GripMovedWithButton = false;
+    if (changed) changed();
+    update();
     event->accept();
     return;
   }

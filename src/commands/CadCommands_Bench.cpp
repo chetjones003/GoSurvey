@@ -12,12 +12,40 @@
 #include "SurfaceStyle.hpp"
 #include "AppPaths.hpp"
 
+#include <cassert>
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
+
+namespace {
+
+/// REQ-495 acceptance 4 scene: `count` alignments on a square grid, each `entities` long, alternating 50-unit tangents
+/// and gentle curves so every alignment has true curves to sample. Ids start at `firstId`.
+std::vector<alignment::Alignment> BenchAlignmentScene(int count, int entities, std::uint64_t firstId) {
+  assert(count > 0 && entities > 0);
+  assert(count <= 100000 && entities <= 100000);
+  const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(count))));
+  std::vector<alignment::Alignment> out;
+  out.reserve(static_cast<size_t>(count));
+  for (int i = 0; i < count; ++i) {
+    alignment::Alignment a;
+    a.id = firstId + static_cast<std::uint64_t>(i);
+    a.name = "BENCH " + std::to_string(i + 1);
+    if (!a.AppendTangent({200.0 * (i % side), 5000.0 * (i / side)}, 0.0, 50.0)) continue;
+    for (int k = 1; k < entities; ++k) {
+      const bool ok = k % 2 == 0 ? a.AppendTangent(50.0) : a.AppendCurve(400.0, 30.0, (k / 2) % 2 == 0);
+      if (!ok) break;
+    }
+    out.push_back(std::move(a));
+  }
+  return out;
+}
+
+}  // namespace
 
 /// Install the bench scene, saving the user's polylines so the run cannot cost them their drawing.
 ///
@@ -49,6 +77,7 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   b.savedMeshAttrs = st.cadMeshAttrs;
   b.savedSolids = st.cadSolids;
   b.savedSolidAttrs = st.cadSolidAttrs;
+  b.savedAlignments = st.alignments;
   b.savedVisualStyle = st.viewportVisualStyle;
   b.savedAzimuthDeg = st.viewportAzimuthDeg;
   b.savedElevationDeg = st.viewportElevationDeg;
@@ -194,6 +223,15 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
       b.surfaceMinorIntervalFt = bstyle->minorIntervalFt;
       b.surfaceMajorIntervalFt = bstyle->majorIntervalFt;
     }
+  } else if (b.alignmentCount > 0) {
+    // REQ-495 acceptance 4: the alignments alone, so the number is their display cost and nothing else.
+    st.userPolylineVerts.clear();
+    st.userPolylineOffsets.clear();
+    st.userPolylineClosed.clear();
+    st.userPolylineAttrs.clear();
+    st.alignments = BenchAlignmentScene(b.alignmentCount, b.alignmentEntityCount, st.nextEntityId);
+    st.nextEntityId += static_cast<std::uint64_t>(b.alignmentCount);
+    b.segmentCount = 0;
   } else {
     b.segmentCount = benchscene::BuildContourScene(segments, &st.userPolylineVerts, &st.userPolylineOffsets,
                                                    &st.userPolylineClosed);
@@ -229,6 +267,18 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   // The solid profile frames from the solids' ANALYTIC bounds instead — there is no vertex array to
   // walk, and a sphere's two stored vertices would frame a line segment rather than a scene, putting
   // most of the geometry off screen and measuring a viewport with nothing in it.
+  if (b.alignmentCount > 0) {
+    for (const alignment::Alignment& al : st.alignments) {
+      alignment::Point2 lo, hi;
+      if (!al.Bounds(&lo, &hi)) continue;
+      mnX = std::min(mnX, lo.x);
+      mxX = std::max(mxX, hi.x);
+      mnY = std::min(mnY, lo.y);
+      mxY = std::max(mxY, hi.y);
+    }
+    mnZ = std::min(mnZ, 0.0);
+    mxZ = std::max(mxZ, 0.0);
+  }
   if (b.solidCount > 0) {
     for (const CadSolidPtr& sp : st.cadSolids) {
       if (!sp)
@@ -291,6 +341,8 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
     std::snprintf(scene, sizeof(scene), "%d triangles, Shaded", b.meshTriangleCount);
   else if (b.surfacePointCount > 0)
     std::snprintf(scene, sizeof(scene), "%d points", b.surfacePointCount);
+  else if (b.alignmentCount > 0)
+    std::snprintf(scene, sizeof(scene), "%d alignments x %d entities", b.alignmentCount, b.alignmentEntityCount);
   else
     std::snprintf(scene, sizeof(scene), "%d segments", b.segmentCount);
 
@@ -334,6 +386,7 @@ bool StartPointCloudBench(AppCommandState& st, const std::string& path, std::vec
   b.savedMeshAttrs = st.cadMeshAttrs;
   b.savedSolids = st.cadSolids;
   b.savedSolidAttrs = st.cadSolidAttrs;
+  b.savedAlignments = st.alignments;
   b.savedVisualStyle = st.viewportVisualStyle;
   b.savedAzimuthDeg = st.viewportAzimuthDeg;
   b.savedElevationDeg = st.viewportElevationDeg;
@@ -480,6 +533,8 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
     st.cadMeshAttrs = std::move(b.savedMeshAttrs);
     st.cadSolids = std::move(b.savedSolids);
     st.cadSolidAttrs = std::move(b.savedSolidAttrs);
+    st.alignments = std::move(b.savedAlignments);
+    b.savedAlignments.clear();
     st.viewportVisualStyle = b.savedVisualStyle;
     b.savedMeshes.clear();
     b.savedMeshAttrs.clear();
@@ -535,6 +590,9 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
                   b.surfacePointCount, b.surfaceTriangleCount,
                   SurfaceStyles::FormatFt(b.surfaceMinorIntervalFt).c_str(),
                   SurfaceStyles::FormatFt(b.surfaceMajorIntervalFt).c_str(), b.surfaceContourSegs);
+  } else if (b.alignmentCount > 0) {
+    profileName = "alignments";
+    std::snprintf(scene, sizeof(scene), "%d alignments x %d entities", b.alignmentCount, b.alignmentEntityCount);
   } else if (!b.pointCloudPath.empty()) {
     profileName = "point cloud";
     std::snprintf(scene, sizeof(scene), "%s, LOD target %lld points/frame",

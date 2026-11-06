@@ -4,6 +4,9 @@
 #include <limits>
 
 #include "CadEntities.hpp"
+#include "util/surfacequery.hpp"  // ISurfaceQuery, for MakeSurfaceQueryForCommands (REQ-497)
+#include "alignment/Alignment.hpp"  // REQ-480 / ADR-075: per-drawing alignment store
+#include "alignment/AlignmentDesign.hpp"  // REQ-502: check sets
 #include "CadDimGeom.hpp"
 #include "EntityId.hpp"
 // TextStyles::DefaultTextStyles, for the textStyles member's initializer (issue #57). Pure and
@@ -12,6 +15,8 @@
 // SurfaceStyles::DefaultSurfaceStyles, for the surfaceStyles member's initializer — same reason,
 // same shape, and pure for the same reason (REQ-070 / ADR-036 (d)).
 #include "SurfaceStyle.hpp"
+#include "AlignmentStyle.hpp"
+#include "AlignmentLabelSet.hpp"
 #include "DimensionStyle.hpp"
 #include "MultileaderStyle.hpp"
 #include "util/cadtablestyle.hpp"
@@ -150,7 +155,10 @@ struct SelectedEntity {
     /// STRETCH refuse it by name (\ref DropSplinesFromSelection).
     Spline = 19,
     /// CAD POINT (REQ-456 / issue #1019). Appended after Spline so existing type values stay stable.
-    Point = 20
+    Point = 20,
+    /// Horizontal alignment (REQ-480 / issue #121). Appended after Point so existing values stay stable.
+    /// Phase 1: selects, highlights, erases and reports; whole-object transforms arrive with Phase 2 editing.
+    Alignment = 21
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -852,6 +860,12 @@ struct CadExtendedGeometryInput {
   /// REQ-443 splines (NURBS curves), tessellated by the renderer to the view.
   const std::vector<CadSpline>* splines = nullptr;
   const std::vector<EntityAttributes>* splineAttrs = nullptr;
+  /// Horizontal alignments (REQ-480/495, issue #121). Drawn from the exact geometry, sampled for display only.
+  const std::vector<alignment::Alignment>* alignments = nullptr;
+  /// Named alignment styles (REQ-491); read when drawing each alignment entity.
+  const std::vector<AlignmentStyle>* alignmentStyles = nullptr;
+  /// Layers frozen in the paper-space viewport being drawn (REQ-028); alignments on them are not drawn (REQ-495.4).
+  const std::vector<std::string>* viewportFrozenLayers = nullptr;
   /// REQ-456 CAD POINT entities.
   const std::vector<CadPoint>* points = nullptr;
   const std::vector<EntityAttributes>* pointAttrs = nullptr;
@@ -924,6 +938,8 @@ template <class VT>
   if (e.blockRefs != nullptr && !e.blockRefs->empty())
     return true;
   if (e.splines != nullptr && !e.splines->empty())
+    return true;
+  if (e.alignments != nullptr && !e.alignments->empty())
     return true;
   if (e.points != nullptr && !e.points->empty())
     return true;
@@ -1377,6 +1393,7 @@ struct DrawingGeometrySnapshot {
   /// LoadBlockPrimitivesIntoDrawing), and cadPipeRuns simply arrived after that pass was written.
   std::vector<CadPipeRun>       cadPipeRuns;
   std::vector<EntityAttributes> cadPipeRunAttrs;
+  std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
   /// Named piping networks (issue #486 increment B3 / REQ-345) — swapped alongside `cadPipeRuns`
   /// for the same BEDIT-isolation reason the comment above states: a network's indices are only
   /// meaningful against the drawing's OWN `cadPipeRuns`, so it must travel with it, not stay behind.
@@ -1398,6 +1415,10 @@ struct DrawingGeometrySnapshot {
   /// in `AppCommandState::surfaceDisplayCache`, which no snapshot touches (ADR-036 (e)). That split is
   /// what lets a style edit be undoable without a single contour entering the undo stack.
   std::vector<SurfaceStyle>     surfaceStyles;
+  std::vector<AlignmentStyle>   alignmentStyles;
+  std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502: drawing-owned check sets
+  std::vector<AlignmentLabelSet> alignmentLabelSets;
+  std::vector<AlignmentLabelStyle> alignmentLabelStyles;  ///< REQ-492.5
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
   std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
@@ -1572,6 +1593,7 @@ struct DrawingDocument {
   /// data rebuilt from these by signature, exactly like `blockRefWorldSolids`.
   std::vector<CadPipeRun>       cadPipeRuns;
   std::vector<EntityAttributes> cadPipeRunAttrs;
+  std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
   std::vector<CadPipingSystem>  cadPipingSystems;
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef>        cadBlockRefs;
@@ -1590,6 +1612,10 @@ struct DrawingDocument {
   projpts::Rules                pointVisibility;        ///< REQ-377: per tab, which project points this drawing shows
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
+  std::vector<AlignmentStyle>   alignmentStyles;
+  std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502: drawing-owned check sets
+  std::vector<AlignmentLabelSet> alignmentLabelSets;        ///< Named alignment label sets (REQ-492).
+  std::vector<AlignmentLabelStyle> alignmentLabelStyles;    ///< Named alignment label styles (REQ-492.5).
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
   std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
@@ -2127,7 +2153,15 @@ struct AppCommandState {
     DataExtract,
     Table,
     PointTable,
+    /// REQ-485.1 ALIGNMENTLAYOUT: Tangent-Tangent layout, one PI per click or typed point; `U` takes one back.
+    AlignmentLayout,
+    /// REQ-485.2 CREATEALIGNMENTFROMOBJECTS: pick the objects, then accept or reverse the direction.
+    AlignmentFromObjects,
+    /// REQ-484.4 GETSTATIONOFFSET <alignment> with no point: each click (or typed X,Y) reports a station and offset,
+    /// until ESC. \ref stationOffsetPickArgs holds the alignment and any SURFACE= option.
+    StationOffsetPick,
   } active = Kind::None;
+  std::string stationOffsetPickArgs;
 
   static const char* KindName(Kind k) {
     switch (k) {
@@ -2149,6 +2183,7 @@ struct AppCommandState {
     case Kind::DataExtract:   return "DATAEXTRACTION";
     case Kind::Table:         return "TABLE";
     case Kind::PointTable:    return "ADDPOINTTABLE";
+    case Kind::StationOffsetPick: return "GETSTATIONOFFSET";
     case Kind::Text:          return "TEXT";
     case Kind::Mtext:         return "MTEXT";
     case Kind::Mleader:          return "MLEADER";
@@ -2234,6 +2269,8 @@ struct AppCommandState {
     case Kind::DrawingSettingsPick: return "DRAWINGSETTINGS";
     case Kind::GeoCaptureArea:     return "GEOCAPTUREAREA";
     case Kind::PadSolid:           return "PADSOLID";
+    case Kind::AlignmentLayout:    return "ALIGNMENTLAYOUT";
+    case Kind::AlignmentFromObjects: return "CREATEALIGNMENTFROMOBJECTS";
     default:                  return "";
     }
   }
@@ -2482,6 +2519,10 @@ struct AppCommandState {
     int solidCount = 0;
     /// Total tessellated triangles across the solid scene, filled in when the scene is built.
     int solidTriangleCount = 0;
+    /// REQ-495 acceptance 4: alignments in the alignment profile, each `alignmentEntityCount` entities long.
+    /// 0 = not the alignment profile.
+    int alignmentCount = 0;
+    int alignmentEntityCount = 0;
 
     /// REQ-100 profile (e) (TASK-270 §14): non-empty selects the point-cloud profile. Unlike every
     /// other profile, the scene is not synthesized — it is the real file at this path, imported
@@ -2515,6 +2556,7 @@ struct AppCommandState {
     std::vector<EntityAttributes> savedMeshAttrs;
     std::vector<CadSolidPtr> savedSolids;             ///< restored verbatim after a solid run
     std::vector<EntityAttributes> savedSolidAttrs;
+    std::vector<alignment::Alignment> savedAlignments;  ///< restored verbatim after an alignment run
     /// The mesh profile forces Shaded (REQ-100 (b) measures *shaded* meshes, and REQ-064's budget
     /// condition is stated in Shaded). Saved so a bench run cannot leave the user in a style they
     /// did not choose — which would also silently invalidate ADR-026 (e)'s 2D Wireframe parity.
@@ -2541,6 +2583,16 @@ struct AppCommandState {
   /// not one of the default running object snaps); reachable immediately via the Shift+right-click
   /// "snap once" override.
   bool objectSnapQuadrant = false;
+  /// Snap to a typed displayed station on an alignment (REQ-490). Default OFF; `STATION 12+45.32`
+  /// at a point prompt also resolves directly. While enabled, uses \ref objectSnapStationDisplayed when valid.
+  bool objectSnapStation = false;
+  bool objectSnapNode = true;  ///< REQ-490.2: drawing points and alignment PIs.
+  /// REQ-483.4: how this drawing writes and reads alignment stations (STATIONFORMAT).
+  alignment::StationFormat alignmentStationFormat;
+  bool objectSnapStationDisplayedValid = false;
+  double objectSnapStationDisplayed = 0.0;
+  /// Set when a `STATION …` point entry fails; cleared after the active command logs it (REQ-490).
+  std::string alignmentStationSnapRejectReason;
   bool objectSnapPerpendicular = true;
   bool objectSnapSurveyPoint = true;
   bool objectSnapGeometricCenter = true;
@@ -2782,6 +2834,7 @@ struct AppCommandState {
   double polarIncrementDeg = 90.0;
   std::vector<double> polarExtraAnglesDeg;
   /// Last drawing viewport cursor (world), updated each frame for LINE ortho distance entry.
+  std::string alignmentCursorReadout;  ///< REQ-501.2: station/offset/bearing under the cursor; UI-only, never saved
   float uiCursorWorldX = 0.f;
   float uiCursorWorldY = 0.f;
   /// Drawing viewport pan/zoom (local coordinates; pan is view center in storage space).
@@ -3585,6 +3638,7 @@ struct AppCommandState {
   /// solid array.
   std::vector<CadPipeRun> cadPipeRuns;
   std::vector<EntityAttributes> cadPipeRunAttrs;
+  std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
   std::vector<CadSolidPtr> pipeRunWorldSolids;
   std::vector<EntityAttributes> pipeRunWorldSolidAttrs;
   /// Which `cadPipeRuns` index each `pipeRunWorldSolids` entry came from (issue #486, selection
@@ -3627,6 +3681,45 @@ struct AppCommandState {
   /// Set by the Qt editor. ADDPOINTTABLE then opens the dialog instead of typed prompts.
   bool addPointTableDialogAvailable = false;
   bool addPointTableDialogRequested = false;
+  /// REQ-486.1: EDITALIGNMENT asks the Qt editor to open the Alignment Layout table on \ref alignmentLayoutName
+  /// (empty: the selected or first alignment). A headless run only reports it.
+  bool alignmentLayoutRequested = false;
+  std::string alignmentLayoutName;
+  /// REQ-491: EDITALIGNMENTSTYLE asks the Qt editor to open the style dialog on
+  /// The alignment style name is stored in alignmentStyleEditorName.
+  bool alignmentStyleEditorRequested = false;
+  std::string alignmentStyleEditorName;
+  /// REQ-485: set by the Qt editor. ALIGNMENT / CREATEALIGNMENT with no arguments then ask it for the Create Alignment
+  /// dialog, and CREATEALIGNMENTFROMOBJECTS asks for its dialog once the objects and direction are picked.
+  bool createAlignmentDialogAvailable = false;
+  bool createAlignmentDialogRequested = false;
+  bool alignmentFromObjectsDialogRequested = false;
+  /// REQ-485.1 Curve and Spiral Settings, kept for the session like Civil 3D's layout settings. A radius of 0 means
+  /// the drawing's default (100 ft, or 30 m in a metric drawing). Tangent-Tangent starts without curves, as Civil 3D's
+  /// layout toolbar does; the last mode chosen is kept.
+  alignment::CurveSettings alignmentCurveSettings{false, 0.0, 0.0, 0.0};
+  /// ALIGNMENTLAYOUT (Kind::AlignmentLayout): the PIs picked so far and the alignment as it was before the session, so
+  /// every PI rebuilds the tail from scratch and `U` can take one back.
+  struct AlignmentLayoutSession {
+    std::string name;
+    std::vector<alignment::Point2> pis;  ///< Drawing-local.
+    alignment::Alignment base;
+    bool snapshotTaken = false;
+    bool fixedDirection = false;  ///< The first tangent keeps the dialog's starting direction.
+    double directionAzimuth = 0.0;
+    size_t warningsShown = 0;
+  } alignmentLayout;
+  /// CREATEALIGNMENTFROMOBJECTS picks (Kind::AlignmentFromObjects). The picked objects live in `selection`, so the
+  /// command that finally creates the alignment reads them from there.
+  struct AlignmentFromObjectsPick {
+    enum class Phase : std::uint8_t { WaitFirst, WaitMore, WaitDirection } phase = Phase::WaitFirst;
+    bool hasPick = false;
+    double pickX = 0.0;  ///< Drawing-local point of the first pick: the alignment starts at the end nearest it.
+    double pickY = 0.0;
+    bool reverse = false;
+  } alignmentFromObjects;
+  /// REQ-485.1: the Alignment Layout Tools window follows this alignment while it is open.
+  std::string alignmentLayoutToolsName;
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
@@ -4425,6 +4518,14 @@ struct AppCommandState {
   /// REQ-443: the whole spline as it was when a grip drag began, so RMB / Esc restores it exactly (a Fit
   /// spline's control points are re-derived on every drag step, so there is no single coordinate to put back).
   CadSpline entityGripOrigSpline;
+  alignment::Alignment entityGripOrigAlignment;  ///< REQ-487.1: the alignment as it was when the grip was grabbed
+  /// REQ-492.5: a station label being dragged in the viewport. The label is moved live; the original is kept so a
+  /// cancel restores it and a commit can take its undo snapshot before the move.
+  bool alignLabelDragActive = false;
+  bool alignLabelDragMoved = false;
+  int alignLabelDragAlignment = -1;
+  int alignLabelDragIndex = -1;
+  alignment::StationOffsetLabel alignLabelDragOriginal;
   float entityGripOrigEllCx = 0.f, entityGripOrigEllCy = 0.f;
   float entityGripDownWorldX = 0.f; // reserved
   float entityGripDownWorldY = 0.f; // reserved
@@ -4903,6 +5004,12 @@ struct AppCommandState {
   /// document: a drawing that reaches the renderer with an empty table would be in a state the rest of
   /// the code is entitled to assume cannot happen.
   std::vector<SurfaceStyle> surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
+  std::vector<AlignmentStyle> alignmentStyles = AlignmentStyles::DefaultAlignmentStyles();
+  /// REQ-491 current style (the REQ-478 pattern): a new alignment uses it unless another style is named.
+  std::string alignmentStyleCurrent = "Standard";
+  std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502
+  std::vector<AlignmentLabelSet> alignmentLabelSets = AlignmentLabelSets::DefaultAlignmentLabelSets();
+  std::vector<AlignmentLabelStyle> alignmentLabelStyles = AlignmentLabelStyles::DefaultAlignmentLabelStyles();  ///< REQ-492.5
   /// Active text style for new TEXT/MTEXT (the STYLE dropdown). Empty resolves to "Standard".
   std::string activeTextStyleName = "Standard";
   /// Centralized dimension style (issue #99) — single active style used by DIMALIGNED/DIMLINEAR/DIMANGULAR.
@@ -6485,7 +6592,7 @@ void StartPolysolidCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The prompt line, computed rather than literal: it echoes the height, width and justification in
 /// force, which is what makes them discoverable without a separate report command (REQ-304).
 [[nodiscard]] std::string CadPolysolidPromptText(const AppCommandState& st);
-/// Handle one typed line: a coordinate, or one of `A L C U H W J O`. \return false if not consumed.
+/// Handle one typed line: a coordinate, or one of `A L C U H W J O`. \neturn false if not consumed.
 bool HandlePolysolidTextInput(const std::string& line, AppCommandState& st,
                               std::vector<std::string>& log);
 /// Handle a viewport click: a path point, or — at the `O`bject prompt — the entity to sweep along.
@@ -6503,7 +6610,7 @@ void CancelPolysolidCommand(AppCommandState& st);
 void StartRevcloudCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The prompt line, echoing the arc length and options in force.
 [[nodiscard]] std::string CadRevcloudPromptText(const AppCommandState& st);
-/// Handle one typed line: a coordinate, Enter, or one of `A R D O C U`. \return false if not consumed.
+/// Handle one typed line: a coordinate, Enter, or one of `A R D O C U`. \neturn false if not consumed.
 bool HandleRevcloudTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
 /// Handle a viewport click: a corner, or — at the `O`bject prompt — the shape to convert.
 void SubmitRevcloudViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
@@ -6534,7 +6641,7 @@ void StartPipeRunAtCurrentSize(AppCommandState& st, std::vector<std::string>& lo
 void ChoosePipeRunNominalSize(AppCommandState& st, const std::string& size);
 /// The prompt line, computed rather than literal: it echoes the phase and the size/class in force.
 [[nodiscard]] std::string CadPipeRunPromptText(const AppCommandState& st);
-/// Handle one typed line: the size/class line, a coordinate, or one of `U UNDO END`. \return false
+/// Handle one typed line: the size/class line, a coordinate, or one of `U UNDO END`. \neturn false
 /// if not consumed.
 bool HandlePipeRunTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
 /// Handle a viewport click: the run's start point, or a further vertex.
@@ -6570,7 +6677,7 @@ bool CadPipeFitNamedAtPick(AppCommandState& st, int runIdx, const std::string& b
 /// Handle a viewport click: the station point to splice the fitting in at. Always ends the command,
 /// success or refusal — there is nothing left to pick after one point.
 void SubmitPipeFitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
-/// Handle one typed line as a station point (`X,Y,Z`). \return false if not consumed.
+/// Handle one typed line as a station point (`X,Y,Z`). \neturn false if not consumed.
 bool HandlePipeFitTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
 
 // --- PIPESPLIT / PIPEJOIN / PIPEPROP (issue #486 increment B8 / REQ-345) --------------------------
@@ -6578,7 +6685,7 @@ bool HandlePipeFitTextInput(const std::string& line, AppCommandState& st, std::v
 void StartPipeSplitCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Handle a viewport click: the station point to split at. Always ends the command.
 void SubmitPipeSplitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
-/// Handle one typed line as a station point (`X,Y,Z`). \return false if not consumed.
+/// Handle one typed line as a station point (`X,Y,Z`). \neturn false if not consumed.
 bool HandlePipeSplitTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
 /// Merge the two selected `CadPipeRun`s into one — they must share the same nominal size and
 /// pressure class and have exactly one coincident endpoint between them. One-shot, no `Kind` state
@@ -6805,6 +6912,8 @@ void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
 /// across time (an in-flight rebuild, a cross-object link), use \ref FindSurfaceIndexById: a name
 /// can be changed, and an erased name can be taken by a different surface.
 [[nodiscard]] int FindSurfaceIndex(const AppCommandState& st, const std::string& name);
+/// REQ-497: the elevation reader for a built surface, in drawing-local coordinates; null when the surface is not built.
+[[nodiscard]] std::unique_ptr<ISurfaceQuery> MakeSurfaceQueryForCommands(const AppCommandState& st, const CadSurface& surf);
 
 /// Index of the surface whose stable entity id is \p id, or -1 when it does not resolve — erased, or
 /// never assigned (REQ-076 / ADR-036 (a)). `id == 0` always returns -1: 0 means "unassigned", so
@@ -7132,6 +7241,8 @@ inline void ClearEntityGripInteraction(AppCommandState& st) {
   st.entityGripLengthenMode = false;
 }
 
+void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log);
+
 inline void RestoreEntityGripOriginal(AppCommandState& st) {
   if (!st.entityGripMoveActive)
     return;
@@ -7160,6 +7271,14 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
     if (idx < 0 || static_cast<size_t>(idx) >= st.cadSplines.size())
       return;
     st.cadSplines[static_cast<size_t>(idx)] = st.entityGripOrigSpline;
+    break;
+  }
+  case SelectedEntity::Type::Alignment: {  // REQ-487.1
+    if (idx < 0 || static_cast<size_t>(idx) >= st.alignments.size())
+      return;
+    st.alignments[static_cast<size_t>(idx)] = st.entityGripOrigAlignment;
+    std::vector<std::string> quiet;
+    RefreshAlignmentOffsets(st, quiet);  // the linked offsets followed the drag; put them back with it
     break;
   }
   case SelectedEntity::Type::Polyline: {
@@ -7345,6 +7464,12 @@ float RotateDeltaFromReferenceAndNewSegment(float refX1, float refY1, float refX
 
 
 /// Build the angle-display settings (REQ-021) from the live UNITS state.
+/// The style tables and plot scale an alignment's labels are placed with (REQ-492.5).
+[[nodiscard]] inline AlignmentLabelSets::LabelContext CadAlignmentLabelContext(const AppCommandState& st) {
+  return AlignmentLabelSets::LabelContext{st.alignmentLabelSets, st.alignmentStyles, st.alignmentLabelStyles,
+                                          st.drawingInsUnits, static_cast<double>(st.modelUnitsPerPlottedInch)};
+}
+
 [[nodiscard]] inline AngleDisplaySettings CadAngleDisplaySettings(const AppCommandState& st) {
   return AngleDisplaySettings{static_cast<AngleDisplayType>(st.angleDisplayType), st.angleDisplayPrecision,
                               st.angleDisplayClockwise, st.angleDisplayBaseDeg};
@@ -8040,6 +8165,100 @@ struct DrawingTransformFactors {
 /// The inverse of \ref DrawingPointToGrid: the LOCAL drawing point (x, y) of a grid coordinate in the
 /// zone's unit. Fails, with the reason, exactly when DrawingPointToGrid would.
 [[nodiscard]] geo::GeoResult GridToDrawingPoint(const AppCommandState& st, double easting, double northing);
+
+// --- Alignments (REQ-480..485, 501; GitHub issue #121 Phase 1; CadCommands_Alignment.cpp) ----------------
+// Typed-argument commands, dispatched from ProcessCommandLineSubmit. Geometry lives in alignment/Alignment.hpp.
+void RunAlignmentCreate(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentAdd(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentDelete(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-484.4: reports the station and offset of one picked point (drawing-local) while GETSTATIONOFFSET picks.
+void CommitStationOffsetPick(AppCommandState& st, double lx, double ly, std::vector<std::string>& log);
+void RunGetPointFromStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunCreateAlignmentFromObjects(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+// REQ-485 interactive creation: ALIGNMENTLAYOUT picks PIs, CREATEALIGNMENTFROMOBJECTS without a name picks objects.
+void RunAlignmentLayout(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentCurveSettings(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// A click or snapped point for Kind::AlignmentLayout, or an object pick for Kind::AlignmentFromObjects (drawing-local).
+bool SubmitAlignmentCommandPoint(AppCommandState& st, double localX, double localY, std::vector<std::string>& log);
+/// Typed input (including a bare Enter) for the two alignment Kinds; false when neither is active.
+bool HandleAlignmentCommandText(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+/// ESC: the layout keeps what was built (as Civil 3D does); picking objects is abandoned.
+void CancelAlignmentCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Command-line prompt for the two alignment Kinds, or nullptr.
+const char* AlignmentCommandPrompt(const AppCommandState& st);
+/// "Alignment - (n)" with the first n not already used, like Civil 3D's default name.
+std::string NextAlignmentName(const AppCommandState& st);
+/// `base`, or "base (2)", "base (3)"... - the first not used; names are unique ignoring case (REQ-480, REQ-487 AC4).
+std::string UniqueAlignmentName(const AppCommandState& st, const std::string& base);
+/// STATIONFORMAT [DELIMITER=][, DIGITS=][, DECIMALS=][, PREFIX=][, SUFFIX=] | DEFAULT - REQ-483.4.
+void RunStationFormat(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// ALIGNMENTMETA <alignment>, SET, <name>, <value> | REMOVE, <name> | LIST - REQ-480.1 metadata.
+void RunAlignmentMeta(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// At the Reverse prompt of CREATEALIGNMENTFROMOBJECTS, the alignment the picks would make (for the direction arrows).
+/// False at other times or when the picks cannot make one.
+bool AlignmentFromObjectsPreview(const AppCommandState& st, alignment::Alignment* out);
+/// The picked start and Reverse answer as CREATEALIGNMENTFROMOBJECTS fields (", PICK=<x> <y>[, REVERSE]"), for the
+/// Create Alignment from Objects dialog to submit with its own fields.
+std::string AlignmentFromObjectsPickArgs(const AppCommandState& st);
+/// The curve radius the layout and Create from Objects use: the settings radius, else 100 ft (30 m metric).
+double EffectiveAlignmentCurveRadius(const AppCommandState& st);
+/// REQ-488.3: rebuilds every linked offset alignment from its parent (a vanished parent detaches it).
+void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log);
+void RunAlignmentEdit(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentLock(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentInsert(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentRemove(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentContinuity(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunReverseAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentLabelStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-492.5
+void RunAlignmentReport(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunOffsetAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentDetach(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunEditAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunEditAlignmentStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunFeatureLineFromAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentProps(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentInverse(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentBearing(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentDistance(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-502
+void RunAlignmentCriteria(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentSpeed(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentCheck(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-500: QUICKPROFILE <surface>, <alignment>. False only when no alignment has that name.
+bool RunQuickProfileAlongAlignment(AppCommandState& st, const std::string& surfaceName, const std::string& alignmentName,
+                                   std::vector<std::string>& log);
+/// REQ-498.2: rebuilds the feature lines made from alignments and logs any link it drops.
+void RefreshFeatureLineLinks(AppCommandState& st, std::vector<std::string>& log);
+/// Offsets and dynamic tables only: the form the erase path uses, so feature links are checked (and logged) once.
+void RefreshAlignmentOffsetsOnly(AppCommandState& st, std::vector<std::string>& log);
+void RunAlignmentSurface(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-492.5 viewport drag of a station label. Begin returns false when no label lies within \p tolWorld of (lx,ly).
+[[nodiscard]] bool TryBeginAlignmentLabelDrag(AppCommandState& st, float lx, float ly, float tolWorld);
+void ApplyAlignmentLabelDrag(AppCommandState& st, float lx, float ly);
+/// Commit (\p commit true) takes one undo step for the whole drag; cancel puts the label back where it was.
+void FinishAlignmentLabelDrag(AppCommandState& st, bool commit, std::vector<std::string>& log);
+void RunAlignmentLabel(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentTable(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-501.2: "STA 25+42.35  OFF -12.40  N 45d12'30" E" for the alignment nearest the LOCAL point (lx, ly), or an
+/// empty string when no alignment lies within \p maxOffset (drawing units). Read-only; used by the status bar.
+[[nodiscard]] std::string AlignmentCursorReadout(const AppCommandState& st, double lx, double ly, double maxOffset);
+/// REQ-490 station snap: resolve \p displayed on the alignment whose station point is nearest
+/// (\p preferLocalX, \p preferLocalY) in storage coordinates.
+[[nodiscard]] bool ResolveAlignmentStationSnapPoint(const AppCommandState& st, double displayed, float preferLocalX,
+                                                    float preferLocalY, float* outLx, float* outLy);
+/// True when \p raw is `STATION …` point entry (case-insensitive prefix).
+[[nodiscard]] bool LooksLikeAlignmentStationSnapInput(const std::string& raw);
+/// Parses `STATION 12+45.32` into storage coordinates. Returns false if \p raw is not a station line.
+[[nodiscard]] bool TryParseAlignmentStationSnapStoragePoint(AppCommandState& st, const std::string& raw, float* lx,
+                                                            float* ly, double* outWorldZ, bool allowRelative,
+                                                            float baseLocalX, float baseLocalY);
 
 // --- Traverse Editor scale factor (REQ-401, GitHub issue #828; CadCommands_Geo.cpp) ---------------
 /// Resolves the ground→grid multiplier the Traverse Editor applies when its "Apply scale factor"

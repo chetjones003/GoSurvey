@@ -95,7 +95,19 @@ void EditorWindow::BuildDraftingInput() {
     });
     connect(m_DynamicFields[i], &QLineEdit::returnPressed, this, [this] { SubmitDraftingInput(); });
   }
+  // REQ-501.2: the alignment readout is a line of the same dynamic input, not a second cursor UI.
+  m_DynamicAlignment = new QLabel(m_DynamicInput);
+  m_DynamicAlignment->setObjectName("dynamicAlignmentReadout");
+  // A light tooltip in both themes, as Civil 3D's alignment tooltip is, so it stands out from the drawing and its grid.
+  m_DynamicAlignment->setStyleSheet(
+      "QLabel { color:#1f2428; background:#f3f5f6; border:1px solid #b8c0c6; border-radius:3px; padding:3px 8px; }");
+  m_DynamicAlignment->hide();
+  layout->addWidget(m_DynamicAlignment);
   m_DynamicInput->hide();
+}
+
+bool EditorWindow::DynamicInputAcceptsInput() const {
+  return m_DynamicInput != nullptr && m_DynamicInput->isVisible() && m_DynamicInputForCommand;
 }
 
 void EditorWindow::ResetDraftingInput() {
@@ -104,7 +116,7 @@ void EditorWindow::ResetDraftingInput() {
 }
 
 void EditorWindow::UpdateDraftingInputFromCommandLine(const QString& text) {
-  if (!m_DynamicInput || !m_DynamicInput->isVisible()) return;
+  if (!DynamicInputAcceptsInput()) return;
   if (m_DynamicGeometry.pointEntry) {
     // Rebuild from the complete value so cumulative edits do not append duplicate mode transitions.
     dyninput::Reset(m_DynamicGroup, m_DynamicGeometry.initialMode, m_DynamicGeometry.showZ);
@@ -168,7 +180,7 @@ QString EditorWindow::DraftingInputDisplayText() const {
 }
 
 void EditorWindow::UpdateCommandLineFromDraftingInput() {
-  if (!m_DynamicInput || !m_DynamicInput->isVisible()) return;
+  if (!DynamicInputAcceptsInput()) return;
   const QString text = DraftingInputDisplayText();
   if (m_Command->text() == text) return;
   m_Command->setText(text);
@@ -200,8 +212,29 @@ void EditorWindow::RefreshDraftingInput(const QString& hint) {
       (m_State.active == AppCommandState::Kind::Line || m_State.active == AppCommandState::Kind::Polyline) &&
       m_State.segmentAnglePickPhase == AppCommandState::SegmentAnglePickPhase::WaitAdjustOrCommit;
   if (bearingPickAwaitingCommand && m_DynamicInput->isVisible()) m_Command->clear();
-  m_DynamicInput->setVisible(active && !bearingPickAwaitingCommand);
-  if (!active) return;
+  // REQ-501.2: near an alignment, a point being entered or a grip being dragged reads its station, offset and bearing.
+  const QString readout = QString::fromUtf8(m_State.alignmentCursorReadout.c_str());
+  const bool gripDrag = m_State.activeDrawingIdx > 0 && m_State.entityGripMoveActive;
+  const bool showReadout = !readout.isEmpty() && ((active && !bearingPickAwaitingCommand && prompt.pointEntry) || gripDrag);
+  const bool showCommandInput = active && !bearingPickAwaitingCommand;
+  m_DynamicInputForCommand = showCommandInput;
+  m_DynamicInput->setVisible(showCommandInput || showReadout);
+  m_DynamicAlignment->setVisible(showReadout);
+  if (showReadout && m_DynamicAlignment->text() != readout) m_DynamicAlignment->setText(readout);
+  if (!showCommandInput && !showReadout) return;
+  m_DynamicPrompt->setVisible(showCommandInput);
+  if (!showCommandInput) {  // a grip drag with no command: the readout alone, beside the cursor
+    for (int i = 0; i < 3; ++i) {
+      m_DynamicFields[i]->hide();
+      m_DynamicLabels[i]->hide();
+    }
+    m_DynamicInput->adjustSize();
+    const QPoint at = m_Viewport->CursorPosition();
+    m_DynamicInput->move(std::clamp(at.x() + 20, 0, std::max(0, m_Viewport->width() - m_DynamicInput->width())),
+        std::clamp(at.y() + 24, 0, std::max(0, m_Viewport->height() - m_DynamicInput->height() - 85)));
+    m_DynamicInput->raise();
+    return;
+  }
   m_DynamicPrompt->setText(m_DynamicHint);
   const bool hintOnly = !prompt.pointEntry;
   const int count = hintOnly ? 0 : dyninput::FieldCount(m_DynamicGroup);
@@ -245,7 +278,7 @@ void EditorWindow::RefreshDraftingInput(const QString& hint) {
 }
 
 bool EditorWindow::SubmitDraftingInput(bool click) {
-  if (!m_DynamicInput || !m_DynamicInput->isVisible()) return false;
+  if (!DynamicInputAcceptsInput()) return false;
   const bool locked = std::any_of(m_DynamicGroup.f.begin(), m_DynamicGroup.f.end(),
       [](const dyninput::Field& f) { return f.locked; });
   if (click && (!m_DynamicGeometry.pointEntry || !locked)) { ResetDraftingInput(); return false; }
@@ -307,7 +340,7 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
   }
   if ((widget == m_Command || suggestionPopupWidget) &&
       (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter)) {
-    if (widget == m_Command && m_DynamicInput && m_DynamicInput->isVisible()) return SubmitDraftingInput();
+    if (widget == m_Command && DynamicInputAcceptsInput()) return SubmitDraftingInput();
     if (m_CommandSuggestions && m_CommandSuggestions->isVisible() &&
         m_CommandSuggestionModel && m_CommandSuggestionModel->rowCount() > 0) {
       QModelIndex selected = m_CommandSuggestions->currentIndex();
@@ -398,7 +431,7 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
     if (key->key() == Qt::Key_Backspace && !m_DynamicGroup.f[i].locked &&
         dyninput::BackspaceAtEmpty(m_DynamicGroup, i)) { RefreshDraftingInput(); return true; }
   }
-  if (widget == m_Viewport && m_DynamicInput->isVisible() &&
+  if (widget == m_Viewport && DynamicInputAcceptsInput() &&
       !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {
     if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) return SubmitDraftingInput();
     if (key->key() == Qt::Key_Tab || (!key->text().isEmpty() && key->text()[0].isPrint())) {
@@ -424,6 +457,7 @@ void EditorWindow::ShowSnapOverride(const QPoint& position) {
   const std::pair<const char*, CadSnap::Kind> kinds[] = {
       {"Endpoint", CadSnap::Kind::Endpoint}, {"Midpoint", CadSnap::Kind::Midpoint},
       {"Center", CadSnap::Kind::Center}, {"Quadrant", CadSnap::Kind::Quadrant},
+      {"Station", CadSnap::Kind::Station}, {"Node", CadSnap::Kind::Node},
       {"Perpendicular", CadSnap::Kind::Perpendicular}, {"Survey", CadSnap::Kind::SurveyCenter},
       {"Geometric center", CadSnap::Kind::GeometricCenter}, {"Intersection", CadSnap::Kind::Intersection},
       {"Apparent intersection", CadSnap::Kind::ApparentIntersection}, {"Surface", CadSnap::Kind::Surface},
@@ -488,7 +522,7 @@ void EditorWindow::ShowPolarSettings() {
   dialog.exec(); Refresh();
 }
 
-void EditorWindow::ShowContextualHelp() {
+void EditorWindow::ShowContextualHelp(const QString& topicCommand) {
   if (!m_WikiLoaded) {
     m_WikiBundle = LoadWikiBundle();
     WikiHelpBuildIndex(m_WikiBundle);
@@ -540,9 +574,11 @@ void EditorWindow::ShowContextualHelp() {
     }
     showPage(slug);
   });
-  QString command;
-  if (m_State.active != AppCommandState::Kind::None) command = QString::fromUtf8(AppCommandState::KindName(m_State.active));
-  else if (m_State.lastCommand != AppCommandState::Kind::None) command = QString::fromUtf8(AppCommandState::KindName(m_State.lastCommand));
+  QString command = topicCommand;
+  if (command.isEmpty() && m_State.active != AppCommandState::Kind::None)
+    command = QString::fromUtf8(AppCommandState::KindName(m_State.active));
+  else if (command.isEmpty() && m_State.lastCommand != AppCommandState::Kind::None)
+    command = QString::fromUtf8(AppCommandState::KindName(m_State.lastCommand));
   const auto target = WikiHelpLookupCommand(command.toLower().toUtf8().toStdString());
   const QString initial = target.pageSlug.empty() ? QStringLiteral("Home") : QString::fromUtf8(target.pageSlug.c_str());
   bool selected = false;

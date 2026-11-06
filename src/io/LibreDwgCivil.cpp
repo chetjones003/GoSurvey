@@ -1,6 +1,7 @@
 #include "LibreDwgCivil.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -1129,6 +1130,154 @@ std::optional<TinSurfaceRecord> DecodeTinSurface(const unsigned char* unknownBit
     }
   }
   return std::nullopt;
+}
+
+namespace {
+
+// AECC_ALIGNMENT layout (Civil 3D 2026, three fixtures built with known values; D-2026-11-04-m).
+constexpr std::size_t kAlignmentStationBit = 354;        // BD starting station
+constexpr uint32_t kAlignmentTangentMarker = 0x812;       // 12 bits that end every tangent header
+constexpr unsigned kAlignmentTangentMarkerBits = 12;
+constexpr uint32_t kAlignmentFreeCurveType = 29;          // after the three -1.0 sentinels: BL 29, B, ids, BD radius
+constexpr uint32_t kAlignmentFreeScsType = 0;             // BL 0, ids, BL, BD spiral in, BD radius, BD spiral out
+constexpr std::size_t kEquationRepeatBits = 194;          // raw station back again, then the station ahead
+constexpr std::size_t kEquationDirectionBit = 326;        // B: 1 increasing
+constexpr double kAlignmentCoordinateLimit = 1e9;
+
+bool RawDouble(const unsigned char* bytes, std::size_t bitCount, std::size_t offset, double* value) {
+  assert(value != nullptr);
+  uint64_t encoded = 0;
+  for (unsigned i = 0; i < 8; ++i) {
+    uint32_t octet = 0;
+    if (!ReadBits(bytes, bitCount, offset + 8 * i, 8, &octet)) return false;
+    encoded |= static_cast<uint64_t>(octet) << (i * 8);
+  }
+  std::memcpy(value, &encoded, sizeof(encoded));
+  return std::isfinite(*value);
+}
+
+/// A bit double that is stored in full (code 00), so it carries a real value rather than the 0 / 1 shorthand.
+bool FullDouble(const unsigned char* bytes, std::size_t bitCount, std::size_t offset, double* value) {
+  uint32_t code = 0;
+  return ReadBits(bytes, bitCount, offset, 2, &code) && code == 0 && RawDouble(bytes, bitCount, offset + 2, value);
+}
+
+bool PlausibleAlignmentValue(double v) { return std::isfinite(v) && std::fabs(v) < kAlignmentCoordinateLimit; }
+
+std::optional<AlignmentTangentRecord> TangentAt(const unsigned char* bytes, std::size_t bitCount, std::size_t at) {
+  uint32_t marker = 0;
+  if (at < kAlignmentTangentMarkerBits ||
+      !ReadBits(bytes, bitCount, at - kAlignmentTangentMarkerBits, kAlignmentTangentMarkerBits, &marker) ||
+      marker != kAlignmentTangentMarker)
+    return std::nullopt;
+  Cursor c(bytes, bitCount, at);
+  AlignmentTangentRecord t;
+  if (!c.Long(&t.id) || !c.Long(&t.previous) || !c.Long(&t.next) || t.id == 0 || t.id == t.previous ||
+      t.id == t.next)
+    return std::nullopt;
+  const std::size_t p = c.position;
+  if (!RawDouble(bytes, bitCount, p, &t.ax) || !RawDouble(bytes, bitCount, p + 64, &t.ay) ||
+      !RawDouble(bytes, bitCount, p + 128, &t.bx) || !RawDouble(bytes, bitCount, p + 192, &t.by))
+    return std::nullopt;
+  if (!PlausibleAlignmentValue(t.ax) || !PlausibleAlignmentValue(t.ay) || !PlausibleAlignmentValue(t.bx) ||
+      !PlausibleAlignmentValue(t.by) || std::hypot(t.bx - t.ax, t.by - t.ay) <= 1e-9)
+    return std::nullopt;
+  return t;
+}
+
+/// A free curve or free spiral-curve-spiral group: its record follows the third -1.0 sentinel, which ends at `at`.
+std::optional<AlignmentCornerRecord> CornerAt(const unsigned char* bytes, std::size_t bitCount, std::size_t at) {
+  double sentinel = 0.0;
+  if (at < 64 || !RawDouble(bytes, bitCount, at - 64, &sentinel) || sentinel != -1.0) return std::nullopt;
+  Cursor c(bytes, bitCount, at);
+  uint32_t type = 0, flag = 0, extra = 0;
+  AlignmentCornerRecord r;
+  if (!c.Long(&type)) return std::nullopt;
+  if (type == kAlignmentFreeCurveType) {
+    if (!c.Read(1, &flag) || flag != 0 || !c.Long(&r.id) || !c.Long(&r.previous) || !c.Long(&r.next) ||
+        !c.Double(&r.radius))
+      return std::nullopt;
+  } else if (type == kAlignmentFreeScsType) {
+    if (!c.Long(&r.id) || !c.Long(&r.previous) || !c.Long(&r.next) || !c.Long(&extra) || !c.Double(&r.spiralIn) ||
+        !c.Double(&r.radius) || !c.Double(&r.spiralOut) || !(r.spiralIn > 0.0) || !(r.spiralOut > 0.0))
+      return std::nullopt;
+  } else {
+    return std::nullopt;
+  }
+  if (r.id == 0 || r.previous == 0 || r.next == 0 || r.previous == r.next || !(r.radius > 0.0) ||
+      !PlausibleAlignmentValue(r.radius))
+    return std::nullopt;
+  return r;
+}
+
+std::optional<AlignmentEquationRecord> EquationAt(const unsigned char* bytes, std::size_t bitCount, std::size_t at) {
+  double raw = 0.0, again = 0.0;
+  AlignmentEquationRecord e;
+  uint32_t direction = 0;
+  if (!FullDouble(bytes, bitCount, at, &raw) || !FullDouble(bytes, bitCount, at + kEquationRepeatBits, &again) ||
+      raw != again || !FullDouble(bytes, bitCount, at + kEquationRepeatBits + 66, &e.stationAhead) ||
+      !ReadBits(bytes, bitCount, at + kEquationDirectionBit, 1, &direction))
+    return std::nullopt;
+  // A station is a surveyed distance: zero or at least a micro-unit. Bit-shifted reads of a real record give values
+  // like 1e-153, which are rejected here.
+  auto station = [](double v) { return PlausibleAlignmentValue(v) && (v == 0.0 || std::fabs(v) >= 1e-6); };
+  if (!station(raw) || !station(e.stationAhead)) return std::nullopt;
+  // Between the two copies of the raw station sits a 128-bit identifier; a run of zero bits is not an equation.
+  uint32_t word = 0, any = 0;
+  for (std::size_t k = 0; k < 4; ++k) {
+    if (!ReadBits(bytes, bitCount, at + 66 + 32 * k, 32, &word)) return std::nullopt;
+    any |= word;
+  }
+  if (any == 0) return std::nullopt;
+  e.rawStationBack = raw;
+  e.increasing = direction != 0;
+  return e;
+}
+
+}  // namespace
+
+std::optional<AlignmentRecord> DecodeAlignment(const unsigned char* bytes, std::size_t bitCount,
+                                               std::size_t stringStart, std::size_t stringBitCount) {
+  assert(bytes != nullptr || bitCount == 0);
+  assert(stringStart <= bitCount || stringBitCount == 0);
+  if (bytes == nullptr || bitCount < kAlignmentStationBit + 66) return std::nullopt;
+  AlignmentRecord record;
+  if (stringStart <= bitCount && stringBitCount <= bitCount - stringStart) {
+    // The stream opens with the implementation class name ("AeccImpAlignment"); the alignment's name is the first
+    // non-empty string after it.
+    Cursor strings(bytes, bitCount, stringStart);
+    std::u16string text;
+    constexpr int kNameSearch = 4;
+    if (strings.Text(&text)) {
+      for (int k = 0; k < kNameSearch && record.name.empty(); ++k) {
+        if (!strings.Text(&text)) break;
+        record.name = text;
+      }
+    }
+  }
+  Cursor stationCursor(bytes, bitCount, kAlignmentStationBit);
+  double station = 0.0;
+  if (stationCursor.Double(&station) && PlausibleAlignmentValue(station)) record.startingStation = station;
+  const std::size_t dataEnd = std::min(bitCount, stringStart);
+  std::size_t lastRecordEnd = 0;
+  for (std::size_t at = 0; at < dataEnd; ++at) {
+    if (auto t = TangentAt(bytes, dataEnd, at)) {
+      record.tangents.push_back(*t);
+      lastRecordEnd = at;
+    } else if (auto r = CornerAt(bytes, dataEnd, at)) {
+      record.corners.push_back(*r);
+      lastRecordEnd = at;
+    }
+  }
+  if (record.tangents.empty()) return std::nullopt;
+  // The equation list follows the sub-entities.
+  for (std::size_t at = lastRecordEnd; at < dataEnd; ++at) {
+    if (auto e = EquationAt(bytes, dataEnd, at)) {
+      record.equations.push_back(*e);
+      at += kEquationDirectionBit;
+    }
+  }
+  return record;
 }
 
 }  // namespace libredwgcivil

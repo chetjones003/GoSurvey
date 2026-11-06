@@ -324,6 +324,14 @@ A lightweight board that complements the milestones. Keep each column honest.
   objects. Export ordinary AutoCAD entities and style records that AutoCAD accepts without Recover; do not
   author Civil 3D custom objects. Use Rapides Substation as the baseline and log unmapped source data.
   No Civil 3D/AutoCAD runtime bridge, Object Enabler, or ODA Civil SDK is shipped or required.
+- **Alignments (REQ-480..503, ADR-075, D-2026-11-02-b, issue #121). Accepted 2026-11-02; Phase 1 in progress.**
+  Six increments: (1) foundation: domain object, tangent + circular curve, stationing/equations, station/offset
+  API, `ALIGNMENT` / `CREATEALIGNMENTFROMOBJECTS`, render, core snaps, DWG round trip, Properties; (2) layout
+  editor, constraints, grips, `REVERSEALIGNMENT`, `OFFSETALIGNMENT`, intersections; (3) clothoid spirals and
+  continuity validation; (4) styles, label sets, labels, tables, reports; (5) surface ground elevation,
+  feature-line link, profile seam, COGO; (6) design criteria and checks. **Each increment needs a
+  Workshop task cites the increment's REQs.** Later: widening, spiral offsets, non-clothoid spirals, profiles,
+  corridors, superelevation calculation.
 - **M-Surfaces-119 — Issue #119 remainder** (D-2026-08-27-a, ADR-039, D-2026-08-27-b). Phases 1–3
   (REQ-124…135) implemented on the 119 branch. REQ-136 TIN volume surface in progress. Grid /
   corridor / contour smoothing and labels / TIN swap remain out of scope.

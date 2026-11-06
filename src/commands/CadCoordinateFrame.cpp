@@ -82,6 +82,12 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
       add2(&moved->vertsXyz[i], &moved->vertsXyz[i + 1]);
     surface.tin = std::move(moved);
   }
+  // Alignments and the plan points of their fixed station labels are drawing-local too (REQ-496.1).
+  for (alignment::Alignment& al : st.alignments) {
+    al.Translate(dx, dy);
+    for (alignment::StationOffsetLabel& label : al.stationLabels)
+      if (label.fixed) add2(&label.fixedPoint.x, &label.fixedPoint.y);
+  }
   // Feature-line vertices are stored local as XYZ triples: X and Y rebase, Z is absolute.
   for (size_t i = 0; i + 2 < st.featureLineVerts.size(); i += 3)
     add2(&st.featureLineVerts[i], &st.featureLineVerts[i + 1]);

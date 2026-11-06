@@ -737,6 +737,14 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
     // AutoCAD's quadrant marker: a plain diamond. 2D Object Snap green (snap.solid == false).
     AppendSnapDiamondOutline(out, f, mh);
     break;
+  case CadSnap::Kind::Station:
+    AppendSnapSquareOutline(out, f, mh);
+    AppendSnapDiagonalCross(out, f, mh * 0.35f);
+    break;
+  case CadSnap::Kind::Node:  // AutoCAD's node marker: a circle with a diagonal cross
+    AppendSnapCircle(out, f, mh * 0.85f, snapCircSegs);
+    AppendSnapDiagonalCross(out, f, mh * 0.6f);
+    break;
   case CadSnap::Kind::SurveyCenter: {
     const float R = mh * 0.62f;
     AppendSnapCircle(out, f, R, snapCircSegs);
@@ -2798,6 +2806,67 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             AppendSplineVcDashed(cpuVcLines_, (*extended->splines)[i], splineTol, dashPatScale, attr, lr,
                                  kLineDefaultR, kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY);
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
+          }
+        }
+        // REQ-495 alignments: exact tangents and curves, sampled ONLY for display to a quarter of a pixel at this
+        // zoom (a query or export never sees these samples). Z is 0: an alignment is horizontal (REQ-480.3).
+        if (extended->alignments) {
+          const double pixelWorld = 2.0 * static_cast<double>(halfH) / std::max(1.0, static_cast<double>(fbHeight));
+          const double alignTol = std::max(1e-6, 0.25 * pixelWorld);
+          std::vector<std::uint64_t> aliveAlignments;
+          aliveAlignments.reserve(extended->alignments->size());
+          for (const alignment::Alignment& al : *extended->alignments) aliveAlignments.push_back(al.id);
+          alignmentSamples_.Retain(aliveAlignments);
+          for (const alignment::Alignment& al : *extended->alignments) {
+            if (al.Empty())
+              continue;
+            EntityAttributes attr{};
+            attr.id = al.id;
+            attr.layer = al.layer;
+            if (CadEntityIdHidden(hiddenIds, attr.id))
+              continue;
+            const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
+            if (lr && (!lr->on || lr->frozen))  // REQ-495.4
+              continue;
+            if (extended->viewportFrozenLayers != nullptr &&
+                std::find(extended->viewportFrozenLayers->begin(), extended->viewportFrozenLayers->end(), attr.layer) !=
+                    extended->viewportFrozenLayers->end())
+              continue;
+            const std::vector<std::vector<alignment::Point2>>& samples = alignmentSamples_.Samples(al, alignTol);
+            const AlignmentStyle* sty =
+                extended->alignmentStyles != nullptr
+                    ? AlignmentStyles::Resolve(*extended->alignmentStyles, al.style)
+                    : nullptr;
+            const int nEnt = static_cast<int>(al.Entities().size());
+            for (int ei = 0; ei < nEnt; ++ei) {
+              const alignment::Entity& ent = al.Entities()[static_cast<size_t>(ei)];
+              const SurfaceComponentStyle* comp =
+                  sty != nullptr ? AlignmentStyles::ComponentForEntity(*sty, ent.kind) : nullptr;
+              if (comp != nullptr && !comp->visible)
+                continue;
+              EntityAttributes segAttr = attr;
+              if (comp != nullptr) {
+                if (comp->color != "ByLayer") segAttr.color = comp->color;
+                if (comp->linetype != "ByLayer") segAttr.linetype = comp->linetype;
+                if (comp->lineweightMm >= 0.f) segAttr.lineweightMm = comp->lineweightMm;
+              }
+              const std::vector<alignment::Point2>& pts = samples[static_cast<size_t>(ei)];
+              if (pts.size() < 2)
+                continue;
+              const int vb = static_cast<int>(cpuVcLines_.size() / 7);
+              maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(segAttr, lr)));
+              float rgba[4];
+              ResolveEntityRgbaForViewport(segAttr, lr, kLineDefaultR, kLineDefaultG, kLineDefaultB, rgba);
+              const std::string lt = EffectiveEntityLinetypeNameForViewport(segAttr, lr);
+              std::vector<float> xy(pts.size() * 2);
+              for (size_t i = 0; i < pts.size(); ++i) {
+                xy[i * 2] = static_cast<float>(pts[i].x - viewAnchorX);
+                xy[i * 2 + 1] = static_cast<float>(pts[i].y - viewAnchorY);
+              }
+              CadTessellateLinetypeChainVc(xy.data(), static_cast<int>(pts.size()), 0.f, false, lt, dashPatScale, rgba,
+                                          &cpuVcLines_);
+              lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
+            }
           }
         }
         if (extended->points && !extended->points->empty()) {

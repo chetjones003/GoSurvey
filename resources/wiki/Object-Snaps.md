@@ -29,6 +29,7 @@ point lands on a real endpoint or intersection instead of near it.
 | **Center** | The centre of a circle or ellipse | **On** | High |
 | **Survey point** | The marker position of a survey point | **On** | High |
 | **Midpoint** | The middle of a line or polyline segment | **On** | Medium |
+| **Node** | A POINT object, and an alignment's PIs — where two tangents meet, over a curve or a spiral group — drawn as a circle with a cross | **On** | Medium |
 | **Geometric center** | The centroid of a closed polyline | **Off** | Medium |
 | **Apparent intersection** | Points where objects cross **as seen in the current view** but need not meet in space | **Off** | Medium |
 | **Perpendicular** | The foot of a perpendicular from a reference point onto an object | **On** | Lowest |

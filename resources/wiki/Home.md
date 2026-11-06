@@ -25,6 +25,7 @@ the places where a feature is present but not finished.
 - **[[Drawing Tools]]** — LINE, POLYLINE, ARC, CIRCLE, ELLIPSE, RECT, HATCH
 - **[[Modify Tools]]** — MOVE, COPY, ROTATE, SCALE, OFFSET, TRIM, JOIN, DELETE, OVERKILL, ALIGN
 - **[[Object Selection]]** — picking, windows, cycling, grips, QUICKSELECT, isolation
+- **[[Alignments]]** — road and utility centrelines: tangents, curves, stationing, station/offset
 - **[[Object Snaps]]** — the eight snap types, the OSNAP toggle, and the one-shot override
 - **[[Coordinate Input]]** — what you may type at a point prompt, and what you may not
 - **[[Drafting Aids]]** — Ortho, grid, dynamic input, elevation and the work plane

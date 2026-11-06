@@ -72,6 +72,12 @@ inline void AppendToolspaceProspectorLines(const AppCommandState& st, std::vecto
     else
       out->push_back("Feature Line " + std::to_string(i + 1));
   }
+  // REQ-480.4 (issue #121): the folder exists only once the drawing owns an alignment.
+  if (!st.alignments.empty()) {
+    out->push_back("Alignments");
+    for (const alignment::Alignment& a : st.alignments)
+      out->push_back(a.name);
+  }
 }
 
 inline void AppendToolspaceSettingsLines(const AppCommandState& st, std::vector<std::string>* out) {

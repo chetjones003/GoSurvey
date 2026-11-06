@@ -6,6 +6,11 @@
 #include "CadDimStroke.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "TextStyle.hpp"
+#include "AlignmentLabelSet.hpp"
+#include "AlignmentStyle.hpp"
+#include "alignment/AlignmentLabels.hpp"
+#include "alignment/AlignmentDesign.hpp"
+#include "alignment/AlignmentTables.hpp"
 #include "font/CadFontName.hpp"
 #include "font/ShxFont.hpp"
 #include "MtextRichFormat.hpp"
@@ -20,6 +25,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <limits>
 
 namespace {
 QPen AnnotationStylePen(const std::string& color, const std::string& linetype, const std::string& weight,
@@ -258,6 +264,543 @@ void DrawQtSurveyPoints(QPainter& painter, const AppCommandState& state, float w
   }
   painter.restore();
 }
+
+namespace {
+
+// REQ-492 / REQ-495.2: the alignment overlay (ticks, markers, arrows, labels, design flags) is placed in screen space.
+struct AlignmentView {
+  const Camera& camera;
+  float width = 0.f;
+  float height = 0.f;
+  double textPx = 0.0;  ///< Label text height on screen (REQ-492.5: a plotted height, so it follows the zoom).
+  [[nodiscard]] QPointF Project(alignment::Point2 p) const {
+    float sx = 0.f, sy = 0.f;
+    camera.WorldToScreen(p.x, p.y, 0.0, width, height, &sx, &sy);
+    return QPointF(sx, sy);
+  }
+};
+
+// An alignment station on screen: the point, unit screen vectors along travel and to its left, and the screen pixels
+// per drawing unit there.
+struct AlignmentScreenFrame {
+  QPointF point;
+  QPointF along{1.0, 0.0};
+  QPointF left{0.0, -1.0};
+  double pixelsPerUnit = 0.0;
+};
+
+AlignmentScreenFrame FrameAt(const AlignmentView& view, const alignment::Alignment& al, double rawStation) {
+  const alignment::Point2 p = al.GetPointAtStation(rawStation);
+  const double az = al.GetBearingAtStation(rawStation);
+  AlignmentScreenFrame f;
+  f.point = view.Project(p);
+  // Bearings run clockwise from north: travel is (sin, cos) and its left is (-cos, sin), one drawing unit long.
+  const QPointF along = view.Project({p.x + std::sin(az), p.y + std::cos(az)}) - f.point;
+  const QPointF left = view.Project({p.x - std::cos(az), p.y + std::sin(az)}) - f.point;
+  const double alongLength = std::hypot(along.x(), along.y());
+  const double leftLength = std::hypot(left.x(), left.y());
+  assert(std::isfinite(alongLength));
+  assert(std::isfinite(leftLength));
+  if (alongLength > 1.e-9) f.along = along / alongLength;
+  if (leftLength > 1.e-9) f.left = left / leftLength;
+  f.pixelsPerUnit = leftLength;
+  return f;
+}
+
+QColor ResolvedColor(const std::string& storage, const std::string& layerColor) {
+  float rgb[3]{1.f, 1.f, 1.f};
+  CadColorResolveRgb(CadColorEffectiveStorage(storage.empty() ? std::string("ByLayer") : storage, layerColor), 1.f, 1.f,
+                     1.f, rgb);
+  return QColor::fromRgbF(rgb[0], rgb[1], rgb[2]);
+}
+
+// Splits UTF-8 text into runs of ASCII and of other characters, in order: a stroke font can draw only the first kind.
+std::vector<std::pair<bool, std::string>> AsciiRuns(const std::string& text) {
+  std::vector<std::pair<bool, std::string>> runs;
+  for (const char c : text) {
+    const bool ascii = (static_cast<unsigned char>(c) & 0x80u) == 0;
+    if (runs.empty() || runs.back().first != ascii) runs.emplace_back(ascii, std::string{});
+    runs.back().second.push_back(c);
+  }
+  return runs;
+}
+
+// The face one kind of alignment label is written in (REQ-492.5): its label style's text style, plotted height and
+// colour. In an SHX text style the ASCII characters are stroked in that font and any other character (°, Δ, ∞) in a
+// TrueType face of the same cap height, because the stroke fonts have no such glyphs (CadFontName.hpp).
+struct LabelFace {
+  QColor color;
+  double px = 0.0;  ///< Cap height on screen.
+  Shx::Font* stroke = nullptr;  ///< The SHX font, when the text style names one that loads.
+  std::string strokeFamily;
+  QFont ttf;
+  // REQ-492.5 formatting from the label style: every line is written as prefix + text + suffix; numbers use `linear`
+  // decimals and stations `station`; a View-oriented label stays level on the screen.
+  std::string prefix, suffix;
+  bool viewOriented = false;
+  int linear = 2;
+  alignment::StationFormat station;
+
+  [[nodiscard]] bool Drawable() const { return std::isfinite(px) && px >= 2.0; }
+  [[nodiscard]] double RunWidth(bool ascii, const std::string& run) const {
+    if (ascii && stroke != nullptr) return Shx::MeasureWidthPx(*stroke, run, static_cast<float>(px));
+    return QFontMetricsF(ttf).horizontalAdvance(QString::fromUtf8(run.c_str()));
+  }
+  [[nodiscard]] double Width(const std::string& text) const {
+    double w = 0.0;
+    for (const auto& [ascii, run] : AsciiRuns(prefix + text + suffix)) w += RunWidth(ascii, run);
+    return w;
+  }
+  // Writes `text` with its baseline starting at `start`, in the painter's current transform.
+  void Draw(QPainter& painter, QPointF start, const std::string& line) const {
+    const std::string text = prefix + line + suffix;
+    QPen pen(color, 1.0);
+    pen.setCosmetic(true);
+    painter.setPen(pen);
+    painter.setFont(ttf);
+    CadAnnotation strokeText;
+    strokeText.fontFamily = strokeFamily;
+    double x = start.x();
+    for (const auto& [ascii, run] : AsciiRuns(text)) {
+      bool drawn = false;
+      if (ascii && stroke != nullptr) {
+        painter.save();
+        painter.translate(x, start.y());
+        drawn = DrawStrokeText(painter, strokeText, static_cast<float>(px), run, true);
+        painter.restore();
+      }
+      if (!drawn) painter.drawText(QPointF(x, start.y()), QString::fromUtf8(run.c_str()));
+      x += RunWidth(ascii, run);
+    }
+  }
+};
+
+LabelFace MakeLabelFace(const AppCommandState& state, const std::string& styleName, double pixelsPerUnit,
+                        const std::string& layerColor) {
+  assert(std::isfinite(pixelsPerUnit));
+  assert(pixelsPerUnit >= 0.0);
+  const AlignmentLabelStyle& style = AlignmentLabelStyles::Resolve(state.alignmentLabelStyles, styleName);
+  LabelFace face;
+  face.prefix = style.prefix;
+  face.suffix = style.suffix;
+  face.viewOriented = style.viewOriented;
+  face.linear = AlignmentLabelStyles::Precision(style, state.displayLinearPrecision);
+  face.station = AlignmentLabelStyles::StationFormatFor(style, state.alignmentStationFormat);
+  face.color = ResolvedColor(style.color, layerColor);
+  face.px = AlignmentLabelStyles::TextHeight(style, state.modelUnitsPerPlottedInch) * pixelsPerUnit;
+  const TextStyle* textStyle = TextStyles::Find(state.textStyles, style.textStyle);
+  const std::string family = TextStyles::EffectiveFontFamily(textStyle != nullptr ? textStyle->fontFamily : std::string{});
+  if (cadfont::IsShxFontName(family)) {
+    Shx::Font* font = Shx::Resolve(family);
+    if (font != nullptr && font->valid()) {
+      face.stroke = font;
+      face.strokeFamily = family;
+    }
+  }
+  face.ttf = QFont(QString::fromUtf8(cadfont::IsShxFontName(family) ? "Arial" : family.c_str()));
+  // A TrueType pixel size is the em height; a capital is about 0.7 em, and a CAD text height is the capital's height.
+  face.ttf.setPixelSize(std::clamp(qRound(face.px / 0.7), 1, 4096));
+  return face;
+}
+
+// Draws `text` along the screen direction `along`, turned so it never reads upside down. `start` is where the text
+// begins, or its middle when `centered`. `lift` moves the baseline off the anchor, in pixels, towards the text's top.
+void DrawTextAlong(QPainter& painter, const LabelFace& face, QPointF start, QPointF along, const std::string& text,
+                   bool centered, double lift) {
+  assert(std::isfinite(start.x()) && std::isfinite(start.y()));
+  assert(std::isfinite(along.x()) && std::isfinite(along.y()));
+  const double textWidth = face.Width(text);
+  double angle = face.viewOriented ? 0.0 : std::atan2(along.y(), along.x()) * 180.0 / alignment::kPi;
+  double x = centered ? -0.5 * textWidth : 0.0;
+  if (face.viewOriented && !centered && along.x() < 0.0) x = -textWidth;  // still reads away from its anchor
+  if (angle > 90.0 || angle < -90.0) {
+    angle += 180.0;
+    if (!centered) x = -textWidth;
+  }
+  painter.save();
+  painter.translate(start);
+  painter.rotate(angle);
+  face.Draw(painter, QPointF(x, -lift), text);
+  painter.restore();
+}
+
+// The screen boxes already claimed by an alignment's labels (D-2026-11-04-e). Labels are placed one after another; each
+// takes the first of its candidate positions whose box is free, as Civil 3D's dragged labels would be laid out by hand.
+class LabelBoxes {
+ public:
+  [[nodiscard]] bool Free(const QPolygonF& box) const { return Overlaps(box) == 0; }
+  [[nodiscard]] std::size_t Overlaps(const QPolygonF& box) const {
+    return static_cast<std::size_t>(
+        std::count_if(taken_.begin(), taken_.end(), [&](const QPolygonF& t) { return t.intersects(box); }));
+  }
+  void Take(QPolygonF box) { taken_.push_back(std::move(box)); }
+
+ private:
+  std::vector<QPolygonF> taken_;
+};
+
+// The box of a band of text beside the line, parallel to it: `width` long, from `nearPx` to `farPx` off the line.
+QPolygonF BesideBox(const AlignmentScreenFrame& f, double side, double nearPx, double farPx, double width) {
+  assert(farPx >= nearPx);
+  assert(width >= 0.0);
+  const QPointF a = f.along * (0.5 * width);
+  const QPointF n0 = f.left * side * nearPx;
+  const QPointF n1 = f.left * side * farPx;
+  return QPolygonF({f.point - a + n0, f.point + a + n0, f.point + a + n1, f.point - a + n1});
+}
+
+// Text centred `offset` pixels beside the alignment and parallel to it (stations, segments, equations). `side` is +1
+// for the left of travel, -1 for the right.
+void DrawTextBeside(QPainter& painter, const LabelFace& face, const AlignmentScreenFrame& f, double offset,
+                    const std::string& text, double side = 1.0) {
+  assert(offset >= 0.0);
+  assert(side == 1.0 || side == -1.0);
+  if (text.empty() || !face.Drawable()) return;
+  DrawTextAlong(painter, face, f.point + f.left * side * (offset + 0.5 * face.px), f.along, text, true, -0.5 * face.px);
+}
+
+// Lines of text stacked beside the line at the first free row, from `firstPx` outward, trying `sides` in order. When no
+// row is free, the one overlapping the fewest labels is used. Claims the box it uses.
+void PlaceStack(QPainter& painter, const LabelFace& face, const AlignmentScreenFrame& f,
+                const std::vector<std::string>& lines, const std::vector<double>& sides, double firstPx, LabelBoxes* boxes) {
+  assert(boxes != nullptr);
+  assert(!sides.empty());
+  if (lines.empty() || !face.Drawable()) return;
+  double width = 0.0;
+  for (const std::string& line : lines) width = std::max(width, face.Width(line));
+  const double pad = 0.3 * face.px, step = 1.4 * face.px;
+  const double depth = step * static_cast<double>(lines.size() - 1) + face.px;
+  constexpr int kRows = 5;  // rows tried per side; alignment::LabelledBounds leaves room for them
+  double side = sides.front(), offset = firstPx;
+  std::size_t fewest = std::numeric_limits<std::size_t>::max();
+  for (int row = 0; row < kRows && fewest > 0; ++row) {
+    for (const double s : sides) {
+      const double near = firstPx + step * row;
+      const std::size_t overlaps = boxes->Overlaps(BesideBox(f, s, near - pad, near + depth + pad, width + 2.0 * pad));
+      if (overlaps >= fewest) continue;
+      fewest = overlaps;
+      side = s;
+      offset = near;
+      if (fewest == 0) break;
+    }
+  }
+  boxes->Take(BesideBox(f, side, offset - pad, offset + depth + pad, width + 2.0 * pad));
+  // Lines read top to bottom on screen: when the stack grows upward, its first line is the outermost.
+  const bool upward = (f.left * side).y() < 0.0;
+  const size_t n = lines.size();
+  for (size_t k = 0; k < n; ++k)
+    DrawTextBeside(painter, face, f, offset + step * static_cast<double>(upward ? n - 1 - k : k), lines[k], side);
+}
+
+// A leader across the alignment with the text written along it, as Civil 3D draws geometry-point and design-speed
+// labels. `side` is +1 for the left of travel, -1 for the right. Claims the leader's box.
+void DrawLeaderLabel(QPainter& painter, const LabelFace& face, const AlignmentScreenFrame& f, double side,
+                     const std::string& text, LabelBoxes* boxes) {
+  assert(side == 1.0 || side == -1.0);
+  assert(boxes != nullptr);
+  if (text.empty() || !face.Drawable()) return;
+  const QPointF out = f.left * side;
+  const QPointF across(-out.y(), out.x());
+  const double textStart = alignment::kLeaderTextStartHeights * face.px;
+  const QPointF p0 = f.point + out * (alignment::kLeaderGapHeights * face.px);
+  const QPointF p1 = f.point + out * (textStart + face.Width(text) + alignment::kLeaderOvershootHeights * face.px);
+  const QPointF h = across * (1.4 * face.px);
+  boxes->Take(QPolygonF({p0 - h, p1 - h, p1 + h, p0 + h}));
+  QPen pen(face.color, 1.0);
+  pen.setCosmetic(true);
+  painter.setPen(pen);
+  painter.drawLine(p0, p1);
+  DrawTextAlong(painter, face, f.point + out * textStart, out, text, false, 0.25 * face.px);
+}
+
+// REQ-492.1/.2 major station text (minor stations are ticks only, D-2026-11-04-c) and equation labels. Station text
+// sits left of the line, as Civil 3D draws it, unless something is already there (D-2026-11-04-e).
+void DrawAlignmentStationText(QPainter& painter, const AppCommandState& state, const AlignmentView& view,
+                              const alignment::Alignment& al, const std::vector<alignment::StationTickLabel>& ticks,
+                              const AlignmentLabelSet& ls, double majorTickLength, const std::string& layerColor,
+                              LabelBoxes* boxes) {
+  assert(ls.majorInterval > 0.0);
+  assert(boxes != nullptr);
+  const double ppu = FrameAt(view, al, al.StartStation()).pixelsPerUnit;
+  const double rowPx = 0.5 * majorTickLength * ppu;
+  const LabelFace major = MakeLabelFace(state, ls.majorStyle, ppu, layerColor);
+  for (const alignment::StationTickLabel& tick : ticks) {
+    if (!tick.major) continue;
+    PlaceStack(painter, major, FrameAt(view, al, tick.rawStation), {alignment::FormatStation(tick.displayedStation, major.station)},
+               {1.0, -1.0}, rowPx + 0.3 * major.px, boxes);
+  }
+  if (!ls.equationsOn) return;
+  const LabelFace equation = MakeLabelFace(state, ls.equationStyle, ppu, layerColor);
+  for (const alignment::EquationLabel& eq : alignment::CollectEquationLabels(al)) {
+    const std::string text = "EQ " + alignment::FormatStation(eq.backDisplayed, equation.station) + " = " +
+                             alignment::FormatStation(eq.aheadDisplayed, equation.station);
+    PlaceStack(painter, equation, FrameAt(view, al, eq.rawStation), {text}, {1.0, -1.0}, rowPx + 0.3 * equation.px, boxes);
+  }
+}
+
+// A line's bearing goes above it (left of travel) and its length below, as Civil 3D draws them. When either is in the
+// way of another label, both are stacked at the first free row on either side (D-2026-11-04-e).
+void DrawLineLabel(QPainter& painter, const LabelFace& face, const AlignmentScreenFrame& f,
+                   const std::vector<std::string>& lines, LabelBoxes* boxes) {
+  assert(lines.size() == 2);
+  assert(boxes != nullptr);
+  if (!face.Drawable()) return;
+  const double pad = 0.3 * face.px, inner = 0.4 * face.px;
+  const QPolygonF above = BesideBox(f, 1.0, inner - pad, inner + face.px + pad, face.Width(lines[0]) + 2.0 * pad);
+  const QPolygonF below = BesideBox(f, -1.0, inner - pad, inner + face.px + pad, face.Width(lines[1]) + 2.0 * pad);
+  if (boxes->Free(above) && boxes->Free(below)) {
+    boxes->Take(above);
+    boxes->Take(below);
+    DrawTextBeside(painter, face, f, inner, lines[0], 1.0);
+    DrawTextBeside(painter, face, f, inner, lines[1], -1.0);
+    return;
+  }
+  PlaceStack(painter, face, f, lines, {-1.0, 1.0}, inner, boxes);
+}
+
+// REQ-492.3/.5: a label at the middle of each segment once the alignment's segments are labelled. A curve or spiral
+// stacks its values on the inside of the turn, as Civil 3D does, moving out or across when that is taken.
+void DrawAlignmentSegmentText(QPainter& painter, const AppCommandState& state, const AlignmentView& view,
+                              const alignment::Alignment& al, const LabelFace& face, LabelBoxes* boxes) {
+  assert(!al.Empty());
+  assert(state.displayLinearPrecision >= 0);
+  const AngleDisplaySettings angles = CadAngleDisplaySettings(state);
+  const int n = static_cast<int>(al.Entities().size());
+  const std::vector<std::string> tags = alignment::ShowsTagLabels(al) ? alignment::SegmentTags(al) : std::vector<std::string>{};
+  for (int i = 0; i < n; ++i) {
+    if (!alignment::SegmentIsLabelled(al, i)) continue;  // REQ-492.3 single segment labels
+    const alignment::Entity& e = al.Entities()[static_cast<size_t>(i)];
+    const double mid = 0.5 * (al.EntityStartStation(i) + al.EntityEndStation(i));
+    const AlignmentScreenFrame f = FrameAt(view, al, mid);
+    if (!tags.empty()) {  // REQ-493.1: a table lists these segments, so each label is its tag
+      PlaceStack(painter, face, f, {tags[static_cast<size_t>(i)]}, {1.0, -1.0}, 0.6 * face.px, boxes);
+      continue;
+    }
+    alignment::CurveData cd;
+    alignment::SpiralData sd;
+    std::vector<std::string> lines;
+    if (e.kind == alignment::EntityKind::Line) {
+      DrawLineLabel(painter, face, f, alignment::LineLabelLines(e, face.linear, angles), boxes);
+      continue;
+    }
+    if (e.kind == alignment::EntityKind::Arc && al.CurveDataFor(i, &cd))
+      lines = alignment::CurveLabelLines(cd, face.linear, angles);
+    else if (e.kind == alignment::EntityKind::Spiral && alignment::SpiralDataFor(i, al, &sd))
+      lines = alignment::SpiralLabelLines(sd, face.linear);
+    const double inside = e.right ? -1.0 : 1.0;
+    PlaceStack(painter, face, f, lines, {inside, -inside}, 0.6 * face.px, boxes);
+  }
+}
+
+// REQ-492: every label an alignment's label set and segment flag ask for, each in its label style (REQ-492.5).
+void DrawAlignmentLabels(QPainter& painter, const AppCommandState& state, const AlignmentView& view,
+                         const alignment::Alignment& al, const std::vector<alignment::StationTickLabel>& ticks,
+                         const AlignmentLabelSet& ls, const AlignmentStyle* sty, const std::string& layerColor,
+                         LabelBoxes* claimed) {
+  assert(!al.Empty());
+  assert(claimed != nullptr);
+  const double ppu = FrameAt(view, al, al.StartStation()).pixelsPerUnit;
+  // Leaders first (they stay where Civil 3D puts them), then the long segment labels, then the short station text,
+  // each stepping around what is already placed (D-2026-11-04-e).
+  LabelBoxes& boxes = *claimed;
+  if (ls.geometryPointsOn) {  // REQ-492.1: the first Geometry Points item, then any further ones in their own styles
+    std::vector<std::pair<const std::string*, const std::vector<std::string>*>> items{{&ls.geometryStyle, &ls.geometryCodes}};
+    for (const AlignmentGeometryLabelItem& item : ls.extraGeometryItems) items.emplace_back(&item.style, &item.codes);
+    for (const auto& [styleName, codes] : items) {
+      const LabelFace face = MakeLabelFace(state, *styleName, ppu, layerColor);
+      for (const alignment::GeometryPointLabel& gp : alignment::CollectGeometryPointLabels(al, face.station))
+        if (AlignmentLabelStyles::ItemLabelsCode(*codes, alignment::GeometryPointAbbreviation(gp.code)))
+          DrawLeaderLabel(painter, face, FrameAt(view, al, gp.internalStation), 1.0, gp.text, &boxes);
+    }
+  }
+  if (ls.designSpeedsOn) {
+    const LabelFace face = MakeLabelFace(state, ls.speedStyle, ppu, layerColor);
+    const bool metric = state.drawingInsUnits == 4 || state.drawingInsUnits == 6;
+    for (const alignment::DesignSpeedLabel& d : alignment::CollectDesignSpeedLabels(al, metric, face.station))
+      DrawLeaderLabel(painter, face, FrameAt(view, al, d.internalStation), -1.0, d.text, &boxes);
+  }
+  if (alignment::HasSegmentLabels(al))
+    DrawAlignmentSegmentText(painter, state, view, al, MakeLabelFace(state, ls.segmentStyle, ppu, layerColor), &boxes);
+  DrawAlignmentStationText(painter, state, view, al, ticks, ls, sty != nullptr ? sty->majorTickLength : 0.0, layerColor,
+                           &boxes);
+  // REQ-492.4: station/offset labels, fixed or relative, drawn where they resolve on the current geometry.
+  const LabelFace offsetFace = MakeLabelFace(state, ls.offsetStyle, ppu, layerColor);
+  for (const alignment::StationOffsetLabel& sl : al.stationLabels) {
+    const alignment::StationOffsetLabelPlacement placed =
+        alignment::PlaceStationOffsetLabel(al, sl, offsetFace.linear, offsetFace.station);
+    if (placed.onAlignment && offsetFace.Drawable()) offsetFace.Draw(painter, view.Project(placed.point), placed.text);
+  }
+}
+
+// REQ-491 Markers tab: one geometry point marker in its shape, `halfSize` drawing units across each way.
+void DrawAlignmentMarker(QPainter& painter, const AlignmentView& view, alignment::Point2 q, const AlignmentMarkerSpec& m) {
+  assert(std::isfinite(q.x) && std::isfinite(q.y));
+  assert(m.halfSize >= 0.0);
+  const double h = m.halfSize;
+  switch (m.shape) {
+    case AlignmentMarkerShape::Cross:
+      painter.drawLine(view.Project({q.x - h, q.y}), view.Project({q.x + h, q.y}));
+      painter.drawLine(view.Project({q.x, q.y - h}), view.Project({q.x, q.y + h}));
+      return;
+    case AlignmentMarkerShape::X:
+      painter.drawLine(view.Project({q.x - h, q.y - h}), view.Project({q.x + h, q.y + h}));
+      painter.drawLine(view.Project({q.x - h, q.y + h}), view.Project({q.x + h, q.y - h}));
+      return;
+    case AlignmentMarkerShape::Circle: {
+      const QPointF c = view.Project(q);
+      const double r = std::hypot(view.Project({q.x + h, q.y}).x() - c.x(), view.Project({q.x + h, q.y}).y() - c.y());
+      painter.setBrush(Qt::NoBrush);
+      painter.drawEllipse(c, r, r);
+      return;
+    }
+    case AlignmentMarkerShape::Square:
+      painter.setBrush(Qt::NoBrush);
+      painter.drawPolygon(QPolygonF({view.Project({q.x - h, q.y - h}), view.Project({q.x + h, q.y - h}),
+                                     view.Project({q.x + h, q.y + h}), view.Project({q.x - h, q.y + h})}));
+      return;
+    case AlignmentMarkerShape::None: return;
+  }
+}
+
+// REQ-491 station ticks across the alignment at its label-set stations, and geometry point crosses.
+void DrawAlignmentTicksAndMarkers(QPainter& painter, const AlignmentView& view, const alignment::Alignment& al,
+                                  const std::vector<alignment::StationTickLabel>& ticks, const AlignmentStyle& sty,
+                                  const std::string& layerColor) {
+  assert(sty.majorTickLength >= 0.0 && sty.minorTickLength >= 0.0);
+  assert(sty.markerHalfSize >= 0.0);
+  if (sty.ticks.visible) {
+    painter.setPen(QPen(ResolvedColor(sty.ticks.color, layerColor), 1));
+    double a0 = -0.5, a1 = 0.5;  // side 0: both sides of the line
+    if (sty.tickSide == 1) { a0 = 0.0; a1 = -1.0; }  // left
+    if (sty.tickSide == 2) { a0 = 0.0; a1 = 1.0; }   // right
+    for (const alignment::StationTickLabel& tick : ticks) {
+      const alignment::Point2 p = al.GetPointAtStation(tick.rawStation);
+      const double az = al.GetBearingAtStation(tick.rawStation);
+      const double nx = std::cos(az), ny = -std::sin(az);  // right of travel
+      const double len = tick.major ? sty.majorTickLength : sty.minorTickLength;
+      painter.drawLine(view.Project({p.x + a0 * len * nx, p.y + a0 * len * ny}),
+                       view.Project({p.x + a1 * len * nx, p.y + a1 * len * ny}));
+    }
+  }
+  if (!sty.markers.visible) return;
+  const QColor styleColor = ResolvedColor(sty.markers.color, layerColor);
+  for (const alignment::GeometryPoint& gp : al.GeometryPoints()) {
+    using GC = alignment::GeometryPointCode;
+    // Only points on the line are marked; a curve's PI and centre lie off it, as in Civil 3D's default styles.
+    if (gp.code == GC::LineMidPt || gp.code == GC::CurveMidPt || gp.code == GC::CurveCenter || gp.code == GC::CurvePI ||
+        gp.code == GC::SpiralPI)
+      continue;
+    const std::string code = alignment::GeometryPointAbbreviation(gp.code);
+    const auto spec = std::find_if(sty.codeMarkers.begin(), sty.codeMarkers.end(),
+                                   [&](const AlignmentMarkerSpec& m) { return m.code == code; });
+    AlignmentMarkerSpec marker{code, AlignmentMarkerShape::Cross, sty.markerHalfSize, "ByLayer"};
+    if (spec != sty.codeMarkers.end()) marker = *spec;
+    const bool byLayer = marker.color.empty() || marker.color == "ByLayer";
+    painter.setPen(QPen(byLayer ? styleColor : ResolvedColor(marker.color, layerColor), 1));
+    DrawAlignmentMarker(painter, view, gp.point, marker);
+  }
+}
+
+// REQ-491 direction arrow at the middle of the alignment.
+void DrawAlignmentArrow(QPainter& painter, const AlignmentView& view, const alignment::Alignment& al,
+                        const AlignmentStyle& sty, const std::string& layerColor) {
+  assert(!al.Empty());
+  assert(sty.arrowLength >= 0.0);
+  painter.setPen(QPen(ResolvedColor(sty.arrows.color, layerColor), 1));
+  const double mid = 0.5 * (al.StartStation() + al.EndStation());
+  const alignment::Point2 p = al.GetPointAtStation(mid);
+  const double az = al.GetBearingAtStation(mid);
+  const double tx = std::sin(az), ty = std::cos(az);
+  const double L = sty.arrowLength;
+  const alignment::Point2 tip{p.x + 0.5 * L * tx, p.y + 0.5 * L * ty};
+  painter.drawLine(view.Project({p.x - 0.5 * L * tx, p.y - 0.5 * L * ty}), view.Project(tip));
+  for (const double turn : {0.5236, -0.5236}) {  // the two barbs, 30 degrees either side of the back-pointing direction
+    const double c = std::cos(turn), sn = std::sin(turn);
+    const double bx = -tx * c + ty * sn;  // (-tx, -ty) rotated by turn
+    const double by = -tx * sn - ty * c;
+    painter.drawLine(view.Project(tip), view.Project({tip.x + 0.25 * L * bx, tip.y + 0.25 * L * by}));
+  }
+}
+
+// REQ-502: where the design-check markers go, one per failing entity, at the entity's midpoint on screen.
+std::vector<QPointF> DesignWarningPoints(const AppCommandState& state, const AlignmentView& view,
+                                         const alignment::Alignment& al) {
+  assert(!al.Empty());
+  assert(view.width > 0.f && view.height > 0.f);
+  std::vector<QPointF> points;
+  const alignment::AlignmentCheckSet* checkSet =
+      alignment::FindCheckSet(state.alignmentCheckSets, AlignmentStyles::EffectiveCheckSetName(state.alignmentStyles, al));
+  if (checkSet == nullptr) return points;
+  for (const alignment::DesignFinding& fd : alignment::CheckDesign(al, *checkSet, state.displayLinearPrecision)) {
+    const int idx = fd.entity - 1;
+    points.push_back(view.Project(al.GetPointAtStation(0.5 * (al.EntityStartStation(idx) + al.EntityEndStation(idx)))));
+  }
+  return points;
+}
+
+// The marker's height in pixels: one label text height on paper, but never under 10 pixels, so a failure stays visible
+// when zoomed out (D-2026-11-04-d).
+double DesignWarningHeight(const AlignmentView& view) {
+  constexpr double kMinPx = 10.0;
+  return std::isfinite(view.textPx) ? std::max(view.textPx, kMinPx) : kMinPx;
+}
+
+// REQ-502 / D-2026-11-04-d: an amber warning triangle with "!" centred on each entity that fails its design check,
+// whatever the style shows, as Civil 3D marks a criteria violation.
+void DrawAlignmentDesignWarnings(QPainter& painter, const AlignmentView& view, const std::vector<QPointF>& points) {
+  assert(view.width > 0.f && view.height > 0.f);
+  assert(std::isfinite(view.textPx));
+  const double h = DesignWarningHeight(view);
+  const QColor amber("#f5a31a");
+  QPen pen(amber, std::max(1.5, 0.1 * h));
+  pen.setJoinStyle(Qt::MiterJoin);
+  painter.setBrush(Qt::NoBrush);
+  for (const QPointF& c : points) {
+    const double half = h / std::sqrt(3.0);  // half the side of an equilateral triangle of height h
+    painter.setPen(pen);
+    painter.drawPolygon(QPolygonF({c + QPointF(0.0, -2.0 * h / 3.0), c + QPointF(half, h / 3.0), c + QPointF(-half, h / 3.0)}));
+    painter.drawLine(c + QPointF(0.0, -0.33 * h), c + QPointF(0.0, 0.05 * h));
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(amber);
+    painter.drawEllipse(c + QPointF(0.0, 0.18 * h), 0.06 * h, 0.06 * h);
+    painter.setBrush(Qt::NoBrush);
+  }
+}
+
+void DrawQtAlignmentOverlay(QPainter& painter, const AppCommandState& state, AlignmentView view,
+                            const alignment::Alignment& al) {
+  assert(view.width > 0.f && view.height > 0.f);
+  assert(std::isfinite(view.width) && std::isfinite(view.height));
+  if (al.Empty() || CadEntityIdHidden(&state.hiddenEntityIds, al.id)) return;
+  view.textPx = AlignmentLabelStyles::TextHeight(AlignmentLabelStyles::Resolve(state.alignmentLabelStyles,
+                                                                               AlignmentLabelStyles::kStandardName),
+                                                 state.modelUnitsPerPlottedInch) *
+                FrameAt(view, al, al.StartStation()).pixelsPerUnit;
+  const CadLayerRow* layer = FindDrawingLayerRowCi(state, al.layer.empty() ? std::string("0") : al.layer);
+  if (layer != nullptr && (!layer->on || layer->frozen)) return;  // REQ-495.4
+  const std::string layerColor = layer != nullptr ? layer->color : "White";
+  // The label set decides the station TEXT and where ticks sit; the style decides what is drawn (REQ-491). A missing
+  // style or label set (already logged at load) reads as Standard.
+  const AlignmentLabelSet* ls = AlignmentLabelSets::Resolve(state.alignmentLabelSets, al.labelSet);
+  const AlignmentStyle* sty = AlignmentStyles::Resolve(state.alignmentStyles, al.style);
+  const std::vector<alignment::StationTickLabel> ticks =
+      ls != nullptr ? alignment::CollectMajorMinorStationTicks(al, ls->majorInterval, ls->minorInterval,
+                                                               ls->majorStationsOn, ls->minorStationsOn)
+                    : std::vector<alignment::StationTickLabel>{};
+  const std::vector<QPointF> warnings = DesignWarningPoints(state, view, al);
+  // Text under two pixels cannot be read; each label face skips it, as other drawing text is skipped zoomed far out.
+  if (ls != nullptr && (sty == nullptr || sty->labelsVisible)) {
+    LabelBoxes boxes;  // labels keep clear of the design-check markers
+    const double h = DesignWarningHeight(view);
+    for (const QPointF& c : warnings) boxes.Take(QPolygonF(QRectF(c.x() - h, c.y() - h, 2.0 * h, 2.0 * h)));
+    DrawAlignmentLabels(painter, state, view, al, ticks, *ls, sty, layerColor, &boxes);
+  }
+  if (sty != nullptr) DrawAlignmentTicksAndMarkers(painter, view, al, ticks, *sty, layerColor);
+  if (sty != nullptr && sty->arrows.visible) DrawAlignmentArrow(painter, view, al, *sty, layerColor);
+  DrawAlignmentDesignWarnings(painter, view, warnings);
+}
+
+}  // namespace
 
 void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, float width, float height) {
   const auto camera = CadViewCamera(state);
@@ -810,6 +1353,8 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       painter.drawText(tip + direction * 8.0 + QPointF(-4, 4), "N");
     }
   }
+
+  for (const alignment::Alignment& al : state.alignments) DrawQtAlignmentOverlay(painter, state, AlignmentView{camera, width, height}, al);
   painter.restore();
 }
 

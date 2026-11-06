@@ -75,6 +75,11 @@ int SelectedSurface(const AppCommandState& state) {
     if (item.type == SelectedEntity::Type::Surface && item.index >= 0 && item.index < static_cast<int>(state.cadSurfaces.size())) return item.index;
   return -1;
 }
+int SelectedAlignment(const AppCommandState& state) {
+  for (const auto& item : state.selection)
+    if (item.type == SelectedEntity::Type::Alignment && item.index >= 0 && item.index < static_cast<int>(state.alignments.size())) return item.index;
+  return -1;
+}
 
 struct RibbonStyleGalleryModel {
   QStringList entries;
@@ -1002,7 +1007,8 @@ void EditorWindow::BuildRibbonPages() {
   ribbon->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed); ribbon->setMinimumWidth(0);
   ribbon->setFixedHeight(kRibbonHeight);
   const QStringList names = {"Home", "Insert", "Annotate", "View", "Manage", "Output", "Survey", "Modeling",
-      "Layout", "SurfaceCtx", "SurveyPointCtx", "PointCloudCtx", "BlockEditor", "GeolocationCtx", "PdfCtx", "HatchCtx"};
+      "Layout", "SurfaceCtx", "SurveyPointCtx", "PointCloudCtx", "BlockEditor", "GeolocationCtx", "PdfCtx", "HatchCtx",
+      "AlignmentCtx"};
   for (const auto& name : names) {
     auto* page = new RibbonPage(ribbon); page->setObjectName("ribbonPage_" + name); page->setProperty("ribbonTab", name);
     QStringList panels;
@@ -1066,6 +1072,19 @@ void EditorWindow::BuildRibbonPages() {
           else if (id == "##GeoMap") for (const auto& map : kOnlineMaps) add(Text(map.label), "@map:" + QString::number(static_cast<int>(map.map)), Text(map.icon));
           else if (id == "##GeoEditLocation") { add("Edit Location", "@drawingSettings"); add("Edit Geographic Marker", "@geoReorient"); }
           else if (id == "##GeoMarkPosition") { add("Lat-Long", "GEOMARKLATLONG"); add("Point", "GEOMARKPOINT"); }
+          else if (id == "##CdAlignment") {  // REQ-485
+            add("Alignment Creation Tools", "CREATEALIGNMENT", "c3d_alignment");
+            add("Create Alignment from Objects", "CREATEALIGNMENTFROMOBJECTS", "c3d_alignment");
+          }
+          else if (id == "##AnnAddTables") {  // REQ-474, REQ-493: Annotate > Add Tables
+            add("Add Point Table", "ADDPOINTTABLE");
+            menu->addSection("Alignment");
+            add("Add Line", "ALIGNMENTTABLE {alignment}, LINE", "c3d_alignment");
+            add("Add Curve", "ALIGNMENTTABLE {alignment}, CURVE", "c3d_alignment");
+            add("Add Spiral", "ALIGNMENTTABLE {alignment}, SPIRAL", "c3d_alignment");
+            add("Add Segment", "ALIGNMENTTABLE {alignment}, SEGMENT", "c3d_alignment");
+            add("Add Station Equation", "ALIGNMENTTABLE {alignment}, EQUATIONS", "c3d_alignment");
+          }
           else if (id == "##GeoCaptureArea") { add("Capture Area", "@captureViewport"); add("Pick Area", "@captureArea"); menu->addSeparator(); add("Remove Captured Areas", "@removeCaptures"); }
           else if (id == "##TsAddData") {
             add("Breaklines", "@surfaceBreaklines"); add("Contours", "@surfaceContours"); add("Boundary", "@surfaceBoundary"); add("Point Groups", "@surfaceManager");
@@ -1423,6 +1442,7 @@ void EditorWindow::RefreshRibbon() {
   const int surface = paper ? -1 : SelectedSurface(m_State);
   int point = -1, cloud = -1, pdf = -1;
   int hatch = -1;
+  const int alignment = paper ? -1 : SelectedAlignment(m_State);
   if (!paper) for (const int i : m_State.selectedSurveyPointIndices)
     if (i >= 0 && i < static_cast<int>(m_State.surveyPoints.size())) { point = i; break; }
   for (const auto& item : m_State.selection) {
@@ -1431,7 +1451,7 @@ void EditorWindow::RefreshRibbon() {
     if (item.type == SelectedEntity::Type::FilledRegion && item.index >= 0 && item.index < static_cast<int>(m_State.cadFilledRegions.size())) hatch = item.index;
   }
   const bool hatchActive = hatch >= 0 || m_State.active == AppCommandState::Kind::Hatch;
-  const QString desired = !m_State.blockEditorName.empty() ? "BlockEditor" : surface >= 0 ? "SurfaceCtx" : point >= 0 ? "SurveyPointCtx" : cloud >= 0 ? "PointCloudCtx" : hatchActive ? "HatchCtx" : QString{};
+  const QString desired = !m_State.blockEditorName.empty() ? "BlockEditor" : surface >= 0 ? "SurfaceCtx" : point >= 0 ? "SurveyPointCtx" : cloud >= 0 ? "PointCloudCtx" : hatchActive ? "HatchCtx" : alignment >= 0 ? "AlignmentCtx" : QString{};
   const QString previous = ribbon->property("selectedContext").toString();
   const QString active = ribbon->currentWidget() ? ribbon->currentWidget()->property("ribbonTab").toString() : "Home";
   if (desired != previous && !desired.isEmpty() && previous.isEmpty()) ribbon->setProperty("beforeContext", active);
@@ -1440,7 +1460,8 @@ void EditorWindow::RefreshRibbon() {
     auto* page = ribbon->widget(i); const QString name = page->property("ribbonTab").toString();
     const bool visible = name == "Layout" ? paper : name == "SurfaceCtx" ? surface >= 0 : name == "SurveyPointCtx" ? point >= 0 :
         name == "PointCloudCtx" ? cloud >= 0 : name == "BlockEditor" ? !m_State.blockEditorName.empty() :
-        name == "GeolocationCtx" ? GeolocationRibbonTabVisible(m_State) : name == "PdfCtx" ? pdf >= 0 : name == "HatchCtx" ? hatchActive : true;
+        name == "GeolocationCtx" ? GeolocationRibbonTabVisible(m_State) : name == "PdfCtx" ? pdf >= 0 : name == "HatchCtx" ? hatchActive :
+        name == "AlignmentCtx" ? alignment >= 0 : true;
     ribbon->setTabVisible(i, visible); page->setEnabled(drawing);
     if (name == desired) desiredIndex = i;
     QString label = name;
@@ -1451,6 +1472,8 @@ void EditorWindow::RefreshRibbon() {
     else if (name == "GeolocationCtx") label = "Geolocation";
     else if (name == "PdfCtx") label = "PDF Underlay";
     else if (name == "HatchCtx") label = "Hatch";
+    else if (name == "AlignmentCtx")
+      label = alignment >= 0 ? "Alignment: " + Text(m_State.alignments[static_cast<std::size_t>(alignment)].name.c_str()) : "Alignment";
     ribbon->setTabText(i, label);
   }
   if (desired != previous) {
@@ -1667,6 +1690,24 @@ void EditorWindow::RunRibbonAction(const QString& id) {
   for (const auto& item : qtribbon::kButtons) if (Text(item.id) == id) { if (item.placeholder) return; command = Text(item.command); break; }
   const int surface = SelectedSurface(m_State);
   const std::string surfaceName = surface >= 0 ? m_State.cadSurfaces[surface].name : std::string{};
+  // REQ-486 / REQ-487: the Alignment tab's commands act on the selected alignment.
+  const int selectedAlignment = SelectedAlignment(m_State);
+  if (command.contains("{alignment}")) {
+    if (selectedAlignment < 0) {
+      m_Log.push_back("Select an alignment first, then choose the command again.");
+      Refresh();
+      return;
+    }
+    command.replace("{alignment}", Text(m_State.alignments[static_cast<std::size_t>(selectedAlignment)].name.c_str()));
+  }
+  if (command == "@alignmentGeometryEditor") {
+    if (selectedAlignment >= 0) {
+      CancelActiveCommand(m_State, m_Log);
+      m_State.alignmentLayoutToolsName = m_State.alignments[static_cast<std::size_t>(selectedAlignment)].name;
+    }
+    Refresh();
+    return;
+  }
   if (id == "##ModPipeRun") { CancelActiveCommand(m_State, m_Log); StartPipeRunAtCurrentSize(m_State, m_Log); }
   else if (id == "##RibbonInsEdit" || id == "##BeEdit") { CadBlocksOpenEditPicker(m_State, m_Log); ShowBlockEditorPicker(); }
   else if (command == "TOOLSPACE" || command == "@properties") {

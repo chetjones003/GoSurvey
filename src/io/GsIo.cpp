@@ -2,6 +2,8 @@
 #include "GsAnnotationJson.hpp"
 
 #include "CadCommands.hpp"
+#include "AlignmentLabelSet.hpp"
+#include "AlignmentStyle.hpp"
 #include "GsMigrate.hpp"
 #include "ProjectPoints.hpp"
 #include "TextStyle.hpp"
@@ -14,6 +16,7 @@
 #include "BrepJson.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -1132,6 +1135,59 @@ static CadSpline CadSplineFromJson(const json& o) {
   return s;
 }
 
+/// One REQ-502 check set as the drawing (and a criteria file) stores it.
+json CheckSetToJson(const alignment::AlignmentCheckSet& s) {
+  assert(!s.name.empty());
+  assert(s.radiusTable.size() < 100000);
+  json o;
+  o["name"] = s.name;
+  o["kind"] = static_cast<int>(s.kind);
+  json table = json::array();
+  for (const alignment::RadiusRequirement& r : s.radiusTable) table.push_back({{"speed", r.speed}, {"minRadius", r.minRadius}});
+  o["radiusTable"] = std::move(table);
+  o["minTangent"] = s.minTangent;
+  o["minSpiralLength"] = s.minSpiralLength;
+  o["minA"] = s.minA;
+  o["maxA"] = s.maxA;
+  o["maxSuperelevation"] = s.maxSuperelevation;  // REQ-502 stub
+  o["minLineLength"] = s.minLineLength;
+  o["minSightDistance"] = s.minSightDistance;    // REQ-502 stub
+  if (s.maxTangentDeflection > 0.0) o["maxTangentDeflection"] = s.maxTangentDeflection;
+  return o;
+}
+
+/// Reads one check set; false (and `s` untouched) for anything without a name.
+bool CheckSetFromJson(const json& o, alignment::AlignmentCheckSet* s) {
+  assert(s != nullptr);
+  if (s == nullptr || !o.is_object() || !o.contains("name") || !o["name"].is_string() || o["name"].get<std::string>().empty())
+    return false;
+  alignment::AlignmentCheckSet r;
+  r.name = o["name"].get<std::string>();
+  if (o.contains("kind") && o["kind"].is_number_integer() && o["kind"].get<int>() == 1) r.kind = alignment::CheckSetKind::Rail;
+  if (o.contains("radiusTable") && o["radiusTable"].is_array()) {
+    for (const auto& row : o["radiusTable"]) {
+      if (!row.is_object() || !row.contains("speed") || !row.contains("minRadius")) continue;
+      if (!row["speed"].is_number() || !row["minRadius"].is_number()) continue;
+      r.radiusTable.push_back({row["speed"].get<double>(), row["minRadius"].get<double>()});
+    }
+    std::sort(r.radiusTable.begin(), r.radiusTable.end(),
+              [](const alignment::RadiusRequirement& x, const alignment::RadiusRequirement& y) { return x.speed < y.speed; });
+  }
+  const auto number = [&](const char* key, double* v) {
+    if (o.contains(key) && o[key].is_number()) *v = o[key].get<double>();
+  };
+  number("minTangent", &r.minTangent);
+  number("minSpiralLength", &r.minSpiralLength);
+  number("minA", &r.minA);
+  number("maxA", &r.maxA);
+  number("maxSuperelevation", &r.maxSuperelevation);
+  number("minLineLength", &r.minLineLength);
+  number("minSightDistance", &r.minSightDistance);
+  number("maxTangentDeflection", &r.maxTangentDeflection);
+  *s = std::move(r);
+  return true;
+}
+
 json BuildRoot(const AppCommandState& st) {
   json root;
   root["format"] = "gosurvey";
@@ -1139,6 +1195,17 @@ json BuildRoot(const AppCommandState& st) {
 
   json doc;
   doc["worldDocumentOriginX"] = st.worldDocumentOriginX;
+  {  // REQ-483.4: written only when it differs from the default, so legacy drawings save unchanged
+    const alignment::StationFormat& sf = st.alignmentStationFormat;
+    const alignment::StationFormat def{};
+    if (sf.delimiter != def.delimiter || sf.digitsRight != def.digitsRight || sf.decimals != def.decimals ||
+        sf.prefix != def.prefix || sf.suffix != def.suffix)
+      doc["stationFormat"] = {{"delimiter", sf.delimiter == '\0' ? std::string() : std::string(1, sf.delimiter)},
+                              {"digits", sf.digitsRight},
+                              {"decimals", sf.decimals},
+                              {"prefix", sf.prefix},
+                              {"suffix", sf.suffix}};
+  }
   doc["worldDocumentOriginY"] = st.worldDocumentOriginY;
   // The section plane (REQ-343 amended, GitHub issue #479 acceptance 8). Additive: a reader that
   // does not know the key ignores it, and a file saved before this loads with the clip off — the
@@ -1278,6 +1345,112 @@ json BuildRoot(const AppCommandState& st) {
         styles.push_back(std::move(o));
       }
       doc["surfaceStyles"] = std::move(styles);
+    }
+  }
+  {
+    const bool onlyUntouchedStandard =
+        st.alignmentStyles.size() == 1 && st.alignmentStyles[0] == AlignmentStyles::StandardAlignmentStyle();
+    if (!st.alignmentStyles.empty() && !onlyUntouchedStandard) {
+      const auto componentToJson = [](const SurfaceComponentStyle& c) {
+        json o;
+        o["visible"] = c.visible;
+        o["color"] = c.color;
+        o["linetype"] = c.linetype;
+        o["lineweightMm"] = c.lineweightMm;
+        return o;
+      };
+      json styles = json::array();
+      for (const AlignmentStyle& s : st.alignmentStyles) {
+        json o;
+        o["name"] = s.name;
+        o["tangent"] = componentToJson(s.tangent);
+        o["curve"] = componentToJson(s.curve);
+        o["spiral"] = componentToJson(s.spiral);
+        o["ticks"] = componentToJson(s.ticks);  // REQ-491
+        o["majorTickLength"] = s.majorTickLength;
+        o["minorTickLength"] = s.minorTickLength;
+        o["tickSide"] = s.tickSide;
+        o["markers"] = componentToJson(s.markers);
+        o["markerHalfSize"] = s.markerHalfSize;
+        o["arrows"] = componentToJson(s.arrows);
+        o["arrowLength"] = s.arrowLength;
+        o["labelsVisible"] = s.labelsVisible;
+        if (!s.checkSetName.empty()) o["checkSet"] = s.checkSetName;  // REQ-502 / D-2026-11-04-b
+        if (!s.codeMarkers.empty()) {  // REQ-491 per-code markers
+          json markers = json::array();
+          for (const AlignmentMarkerSpec& m : s.codeMarkers)
+            markers.push_back({{"code", m.code}, {"shape", static_cast<int>(m.shape)}, {"halfSize", m.halfSize},
+                               {"color", m.color}});
+          o["codeMarkers"] = std::move(markers);
+        }
+        styles.push_back(std::move(o));
+      }
+      doc["alignmentStyles"] = std::move(styles);
+    }
+  }
+  if (st.alignmentStyleCurrent != AlignmentStyles::kStandardName) doc["alignmentStyleCurrent"] = st.alignmentStyleCurrent;
+  {
+    const bool onlyUntouchedStandard =
+        st.alignmentLabelSets.size() == 1 && st.alignmentLabelSets[0] == AlignmentLabelSets::StandardLabelSet();
+    if (!st.alignmentLabelSets.empty() && !onlyUntouchedStandard) {
+      json sets = json::array();
+      for (const AlignmentLabelSet& s : st.alignmentLabelSets) {
+        json o;
+        o["name"] = s.name;
+        o["majorStationsOn"] = s.majorStationsOn;
+        o["minorStationsOn"] = s.minorStationsOn;
+        o["equationsOn"] = s.equationsOn;  // REQ-492.1
+        o["geometryPointsOn"] = s.geometryPointsOn;  // D-2026-11-04-c
+        o["designSpeedsOn"] = s.designSpeedsOn;
+        o["majorInterval"] = s.majorInterval;
+        o["minorInterval"] = s.minorInterval;
+        json styles;  // REQ-492.5: the label style of each item
+        styles["major"] = s.majorStyle;
+        styles["geometry"] = s.geometryStyle;
+        styles["speeds"] = s.speedStyle;
+        styles["equations"] = s.equationStyle;
+        styles["segments"] = s.segmentStyle;
+        styles["offsets"] = s.offsetStyle;
+        o["styles"] = std::move(styles);
+        if (!s.geometryCodes.empty()) o["geometryCodes"] = s.geometryCodes;  // REQ-492.1 repeated items
+        if (!s.extraGeometryItems.empty()) {
+          json items = json::array();
+          for (const AlignmentGeometryLabelItem& item : s.extraGeometryItems)
+            items.push_back({{"style", item.style}, {"codes", item.codes}});
+          o["geometryItems"] = std::move(items);
+        }
+        if (s.profileGeometryPointsOn) o["profileGeometryPointsOn"] = true;  // REQ-492.1 placeholders
+        if (s.superelevationPointsOn) o["superelevationPointsOn"] = true;
+        sets.push_back(std::move(o));
+      }
+      doc["alignmentLabelSets"] = std::move(sets);
+    }
+  }
+  {  // REQ-492.5: alignment label styles (omitted while only an untouched Standard exists)
+    const bool onlyUntouchedStandard = st.alignmentLabelStyles.size() == 1 &&
+                                       st.alignmentLabelStyles[0] == AlignmentLabelStyles::StandardLabelStyle();
+    if (!st.alignmentLabelStyles.empty() && !onlyUntouchedStandard) {
+      json styles = json::array();
+      for (const AlignmentLabelStyle& s : st.alignmentLabelStyles) {
+        json o;
+        o["name"] = s.name;
+        o["textStyle"] = s.textStyle;
+        o["heightInches"] = s.heightInches;
+        o["color"] = s.color;
+        if (s.precision >= 0) o["precision"] = s.precision;  // REQ-492.5 formatting
+        if (!s.prefix.empty()) o["prefix"] = s.prefix;
+        if (!s.suffix.empty()) o["suffix"] = s.suffix;
+        if (s.viewOriented) o["viewOriented"] = true;
+        styles.push_back(std::move(o));
+      }
+      doc["alignmentLabelStyles"] = std::move(styles);
+    }
+  }
+  {  // REQ-502: drawing-owned check sets (omitted when there are none)
+    if (!st.alignmentCheckSets.empty()) {
+      json sets = json::array();
+      for (const alignment::AlignmentCheckSet& s : st.alignmentCheckSets) sets.push_back(CheckSetToJson(s));
+      doc["alignmentCheckSets"] = std::move(sets);
     }
   }
   // Dimension style (issue #99). Single active style, additive, no version bump.
@@ -1767,6 +1940,16 @@ json BuildRoot(const AppCommandState& st) {
     json o;
     o["name"] = i.name;
     o["description"] = i.description;
+    if (i.sourceAlignmentId != 0) {  // REQ-498.2: the link, so a refresh can rebuild the line from its alignment
+      json link;
+      link["alignmentId"] = i.sourceAlignmentId;
+      link["interval"] = i.sampleInterval;
+      link["tolerance"] = i.chordTolerance;
+      link["hasSurface"] = i.hasSurface;
+      link["surface"] = i.surfaceName;
+      link["z"] = i.constantZ;
+      o["alignmentLink"] = std::move(link);
+    }
     if (i.grading) {  // REQ-398 / issue #997: written only on grading results
       json g;
       g["baselineId"] = i.grading->baselineId;
@@ -2199,6 +2382,100 @@ json BuildRoot(const AppCommandState& st) {
     doc["pipeRunAttrs"] = std::move(pipeRunAttrs);
   }
 
+  // Alignments (REQ-480 / REQ-496, ADR-075). Additive and omitted when there are none. Exact parameters
+  // only - never a sampled polyline (REQ-480.2) - in drawing-local doubles.
+  if (!st.alignments.empty()) {
+    json arr = json::array();
+    for (const alignment::Alignment& a : st.alignments) {
+      json o;
+      o["id"] = a.id;
+      o["name"] = a.name;
+      if (!a.description.empty()) o["description"] = a.description;
+      o["layer"] = a.layer;
+      o["style"] = a.style;
+      if (a.labelSet != AlignmentLabelSets::kStandardName) o["labelSet"] = a.labelSet;
+      o["type"] = static_cast<int>(a.type);
+      o["startingStation"] = a.startingStation;
+      if (a.hasReference) o["referenceDistance"] = a.referenceDistance;  // REQ-483.1
+      if (!a.metadata.empty()) {  // REQ-480.1
+        json meta = json::array();
+        for (const auto& [key, value] : a.metadata) meta.push_back(json::array({key, value}));
+        o["metadata"] = std::move(meta);
+      }
+      if (a.continuityRequirement != alignment::ContinuityRequirement::C1)
+        o["continuityRequirement"] = static_cast<int>(a.continuityRequirement);
+      if (a.parentId != 0) {  // REQ-488: a linked offset alignment
+        o["parentId"] = a.parentId;
+        o["offsetDistance"] = a.offsetDistance;
+        if (a.HasOffsetRange()) {  // REQ-488.1: an offset of part of the parent
+          o["offsetFrom"] = a.offsetFromStation;
+          o["offsetTo"] = a.offsetToStation;
+        }
+      }
+      if (a.segmentLabels) o["segmentLabels"] = true;  // REQ-492.3 / REQ-493.3
+      if (!a.segmentLabelStations.empty()) o["segmentLabelStations"] = a.segmentLabelStations;  // single segment labels
+      if (!a.checkSetName.empty()) o["checkSet"] = a.checkSetName;  // REQ-502: criteria applied to this alignment
+      if (!a.designSpeeds.empty()) {  // REQ-502: design speed by internal station
+        json speeds = json::array();
+        for (const alignment::DesignSpeed& d : a.designSpeeds)
+          speeds.push_back({{"station", d.internalStation}, {"speed", d.speed}});
+        o["designSpeeds"] = std::move(speeds);
+      }
+      if (!a.profileIds.empty()) o["profiles"] = a.profileIds;  // REQ-500: profile references, ids only
+      if (!a.stationLabels.empty()) {  // REQ-492.4: station/offset labels, owned by the alignment
+        json labels = json::array();
+        for (const alignment::StationOffsetLabel& l : a.stationLabels)
+          labels.push_back({{"fixed", l.fixed}, {"station", l.internalStation}, {"offset", l.offset},
+                            {"x", l.fixedPoint.x}, {"y", l.fixedPoint.y}});
+        o["stationLabels"] = std::move(labels);
+      }
+      if (!a.tables.empty()) {  // REQ-493: the table links, so dynamic tables keep following their alignment
+        json links = json::array();
+        for (const alignment::AlignmentTableLink& t : a.tables) {
+          json link = {{"id", t.tableId}, {"kind", static_cast<int>(t.kind)}, {"dynamic", t.dynamic}};
+          if (t.firstRow != 0 || t.rowCount != 0) {
+            link["firstRow"] = t.firstRow;
+            link["rowCount"] = t.rowCount;
+          }
+          links.push_back(std::move(link));
+        }
+        o["tables"] = std::move(links);
+      }
+      json ents = json::array();
+      for (const alignment::Entity& e : a.Entities()) {
+        json q;
+        q["k"] = e.kind == alignment::EntityKind::Line ? "L" : e.kind == alignment::EntityKind::Arc ? "A" : "S";
+        q["x"] = e.start.x;
+        q["y"] = e.start.y;
+        q["az"] = e.startAzimuth;
+        q["len"] = e.length;
+        if (e.kind == alignment::EntityKind::Arc) {
+          q["r"] = e.radius;
+          q["right"] = e.right;
+        }
+        if (e.kind == alignment::EntityKind::Spiral) {
+          q["r"] = e.radius;
+          q["rs"] = e.startRadius;
+          q["right"] = e.right;
+        }
+        q["c"] = static_cast<int>(e.constraint);
+        if (e.locks != 0) q["lk"] = static_cast<int>(e.locks);
+        if (e.kind == alignment::EntityKind::Arc && e.definedByLength) q["dl"] = true;  // D-2026-11-04-f
+        if (e.sizeBy != alignment::Entity::SizeBy::Radius) q["sz"] = static_cast<int>(e.sizeBy);  // REQ-481.5a
+        ents.push_back(std::move(q));
+      }
+      o["entities"] = std::move(ents);
+      if (!a.equations.empty()) {
+        json eqs = json::array();
+        for (const alignment::StationEquation& q : a.equations)
+          eqs.push_back({{"rawBack", q.rawBack}, {"ahead", q.ahead}, {"increasing", q.increasing}});
+        o["equations"] = std::move(eqs);
+      }
+      arr.push_back(std::move(o));
+    }
+    doc["alignments"] = std::move(arr);
+  }
+
   // Piping networks (issue #486 increment B3 / REQ-345). Additive and omitted when there are none,
   // same ADR-020 (d) shape as pipeRuns just above — a network is metadata only (a name plus indices
   // into pipeRuns), never geometry.
@@ -2619,6 +2896,8 @@ json BuildRoot(const AppCommandState& st) {
   settings["objectSnapMidpoint"] = st.objectSnapMidpoint;
   settings["objectSnapCenter"] = st.objectSnapCenter;
   settings["objectSnapQuadrant"] = st.objectSnapQuadrant;
+  settings["objectSnapStation"] = st.objectSnapStation;
+  settings["objectSnapNode"] = st.objectSnapNode;
   settings["objectSnapPerpendicular"] = st.objectSnapPerpendicular;
   settings["objectSnapSurveyPoint"] = st.objectSnapSurveyPoint;
   settings["objectSnapGeometricCenter"] = st.objectSnapGeometricCenter;
@@ -2938,6 +3217,8 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
   b(s, "objectSnapMidpoint", &st.objectSnapMidpoint);
   b(s, "objectSnapCenter", &st.objectSnapCenter);
   b(s, "objectSnapQuadrant", &st.objectSnapQuadrant);
+  b(s, "objectSnapStation", &st.objectSnapStation);
+  b(s, "objectSnapNode", &st.objectSnapNode);
   b(s, "objectSnapPerpendicular", &st.objectSnapPerpendicular);
   b(s, "objectSnapSurveyPoint", &st.objectSnapSurveyPoint);
   b(s, "objectSnapGeometricCenter", &st.objectSnapGeometricCenter);
@@ -2959,6 +3240,16 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
 
 void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std::string>& log) {
   st.worldDocumentOriginX = doc.value("worldDocumentOriginX", 0.0);
+  st.alignmentStationFormat = alignment::StationFormat{};
+  if (doc.contains("stationFormat") && doc["stationFormat"].is_object()) {  // REQ-483.4
+    const json& sf = doc["stationFormat"];
+    const std::string delim = sf.value("delimiter", std::string("+"));
+    st.alignmentStationFormat.delimiter = delim.empty() ? '\0' : delim[0];
+    st.alignmentStationFormat.digitsRight = std::clamp(sf.value("digits", 2), 1, 6);
+    st.alignmentStationFormat.decimals = std::clamp(sf.value("decimals", 2), 0, 6);
+    st.alignmentStationFormat.prefix = sf.value("prefix", std::string());
+    st.alignmentStationFormat.suffix = sf.value("suffix", std::string());
+  }
   st.worldDocumentOriginY = doc.value("worldDocumentOriginY", 0.0);
   // A legacy file has no counter; 1 is correct there because every entity in it also has no id, so
   // the post-load EnsureEntityIds numbers the whole drawing from 1. EnsureEntityIds independently
@@ -3488,6 +3779,140 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   }
   SurfaceStyles::EnsureStandard(st.surfaceStyles);
 
+  st.alignmentStyles.clear();
+  if (doc.contains("alignmentStyles") && doc["alignmentStyles"].is_array()) {
+    const auto componentFromJson = [](const json& o, SurfaceComponentStyle* c) {
+      if (!o.is_object() || c == nullptr) return;
+      if (o.contains("visible") && o["visible"].is_boolean()) c->visible = o["visible"].get<bool>();
+      if (o.contains("color") && o["color"].is_string()) c->color = o["color"].get<std::string>();
+      if (o.contains("linetype") && o["linetype"].is_string()) c->linetype = o["linetype"].get<std::string>();
+      if (o.contains("lineweightMm") && o["lineweightMm"].is_number()) c->lineweightMm = o["lineweightMm"].get<float>();
+    };
+    for (const auto& o : doc["alignmentStyles"]) {
+      if (!o.is_object() || !o.contains("name") || !o["name"].is_string()) continue;
+      AlignmentStyle s;
+      s.name = o["name"].get<std::string>();
+      if (o.contains("tangent")) componentFromJson(o["tangent"], &s.tangent);
+      if (o.contains("curve")) componentFromJson(o["curve"], &s.curve);
+      if (o.contains("spiral")) componentFromJson(o["spiral"], &s.spiral);
+      if (o.contains("ticks")) componentFromJson(o["ticks"], &s.ticks);  // REQ-491; a style saved before these read as defaults
+      if (o.contains("majorTickLength") && o["majorTickLength"].is_number()) s.majorTickLength = o["majorTickLength"].get<double>();
+      if (o.contains("minorTickLength") && o["minorTickLength"].is_number()) s.minorTickLength = o["minorTickLength"].get<double>();
+      if (o.contains("tickSide") && o["tickSide"].is_number_integer()) s.tickSide = std::clamp(o["tickSide"].get<int>(), 0, 2);
+      if (o.contains("markers")) componentFromJson(o["markers"], &s.markers);
+      if (o.contains("markerHalfSize") && o["markerHalfSize"].is_number()) s.markerHalfSize = o["markerHalfSize"].get<double>();
+      s.arrows.visible = false;  // a style saved before arrows existed has none (REQ-491)
+      if (o.contains("arrows")) componentFromJson(o["arrows"], &s.arrows);
+      if (o.contains("arrowLength") && o["arrowLength"].is_number()) s.arrowLength = o["arrowLength"].get<double>();
+      if (o.contains("labelsVisible") && o["labelsVisible"].is_boolean()) s.labelsVisible = o["labelsVisible"].get<bool>();
+      if (o.contains("checkSet") && o["checkSet"].is_string()) s.checkSetName = o["checkSet"].get<std::string>();
+      if (o.contains("codeMarkers") && o["codeMarkers"].is_array()) {
+        for (const auto& m : o["codeMarkers"]) {
+          if (!m.is_object() || !m.contains("code") || !m["code"].is_string()) continue;
+          AlignmentMarkerSpec spec;
+          spec.code = m["code"].get<std::string>();
+          if (m.contains("shape") && m["shape"].is_number_integer())
+            spec.shape = static_cast<AlignmentMarkerShape>(std::clamp(m["shape"].get<int>(), 0, 4));
+          if (m.contains("halfSize") && m["halfSize"].is_number()) spec.halfSize = std::max(0.0, m["halfSize"].get<double>());
+          if (m.contains("color") && m["color"].is_string()) spec.color = m["color"].get<std::string>();
+          s.codeMarkers.push_back(std::move(spec));
+        }
+      }
+      st.alignmentStyles.push_back(std::move(s));
+    }
+  }
+  AlignmentStyles::EnsureStandard(st.alignmentStyles);
+  st.alignmentStyleCurrent = AlignmentStyles::kStandardName;  // REQ-491 current style
+  if (doc.contains("alignmentStyleCurrent") && doc["alignmentStyleCurrent"].is_string()) {
+    const std::string current = doc["alignmentStyleCurrent"].get<std::string>();
+    if (AlignmentStyles::Find(st.alignmentStyles, current) != nullptr) st.alignmentStyleCurrent = current;
+    else log.push_back("ALIGNMENTSTYLE — current style \"" + current + "\" is missing; using Standard.");
+  }
+
+  st.alignmentLabelSets.clear();
+  if (doc.contains("alignmentLabelSets") && doc["alignmentLabelSets"].is_array()) {
+    for (const auto& o : doc["alignmentLabelSets"]) {
+      if (!o.is_object() || !o.contains("name") || !o["name"].is_string()) continue;
+      AlignmentLabelSet s;
+      s.name = o["name"].get<std::string>();
+      if (o.contains("equationsOn") && o["equationsOn"].is_boolean())
+        s.equationsOn = o["equationsOn"].get<bool>();
+      if (o.contains("geometryPointsOn") && o["geometryPointsOn"].is_boolean())
+        s.geometryPointsOn = o["geometryPointsOn"].get<bool>();
+      if (o.contains("designSpeedsOn") && o["designSpeedsOn"].is_boolean())
+        s.designSpeedsOn = o["designSpeedsOn"].get<bool>();
+      if (o.contains("majorStationsOn") && o["majorStationsOn"].is_boolean())
+        s.majorStationsOn = o["majorStationsOn"].get<bool>();
+      if (o.contains("minorStationsOn") && o["minorStationsOn"].is_boolean())
+        s.minorStationsOn = o["minorStationsOn"].get<bool>();
+      if (o.contains("majorInterval") && o["majorInterval"].is_number())
+        s.majorInterval = o["majorInterval"].get<double>();
+      if (o.contains("minorInterval") && o["minorInterval"].is_number())
+        s.minorInterval = o["minorInterval"].get<double>();
+      if (o.contains("styles") && o["styles"].is_object()) {  // REQ-492.5
+        const json& styles = o["styles"];
+        const std::array<std::pair<const char*, std::string*>, 6> items{{
+            {"major", &s.majorStyle},       {"geometry", &s.geometryStyle}, {"speeds", &s.speedStyle},
+            {"equations", &s.equationStyle}, {"segments", &s.segmentStyle},  {"offsets", &s.offsetStyle}}};
+        for (const auto& [key, field] : items)
+          if (styles.contains(key) && styles[key].is_string()) *field = styles[key].get<std::string>();
+      }
+      if (o.contains("geometryCodes") && o["geometryCodes"].is_array())
+        for (const auto& c : o["geometryCodes"])
+          if (c.is_string()) s.geometryCodes.push_back(c.get<std::string>());
+      if (o.contains("geometryItems") && o["geometryItems"].is_array()) {
+        for (const auto& it : o["geometryItems"]) {
+          if (!it.is_object()) continue;
+          AlignmentGeometryLabelItem item;
+          if (it.contains("style") && it["style"].is_string()) item.style = it["style"].get<std::string>();
+          if (it.contains("codes") && it["codes"].is_array())
+            for (const auto& c : it["codes"])
+              if (c.is_string()) item.codes.push_back(c.get<std::string>());
+          s.extraGeometryItems.push_back(std::move(item));
+        }
+      }
+      s.profileGeometryPointsOn = o.value("profileGeometryPointsOn", false);
+      s.superelevationPointsOn = o.value("superelevationPointsOn", false);
+      st.alignmentLabelSets.push_back(std::move(s));
+    }
+  }
+  AlignmentLabelSets::EnsureStandard(st.alignmentLabelSets);
+
+  st.alignmentLabelStyles.clear();  // REQ-492.5
+  if (doc.contains("alignmentLabelStyles") && doc["alignmentLabelStyles"].is_array()) {
+    for (const auto& o : doc["alignmentLabelStyles"]) {
+      if (!o.is_object() || !o.contains("name") || !o["name"].is_string()) continue;
+      AlignmentLabelStyle s;
+      s.name = o["name"].get<std::string>();
+      if (o.contains("textStyle") && o["textStyle"].is_string()) s.textStyle = o["textStyle"].get<std::string>();
+      if (o.contains("heightInches") && o["heightInches"].is_number()) s.heightInches = o["heightInches"].get<double>();
+      if (o.contains("color") && o["color"].is_string()) s.color = o["color"].get<std::string>();
+      if (!(s.heightInches > 0.0) || !std::isfinite(s.heightInches)) s.heightInches = AlignmentLabelStyle{}.heightInches;
+      if (o.contains("precision") && o["precision"].is_number_integer()) s.precision = std::clamp(o["precision"].get<int>(), -1, 8);
+      if (o.contains("prefix") && o["prefix"].is_string()) s.prefix = o["prefix"].get<std::string>();
+      if (o.contains("suffix") && o["suffix"].is_string()) s.suffix = o["suffix"].get<std::string>();
+      s.viewOriented = o.value("viewOriented", false);
+      st.alignmentLabelStyles.push_back(std::move(s));
+    }
+  }
+  AlignmentLabelStyles::EnsureStandard(st.alignmentLabelStyles);
+  for (AlignmentLabelSet& set : st.alignmentLabelSets) {  // REQ-492.5: a label set's styles must exist
+    for (std::string* ref : AlignmentLabelStyles::References(set)) {
+      if (AlignmentLabelStyles::Find(st.alignmentLabelStyles, *ref) != nullptr) continue;
+      log.push_back("ALIGNMENTLABELSET — label set \"" + set.name + "\" references missing label style \"" + *ref +
+                    "\"; using Standard.");
+      *ref = AlignmentLabelStyles::kStandardName;
+    }
+  }
+
+  st.alignmentCheckSets.clear();  // REQ-502
+  if (doc.contains("alignmentCheckSets") && doc["alignmentCheckSets"].is_array()) {
+    for (const auto& o : doc["alignmentCheckSets"]) {
+      alignment::AlignmentCheckSet s;
+      if (CheckSetFromJson(o, &s)) st.alignmentCheckSets.push_back(std::move(s));
+    }
+  }
+
   // Dimension style (issue #99). Missing section -> default.
   {
     DimensionStyle ds = DimensionStyles::Default();
@@ -3753,6 +4178,16 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (o.is_object()) {
         i.name = o.value("name", std::string());
         i.description = o.value("description", std::string());
+        const auto link = o.find("alignmentLink");  // REQ-498.2; a line saved before links read as ordinary
+        if (link != o.end() && link->is_object()) {
+          i.sourceAlignmentId = link->value("alignmentId", std::uint64_t{0});
+          i.sampleInterval = link->value("interval", 10.0);
+          i.chordTolerance = link->value("tolerance", 0.01);
+          i.hasSurface = link->value("hasSurface", false);
+          i.surfaceName = link->value("surface", std::string());
+          i.constantZ = link->value("z", 0.0);
+          if (!(i.sampleInterval >= 0.0) || !(i.chordTolerance > 0.0)) i.sourceAlignmentId = 0;
+        }
         // Issue #997. A definition without a usable baseline or slope is dropped, leaving an
         // ordinary feature line, rather than one that can never be rebuilt.
         const auto g = o.find("grading");
@@ -4135,6 +4570,162 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     for (const auto& o : doc["pipeRunAttrs"])
       st.cadPipeRunAttrs.push_back(EntityAttributesFromJson(o));
   st.cadPipeRunAttrs.resize(st.cadPipeRuns.size());  // keep the parallel arrays length-locked
+
+  // Alignments (REQ-480 / REQ-496). Guarded, so a drawing written before them simply has none. An invalid
+  // entity (REQ-499: non-positive length or radius) drops THAT alignment; the entity setter refuses what the
+  // spec forbids, so a corrupt entity can never be stored.
+  st.alignments.clear();
+  if (doc.contains("alignments") && doc["alignments"].is_array()) {
+    for (const auto& el : doc["alignments"]) {
+      if (!el.is_object()) continue;
+      alignment::Alignment a;
+      if (el.contains("id") && el["id"].is_number_unsigned()) a.id = el["id"].get<std::uint64_t>();
+      if (el.contains("name") && el["name"].is_string()) a.name = el["name"].get<std::string>();
+      if (el.contains("description") && el["description"].is_string()) a.description = el["description"].get<std::string>();
+      if (el.contains("layer") && el["layer"].is_string()) a.layer = el["layer"].get<std::string>();
+      if (el.contains("style") && el["style"].is_string()) a.style = el["style"].get<std::string>();
+      if (el.contains("labelSet") && el["labelSet"].is_string()) a.labelSet = el["labelSet"].get<std::string>();
+      if (el.contains("type") && el["type"].is_number_integer()) {
+        const int t = el["type"].get<int>();
+        if (t >= 1 && t <= 5) a.type = static_cast<alignment::AlignmentType>(t);
+      }
+      if (el.contains("startingStation") && el["startingStation"].is_number())
+        a.startingStation = el["startingStation"].get<double>();
+      if (el.contains("referenceDistance") && el["referenceDistance"].is_number()) {
+        a.hasReference = true;
+        a.referenceDistance = el["referenceDistance"].get<double>();
+      }
+      if (el.contains("metadata") && el["metadata"].is_array()) {
+        for (const auto& kv : el["metadata"])
+          if (kv.is_array() && kv.size() == 2 && kv[0].is_string() && kv[1].is_string())
+            a.metadata.emplace_back(kv[0].get<std::string>(), kv[1].get<std::string>());
+      }
+      if (el.contains("continuityRequirement") && el["continuityRequirement"].is_number_integer()) {
+        const int cr = el["continuityRequirement"].get<int>();
+        if (cr >= 0 && cr <= 2) a.continuityRequirement = static_cast<alignment::ContinuityRequirement>(cr);
+      }
+      if (el.contains("segmentLabels") && el["segmentLabels"].is_boolean()) a.segmentLabels = el["segmentLabels"].get<bool>();
+      if (el.contains("segmentLabelStations") && el["segmentLabelStations"].is_array())
+        for (const auto& s : el["segmentLabelStations"])
+          if (s.is_number()) a.segmentLabelStations.push_back(s.get<double>());
+      if (el.contains("checkSet") && el["checkSet"].is_string()) a.checkSetName = el["checkSet"].get<std::string>();
+      if (el.contains("designSpeeds") && el["designSpeeds"].is_array()) {
+        for (const auto& d : el["designSpeeds"]) {
+          if (!d.is_object() || !d.contains("station") || !d.contains("speed")) continue;
+          if (!d["station"].is_number() || !d["speed"].is_number()) continue;
+          a.designSpeeds.push_back({d["station"].get<double>(), d["speed"].get<double>()});
+        }
+      }
+      if (el.contains("profiles") && el["profiles"].is_array())
+        for (const auto& pid : el["profiles"])
+          if (pid.is_number_unsigned()) a.profileIds.push_back(pid.get<std::uint64_t>());
+      if (el.contains("stationLabels") && el["stationLabels"].is_array()) {
+        for (const auto& l : el["stationLabels"]) {
+          alignment::StationOffsetLabel sl;
+          if (l.contains("fixed") && l["fixed"].is_boolean()) sl.fixed = l["fixed"].get<bool>();
+          if (l.contains("station") && l["station"].is_number()) sl.internalStation = l["station"].get<double>();
+          if (l.contains("offset") && l["offset"].is_number()) sl.offset = l["offset"].get<double>();
+          if (l.contains("x") && l["x"].is_number()) sl.fixedPoint.x = l["x"].get<double>();
+          if (l.contains("y") && l["y"].is_number()) sl.fixedPoint.y = l["y"].get<double>();
+          a.stationLabels.push_back(sl);
+        }
+      }
+      if (el.contains("tables") && el["tables"].is_array()) {
+        for (const auto& t : el["tables"]) {
+          alignment::AlignmentTableLink link;
+          if (t.contains("id") && t["id"].is_number_unsigned()) link.tableId = t["id"].get<std::uint64_t>();
+          if (t.contains("kind") && t["kind"].is_number_integer()) {
+            const int k = t["kind"].get<int>();
+            if (k >= 0 && k <= 4) link.kind = static_cast<alignment::AlignmentTableKind>(k);
+          }
+          if (t.contains("dynamic") && t["dynamic"].is_boolean()) link.dynamic = t["dynamic"].get<bool>();
+          if (t.contains("firstRow") && t["firstRow"].is_number_integer()) link.firstRow = std::max(0, t["firstRow"].get<int>());
+          if (t.contains("rowCount") && t["rowCount"].is_number_integer()) link.rowCount = std::max(0, t["rowCount"].get<int>());
+          if (link.tableId != 0) a.tables.push_back(link);
+        }
+      }
+      if (el.contains("parentId") && el["parentId"].is_number_unsigned()) a.parentId = el["parentId"].get<std::uint64_t>();
+      if (el.contains("offsetDistance") && el["offsetDistance"].is_number()) a.offsetDistance = el["offsetDistance"].get<double>();
+      if (el.contains("offsetFrom") && el["offsetFrom"].is_number() && el.contains("offsetTo") && el["offsetTo"].is_number()) {
+        a.offsetFromStation = el["offsetFrom"].get<double>();
+        a.offsetToStation = el["offsetTo"].get<double>();
+      }
+      bool ok = el.contains("entities") && el["entities"].is_array();
+      if (ok) {
+        for (const auto& q : el["entities"]) {
+          alignment::Entity e;
+          e.kind = (q.contains("k") && q["k"].is_string() && q["k"].get<std::string>() == "A") ? alignment::EntityKind::Arc
+                   : (q.contains("k") && q["k"].is_string() && q["k"].get<std::string>() == "S")
+                         ? alignment::EntityKind::Spiral
+                         : alignment::EntityKind::Line;
+          if (q.contains("x") && q["x"].is_number()) e.start.x = q["x"].get<double>();
+          if (q.contains("y") && q["y"].is_number()) e.start.y = q["y"].get<double>();
+          if (q.contains("az") && q["az"].is_number()) e.startAzimuth = q["az"].get<double>();
+          if (q.contains("len") && q["len"].is_number()) e.length = q["len"].get<double>();
+          if (q.contains("r") && q["r"].is_number()) e.radius = q["r"].get<double>();
+          if (q.contains("rs") && q["rs"].is_number()) e.startRadius = q["rs"].get<double>();
+          if (q.contains("right") && q["right"].is_boolean()) e.right = q["right"].get<bool>();
+          if (q.contains("c") && q["c"].is_number_integer()) {
+            const int c = q["c"].get<int>();
+            if (c >= 0 && c <= 3) e.constraint = static_cast<alignment::Entity::Constraint>(c);
+          }
+          if (q.contains("lk") && q["lk"].is_number_integer()) e.locks = static_cast<unsigned char>(q["lk"].get<int>() & alignment::Entity::kLockMask);
+          // D-2026-11-04-f: absent in older files, which read as radius-and-delta curves.
+          e.definedByLength = e.kind == alignment::EntityKind::Arc && q.contains("dl") && q["dl"].is_boolean() &&
+                              q["dl"].get<bool>();
+          if (q.contains("sz") && q["sz"].is_number_integer())  // REQ-481.5a
+            e.sizeBy = static_cast<alignment::Entity::SizeBy>(std::clamp(q["sz"].get<int>(), 0, 7));
+          if (!a.AppendRaw(e)) {
+            ok = false;
+            break;
+          }
+        }
+      }
+      if (!ok) continue;  // an alignment with no geometry yet is valid (REQ-480: ALIGNMENT creates it empty)
+      if (el.contains("equations") && el["equations"].is_array()) {
+        for (const auto& q : el["equations"]) {
+          alignment::StationEquation eq;
+          if (q.contains("rawBack") && q["rawBack"].is_number()) eq.rawBack = q["rawBack"].get<double>();
+          if (q.contains("ahead") && q["ahead"].is_number()) eq.ahead = q["ahead"].get<double>();
+          if (q.contains("increasing") && q["increasing"].is_boolean()) eq.increasing = q["increasing"].get<bool>();
+          (void)a.AddStationEquation(eq);  // a refused equation is dropped, never stored half-valid
+        }
+      }
+      st.alignments.push_back(std::move(a));
+    }
+  }
+  for (alignment::Alignment& a : st.alignments) {
+    if (a.style.empty()) continue;
+    if (AlignmentStyles::Find(st.alignmentStyles, a.style) != nullptr) continue;
+    log.push_back("ALIGNMENT — alignment \"" + a.name + "\" references missing style \"" + a.style +
+                  "\"; using Standard.");
+    a.style = AlignmentStyles::kStandardName;
+  }
+  for (alignment::Alignment& a : st.alignments) {
+    if (a.labelSet.empty()) continue;
+    if (AlignmentLabelSets::Find(st.alignmentLabelSets, a.labelSet) != nullptr) continue;
+    log.push_back("ALIGNMENT — alignment \"" + a.name + "\" references missing label set \"" + a.labelSet +
+                  "\"; using Standard.");
+    a.labelSet = AlignmentLabelSets::kStandardName;
+  }
+  for (AlignmentStyle& s : st.alignmentStyles) {  // REQ-502: a style's check set must exist
+    if (s.checkSetName.empty()) continue;
+    bool found = false;
+    for (const alignment::AlignmentCheckSet& cs : st.alignmentCheckSets) found = found || cs.name == s.checkSetName;
+    if (found) continue;
+    log.push_back("ALIGNMENT — style \"" + s.name + "\" references missing check set \"" + s.checkSetName +
+                  "\"; no criteria applied.");
+    s.checkSetName.clear();
+  }
+  for (alignment::Alignment& a : st.alignments) {  // REQ-502
+    if (a.checkSetName.empty()) continue;
+    bool found = false;
+    for (const alignment::AlignmentCheckSet& cs : st.alignmentCheckSets) found = found || cs.name == a.checkSetName;
+    if (found) continue;
+    log.push_back("ALIGNMENT — alignment \"" + a.name + "\" references missing check set \"" + a.checkSetName +
+                  "\"; no criteria applied.");
+    a.checkSetName.clear();
+  }
 
   // Piping networks (issue #486 increment B3 / REQ-345). Guarded, so a drawing written before them
   // simply has none. An out-of-range index (a hand-edited or corrupted file) is dropped rather than
@@ -4838,6 +5429,29 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
 
 std::string DrawingSettingsToJsonText(const DrawingSettings& ds) { return DrawingSettingsToJson(ds).dump(); }
 
+std::string AlignmentCheckSetsToJsonText(const std::vector<alignment::AlignmentCheckSet>& sets) {
+  json out = json::array();
+  for (const alignment::AlignmentCheckSet& s : sets) out.push_back(CheckSetToJson(s));
+  return out.dump(2);
+}
+
+bool AlignmentCheckSetsFromJsonText(const std::string& jsonText, std::vector<alignment::AlignmentCheckSet>* out,
+                                    std::string* err) {
+  assert(out != nullptr);
+  assert(jsonText.size() < (std::size_t{1} << 30));
+  const json parsed = json::parse(jsonText, nullptr, false);
+  if (parsed.is_discarded() || !parsed.is_array()) {
+    if (err != nullptr) *err = "the file is not a JSON list of check sets";
+    return false;
+  }
+  out->clear();
+  for (const json& o : parsed) {
+    alignment::AlignmentCheckSet s;
+    if (CheckSetFromJson(o, &s)) out->push_back(std::move(s));
+  }
+  return true;
+}
+
 bool DrawingSettingsFromJsonText(const std::string& jsonText, DrawingSettings* out) {
   const json o = json::parse(jsonText, nullptr, false);
   if (!o.is_object())
@@ -4867,7 +5481,7 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
              "annotationAttrs", "tables", "tableAttrs", "positionMarkers", "positionMarkerAttrs", "multileaders",
              "multileaderAttrs", "cadPoints", "cadPointAttrs", "blockRefs", "blockRefAttrs", "filledRegions",
              "filledRegionAttrs", "meshes", "meshAttrs", "pointClouds",
-             "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "surfaces",
+             "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "alignments", "surfaces",
              "surfaceAttrs", "surveyPoints", "blockFavorites", "blockRecent"})
       doc[key] = json::array();
 

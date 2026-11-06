@@ -5294,3 +5294,25 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   may be unavailable on another machine and must be reported rather than silently ignored. No new
   dependency or renderer abstraction is introduced.
 - Status: accepted (D-2026-11-04-e); backs REQ-485.
+### ADR-075 — Alignments are a dedicated horizontal-geometry domain object, stored as exact parameters   (2026-11-02, accepted)
+- Context: Issue #121 asks for Civil 3D-style alignments. The existing options are a polyline (cannot hold true
+  curves/spirals or stationing) and a feature line (3D, vertex-based; ADR-035). Civil 3D separates horizontal
+  alignment, profile and 3D path; downstream features (profiles, corridors, pipes) need one shared station API.
+- Decision: (1) A new domain module (`src/alignment`, headers for `Alignment`, entities, `StationEquation`,
+  queries) owns alignments; it is UI- and renderer-free and depends only on `src/util` geometry. (2) Entities are
+  stored as exact parameters (tangent: start+azimuth+length; curve: PC, radius, delta/length, direction; clothoid:
+  A or Ls, radii, direction) in drawing-local doubles, evaluated relative to each entity's start (REQ-499). The
+  entity list has a parallel station index for O(log n) lookup. (3) Alignments live in `DrawingDocument` (per-drawing,
+  like pipe runs) in their own store, not in the polyline or feature-line stores; other objects reference them by
+  id. (4) Persistence is the DWG-embedded trailer (ADR-044) plus ordinary export entities for AutoCAD (REQ-496);
+  the trailer is authoritative. (5) Only the **clothoid** is required among spiral types; others are deferred.
+  (6) The alignment stores no Z; profiles reference an alignment by id (REQ-500). (7) Rendering samples curves only
+  for display (REQ-495); sampling never feeds queries.
+- Alternatives: extend the polyline store with bulge+station data (cannot express spirals, mixes 2D draw and civil
+  semantics); extend feature lines (3D, wrong abstraction); store as sampled polylines (violates the issue);
+  implement all Civil 3D spiral types now (large, formulas unverified from the Autodesk pages).
+- Consequences: new Domain module, new DWG trailer section, new Prospector folder, new snap kinds in `CadSnap`
+  (no second snap system), new style/label-set collections following REQ-478. Amends ADR-035(f) (feature lines from
+  an alignment are now REQ-498) and the "no alignments" clause of REQ-145 / REQ-142's Prospector. Offset alignments
+  of spirals are refused (REQ-488) until a spiral-offset entity is decided.
+- Status: accepted (D-2026-11-02-b); backs REQ-480..503.

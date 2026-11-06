@@ -428,6 +428,8 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   m_State.measureAnnotationText = MeasureQtText;
   // ADDPOINTTABLE opens the point table dialog in this editor rather than asking typed prompts (REQ-474).
   m_State.addPointTableDialogAvailable = true;
+  // REQ-485: ALIGNMENT with no arguments and CREATEALIGNMENTFROMOBJECTS open the Create Alignment dialogs.
+  m_State.createAlignmentDialogAvailable = true;
   // Issue #1083: before any drawing can open, so the zone, grid readouts and the online map work
   // without Drawing Settings having been opened first.
   LoadCoordinateSystemDictionaries();
@@ -853,7 +855,8 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
     m_DynamicCursor = {x + m_State.worldDocumentOriginX, y + m_State.worldDocumentOriginY, z};
     const auto local = ucs::WorldToUcs(m_State.activeUcs, m_DynamicCursor);
     m_Coordinates->setText(QString("%1  X %2   Y %3   Z %4").arg(CadUcsIsWorld(m_State) ? "WCS" : "UCS")
-        .arg(local.x, 0, 'f', 4).arg(local.y, 0, 'f', 4).arg(local.z, 0, 'f', 4));
+        .arg(local.x, 0, 'f', 4).arg(local.y, 0, 'f', 4).arg(local.z, 0, 'f', 4)
+        + (m_State.alignmentCursorReadout.empty() ? QString() : QString("   |   ") + QString::fromUtf8(m_State.alignmentCursorReadout.c_str())));
     RefreshDraftingInput();
   };
   modelLayout->addWidget(m_Viewport, 1);
@@ -1374,7 +1377,7 @@ void EditorWindow::BuildDocks() {
       {"BSAVE", "Save.png"}, {"BSAVEAS", "Save_As.png"}};
   connect(m_Command, &QLineEdit::textEdited, this,
           [this, commandIcons, semanticIconNames](const QString& text) mutable {
-    if (m_DynamicInput && m_DynamicInput->isVisible()) {
+    if (DynamicInputAcceptsInput()) {
       m_CommandSuggestions->hide();
       UpdateDraftingInputFromCommandLine(text);
       return;
@@ -1419,7 +1422,7 @@ void EditorWindow::BuildDocks() {
     m_CommandSuggestions->raise();
   });
   connect(m_CommandSuggestions, &QListView::clicked, this, [this](const QModelIndex& index) {
-    if (!index.isValid() || (m_DynamicInput && m_DynamicInput->isVisible())) return;
+    if (!index.isValid() || (DynamicInputAcceptsInput())) return;
     const QString command = index.data(Qt::DisplayRole).toString();
     m_CommandSuggestions->hide();
     m_Command->clear();
@@ -2596,6 +2599,8 @@ void EditorWindow::RefreshToolspace() {
   for (const auto& style : m_State.surveyPointLabelStyles) key << QString::fromUtf8(style.name.c_str());
   key << "#root" << QString::fromStdString(ToolspaceActiveDrawingName(m_State));
   key << "#featurelines" << QString::number(ToolspaceFeatureLineCount(m_State));
+  key << "#alignments";
+  for (const auto& al : m_State.alignments) key << QString::fromStdString(al.name);
   for (size_t i = 0; i < m_State.featureLineInfo.size(); ++i) key << QString::fromStdString(m_State.featureLineInfo[i].name);
   key << (drawingOpen ? "#open" : "#closed");
   // The Toolspace trees are rebuilt only when what they list changes. Refresh() runs on every viewport click,
@@ -2730,6 +2735,18 @@ void EditorWindow::RefreshToolspace() {
       entry->setIcon(0, ToolspaceIcon("c3d_featureline.png"));
       entry->setData(0, Qt::UserRole + 1, "featureLine");
       entry->setData(0, Qt::UserRole + 2, static_cast<int>(i));
+    }
+    // Alignments (REQ-480.4): listed only when the drawing has at least one.
+    if (!m_State.alignments.empty()) {
+      auto* alignments = new QTreeWidgetItem(root, {"Alignments"});
+      alignments->setIcon(0, ToolspaceIcon("c3d_featureline.png"));
+      alignments->setData(0, Qt::UserRole + 1, "alignmentsFolder");
+      for (size_t i = 0; i < m_State.alignments.size(); ++i) {
+        auto* entry = new QTreeWidgetItem(alignments, {QString::fromStdString(m_State.alignments[i].name)});
+        entry->setIcon(0, ToolspaceIcon("c3d_featureline.png"));
+        entry->setData(0, Qt::UserRole + 1, "alignment");
+        entry->setData(0, Qt::UserRole + 2, static_cast<int>(i));
+      }
     }
   });
 
@@ -2873,6 +2890,8 @@ void EditorWindow::Refresh() {
     viewportZoom->setVisible(modelSpace);
   }
   RefreshProjects();
+  SyncAlignmentLayout();  // REQ-486: the docked layout table follows undo, grips, commands and tab switches
+  SyncAlignmentLayoutTools();  // REQ-485.1: the layout toolbar follows the alignment being laid out
   const QSignalBlocker tabBlock(m_Tabs);
   while (m_Tabs->count() > static_cast<int>(m_State.drawingTabs.size())) m_Tabs->removeTab(m_Tabs->count() - 1);
   for (int i = 0; i < static_cast<int>(m_State.drawingTabs.size()); ++i) {

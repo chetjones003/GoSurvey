@@ -205,6 +205,44 @@ void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, b
   // the plane it sat.
   const bool planeIsFlat = CadWorkPlaneIsWorldXy(cmd);
 
+  // REQ-485.2: at the Reverse prompt, an arrow along each piece shows which way the alignment will run, as Civil 3D
+  // draws them. Sized to the view so they read at any zoom.
+  if (cmd.active == AppCommandState::Kind::AlignmentFromObjects) {
+    alignment::Alignment preview;
+    if (AlignmentFromObjectsPreview(cmd, &preview)) {
+      const double s = std::max(1e-6, static_cast<double>(orthoHalfH) * 0.035);
+      for (size_t i = 0; i < preview.Entities().size(); ++i) {
+        const double mid = preview.EntityStartStation(static_cast<int>(i)) + preview.Entities()[i].length * 0.5;
+        const alignment::Point2 p = preview.GetPointAtStation(mid);
+        const double az = preview.GetBearingAtStation(mid);
+        const double dx = std::sin(az) * s, dy = std::cos(az) * s;  // along travel
+        const double nx = std::cos(az) * s * 0.6, ny = -std::sin(az) * s * 0.6;  // across it
+        const double tx = p.x + dx, ty = p.y + dy;
+        PushRubberSegViewRel(rubberLines, p.x - dx, p.y - dy, tx, ty, 0., 0., zc, zc);
+        PushRubberSegViewRel(rubberLines, p.x - dx * 0.2 + nx, p.y - dy * 0.2 + ny, tx, ty, 0., 0., zc, zc);
+        PushRubberSegViewRel(rubberLines, p.x - dx * 0.2 - nx, p.y - dy * 0.2 - ny, tx, ty, 0., 0., zc, zc);
+      }
+    }
+  }
+
+  // REQ-487.1: dragging an alignment grip, a rubber line from where the grip was to the cursor, as Civil 3D draws.
+  if (cmd.entityGripMoveActive && cmd.entityGripType == SelectedEntity::Type::Alignment)
+    PushRubberSegViewRel(rubberLines, cmd.entityGripAnchorX, cmd.entityGripAnchorY, curX, curY, 0., 0., zc, zc);
+
+  // REQ-485.1: the next tangent of an alignment layout, from the last PI to the cursor (along the starting direction
+  // when the dialog fixed one).
+  if (cmd.active == AppCommandState::Kind::AlignmentLayout && !cmd.alignmentLayout.pis.empty()) {
+    const alignment::Point2 last = cmd.alignmentLayout.pis.back();
+    double tx = curX, ty = curY;
+    if (cmd.alignmentLayout.fixedDirection && cmd.alignmentLayout.pis.size() == 1) {
+      const double ux = std::sin(cmd.alignmentLayout.directionAzimuth), uy = std::cos(cmd.alignmentLayout.directionAzimuth);
+      const double t = std::max(0.0, (curX - last.x) * ux + (curY - last.y) * uy);
+      tx = last.x + ux * t;
+      ty = last.y + uy * t;
+    }
+    PushRubberSegViewRel(rubberLines, last.x, last.y, tx, ty, 0., 0., zc, zc);
+  }
+
   if (cmd.active == AppCommandState::Kind::Line && cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint) {
     using SAP = AppCommandState::SegmentAnglePickPhase;
     if (cmd.segmentAnglePickPhase == SAP::WaitP2)

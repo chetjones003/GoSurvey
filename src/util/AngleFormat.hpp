@@ -30,8 +30,7 @@ inline double Normalize360(double d) {
   return d;
 }
 
-/// Format a magnitude angle (deg) as D°MM'SS" with `secDecimals` on seconds,
-/// matching the app's pre-feature style (° ' " symbols, no zero padding).
+/// Format a magnitude angle (deg) as D°MM'SS" with `secDecimals` on seconds.
 /// Rollover replicates CadFormatBearingCwNorthDegMinSec. When `wrap360`, a
 /// seconds/minutes carry past 360° wraps to 0; otherwise degrees just increment.
 inline std::string FormatDms(double deg, int secDecimals, bool wrap360) {
@@ -50,7 +49,8 @@ inline std::string FormatDms(double deg, int secDecimals, bool wrap360) {
     if (++im >= 60) { im = 0; id = wrap360 ? (id + 1) % 360 : id + 1; }
   }
   char fmt[24];
-  std::snprintf(fmt, sizeof(fmt), "%%d\xc2\xb0%%d'%%.%df\"", secDecimals);
+  const int secWidth = secDecimals == 0 ? 2 : secDecimals + 3;
+  std::snprintf(fmt, sizeof(fmt), "%%d\xc2\xb0%%02d'%%0%d.%df\"", secWidth, secDecimals);
   char buf[64];
   std::snprintf(buf, sizeof(buf), fmt, id, im, sec);
   return buf;

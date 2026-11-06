@@ -48,7 +48,7 @@ Set a value to **ByLayer** to hand control back to the object's layer ([[Layers]
 |---|---|
 | Start X · Start Y | Editable — changing one moves that endpoint |
 | End X · End Y | Editable |
-| **Derived:** Length · Rotation rel. north | Read-only. Rotation is shown in the angle format set in `UNITS`, e.g. `270°0'0.0"` |
+| **Derived:** Length · Rotation rel. north | Read-only. Rotation is shown in the angle format set in `UNITS`, e.g. `270°00'00.0"` |
 
 ### Circle
 

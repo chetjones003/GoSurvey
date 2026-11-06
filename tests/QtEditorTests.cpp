@@ -1,3 +1,6 @@
+#include "AlignmentStyle.hpp"
+#include "alignment/AlignmentDesign.hpp"
+#include "util/NumFormat.hpp"
 #include "AdjustmentWindow.hpp"
 #include "EditorWindow.hpp"
 #include "DrawingDocumentTabBar.hpp"
@@ -265,6 +268,21 @@ QString Issue914Shot(const char* name) {
   const QString directory = QtTestArtifactDirectory();
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
+}
+/// A window's grab under a plain strip carrying its title: `grab()` misses the title bar Windows draws, and the Civil 3D
+/// captures it is compared with include theirs (REQ-485 panel).
+QPixmap GrabWithTitle(QWidget* window) {
+  const QPixmap body = window->grab();
+  const qreal ratio = body.devicePixelRatio();
+  const int titleHeight = 30;  // logical pixels, like the widget's own coordinates
+  QPixmap framed(body.width(), body.height() + qRound(titleHeight * ratio));
+  framed.setDevicePixelRatio(ratio);
+  framed.fill(window->palette().color(QPalette::Window).darker(115));
+  QPainter painter(&framed);
+  painter.setPen(window->palette().color(QPalette::WindowText));
+  painter.drawText(QRect(10, 0, window->width() - 10, titleHeight), Qt::AlignVCenter | Qt::AlignLeft, window->windowTitle());
+  painter.drawPixmap(0, titleHeight, body);
+  return framed;
 }
 QString Req453Shot(const char* name) {
   const QString directory = QtTestArtifactDirectory();
@@ -787,6 +805,729 @@ private Q_SLOTS:
     window.Refresh();
     QTest::qWait(150);
     QVERIFY(window.grab().save(Issue914Shot("qt-803-spline-selected.png")));
+  }
+
+  void issue121Phase6DesignScreenshots() {
+    // REQ-502 surfaces for the visual panel: the viewport flag, the layout table's Design check column, and the style
+    // dialog's Design tab. Captures go to build/artifacts/ only.
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1440, 900);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+
+    std::vector<std::string> log;
+    const auto run = [&](const char* text) {
+      char buf[256];
+      std::snprintf(buf, sizeof buf, "%s", text);
+      ProcessCommandLineSubmit(buf, sizeof buf, window.State(), log);
+    };
+    run("ALIGNMENT Main Road, Two-lane road, 5+00");
+    run("ALIGNMENTADD Main Road, TANGENT, -120, -40, 70, 90");
+    run("ALIGNMENTADD Main Road, CURVE, 80, 75, RIGHT");
+    run("ALIGNMENTADD Main Road, TANGENT, 60");
+    run("ALIGNMENTCHECKSET NEW, Rural");
+    run("ALIGNMENTCHECKSET SET, Rural, RADIUS, 40, 120");
+    run("ALIGNMENTSPEED Main Road, 5+00, 40");
+    run("ALIGNMENTSTYLE NEW, Wide");
+    run("ALIGNMENTSTYLE SET, Wide, CHECKSET, Rural");
+    run("ALIGNMENTSTYLE ASSIGN, Main Road, Wide");
+    QCOMPARE(window.State().alignments.size(), size_t(1));
+    run("ZOOMEXTENTS");
+    window.Refresh();
+    window.m_Viewport->update();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.State().pendingZoomExtents, 10000);
+    QTest::qWait(250);
+
+    {  // The flag is drawn from these lookups: the effective criteria (the style's, as the alignment has none), then the findings.
+      const alignment::Alignment& flagged = window.State().alignments[0];
+      const std::string criteria = AlignmentStyles::EffectiveCheckSetName(window.State().alignmentStyles, flagged);
+      QCOMPARE(QString::fromStdString(criteria), QString("Rural"));
+      const alignment::AlignmentCheckSet* set = alignment::FindCheckSet(window.State().alignmentCheckSets, criteria);
+      QVERIFY(set != nullptr);
+      QVERIFY(!alignment::CheckDesign(flagged, *set, window.State().displayLinearPrecision).empty());
+    }
+    // The viewport is a GL widget: the framebuffer holds the painter overlay (the flag), a plain window grab does not.
+    QVERIFY(window.m_Viewport->grabFramebuffer().save(Issue914Shot("qt-502-viewport-flag.png")));
+
+    // Civil 3D makes this road's curve Free between Fixed tangents (from a polyline); match it for the panel. The
+    // geometry does not change.
+    run("ALIGNMENTEDIT Main Road, 3, CONSTRAINT, FIXED");
+    run("ALIGNMENTEDIT Main Road, 2, CONSTRAINT, FREE");
+    QCOMPARE(window.State().alignments[0].Entities()[1].constraint, alignment::Entity::Constraint::Free);
+    window.Submit("EDITALIGNMENT Main Road");
+    {
+      auto* dock = window.findChild<QDockWidget*>("alignmentLayoutDock");
+      QVERIFY(dock != nullptr && !dock->isHidden());
+      auto* table = dock->findChild<QTableWidget*>("alignmentLayoutTable");
+      QVERIFY(table);
+      QCOMPARE(table->item(1, 12)->text(), QString("Radius (between tangents)"));
+      QVERIFY(!table->item(1, 0)->icon().isNull());  // the failing row is marked
+      QVERIFY(!table->item(1, 5)->icon().isNull());  // and so is the failing value, the radius
+      QVERIFY(table->item(0, 5)->icon().isNull());
+      // Opening the table selects the alignment, as Civil 3D does.
+      QCOMPARE(window.State().selection.size(), size_t(1));
+      QCOMPARE(window.State().selection[0].type, SelectedEntity::Type::Alignment);
+      // The Design check column names the failing curve (entity 2) and nothing else; the Criteria column shows the
+      // radius the set requires there (REQ-486.5).
+      QCOMPARE(table->columnCount(), 17);
+      QVERIFY(table->item(1, 16)->text().contains("below the selected minimum design radius"));
+      QVERIFY(table->item(0, 16)->text().isEmpty());
+      QVERIFY(table->item(1, 15)->text().startsWith(QString::fromUtf8("R \xE2\x89\xA5 120.")));
+      QVERIFY(table->item(0, 15)->text().isEmpty());
+      QTest::qWait(150);
+      QVERIFY(dock->grab().save(Issue914Shot("qt-502-layout-design-check.png")));
+      QVERIFY(window.grab().save(Issue914Shot("qt-486-window-with-layout.png")));
+      dock->close();
+    }
+
+    bool styleChecked = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("alignmentStyleDialog");
+      QVERIFY(dialog);
+      QTimer::singleShot(20000, dialog, &QDialog::reject);
+      auto* combo = dialog->findChild<QComboBox*>("alignmentStyleCheckSet");
+      QVERIFY(combo);
+      QCOMPARE(combo->currentText(), QString("Rural"));
+      auto* tabs = dialog->findChild<QTabWidget*>("alignmentStyleTabs");
+      QVERIFY(tabs);
+      for (int i = 0; i < tabs->count(); ++i) {
+        if (tabs->tabText(i) == "Design") tabs->setCurrentIndex(i);
+      }
+      QTest::qWait(150);
+      QVERIFY(dialog->grab().save(Issue914Shot("qt-502-style-design-tab.png")));
+      styleChecked = true;
+      dialog->reject();
+    });
+    window.Submit("EDITALIGNMENTSTYLE Wide");
+    QVERIFY(styleChecked);
+
+    // REQ-492 / D-2026-11-04-c: the geometry-point labels are drawn, so hiding them changes the picture.
+    const auto viewportShot = [&] {
+      window.Refresh();
+      window.m_Viewport->update();
+      QTest::qWait(150);
+      return window.m_Viewport->grabFramebuffer();
+    };
+    const QImage withGeometry = viewportShot();
+    run("ALIGNMENTLABELSET HIDE, Standard, GEOMETRY");
+    QVERIFY(!window.State().alignmentLabelSets.front().geometryPointsOn);
+    const QImage withoutGeometry = viewportShot();
+    QVERIFY(withGeometry != withoutGeometry);
+    run("ALIGNMENTLABELSET SHOW, Standard, GEOMETRY");
+    // Civil 3D's Imperial template shows quadrant bearings and two decimals; match them for the paired capture.
+    window.State().angleDisplayType = 2;
+    window.State().angleDisplayPrecision = 2;
+    window.State().displayLinearPrecision = 2;
+    run("ALIGNMENTLABEL Main Road, SEGMENTS");
+    QVERIFY(window.State().alignments[0].segmentLabels);
+    const QImage withSegments = viewportShot();
+    QVERIFY(withSegments != withGeometry);
+    QVERIFY(withSegments.save(Issue914Shot("qt-492-viewport-segment-labels.png")));
+
+    // REQ-492.5: a label style recolours and resizes the items it is assigned to.
+    run("ALIGNMENTLABELSTYLE NEW, Civil");
+    run("ALIGNMENTLABELSTYLE SET, Civil, COLOR, red");
+    run("ALIGNMENTLABELSTYLE SET, Civil, HEIGHT, 0.12");
+    for (const char* item : {"MAJOR", "GEOMETRY", "SPEEDS", "SEGMENTS"}) {
+      char cmd[128];
+      std::snprintf(cmd, sizeof cmd, "ALIGNMENTLABELSET STYLE, Standard, %s, Civil", item);
+      run(cmd);
+    }
+    QCOMPARE(QString::fromStdString(window.State().alignmentLabelSets.front().geometryStyle), QString("Civil"));
+    run("ZOOMEXTENTS");
+    window.m_Viewport->update();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.State().pendingZoomExtents, 10000);
+    const QImage styled = viewportShot();
+    QVERIFY(styled != withSegments);
+    QVERIFY(styled.save(Issue914Shot("qt-492-viewport-label-style.png")));
+  }
+
+  void issue121AlignmentPhase1Screenshots() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1440, 900);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+
+    std::vector<std::string> log;
+    const auto run = [&](const char* text) {
+      char buf[256];
+      std::snprintf(buf, sizeof buf, "%s", text);
+      ProcessCommandLineSubmit(buf, sizeof buf, window.State(), log);
+    };
+    run("ALIGNMENT Main Road, Two-lane road, 5+00");
+    run("ALIGNMENTADD Main Road, TANGENT, -120, -40, 70, 90");
+    run("ALIGNMENTADD Main Road, CURVE, 80, 75, RIGHT");
+    run("ALIGNMENTADD Main Road, TANGENT, 60");
+    run("ALIGNMENTADD Main Road, CURVE, 60, 50, LEFT");
+    run("ALIGNMENTADD Main Road, TANGENT, 50");
+    QCOMPARE(window.State().alignments.size(), size_t(1));
+    run("ZOOMEXTENTS");
+    window.Refresh();
+    window.m_Viewport->update();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.State().pendingZoomExtents, 10000);
+    QTest::qWait(250);
+    QVERIFY(window.grab().save(Issue914Shot("qt-121-alignment-drawn.png")));
+
+    window.State().selection = {{SelectedEntity::Type::Alignment, 0}};
+    window.Refresh();
+    QTest::qWait(250);
+    QVERIFY(window.grab().save(Issue914Shot("qt-121-alignment-selected-properties.png")));
+
+    // Cursor 6 units to the right of the first tangent: the status bar reports station / offset / bearing.
+    const alignment::Alignment& al = window.State().alignments[0];
+    const alignment::Point2 on = al.GetPointFromStationOffset(al.StartStation() + 60.0, 6.0);
+    window.State().alignmentCursorReadout = AlignmentCursorReadout(window.State(), on.x, on.y, 50.0);
+    QVERIFY(!window.State().alignmentCursorReadout.empty());
+    window.m_Viewport->cursorChanged(on.x, on.y, 0.0);
+    QTest::qWait(150);
+    QVERIFY(window.m_Coordinates->text().contains("STA "));
+    QVERIFY(window.grab().save(Issue914Shot("qt-121-alignment-cursor-readout.png")));
+  }
+
+  void issue121AlignmentLayoutEditorEditsThroughTheSolver() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 800);
+    for (const char* line : {"ALIGNMENT Main Road, Two-lane road, 5+00", "ALIGNMENTADD Main Road, TANGENT, -120, -40, 70, 90",
+                             "ALIGNMENTADD Main Road, CURVE, 80, 75, RIGHT", "ALIGNMENTADD Main Road, TANGENT, 60",
+                             "ALIGNMENTADD Main Road, CURVE, 60, 50, LEFT", "ALIGNMENTADD Main Road, TANGENT, 50"})
+      window.Submit(line);
+    QCOMPARE(window.State().alignments.size(), size_t(1));
+    window.Submit("EDITALIGNMENT Main Road");
+    auto* dock = window.findChild<QDockWidget*>("alignmentLayoutDock");
+    QVERIFY(dock != nullptr && !dock->isHidden());
+    auto* table = dock->findChild<QTableWidget*>("alignmentLayoutTable");
+    auto* status = dock->findChild<QLabel*>("alignmentLayoutStatus");
+    QVERIFY(table);
+    QVERIFY(status);
+    QCOMPARE(table->rowCount(), 5);
+    QCOMPARE(table->item(1, 1)->text(), QString("Curve"));
+    // REQ-486.1: only what an entity was defined by can be edited. The curve was entered by radius and delta.
+    QCOMPARE(table->item(1, 12)->text(), QString("Radius, delta"));
+    QVERIFY((table->item(1, 5)->flags() & Qt::ItemIsEditable) != 0);  // radius
+    QVERIFY((table->item(1, 7)->flags() & Qt::ItemIsEditable) != 0);  // delta
+    QVERIFY((table->item(1, 4)->flags() & Qt::ItemIsEditable) == 0);  // length is derived
+    QVERIFY((table->item(2, 9)->flags() & Qt::ItemIsEditable) == 0);  // a floating tangent's bearing is derived
+    QTest::qWait(150);
+    QVERIFY(dock->grab().save(Issue914Shot("qt-121-layout-table.png")));
+    QVERIFY(window.grab().save(Issue914Shot("qt-486-layout-docked.png")));
+
+    // Editing a radius runs ALIGNMENTEDIT: the curve keeps its delta (D-2026-11-04-f) and the table shows the new values.
+    table->item(1, 5)->setText("100");
+    QTest::qWait(150);
+    QCOMPARE(window.State().alignments[0].Entities()[1].radius, 100.0);
+    QCOMPARE(table->item(1, 5)->text(), QString("100.0000"));
+    QVERIFY(status->text().contains("updated"));
+    QVERIFY(dock->grab().save(Issue914Shot("qt-121-layout-edited.png")));
+
+    // A derived (floating) bearing typed in anyway is refused with the reason, and the table shows the real value.
+    const double before = window.State().alignments[0].Entities()[2].startAzimuth;
+    table->item(2, 9)->setText("10");
+    QTest::qWait(150);
+    QVERIFY(status->text().contains("refused"));
+    QCOMPARE(window.State().alignments[0].Entities()[2].startAzimuth, before);
+    QVERIFY(dock->grab().save(Issue914Shot("qt-121-layout-refused.png")));
+
+    // The dock stays open and follows the drawing: UNDO puts the radius back in one step and the table refills.
+    window.Submit("UNDO");
+    QCOMPARE(window.State().alignments[0].Entities()[1].radius, 80.0);
+    window.Refresh();
+    QCOMPARE(table->item(1, 5)->text(), QString("80.0000"));
+    QVERIFY(!dock->isHidden());
+  }
+
+  void issue121StationLabelDragsInTheViewport() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1200, 800);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    for (const char* line : {"ALIGNMENT DRAG1, , 0+00", "ALIGNMENTADD DRAG1, TANGENT, 0, 0, 90, 1000",
+                             "ALIGNMENTLABEL DRAG1, STATIONLABEL, FIXED, 300, 10"})
+      window.Submit(line);
+    QCOMPARE(window.State().alignments.size(), size_t(1));
+    QCOMPARE(window.State().alignments[0].stationLabels.size(), size_t(1));
+    const alignment::Point2 start = window.State().alignments[0].stationLabels[0].fixedPoint;
+
+    // Where the label is on screen, through the same camera the viewport draws with.
+    const Camera camera = CadViewCamera(window.State());
+    float sx = 0.f, sy = 0.f;
+    QWidget* viewport = window.m_Viewport;
+    camera.WorldToScreen(start.x, start.y, 0.0, static_cast<float>(viewport->width()),
+                         static_cast<float>(viewport->height()), &sx, &sy);
+    const QPoint from(qRound(sx), qRound(sy));
+    QTest::mousePress(viewport, Qt::LeftButton, Qt::NoModifier, from);
+    QTest::mouseMove(viewport, from + QPoint(60, 0));
+    QTest::mouseMove(viewport, from + QPoint(120, 0));
+    QTest::mouseRelease(viewport, Qt::LeftButton, Qt::NoModifier, from + QPoint(120, 0));
+    QTest::qWait(50);
+
+    const alignment::Point2 moved = window.State().alignments[0].stationLabels[0].fixedPoint;
+    QVERIFY2(std::fabs(moved.x - start.x) > 1.0, "dragging the label in the viewport moved it");
+    QVERIFY(!window.State().alignLabelDragActive);
+    window.Submit("UNDO");  // the drag was one undo step
+    QCOMPARE(window.State().alignments[0].stationLabels[0].fixedPoint.x, start.x);
+  }
+
+  void issue121StyleTicksMarkersAndArrowsDraw() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1200, 800);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    for (const char* line : {"ALIGNMENT STY1, , 0+00", "ALIGNMENTADD STY1, TANGENT, 0, 0, 90, 300",
+                             "ALIGNMENTADD STY1, CURVE, 120, 60, RIGHT", "ALIGNMENTADD STY1, TANGENT, 150",
+                             "ALIGNMENTLABELSET NEW, Dense", "ALIGNMENTLABELSET MAJORINTERVAL, Dense, 50",
+                             "ALIGNMENTLABELSET MINORINTERVAL, Dense, 25", "ALIGNMENTLABELSET ASSIGN, STY1, Dense",
+                             "ALIGNMENTSTYLE NEW, Show", "ALIGNMENTSTYLE SET, Show, ARROWS, ON",
+                             "ALIGNMENTSTYLE SET, Show, MAJORTICK, 10", "ALIGNMENTSTYLE SET, Show, MINORTICK, 5",
+                             "ALIGNMENTSTYLE SET, Show, TICKSIDE, BOTH", "ALIGNMENTSTYLE ASSIGN, STY1, Show"})
+      window.Submit(line);
+    QCOMPARE(window.State().alignments.size(), size_t(1));
+    window.Submit("ZOOMEXTENTS");
+    QTRY_VERIFY_WITH_TIMEOUT(!window.State().pendingZoomExtents, 10000);
+    window.Refresh();
+    window.m_Viewport->update();
+    QTest::qWait(250);
+    QVERIFY(window.grab().save(Issue914Shot("qt-491-style-ticks-markers-arrows.png")));
+
+    // The overlay (ticks, markers, arrows, labels) is painted on top of the GL scene, so window.grab() does not show it.
+    // Paint the overlay alone onto an image and check the style switches change what reaches the picture.
+    const auto overlayPixels = [&](const QString& file) {
+      QImage image(1200, 800, QImage::Format_ARGB32_Premultiplied);
+      image.fill(Qt::transparent);
+      {
+        QPainter painter(&image);
+        DrawQtModelAnnotations(painter, window.State(), 1200.f, 800.f);
+      }
+      if (!file.isEmpty()) image.save(Issue914Shot(file.toUtf8().constData()));
+      int painted = 0;
+      for (int y = 0; y < image.height(); ++y)
+        for (int x = 0; x < image.width(); ++x)
+          if (qAlpha(image.pixel(x, y)) > 0) ++painted;
+      return painted;
+    };
+    const int withStyle = overlayPixels("qt-491-overlay-ticks-markers-arrows.png");
+    QVERIFY2(withStyle > 0, "the overlay paints ticks, markers and arrows");
+    for (const char* line : {"ALIGNMENTSTYLE SET, Show, ARROWS, OFF", "ALIGNMENTSTYLE SET, Show, TICKS, OFF",
+                             "ALIGNMENTSTYLE SET, Show, MARKERS, OFF", "ALIGNMENTSTYLE SET, Show, LABELS, OFF"})
+      window.Submit(line);
+    const int withoutStyle = overlayPixels("qt-491-overlay-off.png");
+    QVERIFY2(withoutStyle < withStyle, "switching the style items off removes what they draw");
+  }
+
+  void issue121AlignmentStyleEditorChangesTheStyle() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1200, 800);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    for (const char* line : {"ALIGNMENT SED1, , 0+00", "ALIGNMENTADD SED1, TANGENT, 0, 0, 90, 300",
+                             "ALIGNMENTADD SED1, CURVE, 120, 60, RIGHT", "ALIGNMENTADD SED1, TANGENT, 150",
+                             "ALIGNMENTSTYLE NEW, Editor"})
+      window.Submit(line);
+    bool opened = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("alignmentStyleDialog");
+      QVERIFY(dialog);
+      opened = true;
+      QTimer::singleShot(20000, dialog, &QDialog::reject);
+      auto* chooser = dialog->findChild<QComboBox*>("alignmentStyleChooser");
+      auto* tabs = dialog->findChild<QTabWidget*>("alignmentStyleTabs");
+      QVERIFY(chooser && tabs);
+      QCOMPARE(tabs->count(), 5);  // Information, Design, Markers, Display, Summary
+      chooser->setCurrentIndex(chooser->findText("Editor"));
+      QTest::qWait(50);
+      // Markers tab: turn the arrows on from the Display tab, then turn the ticks off.
+      dialog->findChild<QCheckBox*>("alignmentStyleArrows")->setChecked(true);
+      QTest::qWait(50);
+      dialog->findChild<QCheckBox*>("alignmentStyleTicks")->setChecked(false);
+      QTest::qWait(50);
+      const AlignmentStyle* edited = AlignmentStyles::Find(window.State().alignmentStyles, "Editor");
+      QVERIFY(edited != nullptr);
+      QVERIFY(edited->arrows.visible);
+      QVERIFY(!edited->ticks.visible);
+      QVERIFY(dialog->findChild<QLabel*>("alignmentStyleSummary")->text().contains("Arrows: on"));
+      QVERIFY(dialog->grab().save(Issue914Shot("qt-121-style-editor.png")));
+      dialog->accept();
+    });
+    window.Submit("EDITALIGNMENTSTYLE Editor");
+    QVERIFY(opened);
+    window.Submit("UNDO");  // the last change (the tick toggle) is one undo step
+    QVERIFY(AlignmentStyles::Find(window.State().alignmentStyles, "Editor")->ticks.visible);
+  }
+
+  void issue121PropertiesRenameTheAlignment() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1200, 800);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    auto alignmentFolders = [&] {  // REQ-480 AC1 / AC4: the Prospector's Alignments folder only when there are any
+      int folders = 0, entries = 0;
+      auto* prospector = window.findChild<QTreeWidget*>("toolspaceProspectorTree");
+      if (prospector == nullptr) return -1;
+      for (QTreeWidgetItemIterator it(prospector); *it; ++it) {
+        const QString role = (*it)->data(0, Qt::UserRole + 1).toString();
+        folders += role == "alignmentsFolder" ? 1 : 0;
+        entries += role == "alignment" ? 1 : 0;
+      }
+      return folders * 100 + entries;
+    };
+    window.Refresh();
+    QCOMPARE(alignmentFolders(), 0);
+    for (const char* line : {"ALIGNMENT PRN1, , 0+00", "ALIGNMENTADD PRN1, TANGENT, 0, 0, 90, 300"}) window.Submit(line);
+    window.Refresh();
+    QCOMPARE(alignmentFolders(), 101);  // one folder, one alignment in it
+    window.State().selection = {{SelectedEntity::Type::Alignment, 0}};
+    window.Refresh();
+    auto* name = window.findChild<QLineEdit*>("propAlignmentName");
+    QVERIFY(name);
+    QCOMPARE(name->text(), QString("PRN1"));
+    {  // REQ-501 AC1: the values equal the entity data
+      auto label = [&](const char* objectName) {
+        auto* l = window.findChild<QLabel*>(objectName);
+        return l == nullptr ? QString("<missing %1>").arg(objectName) : l->text();
+      };
+      const alignment::Alignment& al = window.State().alignments[0];
+      QCOMPARE(label("propAlignmentEndStation"), QString::fromStdString(alignment::FormatStation(al.EndStationWithEquations())));
+      QVERIFY(label("propAlignmentLength").startsWith("300.00"));
+      QVERIFY(label("propAlignmentStart").contains("0.00"));
+      QVERIFY(label("propAlignmentEnd").startsWith("300.00"));
+      QCOMPARE(label("propAlignmentEntities"), QString("1"));
+      QCOMPARE(label("propAlignmentCurves"), QString("0"));
+      QCOMPARE(label("propAlignmentSpirals"), QString("0"));
+      QCOMPARE(label("propAlignmentEquations"), QString("0"));
+      QCOMPARE(label("propAlignmentParent"), QString("(none)"));
+      QCOMPARE(label("propAlignmentContinuityStatus"), QString("OK"));
+      QVERIFY(label("propAlignmentStartBearing") == label("propAlignmentEndBearing"));
+      // With design criteria the status says whether the alignment meets them (REQ-501.1).
+      for (const char* line : {"ALIGNMENTCHECKSET NEW, Strict", "ALIGNMENTCHECKSET SET, Strict, MINLINE, 500",
+                               "ALIGNMENTCRITERIA PRN1, Strict"})
+        window.Submit(line);
+      QCOMPARE(window.State().alignments[0].checkSetName, std::string("Strict"));
+      window.Refresh();  // the panel follows the alignment's own fields, not only its geometry
+      QVERIFY2(window.findChild<QLabel*>("propAlignmentDesignStatus") != nullptr, "no design status row");
+      QCOMPARE(window.findChild<QLabel*>("propAlignmentDesignStatus")->text(), QString("1 violation(s)"));
+      name = window.findChild<QLineEdit*>("propAlignmentName");
+      QVERIFY(name);
+    }
+    name->setText("Renamed Road");
+    name->editingFinished();
+    QCOMPARE(window.State().alignments[0].name, std::string("Renamed Road"));
+    QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QLineEdit*>("propAlignmentName") != nullptr &&
+                             window.findChild<QLineEdit*>("propAlignmentName")->text() == "Renamed Road", 5000);
+    window.Submit("UNDO");
+    QCOMPARE(window.State().alignments[0].name, std::string("PRN1"));
+  }
+
+  /// REQ-485: the Create Alignment - Layout dialog, the Alignment Layout Tools window driving a Tangent-Tangent layout,
+  /// Curve and Spiral Settings, and Create Alignment from Objects - each captured for the Civil 3D comparison.
+  void issue121CreateAlignmentDialogsAndLayoutTools() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1440, 900);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    AppCommandState& st = window.State();
+    window.Submit("ALIGNMENTCURVESETTINGS RADIUS=200");
+
+    bool layoutDialog = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("createAlignmentLayoutDialog");
+      QVERIFY(dialog);
+      layoutDialog = true;
+      QTimer::singleShot(20000, dialog, &QDialog::reject);
+      QCOMPARE(dialog->windowTitle(), QString("Create Alignment - Layout"));
+      QVERIFY(dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Help));
+      auto* name = dialog->findChild<QLineEdit*>("createAlignmentName");
+      QCOMPARE(name->text(), QString("Alignment - (1)"));
+      name->setText("Main Road");
+      auto* tabs = dialog->findChild<QTabWidget*>("createAlignmentTabs");
+      QVERIFY(tabs && tabs->count() == 2);
+      QTest::qWait(50);
+      QVERIFY(GrabWithTitle(dialog).save(Issue914Shot("qt-485-create-layout-general.png")));
+      tabs->setCurrentIndex(1);
+      QTest::qWait(50);
+      QVERIFY(GrabWithTitle(dialog).save(Issue914Shot("qt-485-create-layout-criteria.png")));
+      dialog->findChild<QLineEdit*>("createAlignmentSpeed")->setText("30");
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    window.Submit("CREATEALIGNMENT");
+    QVERIFY(layoutDialog);
+    QCOMPARE(st.alignments.size(), size_t(1));
+    QCOMPARE(st.alignments[0].name, std::string("Main Road"));
+    QCOMPARE(st.alignments[0].designSpeeds.size(), size_t(1));
+    QCOMPARE(st.active, AppCommandState::Kind::None);  // like Civil 3D, the toolbar opens and waits for a tool
+    auto* tools = window.findChild<QWidget*>("alignmentLayoutTools");
+    QVERIFY(tools && tools->isVisible());
+    QCOMPARE(tools->windowTitle(), QString("Alignment Layout Tools - Main Road"));
+    auto* status = tools->findChild<QLabel*>("layoutToolsStatus");
+    QCOMPARE(status->text(), QString("Select a command from the layout tools"));
+
+    // Tangent-Tangent (With curves) from the toolbar's menu starts the layout with curves.
+    tools->findChild<QAction*>("layoutToolsWithCurves")->trigger();
+    QCOMPARE(st.active, AppCommandState::Kind::AlignmentLayout);
+    QVERIFY(st.alignmentCurveSettings.addCurves);
+    for (const char* point : {"0,0", "0,500", "400,800", "900,800"}) window.Submit(point);
+    QCOMPARE(st.alignments[0].Entities().size(), size_t(5));
+    window.Refresh();
+    QVERIFY(tools->findChild<QToolButton*>("layoutToolsTangents")->isChecked());  // the running tool shows pressed
+    QVERIFY(GrabWithTitle(tools).save(Issue914Shot("qt-485-layout-toolbar-active.png")));
+    tools->findChild<QToolButton*>("layoutToolsUndo")->click();  // during the layout: takes back one PI
+    QCOMPARE(st.alignments[0].Entities().size(), size_t(3));
+    window.Submit("900,800");
+    window.Submit("");
+    QCOMPARE(st.active, AppCommandState::Kind::None);
+    QCOMPARE(st.alignments[0].Entities().size(), size_t(5));
+    QCOMPARE(st.alignments[0].Entities()[0].length, 400.0);
+    QCOMPARE(status->text(), QString("Tan-Tan (With curves)"));
+    QVERIFY(!tools->findChild<QToolButton*>("layoutToolsTangents")->isChecked());
+    window.Submit("ZOOMEXTENTS");
+    window.Refresh();
+    window.m_Viewport->update();
+    QTRY_VERIFY_WITH_TIMEOUT(!st.pendingZoomExtents, 10000);
+    QTest::qWait(250);
+    QVERIFY(GrabWithTitle(tools).save(Issue914Shot("qt-485-layout-toolbar.png")));
+    QPixmap shot = window.grab();
+    {
+      // The labels are painted into the GL framebuffer and the tool window is its own top-level window, so neither is
+      // in the grab: paint both where they sit, the tool window under a plain strip carrying its title.
+      QPainter painter(&shot);
+      painter.drawImage(window.m_Viewport->mapTo(&window, QPoint(0, 0)), window.m_Viewport->grabFramebuffer());
+      const QPixmap toolbar = GrabWithTitle(tools);
+      const int titleHeight = qRound(toolbar.deviceIndependentSize().height()) - tools->height();
+      painter.drawPixmap(window.mapFromGlobal(tools->geometry().topLeft()) - QPoint(0, titleHeight), toolbar);
+    }
+    QVERIFY(shot.save(Issue914Shot("qt-485-window-layout.png")));
+
+    bool settingsDialog = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog && dialog->objectName() == "curveSpiralSettingsDialog");
+      if (!dialog) return;
+      settingsDialog = true;
+      auto* spiralA = dialog->findChild<QLineEdit*>("curveSettingsSpiralInA");
+      QVERIFY(spiralA);  // A is a read-only field, as in Civil 3D
+      if (!spiralA) return;
+      QVERIFY(spiralA->isReadOnly());
+      auto* buttonBox = dialog->findChild<QDialogButtonBox*>();
+      QVERIFY(buttonBox);
+      if (!buttonBox) return;
+      auto* helpButton = buttonBox->button(QDialogButtonBox::Help);
+      QVERIFY(helpButton);
+      if (!helpButton) return;
+      QVERIFY(GrabWithTitle(dialog).save(Issue914Shot("qt-485-curve-spiral-settings.png")));
+      auto* radius = dialog->findChild<QLineEdit*>("curveSettingsRadius");
+      QVERIFY(radius);
+      if (!radius) return;
+      radius->setText("150");
+      auto* okButton = buttonBox->button(QDialogButtonBox::Ok);
+      QVERIFY(okButton);
+      if (!okButton) return;
+      okButton->click();
+    });
+    tools->findChild<QAction*>("layoutToolsSettings")->trigger();
+    QVERIFY(settingsDialog);
+    QCOMPARE(EffectiveAlignmentCurveRadius(st), 150.0);
+    window.Submit("ALIGNMENTCURVESETTINGS RADIUS=200");  // the radius Civil 3D's dialog showed for the same objects
+
+    // Create Alignment from Objects: two lines and a tangent arc, picked, direction accepted, then the dialog.
+    for (double v : {2000.0, 0.0, 0.0, 2000.0, 100.0, 0.0, 2000.0, 100.0, 0.0, 2100.0, 100.0, 0.0}) st.userLinesFlat.push_back(v);
+    st.userLineAttrs.resize(st.userLineAttrs.size() + 2);
+    CadArc arc;
+    arc.cx = 2100.0;
+    arc.cy = 50.0;
+    arc.r = 50.0;
+    arc.startRad = 0.f;
+    arc.sweepRad = static_cast<float>(alignment::kPi / 2.0);
+    st.userArcs.push_back(arc);
+    st.userArcAttrs.resize(st.userArcs.size());
+    BumpCadGpuCache(st);
+    const size_t lineCount = st.userLinesFlat.size();
+    window.Submit("CREATEALIGNMENTFROMOBJECTS");
+    QCOMPARE(st.active, AppCommandState::Kind::AlignmentFromObjects);
+    std::vector<std::string> pickLog;
+    QVERIFY(SubmitAlignmentCommandPoint(st, 2000.0, 10.0, pickLog));
+    QVERIFY(SubmitAlignmentCommandPoint(st, 2050.0, 100.0, pickLog));
+    QVERIFY(SubmitAlignmentCommandPoint(st, 2100.0 + 50.0 * std::cos(alignment::kPi / 4.0),
+                                        50.0 + 50.0 * std::sin(alignment::kPi / 4.0), pickLog));
+    window.Submit("");  // done picking: the direction prompt, with an arrow along each piece
+    {
+      alignment::Alignment preview;
+      QVERIFY(AlignmentFromObjectsPreview(st, &preview));
+      QCOMPARE(preview.StartPoint().y, 0.0);  // from the end nearest the first pick
+      st.pendingZoomMnX = 1900.f;  // the three picked objects, framed like the Civil 3D capture
+      st.pendingZoomMxX = 2250.f;
+      st.pendingZoomMnY = -40.f;
+      st.pendingZoomMxY = 160.f;
+      st.pendingZoomWindow = true;
+      window.Refresh();
+      window.m_Viewport->update();
+      QTRY_VERIFY_WITH_TIMEOUT(!st.pendingZoomWindow, 10000);
+      QTest::qWait(200);
+      QVERIFY(window.m_Viewport->grabFramebuffer().save(Issue914Shot("qt-485-fromobj-direction.png")));
+    }
+    bool objectsDialog = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("createAlignmentFromObjectsDialog");
+      QVERIFY(dialog);
+      objectsDialog = true;
+      QTimer::singleShot(20000, dialog, &QDialog::reject);
+      QVERIFY(dialog->findChild<QCheckBox*>("createAlignmentAddCurves")->isChecked());
+      QVERIFY(dialog->findChild<QCheckBox*>("createAlignmentErase")->isChecked());
+      QTest::qWait(50);
+      QVERIFY(GrabWithTitle(dialog).save(Issue914Shot("qt-485-create-from-objects.png")));
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    window.Submit("");  // accept the direction
+    QVERIFY(objectsDialog);
+    QCOMPARE(st.alignments.size(), size_t(2));
+    QCOMPARE(st.alignments[1].name, std::string("Alignment - (1)"));
+    // R 200 is too big for the 100-unit tangents: like Civil 3D the curve gets R 40 (T = 40 % of 100).
+    QCOMPARE(st.alignments[1].Entities().size(), size_t(4));  // tangent, R 40 curve, tangent, arc
+    QVERIFY(std::fabs(st.alignments[1].Entities()[1].radius - 40.0) < 1e-6);
+    QVERIFY(st.userLinesFlat.size() < lineCount);  // Erase existing entities
+    window.Submit("UNDO");
+    QCOMPARE(st.alignments.size(), size_t(1));
+    QCOMPARE(st.userLinesFlat.size(), lineCount);
+
+    auto* ribbonAlignment = window.findChild<QAction*>("ribbon_CdAlignment");
+    QVERIFY(ribbonAlignment && ribbonAlignment->isEnabled() && ribbonAlignment->menu());
+    QCOMPARE(ribbonAlignment->menu()->actions().size(), 2);
+  }
+
+  /// REQ-487: the grips on a selected tangent / curve / tangent road, and a PI drag with the readout - captured for the
+  /// Civil 3D comparison.
+  void issue121AlignmentGripsShowAndDrag() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1440, 900);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    AppCommandState& st = window.State();
+    for (const char* line : {"ALIGNMENT Main Road", "ALIGNMENTCURVESETTINGS RADIUS=200", "ALIGNMENTLAYOUT Main Road, CURVES",
+                             "0,0", "0,500", "400,800", "900,800", ""})
+      window.Submit(line);
+    QCOMPARE(st.alignments.size(), size_t(1));
+    QCOMPARE(st.alignments[0].Entities().size(), size_t(5));
+    window.findChild<QWidget*>("alignmentLayoutTools")->close();
+    window.Submit("ZOOMEXTENTS");
+    window.Refresh();
+    QTRY_VERIFY_WITH_TIMEOUT(!st.pendingZoomExtents, 10000);
+    st.selection = {{SelectedEntity::Type::Alignment, 0}};
+    window.Refresh();
+    window.m_Viewport->update();
+    QTest::qWait(250);
+    QCOMPARE(alignment::GripPoints(st.alignments[0]).size(), size_t(15));
+    QCOMPARE(window.findChild<QLabel*>("propertiesSummary")->text(), QString("Selected: 1 object — Alignment"));
+    {  // the Alignment contextual tab opens for the selected alignment, as in Civil 3D
+      auto* ribbon = window.findChild<QTabWidget*>("ribbon");
+      QVERIFY(ribbon && ribbon->currentWidget());
+      QCOMPARE(ribbon->currentWidget()->property("ribbonTab").toString(), QString("AlignmentCtx"));
+      QCOMPARE(ribbon->tabText(ribbon->currentIndex()), QString("Alignment: Main Road"));
+      auto* grid = window.findChild<QAction*>("ribbon_AlGridView");
+      QVERIFY(grid && grid->isEnabled());
+    }
+    QVERIFY(window.findChild<QLabel*>("propertiesAlignmentGeometryNote"));
+    {  // General > Layer shows the alignment's own layer and sets it
+      auto* layer = window.findChild<QComboBox*>("propLayer");
+      QVERIFY(layer && layer->isEnabled());
+      QCOMPARE(layer->currentText(), QString::fromStdString(st.alignments[0].layer));
+      layer->textActivated("C-ROAD-MAIN");
+      QTRY_COMPARE_WITH_TIMEOUT(st.alignments[0].layer, std::string("C-ROAD-MAIN"), 5000);
+      st.selection = {{SelectedEntity::Type::Alignment, 0}};
+      window.Refresh();
+    }
+    QVERIFY(window.m_Viewport->grabFramebuffer().save(Issue914Shot("qt-487-grips.png")));
+
+    // Drag PI 1 west: the curves keep R 200, and the status bar reads station / offset / bearing on the road.
+    QVERIFY(TryBeginEntityGripAtLocal(st, 0.0f, 500.0f, 2.0f));
+    QCOMPARE(st.entityGripType, SelectedEntity::Type::Alignment);
+    ApplyEntityGripPoint(st, -100.0f, 500.0f, 0.f);
+    st.alignmentCursorReadout = AlignmentCursorReadout(st, -100.0, 500.0, 10.0);  // as the mouse-move handler does
+    window.m_Viewport->cursorChanged(-100.0, 500.0, 0.0);
+    window.Refresh();
+    window.m_Viewport->update();
+    QTest::qWait(250);
+    QCOMPARE(st.alignments[0].Entities()[1].radius, 200.0);
+    QVERIFY(window.m_Coordinates->text().contains("Main Road  STA "));
+    QVERIFY(window.m_Viewport->grabFramebuffer().save(Issue914Shot("qt-487-drag-pi.png")));
+    QPixmap shot = window.grab();
+    {
+      QPainter painter(&shot);
+      painter.drawImage(window.m_Viewport->mapTo(&window, QPoint(0, 0)), window.m_Viewport->grabFramebuffer());
+    }
+    QVERIFY(shot.save(Issue914Shot("qt-487-window-drag-pi.png")));
+    RestoreEntityGripOriginal(st);
+    QCOMPARE(st.alignments[0].Entities()[0].length, 400.0);
+  }
+
+  /// REQ-501.2: near an alignment, the dynamic input beside the cursor reads station, offset and bearing - while a point
+  /// is being entered and while a grip is dragged - and it equals GetStationOffset at the cursor (acceptance 2).
+  void issue121DynamicCursorReadsStationOffsetBearing() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 850);
+    window.show();
+    window.activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    AppCommandState& st = window.State();
+    for (const char* line : {"ALIGNMENT Main Road", "ALIGNMENTADD Main Road, TANGENT, 0, 0, 90, 500", "ZOOMEXTENTS"})
+      window.Submit(line);
+    QTRY_VERIFY_WITH_TIMEOUT(!st.pendingZoomExtents, 10000);
+    st.objectSnapEnabled = false;  // the readout must follow the cursor itself, not a snap
+    const auto moveTo = [&](QPoint p) {
+      QMouseEvent move(QEvent::MouseMove, p, window.m_Viewport->mapToGlobal(p), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+      QApplication::sendEvent(window.m_Viewport, &move);
+      window.RefreshDraftingInput();
+      QTest::qWait(60);
+    };
+    auto* readout = window.findChild<QLabel*>("dynamicAlignmentReadout");
+    QVERIFY(readout);
+
+    window.Submit("LINE");  // a point is being entered
+    const QPoint nearRoad(window.m_Viewport->width() / 2 + 37, window.m_Viewport->height() / 2 + 18);
+    moveTo(nearRoad);
+    QVERIFY(window.m_DynamicInput->isVisible());
+    QVERIFY(window.findChild<QLineEdit*>("dynamicField0")->isVisible());  // the same dynamic input, not a second UI
+    QVERIFY(readout->isVisible());
+    const alignment::Alignment& road = st.alignments[0];
+    const alignment::StationOffset so = road.GetStationOffset(st.viewportSnapPickLocalX, st.viewportSnapPickLocalY);
+    const QString station = QString::fromStdString(alignment::FormatStation(road.DisplayedStation(so.internalStation, true)));
+    const QString offset = QString::fromStdString(FormatLinear(so.offset, st.displayLinearPrecision));
+    QVERIFY2(readout->text().startsWith("Main Road  STA " + station + "  OFF " + offset + "  BRG "), qPrintable(readout->text()));
+    QVERIFY(std::fabs(so.offset) > 0.0);
+    const QRect crop = window.m_DynamicInput->geometry().adjusted(-140, -90, 40, 30).intersected(window.m_Viewport->rect());
+    QImage frame = window.m_Viewport->grabFramebuffer();
+    {
+      QPainter painter(&frame);  // the dynamic input is a child widget: paint it where it sits over the drawing
+      painter.drawPixmap(window.m_DynamicInput->geometry().topLeft(), window.m_DynamicInput->grab());
+    }
+    QVERIFY(frame.copy(QRect(crop.topLeft() * frame.devicePixelRatio(), crop.size() * frame.devicePixelRatio()))
+                .save(Issue914Shot("qt-501-line-near-alignment.png")));
+
+    moveTo(QPoint(12, 12));  // far from the road: no readout, the fields stay
+    QVERIFY(!readout->isVisible());
+    QVERIFY(window.m_DynamicInput->isVisible());
+    window.CancelDraftingInput();
+    QCOMPARE(st.active, AppCommandState::Kind::None);
+
+    // A grip drag with no command shows the readout alone; typing does not go to the dynamic input.
+    st.selection = {{SelectedEntity::Type::Alignment, 0}};
+    QVERIFY(TryBeginEntityGripAtLocal(st, 500.0f, 0.0f, 3.0f));  // the end of the tangent
+    moveTo(nearRoad);
+    QVERIFY(window.m_DynamicInput->isVisible());
+    QVERIFY(readout->isVisible());
+    QVERIFY(readout->text().startsWith("Main Road  STA "));
+    QVERIFY(!window.findChild<QLineEdit*>("dynamicField0")->isVisible());
+    QVERIFY(!window.DynamicInputAcceptsInput());
+    window.CancelDraftingInput();  // Esc ends the drag, and the readout with it
+    QVERIFY(!st.entityGripMoveActive);
+    QVERIFY(!window.m_DynamicInput->isVisible());
   }
 
   void blockEditorPickerUsesQtDialog() {
@@ -8609,7 +9350,8 @@ private Q_SLOTS:
       }
       ++buttons;
     }
-    QCOMPARE(buttons, 282);  // Issue #811 removed five palettes; PDF options add clipping and snap controls.
+    // Issue #811 removed five palettes; PDF options add clipping and snap controls; the Alignment tab adds 14 (#121).
+    QCOMPARE(buttons, 296);
     window.resize(850, 650); QTest::qWait(100);
     QVERIFY(ribbon->width() > 500); QVERIFY(ribbon->width() <= window.width());
     auto* page = window.findChild<QWidget*>("ribbonPage_Home"); QVERIFY(page);

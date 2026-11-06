@@ -314,6 +314,7 @@ bool CadCommandExpectsPointEntry(const AppCommandState& cmd) {
            cmd.dimAngularPhase == DAP::WaitRay2;
   }
   case K::IdPoint: return true;
+  case K::StationOffsetPick: return true;
   case K::SurveyInverse: return true;
   case K::Dist: return true;
   // REQ-074. Missing here as well as from the viewport click dispatch, so SURFELEV got neither
@@ -331,6 +332,7 @@ bool CadCommandExpectsPointEntry(const AppCommandState& cmd) {
   case K::GeoMarkPoint: return true;       // REQ-359
   case K::GeoReorientMarker: return true;  // REQ-359
   case K::DrawingSettingsPick: return true;  // REQ-360
+  case K::AlignmentLayout: return true;      // REQ-485.1: every prompt wants a PI
   case K::GeoCaptureArea:  // REQ-364: Pick Area's corners; nothing to type while it captures
     return cmd.geoCmdPhase != AppCommandState::GeoCmdPhase::Capturing;
   // REQ-154. The second of the two lists a point-picking command has to appear in — UCS was missing

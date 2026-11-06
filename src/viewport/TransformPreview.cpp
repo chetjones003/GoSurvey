@@ -1502,6 +1502,19 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     appendPreviewCircle(&strip, hlCircles, cmd.userCirclesCxCyZR[k], cmd.userCirclesCxCyZR[k + 1],
                         cmd.userCirclesCxCyZR[k + 2], cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
     AppendFloatLineBatch(strip, hlLines);
+  } else if (e.type == SelectedEntity::Type::Alignment) {  // REQ-480: highlight the exact geometry, sampled for display
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= cmd.alignments.size() || cmd.alignments[k].Empty())
+      return;
+    const std::vector<alignment::Point2> pts = cmd.alignments[k].SampleForDisplay(0.01);
+    for (size_t i = 1; i < pts.size(); ++i) {
+      hlLines->push_back(static_cast<float>(pts[i - 1].x));
+      hlLines->push_back(static_cast<float>(pts[i - 1].y));
+      hlLines->push_back(0.f);
+      hlLines->push_back(static_cast<float>(pts[i].x));
+      hlLines->push_back(static_cast<float>(pts[i].y));
+      hlLines->push_back(0.f);
+    }
   } else if (e.type == SelectedEntity::Type::Arc) {
     const size_t k = static_cast<size_t>(e.index);
     if (k >= cmd.userArcs.size())

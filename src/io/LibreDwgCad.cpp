@@ -4660,24 +4660,32 @@ static Dwg_Object_DICTIONARY* EnsureExtensionDictionary(Dwg_Data* dwg, BITCODE_B
   return dict;
 }
 
+/// Adds `layerName` to the DWG's layer table when the drawing's own table does not have it (white, continuous), so
+/// an entity on it keeps its layer instead of falling back to "0". False when the layer cannot be added.
+static bool EnsureExportLayer(TableWriter& tw, const std::string& layerName) {
+  assert(tw.dwg != nullptr);
+  assert(!layerName.empty());
+  if (tw.dwg == nullptr || layerName.empty()) return false;
+  const std::string layerKey = LowerAscii(layerName);
+  if (tw.layers.find(layerKey) != tw.layers.end()) return true;
+  Dwg_Object_LAYER* addedLayer = dwg_add_LAYER(tw.dwg, layerName.c_str());
+  if (addedLayer == nullptr || addedLayer->parent == nullptr) return false;
+  // AutoCAD treats ACI 0 as an invalid layer color.
+  addedLayer->color.index = 7;
+  addedLayer->color.method = DWG_COLOR_METHOD_ACI;
+  addedLayer->color.rgb = 0xC2FFFFFFu;
+  tw.layers[layerKey] = addedLayer->parent->objid;
+  return true;
+}
+
 static bool AddNativeLayerViewportColor(TableWriter& tw, const std::string& layerName,
                                         BITCODE_HV viewportHandle, const std::string& colorStorage) {
   if (tw.dwg == nullptr || layerName.empty() || viewportHandle == 0)
     return false;
-  const std::string layerKey = LowerAscii(layerName);
-  auto layer = tw.layers.find(layerKey);
-  if (layer == tw.layers.end()) {
-    Dwg_Object_LAYER* addedLayer = dwg_add_LAYER(tw.dwg, layerName.c_str());
-    if (addedLayer == nullptr || addedLayer->parent == nullptr)
-      return false;
-    // New layers need a valid base ACI even when the viewport override is the
-    // only source of color. AutoCAD treats ACI 0 as an invalid layer color.
-    addedLayer->color.index = 7;
-    addedLayer->color.method = DWG_COLOR_METHOD_ACI;
-    addedLayer->color.rgb = 0xC2FFFFFFu;
-    tw.layers[layerKey] = addedLayer->parent->objid;
-    layer = tw.layers.find(layerKey);
-  }
+  // New layers need a valid base ACI even when the viewport override is the only source of color.
+  if (!EnsureExportLayer(tw, layerName))
+    return false;
+  const auto layer = tw.layers.find(LowerAscii(layerName));
   Dwg_Object* layerObj = tw.ObjectAt(layer->second);
   if (layerObj == nullptr || layerObj->fixedtype != DWG_TYPE_LAYER)
     return false;
@@ -5203,6 +5211,317 @@ bool AppendGosurveyStringEed(Dwg_Data* dwg, Dwg_Object_Entity* ent, const std::v
     }
   }
   return true;
+}
+
+// --- REQ-496.2 alignment interchange entities ---
+
+/// "<x> <y> <station>" of an alignment's start (world coordinates), at full double precision.
+std::string AlignmentStartTag(double x, double y, double station) {
+  assert(std::isfinite(x) && std::isfinite(y));
+  assert(std::isfinite(station));
+  std::array<char, 96> buf{};
+  const int n = std::snprintf(buf.data(), buf.size(), "%.17g %.17g %.17g", x, y, station);
+  return n > 0 && static_cast<size_t>(n) < buf.size() ? std::string(buf.data(), static_cast<size_t>(n)) : std::string();
+}
+
+/// Reads AlignmentStartTag's text; false when it is not three finite numbers.
+[[nodiscard]] bool ParseAlignmentStartTag(const std::string& text, double* x, double* y, double* station) {
+  assert(x != nullptr && y != nullptr && station != nullptr);
+  assert(text.size() < 4096);
+  if (x == nullptr || y == nullptr || station == nullptr) return false;
+  return std::sscanf(text.c_str(), "%lf %lf %lf", x, y, station) == 3 && std::isfinite(*x) && std::isfinite(*y) &&
+         std::isfinite(*station);
+}
+
+/// A spiral as polyline vertices (world coordinates) whose chords stay within kSpiralChordHeight of the true
+/// clothoid: spacing √(8·h/κmax), the sagitta bound at the spiral's sharpest curvature (GoSurvey rule, REQ-496.2).
+std::vector<dwg_point_2d> SpiralPolylinePoints(const alignment::Alignment& al, int entity, double ox, double oy) {
+  assert(entity >= 0 && static_cast<size_t>(entity) < al.Entities().size());
+  constexpr double kSpiralChordHeight = 0.001;
+  constexpr int kMaxSpiralVertices = 20000;
+  const alignment::Entity& e = al.Entities()[static_cast<size_t>(entity)];
+  assert(e.length > 0.0);
+  const double kappa = std::max(e.radius > 0.0 ? 1.0 / e.radius : 0.0, e.startRadius > 0.0 ? 1.0 / e.startRadius : 0.0);
+  const double step = kappa > 0.0 ? std::sqrt(8.0 * kSpiralChordHeight / kappa) : e.length;
+  const int segs = std::clamp(static_cast<int>(std::ceil(e.length / step)), 1, kMaxSpiralVertices - 1);
+  const double sta0 = al.EntityStartStation(entity);
+  std::vector<dwg_point_2d> pts(static_cast<size_t>(segs) + 1);
+  for (int k = 0; k <= segs; ++k) {
+    const alignment::Point2 p = al.GetPointAtStation(sta0 + e.length * static_cast<double>(k) / static_cast<double>(segs));
+    pts[static_cast<size_t>(k)].x = p.x + ox;
+    pts[static_cast<size_t>(k)].y = p.y + oy;
+  }
+  return pts;
+}
+
+/// The GOSURVEY strings on an entity's XDATA ("ALIGNMENT", name[, "START", tag]); empty when it has none.
+std::vector<std::string> GosurveyEedStrings(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
+  assert(dwg != nullptr);
+  assert(ent == nullptr || ent->num_eed < 100000);
+  std::vector<std::string> out;
+  if (dwg == nullptr || ent == nullptr || ent->eed == nullptr || ent->num_eed == 0) return out;
+  const BITCODE_H appid = dwg_find_tablehandle(dwg, "GOSURVEY", "APPID");
+  if (appid == nullptr || !EntityEedHasAppidHandle(ent, appid->absolute_ref)) return out;
+  for (BITCODE_BL i = 0; i < ent->num_eed; ++i) {
+    std::string s;
+    if (GosurveyEedCode0String(ent->eed[i].data, &s)) out.push_back(std::move(s));
+  }
+  return out;
+}
+
+/// The entities of one alignment found in a DWG without GoSurvey's trailer (REQ-496.2).
+struct TaggedAlignment {
+  std::string name;
+  std::string layer;
+  bool hasStart = false;
+  alignment::Point2 start;  ///< Drawing-local.
+  double startingStation = 0.0;
+  std::vector<alignment::SourceSegment> segments;
+  std::vector<Dwg_Object*> objects;  ///< Imported as plain linework when the alignment cannot be rebuilt.
+  int polylines = 0;
+};
+
+/// Adds one LINE / ARC / LWPOLYLINE's plan geometry (drawing-local) to `g`; false for anything else.
+[[nodiscard]] bool AppendTaggedSegments(const AppCommandState& st, const Dwg_Object& obj, TaggedAlignment* g) {
+  assert(g != nullptr && obj.tio.entity != nullptr);
+  assert(g->segments.size() < g->segments.max_size());
+  const double ox = st.worldDocumentOriginX, oy = st.worldDocumentOriginY;
+  const Dwg_Object_Entity* ent = obj.tio.entity;
+  const int index = static_cast<int>(g->segments.size()) + 1;
+  if (obj.fixedtype == DWG_TYPE_LINE && ent->tio.LINE != nullptr) {
+    alignment::SourceSegment s;
+    s.a = {ent->tio.LINE->start.x - ox, ent->tio.LINE->start.y - oy};
+    s.b = {ent->tio.LINE->end.x - ox, ent->tio.LINE->end.y - oy};
+    s.sourceIndex = index;
+    g->segments.push_back(s);
+    return true;
+  }
+  if (obj.fixedtype == DWG_TYPE_ARC && ent->tio.ARC != nullptr) {
+    const Dwg_Entity_ARC* a = ent->tio.ARC;
+    if (!DwgExtrusionIsFlat(a->extrusion.x, a->extrusion.y, a->extrusion.z) || a->extrusion.z < 0.0) return false;
+    alignment::SourceSegment s;
+    s.isArc = true;
+    s.center = {a->center.x - ox, a->center.y - oy};
+    s.radius = a->radius;
+    s.startAngle = a->start_angle;
+    s.endAngle = a->end_angle;
+    s.sourceIndex = index;
+    g->segments.push_back(s);
+    return true;
+  }
+  if (obj.fixedtype == DWG_TYPE_LWPOLYLINE && ent->tio.LWPOLYLINE != nullptr) {
+    const Dwg_Entity_LWPOLYLINE* p = ent->tio.LWPOLYLINE;
+    if (p->num_points < 2 || p->points == nullptr) return false;
+    for (BITCODE_BL i = 0; i + 1 < p->num_points; ++i) {
+      const double bulge = p->bulges != nullptr && i < p->num_bulges ? p->bulges[i] : 0.0;
+      g->segments.push_back(alignment::SegmentFromBulge({p->points[i].x - ox, p->points[i].y - oy},
+                                                        {p->points[i + 1].x - ox, p->points[i + 1].y - oy}, bulge, index));
+    }
+    ++g->polylines;
+    return true;
+  }
+  return false;
+}
+
+/// When `obj` is a GoSurvey alignment interchange entity, files it under its alignment and returns true, so the
+/// caller does not import it as linework.
+[[nodiscard]] bool CollectTaggedAlignmentEntity(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj,
+                                                std::vector<TaggedAlignment>* groups) {
+  assert(dwg != nullptr && groups != nullptr);
+  assert(groups->size() < groups->max_size());
+  if (obj == nullptr || obj->supertype != DWG_SUPERTYPE_ENTITY || obj->tio.entity == nullptr) return false;
+  const std::vector<std::string> tag = GosurveyEedStrings(dwg, obj->tio.entity);
+  if (tag.size() < 2 || tag[0] != "ALIGNMENT" || tag[1].empty()) return false;
+  auto it = std::find_if(groups->begin(), groups->end(), [&](const TaggedAlignment& g) { return g.name == tag[1]; });
+  if (it == groups->end()) {
+    groups->push_back({});
+    it = std::prev(groups->end());
+    it->name = tag[1];
+    it->layer = AttrFromEnt(dwg, obj->tio.entity).layer;
+  }
+  if (!AppendTaggedSegments(st, *obj, &*it)) return false;
+  it->objects.push_back(obj);
+  double x = 0.0, y = 0.0, station = 0.0;
+  if (!it->hasStart && tag.size() >= 4 && tag[2] == "START" && ParseAlignmentStartTag(tag[3], &x, &y, &station)) {
+    it->hasStart = true;
+    it->start = {x - st.worldDocumentOriginX, y - st.worldDocumentOriginY};
+    it->startingStation = station;
+  }
+  return true;
+}
+
+/// Rebuilds each collected alignment with the REQ-485 conversion, starting at its tagged start. A group the
+/// conversion refuses is imported as plain linework, with the reason in the log (REQ-201).
+void ImportTaggedAlignments(AppCommandState& st, Dwg_Data* dwg, const std::vector<TaggedAlignment>& groups,
+                            std::unordered_map<std::string, int>* skipHist, std::vector<std::string>& log,
+                            const LegacyLeaderScaleContext& scaleContext) {
+  assert(dwg != nullptr);
+  assert(st.alignments.size() < st.alignments.max_size());
+  for (const TaggedAlignment& g : groups) {
+    if (g.segments.empty()) continue;
+    alignment::FromObjectsOptions opt;
+    opt.hasPick = g.hasStart;
+    opt.pick = g.start;
+    alignment::Alignment rebuilt;
+    std::string why;
+    const bool unique = UniqueAlignmentName(st, g.name) == g.name;
+    if (!unique) why = "an alignment of that name was already read";
+    if (!unique || !alignment::BuildFromSegments(g.segments, opt, &rebuilt, &why)) {
+      log.push_back("DWG import — alignment \"" + g.name + "\" could not be rebuilt from its entities (" + why +
+                    "); they were read as lines and arcs.");
+      for (Dwg_Object* obj : g.objects)
+        ImportObject(st, dwg, obj, Xf2{}, 0, skipHist, nullptr, nullptr, scaleContext);
+      continue;
+    }
+    rebuilt.name = g.name;
+    rebuilt.layer = g.layer.empty() ? std::string("0") : g.layer;
+    rebuilt.startingStation = g.startingStation;
+    rebuilt.id = st.nextEntityId++;
+    log.push_back("DWG import — alignment \"" + g.name + "\" rebuilt from its " + std::to_string(g.objects.size()) +
+                  " drawing entities (the file has no GoSurvey data)" +
+                  (g.polylines > 0 ? "; its spirals were read as tangents." : "."));
+    st.alignments.push_back(std::move(rebuilt));
+  }
+}
+
+// --- REQ-496.3 Civil 3D alignments (D-2026-11-04-m) ---
+
+/// Where the lines through two tangents cross: their PI. False for parallel tangents.
+[[nodiscard]] bool TangentsMeet(const libredwgcivil::AlignmentTangentRecord& a,
+                                const libredwgcivil::AlignmentTangentRecord& b, alignment::Point2* pi) {
+  assert(pi != nullptr);
+  const double ux = a.bx - a.ax, uy = a.by - a.ay, vx = b.bx - b.ax, vy = b.by - b.ay;
+  const double cross = ux * vy - uy * vx;
+  assert(std::isfinite(cross));
+  if (std::fabs(cross) <= 1e-12 * std::hypot(ux, uy) * std::hypot(vx, vy)) return false;
+  const double t = ((b.ax - a.ax) * vy - (b.ay - a.ay) * vx) / cross;
+  *pi = {a.ax + t * ux, a.ay + t * uy};
+  return true;
+}
+
+/// The PIs (world coordinates) and per-PI curve settings of a decoded Civil 3D alignment, walking from the tangent
+/// with nothing before it through the sub-entity links. False, naming the problem, when a link leads to a sub-entity
+/// that was not decoded. A decoded record no link reaches cannot change the road and is left out.
+[[nodiscard]] bool CivilAlignmentPis(const libredwgcivil::AlignmentRecord& rec, std::vector<alignment::Point2>* pis,
+                                     std::vector<alignment::CurveSettings>* settings, std::string* why) {
+  assert(pis != nullptr && settings != nullptr && why != nullptr);
+  assert(!rec.tangents.empty());
+  auto tangentWith = [&](uint32_t id) {
+    return std::find_if(rec.tangents.begin(), rec.tangents.end(), [&](const auto& t) { return t.id == id; });
+  };
+  auto cornerWith = [&](uint32_t id) {
+    return std::find_if(rec.corners.begin(), rec.corners.end(), [&](const auto& c) { return c.id == id; });
+  };
+  const auto first = std::find_if(rec.tangents.begin(), rec.tangents.end(), [](const auto& t) { return t.previous == 0; });
+  if (first == rec.tangents.end()) {
+    *why = "it does not start with a fixed tangent";
+    return false;
+  }
+  pis->assign(1, {first->ax, first->ay});
+  settings->assign(1, alignment::CurveSettings{});
+  auto current = first;
+  const size_t limit = rec.tangents.size() + rec.corners.size();
+  for (size_t step = 0; step <= limit && current->next != 0; ++step) {
+    alignment::CurveSettings corner{false, 0.0, 0.0, 0.0};
+    uint32_t nextTangent = current->next;
+    if (const auto c = cornerWith(current->next); c != rec.corners.end()) {
+      corner = {true, c->radius, c->spiralIn, c->spiralOut};
+      nextTangent = c->next;
+    }
+    const auto next = tangentWith(nextTangent);
+    alignment::Point2 pi;
+    if (next == rec.tangents.end()) {
+      *why = "sub-entity " + std::to_string(nextTangent) +
+             " is not a fixed tangent, free curve or free spiral-curve-spiral group, which are the kinds GoSurvey reads";
+      return false;
+    }
+    if (!TangentsMeet(*current, *next, &pi)) {
+      *why = "tangents " + std::to_string(current->id) + " and " + std::to_string(next->id) + " are parallel";
+      return false;
+    }
+    pis->push_back(pi);
+    settings->push_back(corner);
+    current = next;
+  }
+  if (current->next != 0) {
+    *why = "its sub-entity links loop back on themselves";
+    return false;
+  }
+  pis->push_back({current->bx, current->by});
+  settings->push_back(alignment::CurveSettings{});
+  return true;
+}
+
+/// Imports every Civil 3D alignment GoSurvey can rebuild exactly; the others are named in the log (REQ-201). Returns
+/// the handles of the imported ones, whose proxy previews are then not also read as display geometry.
+std::unordered_set<BITCODE_RLL> ImportCivilAlignments(AppCommandState& st, Dwg_Data* dwg,
+                                                      std::vector<std::string>& log) {
+  assert(dwg != nullptr);
+  assert(st.alignments.size() < st.alignments.max_size());
+  std::unordered_set<BITCODE_RLL> imported;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object& object = dwg->object[i];
+    if (object.type < 500 || object.type - 500 >= dwg->num_classes || object.supertype != DWG_SUPERTYPE_ENTITY ||
+        object.tio.entity == nullptr)
+      continue;
+    const char* cls = dwg->dwg_class[object.type - 500].dxfname;
+    if (cls == nullptr || std::strcmp(cls, "AECC_ALIGNMENT") != 0) continue;
+    std::size_t stringStart = object.num_unknown_bits, stringBits = 0;
+    const std::size_t prefix = object.common_size + object.bitsize_pos;
+    const std::size_t trailer = object.stringstream_size >= 32768 ? 33 : 17;
+    if (object.has_strings && object.bitsize >= prefix + trailer + object.stringstream_size) {
+      stringStart = object.bitsize - prefix - trailer - object.stringstream_size;
+      stringBits = object.stringstream_size;
+    }
+    const auto rec = libredwgcivil::DecodeAlignment(object.unknown_bits, object.num_unknown_bits, stringStart, stringBits);
+    std::string name = rec && !rec->name.empty() ? libredwgcad_detail::DecodeDwgString(rec->name.c_str(), true)
+                                                 : std::string("Civil 3D alignment");
+    std::vector<alignment::Point2> pis;
+    std::vector<alignment::CurveSettings> settings;
+    std::string why = "its data could not be read";
+    std::vector<std::string> warnings;
+    alignment::Alignment made;
+    bool ok = rec.has_value() && CivilAlignmentPis(*rec, &pis, &settings, &why);
+    for (alignment::Point2& p : pis) p = {p.x - st.worldDocumentOriginX, p.y - st.worldDocumentOriginY};
+    ok = ok && alignment::BuildFromPis(pis, settings, &made, &why, &warnings);
+    if (ok && !warnings.empty()) {
+      why = warnings.front();  // a curve that does not fit as decoded would not be Civil 3D's geometry
+      ok = false;
+    }
+    if (!ok) {
+      log.push_back("DWG import — Civil 3D alignment \"" + name + "\" was not imported: " + why + ".");
+      continue;
+    }
+    name = UniqueAlignmentName(st, name);
+    made.name = name;
+    made.layer = AttrFromEnt(dwg, object.tio.entity).layer;
+    if (made.layer.empty()) made.layer = "0";
+    if (rec->startingStation) made.startingStation = *rec->startingStation;
+    size_t equations = 0;
+    std::string refused;
+    for (const libredwgcivil::AlignmentEquationRecord& e : rec->equations) {
+      alignment::StationEquation eq;
+      eq.rawBack = e.rawStationBack;
+      eq.ahead = e.stationAhead;
+      eq.increasing = e.increasing;
+      if (made.AddStationEquation(eq)) ++equations;
+      else refused += " " + std::to_string(e.rawStationBack) + " -> " + std::to_string(e.stationAhead);
+    }
+    made.id = st.nextEntityId++;
+    log.push_back("DWG import — Civil 3D alignment \"" + name + "\": " + std::to_string(made.Entities().size()) +
+                  " entities, " + std::to_string(equations) + " station equation(s)" +
+                  (rec->startingStation ? "" : "; its starting station was not decoded (0+00 used)") +
+                  (refused.empty() ? "" : "; station equations refused (raw station back -> ahead):" + refused) + ".");
+    // REQ-496.3 / REQ-201: say what was not read, so nothing is dropped silently.
+    const bool hasSpiral = std::any_of(made.Entities().begin(), made.Entities().end(),
+                                       [](const alignment::Entity& e) { return e.kind == alignment::EntityKind::Spiral; });
+    log.push_back("  not decoded for \"" + name + "\": type, description, alignment style, label set, labels, design "
+                  "criteria and design speeds (Standard and defaults used)" +
+                  (hasSpiral ? "; the spiral type is not decoded and its spirals are read as clothoids" : "") + ".");
+    st.alignments.push_back(std::move(made));
+    imported.insert(object.handle.value);
+  }
+  return imported;
 }
 
 // Issue #622: AutoCAD-native annotative marker (AcadAnnotative APPID + AnnotativeData XDATA).
@@ -8049,6 +8368,47 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         AppendGosurveyStringEed(dwg, pl->parent, {info.name, info.description});
     }
   }
+  // REQ-496.2 / issue #121: an alignment is exported as ORDINARY AutoCAD LINE and ARC entities (and one LWPOLYLINE
+  // per spiral) on its layer, tagged with its name in GOSURVEY XDATA, so any DWG reader draws it without Recover.
+  // GoSurvey's own reopen prefers the lossless ADR-044 trailer; without it (a drawing AutoCAD saved) the tagged
+  // entities are re-read as a REQ-485 conversion (ImportTaggedAlignments), starting where the first one says.
+  for (const alignment::Alignment& al : st.alignments) {
+    EntityAttributes alAttrs{};
+    alAttrs.layer = al.layer;
+    if (!al.layer.empty() && !EnsureExportLayer(tw, al.layer)) alAttrs.layer.clear();  // then on "0"
+    for (size_t ei = 0; ei < al.Entities().size(); ++ei) {
+      const alignment::Entity& ae = al.Entities()[ei];
+      Dwg_Object_Entity* parent = nullptr;
+      const double ox = st.worldDocumentOriginX, oy = st.worldDocumentOriginY;
+      std::vector<std::string> tag{"ALIGNMENT", al.name};
+      if (ei == 0) {
+        tag.push_back("START");
+        tag.push_back(AlignmentStartTag(ae.start.x + ox, ae.start.y + oy, al.startingStation));
+      }
+      if (ae.kind == alignment::EntityKind::Line) {
+        const alignment::Point2 e = al.GetPointAtStation(al.EntityEndStation(static_cast<int>(ei)));
+        dwg_point_3d a{ae.start.x + ox, ae.start.y + oy, 0.0};
+        dwg_point_3d b{e.x + ox, e.y + oy, 0.0};
+        if (Dwg_Entity_LINE* ln = dwg_add_LINE(hdr, &a, &b)) parent = ln->parent;
+      } else if (ae.kind == alignment::EntityKind::Arc) {
+        alignment::CurveData cd;
+        if (!al.CurveDataFor(static_cast<int>(ei), &cd)) continue;
+        const double aStart = std::atan2(ae.start.y - cd.center.y, ae.start.x - cd.center.x);
+        const double aEnd = std::atan2(cd.pt.y - cd.center.y, cd.pt.x - cd.center.x);
+        dwg_point_3d c{cd.center.x + ox, cd.center.y + oy, 0.0};
+        // A DWG ARC always runs counter-clockwise; a right (clockwise) alignment curve runs end -> start.
+        if (Dwg_Entity_ARC* ar = dwg_add_ARC(hdr, &c, ae.radius, ae.right ? aEnd : aStart, ae.right ? aStart : aEnd))
+          parent = ar->parent;
+      } else {
+        const std::vector<dwg_point_2d> pts = SpiralPolylinePoints(al, static_cast<int>(ei), ox, oy);
+        if (Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(hdr, static_cast<int>(pts.size()), pts.data()))
+          parent = lw->parent;
+      }
+      if (parent == nullptr) continue;
+      apply(parent, &alAttrs);
+      (void)AppendGosurveyStringEed(dwg, parent, tag);  // the entity stands without its tag; only a re-read loses it
+    }
+  }
   for (size_t i = 0; i < st.userEllipses.size(); ++i) {
     const CadEllipse& el = st.userEllipses[i];
     dwg_point_3d c{};
@@ -8693,11 +9053,15 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   }
 
   const Xf2 id{};
+  std::vector<TaggedAlignment> taggedAlignments;  // REQ-496.2: GoSurvey alignment entities, rebuilt below
+  const std::unordered_set<BITCODE_RLL> civilAlignments = ImportCivilAlignments(st, &dwg, log);  // REQ-496.3
   Dwg_Object* mspace = dwg_model_space_object(&dwg);
   if (mspace != nullptr) {
     for (Dwg_Object* e = get_first_owned_entity(mspace); e != nullptr; e = get_next_owned_entity(mspace, e)) {
-      if (!IsPaperLayoutEntity(&dwg, e))
-        ImportObject(st, &dwg, e, id, 0, &skipHist, &degenerateExtrusions, nullptr, legacyLeaderScale);
+      if (IsPaperLayoutEntity(&dwg, e) || civilAlignments.count(e->handle.value) != 0 ||
+          CollectTaggedAlignmentEntity(st, &dwg, e, &taggedAlignments))
+        continue;
+      ImportObject(st, &dwg, e, id, 0, &skipHist, &degenerateExtrusions, nullptr, legacyLeaderScale);
     }
     ImportPlantParts(st, &dwg, mspace, &skipHist);
   }
@@ -8705,7 +9069,8 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   const bool emptyGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userArcs.empty() &&
                          st.userPolylineVerts.empty() && st.cadAnnotations.empty() && st.userEllipses.empty() &&
                          st.cadMultileaders.empty() && st.cadBlockRefs.empty() && st.cadSolids.empty() &&
-                         st.cadSplines.empty() && st.cadPoints.empty();
+                         st.cadSplines.empty() && st.cadPoints.empty() && taggedAlignments.empty() &&
+                         civilAlignments.empty();
   // DXF decode often leaves BLOCK_HEADER.first_entity unset or pointing at BLOCK/ENDBLK only.
   if (emptyGeom) {
     for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
@@ -8737,6 +9102,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
       ImportObject(st, &dwg, o, id, 0, &skipHist, &degenerateExtrusions, nullptr, legacyLeaderScale);
     }
   }
+  ImportTaggedAlignments(st, &dwg, taggedAlignments, &skipHist, log, legacyLeaderScale);
 
   ImportPaperLayoutsFromDwg(st, &dwg, &skipHist, &degenerateExtrusions, legacyLeaderScale);
   if (dwg.header.version >= R_2007)
