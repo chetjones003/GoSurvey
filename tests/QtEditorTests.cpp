@@ -9350,8 +9350,9 @@ private Q_SLOTS:
       }
       ++buttons;
     }
-    // Issue #811 removed five palettes; PDF options add clipping and snap controls; the Alignment tab adds 14 (#121).
-    QCOMPARE(buttons, 296);
+    // Issue #811 removed five palettes; PDF options add clipping and snap controls; the Alignment tab adds 14 (#121);
+    // Issue #802 removed six Create Design placeholders.
+    QCOMPARE(buttons, 290);
     window.resize(850, 650); QTest::qWait(100);
     QVERIFY(ribbon->width() > 500); QVERIFY(ribbon->width() <= window.width());
     auto* page = window.findChild<QWidget*>("ribbonPage_Home"); QVERIFY(page);
