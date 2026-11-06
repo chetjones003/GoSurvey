@@ -13378,12 +13378,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
   (`src/io/LandXmlIo.*`); the open dialog and the conflict question are in the Qt editor (`src/qt/`).
 - Owner-layer: IO/Commands/Qt UI
 - Decision: D-2026-11-06-a. The user chose all three contents, the existing point-conflict handling, and
-  report-and-skip for unsupported items. Two points were proposed by Claude and are open for the user to
-  confirm: surface source faces are re-triangulated rather than kept (item 6), and a headless run stores no
-  conflicting point (item 5).
-- Status: accepted (2026-11-06) — D-2026-11-06-a, GitHub issue #1003; items 5 (headless) and 6 (faces) to be
-  confirmed by the user at PR review.
-- Revisions: 2026-11-06 — initial, D-2026-11-06-a, GitHub issue #1003.
+  report-and-skip for unsupported items. On 2026-11-06 the user also confirmed two points Claude had
+  proposed: surface source faces are re-triangulated rather than kept (item 6), and a headless run holds
+  conflicting points and logs them rather than skipping them (item 5).
+- Status: accepted (2026-11-06) — D-2026-11-06-a, GitHub issue #1003.
+- Revisions: 2026-11-06 — initial, D-2026-11-06-a, GitHub issue #1003; items 5 and 6 confirmed by the user the same day.
 
 
 ### REQ-100 — Frame budget
