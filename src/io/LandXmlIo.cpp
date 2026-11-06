@@ -384,7 +384,9 @@ bool ParseTriple(const char* text, double out[3]) {
     while (p < end && std::isspace(static_cast<unsigned char>(*p))) ++p;
   };
   for (int i = 0; i < 3; ++i) {
+    const char* before = p;
     skipSpace();
+    if (i > 0 && p == before) return false;  // "1-2-3" and "1,2,3" are not three numbers
     const auto [next, ec] = std::from_chars(p, end, out[i]);
     if (ec != std::errc() || !std::isfinite(out[i])) return false;
     p = next;
@@ -481,6 +483,10 @@ bool ImportLandXmlFile(AppCommandState& st, const char* pathUtf8, std::vector<st
         point.northing = v[0] * factor;
         point.easting = v[1] * factor;
         point.elevation = v[2] * factor;
+        if (!Finite(point.northing - originY, point.easting - originX, point.elevation)) {
+          log.push_back("IMPORTLANDXML — skipped point " + name + ": its converted coordinates are not finite.");
+          continue;
+        }
         point.description = node.attribute("desc").as_string();
         point.rawDescription = node.attribute("code").as_string();
         point.layer = layer;
@@ -520,9 +526,17 @@ bool ImportLandXmlFile(AppCommandState& st, const char* pathUtf8, std::vector<st
                           "\": its coordinates are not three numbers.");
             continue;
           }
-          surface.addedPointXyz.push_back(v[1] * factor - originX);  // local = world - origin
-          surface.addedPointXyz.push_back(v[0] * factor - originY);
-          surface.addedPointXyz.push_back(v[2] * factor);
+          const double lx = v[1] * factor - originX;  // local = world - origin
+          const double ly = v[0] * factor - originY;
+          const double lz = v[2] * factor;
+          if (!Finite(lx, ly, lz)) {
+            log.push_back("IMPORTLANDXML — skipped a point of surface \"" + name +
+                          "\": its converted coordinates are not finite.");
+            continue;
+          }
+          surface.addedPointXyz.push_back(lx);
+          surface.addedPointXyz.push_back(ly);
+          surface.addedPointXyz.push_back(lz);
         }
         if (surface.addedPointXyz.size() < 9) {
           log.push_back("IMPORTLANDXML — skipped surface \"" + name + "\": it has fewer than three usable points.");
@@ -559,6 +573,11 @@ bool ImportLandXmlFile(AppCommandState& st, const char* pathUtf8, std::vector<st
           // World x = easting, y = northing; scaled to drawing units.
           const double start[3] = {a[1] * factor, a[0] * factor, a[2] * factor};
           const double end[3] = {b[1] * factor, b[0] * factor, b[2] * factor};
+          if (!Finite(start[0] - originX, start[1] - originY, start[2]) ||
+              !Finite(end[0] - originX, end[1] - originY, end[2])) {
+            log.push_back("IMPORTLANDXML — skipped a segment of " + label + ": its converted coordinates are not finite.");
+            continue;
+          }
           if (runs.empty() || !SamePoint(&runs.back()[runs.back().size() - 3], start))
             runs.push_back({start[0], start[1], start[2]});
           runs.back().insert(runs.back().end(), end, end + 3);

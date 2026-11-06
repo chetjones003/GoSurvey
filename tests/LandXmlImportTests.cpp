@@ -310,3 +310,31 @@ TEST_CASE("IMPORTLANDXML reads the file named on the command line", "[landxml][i
   ProcessCommandLineSubmit(bare, sizeof(bare), st, log);
   CHECK(LogMentions(log, "type a file"));
 }
+
+TEST_CASE("LandXML import rejects coordinates whose numbers are not separated by white space",
+          "[landxml][issue1003][parse]") {
+  ScratchDir dir("separators");
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportText(st, dir, "separators.xml", std::string(kHeader) +
+      "<CgPoints><CgPoint name=\"1\">1-2-3</CgPoint><CgPoint name=\"2\">4 5 6</CgPoint>"
+      "<CgPoint name=\"3\">7,8,9</CgPoint></CgPoints></LandXML>", log));
+  REQUIRE(st.surveyPoints.size() == 1);
+  CHECK(st.surveyPoints[0].id == 2);
+  CHECK(LogMentions(log, "skipped point 1:"));
+  CHECK(LogMentions(log, "skipped point 3:"));
+}
+
+TEST_CASE("LandXML import skips coordinates that overflow when converted to the drawing unit",
+          "[landxml][issue1003][units]") {
+  ScratchDir dir("overflow");
+  AppCommandState st;
+  st.drawingInsUnits = 4;  // millimeters: a meter value is multiplied by 1000
+  std::vector<std::string> log;
+  REQUIRE(ImportText(st, dir, "overflow.xml", std::string(kHeader) +
+      "<Units><Metric linearUnit=\"meter\"/></Units>"
+      "<CgPoints><CgPoint name=\"1\">1e308 0 0</CgPoint><CgPoint name=\"2\">1 2 3</CgPoint></CgPoints></LandXML>", log));
+  REQUIRE(st.surveyPoints.size() == 1);
+  CHECK(st.surveyPoints[0].id == 2);
+  CHECK(LogMentions(log, "not finite"));
+}
