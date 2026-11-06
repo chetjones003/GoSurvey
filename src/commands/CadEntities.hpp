@@ -1378,6 +1378,17 @@ struct CadSurfaceBreakline {
   std::string description;
 };
 
+/// A surface-local decision for one crossing between two referenced breakline segments. The source
+/// linework remains untouched; the definition re-applies the decision at the matching XY crossing.
+struct CadSurfaceCrossingCorrection {
+  enum class Kind : std::uint8_t { Higher, Lower, Average, Custom, TrimA, TrimB };
+  std::uint64_t entityA = 0;
+  std::uint64_t entityB = 0;
+  double x = 0.0, y = 0.0;  ///< Drawing-local crossing coordinate.
+  double customElevation = 0.0;
+  Kind kind = Kind::Average;
+};
+
 /// Per-feature-line descriptive data (REQ-087), one entry per line, parallel to
 /// \c featureLineAttrs.
 ///
@@ -1526,6 +1537,9 @@ struct CadSurface {
   /// (`BuildSurfaceFromSources`) — REQ-069's "deleting a polyline used as a breakline removes it from
   /// the definition."
   std::vector<CadSurfaceBreakline> breaklines;
+  /// Per-crossing elevation decisions or surface-local segment trims (REQ-509). These never edit
+  /// the shared source entities and are applied during the next TIN rebuild.
+  std::vector<CadSurfaceCrossingCorrection> crossingCorrections;
 
   /// Contour polylines as data sources (REQ-129) — same id/constraint path as breaklines, listed
   /// separately so the Surface Manager can show a Contours node.

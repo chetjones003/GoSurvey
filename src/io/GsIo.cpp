@@ -2543,6 +2543,25 @@ json BuildRoot(const AppCommandState& st) {
         breaklines.push_back(std::move(blo));
       }
       o["breaklines"] = std::move(breaklines);
+      json corrections = json::array();
+      for (const CadSurfaceCrossingCorrection& correction : s.crossingCorrections) {
+        json co;
+        co["entityA"] = correction.entityA;
+        co["entityB"] = correction.entityB;
+        co["x"] = correction.x;
+        co["y"] = correction.y;
+        co["customElevation"] = correction.customElevation;
+        switch (correction.kind) {
+        case CadSurfaceCrossingCorrection::Kind::Higher: co["kind"] = "higher"; break;
+        case CadSurfaceCrossingCorrection::Kind::Lower: co["kind"] = "lower"; break;
+        case CadSurfaceCrossingCorrection::Kind::Average: co["kind"] = "average"; break;
+        case CadSurfaceCrossingCorrection::Kind::Custom: co["kind"] = "custom"; break;
+        case CadSurfaceCrossingCorrection::Kind::TrimA: co["kind"] = "trimA"; break;
+        case CadSurfaceCrossingCorrection::Kind::TrimB: co["kind"] = "trimB"; break;
+        }
+        corrections.push_back(std::move(co));
+      }
+      if (!corrections.empty()) o["crossingCorrections"] = std::move(corrections);
       json contours = json::array();
       for (const CadSurfaceBreakline& c : s.contourSources) {
         json co;
@@ -4891,6 +4910,25 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
             bl.entityId = id.get<std::uint64_t>();
             s.breaklines.push_back(std::move(bl));  // legacy: no description existed to carry
           }
+      }
+      if (el.contains("crossingCorrections") && el["crossingCorrections"].is_array()) {
+        for (const auto& co : el["crossingCorrections"]) {
+          if (!co.is_object() || !co.contains("entityA") || !co.contains("entityB")) continue;
+          CadSurfaceCrossingCorrection correction;
+          correction.entityA = co.value("entityA", std::uint64_t{0});
+          correction.entityB = co.value("entityB", std::uint64_t{0});
+          correction.x = co.value("x", 0.0);
+          correction.y = co.value("y", 0.0);
+          correction.customElevation = co.value("customElevation", 0.0);
+          const std::string kind = co.value("kind", std::string("average"));
+          correction.kind = kind == "higher" ? CadSurfaceCrossingCorrection::Kind::Higher
+                            : kind == "lower" ? CadSurfaceCrossingCorrection::Kind::Lower
+                            : kind == "custom" ? CadSurfaceCrossingCorrection::Kind::Custom
+                            : kind == "trimA" ? CadSurfaceCrossingCorrection::Kind::TrimA
+                            : kind == "trimB" ? CadSurfaceCrossingCorrection::Kind::TrimB
+                                               : CadSurfaceCrossingCorrection::Kind::Average;
+          s.crossingCorrections.push_back(correction);
+        }
       }
       if (el.contains("contourSources") && el["contourSources"].is_array()) {
         for (const auto& co : el["contourSources"]) {

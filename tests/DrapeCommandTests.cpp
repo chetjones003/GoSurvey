@@ -182,6 +182,54 @@ TEST_CASE("Surface LOD and Move to Surface have typed command routes", "[surface
   CHECK(LogHas(log, "moved 1 block reference"));
 }
 
+TEST_CASE("Surface visibility commands draw LOS and ZVI results without changing the TIN",
+          "[surface][req510]") {
+  AppCommandState st;
+  AddGround(st, "EG");
+  const auto tin = st.cadSurfaces[0].tin;
+  std::vector<std::string> log;
+  Type(st, "SURFACEVISIBILITY EG, LOS, 10, 50, 1, 90, 50, 1", log);
+  CHECK(st.userLinesFlat.size() == 6);
+  CHECK(LogHas(log, "target is visible"));
+  CHECK(st.cadSurfaces[0].tin == tin);
+
+  const size_t before = st.cadFilledRegions.size();
+  Type(st, "SURFACEVISIBILITY EG, ZVI, 50, 50, 2, 1, 10", log);
+  CHECK(st.cadFilledRegions.size() > before);
+  CHECK(LogHas(log, "ZVI"));
+  CHECK(st.cadSurfaces[0].tin == tin);
+}
+
+TEST_CASE("Crossing breakline decisions are local, undoable and persistent", "[surface][req509]") {
+  AppCommandState st;
+  st.userLinesFlat = {0, 50, 0, 100, 50, 0, 50, 0, 10, 50, 100, 10};
+  st.userLineAttrs.resize(2);
+  EnsureEntityIds(st);
+  CadSurface surface;
+  surface.name = "EG";
+  surface.breaklines = {{st.userLineAttrs[0].id, "Horizontal"}, {st.userLineAttrs[1].id, "Vertical"}};
+  st.cadSurfaces.push_back(surface);
+  st.cadSurfaceAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(BuildSurfaceFromSources(st, st.cadSurfaces[0], log));
+  const auto sourceLines = st.userLinesFlat;
+  Type(st, "SURFCROSSBL EG, LIST", log);
+  CHECK(LogHas(log, "breakline IDs"));
+
+  Type(st, "SURFCROSSBL EG, RESOLVE, 50, 50, AVERAGE", log);
+  REQUIRE(st.cadSurfaces[0].crossingCorrections.size() == 1);
+  CHECK(st.cadSurfaces[0].crossingCorrections[0].kind == CadSurfaceCrossingCorrection::Kind::Average);
+  CHECK(st.userLinesFlat == sourceLines);
+  CHECK(st.cadSurfaces[0].tin != nullptr);
+
+  const std::string json = SerializeGoSurveyJson(st);
+  AppCommandState reopened;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(reopened, json, log));
+  REQUIRE(reopened.cadSurfaces.size() == 1);
+  REQUIRE(reopened.cadSurfaces[0].crossingCorrections.size() == 1);
+  CHECK(reopened.cadSurfaces[0].crossingCorrections[0].x == Approx(50.0));
+}
+
 TEST_CASE("A vertex off the surface refuses its whole entity, by name and count",
           "[drape][issue150][phase7]") {
   // ADR-069 (f). TinElevationAt never extrapolates (REQ-074), so there is no elevation for a vertex

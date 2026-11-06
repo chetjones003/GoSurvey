@@ -1056,7 +1056,8 @@ void EditorWindow::BuildRibbonPages() {
           if (row == 3) { row = 0; ++col; }
         }
         // Release flyouts share command actions with the expanded panel and collapsed menu.
-        if (Text(item.command).endsWith("Menu") || Text(item.id) == "##ModPipeFit" || Text(item.id) == "##GeoEditLocation" || Text(item.id) == "##GeoMarkPosition") {
+        if (Text(item.command).endsWith("Menu") || Text(item.id) == "##ModPipeFit" || Text(item.id) == "##GeoEditLocation" ||
+            Text(item.id) == "##GeoMarkPosition" || Text(item.id) == "##TsVisCheck" || Text(item.id) == "##TsXBreak") {
           auto* menu = new QMenu(button); menu->setToolTipsVisible(true);
           auto add = [&](const QString& label, const QString& command, const QString& icon = {}) {
             auto* option = menu->addAction(icon.isEmpty() ? action->icon() : CadCommandIcon(icon + ".png"), label);
@@ -1092,6 +1093,12 @@ void EditorWindow::BuildRibbonPages() {
           } else if (id == "##TsEditSurf") {
             add("Add Point", "@surfaceAddPoint"); add("Delete Point", "@surfaceDeletePoint"); add("Move Point", "@surfaceMovePoint");
             add("Delete TIN Line", "@surfaceDeleteLine"); add("Swap Edge", "@surfaceSwapEdge"); add("Rebuild", "@surfaceRebuild");
+          } else if (id == "##TsVisCheck") {
+            add("Line of Sight", "@surfaceVisibilityLos");
+            add("Zone of Visual Influence", "@surfaceVisibilityZvi");
+          } else if (id == "##TsXBreak") {
+            add("List Crossings", "@surfaceCrossingsList");
+            add("Resolve Crossing...", "@surfaceCrossingsResolve");
           } else if (id == "##TsExtract") { add("Contours", "@extractContours"); add("Water Drop Path", "WATERDROP EXTRACT"); add("Water Drop Feature Line", "WATERDROP EXTRACT FL"); add("Catchment", "CATCHMENT EXTRACT"); }
           action->setMenu(menu); button->setMenu(menu); button->setPopupMode(id == "##GeoEditLocation" ? QToolButton::MenuButtonPopup : QToolButton::InstantPopup);
         }
@@ -1739,6 +1746,57 @@ void EditorWindow::RunRibbonAction(const QString& id) {
   else if (command == "@captureViewport") StartCaptureMapArea(m_State, false, m_Log);
   else if (command == "@removeCaptures") RemoveCapturedMapAreas(m_State, m_Log);
   else if (command == "@surfaceManager") m_State.showSurfaceManagerWindow = true;
+  else if (command == "@surfaceVisibilityMenu" && surface >= 0) {
+    QMessageBox chooser(QMessageBox::Question, "Surface visibility", "Choose an analysis", QMessageBox::NoButton, this);
+    auto* los = chooser.addButton("Line of Sight", QMessageBox::AcceptRole);
+    auto* zvi = chooser.addButton("Zone of Visual Influence", QMessageBox::AcceptRole);
+    chooser.addButton(QMessageBox::Cancel);
+    chooser.exec();
+    if (chooser.clickedButton() == los) {
+      bool accepted = false;
+      const QString values = QInputDialog::getText(this, "Surface line of sight", "eyeX, eyeY, eye height, targetX, targetY, target height",
+                                                    QLineEdit::Normal, {}, &accepted);
+      if (accepted) Submit(Text(("SURFACEVISIBILITY " + surfaceName + ", LOS, " + values.toStdString()).c_str()));
+    } else if (chooser.clickedButton() == zvi) {
+      bool accepted = false;
+      const QString values = QInputDialog::getText(this, "Zone of visual influence", "observerX, observerY, eye height, target height, radius",
+                                                    QLineEdit::Normal, {}, &accepted);
+      if (accepted) Submit(Text(("SURFACEVISIBILITY " + surfaceName + ", ZVI, " + values.toStdString()).c_str()));
+    }
+  } else if (command == "@surfaceCrossingsMenu" && surface >= 0) {
+    QMessageBox chooser(QMessageBox::Question, "Breakline crossings", "Choose an action", QMessageBox::NoButton, this);
+    auto* list = chooser.addButton("List Crossings", QMessageBox::AcceptRole);
+    auto* resolve = chooser.addButton("Resolve Crossing", QMessageBox::AcceptRole);
+    chooser.addButton(QMessageBox::Cancel);
+    chooser.exec();
+    if (chooser.clickedButton() == list) Submit(Text(("SURFCROSSBL " + surfaceName + ", LIST").c_str()));
+    else if (chooser.clickedButton() == resolve) {
+      bool accepted = false;
+      const QString values = QInputDialog::getText(this, "Resolve breakline crossing",
+          "crossingX, crossingY, HIGHER, LOWER, AVERAGE, TRIM-A, TRIM-B, or elevation",
+          QLineEdit::Normal, {}, &accepted);
+      if (accepted) Submit(Text(("SURFCROSSBL " + surfaceName + ", RESOLVE, " + values.toStdString()).c_str()));
+    }
+  }
+  else if (command == "@surfaceVisibilityLos" && surface >= 0) {
+    bool accepted = false;
+    const QString values = QInputDialog::getText(this, "Surface line of sight", "eyeX, eyeY, eye height, targetX, targetY, target height",
+                                                  QLineEdit::Normal, {}, &accepted);
+    if (accepted) Submit(Text(("SURFACEVISIBILITY " + surfaceName + ", LOS, " + values.toStdString()).c_str()));
+  } else if (command == "@surfaceVisibilityZvi" && surface >= 0) {
+    bool accepted = false;
+    const QString values = QInputDialog::getText(this, "Zone of visual influence", "observerX, observerY, eye height, target height, radius",
+                                                  QLineEdit::Normal, {}, &accepted);
+    if (accepted) Submit(Text(("SURFACEVISIBILITY " + surfaceName + ", ZVI, " + values.toStdString()).c_str()));
+  } else if (command == "@surfaceCrossingsList" && surface >= 0) {
+    Submit(Text(("SURFCROSSBL " + surfaceName + ", LIST").c_str()));
+  } else if (command == "@surfaceCrossingsResolve" && surface >= 0) {
+    bool accepted = false;
+    const QString values = QInputDialog::getText(this, "Resolve breakline crossing",
+        "crossingX, crossingY, HIGHER, LOWER, AVERAGE, TRIM-A, TRIM-B, or elevation",
+        QLineEdit::Normal, {}, &accepted);
+    if (accepted) Submit(Text(("SURFCROSSBL " + surfaceName + ", RESOLVE, " + values.toStdString()).c_str()));
+  }
   else if ((command == "@surfaceLodLow" || command == "@surfaceLodHigh") && surface >= 0) {
     const bool reduced = command == "@surfaceLodLow";
     SetSurfaceDisplayLod(m_State, static_cast<size_t>(surface), reduced);

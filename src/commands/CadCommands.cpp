@@ -3296,7 +3296,8 @@ bool VolumeClipRingLocalXy(const AppCommandState& st, std::uint64_t entityId,
 
 /// Appends one \ref TinConstraint per edge of \p chain — consecutive vertex pairs, plus the closing
 /// edge (last→first) when \p forceClosed or the source itself is closed.
-void AppendChainConstraints(const ResolvedChain& chain, bool forceClosed, std::vector<TinConstraint>& out) {
+void AppendChainConstraints(const ResolvedChain& chain, bool forceClosed, std::vector<TinConstraint>& out,
+                            std::vector<std::uint64_t>* sourceIds = nullptr, std::uint64_t sourceId = 0) {
   const size_t n = chain.verts.size();
   if (n < 2)
     return;
@@ -3305,12 +3306,14 @@ void AppendChainConstraints(const ResolvedChain& chain, bool forceClosed, std::v
     c.ax = chain.verts[i][0]; c.ay = chain.verts[i][1]; c.az = chain.verts[i][2];
     c.bx = chain.verts[i + 1][0]; c.by = chain.verts[i + 1][1]; c.bz = chain.verts[i + 1][2];
     out.push_back(c);
+    if (sourceIds) sourceIds->push_back(sourceId);
   }
   if ((forceClosed || chain.closed) && n >= 3) {
     TinConstraint c;
     c.ax = chain.verts[n - 1][0]; c.ay = chain.verts[n - 1][1]; c.az = chain.verts[n - 1][2];
     c.bx = chain.verts[0][0]; c.by = chain.verts[0][1]; c.bz = chain.verts[0][2];
     out.push_back(c);
+    if (sourceIds) sourceIds->push_back(sourceId);
   }
 }
 
@@ -3319,6 +3322,7 @@ void AppendChainConstraints(const ResolvedChain& chain, bool forceClosed, std::v
 struct SurfaceBuildInputs {
   std::vector<TinInputPoint> pts;
   std::vector<TinConstraint> constraints;
+  std::vector<std::uint64_t> constraintSourceIds;  ///< Stable source entity ID parallel to each constraint.
   std::vector<TinBoundaryLoop> cullLoops;
   double originX = 0.0, originY = 0.0;
   /// A linked point file could not be read (REQ-086). The build is ABANDONED rather than run on what
@@ -3335,6 +3339,52 @@ struct SurfaceBuildInputs {
   std::vector<double> volumeCompVertsXyz;
   std::vector<std::uint32_t> volumeCompIndices;
 };
+
+void ApplySurfaceCrossingCorrections(const CadSurface& surface, SurfaceBuildInputs& inputs) {
+  for (const CadSurfaceCrossingCorrection& correction : surface.crossingCorrections) {
+    for (const TinCrossingIssue& issue : TinFindCrossingConflicts(inputs.constraints)) {
+      if (issue.constraintIndexA >= inputs.constraintSourceIds.size() ||
+          issue.constraintIndexB >= inputs.constraintSourceIds.size()) continue;
+      const std::uint64_t idA = inputs.constraintSourceIds[issue.constraintIndexA];
+      const std::uint64_t idB = inputs.constraintSourceIds[issue.constraintIndexB];
+      const bool sameOrder = idA == correction.entityA && idB == correction.entityB;
+      const bool reverseOrder = idA == correction.entityB && idB == correction.entityA;
+      if ((!sameOrder && !reverseOrder) || std::hypot(issue.x - correction.x, issue.y - correction.y) > 0.05)
+        continue;
+      const size_t indexA = sameOrder ? issue.constraintIndexA : issue.constraintIndexB;
+      const size_t indexB = sameOrder ? issue.constraintIndexB : issue.constraintIndexA;
+      if (correction.kind == CadSurfaceCrossingCorrection::Kind::TrimA ||
+          correction.kind == CadSurfaceCrossingCorrection::Kind::TrimB) {
+        const size_t remove = correction.kind == CadSurfaceCrossingCorrection::Kind::TrimA ? indexA : indexB;
+        inputs.constraints.erase(inputs.constraints.begin() + static_cast<std::ptrdiff_t>(remove));
+        inputs.constraintSourceIds.erase(inputs.constraintSourceIds.begin() + static_cast<std::ptrdiff_t>(remove));
+      } else {
+        double z = (issue.zFromA + issue.zFromB) * 0.5;
+        switch (correction.kind) {
+        case CadSurfaceCrossingCorrection::Kind::Higher: z = std::max(issue.zFromA, issue.zFromB); break;
+        case CadSurfaceCrossingCorrection::Kind::Lower: z = std::min(issue.zFromA, issue.zFromB); break;
+        case CadSurfaceCrossingCorrection::Kind::Average: break;
+        case CadSurfaceCrossingCorrection::Kind::Custom: z = correction.customElevation; break;
+        case CadSurfaceCrossingCorrection::Kind::TrimA:
+        case CadSurfaceCrossingCorrection::Kind::TrimB: break;
+        }
+        const auto split = [&](size_t index) {
+          const TinConstraint original = inputs.constraints[index];
+          TinConstraint first = original, second = original;
+          first.bx = correction.x; first.by = correction.y; first.bz = z;
+          second.ax = correction.x; second.ay = correction.y; second.az = z;
+          inputs.constraints[index] = first;
+          inputs.constraints.insert(inputs.constraints.begin() + static_cast<std::ptrdiff_t>(index + 1), second);
+          inputs.constraintSourceIds.insert(inputs.constraintSourceIds.begin() + static_cast<std::ptrdiff_t>(index + 1),
+                                             inputs.constraintSourceIds[index]);
+        };
+        if (indexA > indexB) { split(indexA); split(indexB); }
+        else { split(indexB); split(indexA); }
+      }
+      break;
+    }
+  }
+}
 
 bool IsSimpleInfillPolygon(const std::vector<double>& xyz, std::string* why) {
   const size_t n = xyz.size() / 3;
@@ -3488,7 +3538,7 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
           chain.verts.push_back({x, y, strip[v + 2]});
           loop.ring.emplace_back(x, y);
         }
-        AppendChainConstraints(chain, true, in.constraints);
+        AppendChainConstraints(chain, true, in.constraints, &in.constraintSourceIds, member.gradingId);
         in.cullLoops.push_back(std::move(loop));
       }
     }
@@ -3558,7 +3608,7 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
       continue;
     }
     resolvedBreaklines.push_back(bl);
-    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints);
+    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints, &in.constraintSourceIds, bl.entityId);
   }
   surface.breaklines = std::move(resolvedBreaklines);
   if (droppedBreaklines > 0)
@@ -3574,7 +3624,7 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
       continue;
     }
     resolvedContours.push_back(c);
-    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints);
+    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints, &in.constraintSourceIds, c.entityId);
   }
   surface.contourSources = std::move(resolvedContours);
   if (droppedContours > 0)
@@ -3592,7 +3642,7 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
       continue;
     }
     resolvedBoundaries.push_back(b);
-    AppendChainConstraints(chain, /*forceClosed=*/true, in.constraints);
+    AppendChainConstraints(chain, /*forceClosed=*/true, in.constraints, &in.constraintSourceIds, b.entityId);
     TinBoundaryLoop loop;
     loop.kind = b.kind == CadBoundaryKind::Outer ? TinBoundaryKind::Outer
               : b.kind == CadBoundaryKind::Hide  ? TinBoundaryKind::Hide
@@ -3635,6 +3685,7 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
 
   // Crossing breaklines at different elevations (REQ-069): reported by name and location so the
   // conflict can actually be found and fixed, rather than left to be inferred from a stray edge.
+  ApplySurfaceCrossingCorrections(surface, in);
   for (const TinCrossingIssue& issue : TinFindCrossingConflicts(in.constraints))
     log.push_back("Surface \"" + surface.name + "\": breaklines cross at (" +
                   std::to_string(issue.x) + ", " + std::to_string(issue.y) +
@@ -3840,6 +3891,7 @@ bool BuildCorridorSurface(AppCommandState& st, CadSurface& surface, std::vector<
   SurfaceBuildInputs in = ResolveSurfaceInputs(st, surface, log);
   in.pts.clear();
   in.constraints.clear();
+  in.constraintSourceIds.clear();
   std::vector<CadSurfaceBreakline> kept;
   for (const CadSurfaceBreakline& fl : surface.corridorFeatureLines) {
     ResolvedChain chain;
@@ -3848,7 +3900,7 @@ bool BuildCorridorSurface(AppCommandState& st, CadSurface& surface, std::vector<
     kept.push_back(fl);
     for (const auto& v : chain.verts)
       in.pts.push_back({v[0], v[1], static_cast<float>(v[2])});
-    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints);
+    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints, &in.constraintSourceIds, fl.entityId);
   }
   surface.corridorFeatureLines = std::move(kept);
   if (in.pts.empty()) {
@@ -6485,6 +6537,264 @@ void RunMoveToSurfaceCommand(AppCommandState& st, const std::string& args, std::
   MoveSelectedBlockRefsToSurface(st, static_cast<size_t>(index), log);
 }
 
+namespace {
+
+bool SurfaceSightVisible(const ISurfaceQuery& query, double ox, double oy, double oz,
+                         double tx, double ty, double tz, int samples, double* obstructionX = nullptr,
+                         double* obstructionY = nullptr, double* obstructionZ = nullptr) {
+  for (int i = 1; i < samples; ++i) {
+    const double t = static_cast<double>(i) / static_cast<double>(samples);
+    const double x = ox + (tx - ox) * t;
+    const double y = oy + (ty - oy) * t;
+    double ground = 0.0;
+    if (!query.elevationAt(x, y, &ground))
+      return false;
+    const double sight = oz + (tz - oz) * t;
+    if (ground > sight + 0.002) {
+      if (obstructionX) *obstructionX = x;
+      if (obstructionY) *obstructionY = y;
+      if (obstructionZ) *obstructionZ = ground;
+      return false;
+    }
+  }
+  return true;
+}
+
+void AddSurfaceResultLine(AppCommandState& st, double ax, double ay, double az,
+                          double bx, double by, double bz, const char* color) {
+  st.userLinesFlat.insert(st.userLinesFlat.end(), {ax, ay, az, bx, by, bz});
+  EntityAttributes attrs = MakeNewEntityAttrs(st);
+  attrs.color = color;
+  st.userLineAttrs.push_back(std::move(attrs));
+}
+
+void RunSurfaceVisibility(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() < 2) {
+    log.push_back("SURFACEVISIBILITY — usage: SURFACEVISIBILITY <surface>, LOS|ZVI, coordinates...");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFACEVISIBILITY — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  const CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  const auto query = MakeSurfaceQueryForCommands(st, surface);
+  if (!query) {
+    log.push_back("SURFACEVISIBILITY — surface \"" + surface.name + "\" has no built TIN.");
+    return;
+  }
+  const std::string mode = StringUtil::toLowerAsciiCopy(f[1]);
+  auto number = [&](size_t i, double* out) {
+    if (i >= f.size()) return false;
+    char* end = nullptr;
+    *out = std::strtod(f[i].c_str(), &end);
+    return end && *end == '\0' && std::isfinite(*out);
+  };
+  auto worldToLocal = [&](double wx, double wy, double* x, double* y) {
+    CadCoord::LocalFromWorld(st, wx, wy, x, y);
+  };
+  if (mode == "los") {
+    if (f.size() != 8) {
+      log.push_back("SURFACEVISIBILITY — LOS usage: SURFACEVISIBILITY <surface>, LOS, eyeX, eyeY, eyeHeight, targetX, targetY, targetHeight.");
+      return;
+    }
+    double wx0 = 0.0, wy0 = 0.0, eye = 0.0, wx1 = 0.0, wy1 = 0.0, target = 0.0;
+    if (!number(2, &wx0) || !number(3, &wy0) || !number(4, &eye) || !number(5, &wx1) ||
+        !number(6, &wy1) || !number(7, &target) || eye < 0.0 || target < 0.0) {
+      log.push_back("SURFACEVISIBILITY — LOS coordinates and heights must be finite; heights cannot be negative.");
+      return;
+    }
+    double x0 = 0.0, y0 = 0.0, x1 = 0.0, y1 = 0.0, g0 = 0.0, g1 = 0.0;
+    worldToLocal(wx0, wy0, &x0, &y0);
+    worldToLocal(wx1, wy1, &x1, &y1);
+    if (!query->elevationAt(x0, y0, &g0) || !query->elevationAt(x1, y1, &g1)) {
+      log.push_back("SURFACEVISIBILITY — eye or target is outside the surface; no result was created.");
+      return;
+    }
+    const double z0 = g0 + eye, z1 = g1 + target;
+    double bx = std::numeric_limits<double>::quiet_NaN(), by = 0.0, bz = 0.0;
+    const bool visible = SurfaceSightVisible(*query, x0, y0, z0, x1, y1, z1, 128, &bx, &by, &bz);
+    if (!visible && !std::isfinite(bx)) {
+      log.push_back("SURFACEVISIBILITY — the line crosses an area outside the surface; no result was created.");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface line of sight");
+    if (visible) {
+      AddSurfaceResultLine(st, x0, y0, z0, x1, y1, z1, "#25a55b");
+      log.push_back("SURFACEVISIBILITY LOS — target is visible.");
+    } else {
+      AddSurfaceResultLine(st, x0, y0, z0, bx, by, bz, "#25a55b");
+      AddSurfaceResultLine(st, bx, by, bz, x1, y1, z1, "#d64545");
+      log.push_back("SURFACEVISIBILITY LOS — target is obstructed; first obstruction at " +
+                    std::to_string(bx + st.worldDocumentOriginX) + ", " +
+                    std::to_string(by + st.worldDocumentOriginY) + ".");
+    }
+    BumpCadGpuCache(st);
+    return;
+  }
+  if (mode == "zvi") {
+    if (f.size() != 7) {
+      log.push_back("SURFACEVISIBILITY — ZVI usage: SURFACEVISIBILITY <surface>, ZVI, observerX, observerY, eyeHeight, targetHeight, radius.");
+      return;
+    }
+    double wx = 0.0, wy = 0.0, eye = 0.0, target = 0.0, radius = 0.0, ground = 0.0;
+    if (!number(2, &wx) || !number(3, &wy) || !number(4, &eye) || !number(5, &target) ||
+        !number(6, &radius) || eye < 0.0 || target < 0.0 || radius <= 0.0 || radius > 10000.0) {
+      log.push_back("SURFACEVISIBILITY — ZVI requires finite coordinates, nonnegative heights, and a radius from 0 to 10000.");
+      return;
+    }
+    double ox = 0.0, oy = 0.0;
+    worldToLocal(wx, wy, &ox, &oy);
+    if (!query->elevationAt(ox, oy, &ground)) {
+      log.push_back("SURFACEVISIBILITY — observer is outside the surface; no result was created.");
+      return;
+    }
+    constexpr int side = 32;
+    const double step = 2.0 * radius / side;
+    std::vector<std::pair<CadFilledRegion, std::string>> cells;
+    cells.reserve(side * side);
+    size_t visibleCells = 0, partialCells = 0, hiddenCells = 0;
+    for (int row = 0; row < side; ++row) for (int col = 0; col < side; ++col) {
+      const double x0 = ox - radius + col * step, x1 = x0 + step;
+      const double y0 = oy - radius + row * step, y1 = y0 + step;
+      int visibleCorners = 0, coveredCorners = 0;
+      std::array<double, 4> cornerZ{};
+      const std::array<std::pair<double,double>, 4> corners = {{{x0,y0}, {x1,y0}, {x1,y1}, {x0,y1}}};
+      for (size_t corner = 0; corner < corners.size(); ++corner) {
+        const auto& p = corners[corner];
+        double targetGround = 0.0;
+        if (!query->elevationAt(p.first, p.second, &targetGround)) continue;
+        cornerZ[corner] = targetGround;
+        ++coveredCorners;
+        if (SurfaceSightVisible(*query, ox, oy, ground + eye, p.first, p.second,
+                                targetGround + target, 24)) ++visibleCorners;
+      }
+      if (coveredCorners != 4) continue;
+      const bool fullyVisible = visibleCorners == 4;
+      const bool fullyHidden = visibleCorners == 0;
+      if (fullyVisible) ++visibleCells;
+      else if (fullyHidden) ++hiddenCells;
+      else ++partialCells;
+      CadFilledRegion region;
+      region.vertsXyz = {x0,y0,cornerZ[0], x1,y0,cornerZ[1], x1,y1,cornerZ[2], x0,y1,cornerZ[3]};
+      region.loopStart = {0};
+      cells.emplace_back(std::move(region), fullyVisible ? "#35a86b" : fullyHidden ? "#d64545" : "#e4b844");
+    }
+    if (cells.empty() && hiddenCells == side * side) {
+      log.push_back("SURFACEVISIBILITY — the requested area has no surface coverage.");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface zone of visual influence");
+    for (auto& [region, color] : cells) {
+      st.cadFilledRegions.push_back(std::move(region));
+      EntityAttributes attrs = MakeNewEntityAttrs(st);
+      attrs.color = color;
+      st.cadFilledRegionAttrs.push_back(std::move(attrs));
+    }
+    EnsureAttrCounts(st);
+    BumpCadGpuCache(st);
+    log.push_back("SURFACEVISIBILITY ZVI — " + std::to_string(visibleCells) + " visible cell(s), " +
+                  std::to_string(partialCells) + " partly visible cell(s), " +
+                  std::to_string(hiddenCells) + " hidden cell(s).");
+    return;
+  }
+  log.push_back("SURFACEVISIBILITY — choose LOS or ZVI.");
+}
+
+void RunSurfaceCrossings(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.empty() || f[0].empty()) {
+    log.push_back("SURFCROSSBL — usage: SURFCROSSBL <surface>[, RESOLVE, x, y, HIGHER|LOWER|AVERAGE|TRIM-A|TRIM-B|elevation].");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFCROSSBL — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  if (surface.kind != SurfaceKind::Tin || surface.breaklines.size() < 2) {
+    log.push_back("SURFCROSSBL — the selected surface has fewer than two breaklines to compare.");
+    return;
+  }
+  CadSurface candidate = surface;
+  std::vector<std::string> ignored;
+  SurfaceBuildInputs inputs = ResolveSurfaceInputs(st, candidate, ignored);
+  if (inputs.inputsIncomplete) {
+    log.push_back("SURFCROSSBL — cannot resolve crossings because the surface definition is incomplete.");
+    return;
+  }
+  const auto issues = TinFindCrossingConflicts(inputs.constraints);
+  auto logIssue = [&](const TinCrossingIssue& issue) {
+    if (issue.constraintIndexA >= inputs.constraintSourceIds.size() || issue.constraintIndexB >= inputs.constraintSourceIds.size())
+      return;
+    log.push_back("SURFCROSSBL — breakline IDs " + std::to_string(inputs.constraintSourceIds[issue.constraintIndexA]) +
+                  " and " + std::to_string(inputs.constraintSourceIds[issue.constraintIndexB]) + " cross at (" +
+                  std::to_string(issue.x + inputs.originX) + ", " + std::to_string(issue.y + inputs.originY) +
+                  "); elevation difference " + std::to_string(issue.zFromA - issue.zFromB) + ".");
+  };
+  if (f.size() == 1 || (f.size() == 2 && StringUtil::toLowerAsciiCopy(f[1]) == "list")) {
+    if (issues.empty()) log.push_back("SURFCROSSBL — no unresolved interior breakline crossings on \"" + surface.name + "\".");
+    else for (const TinCrossingIssue& issue : issues) logIssue(issue);
+    return;
+  }
+  if (f.size() != 5 || StringUtil::toLowerAsciiCopy(f[1]) != "resolve") {
+    log.push_back("SURFCROSSBL — usage: SURFCROSSBL <surface>, RESOLVE, x, y, HIGHER|LOWER|AVERAGE|TRIM-A|TRIM-B|elevation.");
+    return;
+  }
+  char *ex = nullptr, *ey = nullptr;
+  const double wx = std::strtod(f[2].c_str(), &ex), wy = std::strtod(f[3].c_str(), &ey);
+  if (!ex || *ex != '\0' || !ey || *ey != '\0' || !std::isfinite(wx) || !std::isfinite(wy)) {
+    log.push_back("SURFCROSSBL — crossing coordinates must be finite numbers.");
+    return;
+  }
+  double x = 0.0, y = 0.0;
+  CadCoord::LocalFromWorld(st, wx, wy, &x, &y);
+  const TinCrossingIssue* selected = nullptr;
+  for (const TinCrossingIssue& issue : issues)
+    if (std::hypot(issue.x + inputs.originX - wx, issue.y + inputs.originY - wy) <= 0.05) {
+      selected = &issue; break;
+    }
+  if (!selected || selected->constraintIndexA >= inputs.constraintSourceIds.size() ||
+      selected->constraintIndexB >= inputs.constraintSourceIds.size()) {
+    log.push_back("SURFCROSSBL — no unresolved crossing was found within 0.05 drawing units of that location.");
+    return;
+  }
+  CadSurfaceCrossingCorrection correction;
+  correction.entityA = inputs.constraintSourceIds[selected->constraintIndexA];
+  correction.entityB = inputs.constraintSourceIds[selected->constraintIndexB];
+  correction.x = x; correction.y = y;
+  const std::string action = StringUtil::toLowerAsciiCopy(f[4]);
+  if (action == "higher") correction.kind = CadSurfaceCrossingCorrection::Kind::Higher;
+  else if (action == "lower") correction.kind = CadSurfaceCrossingCorrection::Kind::Lower;
+  else if (action == "average") correction.kind = CadSurfaceCrossingCorrection::Kind::Average;
+  else if (action == "trim-a") correction.kind = CadSurfaceCrossingCorrection::Kind::TrimA;
+  else if (action == "trim-b") correction.kind = CadSurfaceCrossingCorrection::Kind::TrimB;
+  else {
+    char* ez = nullptr;
+    correction.customElevation = std::strtod(f[4].c_str(), &ez);
+    if (!ez || *ez != '\0' || !std::isfinite(correction.customElevation)) {
+      log.push_back("SURFCROSSBL — choose HIGHER, LOWER, AVERAGE, TRIM-A, TRIM-B, or a numeric elevation.");
+      return;
+    }
+    correction.kind = CadSurfaceCrossingCorrection::Kind::Custom;
+  }
+  PushUndoSnapshot(st, "Resolve surface breakline crossing");
+  surface.crossingCorrections.erase(std::remove_if(surface.crossingCorrections.begin(), surface.crossingCorrections.end(),
+      [&](const CadSurfaceCrossingCorrection& existing) {
+        return existing.entityA == correction.entityA && existing.entityB == correction.entityB &&
+               std::hypot(existing.x - correction.x, existing.y - correction.y) <= 0.05;
+      }), surface.crossingCorrections.end());
+  surface.crossingCorrections.push_back(correction);
+  BumpCadGpuCache(st);
+  BuildSurfaceFromSources(st, surface, log);
+  log.push_back("SURFCROSSBL — surface-local crossing decision saved; source breaklines were not changed.");
+}
+
+}  // namespace
+
 void EnsureEntityIds(AppCommandState& st) {
   // Geometry has not changed since the last sweep, so nothing can be missing an id. This is what
   // lets callers invoke it unconditionally — including once a frame — without paying for a walk.
@@ -7660,6 +7970,8 @@ const CmdEntry kRegistry[] = {
     {"surflodlow", "", "Set a surface to Reduced viewport detail: SURFLODLOW <surface>"},
     {"surflodhigh", "", "Set a surface to full viewport detail: SURFLODHIGH <surface>"},
     {"movetosurface", "", "Move selected block references to a surface: MOVETOSURFACE <surface>"},
+    {"surfacevisibility", "surfvis", "Surface LOS or ZVI analysis: SURFACEVISIBILITY <surface>, LOS|ZVI, ..."},
+    {"surfcrossbl", "", "List or resolve surface-local breakline crossings: SURFCROSSBL <surface>, ..."},
     {"surfdelline", "sfdelline", "Delete an interior TIN edge: SURFDELLINE <surface>[, <x>, <y>]"},
     {"surfacedelpoint", "sfdelpt",
      "Delete nearest TIN definition point: SURFACEDELPOINT <surface>[, <x>, "
@@ -8365,6 +8677,14 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "movetosurface") {
     RunMoveToSurfaceCommand(st, std::string(), log);
+    return true;
+  }
+  if (primary == "surfacevisibility") {
+    RunSurfaceVisibility(st, std::string(), log);
+    return true;
+  }
+  if (primary == "surfcrossbl") {
+    RunSurfaceCrossings(st, std::string(), log);
     return true;
   }
   if (primary == "watershed") {
@@ -48687,6 +49007,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "surfacedelpoint" || plotTok == "sfdelpt" || plotTok == "surfacemovepoint" ||
         plotTok == "sfmovept" || plotTok == "surfdelline" || plotTok == "sfdelline" ||
         plotTok == "surflodlow" || plotTok == "surflodhigh" || plotTok == "movetosurface" ||
+        plotTok == "surfacevisibility" || plotTok == "surfvis" || plotTok == "surfcrossbl" ||
         plotTok == "quickprofile" || plotTok == "qprof" ||
         plotTok == "alignment" || plotTok == "createalignment" || plotTok == "alignmentadd" ||
         plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "getstationoffset" ||
@@ -48740,6 +49061,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunSurfaceLodCommand(st, rest, false, log);
       else if (plotTok == "movetosurface")
         RunMoveToSurfaceCommand(st, rest, log);
+      else if (plotTok == "surfacevisibility" || plotTok == "surfvis")
+        RunSurfaceVisibility(st, rest, log);
+      else if (plotTok == "surfcrossbl")
+        RunSurfaceCrossings(st, rest, log);
       else if (plotTok == "surfdelline" || plotTok == "sfdelline")
         RunSurfDelLine(st, rest, log);
       else if (plotTok == "quickprofile" || plotTok == "qprof")

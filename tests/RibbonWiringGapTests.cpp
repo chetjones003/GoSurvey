@@ -57,7 +57,9 @@ TEST_CASE("Issue #802 decided-out Civil 3D placeholders are removed from the Qt 
 TEST_CASE("Issue #807 implemented surface controls are wired", "[ribbon][issue807]") {
   for (const auto& [id, command] : {std::pair{"##TsLodLow", "@surfaceLodLow"},
                                     std::pair{"##TsLodHigh", "@surfaceLodHigh"},
-                                    std::pair{"##TsMoveTo", "@moveBlocksToSurface"}}) {
+                                    std::pair{"##TsMoveTo", "@moveBlocksToSurface"},
+                                    std::pair{"##TsVisCheck", "@surfaceVisibilityMenu"},
+                                    std::pair{"##TsXBreak", "@surfaceCrossingsMenu"}}) {
     const auto* button = FindButton(id);
     REQUIRE(button != nullptr);
     CHECK(std::string(button->command) == command);
