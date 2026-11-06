@@ -42,3 +42,8 @@ TEST_CASE("Issue #762 Qt ribbon does not create an unsupported Manage panel", "[
   for (const auto& button : qtribbon::kButtons)
     CHECK(std::string(button.tab) != "Manage");
 }
+
+TEST_CASE("Issue #802 decided-out Civil 3D placeholders are removed from the Qt ribbon", "[ribbon][issue802]") {
+  for (const char* id : {"##CdParcel", "##CdIntersections", "##CdAssembly", "##CdPond", "##CdUgStorage", "##CdChannel"})
+    CHECK(FindButton(id) == nullptr);
+}
