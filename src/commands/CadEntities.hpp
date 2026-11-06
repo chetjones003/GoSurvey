@@ -1483,6 +1483,8 @@ struct CadGradingGroupMember {
 /// Grading groups additionally own per-member baked strips.
 struct CadSurface {
   bool gradingGroup = false;
+  /// REQ-508: viewport-only triangle reduction; source/query TIN data is never changed.
+  bool reducedDisplayLod = false;
   std::vector<CadGradingGroupMember> gradingMembers;
   std::string name;  ///< Unique within the drawing.
   SurfaceKind kind = SurfaceKind::Tin;

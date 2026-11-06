@@ -2523,24 +2523,25 @@ void AppendContourLinesFrom(const ContourResult& r, std::vector<float>* out) {
 
 /// Every triangulation edge of \p t in `GL_LINES` layout — the appearance a surface had before
 /// REQ-070, now the style's "triangles" component.
-void AppendTriangleEdges(const CadTin& t, std::vector<float>* out) {
+void AppendTriangleEdges(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
+                         std::vector<float>* out) {
   const auto emit = [&](std::uint32_t a, std::uint32_t b) {
     // Narrowed here (ADR-054 (b)): `out` is the render buffer, GPU-bound `float`.
-    out->push_back(static_cast<float>(t.vertsXyz[a * 3 + 0]));
-    out->push_back(static_cast<float>(t.vertsXyz[a * 3 + 1]));
-    out->push_back(static_cast<float>(t.vertsXyz[a * 3 + 2]));
-    out->push_back(static_cast<float>(t.vertsXyz[b * 3 + 0]));
-    out->push_back(static_cast<float>(t.vertsXyz[b * 3 + 1]));
-    out->push_back(static_cast<float>(t.vertsXyz[b * 3 + 2]));
+    out->push_back(static_cast<float>(vertsXyz[a * 3 + 0]));
+    out->push_back(static_cast<float>(vertsXyz[a * 3 + 1]));
+    out->push_back(static_cast<float>(vertsXyz[a * 3 + 2]));
+    out->push_back(static_cast<float>(vertsXyz[b * 3 + 0]));
+    out->push_back(static_cast<float>(vertsXyz[b * 3 + 1]));
+    out->push_back(static_cast<float>(vertsXyz[b * 3 + 2]));
   };
   // Each interior edge is emitted twice, once per adjoining triangle. De-duplicating would cost a
   // hash of every edge to halve a buffer the line pipeline already handles at this size (REQ-100's
   // measured envelope is 750k segments); that trade is worth revisiting only if the surface profile
   // misses its budget.
-  for (size_t i = 0; i + 2 < t.indices.size(); i += 3) {
-    emit(t.indices[i], t.indices[i + 1]);
-    emit(t.indices[i + 1], t.indices[i + 2]);
-    emit(t.indices[i + 2], t.indices[i]);
+  for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+    emit(indices[i], indices[i + 1]);
+    emit(indices[i + 1], indices[i + 2]);
+    emit(indices[i + 2], indices[i]);
   }
 }
 
@@ -2561,7 +2562,8 @@ constexpr double kArrowHeadAngleRad = 0.4363;  // 25 degrees
 /// arrow) `AssignBand` placed in no band. Both outputs are cleared unconditionally, and left with
 /// zero buckets — not one empty bucket — when the corresponding toggle (`analysisMode` / `slopeArrowsOn`)
 /// is off, so a plain-style surface pays nothing here and the assembly pass has nothing to iterate.
-void BuildSurfaceAnalysisGeometry(const CadTin& tin, const SurfaceStyle& style,
+void BuildSurfaceAnalysisGeometry(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
+                                  const SurfaceStyle& style,
                                   std::vector<std::vector<float>>* bandBuffers,
                                   std::vector<std::vector<float>>* arrowBuffers) {
   bandBuffers->clear();
@@ -2598,12 +2600,12 @@ void BuildSurfaceAnalysisGeometry(const CadTin& tin, const SurfaceStyle& style,
     buf.push_back(static_cast<float>(bz));
   };
 
-  for (size_t i = 0; i + 2 < tin.indices.size(); i += 3) {
-    const std::uint32_t ia = tin.indices[i], ib = tin.indices[i + 1], ic = tin.indices[i + 2];
+  for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+    const std::uint32_t ia = indices[i], ib = indices[i + 1], ic = indices[i + 2];
     AnalysisTriangle t;
-    t.x0 = tin.vertsXyz[ia * 3 + 0]; t.y0 = tin.vertsXyz[ia * 3 + 1]; t.z0 = tin.vertsXyz[ia * 3 + 2];
-    t.x1 = tin.vertsXyz[ib * 3 + 0]; t.y1 = tin.vertsXyz[ib * 3 + 1]; t.z1 = tin.vertsXyz[ib * 3 + 2];
-    t.x2 = tin.vertsXyz[ic * 3 + 0]; t.y2 = tin.vertsXyz[ic * 3 + 1]; t.z2 = tin.vertsXyz[ic * 3 + 2];
+    t.x0 = vertsXyz[ia * 3 + 0]; t.y0 = vertsXyz[ia * 3 + 1]; t.z0 = vertsXyz[ia * 3 + 2];
+    t.x1 = vertsXyz[ib * 3 + 0]; t.y1 = vertsXyz[ib * 3 + 1]; t.z1 = vertsXyz[ib * 3 + 2];
+    t.x2 = vertsXyz[ic * 3 + 0]; t.y2 = vertsXyz[ic * 3 + 1]; t.z2 = vertsXyz[ic * 3 + 2];
 
     if (wantBands) {
       double value = 0.0;
@@ -2840,7 +2842,8 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
 
     auto it = std::find_if(st.surfaceDisplayCache.begin(), st.surfaceDisplayCache.end(),
                            [&](const AppCommandState::SurfaceDisplayCacheEntry& e) { return e.surfaceId == id; });
-    if (it != st.surfaceDisplayCache.end() && it->builtFrom.lock() == tin && it->style == resolved)
+    if (it != st.surfaceDisplayCache.end() && it->builtFrom.lock() == tin && it->style == resolved &&
+        it->reducedDisplayLod == surf.reducedDisplayLod)
       continue;  // BEFORE any clear/reserve — see the header comment; this early-out is the budget
 
     if (!tin) {
@@ -2855,7 +2858,19 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
     }
     it->builtFrom = tin;
     it->style = resolved;
+    it->reducedDisplayLod = surf.reducedDisplayLod;
     ++st.surfaceDisplayRegenCount;  // past the early-out: this frame is doing the real work
+
+    std::vector<std::uint32_t> reducedIndices;
+    const std::vector<std::uint32_t>* displayIndices = &tin->indices;
+    if (surf.reducedDisplayLod) {
+      // Store only sampled indices in the display cache path; copying the full vertex array would
+      // duplicate the largest part of a TIN merely to display a reduced overview.
+      reducedIndices.reserve((tin->indices.size() + 11) / 12 * 3);
+      for (size_t i = 0; i + 2 < tin->indices.size(); i += 12)
+        reducedIndices.insert(reducedIndices.end(), tin->indices.begin() + i, tin->indices.begin() + i + 3);
+      displayIndices = &reducedIndices;
+    }
 
     // Each component is generated only when its own toggle is on, and its buffer is released when it
     // is off — REQ-070's "a style with triangles off and contours on draws only contours" is then a
@@ -2872,7 +2887,7 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
       // to it would double the buffer on every edit. Capacity is kept, because what follows refills
       // it to the same size.
       it->triangleEdges.clear();
-      AppendTriangleEdges(*tin, &it->triangleEdges);
+      AppendTriangleEdges(tin->vertsXyz, *displayIndices, &it->triangleEdges);
     } else {
       release(&it->triangleEdges);
     }
@@ -2919,7 +2934,10 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
 
     // REQ-072: unconditional — the builder itself clears both outputs to zero buckets when neither
     // `analysisMode` nor `slopeArrowsOn` is on, which is what turns them off (§6 (2)/(3)).
-    BuildSurfaceAnalysisGeometry(*tin, resolved, &it->bandTriangleBuffers, &it->arrowLineBuffers);
+    // Analysis data is authoritative surface information, not a viewport mesh simplification.
+    // Keep arrows and range assignment full-detail even when triangles use Reduced LOD.
+    BuildSurfaceAnalysisGeometry(tin->vertsXyz, tin->indices, resolved,
+                                 &it->bandTriangleBuffers, &it->arrowLineBuffers);
   }
 
   st.surfaceWatershedCache.erase(
@@ -6389,6 +6407,84 @@ std::unique_ptr<ISurfaceQuery> MakeSurfaceQueryForCommands(const AppCommandState
   return MakeSurfaceQuery(st, surf);  // REQ-497: alignment commands read the same ground the QUICKPROFILE command does
 }
 
+bool MoveSelectedBlockRefsToSurface(AppCommandState& st, size_t surfaceIndex, std::vector<std::string>& log) {
+  if (surfaceIndex >= st.cadSurfaces.size()) {
+    log.push_back("Move to Surface — the selected surface no longer exists.");
+    return false;
+  }
+  const auto query = MakeSurfaceQuery(st, st.cadSurfaces[surfaceIndex]);
+  if (!query) {
+    log.push_back("Move to Surface — the selected surface has no built data.");
+    return false;
+  }
+  std::vector<std::pair<size_t, double>> elevations;
+  for (const SelectedEntity& selected : st.selection) {
+    if (selected.type != SelectedEntity::Type::BlockRef || selected.index < 0 ||
+        static_cast<size_t>(selected.index) >= st.cadBlockRefs.size())
+      continue;
+    const CadBlockRef& block = st.cadBlockRefs[static_cast<size_t>(selected.index)];
+    double z = 0.0;
+    if (!query->elevationAt(block.xf.x, block.xf.y, &z)) {
+      log.push_back("Move to Surface — a selected block is outside the surface; no blocks were moved.");
+      return false;
+    }
+    elevations.emplace_back(static_cast<size_t>(selected.index), z);
+  }
+  if (elevations.empty()) {
+    log.push_back("Move to Surface — select one or more block references first.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Move blocks to surface");
+  for (const auto& [index, z] : elevations)
+    st.cadBlockRefs[index].xf.z = static_cast<float>(z);
+  BumpCadGpuCache(st);
+  log.push_back("Move to Surface — moved " + std::to_string(elevations.size()) + " block reference(s) to \"" +
+                st.cadSurfaces[surfaceIndex].name + "\".");
+  return true;
+}
+
+bool SetSurfaceDisplayLod(AppCommandState& st, size_t surfaceIndex, bool reduced) {
+  if (surfaceIndex >= st.cadSurfaces.size() || st.cadSurfaces[surfaceIndex].reducedDisplayLod == reduced)
+    return false;
+  PushUndoSnapshot(st, reduced ? "Reduced surface display detail" : "High surface display detail");
+  st.cadSurfaces[surfaceIndex].reducedDisplayLod = reduced;
+  BumpCadGpuCache(st);
+  return true;
+}
+
+void RunSurfaceLodCommand(AppCommandState& st, const std::string& args, bool reduced,
+                          std::vector<std::string>& log) {
+  const char* command = reduced ? "SURFLODLOW" : "SURFLODHIGH";
+  const std::vector<std::string> fields = SplitCommaFields(args);
+  if (fields.size() != 1 || fields.front().empty()) {
+    log.push_back(std::string(command) + " — usage: " + command + " <surface name>.");
+    return;
+  }
+  const int index = FindSurfaceIndex(st, fields.front());
+  if (index < 0) {
+    log.push_back(std::string(command) + " — no surface named \"" + fields.front() + "\".");
+    return;
+  }
+  const bool changed = SetSurfaceDisplayLod(st, static_cast<size_t>(index), reduced);
+  log.push_back(std::string(command) + " — \"" + st.cadSurfaces[static_cast<size_t>(index)].name +
+                (changed ? (reduced ? "\" now uses Reduced display detail." : "\" now uses High display detail.")
+                         : (reduced ? "\" already uses Reduced display detail." : "\" already uses High display detail.")));
+}
+
+void RunMoveToSurfaceCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> fields = SplitCommaFields(args);
+  if (fields.size() != 1 || fields.front().empty()) {
+    log.push_back("MOVETOSURFACE — usage: MOVETOSURFACE <surface name> (select block references first).");
+    return;
+  }
+  const int index = FindSurfaceIndex(st, fields.front());
+  if (index < 0) {
+    log.push_back("MOVETOSURFACE — no surface named \"" + fields.front() + "\".");
+    return;
+  }
+  MoveSelectedBlockRefsToSurface(st, static_cast<size_t>(index), log);
+}
+
 void EnsureEntityIds(AppCommandState& st) {
   // Geometry has not changed since the last sweep, so nothing can be missing an id. This is what
   // lets callers invoke it unconditionally — including once a frame — without paying for a walk.
@@ -7561,6 +7657,9 @@ const CmdEntry kRegistry[] = {
     {"surfacemovepoint", "sfmovept",
      "Move a TIN definition point: SURFACEMOVEPOINT <surface>[, <x1>, <y1>, "
      "<x2>, <y2>, <z2>]"},
+    {"surflodlow", "", "Set a surface to Reduced viewport detail: SURFLODLOW <surface>"},
+    {"surflodhigh", "", "Set a surface to full viewport detail: SURFLODHIGH <surface>"},
+    {"movetosurface", "", "Move selected block references to a surface: MOVETOSURFACE <surface>"},
     {"surfdelline", "sfdelline", "Delete an interior TIN edge: SURFDELLINE <surface>[, <x>, <y>]"},
     {"surfacedelpoint", "sfdelpt",
      "Delete nearest TIN definition point: SURFACEDELPOINT <surface>[, <x>, "
@@ -8254,6 +8353,18 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "surfelev") {
     StartSurfaceElevGradeCommand(st, log);
+    return true;
+  }
+  if (primary == "surflodlow") {
+    RunSurfaceLodCommand(st, std::string(), true, log);
+    return true;
+  }
+  if (primary == "surflodhigh") {
+    RunSurfaceLodCommand(st, std::string(), false, log);
+    return true;
+  }
+  if (primary == "movetosurface") {
+    RunMoveToSurfaceCommand(st, std::string(), log);
     return true;
   }
   if (primary == "watershed") {
@@ -48575,6 +48686,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "sfswap" ||         plotTok == "surfaceaddpoint" || plotTok == "sfaddpt" ||
         plotTok == "surfacedelpoint" || plotTok == "sfdelpt" || plotTok == "surfacemovepoint" ||
         plotTok == "sfmovept" || plotTok == "surfdelline" || plotTok == "sfdelline" ||
+        plotTok == "surflodlow" || plotTok == "surflodhigh" || plotTok == "movetosurface" ||
         plotTok == "quickprofile" || plotTok == "qprof" ||
         plotTok == "alignment" || plotTok == "createalignment" || plotTok == "alignmentadd" ||
         plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "getstationoffset" ||
@@ -48622,6 +48734,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunSurfDelPoint(st, rest, log);
       else if (plotTok == "surfacemovepoint" || plotTok == "sfmovept")
         RunSurfMovePoint(st, rest, log);
+      else if (plotTok == "surflodlow")
+        RunSurfaceLodCommand(st, rest, true, log);
+      else if (plotTok == "surflodhigh")
+        RunSurfaceLodCommand(st, rest, false, log);
+      else if (plotTok == "movetosurface")
+        RunMoveToSurfaceCommand(st, rest, log);
       else if (plotTok == "surfdelline" || plotTok == "sfdelline")
         RunSurfDelLine(st, rest, log);
       else if (plotTok == "quickprofile" || plotTok == "qprof")

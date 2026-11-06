@@ -1088,7 +1088,7 @@ void EditorWindow::BuildRibbonPages() {
           else if (id == "##GeoCaptureArea") { add("Capture Area", "@captureViewport"); add("Pick Area", "@captureArea"); menu->addSeparator(); add("Remove Captured Areas", "@removeCaptures"); }
           else if (id == "##TsAddData") {
             add("Breaklines", "@surfaceBreaklines"); add("Contours", "@surfaceContours"); add("Boundary", "@surfaceBoundary"); add("Point Groups", "@surfaceManager");
-            auto* missing = menu->addAction("Point Files"); missing->setEnabled(false); missing->setToolTip("Not implemented in GoSurvey 0.7.2.");
+            add("Point Files", "@surfaceManager");
           } else if (id == "##TsEditSurf") {
             add("Add Point", "@surfaceAddPoint"); add("Delete Point", "@surfaceDeletePoint"); add("Move Point", "@surfaceMovePoint");
             add("Delete TIN Line", "@surfaceDeleteLine"); add("Swap Edge", "@surfaceSwapEdge"); add("Rebuild", "@surfaceRebuild");
@@ -1739,6 +1739,13 @@ void EditorWindow::RunRibbonAction(const QString& id) {
   else if (command == "@captureViewport") StartCaptureMapArea(m_State, false, m_Log);
   else if (command == "@removeCaptures") RemoveCapturedMapAreas(m_State, m_Log);
   else if (command == "@surfaceManager") m_State.showSurfaceManagerWindow = true;
+  else if ((command == "@surfaceLodLow" || command == "@surfaceLodHigh") && surface >= 0) {
+    const bool reduced = command == "@surfaceLodLow";
+    SetSurfaceDisplayLod(m_State, static_cast<size_t>(surface), reduced);
+  }
+  else if (command == "@moveBlocksToSurface" && surface >= 0) {
+    MoveSelectedBlockRefsToSurface(m_State, static_cast<size_t>(surface), m_Log);
+  }
   else if (command == "@surfaceBreaklines" && surface >= 0) StartDesignateBreaklineCommand(m_State, surfaceName, m_Log);
   else if (command == "@surfaceContours" && surface >= 0) StartDesignateContourCommand(m_State, surfaceName, m_Log);
   else if (command == "@surfaceBoundary" && surface >= 0) StartDesignateBoundaryCommand(m_State, surfaceName, CadBoundaryKind::Outer, m_Log);

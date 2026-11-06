@@ -192,6 +192,21 @@ Later, after importing a second day of shots coded `EG`:
 7. **Survey → Surfaces**, select `Existing Ground`, press **Rebuild**. The new points are already
    in the group.
 
+## Surface contextual tools
+
+With a surface selected, **Add Data → Point Files** opens Surface Manager. Under **Point Files**, use
+**Add...** to link a CSV with its explicit column layout. The source remains linked and is read again
+when the surface is rebuilt. This does not add the rows to the drawing's survey point database.
+
+**Reduced LOD** and **High LOD** change the selected surface's viewport triangle detail. Reduced LOD
+keeps every fourth TIN face for display; the full surface remains in use for elevation queries,
+selection, plotting, and export. The choice is saved with the drawing.
+The command-line forms are `SURFLODLOW <surface name>` and `SURFLODHIGH <surface name>`.
+
+**Move to Surface** changes only the elevation of selected block references. Every selected block
+must fall inside the selected surface; if any block is outside, none are moved.
+To use the command line, select the block references and run `MOVETOSURFACE <surface name>`.
+
 ---
 
 ## Grading groups and earthwork volumes

@@ -4088,11 +4088,12 @@ struct AppCommandState {
     /// resolved value cannot be forgotten. A style is five small structs and two doubles, so the
     /// comparison is cheaper than the allocation it prevents.
     SurfaceStyle style;
+    bool reducedDisplayLod = false;
 
     /// All generated geometry, each in `GL_LINES` layout: flat x,y,z, six floats per segment.
     /// Regenerated together, only on a staleness miss, and borrowed by
     /// \ref CadSurfaceDisplayGeometry rather than copied into it.
-    std::vector<float> triangleEdges;  ///< Every triangulation edge (the pre-REQ-070 appearance).
+    std::vector<float> triangleEdges;  ///< Display triangulation edges (sampled in Reduced LOD mode).
     std::vector<float> borderEdges;    ///< The outline: edges belonging to one triangle (\c TinBorderEdges).
     std::vector<float> minorContours;  ///< Minor levels, excluding those that are also major.
     std::vector<float> majorContours;
@@ -6917,6 +6918,10 @@ void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
 [[nodiscard]] int FindSurfaceIndex(const AppCommandState& st, const std::string& name);
 /// REQ-497: the elevation reader for a built surface, in drawing-local coordinates; null when the surface is not built.
 [[nodiscard]] std::unique_ptr<ISurfaceQuery> MakeSurfaceQueryForCommands(const AppCommandState& st, const CadSurface& surf);
+/// REQ-512: atomically move selected block references to the sampled surface elevations.
+bool MoveSelectedBlockRefsToSurface(AppCommandState& st, size_t surfaceIndex, std::vector<std::string>& log);
+/// REQ-508: select viewport triangle detail for one surface; records one undoable drawing change.
+bool SetSurfaceDisplayLod(AppCommandState& st, size_t surfaceIndex, bool reduced);
 
 /// Index of the surface whose stable entity id is \p id, or -1 when it does not resolve — erased, or
 /// never assigned (REQ-076 / ADR-036 (a)). `id == 0` always returns -1: 0 means "unassigned", so

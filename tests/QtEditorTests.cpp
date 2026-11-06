@@ -9743,6 +9743,8 @@ private Q_SLOTS:
     state.cadSurfaces.emplace_back(); state.cadSurfaces.back().name = "Existing Ground";
     state.selection.push_back({SelectedEntity::Type::Surface, 0}); window.Submit("");
     QCOMPARE(ribbon->currentIndex(), index("SurfaceCtx")); QVERIFY(ribbon->tabText(index("SurfaceCtx")).contains("Existing Ground"));
+    QTest::qWait(100);
+    QVERIFY(window.grab().save(Issue914Shot("issue807-surface-context.png")));
     state.selection.clear(); window.Submit(""); QCOMPARE(ribbon->currentIndex(), index("Modeling"));
     state.drawingSettings.zoneCode = "TX83-CF"; window.Submit(""); QVERIFY(ribbon->isTabVisible(index("GeolocationCtx")));
     QCOMPARE(ribbon->currentIndex(), index("Modeling")); // A location does not steal the active tab.

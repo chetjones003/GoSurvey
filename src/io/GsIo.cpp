@@ -2502,6 +2502,8 @@ json BuildRoot(const AppCommandState& st) {
     for (const CadSurface& s : st.cadSurfaces) {
       json o;
       o["name"] = s.name;
+      if (s.reducedDisplayLod)
+        o["reducedDisplayLod"] = true;
       if (s.gradingGroup) {
         o["gradingMembers"] = json::array();
         for (const auto &member : s.gradingMembers) {
@@ -4782,6 +4784,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       // written and falls back at draw time, so re-pointing the surface at a style with that name
       // later restores it instead of finding the reference silently rewritten.
       s.styleName = el.value("styleName", std::string());
+      s.reducedDisplayLod = el.value("reducedDisplayLod", false);
       {
         const std::string ks = el.value("kind", std::string());
         s.kind = ks == "grid"          ? SurfaceKind::Grid

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "CadCommands.hpp"
+#include "GsIo.hpp"
 
 using Catch::Approx;
 
@@ -110,6 +111,75 @@ TEST_CASE("DRAPE is one undo step", "[drape][issue150][phase7]") {
     INFO("vertex " << i);
     CHECK(st.userPolylineVerts[static_cast<size_t>(i) * 3 + 2] == Approx(0.0).margin(1e-9));
   }
+}
+
+TEST_CASE("Move to Surface moves selected block references atomically", "[surface][req512]") {
+  AppCommandState st;
+  AddGround(st, "EG");
+  CadBlockRef onGround;
+  onGround.defName = "Marker";
+  onGround.xf.x = 10.f;
+  onGround.xf.y = 50.f;
+  onGround.xf.z = -5.f;
+  st.cadBlockRefs.push_back(onGround);
+  CadBlockRef outside = onGround;
+  outside.xf.x = 110.f;
+  st.cadBlockRefs.push_back(outside);
+  st.selection.push_back({SelectedEntity::Type::BlockRef, 0});
+  st.selection.push_back({SelectedEntity::Type::BlockRef, 1});
+  std::vector<std::string> log;
+
+  CHECK_FALSE(MoveSelectedBlockRefsToSurface(st, 0, log));
+  CHECK(st.cadBlockRefs[0].xf.z == -5.f);
+  CHECK(st.cadBlockRefs[1].xf.z == -5.f);
+  CHECK(LogHas(log, "no blocks were moved"));
+
+  st.selection.pop_back();
+  log.clear();
+  st.activeDocSavedRevision = st.cadGpuRevision;
+  REQUIRE(MoveSelectedBlockRefsToSurface(st, 0, log));
+  CHECK(st.cadBlockRefs[0].xf.z == Approx(3.f));
+  CHECK(st.cadBlockRefs[0].xf.x == 10.f);
+  CHECK(st.cadBlockRefs[0].xf.y == 50.f);
+  CHECK(st.cadGpuRevision != st.activeDocSavedRevision);
+  CHECK(LogHas(log, "moved 1 block reference"));
+}
+
+TEST_CASE("Surface LOD choice persists in the drawing document", "[surface][req508]") {
+  AppCommandState source;
+  AddGround(source, "EG");
+  source.activeDocSavedRevision = source.cadGpuRevision;
+  REQUIRE(SetSurfaceDisplayLod(source, 0, true));
+  CHECK(source.cadGpuRevision != source.activeDocSavedRevision);
+  CHECK_FALSE(SetSurfaceDisplayLod(source, 0, true));
+  const std::string json = SerializeGoSurveyJson(source);
+  AppCommandState reopened;
+  std::vector<std::string> log;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(reopened, json, log));
+  REQUIRE(reopened.cadSurfaces.size() == 1);
+  CHECK(reopened.cadSurfaces[0].reducedDisplayLod);
+}
+
+TEST_CASE("Surface LOD and Move to Surface have typed command routes", "[surface][req508][req512]") {
+  AppCommandState st;
+  AddGround(st, "EG");
+  std::vector<std::string> log;
+
+  Type(st, "SURFLODLOW EG", log);
+  CHECK(st.cadSurfaces[0].reducedDisplayLod);
+  Type(st, "SURFLODHIGH EG", log);
+  CHECK_FALSE(st.cadSurfaces[0].reducedDisplayLod);
+
+  CadBlockRef block;
+  block.defName = "Marker";
+  block.xf.x = 50.f;
+  block.xf.y = 50.f;
+  block.xf.z = -10.f;
+  st.cadBlockRefs.push_back(block);
+  st.selection.push_back({SelectedEntity::Type::BlockRef, 0});
+  Type(st, "MOVETOSURFACE EG", log);
+  CHECK(st.cadBlockRefs[0].xf.z == Approx(7.f));
+  CHECK(LogHas(log, "moved 1 block reference"));
 }
 
 TEST_CASE("A vertex off the surface refuses its whole entity, by name and count",
