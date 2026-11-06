@@ -250,7 +250,7 @@ jobs:
 
       - name: Check whether this version was already released
         id: gate
-        if: github.ref_name == 'master'
+        if: github.ref_name == 'master' && inputs.beta_notes_validation != true
         shell: pwsh
         run: |
           $tag = "v${{ steps.ver.outputs.version }}"
@@ -282,7 +282,10 @@ jobs:
       - name: Archive private release PDB
         # REQ-425 / issue #1004: archive symbols from this exact build before any package
         # artifact is staged. The R2 key is separate from the crash-dumps/ lifecycle prefix.
-        if: github.ref_name == 'beta' || (github.ref_name == 'master' && steps.gate.outputs.publish == 'true')
+        if: >-
+          (github.ref_name == 'beta' ||
+           (github.ref_name == 'master' && steps.gate.outputs.publish == 'true')) &&
+          inputs.beta_notes_validation != true
         shell: pwsh
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -641,7 +644,9 @@ jobs:
       # Publish
       # ---------------------------------------------------------------------
       - name: Upload artifact (non-release branches)
-        if: github.ref_name != 'master' && github.ref_name != 'beta'
+        if: >-
+          (github.ref_name != 'master' && github.ref_name != 'beta') ||
+          inputs.beta_notes_validation == true
         uses: actions/upload-artifact@v4
         with:
           name: GoSurvey-${{ needs.build.outputs.full }}
@@ -651,7 +656,7 @@ jobs:
           retention-days: 14
 
       - name: Publish the rolling beta prerelease
-        if: github.ref_name == 'beta'
+        if: github.ref_name == 'beta' && inputs.beta_notes_validation != true
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -700,7 +705,10 @@ jobs:
             --notes-file installer\Output\release-body.md
 
       - name: Publish the stable release
-        if: github.ref_name == 'master' && needs.build.outputs.publish == 'true'
+        if: >-
+          github.ref_name == 'master' &&
+          needs.build.outputs.publish == 'true' &&
+          inputs.beta_notes_validation != true
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -731,7 +739,8 @@ jobs:
     if: >-
       always() &&
       (needs.build.result == 'failure' || needs.package.result == 'failure') &&
-      (github.ref_name == 'beta' || github.ref_name == 'master')
+      (github.ref_name == 'beta' || github.ref_name == 'master') &&
+      inputs.beta_notes_validation != true
     runs-on: ubuntu-latest
     permissions:
       actions: read
