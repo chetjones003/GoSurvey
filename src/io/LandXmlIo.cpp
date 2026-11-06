@@ -613,11 +613,17 @@ bool ImportLandXmlFile(AppCommandState& st, const char* pathUtf8, std::vector<st
       PushUndoSnapshot(st, "Import LandXML");
     if (!newPoints.empty())
       ResolveConflictingWorldSurveyPoints(st, newPoints, false, 0, &log);
+    size_t addedSurfaces = 0;
     for (CadSurface& surface : newSurfaces) {
-      (void)BuildSurfaceFromSources(st, surface, log);
+      if (!BuildSurfaceFromSources(st, surface, log)) {
+        log.push_back("IMPORTLANDXML — skipped surface \"" + surface.name +
+                      "\": its points could not be triangulated.");
+        continue;
+      }
       st.cadSurfaces.push_back(std::move(surface));
       AppendNewObjectAttrs(st, st.cadSurfaceAttrs, st.cadSurfaces.size(), ObjectLayerKind::Surface,
                            st.cadSurfaces.back().name);  // REQ-361
+      ++addedSurfaces;
     }
     for (const PendingFeatureLine& line : newLines) {
       if (st.featureLineOffsets.empty())
@@ -644,12 +650,20 @@ bool ImportLandXmlFile(AppCommandState& st, const char* pathUtf8, std::vector<st
       BumpCadGpuCache(st);
     EnsureAttrCounts(st);
 
-    st.pendingLandXmlConflictPoints = conflicts;
+    // Keep conflicts still waiting from an earlier import; a number already waiting takes the newer values.
+    for (SurveyPoint& conflict : conflicts) {
+      auto waiting = std::find_if(st.pendingLandXmlConflictPoints.begin(), st.pendingLandXmlConflictPoints.end(),
+                                  [&conflict](const SurveyPoint& point) { return point.id == conflict.id; });
+      if (waiting != st.pendingLandXmlConflictPoints.end())
+        *waiting = conflict;
+      else
+        st.pendingLandXmlConflictPoints.push_back(conflict);
+    }
     log.push_back("IMPORTLANDXML — imported " + std::to_string(newPoints.size()) + " point(s), " +
-                  std::to_string(newSurfaces.size()) + " surface(s) and " + std::to_string(newLines.size()) +
+                  std::to_string(addedSurfaces) + " surface(s) and " + std::to_string(newLines.size()) +
                   " feature line(s) from " + shownPath + ".");
     if (!conflicts.empty())
-      log.push_back("IMPORTLANDXML — " + std::to_string(conflicts.size()) +
+      log.push_back("IMPORTLANDXML — " + std::to_string(st.pendingLandXmlConflictPoints.size()) +
                     " point number(s) already exist in this drawing; choose Overwrite or Offset to add them.");
     return true;
   } catch (const std::exception& error) {

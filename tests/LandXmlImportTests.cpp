@@ -338,3 +338,40 @@ TEST_CASE("LandXML import skips coordinates that overflow when converted to the 
   CHECK(st.surveyPoints[0].id == 2);
   CHECK(LogMentions(log, "not finite"));
 }
+
+TEST_CASE("LandXML import keeps conflicts still waiting from an earlier import", "[landxml][issue1003][conflict]") {
+  ScratchDir dir("waiting");
+  AppCommandState st;
+  st.surveyPoints = {MakePoint(42, 1, 2, 3, "Existing 42"), MakePoint(43, 1, 2, 3, "Existing 43")};
+  std::vector<std::string> log;
+  REQUIRE(ImportText(st, dir, "first.xml", std::string(kHeader) +
+      "<CgPoints><CgPoint name=\"42\">20 10 30</CgPoint></CgPoints></LandXML>", log));
+  REQUIRE(st.pendingLandXmlConflictPoints.size() == 1);
+
+  // A second import with a different conflict must not drop the first one still waiting.
+  REQUIRE(ImportText(st, dir, "second.xml", std::string(kHeader) +
+      "<CgPoints><CgPoint name=\"43\">21 11 31</CgPoint></CgPoints></LandXML>", log));
+  REQUIRE(st.pendingLandXmlConflictPoints.size() == 2);
+  CHECK(st.pendingLandXmlConflictPoints[0].id == 42);
+  CHECK(st.pendingLandXmlConflictPoints[1].id == 43);
+
+  // A number that is already waiting takes the newer values rather than being listed twice.
+  REQUIRE(ImportText(st, dir, "third.xml", std::string(kHeader) +
+      "<CgPoints><CgPoint name=\"42\">50 40 60</CgPoint></CgPoints></LandXML>", log));
+  REQUIRE(st.pendingLandXmlConflictPoints.size() == 2);
+  CHECK(st.pendingLandXmlConflictPoints[0].northing == 50.0);
+}
+
+TEST_CASE("LandXML import skips a surface whose points cannot be triangulated",
+          "[landxml][issue1003][surface]") {
+  ScratchDir dir("degenerate");
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportText(st, dir, "degenerate.xml", std::string(kHeader) +
+      "<Surfaces><Surface name=\"Line only\"><Definition surfType=\"TIN\"><Pnts>"
+      "<P id=\"1\">0 0 1</P><P id=\"2\">0 1 1</P><P id=\"3\">0 2 1</P>"
+      "</Pnts></Definition></Surface></Surfaces></LandXML>", log));
+  CHECK(st.cadSurfaces.empty());
+  CHECK(LogMentions(log, "could not be triangulated"));
+  CHECK(LogMentions(log, "imported 0 point(s), 0 surface(s)"));
+}
