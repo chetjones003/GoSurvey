@@ -135,8 +135,10 @@ runs:
       run: |
         $env:GOSURVEY_TEST_RUN_ID = "ci-${{ github.run_id }}-${{ github.run_attempt }}"
         "GOSURVEY_TEST_RUN_ID=$env:GOSURVEY_TEST_RUN_ID" | Add-Content $env:GITHUB_ENV
-        New-Item -ItemType Directory -Force -Path build/artifacts/ci | Out-Null
-        ctest --preset ninja-release --parallel ${{ inputs.test-parallel }} --output-on-failure --output-junit build/artifacts/ci/ctest.xml
+        $ciArtifacts = Join-Path $env:GITHUB_WORKSPACE 'build/artifacts/ci'
+        New-Item -ItemType Directory -Force -Path $ciArtifacts | Out-Null
+        $junitPath = Join-Path $ciArtifacts 'ctest.xml'
+        ctest --preset ninja-release --parallel ${{ inputs.test-parallel }} --output-on-failure --output-junit $junitPath
         if ($LASTEXITCODE -ne 0) { throw 'CTest failed.' }
 
     - name: Restore Qt OpenGL runtime files
