@@ -387,6 +387,9 @@ bool ParseTriple(const char* text, double out[3]) {
     const char* before = p;
     skipSpace();
     if (i > 0 && p == before) return false;  // "1-2-3" and "1,2,3" are not three numbers
+    // from_chars does not take an explicit plus sign; accept "+" only when a number follows it.
+    if (p + 1 < end && *p == '+' && (std::isdigit(static_cast<unsigned char>(p[1])) || p[1] == '.'))
+      ++p;
     const auto [next, ec] = std::from_chars(p, end, out[i]);
     if (ec != std::errc() || !std::isfinite(out[i])) return false;
     p = next;

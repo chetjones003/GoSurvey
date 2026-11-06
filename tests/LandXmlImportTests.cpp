@@ -375,3 +375,19 @@ TEST_CASE("LandXML import skips a surface whose points cannot be triangulated",
   CHECK(LogMentions(log, "could not be triangulated"));
   CHECK(LogMentions(log, "imported 0 point(s), 0 surface(s)"));
 }
+
+TEST_CASE("LandXML import accepts coordinates written with an explicit plus sign",
+          "[landxml][issue1003][parse]") {
+  ScratchDir dir("plus");
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportText(st, dir, "plus.xml", std::string(kHeader) +
+      "<CgPoints><CgPoint name=\"3\">+100 +200 +5</CgPoint>"
+      "<CgPoint name=\"4\">+-1 2 3</CgPoint></CgPoints></LandXML>", log));
+  REQUIRE(st.surveyPoints.size() == 1);
+  CHECK(st.surveyPoints[0].id == 3);
+  CHECK(st.surveyPoints[0].northing == 100.0);
+  CHECK(st.surveyPoints[0].easting == 200.0);
+  CHECK(st.surveyPoints[0].elevation == 5.0);
+  CHECK(LogMentions(log, "skipped point 4:"));
+}
