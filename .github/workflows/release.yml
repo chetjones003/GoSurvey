@@ -24,6 +24,17 @@ on:
   push:
     branches: [beta]
   workflow_dispatch:
+    inputs:
+      beta_notes_api_smoke:
+        description: Run a non-publishing OpenAI beta-notes API smoke test
+        required: false
+        type: boolean
+        default: false
+      beta_notes_validation:
+        description: Run the full build, CTest, and package flow with generated beta notes without publishing
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -35,8 +46,31 @@ permissions:
   actions: write    # sccache GitHub Actions cache backend
 
 jobs:
+  beta-notes-api-smoke:
+    if: ${{ inputs.beta_notes_api_smoke == true }}
+    name: Beta notes OpenAI API smoke test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify OpenAI Responses API with gpt-6-luna
+        env:
+          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+        run: python .github/scripts/beta_release_notes.py --smoke-test
+
   build:
+    if: ${{ inputs.beta_notes_api_smoke != true }}
     runs-on: windows-latest
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: read
     env:
       SCCACHE_GHA_ENABLED: "true"
     outputs:
@@ -54,7 +88,26 @@ jobs:
         with:
           # Beta resolves its number against the current master version and prior beta manifest;
           # master also needs full history for stable tag inspection.
-          fetch-depth: ${{ (github.ref_name == 'master' || github.ref_name == 'beta') && '0' || '1' }}
+          fetch-depth: ${{ (github.ref_name == 'master' || github.ref_name == 'beta' || inputs.beta_notes_validation == true) && '0' || '1' }}
+
+      - name: Capture master baseline for beta notes
+        if: github.ref_name == 'beta' || inputs.beta_notes_validation == true
+        id: notes-baseline
+        shell: pwsh
+        run: |
+          git fetch --no-tags origin master
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch master to capture the beta notes baseline.' }
+          $baseline = git rev-parse origin/master
+          if ($LASTEXITCODE -ne 0 -or $baseline -notmatch '^[0-9a-fA-F]{40}$') {
+            throw 'Could not capture the master commit for the beta notes baseline.'
+          }
+          "commit=$baseline" | Out-File $env:GITHUB_OUTPUT -Append
+
+      - name: Set up Python for beta release notes
+        if: github.ref_name == 'beta' || inputs.beta_notes_validation == true
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       # ---------------------------------------------------------------------
       # Version and channel
@@ -177,6 +230,24 @@ jobs:
           if ($branch -eq 'beta') { "sourceCommit=$($env:SOURCE_COMMIT)" | Out-File $env:GITHUB_OUTPUT -Append }
           Write-Host "version=$version full=$full channel=$channel tag=$tag"
 
+      - name: Generate beta release notes and What's New content
+        if: github.ref_name == 'beta' || inputs.beta_notes_validation == true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+          RELEASE_VERSION: ${{ steps.ver.outputs.full }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          BASELINE_COMMIT: ${{ steps.notes-baseline.outputs.commit }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python .github/scripts/beta_release_notes.py `
+            --repository $env:REPOSITORY `
+            --source-commit $env:SOURCE_COMMIT `
+            --baseline-commit $env:BASELINE_COMMIT `
+            --version $env:RELEASE_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Beta note generation failed (exit $LASTEXITCODE)." }
+
       - name: Check whether this version was already released
         id: gate
         if: github.ref_name == 'master'
@@ -281,14 +352,28 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Upload generated beta release content
+        if: github.ref_name == 'beta' || inputs.beta_notes_validation == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: beta-release-content
+          path: build/artifacts/release-notes/beta-release-content.json
+          if-no-files-found: error
+          retention-days: 1
+
   package:
     needs: build
     # REQ-202 / D-2026-08-31-a (issue #142): the installer is built only where it
     # is published (beta, master) or explicitly asked for (workflow_dispatch).
     # A feature-branch push runs the build job only; use "Run workflow" to get an
     # installer artifact on demand.
-    if: github.ref_name == 'beta' || github.ref_name == 'master' || github.event_name == 'workflow_dispatch'
+    if: >-
+      inputs.beta_notes_api_smoke != true &&
+      (github.ref_name == 'beta' || github.ref_name == 'master' || github.event_name == 'workflow_dispatch')
     runs-on: windows-latest
+    permissions:
+      contents: write
+      actions: read
 
     steps:
       - name: Check out
@@ -304,6 +389,13 @@ jobs:
         with:
           name: gosurvey-bin
           path: build
+
+      - name: Download generated beta release content
+        if: github.ref_name == 'beta' || inputs.beta_notes_validation == true
+        uses: actions/download-artifact@v4
+        with:
+          name: beta-release-content
+          path: installer/Output/beta-release-content
 
       - name: REQ-336 assert whats-new.md in packaging inputs
         shell: pwsh
@@ -401,9 +493,12 @@ jobs:
           # (Found the accidental way: a commit message containing "MSVC toolchain" ended a string
           # literal and failed the step with `Unexpected token 'MSVC'`.)
           #
-          # Used ONLY to look for the `BREAKING-DRAWINGS:` marker. User-facing release notes come
-          # from RELEASE_NOTES.md — a commit message must never reach the update dialog.
+          # Used ONLY to look for the `BREAKING-DRAWINGS:` marker. Beta notes come from the
+          # validated generator artifact; stable notes come from RELEASE_NOTES.md. A commit message
+          # must never reach the update dialog or the AI prompt.
           HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          EXPECTED_VERSION: ${{ needs.build.outputs.full }}
+          BETA_NOTES_VALIDATION: ${{ inputs.beta_notes_validation }}
         run: |
           $installer = Get-ChildItem installer\Output\*.exe | Select-Object -First 1
           if (-not $installer) { throw "No installer produced in installer\Output" }
@@ -423,7 +518,8 @@ jobs:
           if (-not $fmtLine) { throw "Could not read kGsFormatVersion from src\io\GsMigrate.hpp" }
           $gsFormatVersion = [int]$fmtLine.Matches[0].Groups[1].Value
 
-          # Release notes come from RELEASE_NOTES.md, NOT from the commit message.
+          # Stable release notes come from RELEASE_NOTES.md. Beta uses the generated artifact above.
+          # Neither path uses the commit message as user-facing release content.
           #
           # The manifest's notes are shown to surveyors inside the update dialog. Commit messages
           # are written for developers and are full of things an end user should never be shown --
@@ -441,7 +537,25 @@ jobs:
           # fallback line. Safe to interpolate: this value is a [0-9.]+ string from a regex.
           $version = "${{ needs.build.outputs.version }}"
           $notes = ""
-          if (Test-Path RELEASE_NOTES.md) {
+          $betaContent = $null
+          if ($env:GITHUB_REF_NAME -eq 'beta' -or $env:BETA_NOTES_VALIDATION -eq 'true') {
+            $generatedPath = 'installer\Output\beta-release-content\beta-release-content.json'
+            if (-not (Test-Path -LiteralPath $generatedPath)) {
+              throw "REQ-505: generated beta release content is missing: $generatedPath"
+            }
+            try {
+              $betaContent = Get-Content -LiteralPath $generatedPath -Raw | ConvertFrom-Json
+            } catch {
+              throw "REQ-505: generated beta release content is invalid JSON: $($_.Exception.Message)"
+            }
+            if ($betaContent.sourceCommit -ne $env:GITHUB_SHA -or
+                $betaContent.version -ne $env:EXPECTED_VERSION -or
+                [string]::IsNullOrWhiteSpace($betaContent.notes) -or
+                [string]::IsNullOrWhiteSpace($betaContent.whatsNewMarkdown)) {
+              throw 'REQ-505: generated beta release content does not match this source commit and version.'
+            }
+            $notes = [string]$betaContent.notes
+          } elseif (Test-Path RELEASE_NOTES.md) {
             $lines = Get-Content RELEASE_NOTES.md
             $start = -1
             for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -499,10 +613,14 @@ jobs:
             }
             notes       = $notes
           }
-          if ($env:GITHUB_REF_NAME -eq 'beta') {
+          if ($env:GITHUB_REF_NAME -eq 'beta' -or $env:BETA_NOTES_VALIDATION -eq 'true') {
             # This makes retries idempotent: the version resolver can recognize the exact source
             # commit already represented by the rolling manifest.
             $manifest['sourceCommit'] = $env:GITHUB_SHA
+            $manifest['whatsNewMarkdown'] = [string]$betaContent.whatsNewMarkdown
+            $manifest['notesBaselineCommit'] = [string]$betaContent.baselineCommit
+            $manifest['notesSourcePullRequestCount'] = [int]$betaContent.sourcePullRequestCount
+            $manifest['notesModel'] = [string]$betaContent.model
           }
           $manifest | ConvertTo-Json -Depth 4 | Out-File -Encoding utf8 installer\Output\latest.json
           if ($env:GITHUB_REF_NAME -eq 'master') {

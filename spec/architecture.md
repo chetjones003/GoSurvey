@@ -5294,6 +5294,35 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   may be unavailable on another machine and must be reported rather than silently ignored. No new
   dependency or renderer abstraction is introduced.
 - Status: accepted (D-2026-11-04-e); backs REQ-485.
+
+### ADR-079 — Generate beta release documentation in the release workflow (2026-11-05, accepted)
+- Context: REQ-202 publishes a rolling beta from CI and reuses its version for a rerun of the same
+  source commit. REQ-336 ships `resources/whats-new.md` in the application and protects checked-in
+  authored content with an explicit review lock. Beta releases need timely surveyor-facing notes,
+  including in the installed What's New view, without changing the beta branch for each release.
+- Decision: In the beta release workflow, collect merged PR titles and descriptions represented after
+  the captured master baseline; send those public text fields and an anonymous zero-based source index
+  (never PR numbers, URLs, or user identifiers) to the OpenAI Responses API using
+  `gpt-6-luna` at low reasoning effort with `store: false`. Use strict JSON Schema output containing one
+  source-indexed result per input PR. Generate plain-text note fields and a beta summary section,
+  validate the returned shape and content, and apply the
+  summary to a temporary workspace copy of `resources/whats-new.md` before packaging. Preserve all
+  authored sections and image references. Store the exact generated notes and full Markdown in the
+  rolling beta manifest so reruns for the same source commit reuse identical content. Fail before
+  packaging/publication if metadata, generation, validation, or manifest persistence fails. The master
+  stable path remains manually authored and unchanged; no app runtime service or dependency is added.
+- Alternatives: (1) Commit each generated file to beta — rejected because it mutates the source branch
+  and creates release bookkeeping PRs. (2) Require a separate human approval each release — rejected
+  by the user's explicit automatic-publication choice. (3) Use raw commits or diffs as source — rejected
+  because the user chose PR titles/descriptions and those contain the user-facing context.
+- Model rationale: Luna is a text model whose official API documentation lists both Responses API and
+  structured-output support. It is suitable for short copy rewriting and has substantially lower
+  standard token rates than the currently documented PR Agent primary model; no SDK or runtime
+  dependency is needed because the workflow calls the REST API directly.
+- Consequences: beta generation is a required pre-package workflow step; release workflow tests must
+  cover data minimization, output validation, content preservation, rerun reuse, and fail-closed
+  publication. REQ-336's authoring lock continues to apply to committed authored content only.
+- Status: accepted (D-2026-11-05-p); backs REQ-505.
 ### ADR-075 — Alignments are a dedicated horizontal-geometry domain object, stored as exact parameters   (2026-11-02, accepted)
 - Context: Issue #121 asks for Civil 3D-style alignments. The existing options are a polyline (cannot hold true
   curves/spirals or stationing) and a feature line (3D, vertex-based; ADR-035). Civil 3D separates horizontal
