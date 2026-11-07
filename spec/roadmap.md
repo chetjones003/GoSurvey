@@ -299,7 +299,7 @@ A lightweight board that complements the milestones. Keep each column honest.
   true on exit** — no cert was obtained; the no-op signing step is still a no-op.
 
 ### Next (accepted, sequenced, not started)
-- **Surface contextual tools (REQ-506…514, ADR-080, D-2026-11-06-a, GitHub issue #807).** Implement the
+- **Surface contextual tools (REQ-508…516, ADR-080, D-2026-11-06-d, GitHub issue #807).** Implement the
   remaining Surface tab actions against the accepted Autodesk-informed GoSurvey behavior: linked
   labels and legend tables; render-only Reduced/High LOD; crossing-breakline review and surface-local
   corrections; point/area visibility; raster draping; block placement on a surface; saved existing-

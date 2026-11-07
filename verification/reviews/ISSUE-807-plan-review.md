@@ -7,7 +7,7 @@
 
 ## Authority and acceptance
 
-- All eleven Issue #807 controls are mapped to accepted requirements REQ-086 and REQ-506…514.
+- All eleven Issue #807 controls are mapped to accepted requirements REQ-086 and REQ-508…516.
 - REQ-143 defines the surface contextual tab, identifies the wired controls and preserves the
   disabled/unavailable behavior for every other unsupported control.
 - REQ-145 remains the session-only `QUICKPROFILE`; the user explicitly approved the separate saved

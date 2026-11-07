@@ -594,7 +594,7 @@ struct CadAnnotation {
   /// of its ~35 read sites into a compile error rather than letting an index-shaped assumption
   /// survive as silently wrong data (the ADR-025 (a) lesson).
   int surveyPointLabelForId = -1;
-  /// Surface-derived label link (REQ-506). A stable surface id plus the stored query values lets
+  /// Surface-derived label link (REQ-515). A stable surface id plus the stored query values lets
   /// surface rebuilds refresh the annotation without moving it.
   std::uint64_t surfaceLabelForId = 0;
   std::uint8_t surfaceLabelKind = 0;  ///< 1=spot, 2=slope, 3=contour.

@@ -451,7 +451,7 @@ TEST_CASE("Surface visibility refuses a queryable grid surface without a TIN", "
   CHECK(LogHas(log, "no built TIN"));
 }
 
-TEST_CASE("Linked surface legends become unavailable after their source is deleted", "[surface][req507]") {
+TEST_CASE("Linked surface legends become unavailable after their source is deleted", "[surface][req516]") {
   AppCommandState st;
   AddGround(st, "EG");
   st.surfaceStyles[0].analysisMode = SurfaceAnalysisMode::Elevation;
@@ -549,7 +549,7 @@ TEST_CASE("Crossing breakline decisions are local, undoable and persistent", "[s
   CHECK(reopened.cadSurfaces[0].crossingCorrections[0].x == Approx(50.0));
 }
 
-TEST_CASE("Surface labels query and track their source surface", "[surface][req506]") {
+TEST_CASE("Surface labels query and track their source surface", "[surface][req515]") {
   AppCommandState st;
   AddGround(st, "EG");
   std::vector<std::string> log;
@@ -571,7 +571,7 @@ TEST_CASE("Surface labels query and track their source surface", "[surface][req5
   CHECK(reopened.cadAnnotations[0].surfaceLabelValues == st.cadAnnotations[0].surfaceLabelValues);
 }
 
-TEST_CASE("Contour labels can repeat where a guide crosses the requested contour", "[surface][req506]") {
+TEST_CASE("Contour labels can repeat where a guide crosses the requested contour", "[surface][req515]") {
   AppCommandState st;
   AddGround(st, "EG");
   std::vector<std::string> log;
@@ -616,7 +616,7 @@ TEST_CASE("Templates omit attached model images and their surface links", "[io][
   fs::remove(path, ec);
 }
 
-TEST_CASE("Surface labels show unavailable after their TIN is removed", "[surface][req506]") {
+TEST_CASE("Surface labels show unavailable after their TIN is removed", "[surface][req515]") {
   AppCommandState st;
   AddGround(st, "EG");
   std::vector<std::string> log;
@@ -629,7 +629,7 @@ TEST_CASE("Surface labels show unavailable after their TIN is removed", "[surfac
   CHECK(st.cadGpuRevision == drawingRevision);
 }
 
-TEST_CASE("Surface analysis legends reflect configured ranges and persist their link", "[surface][req507]") {
+TEST_CASE("Surface analysis legends reflect configured ranges and persist their link", "[surface][req516]") {
   AppCommandState st;
   st.worldDocumentOriginX = 10000.0;
   st.worldDocumentOriginY = 20000.0;
@@ -745,7 +745,7 @@ TEST_CASE("Surface profile gaps survive save and reopen as gaps", "[surface][req
   CHECK_FALSE(std::isfinite(reopened.surfaceProfiles[0].elevations[5]));
 }
 
-TEST_CASE("Asynchronous surface rebuild refreshes linked labels and profiles", "[surface][req506][req513]") {
+TEST_CASE("Asynchronous surface rebuild refreshes linked labels and profiles", "[surface][req515][req513]") {
   AppCommandState st;
   CadSurface surface;
   surface.name = "EG";

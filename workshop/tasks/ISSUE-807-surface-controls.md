@@ -42,7 +42,7 @@ Visibility, Drape Image, Move to Surface, Create Profile, and Data Shortcut.
 
 ## 3. Implementation plan
 
-1. REQ-506…514 and amendments to REQ-143/145 specify the acceptance conditions; ADR-080 records
+1. REQ-508…516 and amendments to REQ-143/145 specify the acceptance conditions; ADR-080 records
    ownership, identity, persistence, and rendering decisions. Plan verification is against those
    documents and the current `beta` codebase before implementation.
 2. Reuse REQ-086 point-file actions, `src/alignment` and `alignment::SampleGround` (REQ-480…502),
@@ -69,7 +69,7 @@ Visibility, Drape Image, Move to Surface, Create Profile, and Data Shortcut.
 | Point Files uses linked surface definition data. | Already settled by REQ-086; ribbon entry reuses that behavior. |
 | Move to Surface applies to block references and changes insertion Z only. | Directly follows Autodesk's documented target and operation; REQ-512 specifies atomic failure behavior. |
 | Reduced/High LOD is render-only. | Preserve full TIN accuracy for queries, picks, plots and exports; persist the display choice per surface (REQ-508/ADR-080). |
-| Other controls follow documented surface workflows adapted to GoSurvey. | REQ-506/507 cover supported labels and analysis tables; REQ-509 resolves crossings without changing shared geometry; REQ-510 offers point and area visibility checks; REQ-511 attaches external rasters; REQ-514 creates read-only project surface references. |
+| Other controls follow documented surface workflows adapted to GoSurvey. | REQ-515/516 cover supported labels and analysis tables; REQ-509 resolves crossings without changing shared geometry; REQ-510 offers point and area visibility checks; REQ-511 attaches external rasters; REQ-514 creates read-only project surface references. |
 
 ## 5. Initial slice verification (superseded)
 
@@ -135,5 +135,5 @@ Visibility, Drape Image, Move to Surface, Create Profile, and Data Shortcut.
   Release build plus 99 assertions in five focused REQ-509/513/514 test cases, including large-coordinate
   short profile segments. The PR full-validation workflow is rerunning on the fixes.
 
-- Round 5 (PR #1168 review on 53242e4, rebased onto beta): visibility now refuses a surface without a built TIN and refuses (rather than skipping) an intersected interval whose elevation cannot be evaluated; linked legend tables show "Analysis / Surface value unavailable / —" after their source surface is deleted; Drape Image converts the entered insertion point from world to drawing-local coordinates before attaching; profile source recovery retries only the recoverable source-missing/unavailable states, so a persistent "alignment has no covered stations" failure is not re-sampled every tick. Regression tests: `[req507]` legend invalidation, `[req508]` LOD geometry, `[req510]` TIN-less refusal, and the Qt `issue807DrapeImageBuildsTerrainTextureGeometry` path. Status: full `ctest --preset ninja-release` PASS on the rebased head (194/194, `build/artifacts/issue807/ctest-full.log`).
+- Round 5 (PR #1168 review on 53242e4, rebased onto beta): visibility now refuses a surface without a built TIN and refuses (rather than skipping) an intersected interval whose elevation cannot be evaluated; linked legend tables show "Analysis / Surface value unavailable / —" after their source surface is deleted; Drape Image converts the entered insertion point from world to drawing-local coordinates before attaching; profile source recovery retries only the recoverable source-missing/unavailable states, so a persistent "alignment has no covered stations" failure is not re-sampled every tick. Regression tests: `[req516]` legend invalidation, `[req508]` LOD geometry, `[req510]` TIN-less refusal, and the Qt `issue807DrapeImageBuildsTerrainTextureGeometry` path. Status: full `ctest --preset ninja-release` PASS on the rebased head (194/194, `build/artifacts/issue807/ctest-full.log`).
 - Autodesk visual comparison (CLAUDE.md §3.6): SKIPPED by the user's direction on 2026-11-07. Civil 3D is not installed on this machine, so no comparison pass is claimed; the earlier record stays inconclusive. Panel scoring was not run.

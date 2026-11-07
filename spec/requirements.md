@@ -5875,7 +5875,7 @@ requirements is a planning failure, not a sign of rigor.
 - Purpose: Civil 3D-shaped tools appear when a surface is selected, without inventing unimplemented objects
 - Priority: must
 - Type: functional
-- Statement: When at least one `SelectedEntity::Type::Surface` is selected in model space (or floating model space), the ribbon tab strip gains a contextual tab titled `Tin Surface: <surface name>` (the first selected surface). Selecting a surface the first time in a stretch switches to that tab; deselecting restores the previous permanent tab only if the contextual tab is still active. The tab contains the screenshot panels **Labels & Tables**, **General Tools**, **Modify**, **Level of Detail**, **Analyze**, **Surface Tools**, and **Launch Pad**. Implemented actions target that selected surface: Properties (side Properties panel), Inquiry (`SURFELEV`), Isolate Objects (`ISOLATEOBJECTS` / `HIDEOBJECTS` / `UNISOLATEOBJECTS`), Surface Properties, Add Data (breakline / contour / boundary designate and Point Files per REQ-086), Edit Surface (`SURFACEADDPOINT`, `SURFACEDELPOINT`, `SURFSWAPEDGE`, `SURFACEREBUILD`), Add Labels (REQ-506), Add Legend (REQ-507), Reduced/High LOD (REQ-508), Water Drop, Crossing BL (REQ-509), Visibility (REQ-510), Catchment, Volumes Dashboard, Drape Image (REQ-511), Move to Surface (REQ-512), Extract (`EXTRACT`, `WATERDROP EXTRACT`, `WATERDROP EXTRACT FL`, `CATCHMENT EXTRACT`), Quick Profile (`QUICKPROFILE`), Create Profile (REQ-513), Data Shortcut (REQ-514). **Object Viewer is omitted** (D-2026-08-28-f): the 3D viewport is the viewer. Any other control with no GoSurvey command is **disabled** and its tooltip includes **not implemented yet**. REQ-084 still forbids a disabled control from acting. The contextual tab index is not a persisted prefs slot (`kRibbonTabCount` stays the permanent tabs).
+- Statement: When at least one `SelectedEntity::Type::Surface` is selected in model space (or floating model space), the ribbon tab strip gains a contextual tab titled `Tin Surface: <surface name>` (the first selected surface). Selecting a surface the first time in a stretch switches to that tab; deselecting restores the previous permanent tab only if the contextual tab is still active. The tab contains the screenshot panels **Labels & Tables**, **General Tools**, **Modify**, **Level of Detail**, **Analyze**, **Surface Tools**, and **Launch Pad**. Implemented actions target that selected surface: Properties (side Properties panel), Inquiry (`SURFELEV`), Isolate Objects (`ISOLATEOBJECTS` / `HIDEOBJECTS` / `UNISOLATEOBJECTS`), Surface Properties, Add Data (breakline / contour / boundary designate and Point Files per REQ-086), Edit Surface (`SURFACEADDPOINT`, `SURFACEDELPOINT`, `SURFSWAPEDGE`, `SURFACEREBUILD`), Add Labels (REQ-515), Add Legend (REQ-516), Reduced/High LOD (REQ-508), Water Drop, Crossing BL (REQ-509), Visibility (REQ-510), Catchment, Volumes Dashboard, Drape Image (REQ-511), Move to Surface (REQ-512), Extract (`EXTRACT`, `WATERDROP EXTRACT`, `WATERDROP EXTRACT FL`, `CATCHMENT EXTRACT`), Quick Profile (`QUICKPROFILE`), Create Profile (REQ-513), Data Shortcut (REQ-514). **Object Viewer is omitted** (D-2026-08-28-f): the 3D viewport is the viewer. Any other control with no GoSurvey command is **disabled** and its tooltip includes **not implemented yet**. REQ-084 still forbids a disabled control from acting. The contextual tab index is not a persisted prefs slot (`kRibbonTabCount` stays the permanent tabs).
 - Acceptance:
   - with no surface selected, the tab strip does not include a `Tin Surface:` tab;
   - selecting a named surface shows a tab whose label contains that surface's name;
@@ -5884,7 +5884,7 @@ requirements is a planning failure, not a sign of rigor.
   - each action named in this requirement is enabled only when its backing command can execute and satisfies its referenced requirement;
   - Object Viewer is not present on the tab.
 - Owner-layer: UI, Commands
-- Status: accepted (2026-08-28); amended 2026-11-06 (D-2026-11-06-a, issue #807)
+- Status: accepted (2026-08-28); amended 2026-11-06 (D-2026-11-06-d, issue #807)
 - Revisions: 2026-08-28 — D-2026-08-28-d. 2026-08-28 — D-2026-08-28-f: omit Object Viewer.
 
 ### REQ-144 — Add and delete TIN definition points (issue #119)
@@ -5919,7 +5919,7 @@ requirements is a planning failure, not a sign of rigor.
   missing/unbuilt surfaces are named refusals. The graph is **session UI**, never written to `.gs`
   and not a document entity. `CREATEPROFILEFROMSURFACE` and persisted profile views are separately
   specified by REQ-513; the `QUICKPROFILE` command remains session-only and unchanged. *(Amended
-  2026-11-02, D-2026-11-02-b: added alignment sampling; amended 2026-11-06, D-2026-11-06-a:
+  2026-11-02, D-2026-11-02-b: added alignment sampling; amended 2026-11-06, D-2026-11-06-d:
   Create Profile is in scope as a persisted surface profile.)*
 - Acceptance:
   - on a plane Z = X, the sample at the midpoint of (0,0)–(10,0) is 5 within REQ-101;
@@ -15128,8 +15128,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | Requirement | Layer | Test(s) | Status |
 |-------------|-------|---------|--------|
 | REQ-505 | Build/Platform | beta release workflow tests: PR range/input privacy, generated release/manifest notes, packaged What's New preservation, same-commit reuse, failure blocks publish, stable path unchanged | accepted |
-| REQ-506 | Domain/Commands/Renderer/IO/UI | `[req506]` linked surface labels: value refresh, contour path, refusal, undo | accepted |
-| REQ-507 | Domain/Commands/Renderer/IO/UI | `[req507]` analysis legend rows, refresh, persistence, empty refusal | accepted |
+| REQ-515 | Domain/Commands/Renderer/IO/UI | `[req515]` linked surface labels: value refresh, contour path, refusal, undo | accepted |
+| REQ-516 | Domain/Commands/Renderer/IO/UI | `[req516]` analysis legend rows, refresh, persistence, empty refusal | accepted |
 | REQ-508 | Domain/Renderer/Commands/IO/UI | `[req508]` render-only Reduced/High LOD, query/pick/export invariance, persistence | accepted |
 | REQ-509 | Domain/Commands/IO/UI | `[req509]` breakline intersections, resolution/trim, shared-source isolation, undo | accepted |
 | REQ-510 | util/Commands/Renderer/IO/UI | `[req510]` point LOS and ZVI, obstruction and coverage behavior, undo | accepted |
@@ -15323,7 +15323,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-140 | Commands/util | done (TASK-129) — `[req140]` stats; `VOLREPORT`; `req140-volreport` | accepted |
 | REQ-141 | UI/Commands | done (TASK-129) — Survey Analyze ribbon; `WATERDROP EXTRACT FL` | accepted |
 | REQ-142 | UI/Commands | done (TASK-130) — Toolspace Prospector + Settings | accepted |
-| REQ-143 | UI/Commands | done (TASK-133); issue #807 adds enabled actions REQ-506…514 | accepted, amended 2026-11-06 |
+| REQ-143 | UI/Commands | done (TASK-133); issue #807 adds enabled actions REQ-508…516 | accepted, amended 2026-11-06 |
 | REQ-144 | Domain/Commands/IO/UI | done (TASK-134) — `req144-surface-add-del-point`; SURFACEADDPOINT / SURFACEDELPOINT | accepted |
 | REQ-145 | util/Commands/UI | done (TASK-135) — `SurfaceProfileTests [req145]`; `req145-quick-profile`; amended to coexist with persistent profiles (REQ-513) | accepted, amended 2026-11-06 |
 | REQ-146 | util/Commands | done (TASK-136) — cut/fill areas; `SurfaceVolumeTests [req146]`; VOLUMES/VOLCSV | accepted |
@@ -17024,7 +17024,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Build/Platform (GitHub Actions)
 - Status: accepted (2026-11-05, user approved scope and GitHub issue alert route)
 
-### REQ-506 — Surface labels (GitHub issue #807)
+### REQ-515 — Surface labels (GitHub issue #807)
 - Purpose: place useful, surface-derived labels in the drawing without converting the surface itself.
 - Priority: must
 - Type: functional
@@ -17042,9 +17042,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - removing or undoing a label leaves the surface and its definition unchanged;
   - absent, unbuilt, or uncovered surface locations produce a named refusal and no label.
 - Owner-layer: Commands, Domain, Renderer, IO, UI
-- Status: accepted (2026-11-06, D-2026-11-06-a; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
+- Status: accepted (2026-11-06, D-2026-11-06-d; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
 
-### REQ-507 — Surface analysis legend tables (GitHub issue #807)
+### REQ-516 — Surface analysis legend tables (GitHub issue #807)
 - Purpose: show the ranges or values of a surface analysis beside the analyzed surface.
 - Priority: must
 - Type: functional
@@ -17059,7 +17059,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - saving and reopening preserves the legend's surface/analysis link and table content;
   - missing analysis or an empty result creates no table and reports why.
 - Owner-layer: Commands, Domain, Renderer, IO, UI
-- Status: accepted (2026-11-06, D-2026-11-06-a; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
+- Status: accepted (2026-11-06, D-2026-11-06-d; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
 
 ### REQ-508 — Per-surface reduced and high display detail (GitHub issue #807)
 - Purpose: trade viewport surface detail for interaction speed without changing measured terrain.
@@ -17076,7 +17076,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - High draws the complete surface geometry;
   - each mode survives save/reopen and is independently selectable per surface.
 - Owner-layer: Domain, Renderer, Commands, IO, UI
-- Status: accepted (2026-11-06, D-2026-11-06-a; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
+- Status: accepted (2026-11-06, D-2026-11-06-d; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
 
 ### REQ-509 — Diagnose and resolve crossing surface breaklines (GitHub issue #807)
 - Purpose: find breakline intersections that supply conflicting elevations to a TIN.
@@ -17096,7 +17096,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - shared source entities and other surfaces remain unchanged;
   - corrections and trimming round-trip through DWG and are undoable.
 - Owner-layer: Domain, Commands, IO, UI
-- Status: accepted (2026-11-06, D-2026-11-06-a; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
+- Status: accepted (2026-11-06, D-2026-11-06-d; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
 
 ### REQ-510 — Surface point and area visibility checks (GitHub issue #807)
 - Purpose: assess whether a target can be seen over a selected terrain surface.
@@ -17116,7 +17116,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - uncovered points and an unbuilt surface produce a named refusal and no result geometry;
   - output geometry is undoable and removable, and analysis does not modify the source surface.
 - Owner-layer: util, Commands, Renderer, IO, UI
-- Status: accepted (2026-11-06, D-2026-11-06-a; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
+- Status: accepted (2026-11-06, D-2026-11-06-d; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
 
 ### REQ-511 — Attach and drape raster images on a surface (GitHub issue #807)
 - Purpose: show a site image following terrain relief.
@@ -17137,7 +17137,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - save/reopen restores image path, placement and draped appearance;
   - missing image and unbuilt surface produce a named refusal while preserving the prior drawing.
 - Owner-layer: Domain, Renderer, Commands, IO, UI
-- Status: accepted (2026-11-06, D-2026-11-06-a; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
+- Status: accepted (2026-11-06, D-2026-11-06-d; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
 
 ### REQ-512 — Move block references to surface elevation (GitHub issue #807)
 - Purpose: place selected symbols on the terrain at their insertion points.
@@ -17152,13 +17152,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a selection containing an uncovered insertion is refused atomically;
   - the move is one undo step and survives save/reopen.
 - Owner-layer: Commands, Domain, IO, UI
-- Status: accepted (2026-11-06, D-2026-11-06-a; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
+- Status: accepted (2026-11-06, D-2026-11-06-d; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
 
 ### REQ-513 — Create a surface profile and profile view from an alignment (GitHub issue #807)
 - Purpose: save and display existing-ground elevations along a horizontal alignment.
 - Priority: must
 - Type: functional
-- Decision: D-2026-11-06-a; the user approved the documented alignment/profile workflow on
+- Decision: D-2026-11-06-d; the user approved the documented alignment/profile workflow on
   2026-11-06. This amends REQ-145's original no-alignment scope. The alignment system (REQ-480–502)
   supplies horizontal geometry. The profile here is a sampled existing-ground surface profile;
   design-grade tangents and vertical curves remain the separate follow-up in issue #1163.
@@ -17179,7 +17179,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - save/reopen preserves source IDs, samples and profile-view placement; missing references are
     reported and do not crash or fabricate a profile.
 - Owner-layer: alignment, Domain, Commands, Renderer, IO, UI
-- Status: accepted (2026-11-06, D-2026-11-06-a; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
+- Status: accepted (2026-11-06, D-2026-11-06-d; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
 
 ### REQ-514 — Project surface data shortcuts (GitHub issue #807)
 - Purpose: reuse an authoritative surface in another drawing in the same GoSurvey project.
@@ -17202,19 +17202,27 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - project reference metadata survives save/reopen and project pack/open;
   - read-only projects cannot create or refresh shortcuts.
 - Owner-layer: Project, Domain, Commands, IO, Renderer, UI
-- Status: accepted (2026-11-06, D-2026-11-06-a; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
+- Status: accepted (2026-11-06, D-2026-11-06-d; Autodesk behavior reference: docs/research/ISSUE-807-autodesk-surface-controls.md)
 
-### REQ-504 — Shared PR/release validation and failed release alerts
-- Purpose: make PR validation exercise the same build and full test path used by beta and stable releases, and make post-merge release failures visible.
+### REQ-507 — Useful Properties for every selected object type
+- Purpose: make the Properties panel useful for inspection of the full drawing, not only its original line, circle, and text editors.
 - Priority: must
-- Type: quality
-- Statement: PRs targeting `beta` or `master` and release runs targeting either branch use one shared Release configure/build/full-CTest validation path, including matching compiler, Qt kit, CMake options, Qt test sharding, CTest parallelism, Mesa runtime staging, hosted display preparation, and runtime cleanup. Release version metadata is supplied by the caller. Existing static analysis, security checks, PR coverage/performance evidence, and release packaging stay in their existing workflows. If the build or package job fails on a beta/master release run, CI creates one GitHub issue labeled `bug` and `needs-triage`, mentions the repository owner, identifies the branch and failed jobs/steps, and links the run and job logs. Reruns reuse or reopen that issue. Successful runs create no issue. Existing release triggers and package/publish behavior remain governed by REQ-202: beta push remains automatic; stable release remains manual.
+- Type: functional
+- Decision: D-2026-11-06-c. Supersedes TASK-891's earlier deferral of object-specific property reporting for polyline, arc, ellipse, survey point, surface, solid, mesh, block, table, pipe-run and related object types.
+- Statement: When an entity is selected, the Properties panel shows its object type and useful object-specific values available from the drawing model. Calculated geometry and imported reference data may be read-only. Existing editing behavior for line, circle, text, general attributes, feature-line grading, surface and alignment properties remains intact. Heterogeneous selection identifies the selected kinds and summarizes useful values by kind where practical; it must not describe known selected objects as an empty or generic geometry set.
+- Minimum object-specific information for a single selection:
+  - Polyline: vertex count, open/closed, planar and spatial length, elevation range, and area when closed.
+  - Arc and ellipse: center/elevation, radii or axis dimensions, angular sweep/rotation, and derived length/area where defined.
+  - Feature line: name, vertex count, closed state, length, and elevation range; preserve its existing grading criteria report.
+  - Survey point / CAD point: identifier and stored coordinates/elevation; survey description when present.
+  - Surface: name, source/style or kind, point and triangle counts, elevation range, and current build state.
+  - Alignment: preserve REQ-501's existing station, entity, curve, spiral and continuity information.
+  - Solid, mesh, point cloud, and pipe run: their available defining dimensions, topology/counts, bounds, route length/size/class, or other model-owned metadata; do not recompute or mutate source geometry solely for display.
+  - Block reference, table, filled region, multileader, PDF underlay, spline, and position marker: identify the object and show available name, placement, dimensions, counts, text, or path/page metadata.
 - Acceptance:
-  - PRs targeting `beta` and `master` invoke the same shared configure/build/full-CTest action as release runs targeting those branches.
-  - Both callers use the same compiler setup, Qt kit, CMake options, 6 Qt editor shards, 8-way hosted CTest parallelism, Mesa runtime, hosted display preparation, and cleanup; release version metadata is supplied by the release caller.
-  - Existing clang-tidy, MSVC `/analyze`, security scans, PR coverage/performance evidence, and release package/publish steps remain active.
-  - A failed beta/master release build or package job creates one issue labeled `bug` and `needs-triage`, mentions the repository owner, and includes the branch, failed job/step names, and run/job log links.
-  - A rerun updates or reopens the same issue instead of creating another; successful runs create no issue.
-  - Beta push and stable manual release triggers and all package/publish outcomes are unchanged (REQ-202).
-- Owner-layer: Build/Platform (GitHub Actions)
-- Status: accepted (2026-11-05, user approved scope and GitHub issue alert route)
+  1. Selecting each currently selectable entity type shows an object-type label and at least one meaningful object-specific value when the model has such data.
+  2. Selecting a polyline, arc, ellipse, feature line, survey point, surface, solid, or pipe run shows the minimum information above without requiring a command-line query.
+  3. Mixed selections identify their member types and do not show the prior "select only lines, circles, or text" dead-end message.
+  4. Read-only reports cannot mutate the drawing; existing editable fields retain validation, persistence, and undo behavior.
+- Owner-layer: Qt Properties UI reads domain/command state; existing model and edit services remain the source of truth.
+- Status: accepted 2026-11-06 (D-2026-11-06-c).

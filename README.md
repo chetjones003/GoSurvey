@@ -34,6 +34,12 @@ Step-by-step guides, command reference, workflows, and troubleshooting live at *
 
 Inside the app, press **F1** or type **`HELP`** to open the same manual.
 
+## Sample drawings
+
+The [GoSurvey Feature Showcase](samples/GoSurvey-Feature-Showcase/) contains an authored project and
+separate drawings for geometry and survey objects, a 500-point mountainous TIN, grading, alignments,
+native 3D primitives, a piping layout, and additional site features.
+
 ---
 
 ## License

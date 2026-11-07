@@ -5400,4 +5400,4 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   Project shortcut metadata must preserve unknown future kinds (REQ-373). `CadTin` remains the single
   source of truth. REQ-143 lists the new enabled actions; all other unimplemented buttons remain
   disabled per REQ-084/143.
-- Status: accepted (D-2026-11-06-a); backs REQ-506..514 and amends REQ-145.
+- Status: accepted (D-2026-11-06-d); backs REQ-508..516 and amends REQ-145.
