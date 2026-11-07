@@ -49,3 +49,5 @@
 - Website documentation change passed its Cloudflare Pages PR check; no review decision or comments were present when checked.
 - Automated tests and visible UI screenshot review were not run.
 - PR review follow-up: corrected authored DXF elevation encoding to use 3D `POLYLINE`/`VERTEX` records or shared `LWPOLYLINE` elevation, added mixed core-object counts in Geometry, and added polyline plan/spatial length and bulge-aware closed area. Rebuilt successfully and regenerated all showcase DWGs.
+- Further PR review follow-up: added model-owned details for solids, meshes, block references, tables, filled regions, multileaders, PDF underlays, pipe runs, point clouds, position markers and survey points; added feature-line closure/length/elevation, arc length, and ellipse axis/orientation/sweep/length/area reports. Rebuilt the Release application successfully; automated tests remain unrun.
+- Website Properties documentation PR #4 was updated with the expanded reports and again passed `git diff --check`; its Cloudflare Pages check is pending for the new head.

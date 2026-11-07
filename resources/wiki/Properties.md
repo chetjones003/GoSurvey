@@ -70,20 +70,27 @@ A circle's area is also listed here. `AREA` reports typed points or a closed pol
 ### Polyline, arc and ellipse
 
 These objects show read-only geometry in **Object details**: polylines report vertex count, closure
-and elevation range; arcs report center, radius and sweep; ellipses report center, major radius and
-axis ratio.
+elevation range, planar and spatial lengths, and closed area; arcs report center, radius, sweep and
+length; ellipses report center, major and minor radii, major-axis rotation, sweep, curve length, and
+area (or arc-segment area for a partial ellipse).
 
 ### Feature line, surface and alignment
 
-Feature lines report their name, description and vertex count, plus grading criteria when present.
-TIN surfaces report point and triangle counts, elevation range and definition state. Alignments
+Feature lines report their name, description, vertex count, closure, elevation range, and plan and
+spatial lengths, plus grading criteria when present. TIN surfaces report point and triangle counts,
+elevation range and definition state. Alignments
 report station range, length, endpoints, bearings and design criteria where configured.
 
 ### 3D and reference objects
 
-Pipe runs report their name, nominal size and route vertex count. Other selected model and reference
-objects are identified by type in **Object details**; available model-specific fields are shown
-there when the drawing contains them.
+Pipe runs report their name, nominal size, route vertices and length, pressure class, and stated wall
+thickness. Solids show topology counts and XYZ bounds; meshes show source, vertex and triangle
+counts, and bounds; block references show definition, insertion, scale, rotation, and attribute
+count; tables show rows, columns, insertion, dimensions, and style; filled regions show loops,
+vertices, and pattern; multileaders show branches, path vertices, text, and style; PDF underlays show
+file, page, insertion, scale, rotation, and page size. Point clouds show source and total/preview
+counts. A single selected survey point shows ID, easting, northing, elevation, description, and raw
+code. Values are read-only; use the relevant contextual tools or manager to edit the object.
 
 ### Annotation — TEXT and MTEXT
 
