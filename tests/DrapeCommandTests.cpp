@@ -305,6 +305,64 @@ TEST_CASE("Project data shortcuts create read-only references and refresh from s
   fs::remove_all(root, ec);
 }
 
+TEST_CASE("Grid surface shortcuts move their grid origin with the destination frame", "[surface][req514]") {
+  namespace fs = std::filesystem;
+  const fs::path root = fs::temp_directory_path() / "gosurvey-issue807-grid-shortcut-tests";
+  std::error_code ec;
+  fs::remove_all(root, ec);
+  fs::create_directories(root, ec);
+  gsproj::Project project;
+  std::string error;
+  REQUIRE(gsproj::Create(root, "Issue807Grid", &project, &error));
+  const fs::path drawingPath = project.Folder() / "drawings" / "GridSource.dwg";
+  fs::create_directories(drawingPath.parent_path(), ec);
+
+  AppCommandState source;
+  source.activeDrawingIdx = 1;
+  source.activeDocFilePath = drawingPath.u8string();
+  source.worldDocumentOriginX = 10000.0;
+  source.worldDocumentOriginY = 20000.0;
+  CadSurface grid;
+  grid.name = "Grid EG";
+  grid.kind = SurfaceKind::Grid;
+  grid.gridOriginX = 0.0;
+  grid.gridOriginY = 0.0;
+  grid.gridSpacingX = 1.0;
+  grid.gridSpacingY = 1.0;
+  grid.gridCols = 2;
+  grid.gridRows = 2;
+  grid.gridZ = {2.0, 2.0, 2.0, 2.0};
+  grid.tin = SlopingGround();  // a shortcut source must have a saved built TIN (REQ-514)
+  source.cadSurfaces.push_back(grid);
+  source.cadSurfaceAttrs.push_back(EntityAttributes{});
+  source.cadSurfaceAttrs[0].id = 4300;
+  std::vector<std::string> log;
+  REQUIRE(SaveDrawingDocument(source, drawingPath.u8string().c_str(), log));
+  source.activeDocSavedRevision = source.cadGpuRevision;
+
+  AppCommandState::ProjectSession session;
+  session.uid = 8;
+  session.project = project;
+  source.openProjects.push_back(session);
+  source.drawingTabs[1].projectUid = 8;
+  REQUIRE(CreateSurfaceDataShortcut(source, 0, log));
+
+  AppCommandState reference;
+  reference.activeDrawingIdx = 1;
+  reference.worldDocumentOriginX = 5000.0;
+  reference.worldDocumentOriginY = 7000.0;
+  reference.drawingTabs[1].projectUid = 8;
+  reference.openProjects.push_back(source.openProjects[0]);
+  REQUIRE(CreateSurfaceReference(reference, "drawings/GridSource.dwg", 4300, "Grid EG", log));
+  REQUIRE(reference.cadSurfaces.size() == 1);
+  CHECK(reference.cadSurfaces[0].dataShortcutReadOnly);
+  CHECK(reference.cadSurfaces[0].kind == SurfaceKind::Grid);
+  // The source grid origin is (0,0) in the source frame; the reference frame is offset by (+5000, +13000).
+  CHECK(reference.cadSurfaces[0].gridOriginX == Approx(5000.0));
+  CHECK(reference.cadSurfaces[0].gridOriginY == Approx(13000.0));
+  fs::remove_all(root, ec);
+}
+
 TEST_CASE("Surface LOD and Move to Surface have typed command routes", "[surface][req508][req512]") {
   AppCommandState st;
   AddGround(st, "EG");

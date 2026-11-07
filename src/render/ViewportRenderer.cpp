@@ -1524,8 +1524,10 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       const size_t stride = d.terrain ? 5 : 4;
       if (src.size() % stride != 0) continue;
       if (d.terrain) {
+        // Depth-tested drapes write depth so nearer terrain occludes farther drape triangles regardless
+        // of submission order; the 2D wireframe style keeps depth writes off (depthOn is false there).
         glEnable(GL_DEPTH_TEST);
-        glDepthMask(GL_FALSE);
+        glDepthMask(depthOn ? GL_TRUE : GL_FALSE);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
       } else {

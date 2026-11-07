@@ -108,15 +108,20 @@ CadSurface MakeLocalSurfaceReference(const CadSurface& source, const AppCommandS
                                      const AppCommandState& destinationState, const std::string& name,
                                      const std::string& sourceRel, std::uint64_t sourceId) {
   CadSurface reference = source;
+  const double dx = sourceState.worldDocumentOriginX - destinationState.worldDocumentOriginX;
+  const double dy = sourceState.worldDocumentOriginY - destinationState.worldDocumentOriginY;
   if (source.tin) {
     auto localTin = std::make_shared<CadTin>(*source.tin);
-    const double dx = sourceState.worldDocumentOriginX - destinationState.worldDocumentOriginX;
-    const double dy = sourceState.worldDocumentOriginY - destinationState.worldDocumentOriginY;
     for (size_t i = 0; i + 2 < localTin->vertsXyz.size(); i += 3) {
       localTin->vertsXyz[i] += dx;
       localTin->vertsXyz[i + 1] += dy;
     }
     reference.tin = std::move(localTin);
+  }
+  // A grid surface samples its own grid in the same local frame as its TIN; move the grid origin with it.
+  if (source.kind == SurfaceKind::Grid) {
+    reference.gridOriginX += dx;
+    reference.gridOriginY += dy;
   }
   reference.name = name;
   reference.sourcePointGroups.clear();
