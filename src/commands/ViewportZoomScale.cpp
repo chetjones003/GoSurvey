@@ -1,6 +1,7 @@
 #include "ViewportZoomScale.hpp"
 
 #include "CadCommands.hpp"
+#include "util/PlotScales.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -89,7 +90,8 @@ void EnsureStandardAnnotationScales(std::vector<CadAnnotationScale>& scales, int
   if (!scales.empty())
     return;
   // AutoCAD's Default Scale List in AutoCAD's order. Each entry is paper units : drawing units, so the
-  // model units per plotted inch is drawing / paper. Imperial drawings are in inches: 1" = 5' is 60.
+  // drawing units per plotted inch is drawing / paper, times the drawing's own unit size (below).
+  // The imperial table is written in inches: 1" = 5' is 60.
   static const CadAnnotationScale kImperial[] = {
       {"1\" = 1\"", 1.f, 1.f},        {"1\" = 5'", 1.f, 60.f},        {"1\" = 10'", 1.f, 120.f},
       {"1\" = 20'", 1.f, 240.f},      {"1\" = 30'", 1.f, 360.f},      {"1\" = 40'", 1.f, 480.f},
@@ -106,13 +108,18 @@ void EnsureStandardAnnotationScales(std::vector<CadAnnotationScale>& scales, int
       {"2:1", 2.f, 1.f},     {"4:1", 4.f, 1.f},     {"8:1", 8.f, 1.f},     {"10:1", 10.f, 1.f},
       {"100:1", 100.f, 1.f},
   };
-  const bool imperial = drawingInsUnits == 1 || drawingInsUnits == 2;
-  if (!imperial) {
+  // Same unit rules as the Drawing Settings plot-scale list (util/PlotScales.hpp): metric 1:N is 25.4·N mm
+  // or 0.0254·N m per plotted inch; every other drawing is imperial, where 1 drawing unit is 12 inches
+  // for an inches drawing and a foot otherwise (INSUNITS 2 is the default).
+  if (PlotScaleUnitsAreMetric(drawingInsUnits)) {
+    const float unitsPerInch = static_cast<float>(MetricPlotScaleUnitsPerInch(drawingInsUnits));
     scales.assign(std::begin(kMetric), std::end(kMetric));
+    for (auto& scale : scales)
+      scale.drawingUnits *= unitsPerInch;
     return;
   }
   scales.assign(std::begin(kImperial), std::end(kImperial));
-  if (drawingInsUnits == 2) {  // feet: 1 foot = 12 inches, so 1" = 5' is 5 feet per plotted inch
+  if (drawingInsUnits != 1) {  // feet: 1 foot = 12 inches, so 1" = 5' is 5 feet per plotted inch
     for (auto& scale : scales)
       scale.drawingUnits /= 12.f;
   }

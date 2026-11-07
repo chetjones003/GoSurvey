@@ -133,13 +133,18 @@ TEST_CASE("Native DWG and DXF preserve zoom presets independently from annotatio
 TEST_CASE("Standard annotation scale list is AutoCAD's default list", "[req458]") {
   // D-2026-11-06-a: a drawing with no annotation scales gets AutoCAD's Default Scale List, in AutoCAD's order.
   std::vector<CadAnnotationScale> metric;
-  EnsureStandardAnnotationScales(metric, 4);  // mm
+  EnsureStandardAnnotationScales(metric, 4);  // mm: 1:50 is 25.4 * 50 = 1270 mm per plotted inch
   REQUIRE(metric.size() == 17);
   CHECK(metric.front().name == "1:1");
   CHECK(metric[10].name == "1:50");
   CHECK(metric.back().name == "100:1");
-  CHECK(CadAnnotationScaleModelUnitsPerPlottedInch(metric[10]) == Catch::Approx(50.0f));
-  CHECK(CadAnnotationScaleModelUnitsPerPlottedInch(metric.back()) == Catch::Approx(0.01f));
+  CHECK(CadAnnotationScaleModelUnitsPerPlottedInch(metric[10]) == Catch::Approx(1270.0f));
+  CHECK(CadAnnotationScaleModelUnitsPerPlottedInch(metric.back()) == Catch::Approx(0.254f));
+
+  std::vector<CadAnnotationScale> metricMeters;
+  EnsureStandardAnnotationScales(metricMeters, 6);  // m: 1:50 is 0.0254 * 50 = 1.27 m per plotted inch
+  REQUIRE(metricMeters.size() == 17);
+  CHECK(CadAnnotationScaleModelUnitsPerPlottedInch(metricMeters[10]) == Catch::Approx(1.27f));
 
   std::vector<CadAnnotationScale> imperial;
   EnsureStandardAnnotationScales(imperial, 1);  // inches

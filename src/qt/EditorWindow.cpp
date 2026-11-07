@@ -2871,7 +2871,7 @@ void EditorWindow::Refresh() {
     // that has no list gets one; a list the user or a file defined is kept.
     if (m_State.activeDrawingIdx > 0 && m_State.annotationScales.empty()) {
       EnsureStandardAnnotationScales(m_State.annotationScales, m_State.drawingInsUnits);
-      m_State.currentAnnotationScaleIndex = m_State.annotationScales.empty() ? -1 : 0;
+      SyncCurrentAnnotationScaleIndex(m_State);  // the entry nearest the drawing's plot scale, as on load
     }
     const QSignalBlocker block(annotationScale);
     annotationScale->clear();
