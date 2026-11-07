@@ -17230,46 +17230,35 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 ### REQ-517 — Create view frames along an alignment (GitHub issue #999, part of #802)
 
-- Purpose: each plan sheet must show a known stretch of ground. Civil 3D's Create View Frames lays
-  rectangles out along an alignment so the sheets join end to end, with a chosen overlap for match lines.
+- Purpose: each plan sheet must show a known stretch of ground. Civil 3D's Create View Frames lays rectangles out along an alignment so the sheets join end to end, with a chosen overlap for match lines.
 - Priority: should
 - Type: functional
-- Depends on: REQ-480 (alignment), REQ-483 (alignment stationing), REQ-484 (alignment query API: station to
-  point), the named paper scale list (GitHub #1017), the paper sizes in layout Page Setup (REQ-445), REQ-143
-  (disabled controls), REQ-201 (failures are observable).
+- Depends on: REQ-480 (alignment), REQ-483 (stationing, alignment epic), REQ-484 (alignment query API: station to point), the named paper scale list (GitHub #1017), the paper sizes in layout Page Setup (REQ-445), REQ-143 (disabled controls), REQ-201 (failures are observable).
 - Statement:
-  1. A typed `CREATEVIEWFRAMES` command and the Output → Plan Production → Create View Frames button ask for:
-     the alignment, the station range (default: the whole alignment), the sheet size, the scale and the
-     overlap in ground units. The Qt editor shows a dialog; a headless run takes the same values in that order.
-  2. **Frame size.** A frame's length along the alignment is the sheet's width in inches times the scale's
-     ground units per inch. Its width across the alignment is the sheet's height times the same. Sheet sizes
-     are the paper sizes Page Setup already offers.
-  3. **Placement.** Frames run along the alignment's stationing from the start of the range. Each frame starts
-     at the previous frame's end minus the overlap. The last frame keeps its full length even when it passes
-     the end station. Each frame is a plan rectangle centred on the alignment and oriented to the tangent at
-     its centre station. On a curve the rectangle is straight, not an arc.
-  4. **Refusals (REQ-201).** No alignment in the drawing, a station range that is empty, reversed or outside
-     the alignment, or an overlap equal to or greater than the frame length is refused with a log line. Nothing
-     is created. A read-only project refuses before any change.
-  5. **Objects.** The frames form one view frame group named after the alignment. Each frame has a name
-     (`VF-1`, `VF-2`, ...), its start and end stations, its sheet size and its scale. Each frame is drawn in
-     plan with its name. Creating a group, and deleting a frame or a group, are each one undo step.
-  6. Frames do not change the alignment, the surfaces or any other object. They persist with the drawing and
-     survive save and reopen.
+  1. A typed `CREATEVIEWFRAMES` command and the Output → Plan Production → Create View Frames button ask for: the alignment, the station range (default: the whole alignment), the sheet size, the scale, the overlap in ground units and the placement. The Qt editor shows a dialog; a headless run takes the same values in that order.
+  2. **Frame size.** A frame's length along the alignment is the sheet's width in inches times the scale's ground units per inch. Its width across the alignment is the sheet's height times the same. Sheet sizes are the paper sizes layout Page Setup already offers. Sheet size and scale are typed in the dialog; they are not read from a layout.
+  3. **Scale.** The scale must be one of the named paper scales (GitHub #1017). Any other ratio is refused.
+  4. **Placement.** One of three choices: **Centred** (the default; the alignment runs down the frame's middle), **Left** (the alignment lies on the frame's left edge, looking along increasing stationing) or **Right** (the alignment lies on the frame's right edge). Each frame is a plan rectangle oriented to the alignment tangent at its centre station. On a curve the rectangle is straight, not an arc.
+  5. **Run.** Frames run along the alignment's stationing from the start of the range. Each frame starts at the previous frame's end minus the overlap. The last frame keeps its full length even when it passes the end station.
+  6. **Refusals (REQ-201).** No alignment in the drawing, a station range that is empty, reversed or outside the alignment, an overlap equal to or greater than the frame length, or a scale that is not a named paper scale is refused with a log line. Nothing is created. A read-only project refuses before any change.
+  7. **Group and frames.** One command creates one view frame group named after the alignment. The group stores its settings: range, sheet size, scale, overlap and placement. Its frames are named `VF-1`, `VF-2`, ..., and each stores its start and end stations, sheet size and scale. Each frame is drawn in plan with its name. Creating a group, and deleting a frame or a group, are each one undo step.
+  8. **Frames follow the alignment.** Whenever an alignment's geometry changes (any edit under REQ-487 or any command that changes its geometry), every frame group on that alignment regenerates from its stored settings. A hand-edited frame is overwritten by the regeneration. The log names each regenerated group and each overwritten edit. The regeneration is part of the same undo step as the alignment edit.
+  9. **Deleting an alignment** deletes its frame groups in the same undo step. One undo restores both.
+  10. Frames do not change surfaces or any other object. Groups persist with the drawing and survive save and reopen.
 - Acceptance:
-  - A 5000 ft alignment, sheet width 36 in, scale 1 in = 50 ft (frame length 1800 ft) and overlap 100 ft give
-    three frames: 0+00 to 1800+00, 1700+00 to 3500+00 and 3400+00 to 5200+00. The third is not shortened.
+  - A 5000 ft alignment, sheet width 36 in, scale 1 in = 50 ft (frame length 1800 ft), overlap 100 ft and Centred placement give three frames: 0+00 to 1800+00, 1700+00 to 3500+00 and 3400+00 to 5200+00. The third is not shortened.
+  - With Left placement the alignment lies on each frame's left edge; with Right, on its right edge; with Centred, down its middle.
   - A frame's height across the alignment equals the sheet height times the scale.
-  - Each frame's name, stations, sheet size and scale survive save and reopen.
-  - Each refusal in item 4 logs a reason and creates no frame.
+  - Editing the alignment's geometry regenerates its frame group in the same undo step; one undo restores the alignment and its frames together.
+  - Deleting an alignment deletes its frame groups; one undo restores both.
+  - A scale that is not a named paper scale (for example 1 in = 37 ft) is refused and creates nothing.
+  - Each refusal in item 6 logs a reason and creates no frame.
+  - Each frame's name, stations, sheet size, scale and the group's settings survive save and reopen.
   - A read-only project refuses the command and changes nothing.
   - The Create View Frames button is enabled and runs the command; its "not implemented yet" tooltip is gone.
 - Owner-layer: Domain / Commands / Renderer / IO / UI
-- Assumptions (recorded, not asked): frames are centred on the alignment; the overlap is measured along the
-  alignment. Autodesk takes the sheet size and scale from the sheet template rather than from this dialog;
-  this spec asks for them directly so the frame geometry is explicit. The user may choose to follow Civil 3D.
-- Status: proposed (2026-11-07, D-2026-11-07-a; GitHub #999). Autodesk evidence:
-  docs/research/ISSUE-802-autodesk-plan-production.md.
+- Assumptions (recorded): the default placement is Centred; the overlap is measured along the alignment. Autodesk takes the sheet size and scale from the sheet template; this spec takes them from the dialog, which the user chose on 2026-11-07.
+- Status: accepted (2026-11-07, D-2026-11-07-b; GitHub #999). Settled by the user's answers to the #999 questions.
 
 ### REQ-518 — Create paper sheets from view frames (GitHub issue #1000, part of #802)
 
