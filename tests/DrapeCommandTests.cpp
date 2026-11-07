@@ -547,7 +547,7 @@ TEST_CASE("Create Profile samples an alignment and persists its placed graph", "
   REQUIRE(baseline.AppendTangent({0.0, 50.0}, 90.0 * alignment::kPi / 180.0, 100.0));
   st.alignments.push_back(baseline);
   std::vector<std::string> log;
-  Type(st, "CREATEPROFILEFROMSURFACE EG, BASELINE, EG Profile, 25, 0, 0, 1, 2", log);
+  Type(st, "CREATEPROFILEFROMSURFACE EG, BASELINE, EG Profile, 25, 100000000, 200000000, 0.001, 2", log);
   REQUIRE(st.surfaceProfiles.size() == 1);
   const CadSurfaceProfile& profile = st.surfaceProfiles[0];
   REQUIRE(profile.stations.size() == 5);
@@ -556,6 +556,7 @@ TEST_CASE("Create Profile samples an alignment and persists its placed graph", "
   CHECK(profile.elevations[4] == Approx(GroundZ(100)).margin(0.002));
   CHECK(profile.viewEntityIds.size() >= 6);
   CHECK(st.userLineAttrs.size() == profile.viewEntityIds.size());
+  CHECK(st.userLinesFlat[3] - st.userLinesFlat[0] == Approx(0.1).margin(1.e-6));
 
   st.userLinesFlat.insert(st.userLinesFlat.end(), {200.f, 200.f, 0.f, 210.f, 200.f, 0.f});
   EntityAttributes unrelated;

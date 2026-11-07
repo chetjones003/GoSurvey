@@ -5237,8 +5237,7 @@ bool RefreshSurfaceProfilesForSurface(AppCommandState& st, const CadSurface& sur
     changed = true;
     const size_t firstLine = st.userLineAttrs.size();
     auto addLine = [&](double x0, double y0, double x1, double y1) {
-      st.userLinesFlat.insert(st.userLinesFlat.end(), {static_cast<float>(x0), static_cast<float>(y0), 0.f,
-                                                       static_cast<float>(x1), static_cast<float>(y1), 0.f});
+      st.userLinesFlat.insert(st.userLinesFlat.end(), {x0, y0, 0.0, x1, y1, 0.0});
       EntityAttributes attrs = MakeNewEntityAttrs(st);
       attrs.id = st.nextEntityId++;
       st.userLineAttrs.push_back(std::move(attrs));
