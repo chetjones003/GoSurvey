@@ -5345,3 +5345,59 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   an alignment are now REQ-498) and the "no alignments" clause of REQ-145 / REQ-142's Prospector. Offset alignments
   of spirals are refused (REQ-488) until a spiral-offset entity is decided.
 - Status: accepted (D-2026-11-02-b); backs REQ-480..503.
+
+### ADR-080 — Surface contextual tools use drawing-owned links and derived display data (2026-11-06, accepted)
+- Context: Issue #807 asks to implement the remaining TIN Surface ribbon tools. Autodesk documents
+  labels, analysis tables, reduced/high LOD, crossing-breakline review, visibility analysis, raster
+  draping, block-to-surface placement, surface profiles, and project data shortcuts. GoSurvey already
+  has stable surface/alignment identities, project files, surface queries, and block references, but
+  the missing controls cross entity storage, rendering, persistence, and project linking. User
+  direction on 2026-11-06 explicitly includes the alignment-based surface profile workflow (amending
+  REQ-145); full vertical design profiles remain issue #1163.
+- Decision:
+  1. Keep `CadTin` and surface query geometry authoritative. Reduced LOD is a render-only cache; it
+     never changes query, pick, snap, analysis, plotting, export, or save data. Surface build
+     corrections are value-owned by the surface definition and never mutate shared breakline source
+     entities.
+  2. Surface labels are drawing-owned records with stable IDs and a stable surface ID, anchor/path,
+     kind, style and layer. Their displayed values are derived from the current surface at render or
+     refresh time. They participate in selection, undo, DWG persistence and ordinary removal.
+  3. A surface legend is an ordinary `CadTable` with additive source-surface and analysis metadata;
+     its rows are derived from the named analysis. It remains one selectable, undoable drawing
+     object, not a new table subsystem.
+  4. Visibility results are ordinary drawing geometry on the current layer. The calculation module
+     is pure over `ISurfaceQuery`; Qt/renderer code presents the result but does not perform terrain
+     math.
+  5. Raster images are external-file drawing references with explicit placement and stable IDs.
+     Draping uses a renderer-owned texture/display cache over surface triangles. Source image files
+     are tracked by REQ-379 in projects; the image pixels are not copied into the TIN or surface data.
+  6. Move-to-surface changes only a selected block reference's insertion Z and commits all selected
+     blocks atomically.
+  7. A created surface profile is a drawing-owned sampled existing-ground record referencing stable
+     surface and alignment IDs. A profile view owns only its graph placement and scales and renders
+     the profile record. Neither adds vertical design tangents/curves; those remain issue #1163.
+  8. A data shortcut is a project-owned record of the source drawing's project-relative path and
+     stable surface ID. A consumer drawing owns a read-only reference to that record and may hold a
+     last-good display cache. Source definition edits are never applied through the consumer. Project
+     lock, relative-path and missing-file behavior reuse REQ-373/374/379.
+  9. All new persistent entities/references follow the existing document-store and DWG-trailer
+     patterns. Stable IDs, not array indices, carry cross-store references (REQ-076 / ADR-027).
+     Undo snapshots own values; rebuild/display caches are replaceable derived data and are never
+     serialized as authoritative geometry.
+- Alternatives:
+  - Store labels as plain MTEXT with frozen values: rejected because a surface rebuild would leave
+    misleading labels.
+  - Simplify or replace the TIN for Reduced LOD: rejected because it would change measured and
+    selected terrain.
+  - Edit shared breakline polylines to resolve one surface's crossings: rejected because another
+    surface may use the same linework.
+  - Copy the source surface into a data shortcut consumer: rejected because it would no longer be a
+    read-only, refreshable reference.
+  - Reuse `QUICKPROFILE` as Create Profile: rejected because `QUICKPROFILE` is explicitly session-only
+    and has no persistent profile-view placement (REQ-145).
+- Consequences: the issue needs additive DWG trailer fields and undo/selection/render/IO integration
+  for surface labels, legend metadata, raster images, surface profiles/views and surface references.
+  Project shortcut metadata must preserve unknown future kinds (REQ-373). `CadTin` remains the single
+  source of truth. REQ-143 lists the new enabled actions; all other unimplemented buttons remain
+  disabled per REQ-084/143.
+- Status: accepted (D-2026-11-06-d); backs REQ-508..516 and amends REQ-145.

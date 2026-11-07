@@ -817,7 +817,30 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           }
           flushRun();
         };
-        emitSurf(it->triangleEdges);
+        const CadSurface& surface = st.cadSurfaces[si];
+        if (surface.reducedDisplayLod && surface.tin && it->style.triangles.visible) {
+          // LOD is a viewport choice only (REQ-508). Plot from every authoritative TIN face instead
+          // of the reduced viewport cache so reduced and high LOD drawings produce the same sheet.
+          const auto& vertices = surface.tin->vertsXyz;
+          const auto& indices = surface.tin->indices;
+          std::vector<float> fullDetailEdges;
+          fullDetailEdges.reserve(indices.size() * 6);
+          const auto appendEdge = [&](std::uint32_t a, std::uint32_t b) {
+            fullDetailEdges.insert(fullDetailEdges.end(), {
+                static_cast<float>(vertices[a * 3]), static_cast<float>(vertices[a * 3 + 1]),
+                static_cast<float>(vertices[a * 3 + 2]), static_cast<float>(vertices[b * 3]),
+                static_cast<float>(vertices[b * 3 + 1]), static_cast<float>(vertices[b * 3 + 2])});
+          };
+          for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+            const std::uint32_t a = indices[i], b = indices[i + 1], c = indices[i + 2];
+            appendEdge(a, b);
+            appendEdge(b, c);
+            appendEdge(c, a);
+          }
+          emitSurf(fullDetailEdges);
+        } else {
+          emitSurf(it->triangleEdges);
+        }
         emitSurf(it->minorContours);
         emitSurf(it->majorContours);
         emitSurf(it->borderEdges);

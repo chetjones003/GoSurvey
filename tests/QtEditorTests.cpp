@@ -9740,9 +9740,23 @@ private Q_SLOTS:
     QCOMPARE(ribbon->currentIndex(), index("SurveyPointCtx")); QVERIFY(ribbon->tabText(index("SurveyPointCtx")).contains("42"));
     state.selectedSurveyPointIndices.clear(); window.Submit("");
     QVERIFY(!ribbon->isTabVisible(index("SurveyPointCtx"))); QCOMPARE(ribbon->currentIndex(), index("Modeling"));
+    QTest::qWait(100);
+    QVERIFY(window.grab().save(Issue914Shot("issue807-no-surface-selection.png")));
     state.cadSurfaces.emplace_back(); state.cadSurfaces.back().name = "Existing Ground";
     state.selection.push_back({SelectedEntity::Type::Surface, 0}); window.Submit("");
     QCOMPARE(ribbon->currentIndex(), index("SurfaceCtx")); QVERIFY(ribbon->tabText(index("SurfaceCtx")).contains("Existing Ground"));
+    QTest::qWait(100);
+    QVERIFY(window.grab().save(Issue914Shot("issue807-surface-context.png")));
+    auto* surfaceVisibility = window.findChild<QToolButton*>("tool_TsVisCheck");
+    QVERIFY(surfaceVisibility);
+    QCOMPARE(surfaceVisibility->actions().size(), 1);
+    auto* visibilityMenu = surfaceVisibility->actions().front()->menu();
+    QVERIFY(visibilityMenu);
+    visibilityMenu->popup(surfaceVisibility->mapToGlobal(QPoint(0, surfaceVisibility->height())));
+    QTRY_VERIFY(visibilityMenu->isVisible());
+    QCOMPARE(visibilityMenu->actions().size(), 2);
+    QVERIFY(visibilityMenu->grab().save(Issue914Shot("issue807-surface-visibility-menu.png")));
+    visibilityMenu->hide();
     state.selection.clear(); window.Submit(""); QCOMPARE(ribbon->currentIndex(), index("Modeling"));
     state.drawingSettings.zoneCode = "TX83-CF"; window.Submit(""); QVERIFY(ribbon->isTabVisible(index("GeolocationCtx")));
     QCOMPARE(ribbon->currentIndex(), index("Modeling")); // A location does not steal the active tab.
@@ -16264,9 +16278,34 @@ private Q_SLOTS:
     QVERIFY(fileRow);
     QVERIFY(manager->findChild<QPushButton*>("surfaceManagerImport")->isEnabled());
     QCOMPARE(manager->findChild<QPushButton*>("surfaceManagerRemove")->text(), QString("Remove link"));
+    QVERIFY(manager->grab().save(Issue914Shot("issue807-point-files-manager.png")));
     manager->findChild<QPushButton*>("surfaceManagerRemove")->click();
     QVERIFY(st.cadSurfaces[0].sourcePointFiles.empty());
     manager->close();
+  }
+
+  void issue807DrapeImageBuildsTerrainTextureGeometry() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 800);
+    window.show();
+    auto& st = window.State();
+    Issue893Fixture(st);
+    window.Submit("ZOOMEXTENTS");
+    QTest::qWait(100);
+    QVERIFY(window.m_Viewport->IsRendererReady());
+
+    const std::filesystem::path imagePath = std::filesystem::path(GOSURVEY_SOURCE_DIR) /
+                                            "samples" / "01-main-window.png";
+    std::vector<std::string> log;
+    QVERIFY(AttachModelRasterImage(st, imagePath.u8string(), 0.0f, 0.0f, 20.0f, 10.0f, 0.0f, log));
+    QVERIFY(SetModelRasterDrape(st, 0, 0, log));
+    window.Submit("");
+    QTRY_VERIFY(!window.m_Viewport->m_RasterDrapeCache.empty());
+    QCOMPARE(window.m_Viewport->m_RasterDrapeCache.size(), size_t(1));
+    QVERIFY(window.m_Viewport->m_RasterDrapeCache[0].texture != 0);
+    QVERIFY(window.m_Viewport->m_RasterDrapeCache[0].xyuv.size() >= 15);
+    QVERIFY(window.m_Viewport->grabFramebuffer().save(Issue914Shot("issue807-drape-image-render.png")));
   }
 
   void homeSurfacesOpensCreateSurfaceAndCancelLeavesDrawingUnchanged() {

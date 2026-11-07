@@ -716,6 +716,17 @@ TEST_CASE("ExportDwgFile survives repeated save with two TIN surfaces (issue #66
   REQUIRE(st.cadSurfaceAttrs[0].id != st.cadSurfaceAttrs[1].id);
   REQUIRE(st.cadSurfaces[0].tin != nullptr);
   REQUIRE(st.cadSurfaces[1].tin != nullptr);
+  REQUIRE_FALSE(st.surfaceStyles.empty());
+  st.surfaceStyles.front().triangles.visible = true;
+  RefreshSurfaceDisplayGeometry(st);
+  const size_t fullTriangleEdges = st.surfaceDisplayCache[0].triangleEdges.size();
+  const size_t authoritativeFaces = st.cadSurfaces[0].tin->indices.size();
+  st.cadSurfaces[0].reducedDisplayLod = true;
+  RefreshSurfaceDisplayGeometry(st);
+  CHECK(st.surfaceDisplayCache[0].triangleEdges.size() < fullTriangleEdges);
+  CHECK(st.cadSurfaces[0].tin->indices.size() == authoritativeFaces);
+  st.cadSurfaces[0].reducedDisplayLod = false;
+  RefreshSurfaceDisplayGeometry(st);
   for (int i = 0; i < 100; ++i) {
     CAPTURE(i);
     RefreshSurfaceDisplayGeometry(st);

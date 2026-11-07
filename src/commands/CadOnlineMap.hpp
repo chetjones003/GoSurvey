@@ -22,6 +22,7 @@
 struct MapTileDraw {
   unsigned int               texture = 0;
   const std::vector<double>* xyuv = nullptr;
+  bool                       terrain = false; ///< five doubles per vertex: local XYZ + UV
 };
 
 /// The USGS tile URL of tile (z, x, y) of \p service (REQ-363 item 2).

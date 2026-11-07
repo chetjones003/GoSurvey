@@ -83,6 +83,56 @@ Bounds PlotLineBounds(const plotsheet::Settings& settings, const std::string& ta
   return out;
 }
 
+int PlotSurfaceSegmentCount(bool reducedLod, const std::string& tag) {
+  AppCommandState st;
+  PaperLayout layout;
+  layout.name = "Sheet";
+  layout.landscape = true;
+  layout.portraitWidthIn = kSheetH;
+  layout.portraitHeightIn = kSheetW;
+  Viewport viewport;
+  viewport.modelCenterX = 50.0;
+  viewport.modelCenterY = 50.0;
+  viewport.scaleModelPerPaperIn = 50.f;
+  layout.viewports.push_back(viewport);
+  st.paperLayouts.push_back(layout);
+
+  CadSurface surface;
+  surface.name = "EG";
+  surface.reducedDisplayLod = reducedLod;
+  auto tin = std::make_shared<CadTin>();
+  tin->vertsXyz = {0.0, 0.0, 2.0, 100.0, 0.0, 12.0, 100.0, 100.0, 12.0, 0.0, 100.0, 2.0};
+  tin->indices = {0, 1, 2, 0, 2, 3};
+  surface.tin = std::move(tin);
+  st.cadSurfaces.push_back(std::move(surface));
+  st.cadSurfaceAttrs.push_back(EntityAttributes{});
+  st.cadSurfaceAttrs.back().linetype = "DASHED";
+  REQUIRE_FALSE(st.surfaceStyles.empty());
+  st.surfaceStyles.front().triangles.visible = true;
+  st.surfaceStyles.front().slopeArrowsOn = true;
+  EnsureEntityIds(st);
+
+  const auto path = std::filesystem::temp_directory_path() / ("gosurvey-surface-lod-" + tag + ".pdf");
+  std::vector<std::string> log;
+  FPDF_InitLibrary();
+  REQUIRE(PlotLayoutsToPdf(st, {0}, path.string().c_str(), log));
+  FPDF_DOCUMENT document = FPDF_LoadDocument(path.string().c_str(), nullptr);
+  REQUIRE(document != nullptr);
+  FPDF_PAGE page = FPDF_LoadPage(document, 0);
+  REQUIRE(page != nullptr);
+  int segments = 0;
+  for (int i = 0; i < FPDFPage_CountObjects(page); ++i) {
+    FPDF_PAGEOBJECT object = FPDFPage_GetObject(page, i);
+    if (FPDFPageObj_GetType(object) == FPDF_PAGEOBJ_PATH)
+      segments += FPDFPath_CountSegments(object);
+  }
+  FPDF_ClosePage(page);
+  FPDF_CloseDocument(document);
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  return segments;
+}
+
 }  // namespace
 
 TEST_CASE("Page Setup default plot leaves the line where the layout puts it (REQ-445 no regression, measured)",
@@ -501,6 +551,10 @@ TEST_CASE("Two-vertex bulge viewport clips plotted model strokes to its curved b
   REQUIRE(std::isfinite(minX));
   CHECK_THAT(minX, WithinAbs(4.f - std::sqrt(4.f - 2.25f), 0.03));
   CHECK_THAT(maxX, WithinAbs(4.f + std::sqrt(4.f - 2.25f), 0.03));
+}
+
+TEST_CASE("Reduced LOD does not change plotted TIN edge detail", "[plot][req508]") {
+  CHECK(PlotSurfaceSegmentCount(true, "reduced") == PlotSurfaceSegmentCount(false, "high"));
 }
 
 TEST_CASE("PDF viewport and filled-region RGB packing preserves the blue channel", "[plot][req485]") {

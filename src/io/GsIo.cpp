@@ -2476,6 +2476,21 @@ json BuildRoot(const AppCommandState& st) {
     doc["alignments"] = std::move(arr);
   }
 
+  if (!st.surfaceProfiles.empty()) {
+    json profiles = json::array();
+    for (const CadSurfaceProfile& profile : st.surfaceProfiles) {
+      json p;
+      p["id"] = profile.id; p["name"] = profile.name; p["surfaceId"] = profile.surfaceId;
+      p["alignmentId"] = profile.alignmentId; p["sampleInterval"] = profile.sampleInterval;
+      p["viewX"] = profile.viewX; p["viewY"] = profile.viewY;
+      p["horizontalScale"] = profile.horizontalScale; p["verticalScale"] = profile.verticalScale;
+      p["stations"] = profile.stations; p["elevations"] = profile.elevations;
+      p["viewEntityIds"] = profile.viewEntityIds;
+      profiles.push_back(std::move(p));
+    }
+    doc["surfaceProfiles"] = std::move(profiles);
+  }
+
   // Piping networks (issue #486 increment B3 / REQ-345). Additive and omitted when there are none,
   // same ADR-020 (d) shape as pipeRuns just above — a network is metadata only (a name plus indices
   // into pipeRuns), never geometry.
@@ -2502,6 +2517,12 @@ json BuildRoot(const AppCommandState& st) {
     for (const CadSurface& s : st.cadSurfaces) {
       json o;
       o["name"] = s.name;
+      if (s.reducedDisplayLod)
+        o["reducedDisplayLod"] = true;
+      if (s.dataShortcutReadOnly) {
+        o["dataShortcut"] = {{"drawing", s.dataShortcutDrawing},
+                             {"surfaceId", s.dataShortcutSurfaceId}};
+      }
       if (s.gradingGroup) {
         o["gradingMembers"] = json::array();
         for (const auto &member : s.gradingMembers) {
@@ -2541,6 +2562,25 @@ json BuildRoot(const AppCommandState& st) {
         breaklines.push_back(std::move(blo));
       }
       o["breaklines"] = std::move(breaklines);
+      json corrections = json::array();
+      for (const CadSurfaceCrossingCorrection& correction : s.crossingCorrections) {
+        json co;
+        co["entityA"] = correction.entityA;
+        co["entityB"] = correction.entityB;
+        co["x"] = correction.x;
+        co["y"] = correction.y;
+        co["customElevation"] = correction.customElevation;
+        switch (correction.kind) {
+        case CadSurfaceCrossingCorrection::Kind::Higher: co["kind"] = "higher"; break;
+        case CadSurfaceCrossingCorrection::Kind::Lower: co["kind"] = "lower"; break;
+        case CadSurfaceCrossingCorrection::Kind::Average: co["kind"] = "average"; break;
+        case CadSurfaceCrossingCorrection::Kind::Custom: co["kind"] = "custom"; break;
+        case CadSurfaceCrossingCorrection::Kind::TrimA: co["kind"] = "trimA"; break;
+        case CadSurfaceCrossingCorrection::Kind::TrimB: co["kind"] = "trimB"; break;
+        }
+        corrections.push_back(std::move(co));
+      }
+      if (!corrections.empty()) o["crossingCorrections"] = std::move(corrections);
       json contours = json::array();
       for (const CadSurfaceBreakline& c : s.contourSources) {
         json co;
@@ -2651,6 +2691,17 @@ json BuildRoot(const AppCommandState& st) {
       surfAttrs.push_back(std::move(o));
     }
     doc["surfaceAttrs"] = std::move(surfAttrs);
+  }
+  if (!st.cadRasterImages.empty()) {
+    json images = json::array();
+    for (const CadRasterImage& image : st.cadRasterImages) {
+      images.push_back({{"id", image.id}, {"surfaceId", image.surfaceId}, {"path", image.path},
+                        {"layer", image.layer}, {"insX", image.insX}, {"insY", image.insY},
+                        {"width", image.width}, {"height", image.height},
+                        {"rotationRad", image.rotationRad}, {"pixelW", image.pixelW},
+                        {"pixelH", image.pixelH}});
+    }
+    doc["modelImages"] = std::move(images);
   }
   json fillAttrs = json::array();
   for (const auto& a : st.cadFilledRegionAttrs) {
@@ -4702,6 +4753,28 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
                   "\"; using Standard.");
     a.style = AlignmentStyles::kStandardName;
   }
+  st.surfaceProfiles.clear();
+  if (doc.contains("surfaceProfiles") && doc["surfaceProfiles"].is_array()) {
+    for (const auto& el : doc["surfaceProfiles"]) {
+      if (!el.is_object()) continue;
+      CadSurfaceProfile p;
+      p.id = el.value("id", p.id); p.name = el.value("name", p.name);
+      p.surfaceId = el.value("surfaceId", p.surfaceId); p.alignmentId = el.value("alignmentId", p.alignmentId);
+      p.sampleInterval = el.value("sampleInterval", p.sampleInterval); p.viewX = el.value("viewX", p.viewX);
+      p.viewY = el.value("viewY", p.viewY); p.horizontalScale = el.value("horizontalScale", p.horizontalScale);
+      p.verticalScale = el.value("verticalScale", p.verticalScale);
+      if (el.contains("stations") && el["stations"].is_array()) p.stations = el["stations"].get<std::vector<double>>();
+      if (el.contains("elevations") && el["elevations"].is_array()) {
+        for (const auto& value : el["elevations"])
+          p.elevations.push_back(value.is_number() ? value.get<double>() : std::numeric_limits<double>::quiet_NaN());
+      }
+      if (el.contains("viewEntityIds") && el["viewEntityIds"].is_array()) p.viewEntityIds = el["viewEntityIds"].get<std::vector<std::uint64_t>>();
+      if (p.stations.size() != p.elevations.size() || p.sampleInterval <= 0.0 || p.horizontalScale <= 0.0 || p.verticalScale <= 0.0) {
+        log.push_back("PROFILE — invalid saved surface profile \"" + p.name + "\" was ignored."); continue;
+      }
+      st.surfaceProfiles.push_back(std::move(p));
+    }
+  }
   for (alignment::Alignment& a : st.alignments) {
     if (a.labelSet.empty()) continue;
     if (AlignmentLabelSets::Find(st.alignmentLabelSets, a.labelSet) != nullptr) continue;
@@ -4782,6 +4855,12 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       // written and falls back at draw time, so re-pointing the surface at a style with that name
       // later restores it instead of finding the reference silently rewritten.
       s.styleName = el.value("styleName", std::string());
+      s.reducedDisplayLod = el.value("reducedDisplayLod", false);
+      if (el.contains("dataShortcut") && el["dataShortcut"].is_object()) {
+        s.dataShortcutReadOnly = true;
+        s.dataShortcutDrawing = el["dataShortcut"].value("drawing", std::string());
+        s.dataShortcutSurfaceId = el["dataShortcut"].value("surfaceId", std::uint64_t{0});
+      }
       {
         const std::string ks = el.value("kind", std::string());
         s.kind = ks == "grid"          ? SurfaceKind::Grid
@@ -4889,6 +4968,25 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
             s.breaklines.push_back(std::move(bl));  // legacy: no description existed to carry
           }
       }
+      if (el.contains("crossingCorrections") && el["crossingCorrections"].is_array()) {
+        for (const auto& co : el["crossingCorrections"]) {
+          if (!co.is_object() || !co.contains("entityA") || !co.contains("entityB")) continue;
+          CadSurfaceCrossingCorrection correction;
+          correction.entityA = co.value("entityA", std::uint64_t{0});
+          correction.entityB = co.value("entityB", std::uint64_t{0});
+          correction.x = co.value("x", 0.0);
+          correction.y = co.value("y", 0.0);
+          correction.customElevation = co.value("customElevation", 0.0);
+          const std::string kind = co.value("kind", std::string("average"));
+          correction.kind = kind == "higher" ? CadSurfaceCrossingCorrection::Kind::Higher
+                            : kind == "lower" ? CadSurfaceCrossingCorrection::Kind::Lower
+                            : kind == "custom" ? CadSurfaceCrossingCorrection::Kind::Custom
+                            : kind == "trimA" ? CadSurfaceCrossingCorrection::Kind::TrimA
+                            : kind == "trimB" ? CadSurfaceCrossingCorrection::Kind::TrimB
+                                               : CadSurfaceCrossingCorrection::Kind::Average;
+          s.crossingCorrections.push_back(correction);
+        }
+      }
       if (el.contains("contourSources") && el["contourSources"].is_array()) {
         for (const auto& co : el["contourSources"]) {
           if (!co.is_object() || !co.contains("entityId") || !co["entityId"].is_number_unsigned())
@@ -4943,6 +5041,25 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     for (const auto& o : doc["surfaceAttrs"])
       st.cadSurfaceAttrs.push_back(EntityAttributesFromJson(o));
   st.cadSurfaceAttrs.resize(st.cadSurfaces.size());  // length-locked, as with meshes
+  st.cadRasterImages.clear();
+  if (doc.contains("modelImages") && doc["modelImages"].is_array()) {
+    for (const auto& item : doc["modelImages"]) {
+      if (!item.is_object() || !item.contains("path") || !item["path"].is_string()) continue;
+      CadRasterImage image;
+      image.id = item.value("id", std::uint64_t{0});
+      image.surfaceId = item.value("surfaceId", std::uint64_t{0});
+      image.path = item["path"].get<std::string>();
+      image.layer = item.value("layer", std::string("0"));
+      image.insX = item.value("insX", 0.f);
+      image.insY = item.value("insY", 0.f);
+      image.width = item.value("width", 0.f);
+      image.height = item.value("height", 0.f);
+      image.rotationRad = item.value("rotationRad", 0.f);
+      image.pixelW = item.value("pixelW", 0);
+      image.pixelH = item.value("pixelH", 0);
+      st.cadRasterImages.push_back(std::move(image));
+    }
+  }
   if (!st.cadMeshes.empty()) {
     // REQ-063 requires the count to be REPORTED, not merely survived: a silent truncation and a
     // successful load are indistinguishable without it.
@@ -5483,8 +5600,8 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
              "annotationAttrs", "tables", "tableAttrs", "positionMarkers", "positionMarkerAttrs", "multileaders",
              "multileaderAttrs", "cadPoints", "cadPointAttrs", "blockRefs", "blockRefAttrs", "filledRegions",
              "filledRegionAttrs", "meshes", "meshAttrs", "pointClouds",
-             "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "alignments", "surfaces",
-             "surfaceAttrs", "surveyPoints", "blockFavorites", "blockRecent"})
+             "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "alignments", "surfaceProfiles", "surfaces",
+             "surfaceAttrs", "surveyPoints", "modelImages", "blockFavorites", "blockRecent"})
       doc[key] = json::array();
 
     // Captured map tiles are source-drawing imagery, not reusable template settings.
