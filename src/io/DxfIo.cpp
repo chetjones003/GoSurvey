@@ -2920,6 +2920,31 @@ int ImportDxfPaperSpace(const std::vector<DxfPair>& t, AppCommandState& st,
   return nRead;
 }
 
+// REQ-113 acceptance (15): activate the layout named by the HEADER's $CTAB. A missing or unknown name
+// (or "Model") activates model space, so a stale index from the previous drawing never survives.
+void ActivateDxfCurrentTab(const std::vector<DxfPair>& t, AppCommandState& st) {
+  std::string ctab;
+  size_t hb = 0, he = 0;
+  if (FindSectionBounds(t, "HEADER", &hb, &he)) {
+    for (size_t i = hb; i + 1 < he; ++i) {
+      if (t[i].code != 9 || t[i].value != "$CTAB")
+        continue;
+      for (size_t k = i + 1; k < he && t[k].code != 9; ++k)
+        if (t[k].code == 1) {
+          ctab = Trim(t[k].value);
+          break;
+        }
+      break;
+    }
+  }
+  int active = kModelSpaceIndex;
+  for (size_t i = 0; i < st.paperLayouts.size(); ++i)
+    if (!ctab.empty() && !EqCiStr(ctab, "Model") && EqCiStr(st.paperLayouts[i].name, ctab))
+      active = static_cast<int>(i);
+  st.activeSpaceIndex = active;
+  st.lastPaperLayoutIndex = std::max(0, active);
+}
+
 bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
   if (!pathUtf8 || pathUtf8[0] == '\0') {
     log.push_back("DXF import — no path.");
@@ -3127,6 +3152,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   log.push_back(os.str());
   if (ImportDxfPaperSpace(pairs, st, layerRgb, blockDefs, textStyles, hasEntitiesSec, eb, ee, log) > 0)
     skippedPaper = 0;  // read onto their layouts instead (issue #768)
+  ActivateDxfCurrentTab(pairs, st);
   if (skippedPaper > 0)
     log.push_back("DXF import — skipped " + std::to_string(skippedPaper) +
                   " paper-space-only ENTITIES (group 67); layouts/title blocks not imported.");
@@ -4548,6 +4574,11 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   emitPair(7, "Standard");
   emitPair(9, "$CLAYER");
   emitPair(8, "0");
+  // REQ-113 acceptance (15): the current layout tab. Model space when no layout is active.
+  emitPair(9, "$CTAB");
+  emitPair(1, st.activeSpaceIndex >= 0 && static_cast<size_t>(st.activeSpaceIndex) < st.paperLayouts.size()
+                  ? st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)].name
+                  : std::string("Model"));
   emitPair(9, "$CELTYPE");
   emitPair(6, "ByLayer");
   emitPair(9, "$CECOLOR");

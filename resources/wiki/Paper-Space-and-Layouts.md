@@ -216,6 +216,10 @@ is where a border, a titleblock, and sheet notes belong. `LINE`, `POLYLINE`, `SP
 model geometry. Paper `POINT`, `SPLINE`, and `LEADER` round-trip through DXF and DWG. On a sheet a
 leader's Mtext box is sized in paper inches.
 
+DXF keeps the order of the layout tabs and which layout was open. Reopening the DXF shows the same tabs in
+the same order and returns to the layout that was current; if the file does not name a current layout, or
+names one that is not in the file, GoSurvey opens in Model space.
+
 DWG saves each sheet object as a native AutoCAD object on its layout: `SPLINE`, `POINT`, `DIMENSION`
 and raster `IMAGE`. Sheet leaders are `MULTILEADER` in R2010 and later DWG files, and `LEADER` with
 `MTEXT` in R2000 DWG. A sheet image is saved by file path: if its file is moved or deleted, the image
