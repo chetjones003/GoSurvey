@@ -17227,3 +17227,116 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. Read-only reports cannot mutate the drawing; existing editable fields retain validation, persistence, and undo behavior.
 - Owner-layer: Qt Properties UI reads domain/command state; existing model and edit services remain the source of truth.
 - Status: accepted 2026-11-06 (D-2026-11-06-c).
+
+### REQ-517 — Create view frames along an alignment (GitHub issue #999, part of #802)
+
+- Purpose: each plan sheet must show a known stretch of ground. Civil 3D's Create View Frames lays rectangles out along an alignment so the sheets join end to end, with a chosen overlap for match lines.
+- Priority: should
+- Type: functional
+- Depends on: REQ-480 (alignment), REQ-483 (stationing, alignment epic), REQ-484 (alignment query API: station to point), the named paper scale list (GitHub #1017), the paper sizes in layout Page Setup (REQ-445), REQ-143 (disabled controls), REQ-201 (failures are observable).
+- Statement:
+  1. A typed `CREATEVIEWFRAMES` command and the Output → Plan Production → Create View Frames button ask for: the alignment, the station range (default: the whole alignment), the sheet size, the scale, the overlap in ground units and the placement. The Qt editor shows a dialog; a headless run takes the same values in that order.
+  2. **Frame size.** A frame's length along the alignment is the sheet's width in inches times the scale's ground units per inch. Its width across the alignment is the sheet's height times the same. Sheet sizes are the paper sizes layout Page Setup already offers. Sheet size and scale are typed in the dialog; they are not read from a layout.
+  3. **Scale.** The scale must be one of the named paper scales (GitHub #1017). Any other ratio is refused.
+  4. **Placement.** One of three choices: **Centred** (the default; the alignment runs down the frame's middle), **Left** (the alignment lies on the frame's left edge, looking along increasing stationing) or **Right** (the alignment lies on the frame's right edge). Each frame is a plan rectangle oriented to the alignment tangent at its centre station. On a curve the rectangle is straight, not an arc.
+  5. **Run.** Frames run along the alignment's stationing from the start of the range. Each frame starts at the previous frame's end minus the overlap. The last frame keeps its full length even when it passes the end station.
+  6. **Refusals (REQ-201).** No alignment in the drawing, a station range that is empty, reversed or outside the alignment, an overlap equal to or greater than the frame length, or a scale that is not a named paper scale is refused with a log line. Nothing is created. A read-only project refuses before any change.
+  7. **Group and frames.** One command creates one view frame group named after the alignment. The group stores its settings: range, sheet size, scale, overlap and placement. Its frames are named `VF-1`, `VF-2`, ..., and each stores its start and end stations, sheet size and scale. Each frame is drawn in plan with its name. Creating a group, and deleting a frame or a group, are each one undo step.
+  8. **Frames follow the alignment.** Whenever an alignment's geometry changes (any edit under REQ-487 or any command that changes its geometry), every frame group on that alignment regenerates from its stored settings. A hand-edited frame is overwritten by the regeneration. The log names each regenerated group and each overwritten edit. The regeneration is part of the same undo step as the alignment edit.
+  9. **Deleting an alignment** deletes its frame groups in the same undo step. One undo restores both.
+  10. Frames do not change surfaces or any other object. Groups persist with the drawing and survive save and reopen.
+- Acceptance:
+  - An alignment from 0+00 to 50+00 (5000 ft), sheet width 36 in, scale 1 in = 50 ft (frame length 1800 ft), overlap 100 ft and Centred placement give three frames: 0+00 to 18+00, 17+00 to 35+00 and 34+00 to 52+00 (1800 ft each, starting 1700 ft apart). The third is not shortened and runs past the end station, as item 5 requires.
+  - With Left placement the alignment lies on each frame's left edge; with Right, on its right edge; with Centred, down its middle.
+  - A frame's height across the alignment equals the sheet height times the scale.
+  - Editing the alignment's geometry regenerates its frame group in the same undo step; one undo restores the alignment and its frames together.
+  - Deleting an alignment deletes its frame groups; one undo restores both.
+  - A scale that is not a named paper scale (for example 1 in = 37 ft) is refused and creates nothing.
+  - Each refusal in item 6 logs a reason and creates no frame.
+  - Each frame's name, stations, sheet size, scale and the group's settings survive save and reopen.
+  - A read-only project refuses the command and changes nothing.
+  - The Create View Frames button is enabled and runs the command; its "not implemented yet" tooltip is gone.
+- Owner-layer: Domain / Commands / Renderer / IO / UI
+- Assumptions (recorded): the default placement is Centred; the overlap is measured along the alignment. Autodesk takes the sheet size and scale from the sheet template; this spec takes them from the dialog, which the user chose on 2026-11-07.
+- Status: accepted (2026-11-07, D-2026-11-07-b; GitHub #999). Settled by the user's answers to the #999 questions.
+
+### REQ-518 — Create paper sheets from view frames (GitHub issue #1000, part of #802)
+
+- Purpose: a view frame is only a rectangle in the model. Plotting needs one paper layout per frame.
+- Priority: should
+- Type: functional
+- Depends on: REQ-517; layout duplication (REQ-489, GitHub #1015); MVIEW viewports (REQ-490, GitHub #1016);
+  named scale (GitHub #1017); native paper-space geometry (REQ-037); layout PDF export (REQ-488).
+- Statement:
+  1. A typed `CREATESHEETS` command and the Output → Plan Production → Create Sheets button ask for a view frame
+     group, the frames to use (default: all of them) and a template layout in the current drawing. The template
+     supplies the paper size and the title-block content. No external template file is used.
+  2. For each chosen frame, one new paper layout is created. It is a copy of the template's paper content
+     (REQ-037) with one viewport. The viewport's model view is centred on the frame's centre and set to the
+     frame's scale (GitHub #1017). The viewport covers the full sheet at the frame's size, so its coverage equals the frame's.
+     The template supplies only title-block content; a template's own viewport rectangle is ignored (REQ-490).
+     [OPEN, user decision: the frame is rotated to the alignment tangent, but the spec has no view rotation for paper viewports. Options: (a) add view rotation so the viewport turns with the frame; (b) keep the viewport unrotated, so the alignment is not horizontal on the sheet. Not implemented until the user chooses.]
+  3. A layout is named after its frame (`VF-1`, `VF-2`, ...). If that name is taken, a numbered suffix is added.
+  4. **Refusals (REQ-201).** No frame group, no template layout, or a template that is in model space refuses
+     the command and creates nothing.
+  5. Creating the sheets is one undo step. The new layouts appear in the layout tabs and export to PDF under
+     REQ-488 like any other layout.
+  6. Sheets are not regenerated when frames later change. Updating existing sheets is out of scope.
+- Acceptance:
+  - Creating sheets for three frames creates three layouts, each with one viewport. Each viewport's centre equals
+    its frame's centre and its scale equals the frame's scale.
+  - The template layout is unchanged.
+  - A missing template or a model-space template refuses and creates nothing.
+  - One undo step removes all created layouts.
+  - The three layouts appear in the layout tabs and export to PDF under REQ-488.
+  - The Create Sheets button is enabled and runs the command; its "not implemented yet" tooltip is gone.
+- Owner-layer: Domain / Commands / IO / UI
+- Assumptions (recorded, not asked): the viewport is the full sheet at the frame's size, not the template's viewport rectangle; a sheet number
+  is not drawn because GoSurvey has no sheet-number field.
+- Status: proposed (2026-11-07, D-2026-11-07-a; GitHub #1000).
+
+### REQ-519 — Sample lines and section sheets (GitHub issue #1001, part of #802)
+
+- Purpose: cross sections show how the ground lies across an alignment. Sample lines mark where the sections
+  are taken, and section sheets lay the sections out for review and plotting.
+- Priority: should
+- Type: functional
+- Depends on: alignment (REQ-480); TIN surfaces (REQ-068); surface ground elevation (REQ-497); native paper-space
+  geometry (REQ-037); layout duplication (REQ-489, GitHub #1015); MVIEW viewports (REQ-490, GitHub #1016);
+  REQ-143; REQ-201.
+- Statement:
+  1. **Sample lines.** A typed `CREATESAMPLELINES` command and the Home → Profile & Section Views → Sample Lines
+     button ask for a start station, an end station, an interval, and left and right swath widths. One sample
+     line is placed perpendicular to the alignment at each interval station in the range. Each is named by its
+     station (for example `0+00`), is stored with the alignment as a drawing object and is drawn in plan.
+  2. **Sections.** A sample line is sampled against one chosen TIN surface. Along each half-line (left and right),
+     the section records the distance from the alignment and the ground elevation at each sample point. Sample points are the alignment origin, each swath end inside the surface's coverage, and each point where the line crosses a surface triangle edge or vertex or the coverage boundary. A line wholly inside one triangle still produces a section. Ground elevation uses the method of REQ-497. A sample line with
+     no surface coverage gets an empty section and is reported under REQ-201. The command continues with the rest.
+  3. **Section sheets.** A typed `CREATESECTIONSHEETS` command and the Output → Plan Production → Create Section
+     Sheets button create paper layouts from chosen sample lines, using a template layout (as REQ-518). Each sheet
+     holds a number of sections chosen in the dialog, placed left to right in station order. Each section is drawn
+     as native paper-space geometry (REQ-037): a ground line, a horizontal axis at an elevation chosen in the dialog,
+     a station label, and the horizontal and vertical scales as text. All sections on one sheet share one
+     horizontal scale and one vertical scale.
+  4. **Refusals (REQ-201).** No alignment, no surface, an interval that is zero or negative, or an end station
+     before the start station refuses the command and creates nothing. An empty section is drawn with the label
+     "no data" and does not stop the sheet.
+  5. Creating sample lines, and creating section sheets, are each one undo step.
+  6. Sample lines do not change the surface or the alignment. Sample lines and their sections persist with the drawing.
+- Acceptance:
+  - An alignment from 0+00 to 5+00 (500 ft) with interval 50 ft creates 11 sample lines, named 0+00, 0+50, 1+00, ... through 5+00.
+  - Sampling a flat surface at elevation 100 gives every section point the ground elevation 100.
+  - On a surface that rises 1 ft for every 10 ft from the alignment, a section 20 ft from the alignment is 2.0 ft
+    higher than the alignment's own surface elevation at that station.
+  - Creating section sheets for three sample lines with two sections per sheet creates two layouts. The first holds
+    the first two sections and the second holds the third, both in station order.
+  - Each refusal in item 4 logs a reason and creates nothing. A sample line with no surface coverage produces a
+    "no data" section and a log line, and the rest of the run still completes.
+  - A read-only project refuses both commands and changes nothing.
+  - The Sample Lines and Create Section Sheets buttons are enabled and run their commands; their "not implemented yet"
+    tooltips are gone.
+- Owner-layer: Alignment / Domain / Commands / Renderer / IO / UI
+- Assumptions (recorded, not asked): sections are sampled where the line crosses triangle edges or vertices, which is
+  exact for a TIN and needs no extra sample spacing. Default interval, swath widths, sections per sheet and axis elevation
+  are open choices for the user; this spec does not fix them.
+- Status: proposed (2026-11-07, D-2026-11-07-a; GitHub #1001).
