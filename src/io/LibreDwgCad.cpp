@@ -8605,7 +8605,51 @@ void BumpExportedDxfHandseed(const char* pathUtf8) {
   }
 }
 
-bool WriteDxfFile(const char* pathUtf8, Dwg_Data* dwg, std::vector<std::string>& log) {
+// LibreDWG does not write the HEADER's $CTAB (current layout tab). Insert it before $CLAYER, or replace
+// an existing value, so a DXF round trip restores the active layout (REQ-113 acceptance 15).
+void SetExportedDxfCurrentTab(const char* pathUtf8, const std::string& tabName) {
+  std::ifstream in(pathUtf8, std::ios::binary);
+  if (!in)
+    return;
+  std::vector<std::string> lines;
+  std::string line;
+  while (std::getline(in, line))
+    lines.push_back(line);
+  in.close();
+  const std::string eol = (!lines.empty() && !lines[0].empty() && lines[0].back() == '\r') ? "\r" : "";
+  size_t clayerAt = static_cast<size_t>(-1);
+  bool replaced = false;
+  for (size_t i = 0; i + 1 < lines.size(); ++i) {
+    if (TrimAscii(lines[i]) != "9")
+      continue;
+    const std::string var = TrimAscii(lines[i + 1]);
+    if (var == "$CTAB") {
+      for (size_t k = i + 2; k + 1 < lines.size() && TrimAscii(lines[k]) != "9"; k += 2)
+        if (TrimAscii(lines[k]) == "1") {
+          lines[k + 1] = tabName + eol;
+          replaced = true;
+          break;
+        }
+      break;
+    }
+    if (var == "$CLAYER" && clayerAt == static_cast<size_t>(-1))
+      clayerAt = i;
+  }
+  if (!replaced) {
+    if (clayerAt == static_cast<size_t>(-1))
+      return;
+    lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(clayerAt),
+                 {std::string("  9") + eol, std::string("$CTAB") + eol, std::string("  1") + eol, tabName + eol});
+  }
+  std::ofstream out(pathUtf8, std::ios::binary | std::ios::trunc);
+  if (!out)
+    return;
+  for (const std::string& l : lines)
+    out << l << '\n';
+}
+
+bool WriteDxfFile(const char* pathUtf8, Dwg_Data* dwg, const std::string& currentTab,
+                  std::vector<std::string>& log) {
   // dwg_write_dxf walks BLOCK_HEADER.first_entity. A drawing built only with
   // dwg_add_* often encodes to DWG correctly but has an empty DXF ENTITIES
   // section until it is read back.
@@ -8652,6 +8696,7 @@ bool WriteDxfFile(const char* pathUtf8, Dwg_Data* dwg, std::vector<std::string>&
     return false;
   }
   BumpExportedDxfHandseed(pathUtf8);
+  SetExportedDxfCurrentTab(pathUtf8, currentTab);
   return true;
 }
 
@@ -9259,7 +9304,11 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
 
   bool ok = false;
   if (asDxf) {
-    ok = WriteDxfFile(pathUtf8, dwg, log);
+    const std::string currentTab =
+        st.activeSpaceIndex >= 0 && static_cast<size_t>(st.activeSpaceIndex) < st.paperLayouts.size()
+            ? st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)].name
+            : std::string("Model");
+    ok = WriteDxfFile(pathUtf8, dwg, currentTab, log);
     if (ok) {
       size_t nPaperTables = 0;
       size_t nPaperMultileaders = 0;

@@ -9208,3 +9208,103 @@ TEST_CASE("Dimension value keeps the style's unit scale after a refresh (REQ-459
   CadDimRefreshMeasurementText(&a, sty, angleSet);
   REQUIRE(a.text == "20");
 }
+
+// Issue #1014 / REQ-113 acceptance (15): the DXF carries the layout tab order and the current layout
+// ($CTAB). A current layout that is missing or names no imported layout activates Model space.
+namespace {
+AppCommandState ThreeNamedLayouts() {
+  AppCommandState st;
+  for (const char* name : {"Plan", "Profile", "Detail"}) {
+    PaperLayout pl;
+    pl.name = name;
+    st.paperLayouts.push_back(std::move(pl));
+  }
+  return st;
+}
+}  // namespace
+
+TEST_CASE("DXF round-trips layout order and the current layout (issue #1014)", "[dxf][req113][issue1014]") {
+  ScratchDir dir("dxf-layout-order-1014");
+  const auto p = (dir.path / "order.dxf").string();
+  std::vector<std::string> log;
+
+  AppCommandState st = ThreeNamedLayouts();
+  st.activeSpaceIndex = 1;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  AppCommandState in;
+  in.activeSpaceIndex = 2;  // stale state from a previous drawing must not survive
+  REQUIRE(ImportDxfFile(in, p.c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 3);
+  CHECK(in.paperLayouts[0].name == "Plan");
+  CHECK(in.paperLayouts[1].name == "Profile");
+  CHECK(in.paperLayouts[2].name == "Detail");
+  CHECK(in.activeSpaceIndex == 1);
+  CHECK(in.lastPaperLayoutIndex == 1);
+
+  st.activeSpaceIndex = kModelSpaceIndex;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  AppCommandState inModel;
+  inModel.activeSpaceIndex = 0;
+  REQUIRE(ImportDxfFile(inModel, p.c_str(), log));
+  REQUIRE(inModel.paperLayouts.size() == 3);
+  CHECK(inModel.activeSpaceIndex == kModelSpaceIndex);
+}
+
+TEST_CASE("DXF with viewport state (LibreDWG writer) keeps the current layout (issue #1014)",
+          "[dxf][req113][issue1014]") {
+  ScratchDir dir("dxf-layout-order-1014-vp");
+  const auto p = (dir.path / "order-vp.dxf").string();
+  std::vector<std::string> log;
+
+  AppCommandState st = ThreeNamedLayouts();
+  Viewport vp;
+  vp.paperXIn = 1.f;
+  vp.paperYIn = 1.f;
+  vp.paperWIn = 5.f;
+  vp.paperHIn = 4.f;
+  vp.locked = true;
+  vp.camAzimuthDeg = 30.f;
+  vp.camElevationDeg = 40.f;
+  st.paperLayouts[2].viewports.push_back(vp);
+  st.activeSpaceIndex = 2;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  {
+    std::ifstream input(p, std::ios::binary);
+    const std::string dxf(std::istreambuf_iterator<char>(input), {});
+    CHECK(dxf.find("$CTAB") != std::string::npos);
+  }
+  AppCommandState in;
+  REQUIRE(ImportDxfFile(in, p.c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 3);
+  CHECK(in.paperLayouts[0].name == "Plan");
+  CHECK(in.paperLayouts[1].name == "Profile");
+  CHECK(in.paperLayouts[2].name == "Detail");
+  CHECK(in.activeSpaceIndex == 2);
+}
+
+TEST_CASE("DXF import orders layouts by tab value and falls back to Model for an unknown $CTAB (issue #1014)",
+          "[dxf][req113][issue1014]") {
+  ScratchDir dir("dxf-layout-order-1014-hand");
+  const auto p = (dir.path / "hand.dxf").string();
+  auto layoutObject = [](const char* name, int tab) {
+    return std::string("  0\nLAYOUT\n  5\n") + std::to_string(100 + tab) +
+           "\n100\nAcDbPlotSettings\n 44\n11.0\n 45\n8.5\n 72\n0\n 73\n0\n100\nAcDbLayout\n  1\n" + name +
+           "\n 70\n1\n 71\n" + std::to_string(tab) + "\n";
+  };
+  const std::string dxf = std::string("  0\nSECTION\n  2\nHEADER\n  9\n$CTAB\n  1\nNoSuchLayout\n  0\nENDSEC\n") +
+                          "  0\nSECTION\n  2\nENTITIES\n  0\nENDSEC\n  0\nSECTION\n  2\nOBJECTS\n" + layoutObject("Model", 0) + layoutObject("Third", 3) +
+                          layoutObject("First", 1) + layoutObject("Second", 2) + "  0\nENDSEC\n  0\nEOF\n";
+  {
+    std::ofstream out(p, std::ios::binary);
+    out << dxf;
+  }
+  AppCommandState in;
+  in.activeSpaceIndex = 1;
+  std::vector<std::string> log;
+  REQUIRE(ImportDxfFile(in, p.c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 3);
+  CHECK(in.paperLayouts[0].name == "First");
+  CHECK(in.paperLayouts[1].name == "Second");
+  CHECK(in.paperLayouts[2].name == "Third");
+  CHECK(in.activeSpaceIndex == kModelSpaceIndex);
+}
