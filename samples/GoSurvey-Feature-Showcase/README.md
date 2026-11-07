@@ -5,7 +5,7 @@ Open `GoSurvey Feature Showcase.gsproj` in GoSurvey. Every DWG in this project w
 | Drawing | Contents |
 | --- | --- |
 | `01-Geometry-and-Civil-Objects.dwg` | Items 1–8 together: line box with endpoint markers, closed and rectangular polylines, arcs and bulged arc, elevated polylines, and survey-control marker geometry. |
-| `09-Mountainous-Surface.dwg` | A native GoSurvey TIN surface built from a new 25 × 20 grid (500 survey points) over a synthetic ridge-and-basin terrain, with triangulation display enabled. |
+| `09-Mountainous-Surface.dwg` | A native GoSurvey TIN surface built from a new 25 × 20 grid (500 survey points) over a synthetic ridge-and-basin terrain, with interpolated minor and major contours displayed from its surface style. |
 | `10-Grading.dwg` | A new pad and four-step grading study with toe/daylight, pad and slope lines. |
 | `11-Alignments.dwg` | A new access-route centerline with station ticks, offsets and profile markers. |
 | `12-Primitive-3D-Models.dwg` | Original native GoSurvey solids for box, wedge, pyramid, cylinder, cone, sphere and torus, alongside illustrated wireframe equipment. |
