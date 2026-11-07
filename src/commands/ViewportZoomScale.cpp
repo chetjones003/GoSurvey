@@ -85,7 +85,7 @@ float ViewportZoomForModelUnitsPerInch(float modelUnitsPerInch, float viewportHe
   return 100.f / std::max(visibleWorld, 1.e-6f);
 }
 
-void EnsureStandardAnnotationScales(std::vector<CadAnnotationScale>& scales, bool imperial) {
+void EnsureStandardAnnotationScales(std::vector<CadAnnotationScale>& scales, int drawingInsUnits) {
   if (!scales.empty())
     return;
   // AutoCAD's Default Scale List in AutoCAD's order. Each entry is paper units : drawing units, so the
@@ -106,10 +106,16 @@ void EnsureStandardAnnotationScales(std::vector<CadAnnotationScale>& scales, boo
       {"2:1", 2.f, 1.f},     {"4:1", 4.f, 1.f},     {"8:1", 8.f, 1.f},     {"10:1", 10.f, 1.f},
       {"100:1", 100.f, 1.f},
   };
-  if (imperial)
-    scales.assign(std::begin(kImperial), std::end(kImperial));
-  else
+  const bool imperial = drawingInsUnits == 1 || drawingInsUnits == 2;
+  if (!imperial) {
     scales.assign(std::begin(kMetric), std::end(kMetric));
+    return;
+  }
+  scales.assign(std::begin(kImperial), std::end(kImperial));
+  if (drawingInsUnits == 2) {  // feet: 1 foot = 12 inches, so 1" = 5' is 5 feet per plotted inch
+    for (auto& scale : scales)
+      scale.drawingUnits /= 12.f;
+  }
 }
 
 void SetCurrentViewportZoomScaleIndex(AppCommandState& st, int index) {

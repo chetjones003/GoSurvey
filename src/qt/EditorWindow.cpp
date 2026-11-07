@@ -2870,8 +2870,7 @@ void EditorWindow::Refresh() {
     // AutoCAD's Default Scale List, imperial or metric by the drawing's units (D-2026-11-06-a). Only a drawing
     // that has no list gets one; a list the user or a file defined is kept.
     if (m_State.activeDrawingIdx > 0 && m_State.annotationScales.empty()) {
-      const int units = m_State.drawingInsUnits;
-      EnsureStandardAnnotationScales(m_State.annotationScales, units == 1 || units == 2);
+      EnsureStandardAnnotationScales(m_State.annotationScales, m_State.drawingInsUnits);
       m_State.currentAnnotationScaleIndex = m_State.annotationScales.empty() ? -1 : 0;
     }
     const QSignalBlocker block(annotationScale);
