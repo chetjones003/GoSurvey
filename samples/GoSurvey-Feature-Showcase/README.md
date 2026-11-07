@@ -12,8 +12,8 @@ Open `GoSurvey Feature Showcase.gsproj` in GoSurvey. Every DWG in this project w
 | `13-Complex-Piping-System.dwg` | An original piping layout with four native swept pipe runs, twin headers, risers, branches, vessel, pumps and equipment skids. |
 | `14-Additional-Features.dwg` | An original site plan with building/parking areas, storm and sanitary routes, and structure symbols. |
 
-The project is intended as editable sample geometry and workflow practice. Terrain is a GoSurvey TIN derived from the included survey-point observations. The native solids and pipe runs exercise GoSurvey's own 3D model types. Grading and alignment drawings remain authored geometry studies rather than Civil 3D grading-group and alignment objects.
+The project is intended as editable sample geometry and workflow practice. Terrain is a GoSurvey TIN derived from the included survey-point observations in `Points/mountain-points.csv`, which the surface keeps as its registered source. The native solids and pipe runs exercise GoSurvey's own 3D model types. Grading and alignment drawings remain authored geometry studies rather than Civil 3D grading-group and alignment objects.
 
 ## Regenerate
 
-After building GoSurvey, run `python samples/GoSurvey-Feature-Showcase/generate_showcase.py` from the repository root. The script creates temporary authored DXF/CSV sources, imports them through GoSurvey's headless document path and saves GoSurvey DWGs into `Drawings/`.
+After building GoSurvey, run `python samples/GoSurvey-Feature-Showcase/generate_showcase.py` from the repository root. The script writes the terrain observations to `Points/mountain-points.csv`, creates temporary authored DXF sources, imports them through GoSurvey's headless document path and saves GoSurvey DWGs into `Drawings/`.
