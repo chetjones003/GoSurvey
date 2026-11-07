@@ -569,6 +569,10 @@ void EditorWindow::RefreshProperties() {
     // Keep the shared geometry editor reserved for homogeneous line/circle/text selections;
     // object-specific, read-only geometry is reported below for every other entity kind.
     if (st.selection.size() > 1) {
+      auto* mixed = new QLabel("Mixed object types — geometry is read-only here. Edit General above, or select only lines, circles, or text.", body);
+      mixed->setObjectName("propertiesMixedNote");
+      mixed->setWordWrap(true);
+      geometryRows->addWidget(mixed);
       if (lines.size()) readOnly(geometryRows, "Lines", QString::number(lines.size()), "propMixedLines");
       if (circles.size()) readOnly(geometryRows, "Circles", QString::number(circles.size()), "propMixedCircles");
       if (texts.size()) readOnly(geometryRows, "Annotations", QString::number(texts.size()), "propMixedAnnotations");
