@@ -98,7 +98,7 @@ Visibility, Drape Image, Move to Surface, Create Profile, and Data Shortcut.
   surface profiles and profile views are separate from the existing session-only `QUICKPROFILE`;
   data shortcut consumers are read-only references with source/destination-origin handling.
   Unsupported unrelated controls remain disabled per REQ-143.
-- Four Sol review rounds have completed; all findings were fixed. The fourth round found and the
+- Four change-request review rounds have completed; all findings were fixed. The fourth round found and the
   implementation now validates contour-label associations after terrain changes, clips ZVI cells
   to the requested circular footprint and refuses empty results before taking undo state, and
   excludes attached model images from templates. Regression tests cover single and guide contour
