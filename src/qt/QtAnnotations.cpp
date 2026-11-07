@@ -1091,7 +1091,8 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     // Annotative multileaders take their arrow and text size from the annotation scale (D-2026-11-06-a).
     const float mlMup = ModelObjectUnitsPerPlottedInch(ml.annotative, state.activeSpaceIndex == kModelSpaceIndex,
         state.modelUnitsPerPlottedInch, state.annotationScales, state.currentAnnotationScaleIndex);
-    const float leaderArrow = ml.arrowSizeWorld > 0.f && !ml.annotative ? ml.arrowSizeWorld :
+    const bool mlFollowsAnnotationScale = ml.annotative && state.activeSpaceIndex == kModelSpaceIndex;
+    const float leaderArrow = ml.arrowSizeWorld > 0.f && !mlFollowsAnnotationScale ? ml.arrowSizeWorld :
         std::max(style.arrowSizeInches, .001f) * std::max(mlMup, 1.e-6f);
     if (style.props.count("leaderType")) ml.splinePath = StyleProperty(style.props, "leaderType") == "Spline";
     if (StyleProperty(style.props, "arrowSymbol") == "None") ml.showArrow = false;
