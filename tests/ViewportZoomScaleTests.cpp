@@ -4,6 +4,7 @@
 #include "CadCommands.hpp"
 #include "ViewportZoomScale.hpp"
 #include "GsIo.hpp"
+#include "io/GsAnnotationJson.hpp"
 #include "io/LibreDwgCad.hpp"
 
 #include <algorithm>
@@ -167,4 +168,46 @@ TEST_CASE("Standard annotation scale list is AutoCAD's default list", "[req458]"
   EnsureStandardAnnotationScales(kept, 2);
   REQUIRE(kept.size() == 1);
   CHECK(kept.front().name == "1:25");
+}
+
+TEST_CASE("Annotative objects follow the annotation scale in model space only (D-2026-11-06-a)", "[req458]") {
+  const std::vector<CadAnnotationScale> scales{{"1:50", 1.f, 50.f}, {"1:10", 1.f, 10.f}};
+  CHECK(ModelObjectUnitsPerPlottedInch(true, true, 80.f, scales, 1) == Catch::Approx(10.f));
+  CHECK(ModelObjectUnitsPerPlottedInch(false, true, 80.f, scales, 1) == Catch::Approx(80.f));
+  CHECK(ModelObjectUnitsPerPlottedInch(true, false, 80.f, scales, 1) == Catch::Approx(80.f));
+  CHECK(ModelObjectUnitsPerPlottedInch(true, true, 80.f, scales, -1) == Catch::Approx(80.f));
+}
+
+TEST_CASE("Survey markers and labels are annotative by default (D-2026-11-06-a)", "[req458]") {
+  CHECK(SurveyPointStyleDefinition{}.annotative);
+
+  AppCommandState st;
+  SurveyPoint point;
+  point.id = 7;
+  point.easting = 100.0;
+  point.northing = 200.0;
+  point.elevation = 1.0;
+  point.description = "EG";
+  st.surveyPoints.push_back(point);
+  std::vector<std::string> log;
+  EnsureSurveyPointLabelMtext(st, 0, &log);
+  REQUIRE_FALSE(st.cadAnnotations.empty());
+  CHECK(st.cadAnnotations.back().annotative);
+  CHECK(st.cadAnnotations.back().surveyPointLabelForId == 7);
+}
+
+TEST_CASE("Survey labels saved before the annotative flag load annotative (D-2026-11-06-a)", "[req458]") {
+  CadAnnotation surveyLabel;
+  surveyLabel.kind = CadAnnotation::Kind::Mtext;
+  surveyLabel.surveyPointLabelForId = 7;
+  nlohmann::json saved;
+  CadAnnotationToJson(surveyLabel, saved);
+  saved.erase("annotative");
+  CHECK(CadAnnotationFromJson(saved).annotative);
+
+  CadAnnotation plain;
+  plain.kind = CadAnnotation::Kind::Mtext;
+  nlohmann::json plainSaved;
+  CadAnnotationToJson(plain, plainSaved);
+  CHECK_FALSE(CadAnnotationFromJson(plainSaved).annotative);
 }

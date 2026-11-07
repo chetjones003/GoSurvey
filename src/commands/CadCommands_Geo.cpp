@@ -673,7 +673,10 @@ bool SetGeographicMarker(AppCommandState& st, double localX, double localY, doub
 // ---------------------------------------------------------------------------
 
 float PositionMarkerRadiusWorld(const AppCommandState& st) {
-  return kPositionMarkerPlottedRadiusIn * std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+  // Position markers are annotative by default (D-2026-11-06-a): in model space they follow the annotation scale.
+  return kPositionMarkerPlottedRadiusIn * std::max(ModelObjectUnitsPerPlottedInch(true,
+      st.activeSpaceIndex == kModelSpaceIndex, st.modelUnitsPerPlottedInch, st.annotationScales,
+      st.currentAnnotationScaleIndex), 1.e-6f);
 }
 
 void CadPositionMarkerTranslate(CadPositionMarker* m, double dx, double dy, double dz) {

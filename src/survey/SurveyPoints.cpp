@@ -893,6 +893,7 @@ void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::ve
   ann.plottedHeightInches = std::max(st.surveyPointLabelPlottedHeightInches, 0.04f);
   ann.rotationRad = 0.f;
   ann.surveyPointLabelForId = p.id;
+  ann.annotative = true;  // survey point labels are annotative by default (D-2026-11-06-a)
   st.cadAnnotations.push_back(std::move(ann));
   while (st.cadAnnotationAttrs.size() < st.cadAnnotations.size())
     st.cadAnnotationAttrs.emplace_back();

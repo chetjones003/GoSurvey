@@ -52,6 +52,9 @@ struct SurveyPointStyleDefinition {
   /// Civil point-style display components map independently; a hidden component stays hidden.
   bool markerVisible = true;
   bool labelVisible = true;
+  /// Annotative (D-2026-11-06-a): in model space the marker is sized from the current annotation scale.
+  /// Survey points are annotative by default, and a drawing saved before this field loads as annotative.
+  bool annotative = true;
   bool hasExplicitMarkerGeometry = false;
   unsigned markerType = 1;  // AutoCAD point=0, custom=1, named block=2.
   unsigned customMarker = 3;  // Dot, blank, plus, X, vertical line.

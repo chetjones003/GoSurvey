@@ -1587,12 +1587,16 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   }
 
   if (wantSurveyPoint) {
-    const float arm =
-        SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
     for (const SurveyPoint& sp : cmd.surveyPoints) {
       const float ex = static_cast<float>(sp.easting);
       const float ey = static_cast<float>(sp.northing);
       const float ez = static_cast<float>(sp.elevation);
+      // Same size as the drawn marker: annotative markers follow the current annotation scale (D-2026-11-06-a).
+      const SurveyPointStyleDefinition* markerStyle = FindSurveyPointStyle(cmd.surveyPointStyles, sp.styleName);
+      const float arm = SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches,
+          ModelObjectUnitsPerPlottedInch(markerStyle == nullptr || markerStyle->annotative,
+              cmd.activeSpaceIndex == kModelSpaceIndex, cmd.modelUnitsPerPlottedInch, cmd.annotationScales,
+              cmd.currentAnnotationScaleIndex));
       // Exact centre: needed when the cursor sits on the point node (ALIGN / IMPORT workflows)
       // even if it is not over the plotted X arms.
       Consider(&acc, wx, wy, ex, ey, Kind::SurveyCenter, tolWorld, ez);
