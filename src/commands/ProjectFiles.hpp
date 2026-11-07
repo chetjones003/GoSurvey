@@ -80,3 +80,13 @@ bool CopyProjectLinksIn(AppCommandState& st, std::uint32_t projectUid, std::vect
 bool CreateProjectTurnover(AppCommandState& st, std::uint32_t projectUid, const std::string& recipient,
                            const std::vector<std::string>& chosen, bool acknowledged,
                            std::vector<std::string>& log);
+
+/// REQ-514: register an active project surface as an authoritative project data shortcut.
+bool CreateSurfaceDataShortcut(AppCommandState& st, size_t surfaceIndex, std::vector<std::string>& log);
+/// REQ-514: create a local read-only surface reference from a registered source drawing/surface ID.
+bool CreateSurfaceReference(AppCommandState& st, const std::string& sourceDrawingRel,
+                            std::uint64_t sourceSurfaceId,
+                            const std::string& referenceName, std::vector<std::string>& log);
+/// REQ-514: refresh saved references after a project drawing opens; missing sources retain last-good data.
+void RefreshProjectSurfaceReferences(AppCommandState& st, std::uint32_t projectUid,
+                                     std::vector<std::string>& log);

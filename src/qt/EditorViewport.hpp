@@ -8,6 +8,7 @@
 #include <QTimer>
 #include <functional>
 #include <memory>
+#include <unordered_map>
 #include "CadCommands.hpp"
 #include "CadOnlineMap.hpp"
 #include "CadSnap.hpp"
@@ -90,6 +91,16 @@ private:
   std::unique_ptr<QOpenGLTextureBlitter> m_TextureBlitter;
   std::unique_ptr<QOpenGLVertexArrayObject> m_ClipMaskVao;
   std::unique_ptr<OnlineMapController> m_OnlineMap;
+  struct RasterDrapeCache {
+    std::uint64_t imageId = 0;
+    unsigned int texture = 0;
+    std::vector<double> xyuv;
+  };
+  std::unordered_map<std::string, unsigned int> m_RasterTextures;
+  std::vector<RasterDrapeCache> m_RasterDrapeCache;
+  std::vector<MapTileDraw> m_RenderTiles;
+  std::uint32_t m_RasterDrapeRevision = 0;
+  std::uint32_t m_RasterDrapeRenderRevision = 0;
   PartThumbnailImages m_PartThumbs;
   QTimer m_MapTimer;
   QTimer m_ViewAnimTimer;
@@ -103,6 +114,7 @@ private:
   ray3d::Vec3 m_Cursor;
   CadSnap::Hit m_Snap;
   bool m_Ready = false;
+  bool m_CleanupComplete = false;
   bool m_ResizePreview = false;
   QLabel* m_ResizePreviewOverlay = nullptr;
   QSize m_ResizePreviewMinimumSize;

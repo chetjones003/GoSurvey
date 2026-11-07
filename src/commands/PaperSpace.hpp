@@ -433,9 +433,13 @@ struct PageSetup {
   std::string plotStyleTablePath;
 };
 
-/// REQ-457 / issue #1010: a raster IMAGE underlay on a sheet (JPEG, PNG or BMP). Stored by file path
-/// (REQ-173), placed in paper inches. The pixel size is recorded when the file is attached.
+/// Raster image attachment shared by model-space surface drapes (REQ-511) and paper-space underlays
+/// (REQ-457 / issue #1010). Stored by file path (REQ-173); the pixel size is recorded at attach time.
+/// PaperLayout::paperImages uses paper inches. AppCommandState::cadRasterImages uses drawing units.
 struct CadRasterImage {
+  std::uint64_t id = 0;                       ///< stable drawing id when used in model space
+  std::uint64_t surfaceId = 0;                 ///< nonzero when draped on a TIN
+  std::string layer = "0";                    ///< model-space layer (REQ-511)
   std::string path;                          ///< file path as attached
   float insX = 0.f, insY = 0.f;              ///< insertion point (lower-left corner), paper inches
   float width = 0.f, height = 0.f;           ///< size on the sheet, paper inches

@@ -39,6 +39,7 @@
 #include <QPainterPath>
 #include <QPolygonF>
 #include <QPixmap>
+#include <QImage>
 #include <QLabel>
 #include <QLayout>
 #include <QWheelEvent>
@@ -324,7 +325,7 @@ EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>&
 EditorViewport::~EditorViewport() { Cleanup(); }
 
 void EditorViewport::Cleanup() {
-  if (!context()) return;
+  if (!context() || m_CleanupComplete) return;
   m_MapTimer.stop();
   m_ViewAnimTimer.stop();
   makeCurrent();
@@ -336,12 +337,21 @@ void EditorViewport::Cleanup() {
   m_ClipMaskBuffer.reset();
   m_ClipMaskProgram.reset();
   m_OnlineMap.reset();
+  for (const auto& [path, texture] : m_RasterTextures) {
+    (void)path;
+    if (texture) ViewportRenderer::DeleteMapTileTexture(texture);
+  }
+  m_RasterTextures.clear();
+  m_RasterDrapeCache.clear();
+  m_RenderTiles.clear();
   if (m_Ready && m_Renderer) m_Renderer->Shutdown();
   m_Ready = false;
+  m_CleanupComplete = true;
   doneCurrent();
 }
 
 void EditorViewport::initializeGL() {
+  m_CleanupComplete = false;
   glewExperimental = GL_TRUE;
   if (glewInit() != GLEW_OK) {
     m_Error = "OpenGL initialization failed.";
@@ -738,7 +748,97 @@ void EditorViewport::paintGL() {
          m_State.active == AppCommandState::Kind::GeoCaptureArea))
       m_MapTimer.start();
     m_OnlineMap->Update(m_State, m_State.activeSpaceIndex == kModelSpaceIndex, camera, w, h, m_Log);
-    tuning.mapTiles = &m_OnlineMap->DrawList();
+    m_RenderTiles = m_OnlineMap->DrawList();
+    if (m_RasterDrapeRevision != m_State.cadGpuCacheRevision ||
+        m_RasterDrapeRenderRevision != m_RenderRevision) {
+      m_RasterDrapeCache.clear();
+      m_RasterDrapeRevision = m_State.cadGpuCacheRevision;
+      m_RasterDrapeRenderRevision = m_RenderRevision;
+      for (const CadRasterImage& image : m_State.cadRasterImages) {
+        if (image.surfaceId == 0 || image.id == 0 || image.width <= 0.f || image.height <= 0.f) continue;
+        const CadLayerRow* imageLayer = FindDrawingLayerRowCi(m_State, image.layer);
+        if (imageLayer && (!imageLayer->on || imageLayer->frozen)) continue;
+        const auto surfaceIt = std::find_if(m_State.cadSurfaceAttrs.begin(), m_State.cadSurfaceAttrs.end(),
+            [&](const EntityAttributes& attr) { return attr.id == image.surfaceId; });
+        if (surfaceIt == m_State.cadSurfaceAttrs.end()) continue;
+        const size_t surfaceIndex = static_cast<size_t>(surfaceIt - m_State.cadSurfaceAttrs.begin());
+        if (surfaceIndex >= m_State.cadSurfaces.size() || !m_State.cadSurfaces[surfaceIndex].tin) continue;
+        unsigned int texture = 0;
+        const auto cachedTexture = m_RasterTextures.find(image.path);
+        if (cachedTexture != m_RasterTextures.end()) texture = cachedTexture->second;
+        else {
+          QImage decoded(QString::fromUtf8(image.path.c_str()));
+          if (decoded.isNull()) {
+            m_Log.push_back("Drape Image — attached image \"" + image.path + "\" is unavailable.");
+            continue;
+          }
+          decoded = decoded.convertToFormat(QImage::Format_RGBA8888);
+          std::vector<unsigned char> rgba(static_cast<size_t>(decoded.width()) * decoded.height() * 4u);
+          for (int row = 0; row < decoded.height(); ++row)
+            std::copy_n(decoded.constScanLine(row), static_cast<size_t>(decoded.width()) * 4u,
+                        rgba.begin() + static_cast<std::ptrdiff_t>(row) * decoded.width() * 4);
+          texture = ViewportRenderer::CreateMapTileTexture(rgba, decoded.width(), decoded.height());
+          if (!texture) continue;
+          m_RasterTextures.emplace(image.path, texture);
+        }
+        RasterDrapeCache cache;
+        cache.imageId = image.id;
+        cache.texture = texture;
+        const CadTin& tin = *m_State.cadSurfaces[surfaceIndex].tin;
+        const double c = std::cos(image.rotationRad), s = std::sin(image.rotationRad);
+        struct ClipVertex { double u, v, z; };
+        auto clip = [&](std::vector<ClipVertex> polygon, int edge) {
+          std::vector<ClipVertex> output;
+          if (polygon.empty()) return output;
+          auto distance = [&](const ClipVertex& p) {
+            switch (edge) {
+              case 0: return p.u;
+              case 1: return static_cast<double>(image.width) - p.u;
+              case 2: return p.v;
+              default: return static_cast<double>(image.height) - p.v;
+            }
+          };
+          ClipVertex previous = polygon.back();
+          double dp = distance(previous);
+          for (const ClipVertex& current : polygon) {
+            const double dc = distance(current);
+            const bool pin = dp >= -1.e-9, cin = dc >= -1.e-9;
+            if (pin != cin) {
+              const double t = dp / (dp - dc);
+              output.push_back({previous.u + (current.u - previous.u) * t,
+                                previous.v + (current.v - previous.v) * t,
+                                previous.z + (current.z - previous.z) * t});
+            }
+            if (cin) output.push_back(current);
+            previous = current; dp = dc;
+          }
+          return output;
+        };
+        const auto& vertices = tin.vertsXyz;
+        const auto& indices = tin.indices;
+        for (size_t ti = 0; ti + 2 < indices.size(); ti += 3) {
+          std::vector<ClipVertex> polygon;
+          polygon.reserve(7);
+          for (int k = 0; k < 3; ++k) {
+            const size_t ix = static_cast<size_t>(indices[ti + static_cast<size_t>(k)]) * 3;
+            const double dx = vertices[ix] - image.insX, dy = vertices[ix + 1] - image.insY;
+            polygon.push_back({dx * c + dy * s, -dx * s + dy * c, vertices[ix + 2]});
+          }
+          for (int edge = 0; edge < 4 && !polygon.empty(); ++edge) polygon = clip(std::move(polygon), edge);
+          for (size_t k = 1; k + 1 < polygon.size(); ++k) {
+            for (const ClipVertex& p : {polygon[0], polygon[k], polygon[k + 1]}) {
+              const double x = image.insX + p.u * c - p.v * s;
+              const double y = image.insY + p.u * s + p.v * c;
+              cache.xyuv.insert(cache.xyuv.end(), {x, y, p.z, p.u / image.width, 1.0 - p.v / image.height});
+            }
+          }
+        }
+        if (!cache.xyuv.empty()) m_RasterDrapeCache.push_back(std::move(cache));
+      }
+    }
+    for (const RasterDrapeCache& cache : m_RasterDrapeCache)
+      m_RenderTiles.push_back({cache.texture, &cache.xyuv, true});
+    tuning.mapTiles = &m_RenderTiles;
     m_Renderer->SetSize(w, h);
     std::vector<PdfAttachment> pdfForRender;
     const std::vector<PdfAttachment>* pdfAttachments = &m_State.pdfAttachments;
@@ -768,7 +868,7 @@ void EditorViewport::paintGL() {
       pdfAttachments = &pdfForRender;
     }
     m_Renderer->RenderScene(camera, w, h, m_State.userLinesFlat, m_State.userCirclesCxCyZR,
-        m_State.cadGpuRevision + m_RenderRevision, rubber, &m_Snap, m_State.objectSnapGlyphHalfPx,
+        m_State.cadGpuCacheRevision + m_RenderRevision, rubber, &m_Snap, m_State.objectSnapGlyphHalfPx,
         &preview, &previewCircles, &highlight, &highlightCircles, &subHoverLines, nullptr, nullptr,
         &m_State.userLineAttrs, &m_State.userCircleAttrs, &ext, m_Grid, &m_State.drawingLayerTable, tuning,
         pdfAttachments, -1, &m_State.cadFilledRegions, &m_State.cadFilledRegionAttrs,
@@ -868,7 +968,7 @@ void EditorViewport::paintGL() {
       ext.viewportFrozenLayers = &viewport.frozenLayers;
       m_Renderer->SetSize(viewW, viewH);
       m_Renderer->RenderScene(camera, viewW, viewH, m_State.userLinesFlat, m_State.userCirclesCxCyZR,
-          m_State.cadGpuRevision + m_RenderRevision, {}, nullptr, 6.f, nullptr, nullptr, nullptr, nullptr,
+          m_State.cadGpuCacheRevision + m_RenderRevision, {}, nullptr, 6.f, nullptr, nullptr, nullptr, nullptr,
           nullptr, nullptr, nullptr, &m_State.userLineAttrs, &m_State.userCircleAttrs, &ext, false,
           &m_State.drawingLayerTable, tuning, &m_State.pdfAttachments, -1, &m_State.cadFilledRegions,
           &m_State.cadFilledRegionAttrs, &m_State.cadMeshes, &m_State.cadMeshAttrs,

@@ -24,12 +24,14 @@
 #include "io/CadPointCloudPtx.hpp"    // REQ-172 PTX increment — reader/writer, same contract as E57
 #include "io/CadPointCloudLas.hpp"    // REQ-172 LAS increment — reader/writer, same contract as E57
 #include "io/CadPointCloudLaz.hpp"    // REQ-172 LAZ increment — reader/writer, same contract as E57
+#include "io/RasterImage.hpp"        // REQ-511 readable model-space raster attachments
 #include "util/tinbuild.hpp"
 #include "util/contourgen.hpp"  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
 #include "util/surfaceanalysis.hpp"  // REQ-072 banding + slope arrows (ADR-036 (g)) — pure, like contourgen
 #include "util/surfacevolume.hpp"  // REQ-073 surface-to-surface volumes (TASK-095) — pure, like surfaceanalysis
 #include "util/surfacestats.hpp"   // REQ-125
 #include "util/watershed.hpp"      // REQ-132…134
+#include "alignment/AlignmentGround.hpp" // REQ-513 surface profiles
 #include "util/tinvolume.hpp"      // REQ-136
 #include "util/gridsurface.hpp"    // REQ-137
 #include "util/surfacequery.hpp"   // REQ-137
@@ -165,6 +167,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadPipeRuns            = cmd.cadPipeRuns;      // pipe runs are per-drawing (issue #486 / REQ-345)
   doc.cadPipeRunAttrs        = cmd.cadPipeRunAttrs;
   doc.alignments             = cmd.alignments;       // REQ-480: per-drawing
+  doc.surfaceProfiles        = cmd.surfaceProfiles;  // REQ-513
   doc.cadPipingSystems       = cmd.cadPipingSystems;  // indices into cadPipeRuns — travels with it
   doc.blockDefs              = cmd.blockDefs;
   doc.cadBlockRefs           = cmd.cadBlockRefs;
@@ -195,6 +198,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.selection              = cmd.selection;
   doc.hiddenEntityIds        = cmd.hiddenEntityIds;  // isolation is per-drawing (REQ-084 (d))
   doc.paperLayouts           = cmd.paperLayouts;
+  doc.cadRasterImages        = cmd.cadRasterImages;
   // REQ-155: fold the live floating-viewport UCS into the snapshot's copy of that viewport, so a
   // tab switch while floating does not lose a UCS change made in the viewport.
   if (cmd.floatingUcsSwapActive && cmd.floatingViewportLayout >= 0 &&
@@ -292,6 +296,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadPipeRuns                = doc.cadPipeRuns;      // issue #486 / REQ-345
   cmd.cadPipeRunAttrs            = doc.cadPipeRunAttrs;
   cmd.alignments                 = doc.alignments;       // REQ-480
+  cmd.surfaceProfiles            = doc.surfaceProfiles;  // REQ-513
   cmd.cadPipingSystems           = doc.cadPipingSystems;
   // The derived swept solids belong to the drawing we are leaving. Their rebuild is gated on a
   // signature over the runs alone, and the incoming drawing can legitimately hash the same (two
@@ -333,6 +338,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.selection                  = doc.selection;
   cmd.hiddenEntityIds            = doc.hiddenEntityIds;  // isolation is per-drawing (REQ-084 (d))
   cmd.paperLayouts               = doc.paperLayouts;
+  cmd.cadRasterImages            = doc.cadRasterImages;
   cmd.savedPageSetups            = doc.savedPageSetups;
   cmd.activeSpaceIndex           = doc.activeSpaceIndex;
   cmd.lastPaperLayoutIndex       = doc.activeSpaceIndex >= 0 ? doc.activeSpaceIndex : 0;
@@ -2155,6 +2161,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.cadPipeRuns          = st.cadPipeRuns;      // issue #486 / REQ-345
   snap.cadPipeRunAttrs      = st.cadPipeRunAttrs;
   snap.alignments           = st.alignments;       // REQ-480
+  snap.surfaceProfiles      = st.surfaceProfiles;  // REQ-513
   snap.cadPipingSystems     = st.cadPipingSystems; // issue #486 increment B3 / REQ-345
   snap.blockDefs            = st.blockDefs;
   snap.cadBlockRefs         = st.cadBlockRefs;
@@ -2202,6 +2209,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.multileaderStyles    = st.multileaderStyles;
   snap.pdfAttachments       = st.pdfAttachments;
   snap.paperLayouts         = st.paperLayouts;  // native paper geometry is undoable (REQ-037/038)
+  snap.cadRasterImages      = st.cadRasterImages;
   // Zero GL texture IDs: restored snapshots must not reference freed GPU resources.
   for (auto& att : snap.pdfAttachments)
     att.glTexId = 0;
@@ -2281,6 +2289,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.cadPipeRuns          = snap.cadPipeRuns;      // issue #486 / REQ-345
   st.cadPipeRunAttrs      = snap.cadPipeRunAttrs;
   st.alignments           = snap.alignments;       // REQ-480
+  st.surfaceProfiles      = snap.surfaceProfiles;  // REQ-513
   st.cadPipingSystems     = snap.cadPipingSystems; // issue #486 increment B3 / REQ-345
   st.pipeRunWorldSolidsSig = 0;  // force RebuildPipeRunWorldSolids to re-derive from the swap
   st.blockDefs            = snap.blockDefs;
@@ -2313,6 +2322,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
     ExitFloatingModelSpace(st, ignored);  // before the swap, so the drawing's UCS is restored
   }
   st.paperLayouts         = snap.paperLayouts;
+  st.cadRasterImages      = snap.cadRasterImages;
   st.selectedPaperEntities.clear();  // restored layouts invalidate paper-entity indices
   if (layoutCountChanged) {
     ClearViewportSelection(st);
@@ -2523,24 +2533,25 @@ void AppendContourLinesFrom(const ContourResult& r, std::vector<float>* out) {
 
 /// Every triangulation edge of \p t in `GL_LINES` layout — the appearance a surface had before
 /// REQ-070, now the style's "triangles" component.
-void AppendTriangleEdges(const CadTin& t, std::vector<float>* out) {
+void AppendTriangleEdges(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
+                         std::vector<float>* out) {
   const auto emit = [&](std::uint32_t a, std::uint32_t b) {
     // Narrowed here (ADR-054 (b)): `out` is the render buffer, GPU-bound `float`.
-    out->push_back(static_cast<float>(t.vertsXyz[a * 3 + 0]));
-    out->push_back(static_cast<float>(t.vertsXyz[a * 3 + 1]));
-    out->push_back(static_cast<float>(t.vertsXyz[a * 3 + 2]));
-    out->push_back(static_cast<float>(t.vertsXyz[b * 3 + 0]));
-    out->push_back(static_cast<float>(t.vertsXyz[b * 3 + 1]));
-    out->push_back(static_cast<float>(t.vertsXyz[b * 3 + 2]));
+    out->push_back(static_cast<float>(vertsXyz[a * 3 + 0]));
+    out->push_back(static_cast<float>(vertsXyz[a * 3 + 1]));
+    out->push_back(static_cast<float>(vertsXyz[a * 3 + 2]));
+    out->push_back(static_cast<float>(vertsXyz[b * 3 + 0]));
+    out->push_back(static_cast<float>(vertsXyz[b * 3 + 1]));
+    out->push_back(static_cast<float>(vertsXyz[b * 3 + 2]));
   };
   // Each interior edge is emitted twice, once per adjoining triangle. De-duplicating would cost a
   // hash of every edge to halve a buffer the line pipeline already handles at this size (REQ-100's
   // measured envelope is 750k segments); that trade is worth revisiting only if the surface profile
   // misses its budget.
-  for (size_t i = 0; i + 2 < t.indices.size(); i += 3) {
-    emit(t.indices[i], t.indices[i + 1]);
-    emit(t.indices[i + 1], t.indices[i + 2]);
-    emit(t.indices[i + 2], t.indices[i]);
+  for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+    emit(indices[i], indices[i + 1]);
+    emit(indices[i + 1], indices[i + 2]);
+    emit(indices[i + 2], indices[i]);
   }
 }
 
@@ -2561,7 +2572,8 @@ constexpr double kArrowHeadAngleRad = 0.4363;  // 25 degrees
 /// arrow) `AssignBand` placed in no band. Both outputs are cleared unconditionally, and left with
 /// zero buckets — not one empty bucket — when the corresponding toggle (`analysisMode` / `slopeArrowsOn`)
 /// is off, so a plain-style surface pays nothing here and the assembly pass has nothing to iterate.
-void BuildSurfaceAnalysisGeometry(const CadTin& tin, const SurfaceStyle& style,
+void BuildSurfaceAnalysisGeometry(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
+                                  const SurfaceStyle& style,
                                   std::vector<std::vector<float>>* bandBuffers,
                                   std::vector<std::vector<float>>* arrowBuffers) {
   bandBuffers->clear();
@@ -2598,12 +2610,12 @@ void BuildSurfaceAnalysisGeometry(const CadTin& tin, const SurfaceStyle& style,
     buf.push_back(static_cast<float>(bz));
   };
 
-  for (size_t i = 0; i + 2 < tin.indices.size(); i += 3) {
-    const std::uint32_t ia = tin.indices[i], ib = tin.indices[i + 1], ic = tin.indices[i + 2];
+  for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+    const std::uint32_t ia = indices[i], ib = indices[i + 1], ic = indices[i + 2];
     AnalysisTriangle t;
-    t.x0 = tin.vertsXyz[ia * 3 + 0]; t.y0 = tin.vertsXyz[ia * 3 + 1]; t.z0 = tin.vertsXyz[ia * 3 + 2];
-    t.x1 = tin.vertsXyz[ib * 3 + 0]; t.y1 = tin.vertsXyz[ib * 3 + 1]; t.z1 = tin.vertsXyz[ib * 3 + 2];
-    t.x2 = tin.vertsXyz[ic * 3 + 0]; t.y2 = tin.vertsXyz[ic * 3 + 1]; t.z2 = tin.vertsXyz[ic * 3 + 2];
+    t.x0 = vertsXyz[ia * 3 + 0]; t.y0 = vertsXyz[ia * 3 + 1]; t.z0 = vertsXyz[ia * 3 + 2];
+    t.x1 = vertsXyz[ib * 3 + 0]; t.y1 = vertsXyz[ib * 3 + 1]; t.z1 = vertsXyz[ib * 3 + 2];
+    t.x2 = vertsXyz[ic * 3 + 0]; t.y2 = vertsXyz[ic * 3 + 1]; t.z2 = vertsXyz[ic * 3 + 2];
 
     if (wantBands) {
       double value = 0.0;
@@ -2840,7 +2852,8 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
 
     auto it = std::find_if(st.surfaceDisplayCache.begin(), st.surfaceDisplayCache.end(),
                            [&](const AppCommandState::SurfaceDisplayCacheEntry& e) { return e.surfaceId == id; });
-    if (it != st.surfaceDisplayCache.end() && it->builtFrom.lock() == tin && it->style == resolved)
+    if (it != st.surfaceDisplayCache.end() && it->builtFrom.lock() == tin && it->style == resolved &&
+        it->reducedDisplayLod == surf.reducedDisplayLod)
       continue;  // BEFORE any clear/reserve — see the header comment; this early-out is the budget
 
     if (!tin) {
@@ -2855,7 +2868,19 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
     }
     it->builtFrom = tin;
     it->style = resolved;
+    it->reducedDisplayLod = surf.reducedDisplayLod;
     ++st.surfaceDisplayRegenCount;  // past the early-out: this frame is doing the real work
+
+    std::vector<std::uint32_t> reducedIndices;
+    const std::vector<std::uint32_t>* displayIndices = &tin->indices;
+    if (surf.reducedDisplayLod) {
+      // Store only sampled indices in the display cache path; copying the full vertex array would
+      // duplicate the largest part of a TIN merely to display a reduced overview.
+      reducedIndices.reserve((tin->indices.size() + 11) / 12 * 3);
+      for (size_t i = 0; i + 2 < tin->indices.size(); i += 12)
+        reducedIndices.insert(reducedIndices.end(), tin->indices.begin() + i, tin->indices.begin() + i + 3);
+      displayIndices = &reducedIndices;
+    }
 
     // Each component is generated only when its own toggle is on, and its buffer is released when it
     // is off — REQ-070's "a style with triangles off and contours on draws only contours" is then a
@@ -2872,7 +2897,7 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
       // to it would double the buffer on every edit. Capacity is kept, because what follows refills
       // it to the same size.
       it->triangleEdges.clear();
-      AppendTriangleEdges(*tin, &it->triangleEdges);
+      AppendTriangleEdges(tin->vertsXyz, *displayIndices, &it->triangleEdges);
     } else {
       release(&it->triangleEdges);
     }
@@ -2919,7 +2944,10 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
 
     // REQ-072: unconditional — the builder itself clears both outputs to zero buckets when neither
     // `analysisMode` nor `slopeArrowsOn` is on, which is what turns them off (§6 (2)/(3)).
-    BuildSurfaceAnalysisGeometry(*tin, resolved, &it->bandTriangleBuffers, &it->arrowLineBuffers);
+    // Analysis data is authoritative surface information, not a viewport mesh simplification.
+    // Keep arrows and range assignment full-detail even when triangles use Reduced LOD.
+    BuildSurfaceAnalysisGeometry(tin->vertsXyz, tin->indices, resolved,
+                                 &it->bandTriangleBuffers, &it->arrowLineBuffers);
   }
 
   st.surfaceWatershedCache.erase(
@@ -3278,7 +3306,8 @@ bool VolumeClipRingLocalXy(const AppCommandState& st, std::uint64_t entityId,
 
 /// Appends one \ref TinConstraint per edge of \p chain — consecutive vertex pairs, plus the closing
 /// edge (last→first) when \p forceClosed or the source itself is closed.
-void AppendChainConstraints(const ResolvedChain& chain, bool forceClosed, std::vector<TinConstraint>& out) {
+void AppendChainConstraints(const ResolvedChain& chain, bool forceClosed, std::vector<TinConstraint>& out,
+                            std::vector<std::uint64_t>* sourceIds = nullptr, std::uint64_t sourceId = 0) {
   const size_t n = chain.verts.size();
   if (n < 2)
     return;
@@ -3287,12 +3316,14 @@ void AppendChainConstraints(const ResolvedChain& chain, bool forceClosed, std::v
     c.ax = chain.verts[i][0]; c.ay = chain.verts[i][1]; c.az = chain.verts[i][2];
     c.bx = chain.verts[i + 1][0]; c.by = chain.verts[i + 1][1]; c.bz = chain.verts[i + 1][2];
     out.push_back(c);
+    if (sourceIds) sourceIds->push_back(sourceId);
   }
   if ((forceClosed || chain.closed) && n >= 3) {
     TinConstraint c;
     c.ax = chain.verts[n - 1][0]; c.ay = chain.verts[n - 1][1]; c.az = chain.verts[n - 1][2];
     c.bx = chain.verts[0][0]; c.by = chain.verts[0][1]; c.bz = chain.verts[0][2];
     out.push_back(c);
+    if (sourceIds) sourceIds->push_back(sourceId);
   }
 }
 
@@ -3301,6 +3332,7 @@ void AppendChainConstraints(const ResolvedChain& chain, bool forceClosed, std::v
 struct SurfaceBuildInputs {
   std::vector<TinInputPoint> pts;
   std::vector<TinConstraint> constraints;
+  std::vector<std::uint64_t> constraintSourceIds;  ///< Stable source entity ID parallel to each constraint.
   std::vector<TinBoundaryLoop> cullLoops;
   double originX = 0.0, originY = 0.0;
   /// A linked point file could not be read (REQ-086). The build is ABANDONED rather than run on what
@@ -3317,6 +3349,55 @@ struct SurfaceBuildInputs {
   std::vector<double> volumeCompVertsXyz;
   std::vector<std::uint32_t> volumeCompIndices;
 };
+
+void ApplySurfaceCrossingCorrections(const CadSurface& surface, SurfaceBuildInputs& inputs) {
+  for (const CadSurfaceCrossingCorrection& correction : surface.crossingCorrections) {
+    for (const TinCrossingIssue& issue : TinFindCrossingConflicts(inputs.constraints)) {
+      if (issue.constraintIndexA >= inputs.constraintSourceIds.size() ||
+          issue.constraintIndexB >= inputs.constraintSourceIds.size()) continue;
+      const std::uint64_t idA = inputs.constraintSourceIds[issue.constraintIndexA];
+      const std::uint64_t idB = inputs.constraintSourceIds[issue.constraintIndexB];
+      const bool sameOrder = idA == correction.entityA && idB == correction.entityB;
+      const bool reverseOrder = idA == correction.entityB && idB == correction.entityA;
+      if ((!sameOrder && !reverseOrder) ||
+          std::hypot(issue.x - inputs.originX - correction.x, issue.y - inputs.originY - correction.y) > 0.05)
+        continue;
+      const size_t indexA = sameOrder ? issue.constraintIndexA : issue.constraintIndexB;
+      const size_t indexB = sameOrder ? issue.constraintIndexB : issue.constraintIndexA;
+      if (correction.kind == CadSurfaceCrossingCorrection::Kind::TrimA ||
+          correction.kind == CadSurfaceCrossingCorrection::Kind::TrimB) {
+        const size_t remove = correction.kind == CadSurfaceCrossingCorrection::Kind::TrimA ? indexA : indexB;
+        inputs.constraints.erase(inputs.constraints.begin() + static_cast<std::ptrdiff_t>(remove));
+        inputs.constraintSourceIds.erase(inputs.constraintSourceIds.begin() + static_cast<std::ptrdiff_t>(remove));
+      } else {
+        double z = (issue.zFromA + issue.zFromB) * 0.5;
+        switch (correction.kind) {
+        case CadSurfaceCrossingCorrection::Kind::Higher: z = std::max(issue.zFromA, issue.zFromB); break;
+        case CadSurfaceCrossingCorrection::Kind::Lower: z = std::min(issue.zFromA, issue.zFromB); break;
+        case CadSurfaceCrossingCorrection::Kind::Average: break;
+        case CadSurfaceCrossingCorrection::Kind::Custom: z = correction.customElevation; break;
+        case CadSurfaceCrossingCorrection::Kind::TrimA:
+        case CadSurfaceCrossingCorrection::Kind::TrimB: break;
+        }
+        const auto split = [&](size_t index) {
+          const TinConstraint original = inputs.constraints[index];
+          TinConstraint first = original, second = original;
+          const double x = issue.x;
+          const double y = issue.y;
+          first.bx = x; first.by = y; first.bz = z;
+          second.ax = x; second.ay = y; second.az = z;
+          inputs.constraints[index] = first;
+          inputs.constraints.insert(inputs.constraints.begin() + static_cast<std::ptrdiff_t>(index + 1), second);
+          inputs.constraintSourceIds.insert(inputs.constraintSourceIds.begin() + static_cast<std::ptrdiff_t>(index + 1),
+                                             inputs.constraintSourceIds[index]);
+        };
+        if (indexA > indexB) { split(indexA); split(indexB); }
+        else { split(indexB); split(indexA); }
+      }
+      break;
+    }
+  }
+}
 
 bool IsSimpleInfillPolygon(const std::vector<double>& xyz, std::string* why) {
   const size_t n = xyz.size() / 3;
@@ -3470,7 +3551,7 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
           chain.verts.push_back({x, y, strip[v + 2]});
           loop.ring.emplace_back(x, y);
         }
-        AppendChainConstraints(chain, true, in.constraints);
+        AppendChainConstraints(chain, true, in.constraints, &in.constraintSourceIds, member.gradingId);
         in.cullLoops.push_back(std::move(loop));
       }
     }
@@ -3540,7 +3621,7 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
       continue;
     }
     resolvedBreaklines.push_back(bl);
-    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints);
+    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints, &in.constraintSourceIds, bl.entityId);
   }
   surface.breaklines = std::move(resolvedBreaklines);
   if (droppedBreaklines > 0)
@@ -3556,7 +3637,7 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
       continue;
     }
     resolvedContours.push_back(c);
-    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints);
+    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints, &in.constraintSourceIds, c.entityId);
   }
   surface.contourSources = std::move(resolvedContours);
   if (droppedContours > 0)
@@ -3574,7 +3655,7 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
       continue;
     }
     resolvedBoundaries.push_back(b);
-    AppendChainConstraints(chain, /*forceClosed=*/true, in.constraints);
+    AppendChainConstraints(chain, /*forceClosed=*/true, in.constraints, &in.constraintSourceIds, b.entityId);
     TinBoundaryLoop loop;
     loop.kind = b.kind == CadBoundaryKind::Outer ? TinBoundaryKind::Outer
               : b.kind == CadBoundaryKind::Hide  ? TinBoundaryKind::Hide
@@ -3617,6 +3698,7 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
 
   // Crossing breaklines at different elevations (REQ-069): reported by name and location so the
   // conflict can actually be found and fixed, rather than left to be inferred from a stray edge.
+  ApplySurfaceCrossingCorrections(surface, in);
   for (const TinCrossingIssue& issue : TinFindCrossingConflicts(in.constraints))
     log.push_back("Surface \"" + surface.name + "\": breaklines cross at (" +
                   std::to_string(issue.x) + ", " + std::to_string(issue.y) +
@@ -3822,6 +3904,7 @@ bool BuildCorridorSurface(AppCommandState& st, CadSurface& surface, std::vector<
   SurfaceBuildInputs in = ResolveSurfaceInputs(st, surface, log);
   in.pts.clear();
   in.constraints.clear();
+  in.constraintSourceIds.clear();
   std::vector<CadSurfaceBreakline> kept;
   for (const CadSurfaceBreakline& fl : surface.corridorFeatureLines) {
     ResolvedChain chain;
@@ -3830,7 +3913,7 @@ bool BuildCorridorSurface(AppCommandState& st, CadSurface& surface, std::vector<
     kept.push_back(fl);
     for (const auto& v : chain.verts)
       in.pts.push_back({v[0], v[1], static_cast<float>(v[2])});
-    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints);
+    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints, &in.constraintSourceIds, fl.entityId);
   }
   surface.corridorFeatureLines = std::move(kept);
   if (in.pts.empty()) {
@@ -3863,7 +3946,122 @@ bool BuildCorridorSurface(AppCommandState& st, CadSurface& surface, std::vector<
 
 } // namespace
 
-bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
+namespace {
+bool RefreshSurfaceProfilesForSurface(AppCommandState& st, const CadSurface& surface, bool invalidateCache = true,
+                                      std::uint64_t alignmentId = 0);
+bool RefreshSurfaceLabelValues(AppCommandState& st, const CadSurface& surface, bool invalidateCache = true) {
+  const auto surfaceIt = std::find_if(st.cadSurfaces.begin(), st.cadSurfaces.end(),
+                                     [&](const CadSurface& candidate) { return &candidate == &surface; });
+  if (surfaceIt == st.cadSurfaces.end()) return false;
+  const size_t si = static_cast<size_t>(surfaceIt - st.cadSurfaces.begin());
+  if (si >= st.cadSurfaceAttrs.size() || st.cadSurfaceAttrs[si].id == 0) return false;
+  const std::uint64_t id = st.cadSurfaceAttrs[si].id;
+  const bool hasBuiltTin = surface.tin && !surface.tin->indices.empty();
+  auto elevation = [&](double x, double y, double* z) {
+    return hasBuiltTin && TinElevationAt(surface.tin->vertsXyz, surface.tin->indices, x, y, z);
+  };
+  bool changed = false;
+  for (CadAnnotation& label : st.cadAnnotations) {
+    if (label.surfaceLabelForId != id) continue;
+    if (!hasBuiltTin) {
+      const std::string unavailable = "Surface value unavailable";
+      if (label.text != unavailable) { label.text = unavailable; changed = true; }
+      continue;
+    }
+    if (label.surfaceLabelValues.empty()) continue;
+    bool valueAvailable = false;
+    double z0 = 0.0, z1 = 0.0;
+    if (label.surfaceLabelKind == 1 && label.surfaceLabelValues.size() == 2 &&
+        elevation(label.surfaceLabelValues[0], label.surfaceLabelValues[1], &z0)) {
+      label.text = "Elev " + FormatLinear(z0, st.displayLinearPrecision);
+      changed = true; valueAvailable = true;
+    } else if (label.surfaceLabelKind == 2 && label.surfaceLabelValues.size() == 4 &&
+               elevation(label.surfaceLabelValues[0], label.surfaceLabelValues[1], &z0) &&
+               elevation(label.surfaceLabelValues[2], label.surfaceLabelValues[3], &z1)) {
+      const double run = std::hypot(label.surfaceLabelValues[2] - label.surfaceLabelValues[0],
+                                    label.surfaceLabelValues[3] - label.surfaceLabelValues[1]);
+      if (run > 1.e-9) {
+        label.text = "Slope " + FormatLinear((z1 - z0) / run * 100.0, st.displayLinearPrecision) + "%";
+        changed = true; valueAvailable = true;
+      }
+    } else if (label.surfaceLabelKind == 3 && label.surfaceLabelValues.size() == 1 &&
+               elevation(label.insX, label.insY, &z0) &&
+               std::abs(z0 - label.surfaceLabelValues[0]) <= 0.01) {
+      const std::string text = "Elev " + FormatLinear(label.surfaceLabelValues[0], st.displayLinearPrecision);
+      if (label.text != text) { label.text = text; changed = true; }
+      valueAvailable = true;
+    } else if (label.surfaceLabelKind == 4 && label.surfaceLabelValues.size() == 2) {
+      const WatershedResult watersheds = ComputeWatershed(surface.tin->vertsXyz, surface.tin->indices);
+      const WatershedBasin* nearest = nullptr;
+      double nearestD2 = std::numeric_limits<double>::infinity();
+      for (const WatershedBasin& basin : watersheds.basins) {
+        const double dx = basin.drainX - label.surfaceLabelValues[0];
+        const double dy = basin.drainY - label.surfaceLabelValues[1];
+        if (dx * dx + dy * dy < nearestD2) { nearestD2 = dx * dx + dy * dy; nearest = &basin; }
+      }
+      if (nearest && nearestD2 < 1.e-6) {
+        label.text = "Watershed " + FormatLinear(nearest->area2d, st.displayLinearPrecision) + " sq ft";
+        changed = true; valueAvailable = true;
+      }
+    }
+    if (!valueAvailable && (label.surfaceLabelKind == 1 || label.surfaceLabelKind == 2 ||
+                            label.surfaceLabelKind == 3 || label.surfaceLabelKind == 4)) {
+      const std::string unavailable = "Surface value unavailable";
+      if (label.text != unavailable) { label.text = unavailable; changed = true; }
+    }
+  }
+  auto legendCells = [&](const std::string& kind) {
+    std::vector<std::string> cells = {"Range", "Upper bound", "Color"};
+    if (!hasBuiltTin) return std::vector<std::string>{"Analysis", "Surface value unavailable", "—"};
+    const SurfaceStyle* style = SurfaceStyles::Find(st.surfaceStyles, surface.styleName);
+    if (kind == "watershed") {
+      const WatershedResult result = ComputeWatershed(surface.tin->vertsXyz, surface.tin->indices);
+      for (const WatershedBasin& basin : result.basins) {
+        cells.push_back("Basin " + std::to_string(basin.id));
+        cells.push_back(FormatLinear(basin.area2d, st.displayLinearPrecision) + " sq ft");
+        cells.push_back(basin.drain == DrainKind::Depression ? "depression" : basin.drain == DrainKind::Flat ? "flat" : "boundary");
+      }
+    } else if (kind == "contour" && style) {
+      const SurfaceStats stats = ComputeSurfaceStats(surface.tin->vertsXyz, surface.tin->indices,
+                                                      static_cast<int>(surface.breaklines.size()), surface.isVolumeSurface());
+      std::vector<double> levels = style->userContourFt;
+      if (levels.empty() && style->minorIntervalFt > 0.0 && stats.built) {
+        const int first = static_cast<int>(std::ceil(stats.minZ / style->minorIntervalFt));
+        const int last = static_cast<int>(std::floor(stats.maxZ / style->minorIntervalFt));
+        if (last - first < 1000) for (int n = first; n <= last; ++n) levels.push_back(n * style->minorIntervalFt);
+      }
+      for (double level : levels) { cells.push_back("Contour"); cells.push_back(FormatLinear(level, st.displayLinearPrecision)); cells.push_back("—"); }
+    } else if (style) {
+      const bool arrows = kind == "slopearrow";
+      const std::vector<SurfaceBand>& bands = arrows ? style->arrowBands : style->bands;
+      const bool modeMatches = arrows || (kind == "elevation" && style->analysisMode == SurfaceAnalysisMode::Elevation) ||
+                               (kind == "slope" && style->analysisMode == SurfaceAnalysisMode::Slope);
+      if (modeMatches) {
+        double lower = -std::numeric_limits<double>::infinity();
+        for (const SurfaceBand& band : bands) {
+          cells.push_back(std::isfinite(lower) ? "(" + FormatLinear(lower, st.displayLinearPrecision) + ", " + FormatLinear(band.upperBound, st.displayLinearPrecision) + "]" : "≤ " + FormatLinear(band.upperBound, st.displayLinearPrecision));
+          cells.push_back(FormatLinear(band.upperBound, st.displayLinearPrecision)); cells.push_back(band.color); lower = band.upperBound;
+        }
+      }
+    }
+    return cells;
+  };
+  for (CadTable& table : st.cadTables) {
+    if (table.surfaceLegendForId != id) continue;
+    std::vector<std::string> cells = legendCells(table.surfaceLegendKind);
+    if (table.cells != cells || table.cols != 3) {
+      table.cells = std::move(cells);
+      table.cols = 3;
+      if (table.cells.size() > 3) CadTableFitToContent(&table, st.modelUnitsPerPlottedInch);
+      changed = true;
+    }
+  }
+  if (changed && invalidateCache) BumpCadGpuCache(st);
+  return changed;
+}
+} // namespace
+
+static bool BuildSurfaceFromSourcesImpl(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
   if (surface.gradingGroup && surface.gradingMembers.empty()) {
     surface.tin.reset();
     surface.builtAtRevision = st.cadGpuRevision;
@@ -3958,6 +4156,51 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
     msg += " " + std::to_string(r.constraintsUnresolved) + " constraint edge(s) could not be enforced.";
   log.push_back(msg);
   return true;
+}
+
+bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
+  if (surface.dataShortcutReadOnly) {
+    log.push_back("Surface reference \"" + surface.name + "\" is read-only; refresh it from its project shortcut instead.");
+    return false;
+  }
+  const bool built = BuildSurfaceFromSourcesImpl(st, surface, log);
+  if (built) { RefreshSurfaceLabelValues(st, surface); RefreshSurfaceProfilesForSurface(st, surface); }
+  return built;
+}
+
+void RefreshSurfaceLegendTablesForStyle(AppCommandState& st, const std::string& styleName) {
+  bool changed = false;
+  for (const CadSurface& surface : st.cadSurfaces)
+    if (surface.styleName == styleName)
+      changed = RefreshSurfaceLabelValues(st, surface, false) || changed;
+  if (changed) BumpCadGpuCacheOnly(st);
+}
+
+void RefreshSurfaceDependentsAfterReplacement(AppCommandState& st, size_t surfaceIndex,
+                                              std::vector<std::string>& log) {
+  if (surfaceIndex >= st.cadSurfaces.size()) return;
+  CadSurface& surface = st.cadSurfaces[surfaceIndex];
+  ReDrapeLinkedToSurface(st, surfaceIndex, log, false);
+  (void)RefreshSurfaceLabelValues(st, surface, false);
+  (void)RefreshSurfaceProfilesForSurface(st, surface, false);
+  BumpCadGpuCache(st);
+}
+
+void RefreshSurfaceProfilesForAlignment(AppCommandState& st, std::uint64_t alignmentId,
+                                        std::vector<std::string>& log) {
+  if (alignmentId == 0) return;
+  bool changed = false;
+  for (const CadSurfaceProfile& profile : st.surfaceProfiles) {
+    if (profile.alignmentId != alignmentId) continue;
+    const int surfaceIndex = FindSurfaceIndexById(st, profile.surfaceId);
+    if (surfaceIndex < 0) continue;
+    changed = RefreshSurfaceProfilesForSurface(st, st.cadSurfaces[static_cast<size_t>(surfaceIndex)], false,
+                                               alignmentId) || changed;
+  }
+  if (changed) {
+    BumpCadGpuCache(st);
+    log.push_back("Saved surface profile refreshed for edited alignment.");
+  }
 }
 
 int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
@@ -4067,6 +4310,64 @@ void EraseSurfaceAtIndex(AppCommandState& st, size_t index) {
 
 void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
   using SurfaceJob = AppCommandState::SurfaceRebuildAsync;
+  bool appliedSurface = false;
+  std::unordered_set<std::uint64_t> presentSurfaceIds;
+  for (size_t i = 0; i < st.cadSurfaces.size() && i < st.cadSurfaceAttrs.size(); ++i)
+    if (st.cadSurfaceAttrs[i].id != 0) presentSurfaceIds.insert(st.cadSurfaceAttrs[i].id);
+  for (CadSurfaceProfile& profile : st.surfaceProfiles) {
+    const bool hasAlignment = std::any_of(st.alignments.begin(), st.alignments.end(),
+        [&](const alignment::Alignment& a) { return a.id == profile.alignmentId; });
+    const int surfaceIndex = FindSurfaceIndexById(st, profile.surfaceId);
+    std::string unavailable;
+    if (!hasAlignment) unavailable = "Source alignment is missing.";
+    else if (surfaceIndex < 0) unavailable = "Source surface is missing.";
+    else {
+      const CadSurface& surface = st.cadSurfaces[static_cast<size_t>(surfaceIndex)];
+      if (!surface.tin || surface.tin->indices.empty()) unavailable = "Source surface has no built TIN.";
+    }
+    if (!unavailable.empty()) {
+      if (profile.sourceStatus != unavailable) {
+        profile.sourceStatus = unavailable;
+        log.push_back("Profile \"" + profile.name + "\" unavailable: " + unavailable + " Last saved view retained.");
+      }
+    } else if (profile.sourceStatus == "Source alignment is missing." ||
+               profile.sourceStatus == "Source surface is missing." ||
+               profile.sourceStatus == "Source surface has no built TIN." ||
+               profile.sourceStatus == "Source alignment unavailable." ||
+               profile.sourceStatus == "Source surface unavailable.") {
+      const std::string priorStatus = profile.sourceStatus;
+      appliedSurface = RefreshSurfaceProfilesForSurface(
+          st, st.cadSurfaces[static_cast<size_t>(surfaceIndex)], false,
+          profile.alignmentId) || appliedSurface;
+      if (profile.sourceStatus.empty())
+        log.push_back("Profile \"" + profile.name + "\" source is available again; profile view refreshed.");
+      else if (profile.sourceStatus != priorStatus)
+        log.push_back("Profile \"" + profile.name + "\" unavailable: " + profile.sourceStatus);
+    }
+  }
+  bool invalidatedMissingLabel = false;
+  for (CadAnnotation& label : st.cadAnnotations) {
+    if (label.surfaceLabelForId != 0 && presentSurfaceIds.find(label.surfaceLabelForId) == presentSurfaceIds.end() &&
+        label.text != "Surface value unavailable") {
+      label.text = "Surface value unavailable";
+      invalidatedMissingLabel = true;
+    }
+  }
+  const std::vector<std::string> unavailableLegend = {
+      "Analysis", "Surface value unavailable", "—"};
+  for (CadTable& table : st.cadTables) {
+    if (table.surfaceLegendForId == 0 || presentSurfaceIds.find(table.surfaceLegendForId) != presentSurfaceIds.end())
+      continue;
+    if (table.cells != unavailableLegend || table.cols != 3) {
+      table.cells = unavailableLegend;
+      table.cols = 3;
+      invalidatedMissingLabel = true;
+    }
+  }
+  for (const CadSurface& surface : st.cadSurfaces)
+    if (!surface.tin || surface.tin->indices.empty())
+      invalidatedMissingLabel = RefreshSurfaceLabelValues(st, surface, false) || invalidatedMissingLabel;
+  if (invalidatedMissingLabel) BumpCadGpuCacheOnly(st);
 
   // Reap finished workers first, so a surface freed up this frame can be redispatched this same
   // frame rather than waiting one extra frame.
@@ -4100,7 +4401,10 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
         MarkVolumeSurfacesDirtyForParent(st, surface.name);
         // A link means the same thing whichever way the rebuild was driven (ADR-069 (b)): the
         // command path above and this async reap are the only two places a TIN is replaced.
-        ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);
+        ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log, false);
+        (void)RefreshSurfaceLabelValues(st, surface, false);
+        (void)RefreshSurfaceProfilesForSurface(st, surface, false);
+        appliedSurface = true;
       } else {
         // No partial surface; the previous triangulation (if any) is left alone (REQ-001).
         surface.lastBuildMessage = r.ok() ? "Boundaries left no surface." : r.message;
@@ -4112,11 +4416,17 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
     st.surfaceRebuildAsync.erase(st.surfaceRebuildAsync.begin() + static_cast<std::ptrdiff_t>(i));
   }
 
+  if (appliedSurface) BumpCadGpuCacheOnly(st);
+
   // Dispatch a rebuild for every surface whose definition might have changed and does not already
   // have one in flight — one dispatch per surface per revision is REQ-069's "at most one rebuild per
   // command/undo boundary," since a command bumps cadGpuRevision once however many points it moved.
   for (size_t sIdx = 0; sIdx < st.cadSurfaces.size(); ++sIdx) {
     CadSurface& surface = st.cadSurfaces[sIdx];
+    if (surface.dataShortcutReadOnly) {
+      surface.builtAtRevision = st.cadGpuRevision;
+      continue; // shortcut TINs update only through RefreshProjectSurfaceReferences
+    }
     // REQ-404 / ADR-070: only membership edits and explicit grading rebuilds
     // refresh these snapshots.
     if (surface.gradingGroup) {
@@ -4150,6 +4460,9 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
         surface.sourcePointFiles.empty() && surface.addedPointXyz.empty() && surface.breaklines.empty() &&
         surface.contourSources.empty() && surface.boundaries.empty() && surface.movedPoints.empty() &&
         surface.corridorFeatureLines.empty()) {
+      const bool refreshedLabels = RefreshSurfaceLabelValues(st, surface, false);
+      const bool refreshedProfiles = RefreshSurfaceProfilesForSurface(st, surface, false);
+      if (refreshedLabels || refreshedProfiles) BumpCadGpuCacheOnly(st);
       surface.builtAtRevision = st.cadGpuRevision;
       continue;
     }
@@ -4355,7 +4668,9 @@ void ReportSurfaces(const AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("SURFACELIST — no surfaces in the drawing.");
     return;
   }
-  for (const CadSurface& s : st.cadSurfaces) {
+  for (size_t surfaceIndex = 0; surfaceIndex < st.cadSurfaces.size(); ++surfaceIndex) {
+    const CadSurface& s = st.cadSurfaces[surfaceIndex];
+    const std::uint64_t id = surfaceIndex < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[surfaceIndex].id : 0;
     std::string line = "Surface \"" + s.name + "\": ";
     const char* kn = s.kind == SurfaceKind::Grid          ? "grid"
                      : s.kind == SurfaceKind::TinVolume   ? "tin-volume"
@@ -4371,6 +4686,7 @@ void ReportSurfaces(const AppCommandState& st, std::vector<std::string>& log) {
             std::to_string(s.contourSources.size()) + " contour source(s), " +
             std::to_string(s.boundaries.size()) + " boundary(ies), " +
             std::to_string(s.sourcePointFiles.size()) + " point file(s).";
+    line += " Stable surface ID: " + std::to_string(id) + ".";
     log.push_back(line);
 
     for (size_t i = 0; i < s.sourcePointGroups.size(); ++i) {
@@ -4557,6 +4873,10 @@ void RunSurfaceCreateVolGrid(AppCommandState& st, const std::string& args, std::
 
 static void CommitSurfSwapEdgeLocal(AppCommandState& st, CadSurface& s, double x, double y,
                                     std::vector<std::string>& log) {
+  if (s.dataShortcutReadOnly) {
+    log.push_back("SURFSWAPEDGE — surface reference \"" + s.name + "\" is read-only.");
+    return;
+  }
   if (!s.tin || s.tin->indices.size() < 6) {
     log.push_back("SURFSWAPEDGE — \"" + s.name + "\" is not a built TIN.");
     return;
@@ -4606,6 +4926,10 @@ void RunSurfSwapEdge(AppCommandState& st, const std::string& args, std::vector<s
 static bool SurfaceRefusesPointEdits(const CadSurface& s, const char* cmd, std::vector<std::string>& log) {
   assert(cmd != nullptr);
   assert(cmd[0] != '\0');
+  if (s.dataShortcutReadOnly) {
+    log.push_back(std::string(cmd) + " — surface reference \"" + s.name + "\" is read-only.");
+    return true;
+  }
   if (s.kind == SurfaceKind::Tin && !s.isVolumeSurface())
     return false;
   log.push_back(std::string(cmd) + " — \"" + s.name + "\" is not a TIN surface.");
@@ -4849,6 +5173,164 @@ static std::unique_ptr<ISurfaceQuery> MakeSurfaceQuery(const AppCommandState& st
   return nullptr;
 }
 
+bool RefreshSurfaceProfilesForSurface(AppCommandState& st, const CadSurface& surface, bool invalidateCache,
+                                      std::uint64_t alignmentId) {
+  const auto surfaceIt = std::find_if(st.cadSurfaces.begin(), st.cadSurfaces.end(),
+                                     [&](const CadSurface& value) { return &value == &surface; });
+  if (surfaceIt == st.cadSurfaces.end()) return false;
+  const size_t surfaceIndex = static_cast<size_t>(surfaceIt - st.cadSurfaces.begin());
+  if (surfaceIndex >= st.cadSurfaceAttrs.size()) return false;
+  const std::uint64_t surfaceId = st.cadSurfaceAttrs[surfaceIndex].id;
+  if (surfaceId == 0) return false;
+  bool changed = false;
+  auto eraseEntities = [&](const std::vector<std::uint64_t>& ids) {
+    const std::unordered_set<std::uint64_t> remove(ids.begin(), ids.end());
+    std::vector<double> lines;
+    std::vector<EntityAttributes> attrs;
+    std::vector<int> oldToNew(st.userLineAttrs.size(), -1);
+    lines.reserve(st.userLinesFlat.size()); attrs.reserve(st.userLineAttrs.size());
+    for (size_t i = 0; i < st.userLineAttrs.size(); ++i) {
+      if (remove.find(st.userLineAttrs[i].id) != remove.end()) continue;
+      const size_t start = i * 6;
+      if (start + 5 >= st.userLinesFlat.size()) continue;
+      oldToNew[i] = static_cast<int>(attrs.size());
+      lines.insert(lines.end(), st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(start),
+                   st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(start + 6));
+      attrs.push_back(st.userLineAttrs[i]);
+    }
+    st.userLinesFlat.swap(lines); st.userLineAttrs.swap(attrs);
+    for (size_t i = st.selection.size(); i > 0; --i) {
+      SelectedEntity& selected = st.selection[i - 1];
+      if (selected.type != SelectedEntity::Type::LineSeg || selected.index < 0 ||
+          static_cast<size_t>(selected.index) >= oldToNew.size()) continue;
+      const int mapped = oldToNew[static_cast<size_t>(selected.index)];
+      if (mapped < 0) st.selection.erase(st.selection.begin() + static_cast<std::ptrdiff_t>(i - 1));
+      else selected.index = mapped;
+    }
+  };
+  for (CadSurfaceProfile& profile : st.surfaceProfiles) {
+    if (profile.surfaceId != surfaceId || (alignmentId != 0 && profile.alignmentId != alignmentId)) continue;
+    auto setStatus = [&](const std::string& status) {
+      if (profile.sourceStatus == status) return;
+      profile.sourceStatus = status;
+      changed = true;
+    };
+    const auto alignmentIt = std::find_if(st.alignments.begin(), st.alignments.end(),
+                                          [&](const alignment::Alignment& value) { return value.id == profile.alignmentId; });
+    if (alignmentIt == st.alignments.end()) {
+      setStatus("Source alignment unavailable.");
+      continue;
+    }
+    const size_t alignmentIndex = static_cast<size_t>(alignmentIt - st.alignments.begin());
+    auto query = MakeSurfaceQuery(st, surface);
+    if (!query) {
+      setStatus("Source surface unavailable.");
+      continue;
+    }
+    std::vector<alignment::GroundPoint> sampled;
+    std::string why;
+    if (!alignment::SampleGround(st.alignments[alignmentIndex], *query,
+                                profile.sampleInterval, 100000, &sampled, &why)) {
+      setStatus("Surface profile unavailable: " + why + ".");
+      continue;
+    }
+    std::vector<double> stations, elevations;
+    stations.reserve(sampled.size()); elevations.reserve(sampled.size());
+    double minZ = std::numeric_limits<double>::infinity(), maxZ = -minZ;
+    for (const auto& point : sampled) {
+      stations.push_back(point.internalStation);
+      elevations.push_back(point.hasGround ? point.ground : std::numeric_limits<double>::quiet_NaN());
+      if (point.hasGround) { minZ = std::min(minZ, point.ground); maxZ = std::max(maxZ, point.ground); }
+    }
+    if (!std::isfinite(minZ)) {
+      setStatus("Surface profile unavailable: alignment has no covered stations.");
+      continue; // preserve the last good graph while the source is unavailable
+    }
+    setStatus("");
+    eraseEntities(profile.viewEntityIds);
+    profile.viewEntityIds.clear(); profile.stations = std::move(stations); profile.elevations = std::move(elevations);
+    changed = true;
+    const size_t firstLine = st.userLineAttrs.size();
+    auto addLine = [&](double x0, double y0, double x1, double y1) {
+      st.userLinesFlat.insert(st.userLinesFlat.end(), {x0, y0, 0.0, x1, y1, 0.0});
+      EntityAttributes attrs = MakeNewEntityAttrs(st);
+      attrs.id = st.nextEntityId++;
+      st.userLineAttrs.push_back(std::move(attrs));
+    };
+    const double endX = profile.viewX + profile.stations.back() * profile.horizontalScale;
+    const double graphHeight = std::max(0.1, (maxZ - minZ) * profile.verticalScale);
+    addLine(profile.viewX, profile.viewY, endX, profile.viewY); // station axis
+    addLine(profile.viewX, profile.viewY, profile.viewX, profile.viewY + graphHeight); // elevation axis
+    for (size_t i = 1; i < profile.stations.size(); ++i) {
+      if (!std::isfinite(profile.elevations[i - 1]) || !std::isfinite(profile.elevations[i])) continue;
+      addLine(profile.viewX + profile.stations[i - 1] * profile.horizontalScale,
+              profile.viewY + (profile.elevations[i - 1] - minZ) * profile.verticalScale,
+              profile.viewX + profile.stations[i] * profile.horizontalScale,
+              profile.viewY + (profile.elevations[i] - minZ) * profile.verticalScale);
+    }
+    EnsureEntityIds(st);
+    for (size_t i = firstLine; i < st.userLineAttrs.size(); ++i) profile.viewEntityIds.push_back(st.userLineAttrs[i].id);
+    if (invalidateCache) BumpCadGpuCache(st);
+  }
+  return changed;
+}
+
+void RunCreateSurfaceProfile(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const auto f = SplitCommaFields(args);
+  if (f.size() != 8) { log.push_back("CREATEPROFILEFROMSURFACE — usage: <surface>, <alignment>, <profile name>, interval, viewX, viewY, horizontal scale, vertical scale."); return; }
+  const int si = FindSurfaceIndex(st, StringUtil::trimCopy(f[0]));
+  if (si < 0) { log.push_back("CREATEPROFILEFROMSURFACE — no surface named \"" + f[0] + "\"."); return; }
+  if (!st.cadSurfaces[static_cast<size_t>(si)].tin) { log.push_back("CREATEPROFILEFROMSURFACE — surface has no built TIN."); return; }
+  int ai = -1;
+  for (size_t i = 0; i < st.alignments.size(); ++i) if (st.alignments[i].name == StringUtil::trimCopy(f[1])) { ai = static_cast<int>(i); break; }
+  if (ai < 0) { log.push_back("CREATEPROFILEFROMSURFACE — no alignment named \"" + f[1] + "\"."); return; }
+  const std::string name = StringUtil::trimCopy(f[2]);
+  if (name.empty() || std::any_of(st.surfaceProfiles.begin(), st.surfaceProfiles.end(), [&](const auto& p) { return p.name == name; })) {
+    log.push_back("CREATEPROFILEFROMSURFACE — profile name must be non-empty and unique."); return;
+  }
+  double values[5]{};
+  for (size_t i = 0; i < 5; ++i) { char* end = nullptr; values[i] = std::strtod(f[i + 3].c_str(), &end); if (!end || *end != '\0' || !std::isfinite(values[i])) { log.push_back("CREATEPROFILEFROMSURFACE — interval, view origin, and scales must be finite numbers."); return; } }
+  if (values[0] <= 0.0 || values[3] <= 0.0 || values[4] <= 0.0) { log.push_back("CREATEPROFILEFROMSURFACE — interval and profile-view scales must be positive."); return; }
+  EnsureEntityIds(st);
+  if (static_cast<size_t>(si) >= st.cadSurfaceAttrs.size() || st.cadSurfaceAttrs[static_cast<size_t>(si)].id == 0 || st.alignments[static_cast<size_t>(ai)].id == 0) {
+    log.push_back("CREATEPROFILEFROMSURFACE — a source has no stable drawing identifier."); return;
+  }
+  CadSurfaceProfile profile;
+  profile.id = st.nextEntityId++;
+  profile.name = name;
+  profile.surfaceId = st.cadSurfaceAttrs[static_cast<size_t>(si)].id;
+  profile.alignmentId = st.alignments[static_cast<size_t>(ai)].id;
+  profile.sampleInterval = values[0];
+  CadCoord::LocalFromWorld(st, values[1], values[2], &profile.viewX, &profile.viewY);
+  profile.horizontalScale = values[3]; profile.verticalScale = values[4];
+  PushUndoSnapshot(st, "Create surface profile");
+  st.surfaceProfiles.push_back(profile);
+  st.alignments[static_cast<size_t>(ai)].profileIds.push_back(profile.id);
+  RefreshSurfaceProfilesForSurface(st, st.cadSurfaces[static_cast<size_t>(si)]);
+  if (st.surfaceProfiles.back().sourceStatus.empty())
+    log.push_back("CREATEPROFILEFROMSURFACE — profile \"" + name + "\" sampled and profile view placed.");
+  else
+    log.push_back("CREATEPROFILEFROMSURFACE — profile \"" + name + "\" unavailable: " +
+                  st.surfaceProfiles.back().sourceStatus + " Last saved view retained.");
+}
+
+void RunSurfaceProfileView(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const auto f = SplitCommaFields(args);
+  if (f.size() != 5) { log.push_back("PROFILEVIEW — usage: <profile>, viewX, viewY, horizontal scale, vertical scale."); return; }
+  auto it = std::find_if(st.surfaceProfiles.begin(), st.surfaceProfiles.end(), [&](const auto& p) { return p.name == StringUtil::trimCopy(f[0]); });
+  if (it == st.surfaceProfiles.end()) { log.push_back("PROFILEVIEW — no saved profile named \"" + f[0] + "\"."); return; }
+  double v[4]{};
+  for (size_t i = 0; i < 4; ++i) { char* end = nullptr; v[i] = std::strtod(f[i + 1].c_str(), &end); if (!end || *end != '\0' || !std::isfinite(v[i])) { log.push_back("PROFILEVIEW — origin and scales must be finite numbers."); return; } }
+  if (v[2] <= 0.0 || v[3] <= 0.0) { log.push_back("PROFILEVIEW — scales must be positive."); return; }
+  const int si = FindSurfaceIndexById(st, it->surfaceId);
+  if (si < 0) { log.push_back("PROFILEVIEW — source surface is missing; the last saved view remains unchanged."); return; }
+  PushUndoSnapshot(st, "Move profile view");
+  CadCoord::LocalFromWorld(st, v[0], v[1], &it->viewX, &it->viewY);
+  it->horizontalScale = v[2]; it->verticalScale = v[3];
+  RefreshSurfaceProfilesForSurface(st, st.cadSurfaces[static_cast<size_t>(si)]);
+  log.push_back("PROFILEVIEW — \"" + it->name + "\" view updated.");
+}
+
 static void CommitQuickProfileLocal(AppCommandState& st, const CadSurface& s, double x0, double y0, double x1,
                                     double y1, std::vector<std::string>& log) {
   auto q = MakeSurfaceQuery(st, s);
@@ -5083,8 +5565,18 @@ void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector
     return;
   }
   if (name.empty()) {
+    const bool hasEditableSurface = std::any_of(st.cadSurfaces.begin(), st.cadSurfaces.end(),
+        [](const CadSurface& surface) { return !surface.dataShortcutReadOnly; });
+    if (!hasEditableSurface) {
+      log.push_back("SURFACEREBUILD — all surfaces are read-only project references.");
+      return;
+    }
     PushUndoSnapshot(st, "Rebuild surfaces");
     for (size_t i = 0; i < st.cadSurfaces.size(); ++i) {
+      if (st.cadSurfaces[i].dataShortcutReadOnly) {
+        log.push_back("SURFACEREBUILD — reference \"" + st.cadSurfaces[i].name + "\" skipped; it is refreshed from its project source.");
+        continue;
+      }
       BuildSurfaceFromSources(st, st.cadSurfaces[i], log);
       ReDrapeLinkedToSurface(st, i, log);  // ADR-069 (b)
     }
@@ -5094,6 +5586,10 @@ void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector
   const int si = FindSurfaceIndex(st, name);
   if (si < 0) {
     log.push_back("SURFACEREBUILD — no surface named \"" + name + "\".");
+    return;
+  }
+  if (st.cadSurfaces[static_cast<size_t>(si)].dataShortcutReadOnly) {
+    log.push_back("SURFACEREBUILD — surface reference \"" + name + "\" is read-only; refresh it from the project source.");
     return;
   }
   PushUndoSnapshot(st, "Rebuild surface");
@@ -5122,6 +5618,7 @@ void RunSurfaceAddFile(AppCommandState& st, const std::string& args, std::vector
     return;
   }
   CadSurfacePointFile pf;
+  if (SurfaceRefusesPointEdits(st.cadSurfaces[static_cast<size_t>(si)], "SURFACEADDFILE", log)) return;
   pf.path = f[1];
   if (f.size() >= 3 && !f[2].empty()) {
     const std::string lay = StringUtil::toLowerAsciiCopy(f[2]);
@@ -5149,6 +5646,7 @@ void RunSurfaceAddFile(AppCommandState& st, const std::string& args, std::vector
 
   PushUndoSnapshot(st, "Link point file to surface");
   CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  if (SurfaceRefusesPointEdits(s, "SURFACEIMPORTFILE", log)) return;
   log.push_back("SURFACEADDFILE — linked \"" + pf.path + "\" to \"" + s.name + "\" (" +
                 std::to_string(probe.size()) + " point(s)" +
                 (skipped > 0 ? ", " + std::to_string(skipped) + " row(s) unreadable" : "") + ").");
@@ -5455,6 +5953,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
     }
     PushUndoSnapshot(st, "Surface style");
     st.cadSurfaces[static_cast<size_t>(si)].styleName = f[1];
+    (void)RefreshSurfaceLabelValues(st, st.cadSurfaces[static_cast<size_t>(si)], false);
     BumpCadGpuCache(st);
     log.push_back("SURFSTYLE — surface \"" + st.cadSurfaces[static_cast<size_t>(si)].name +
                   "\" now uses style \"" + f[1] + "\".");
@@ -6389,7 +6888,678 @@ std::unique_ptr<ISurfaceQuery> MakeSurfaceQueryForCommands(const AppCommandState
   return MakeSurfaceQuery(st, surf);  // REQ-497: alignment commands read the same ground the QUICKPROFILE command does
 }
 
+bool MoveSelectedBlockRefsToSurface(AppCommandState& st, size_t surfaceIndex, std::vector<std::string>& log) {
+  if (surfaceIndex >= st.cadSurfaces.size()) {
+    log.push_back("Move to Surface — the selected surface no longer exists.");
+    return false;
+  }
+  const auto query = MakeSurfaceQuery(st, st.cadSurfaces[surfaceIndex]);
+  if (!query) {
+    log.push_back("Move to Surface — the selected surface has no built data.");
+    return false;
+  }
+  std::vector<std::pair<size_t, double>> elevations;
+  for (const SelectedEntity& selected : st.selection) {
+    if (selected.type != SelectedEntity::Type::BlockRef || selected.index < 0 ||
+        static_cast<size_t>(selected.index) >= st.cadBlockRefs.size())
+      continue;
+    const CadBlockRef& block = st.cadBlockRefs[static_cast<size_t>(selected.index)];
+    double z = 0.0;
+    if (!query->elevationAt(block.xf.x, block.xf.y, &z)) {
+      log.push_back("Move to Surface — a selected block is outside the surface; no blocks were moved.");
+      return false;
+    }
+    elevations.emplace_back(static_cast<size_t>(selected.index), z);
+  }
+  if (elevations.empty()) {
+    log.push_back("Move to Surface — select one or more block references first.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Move blocks to surface");
+  for (const auto& [index, z] : elevations)
+    st.cadBlockRefs[index].xf.z = static_cast<float>(z);
+  BumpCadGpuCache(st);
+  log.push_back("Move to Surface — moved " + std::to_string(elevations.size()) + " block reference(s) to \"" +
+                st.cadSurfaces[surfaceIndex].name + "\".");
+  return true;
+}
+
+bool SetSurfaceDisplayLod(AppCommandState& st, size_t surfaceIndex, bool reduced) {
+  if (surfaceIndex >= st.cadSurfaces.size() || st.cadSurfaces[surfaceIndex].reducedDisplayLod == reduced)
+    return false;
+  PushUndoSnapshot(st, reduced ? "Reduced surface display detail" : "High surface display detail");
+  st.cadSurfaces[surfaceIndex].reducedDisplayLod = reduced;
+  BumpCadGpuCache(st);
+  return true;
+}
+
+bool AttachModelRasterImage(AppCommandState& st, const std::string& path, float x, float y,
+                            float width, float height, float rotationRad, std::vector<std::string>& log) {
+  if (path.empty() || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) ||
+      !std::isfinite(height) || !std::isfinite(rotationRad) || width <= 0.f || height <= 0.f) {
+    log.push_back("IMAGEATTACH — path and finite placement with positive width and height are required; no image was added.");
+    return false;
+  }
+  CadRasterImage image;
+  std::string why;
+  double localX = 0.0, localY = 0.0;
+  CadCoord::LocalFromWorld(st, x, y, &localX, &localY);
+  if (!MakeSheetRasterImage(path, static_cast<float>(localX), static_cast<float>(localY),
+                            width, height, rotationRad, &image, &why)) {
+    log.push_back("IMAGEATTACH — image \"" + path + "\" could not be read (" + why + "); no image was added.");
+    return false;
+  }
+  EnsureEntityIds(st);
+  image.id = AllocEntityId(st);
+  image.layer = st.currentLayer.empty() ? "0" : st.currentLayer;
+  PushUndoSnapshot(st, "Attach image");
+  st.cadRasterImages.push_back(std::move(image));
+  BumpCadGpuCache(st);
+  log.push_back("IMAGEATTACH — attached \"" + path + "\" as image " +
+                std::to_string(st.cadRasterImages.back().id) + ".");
+  return true;
+}
+
+bool SetModelRasterDrape(AppCommandState& st, size_t imageIndex, size_t surfaceIndex,
+                         std::vector<std::string>& log) {
+  if (imageIndex >= st.cadRasterImages.size()) {
+    log.push_back("SURFDRAPE — the selected image no longer exists; no change was made.");
+    return false;
+  }
+  if (surfaceIndex >= st.cadSurfaces.size() || !st.cadSurfaces[surfaceIndex].tin ||
+      st.cadSurfaces[surfaceIndex].tin->indices.empty()) {
+    log.push_back("SURFDRAPE — the selected surface has no built TIN; no change was made.");
+    return false;
+  }
+  EnsureEntityIds(st);
+  const std::uint64_t surfaceId = st.cadSurfaceAttrs[surfaceIndex].id;
+  if (surfaceId == 0) {
+    log.push_back("SURFDRAPE — the selected surface has no stable identity; no change was made.");
+    return false;
+  }
+  if (st.cadRasterImages[imageIndex].surfaceId == surfaceId) {
+    log.push_back("SURFDRAPE — the image is already draped on this surface.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Drape image on surface");
+  st.cadRasterImages[imageIndex].surfaceId = surfaceId;
+  BumpCadGpuCache(st);
+  log.push_back("SURFDRAPE — image " + std::to_string(st.cadRasterImages[imageIndex].id) +
+                " is draped on \"" + st.cadSurfaces[surfaceIndex].name + "\".");
+  return true;
+}
+
+void RunSurfaceLodCommand(AppCommandState& st, const std::string& args, bool reduced,
+                          std::vector<std::string>& log) {
+  const char* command = reduced ? "SURFLODLOW" : "SURFLODHIGH";
+  const std::vector<std::string> fields = SplitCommaFields(args);
+  if (fields.size() != 1 || fields.front().empty()) {
+    log.push_back(std::string(command) + " — usage: " + command + " <surface name>.");
+    return;
+  }
+  const int index = FindSurfaceIndex(st, fields.front());
+  if (index < 0) {
+    log.push_back(std::string(command) + " — no surface named \"" + fields.front() + "\".");
+    return;
+  }
+  const bool changed = SetSurfaceDisplayLod(st, static_cast<size_t>(index), reduced);
+  log.push_back(std::string(command) + " — \"" + st.cadSurfaces[static_cast<size_t>(index)].name +
+                (changed ? (reduced ? "\" now uses Reduced display detail." : "\" now uses High display detail.")
+                         : (reduced ? "\" already uses Reduced display detail." : "\" already uses High display detail.")));
+}
+
+void RunMoveToSurfaceCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> fields = SplitCommaFields(args);
+  if (fields.size() != 1 || fields.front().empty()) {
+    log.push_back("MOVETOSURFACE — usage: MOVETOSURFACE <surface name> (select block references first).");
+    return;
+  }
+  const int index = FindSurfaceIndex(st, fields.front());
+  if (index < 0) {
+    log.push_back("MOVETOSURFACE — no surface named \"" + fields.front() + "\".");
+    return;
+  }
+  MoveSelectedBlockRefsToSurface(st, static_cast<size_t>(index), log);
+}
+
+namespace {
+
+bool SurfaceSightVisible(const CadTin& tin, double ox, double oy, double oz,
+                         double tx, double ty, double tz, double* obstructionX = nullptr,
+                         double* obstructionY = nullptr, double* obstructionZ = nullptr,
+                         bool* fullyCovered = nullptr) {
+  struct Interval { double first, last; };
+  std::vector<Interval> intervals;
+  const double dx = tx - ox, dy = ty - oy;
+  for (size_t ti = 0; ti + 2 < tin.indices.size(); ti += 3) {
+    const std::uint32_t ia = tin.indices[ti], ib = tin.indices[ti + 1], ic = tin.indices[ti + 2];
+    if ((static_cast<size_t>(std::max({ia, ib, ic})) + 1) * 3 > tin.vertsXyz.size()) continue;
+    const double ax = tin.vertsXyz[static_cast<size_t>(ia) * 3], ay = tin.vertsXyz[static_cast<size_t>(ia) * 3 + 1];
+    const double bx = tin.vertsXyz[static_cast<size_t>(ib) * 3], by = tin.vertsXyz[static_cast<size_t>(ib) * 3 + 1];
+    const double cx = tin.vertsXyz[static_cast<size_t>(ic) * 3], cy = tin.vertsXyz[static_cast<size_t>(ic) * 3 + 1];
+    const double area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    if (std::abs(area) <= 1.e-15) continue;
+    const double orientation = area > 0.0 ? 1.0 : -1.0;
+    double first = 0.0, last = 1.0;
+    const std::array<std::pair<double,double>, 3> a = {{{ax,ay},{bx,by},{cx,cy}}};
+    const std::array<std::pair<double,double>, 3> b = {{{bx,by},{cx,cy},{ax,ay}}};
+    bool intersects = true;
+    for (size_t edge = 0; edge < 3; ++edge) {
+      const double ex = b[edge].first - a[edge].first, ey = b[edge].second - a[edge].second;
+      const double f0 = orientation * (ex * (oy - a[edge].second) - ey * (ox - a[edge].first));
+      const double slope = orientation * (ex * dy - ey * dx);
+      if (std::abs(slope) <= 1.e-15) { if (f0 < -1.e-10) { intersects = false; break; } continue; }
+      const double crossing = (-1.e-10 - f0) / slope;
+      if (slope > 0.0) first = std::max(first, crossing); else last = std::min(last, crossing);
+      if (first > last) { intersects = false; break; }
+    }
+    if (intersects && last >= 0.0 && first <= 1.0) intervals.push_back({std::clamp(first,0.0,1.0), std::clamp(last,0.0,1.0)});
+  }
+  std::sort(intervals.begin(), intervals.end(), [](const Interval& a, const Interval& b) { return a.first < b.first; });
+  double coveredThrough = 0.0;
+  bool covered = !intervals.empty();
+  for (const Interval& interval : intervals) {
+    if (interval.first > coveredThrough + 1.e-9) { covered = false; break; }
+    coveredThrough = std::max(coveredThrough, interval.last);
+  }
+  covered = covered && coveredThrough >= 1.0 - 1.e-9;
+  if (fullyCovered) *fullyCovered = covered;
+  if (!covered) return false;
+  for (const Interval& interval : intervals) {
+    double z0 = 0.0, z1 = 0.0;
+    const double x0 = ox + dx * interval.first, y0 = oy + dy * interval.first;
+    const double x1 = ox + dx * interval.last, y1 = oy + dy * interval.last;
+    if (!TinElevationAt(tin.vertsXyz, tin.indices, x0, y0, &z0) ||
+        !TinElevationAt(tin.vertsXyz, tin.indices, x1, y1, &z1)) {
+      if (fullyCovered) *fullyCovered = false;
+      return false;
+    }
+    const double d0 = z0 - (oz + (tz - oz) * interval.first);
+    const double d1 = z1 - (oz + (tz - oz) * interval.last);
+    if (d0 > 0.002 || d1 > 0.002 || (d0 <= 0.002 && d1 > 0.002)) {
+      double t = interval.first;
+      if (d0 <= 0.002 && d1 > 0.002 && d1 != d0)
+        t += (interval.last - interval.first) * (0.002 - d0) / (d1 - d0);
+      if (obstructionX) *obstructionX = ox + dx * t;
+      if (obstructionY) *obstructionY = oy + dy * t;
+      if (obstructionZ) (void)TinElevationAt(tin.vertsXyz, tin.indices, ox + dx * t, oy + dy * t, obstructionZ);
+      return false;
+    }
+  }
+  return true;
+}
+
+void AddSurfaceResultLine(AppCommandState& st, double ax, double ay, double az,
+                          double bx, double by, double bz, const char* color) {
+  st.userLinesFlat.insert(st.userLinesFlat.end(), {ax, ay, az, bx, by, bz});
+  EntityAttributes attrs = MakeNewEntityAttrs(st);
+  attrs.color = color;
+  st.userLineAttrs.push_back(std::move(attrs));
+}
+
+void RunSurfaceVisibility(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() < 2) {
+    log.push_back("SURFACEVISIBILITY — usage: SURFACEVISIBILITY <surface>, LOS|ZVI, coordinates...");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFACEVISIBILITY — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  const CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  const auto query = MakeSurfaceQueryForCommands(st, surface);
+  if (!query || !surface.tin || surface.tin->indices.empty()) {
+    log.push_back("SURFACEVISIBILITY — surface \"" + surface.name + "\" has no built TIN.");
+    return;
+  }
+  const std::string mode = StringUtil::toLowerAsciiCopy(f[1]);
+  auto number = [&](size_t i, double* out) {
+    if (i >= f.size()) return false;
+    char* end = nullptr;
+    *out = std::strtod(f[i].c_str(), &end);
+    return end && *end == '\0' && std::isfinite(*out);
+  };
+  auto worldToLocal = [&](double wx, double wy, double* x, double* y) {
+    CadCoord::LocalFromWorld(st, wx, wy, x, y);
+  };
+  if (mode == "los") {
+    if (f.size() != 8) {
+      log.push_back("SURFACEVISIBILITY — LOS usage: SURFACEVISIBILITY <surface>, LOS, eyeX, eyeY, eyeHeight, targetX, targetY, targetHeight.");
+      return;
+    }
+    double wx0 = 0.0, wy0 = 0.0, eye = 0.0, wx1 = 0.0, wy1 = 0.0, target = 0.0;
+    if (!number(2, &wx0) || !number(3, &wy0) || !number(4, &eye) || !number(5, &wx1) ||
+        !number(6, &wy1) || !number(7, &target) || eye < 0.0 || target < 0.0) {
+      log.push_back("SURFACEVISIBILITY — LOS coordinates and heights must be finite; heights cannot be negative.");
+      return;
+    }
+    double x0 = 0.0, y0 = 0.0, x1 = 0.0, y1 = 0.0, g0 = 0.0, g1 = 0.0;
+    worldToLocal(wx0, wy0, &x0, &y0);
+    worldToLocal(wx1, wy1, &x1, &y1);
+    if (!query->elevationAt(x0, y0, &g0) || !query->elevationAt(x1, y1, &g1)) {
+      log.push_back("SURFACEVISIBILITY — eye or target is outside the surface; no result was created.");
+      return;
+    }
+    const double z0 = g0 + eye, z1 = g1 + target;
+    double bx = std::numeric_limits<double>::quiet_NaN(), by = 0.0, bz = 0.0;
+    bool covered = false;
+    const bool visible = SurfaceSightVisible(*surface.tin, x0, y0, z0, x1, y1, z1, &bx, &by, &bz, &covered);
+    if (!covered) {
+      log.push_back("SURFACEVISIBILITY — the line crosses an area outside the surface; no result was created.");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface line of sight");
+    if (visible) {
+      AddSurfaceResultLine(st, x0, y0, z0, x1, y1, z1, "#25a55b");
+      log.push_back("SURFACEVISIBILITY LOS — target is visible.");
+    } else {
+      AddSurfaceResultLine(st, x0, y0, z0, bx, by, bz, "#25a55b");
+      AddSurfaceResultLine(st, bx, by, bz, x1, y1, z1, "#d64545");
+      log.push_back("SURFACEVISIBILITY LOS — target is obstructed; first obstruction at " +
+                    std::to_string(bx + st.worldDocumentOriginX) + ", " +
+                    std::to_string(by + st.worldDocumentOriginY) + ".");
+    }
+    BumpCadGpuCache(st);
+    return;
+  }
+  if (mode == "zvi") {
+    if (f.size() != 7) {
+      log.push_back("SURFACEVISIBILITY — ZVI usage: SURFACEVISIBILITY <surface>, ZVI, observerX, observerY, eyeHeight, targetHeight, radius.");
+      return;
+    }
+    double wx = 0.0, wy = 0.0, eye = 0.0, target = 0.0, radius = 0.0, ground = 0.0;
+    if (!number(2, &wx) || !number(3, &wy) || !number(4, &eye) || !number(5, &target) ||
+        !number(6, &radius) || eye < 0.0 || target < 0.0 || radius <= 0.0 || radius > 10000.0) {
+      log.push_back("SURFACEVISIBILITY — ZVI requires finite coordinates, nonnegative heights, and a radius from 0 to 10000.");
+      return;
+    }
+    double ox = 0.0, oy = 0.0;
+    worldToLocal(wx, wy, &ox, &oy);
+    if (!query->elevationAt(ox, oy, &ground)) {
+      log.push_back("SURFACEVISIBILITY — observer is outside the surface; no result was created.");
+      return;
+    }
+    constexpr int side = 32;
+    const double step = 2.0 * radius / side;
+    std::vector<std::pair<CadFilledRegion, std::string>> cells;
+    cells.reserve(side * side);
+    size_t visibleCells = 0, partialCells = 0, hiddenCells = 0;
+    std::vector<std::pair<double,double>> footprint;
+    constexpr int circleSegments = 128;
+    constexpr double circlePi = 3.14159265358979323846;
+    footprint.reserve(circleSegments);
+    for (int i = 0; i < circleSegments; ++i) {
+      const double angle = 2.0 * circlePi * static_cast<double>(i) / circleSegments;
+      footprint.emplace_back(ox + radius * std::cos(angle), oy + radius * std::sin(angle));
+    }
+    const auto clipAxis = [](const std::vector<std::pair<double,double>>& input, int axis, double bound,
+                             bool keepGreater) {
+      std::vector<std::pair<double,double>> output;
+      if (input.empty()) return output;
+      const auto coordinate = [axis](const auto& p) { return axis == 0 ? p.first : p.second; };
+      const auto inside = [&](const auto& p) {
+        return keepGreater ? coordinate(p) >= bound - 1.e-10 : coordinate(p) <= bound + 1.e-10;
+      };
+      auto previous = input.back();
+      bool previousInside = inside(previous);
+      for (const auto& current : input) {
+        const bool currentInside = inside(current);
+        if (currentInside != previousInside) {
+          const double denominator = coordinate(current) - coordinate(previous);
+          if (std::abs(denominator) > 1.e-15) {
+            const double t = (bound - coordinate(previous)) / denominator;
+            output.emplace_back(previous.first + t * (current.first - previous.first),
+                                previous.second + t * (current.second - previous.second));
+          }
+        }
+        if (currentInside) output.push_back(current);
+        previous = current;
+        previousInside = currentInside;
+      }
+      return output;
+    };
+    for (int row = 0; row < side; ++row) for (int col = 0; col < side; ++col) {
+      const double x0 = ox - radius + col * step, x1 = x0 + step;
+      const double y0 = oy - radius + row * step, y1 = y0 + step;
+      std::vector<std::pair<double,double>> polygon = clipAxis(footprint, 0, x0, true);
+      polygon = clipAxis(polygon, 0, x1, false);
+      polygon = clipAxis(polygon, 1, y0, true);
+      polygon = clipAxis(polygon, 1, y1, false);
+      if (polygon.size() < 3) continue;
+      int visiblePoints = 0;
+      bool completeSightCoverage = true;
+      std::vector<double> vertexZ;
+      vertexZ.reserve(polygon.size());
+      for (const auto& p : polygon) {
+        double targetGround = 0.0;
+        if (!query->elevationAt(p.first, p.second, &targetGround)) {
+          completeSightCoverage = false;
+          break;
+        }
+        vertexZ.push_back(targetGround);
+        bool sightCovered = false;
+        if (SurfaceSightVisible(*surface.tin, ox, oy, ground + eye, p.first, p.second,
+                                targetGround + target, nullptr, nullptr, nullptr, &sightCovered)) ++visiblePoints;
+        completeSightCoverage = completeSightCoverage && sightCovered;
+      }
+      if (!completeSightCoverage || vertexZ.size() != polygon.size()) continue;
+      const bool fullyVisible = visiblePoints == static_cast<int>(polygon.size());
+      const bool fullyHidden = visiblePoints == 0;
+      if (fullyVisible) ++visibleCells;
+      else if (fullyHidden) ++hiddenCells;
+      else ++partialCells;
+      CadFilledRegion region;
+      region.vertsXyz.reserve(polygon.size() * 3);
+      for (size_t i = 0; i < polygon.size(); ++i) {
+        region.vertsXyz.push_back(polygon[i].first);
+        region.vertsXyz.push_back(polygon[i].second);
+        region.vertsXyz.push_back(vertexZ[i]);
+      }
+      region.loopStart = {0};
+      cells.emplace_back(std::move(region), fullyVisible ? "#35a86b" : fullyHidden ? "#d64545" : "#e4b844");
+    }
+    if (cells.empty()) {
+      log.push_back("SURFACEVISIBILITY — the requested area has no surface coverage.");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface zone of visual influence");
+    for (auto& [region, color] : cells) {
+      st.cadFilledRegions.push_back(std::move(region));
+      EntityAttributes attrs = MakeNewEntityAttrs(st);
+      attrs.color = color;
+      st.cadFilledRegionAttrs.push_back(std::move(attrs));
+    }
+    EnsureAttrCounts(st);
+    BumpCadGpuCache(st);
+    log.push_back("SURFACEVISIBILITY ZVI — " + std::to_string(visibleCells) + " visible cell(s), " +
+                  std::to_string(partialCells) + " partly visible cell(s), " +
+                  std::to_string(hiddenCells) + " hidden cell(s).");
+    return;
+  }
+  log.push_back("SURFACEVISIBILITY — choose LOS or ZVI.");
+}
+
+void RunSurfaceLabel(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() < 2) {
+    log.push_back("SURFLABEL — usage: SURFLABEL <surface>, SPOT, x, y | SLOPE, x1, y1, x2, y2 | CONTOUR, elevation, x, y | CONTOUR, elevation, GUIDE, x1, y1, ... | WATERSHED.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, StringUtil::trimCopy(f[0]));
+  if (si < 0) { log.push_back("SURFLABEL — no surface named \"" + f[0] + "\"."); return; }
+  CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  if (!surface.tin || surface.tin->indices.empty()) { log.push_back("SURFLABEL — surface \"" + surface.name + "\" has no built TIN."); return; }
+  const std::string kind = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(f[1]));
+  std::vector<std::vector<double>> values;
+  std::vector<std::pair<double,double>> anchors;
+  auto parse = [&](size_t i, double* value) {
+    if (i >= f.size()) return false;
+    char* end = nullptr; *value = std::strtod(f[i].c_str(), &end);
+    return end && *end == '\0' && std::isfinite(*value);
+  };
+  auto local = [&](double wx, double wy) { double x = 0.0, y = 0.0; CadCoord::LocalFromWorld(st, wx, wy, &x, &y); return std::pair<double,double>{x,y}; };
+  auto query = [&](double x, double y, double* z) { return TinElevationAt(surface.tin->vertsXyz, surface.tin->indices, x, y, z); };
+  if (kind == "spot" && f.size() == 4) {
+    double x = 0.0, y = 0.0, z = 0.0;
+    if (!parse(2, &x) || !parse(3, &y)) { log.push_back("SURFLABEL — spot coordinates must be finite numbers."); return; }
+    const auto p = local(x, y);
+    if (!query(p.first, p.second, &z)) { log.push_back("SURFLABEL — point is outside surface \"" + surface.name + "\"."); return; }
+    values.push_back({p.first,p.second}); anchors.push_back(p);
+  } else if (kind == "slope" && f.size() == 6) {
+    double x0 = 0.0, y0 = 0.0, x1 = 0.0, y1 = 0.0, z0 = 0.0, z1 = 0.0;
+    if (!parse(2,&x0) || !parse(3,&y0) || !parse(4,&x1) || !parse(5,&y1)) { log.push_back("SURFLABEL — slope coordinates must be finite numbers."); return; }
+    const auto a = local(x0,y0), b = local(x1,y1);
+    if (std::hypot(b.first-a.first,b.second-a.second) <= 1.e-9 || !query(a.first,a.second,&z0) || !query(b.first,b.second,&z1)) {
+      log.push_back("SURFLABEL — slope endpoints must be distinct and both covered by surface \"" + surface.name + "\"."); return;
+    }
+    values.push_back({a.first,a.second,b.first,b.second}); anchors.push_back({(a.first+b.first)*0.5,(a.second+b.second)*0.5});
+  } else if (kind == "contour" && f.size() == 5) {
+    double level = 0.0, wx = 0.0, wy = 0.0, z = 0.0;
+    if (!parse(2,&level) || !parse(3,&wx) || !parse(4,&wy)) { log.push_back("SURFLABEL — contour elevation and coordinates must be finite numbers."); return; }
+    const auto p = local(wx,wy);
+    if (!query(p.first,p.second,&z) || std::abs(z-level) > 0.01) { log.push_back("SURFLABEL — selected point is not on the requested contour of surface \"" + surface.name + "\"."); return; }
+    values.push_back({level}); anchors.push_back(p);
+  } else if (kind == "contour" && f.size() >= 8 &&
+             StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(f[3])) == "guide" && (f.size() - 4) % 2 == 0) {
+    double level = 0.0;
+    if (!parse(2, &level) || f.size() < 8) {
+      log.push_back("SURFLABEL — repeated contour labels need an elevation and at least two guide points."); return;
+    }
+    std::vector<std::pair<double,double>> guide;
+    for (size_t i = 4; i < f.size(); i += 2) {
+      double wx = 0.0, wy = 0.0;
+      if (!parse(i, &wx) || !parse(i + 1, &wy)) {
+        log.push_back("SURFLABEL — guide coordinates must be finite numbers."); return;
+      }
+      guide.push_back(local(wx, wy));
+    }
+    const auto& verts = surface.tin->vertsXyz;
+    const auto& indices = surface.tin->indices;
+    auto addUnique = [](std::vector<std::pair<double,double>>& points, double x, double y) {
+      if (std::none_of(points.begin(), points.end(), [&](const auto& p) { return std::hypot(p.first-x,p.second-y) < 1.e-8; }))
+        points.emplace_back(x, y);
+    };
+    std::vector<std::pair<std::pair<double,double>,std::pair<double,double>>> contourLines;
+    for (size_t ti = 0; ti + 2 < indices.size(); ti += 3) {
+      std::vector<std::pair<double,double>> points;
+      for (int e = 0; e < 3; ++e) {
+        const size_t ia = static_cast<size_t>(indices[ti + static_cast<size_t>(e)]) * 3;
+        const size_t ib = static_cast<size_t>(indices[ti + static_cast<size_t>((e + 1) % 3)]) * 3;
+        if (ia + 2 >= verts.size() || ib + 2 >= verts.size()) continue;
+        const double za = verts[ia + 2], zb = verts[ib + 2];
+        if (level < std::min(za,zb) || level > std::max(za,zb) || za == zb) continue;
+        const double t = (level - za) / (zb - za);
+        addUnique(points, verts[ia] + (verts[ib] - verts[ia]) * t, verts[ia + 1] + (verts[ib + 1] - verts[ia + 1]) * t);
+      }
+      if (points.size() == 2) contourLines.emplace_back(points[0], points[1]);
+    }
+    for (size_t gi = 1; gi < guide.size(); ++gi) {
+      const double px = guide[gi-1].first, py = guide[gi-1].second;
+      const double rx = guide[gi].first-px, ry = guide[gi].second-py;
+      for (const auto& segment : contourLines) {
+        const double qx = segment.first.first, qy = segment.first.second;
+        const double sx = segment.second.first-qx, sy = segment.second.second-qy;
+        const double den = rx*sy-ry*sx;
+        if (std::abs(den) < 1.e-12) continue;
+        const double t = ((qx-px)*sy-(qy-py)*sx)/den;
+        const double u = ((qx-px)*ry-(qy-py)*rx)/den;
+        if (t < -1.e-9 || t > 1.0+1.e-9 || u < -1.e-9 || u > 1.0+1.e-9) continue;
+        const double x = px + t*rx, y = py + t*ry;
+        if (std::none_of(anchors.begin(), anchors.end(), [&](const auto& a) { return std::hypot(a.first-x,a.second-y) < 0.01; })) {
+          anchors.emplace_back(x,y);
+          values.push_back({level});
+        }
+      }
+    }
+    if (anchors.empty()) { log.push_back("SURFLABEL — guide does not cross the requested contour on surface \"" + surface.name + "\"."); return; }
+  } else if (kind == "watershed" && f.size() == 2) {
+    const WatershedResult watersheds = ComputeWatershed(surface.tin->vertsXyz, surface.tin->indices);
+    if (!watersheds.ok || watersheds.basins.empty()) { log.push_back("SURFLABEL — no watershed basins are available on surface \"" + surface.name + "\"."); return; }
+    for (const WatershedBasin& basin : watersheds.basins) {
+      values.push_back({basin.drainX,basin.drainY}); anchors.push_back({basin.drainX,basin.drainY});
+    }
+  } else {
+    log.push_back("SURFLABEL — choose SPOT, SLOPE, CONTOUR, or WATERSHED with the documented arguments."); return;
+  }
+  EnsureEntityIds(st);
+  if (static_cast<size_t>(si) >= st.cadSurfaceAttrs.size() || st.cadSurfaceAttrs[static_cast<size_t>(si)].id == 0) {
+    log.push_back("SURFLABEL — surface has no stable drawing identifier."); return;
+  }
+  PushUndoSnapshot(st, "Surface labels");
+  for (size_t i = 0; i < values.size(); ++i) {
+    CadAnnotation label;
+    label.insX = static_cast<float>(anchors[i].first); label.insY = static_cast<float>(anchors[i].second);
+    label.surfaceLabelForId = st.cadSurfaceAttrs[static_cast<size_t>(si)].id;
+    label.surfaceLabelKind = kind == "spot" ? 1 : kind == "slope" ? 2 : kind == "contour" ? 3 : 4;
+    label.surfaceLabelValues = values[i];
+    label.plottedHeightInches = st.defaultPlottedTextHeightInches;
+    StampActiveTextStyleOnNewText(st, label);
+    st.cadAnnotations.push_back(std::move(label));
+    st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
+  }
+  RefreshSurfaceLabelValues(st, surface);
+  BumpCadGpuCache(st);
+  log.push_back("SURFLABEL — " + std::to_string(values.size()) + " linked label(s) added to \"" + surface.name + "\".");
+}
+
+void RunSurfaceLegend(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() < 2) { log.push_back("SURFACELEGEND — usage: SURFACELEGEND <surface>, ELEVATION|SLOPE|SLOPEARROW|CONTOUR|WATERSHED, x, y."); return; }
+  const int si = FindSurfaceIndex(st, StringUtil::trimCopy(f[0]));
+  if (si < 0) { log.push_back("SURFACELEGEND — no surface named \"" + f[0] + "\"."); return; }
+  CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  if (!surface.tin || surface.tin->indices.empty()) { log.push_back("SURFACELEGEND — surface \"" + surface.name + "\" has no built TIN."); return; }
+  const std::string kind = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(f[1]));
+  double wx = 0.0, wy = 0.0;
+  auto number = [&](size_t i, double* out) { if (i >= f.size()) return false; char* end = nullptr; *out = std::strtod(f[i].c_str(), &end); return end && *end == '\0' && std::isfinite(*out); };
+  if (f.size() != 4 || !number(2,&wx) || !number(3,&wy)) { log.push_back("SURFACELEGEND — insertion X and Y must be finite numbers."); return; }
+  const SurfaceStyle* style = SurfaceStyles::Find(st.surfaceStyles, surface.styleName);
+  CadTable table; table.cols = 3;
+  CadCoord::LocalFromWorld(st, wx, wy, &table.insX, &table.insY);
+  table.insZ = CadCommitElevation(st); table.surfaceLegendKind = kind;
+  EnsureEntityIds(st);
+  if (static_cast<size_t>(si) >= st.cadSurfaceAttrs.size() || st.cadSurfaceAttrs[static_cast<size_t>(si)].id == 0) { log.push_back("SURFACELEGEND — surface has no stable drawing identifier."); return; }
+  table.surfaceLegendForId = st.cadSurfaceAttrs[static_cast<size_t>(si)].id;
+  table.cells = {"Range", "Upper bound", "Color"};
+  const int p = st.displayLinearPrecision;
+  if ((kind == "elevation" && style && style->analysisMode == SurfaceAnalysisMode::Elevation) ||
+      (kind == "slope" && style && style->analysisMode == SurfaceAnalysisMode::Slope) ||
+      (kind == "slopearrow" && style)) {
+    const bool arrows = kind == "slopearrow";
+    const auto& bands = arrows ? style->arrowBands : style->bands;
+    double lower = -std::numeric_limits<double>::infinity();
+    for (const SurfaceBand& band : bands) {
+      table.cells.push_back(std::isfinite(lower) ? "(" + FormatLinear(lower,p) + ", " + FormatLinear(band.upperBound,p) + "]" : "≤ " + FormatLinear(band.upperBound,p));
+      table.cells.push_back(FormatLinear(band.upperBound,p)); table.cells.push_back(band.color); lower = band.upperBound;
+    }
+  } else if (kind == "contour" && style) {
+    std::vector<double> levels = style->userContourFt;
+    const SurfaceStats stats = ComputeSurfaceStats(surface.tin->vertsXyz, surface.tin->indices, static_cast<int>(surface.breaklines.size()), surface.isVolumeSurface());
+    if (levels.empty() && stats.built && style->minorIntervalFt > 0.0) {
+      const int first = static_cast<int>(std::ceil(stats.minZ / style->minorIntervalFt)), last = static_cast<int>(std::floor(stats.maxZ / style->minorIntervalFt));
+      if (last - first < 1000) for (int n = first; n <= last; ++n) levels.push_back(n * style->minorIntervalFt);
+    }
+    for (double level : levels) { table.cells.push_back("Contour"); table.cells.push_back(FormatLinear(level,p)); table.cells.push_back("—"); }
+  } else if (kind == "watershed") {
+    const WatershedResult result = ComputeWatershed(surface.tin->vertsXyz, surface.tin->indices);
+    for (const WatershedBasin& basin : result.basins) { table.cells.push_back("Basin " + std::to_string(basin.id)); table.cells.push_back(FormatLinear(basin.area2d,p) + " sq ft"); table.cells.push_back(basin.drain == DrainKind::Depression ? "depression" : basin.drain == DrainKind::Flat ? "flat" : "boundary"); }
+  }
+  if (table.cells.size() <= 3) { log.push_back("SURFACELEGEND — the requested analysis has no computed rows on surface \"" + surface.name + "\"."); return; }
+  if (const TextStyle* ts = ActiveTextStyle(st)) table.fontFamily = ts->fontFamily;
+  table.plottedHeightInches = st.defaultPlottedTextHeightInches;
+  CadTableFitToContent(&table, st.modelUnitsPerPlottedInch);
+  PushUndoSnapshot(st, "Surface analysis legend");
+  st.cadTables.push_back(std::move(table));
+  AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});
+  EnsureAttrCounts(st); BumpCadGpuCache(st);
+  log.push_back("SURFACELEGEND — linked " + kind + " table added for \"" + surface.name + "\".");
+}
+
+void RunSurfaceCrossings(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.empty() || f[0].empty()) {
+    log.push_back("SURFCROSSBL — usage: SURFCROSSBL <surface>[, RESOLVE, x, y, HIGHER|LOWER|AVERAGE|TRIM-A|TRIM-B|elevation].");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFCROSSBL — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  if (surface.dataShortcutReadOnly && f.size() > 1 && StringUtil::toLowerAsciiCopy(f[1]) != "list") {
+    log.push_back("SURFCROSSBL — surface reference \"" + surface.name + "\" is read-only.");
+    return;
+  }
+  if (surface.kind != SurfaceKind::Tin || surface.breaklines.size() < 2) {
+    log.push_back("SURFCROSSBL — the selected surface has fewer than two breaklines to compare.");
+    return;
+  }
+  CadSurface candidate = surface;
+  std::vector<std::string> ignored;
+  SurfaceBuildInputs inputs = ResolveSurfaceInputs(st, candidate, ignored);
+  if (inputs.inputsIncomplete) {
+    log.push_back("SURFCROSSBL — cannot resolve crossings because the surface definition is incomplete.");
+    return;
+  }
+  const auto issues = TinFindCrossingConflicts(inputs.constraints);
+  auto logIssue = [&](const TinCrossingIssue& issue) {
+    if (issue.constraintIndexA >= inputs.constraintSourceIds.size() || issue.constraintIndexB >= inputs.constraintSourceIds.size())
+      return;
+    log.push_back("SURFCROSSBL — breakline IDs " + std::to_string(inputs.constraintSourceIds[issue.constraintIndexA]) +
+                  " and " + std::to_string(inputs.constraintSourceIds[issue.constraintIndexB]) + " cross at (" +
+                  std::to_string(issue.x) + ", " + std::to_string(issue.y) +
+                  "); elevation difference " + std::to_string(issue.zFromA - issue.zFromB) + ".");
+  };
+  if (f.size() == 1 || (f.size() == 2 && StringUtil::toLowerAsciiCopy(f[1]) == "list")) {
+    if (issues.empty()) log.push_back("SURFCROSSBL — no unresolved interior breakline crossings on \"" + surface.name + "\".");
+    else for (const TinCrossingIssue& issue : issues) logIssue(issue);
+    return;
+  }
+  if (f.size() != 5 || StringUtil::toLowerAsciiCopy(f[1]) != "resolve") {
+    log.push_back("SURFCROSSBL — usage: SURFCROSSBL <surface>, RESOLVE, x, y, HIGHER|LOWER|AVERAGE|TRIM-A|TRIM-B|elevation.");
+    return;
+  }
+  char *ex = nullptr, *ey = nullptr;
+  const double wx = std::strtod(f[2].c_str(), &ex), wy = std::strtod(f[3].c_str(), &ey);
+  if (!ex || *ex != '\0' || !ey || *ey != '\0' || !std::isfinite(wx) || !std::isfinite(wy)) {
+    log.push_back("SURFCROSSBL — crossing coordinates must be finite numbers.");
+    return;
+  }
+  double x = 0.0, y = 0.0;
+  CadCoord::LocalFromWorld(st, wx, wy, &x, &y);
+  const TinCrossingIssue* selected = nullptr;
+  for (const TinCrossingIssue& issue : issues)
+    if (std::hypot(issue.x - wx, issue.y - wy) <= 0.05) {
+      selected = &issue; break;
+    }
+  if (!selected || selected->constraintIndexA >= inputs.constraintSourceIds.size() ||
+      selected->constraintIndexB >= inputs.constraintSourceIds.size()) {
+    log.push_back("SURFCROSSBL — no unresolved crossing was found within 0.05 drawing units of that location.");
+    return;
+  }
+  CadSurfaceCrossingCorrection correction;
+  correction.entityA = inputs.constraintSourceIds[selected->constraintIndexA];
+  correction.entityB = inputs.constraintSourceIds[selected->constraintIndexB];
+  correction.x = x; correction.y = y;
+  const std::string action = StringUtil::toLowerAsciiCopy(f[4]);
+  if (action == "higher") correction.kind = CadSurfaceCrossingCorrection::Kind::Higher;
+  else if (action == "lower") correction.kind = CadSurfaceCrossingCorrection::Kind::Lower;
+  else if (action == "average") correction.kind = CadSurfaceCrossingCorrection::Kind::Average;
+  else if (action == "trim-a") correction.kind = CadSurfaceCrossingCorrection::Kind::TrimA;
+  else if (action == "trim-b") correction.kind = CadSurfaceCrossingCorrection::Kind::TrimB;
+  else {
+    char* ez = nullptr;
+    correction.customElevation = std::strtod(f[4].c_str(), &ez);
+    if (!ez || *ez != '\0' || !std::isfinite(correction.customElevation)) {
+      log.push_back("SURFCROSSBL — choose HIGHER, LOWER, AVERAGE, TRIM-A, TRIM-B, or a numeric elevation.");
+      return;
+    }
+    correction.kind = CadSurfaceCrossingCorrection::Kind::Custom;
+  }
+  PushUndoSnapshot(st, "Resolve surface breakline crossing");
+  surface.crossingCorrections.erase(std::remove_if(surface.crossingCorrections.begin(), surface.crossingCorrections.end(),
+      [&](const CadSurfaceCrossingCorrection& existing) {
+        return existing.entityA == correction.entityA && existing.entityB == correction.entityB &&
+               std::hypot(existing.x - correction.x, existing.y - correction.y) <= 0.05;
+      }), surface.crossingCorrections.end());
+  surface.crossingCorrections.push_back(correction);
+  BumpCadGpuCache(st);
+  BuildSurfaceFromSources(st, surface, log);
+  log.push_back("SURFCROSSBL — surface-local crossing decision saved; source breaklines were not changed.");
+}
+
+}  // namespace
+
 void EnsureEntityIds(AppCommandState& st) {
+  // Model raster IMAGEs carry their own stable ID in CadRasterImage rather than a parallel
+  // EntityAttributes array. Keep the shared drawing counter above those IDs so loading and then
+  // attaching another raster cannot recycle an existing image identity.
+  for (const CadRasterImage& image : st.cadRasterImages)
+    if (image.id >= st.nextEntityId && image.id != std::numeric_limits<std::uint64_t>::max())
+      st.nextEntityId = image.id + 1;
   // Geometry has not changed since the last sweep, so nothing can be missing an id. This is what
   // lets callers invoke it unconditionally — including once a frame — without paying for a walk.
   if (st.entityIdSweepRevision == st.cadGpuRevision)
@@ -7561,6 +8731,15 @@ const CmdEntry kRegistry[] = {
     {"surfacemovepoint", "sfmovept",
      "Move a TIN definition point: SURFACEMOVEPOINT <surface>[, <x1>, <y1>, "
      "<x2>, <y2>, <z2>]"},
+    {"surflodlow", "", "Set a surface to Reduced viewport detail: SURFLODLOW <surface>"},
+    {"imageattach", "", "Attach a readable model-space image: IMAGEATTACH <path>, x, y, width, height, rotation-degrees"},
+    {"surfdrape", "", "Drape an image onto a surface: SURFDRAPE <surface>, <image-id>"},
+    {"createdatashortcut", "", "Register a project surface source: CREATEDATASHORTCUT <surface>"},
+    {"createsurfacereference", "", "Create a read-only project surface reference: CREATESURFACEREFERENCE <source-drawing-rel>, <source-surface-id>, <name>"},
+    {"surflodhigh", "", "Set a surface to full viewport detail: SURFLODHIGH <surface>"},
+    {"movetosurface", "", "Move selected block references to a surface: MOVETOSURFACE <surface>"},
+    {"surfacevisibility", "surfvis", "Surface LOS or ZVI analysis: SURFACEVISIBILITY <surface>, LOS|ZVI, ..."},
+    {"surfcrossbl", "", "List or resolve surface-local breakline crossings: SURFCROSSBL <surface>, ..."},
     {"surfdelline", "sfdelline", "Delete an interior TIN edge: SURFDELLINE <surface>[, <x>, <y>]"},
     {"surfacedelpoint", "sfdelpt",
      "Delete nearest TIN definition point: SURFACEDELPOINT <surface>[, <x>, "
@@ -8254,6 +9433,26 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "surfelev") {
     StartSurfaceElevGradeCommand(st, log);
+    return true;
+  }
+  if (primary == "surflodlow") {
+    RunSurfaceLodCommand(st, std::string(), true, log);
+    return true;
+  }
+  if (primary == "surflodhigh") {
+    RunSurfaceLodCommand(st, std::string(), false, log);
+    return true;
+  }
+  if (primary == "movetosurface") {
+    RunMoveToSurfaceCommand(st, std::string(), log);
+    return true;
+  }
+  if (primary == "surfacevisibility") {
+    RunSurfaceVisibility(st, std::string(), log);
+    return true;
+  }
+  if (primary == "surfcrossbl") {
+    RunSurfaceCrossings(st, std::string(), log);
     return true;
   }
   if (primary == "watershed") {
@@ -27260,9 +28459,13 @@ void StartDesignateBreaklineCommand(AppCommandState& st, const std::string& surf
     log.push_back("DESIGNATEBREAKLINE — finish or cancel the active command first.");
     return;
   }
-  if (FindSurfaceIndex(st, surfaceName) < 0) {
+  const int surfaceIndex = FindSurfaceIndex(st, surfaceName);
+  if (surfaceIndex < 0) {
     log.push_back("DESIGNATEBREAKLINE — no surface named \"" + surfaceName + "\".");
     return;
+  }
+  if (st.cadSurfaces[static_cast<size_t>(surfaceIndex)].dataShortcutReadOnly) {
+    log.push_back("DESIGNATEBREAKLINE — surface reference \"" + surfaceName + "\" is read-only."); return;
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
@@ -27281,9 +28484,13 @@ void StartDesignateContourCommand(AppCommandState& st, const std::string& surfac
     log.push_back("DESIGNATECONTOUR — finish or cancel the active command first.");
     return;
   }
-  if (FindSurfaceIndex(st, surfaceName) < 0) {
+  const int surfaceIndex = FindSurfaceIndex(st, surfaceName);
+  if (surfaceIndex < 0) {
     log.push_back("DESIGNATECONTOUR — no surface named \"" + surfaceName + "\".");
     return;
+  }
+  if (st.cadSurfaces[static_cast<size_t>(surfaceIndex)].dataShortcutReadOnly) {
+    log.push_back("DESIGNATECONTOUR — surface reference \"" + surfaceName + "\" is read-only."); return;
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
@@ -27302,9 +28509,13 @@ void StartDesignateBoundaryCommand(AppCommandState& st, const std::string& surfa
     log.push_back("DESIGNATEBOUNDARY — finish or cancel the active command first.");
     return;
   }
-  if (FindSurfaceIndex(st, surfaceName) < 0) {
+  const int surfaceIndex = FindSurfaceIndex(st, surfaceName);
+  if (surfaceIndex < 0) {
     log.push_back("DESIGNATEBOUNDARY — no surface named \"" + surfaceName + "\".");
     return;
+  }
+  if (st.cadSurfaces[static_cast<size_t>(surfaceIndex)].dataShortcutReadOnly) {
+    log.push_back("DESIGNATEBOUNDARY — surface reference \"" + surfaceName + "\" is read-only."); return;
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
@@ -28001,7 +29212,8 @@ int ApplyResolvedDrape(AppCommandState& st, const std::vector<DrapeResolved>& re
 
 }  // namespace
 
-void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::string>& log) {
+void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::string>& log,
+                            bool invalidateCache) {
   if (si >= st.cadSurfaces.size())
     return;
   const CadSurface& surf = st.cadSurfaces[si];
@@ -28015,7 +29227,7 @@ void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::str
       ResolveDrapeOnto(st, si, linked, /*reportRefusals=*/false, log, nullptr, nullptr);
   const int moved = ApplyResolvedDrape(st, ready, id);
   if (moved > 0) {
-    BumpCadGpuCache(st);
+    if (invalidateCache) BumpCadGpuCache(st);
     log.push_back("DRAPE - " + std::to_string(moved) + " linked object(s) re-draped onto \"" + surf.name +
                   "\".");
   }
@@ -48575,6 +49787,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "sfswap" ||         plotTok == "surfaceaddpoint" || plotTok == "sfaddpt" ||
         plotTok == "surfacedelpoint" || plotTok == "sfdelpt" || plotTok == "surfacemovepoint" ||
         plotTok == "sfmovept" || plotTok == "surfdelline" || plotTok == "sfdelline" ||
+        plotTok == "surflodlow" || plotTok == "surflodhigh" || plotTok == "movetosurface" ||
+        plotTok == "imageattach" || plotTok == "surfdrape" || plotTok == "createdatashortcut" ||
+        plotTok == "createsurfacereference" ||
+        plotTok == "surfacevisibility" || plotTok == "surfvis" || plotTok == "surfcrossbl" || plotTok == "surflabel" || plotTok == "surfacelegend" || plotTok == "createprofilefromsurface" || plotTok == "profileview" ||
         plotTok == "quickprofile" || plotTok == "qprof" ||
         plotTok == "alignment" || plotTok == "createalignment" || plotTok == "alignmentadd" ||
         plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "getstationoffset" ||
@@ -48622,6 +49838,70 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunSurfDelPoint(st, rest, log);
       else if (plotTok == "surfacemovepoint" || plotTok == "sfmovept")
         RunSurfMovePoint(st, rest, log);
+      else if (plotTok == "surflodlow")
+        RunSurfaceLodCommand(st, rest, true, log);
+      else if (plotTok == "imageattach") {
+        const std::vector<std::string> fields = SplitCommaFields(rest);
+        auto number = [&](size_t i, float* out) {
+          if (i >= fields.size()) return false;
+          char* end = nullptr;
+          const double value = std::strtod(fields[i].c_str(), &end);
+          if (!end || *end != '\0' || !std::isfinite(value) || std::abs(value) > 1.e30) return false;
+          *out = static_cast<float>(value);
+          return true;
+        };
+        float x = 0.f, y = 0.f, width = 0.f, height = 0.f, rotation = 0.f;
+        if (fields.size() != 6 || fields[0].empty() || !number(1, &x) || !number(2, &y) ||
+            !number(3, &width) || !number(4, &height) || !number(5, &rotation))
+          log.push_back("IMAGEATTACH — usage: IMAGEATTACH <path>, x, y, width, height, rotation-degrees.");
+        else
+          AttachModelRasterImage(st, fields[0], x, y, width, height,
+              rotation * static_cast<float>(3.14159265358979323846 / 180.0), log);
+      }
+      else if (plotTok == "surfdrape") {
+        const std::vector<std::string> fields = SplitCommaFields(rest);
+        char* end = nullptr;
+        const unsigned long long id = fields.size() == 2 ? std::strtoull(fields[1].c_str(), &end, 10) : 0;
+        const int surface = fields.size() == 2 ? FindSurfaceIndex(st, fields[0]) : -1;
+        if (surface < 0 || !end || *end != '\0' || id == 0)
+          log.push_back("SURFDRAPE — usage: SURFDRAPE <surface>, <image-id>.");
+        else {
+          const auto image = std::find_if(st.cadRasterImages.begin(), st.cadRasterImages.end(),
+              [&](const CadRasterImage& candidate) { return candidate.id == static_cast<std::uint64_t>(id); });
+          if (image == st.cadRasterImages.end()) log.push_back("SURFDRAPE — no attached image has ID " + std::to_string(id) + ".");
+          else SetModelRasterDrape(st, static_cast<size_t>(image - st.cadRasterImages.begin()),
+                                   static_cast<size_t>(surface), log);
+        }
+      }
+      else if (plotTok == "createdatashortcut") {
+        const int source = FindSurfaceIndex(st, StringUtil::trimCopy(rest));
+        if (source < 0) log.push_back("CREATEDATASHORTCUT — name an existing source surface.");
+        else CreateSurfaceDataShortcut(st, static_cast<size_t>(source), log);
+      }
+      else if (plotTok == "createsurfacereference") {
+        const std::vector<std::string> fields = SplitCommaFields(rest);
+        char* end = nullptr;
+        const unsigned long long id = fields.size() == 3 ? std::strtoull(fields[1].c_str(), &end, 10) : 0;
+        if (!id || !end || *end != '\0' || fields[0].empty() || fields[2].empty())
+          log.push_back("CREATESURFACEREFERENCE — usage: CREATESURFACEREFERENCE <source-drawing-rel>, <source-surface-id>, <name>.");
+        else CreateSurfaceReference(st, fields[0], static_cast<std::uint64_t>(id), fields[2], log);
+      }
+      else if (plotTok == "surflodhigh")
+        RunSurfaceLodCommand(st, rest, false, log);
+      else if (plotTok == "movetosurface")
+        RunMoveToSurfaceCommand(st, rest, log);
+      else if (plotTok == "surfacevisibility" || plotTok == "surfvis")
+        RunSurfaceVisibility(st, rest, log);
+      else if (plotTok == "surfcrossbl")
+        RunSurfaceCrossings(st, rest, log);
+      else if (plotTok == "surflabel")
+        RunSurfaceLabel(st, rest, log);
+      else if (plotTok == "surfacelegend")
+        RunSurfaceLegend(st, rest, log);
+      else if (plotTok == "createprofilefromsurface")
+        RunCreateSurfaceProfile(st, rest, log);
+      else if (plotTok == "profileview")
+        RunSurfaceProfileView(st, rest, log);
       else if (plotTok == "surfdelline" || plotTok == "sfdelline")
         RunSurfDelLine(st, rest, log);
       else if (plotTok == "quickprofile" || plotTok == "qprof")

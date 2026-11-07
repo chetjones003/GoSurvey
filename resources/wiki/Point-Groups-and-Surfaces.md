@@ -192,6 +192,52 @@ Later, after importing a second day of shots coded `EG`:
 7. **Survey → Surfaces**, select `Existing Ground`, press **Rebuild**. The new points are already
    in the group.
 
+## Surface contextual tools
+
+With a surface selected, **Add Data → Point Files** opens Surface Manager. Under **Point Files**, use
+**Add...** to link a CSV with its explicit column layout. The source remains linked and is read again
+when the surface is rebuilt. This does not add the rows to the drawing's survey point database.
+
+**Reduced LOD** and **High LOD** change the selected surface's viewport triangle detail. Reduced LOD
+keeps every fourth TIN face for display; the full surface remains in use for elevation queries,
+selection, plotting, and export. The choice is saved with the drawing.
+The command-line forms are `SURFLODLOW <surface name>` and `SURFLODHIGH <surface name>`.
+
+**Move to Surface** changes only the elevation of selected block references. Every selected block
+must fall inside the selected surface; if any block is outside, none are moved.
+To use the command line, select the block references and run `MOVETOSURFACE <surface name>`.
+
+**Add Labels** supports linked spot elevations, slopes between two picked points, contour labels,
+and watershed basin labels. **Add Legend** inserts an updateable drawing table for the selected
+surface's elevation, slope, slope-arrow, contour, or watershed analysis. Typed forms are
+`SURFLABEL <surface>, SPOT, x, y`, `SURFLABEL <surface>, SLOPE, x1, y1, x2, y2`,
+`SURFLABEL <surface>, CONTOUR, elevation, x, y`, `SURFLABEL <surface>, WATERSHED`, and
+`SURFACELEGEND <surface>, <ELEVATION|SLOPE|SLOPEARROW|CONTOUR|WATERSHED>, x, y`.
+Surface-linked labels and legends refresh when the source surface is rebuilt.
+
+**Crossing BL** lists crossings between a surface's breaklines and resolves one crossing locally
+with `SURFCROSSBL <surface>, RESOLVE, x, y, HIGHER|LOWER|AVERAGE|TRIM-A|TRIM-B|elevation`.
+The shared linework is unchanged. **Visibility** supports line of sight and a zone of visual
+influence, for example `SURFACEVISIBILITY <surface>, LOS, eyeX, eyeY, eyeHeight, targetX, targetY,
+targetHeight`.
+
+**Drape Image** attaches a readable PNG, JPEG, or BMP at a model-space location and clips it to the
+selected TIN. Rebuilding the TIN updates the drape. The ribbon prompts for the image, lower-left
+placement, size, and rotation; the command forms are `IMAGEATTACH <path>, x, y, width, height,
+rotation-degrees` and `SURFDRAPE <surface>, <image-id>`.
+
+**Create Profile** samples a saved existing-ground profile along a horizontal alignment and places
+its profile view. Supply the alignment, profile name, sample interval, view origin, and positive
+horizontal and vertical scales. Profiles keep uncovered stations as gaps and refresh when the
+surface is rebuilt. `SURFACELIST` reports the stable surface ID used by project references.
+
+**Data Shortcut** is available only in a writable project. Save the source drawing in the project,
+select its surface, and create the shortcut. In another project drawing, create a read-only surface
+reference using the project-relative source drawing path and ID, for example
+`CREATESURFACEREFERENCE Drawings/site.dwg, 42, Existing Ground`. References refresh when opened;
+if the source is missing, the last saved display remains available. Surface definition edits are
+refused on references, while their local name and display style can be changed.
+
 ---
 
 ## Grading groups and earthwork volumes

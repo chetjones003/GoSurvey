@@ -1394,6 +1394,7 @@ struct DrawingGeometrySnapshot {
   std::vector<CadPipeRun>       cadPipeRuns;
   std::vector<EntityAttributes> cadPipeRunAttrs;
   std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
+  std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
   /// Named piping networks (issue #486 increment B3 / REQ-345) — swapped alongside `cadPipeRuns`
   /// for the same BEDIT-isolation reason the comment above states: a network's indices are only
   /// meaningful against the drawing's OWN `cadPipeRuns`, so it must travel with it, not stay behind.
@@ -1425,6 +1426,7 @@ struct DrawingGeometrySnapshot {
   std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<PaperLayout>      paperLayouts;  ///< Paper layouts incl. native paper geometry (REQ-037/038) — undoable.
+  std::vector<CadRasterImage>   cadRasterImages; ///< model-space rasters, optionally linked to a surface (REQ-511)
   double worldDocumentOriginX = 0.0;
   double worldDocumentOriginY = 0.0;
   /// The section plane (REQ-343 amended, GitHub issue #479 acceptance 8). Mirrors
@@ -1594,6 +1596,7 @@ struct DrawingDocument {
   std::vector<CadPipeRun>       cadPipeRuns;
   std::vector<EntityAttributes> cadPipeRunAttrs;
   std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
+  std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
   std::vector<CadPipingSystem>  cadPipingSystems;
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef>        cadBlockRefs;
@@ -1629,6 +1632,7 @@ struct DrawingDocument {
   /// this struct is the in-memory tab store, not the file format.
   std::vector<std::uint64_t>    hiddenEntityIds;
   std::vector<PaperLayout>      paperLayouts;            ///< Paper-space layouts (REQ-025); empty = none.
+  std::vector<CadRasterImage>   cadRasterImages; ///< model-space raster underlays (REQ-511)
   std::vector<PageSetup>        savedPageSetups;         ///< Drawing-wide named page setups.
   int                           activeSpaceIndex = kModelSpaceIndex;  ///< -1 = model; else index into paperLayouts.
   uint32_t cadGpuRevision  = 0;
@@ -3560,6 +3564,8 @@ struct AppCommandState {
   int offsetPaperLayoutIndex = -1;
   /// Bumped when CAD geometry or per-entity viewport styling changes; GPU vertex caches invalidate when stale.
   uint32_t cadGpuRevision = 0;
+  /// Renderer-only invalidation. Unlike cadGpuRevision, this does not dirty the drawing or cancel surface workers.
+  uint32_t cadGpuCacheRevision = 0;
 
   std::vector<CadAnnotation> cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
@@ -3639,6 +3645,7 @@ struct AppCommandState {
   std::vector<CadPipeRun> cadPipeRuns;
   std::vector<EntityAttributes> cadPipeRunAttrs;
   std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
+  std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
   std::vector<CadSolidPtr> pipeRunWorldSolids;
   std::vector<EntityAttributes> pipeRunWorldSolidAttrs;
   /// Which `cadPipeRuns` index each `pipeRunWorldSolids` entry came from (issue #486, selection
@@ -4088,11 +4095,12 @@ struct AppCommandState {
     /// resolved value cannot be forgotten. A style is five small structs and two doubles, so the
     /// comparison is cheaper than the allocation it prevents.
     SurfaceStyle style;
+    bool reducedDisplayLod = false;
 
     /// All generated geometry, each in `GL_LINES` layout: flat x,y,z, six floats per segment.
     /// Regenerated together, only on a staleness miss, and borrowed by
     /// \ref CadSurfaceDisplayGeometry rather than copied into it.
-    std::vector<float> triangleEdges;  ///< Every triangulation edge (the pre-REQ-070 appearance).
+    std::vector<float> triangleEdges;  ///< Display triangulation edges (sampled in Reduced LOD mode).
     std::vector<float> borderEdges;    ///< The outline: edges belonging to one triangle (\c TinBorderEdges).
     std::vector<float> minorContours;  ///< Minor levels, excluding those that are also major.
     std::vector<float> majorContours;
@@ -5669,6 +5677,7 @@ struct AppCommandState {
   // -------------------------------------------------------------------------
   // PAPER SPACE (REQ-025/026/031) — active drawing's layouts; mirrored per tab in DrawingDocument.
   std::vector<PaperLayout> paperLayouts;
+  std::vector<CadRasterImage> cadRasterImages;
   int activeSpaceIndex = kModelSpaceIndex;   ///< -1 = model space; else index into paperLayouts.
   int lastPaperLayoutIndex = 0;              ///< layout the MODEL/PAPER toggle returns to.
   int selectedViewportLayout = -1;           ///< layout owning the primary selected viewport (REQ-027), or -1.
@@ -6917,6 +6926,16 @@ void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
 [[nodiscard]] int FindSurfaceIndex(const AppCommandState& st, const std::string& name);
 /// REQ-497: the elevation reader for a built surface, in drawing-local coordinates; null when the surface is not built.
 [[nodiscard]] std::unique_ptr<ISurfaceQuery> MakeSurfaceQueryForCommands(const AppCommandState& st, const CadSurface& surf);
+/// REQ-512: atomically move selected block references to the sampled surface elevations.
+bool MoveSelectedBlockRefsToSurface(AppCommandState& st, size_t surfaceIndex, std::vector<std::string>& log);
+/// REQ-508: select viewport triangle detail for one surface; records one undoable drawing change.
+bool SetSurfaceDisplayLod(AppCommandState& st, size_t surfaceIndex, bool reduced);
+/// REQ-511: add a readable model-space image attachment with stable identity and drawing placement.
+bool AttachModelRasterImage(AppCommandState& st, const std::string& path, float x, float y,
+                            float width, float height, float rotationRad, std::vector<std::string>& log);
+/// REQ-511: associate a model-space image with a built TIN for clipped terrain draping.
+bool SetModelRasterDrape(AppCommandState& st, size_t imageIndex, size_t surfaceIndex,
+                         std::vector<std::string>& log);
 
 /// Index of the surface whose stable entity id is \p id, or -1 when it does not resolve — erased, or
 /// never assigned (REQ-076 / ADR-036 (a)). `id == 0` always returns -1: 0 means "unassigned", so
@@ -6931,6 +6950,14 @@ void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
 ///
 /// Returns true when a surface was produced.
 bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log);
+/// Refresh linked legend rows for surfaces using an edited style's analysis configuration.
+void RefreshSurfaceLegendTablesForStyle(AppCommandState& st, const std::string& styleName);
+/// Refresh linked entities and analysis results after a project-owned surface reference replaces its TIN.
+void RefreshSurfaceDependentsAfterReplacement(AppCommandState& st, size_t surfaceIndex,
+                                              std::vector<std::string>& log);
+/// Refresh saved surface profiles after an alignment geometry or stationing edit.
+void RefreshSurfaceProfilesForAlignment(AppCommandState& st, std::uint64_t alignmentId,
+                                        std::vector<std::string>& log);
 
 /// Re-lay everything linked to surface p si, after that surface has been rebuilt (ADR-065 (b),
 /// GitHub #150). Called from the only places a TIN is replaced - `SURFACEREBUILD` and the async
@@ -6939,7 +6966,8 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
 /// A linked entity whose vertices are no longer over the new ground is LEFT WHERE IT IS and said
 /// so: a surface shrinking under a draped line is not a reason to move or discard the line
 /// (REQ-201). Its link is kept, so it re-drapes on its own once the surface covers it again.
-void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::string>& log);
+void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::string>& log,
+                            bool invalidateCache = true);
 
 /// The name of the surface p e is draped on and follows, or empty when it follows none
 /// (ADR-065 (d), GitHub #150) - never linked, baked since, or linked to a surface that has been
@@ -7068,7 +7096,11 @@ bool CanUndo(const AppCommandState& st);
 bool CanRedo(const AppCommandState& st);
 
 
-inline void BumpCadGpuCache(AppCommandState& st) { ++st.cadGpuRevision; }
+inline void BumpCadGpuCache(AppCommandState& st) {
+  ++st.cadGpuRevision;
+  ++st.cadGpuCacheRevision;
+}
+inline void BumpCadGpuCacheOnly(AppCommandState& st) { ++st.cadGpuCacheRevision; }
 
 /// Keeps per-entity attribute vectors sized to match geometry counts (used by Properties and select-similar).
 void EnsureAttrCounts(AppCommandState& st);

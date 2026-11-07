@@ -299,19 +299,25 @@ A lightweight board that complements the milestones. Keep each column honest.
   true on exit** — no cert was obtained; the no-op signing step is still a no-op.
 
 ### Next (accepted, sequenced, not started)
+- **Surface contextual tools (REQ-508…516, ADR-080, D-2026-11-06-d, GitHub issue #807).** Implement the
+  remaining Surface tab actions against the accepted Autodesk-informed GoSurvey behavior: linked
+  labels and legend tables; render-only Reduced/High LOD; crossing-breakline review and surface-local
+  corrections; point/area visibility; raster draping; block placement on a surface; saved existing-
+  ground profiles and profile views; and project surface data shortcuts. Reuse REQ-086 point files,
+  the alignment/surface-query work from REQ-480…502, and REQ-373…383 project support. The user
+  explicitly approved the surface-profile workflow, superseding REQ-145's old no-profile exclusion.
+  Keep #1163's vertical design tangents/curves outside this increment. One PR must satisfy every
+  referenced acceptance condition and preserve all unrelated disabled ribbon controls.
 - **Curved polyline segments (REQ-316, ADR-047, D-2026-09-02-e).** Four slices, each its own PR:
   (1) per-vertex bulge storage (parallel `userPolylineVertsBulge` array) +
   POLYLINE `Arc`/`Line` sub-modes + arc render + DXF/`.gs` round-trip; (2) snap / pick / extents /
   length / Properties on arc segments; (3) JOIN of lines + arcs, and arc-segment grips;
   (4) TRIM / OFFSET / FILLET / CHAMFER of bulge polylines. **No code past a slice until its
   Workshop task cites REQ-316 and passes Verification.**
-- **Projects (REQ-373…REQ-383, ADR-065 accepted, D-2026-10-05-d/-e, issue #696).** Ten phases, one
-  PR each, tracked as checkboxes in the issue: P0 spec → P1 project foundation (`.gsproj`, New/Open,
-  Start screen, join, lock) → P2 project settings → P3 shared point database (ADR-065 accepted 2026-10-05)
-  → P4 Survey Database toolspace + visibility rules → P5 Add Drawing to Project →
-  P6 file tracking + Project Health → P7 Pack Project (ADR-066, D-2026-10-05-i) → P8 turnovers → P9 warning pass. **No code past
-  P0 until this spec PR is merged and a Workshop task cites the phase's REQ.** Cloud storage, merge of
-  diverged copies, configurable layout and simultaneous multi-user editing stay out.
+- **Projects (REQ-373…REQ-383, ADR-065/066, issue #696).** Phases P0–P9 are complete and merged to
+  beta; end-to-end Developer Shell verification `p696-e2e` reported 269 checks passing. Follow-up
+  #722 (paste-convert / point-paste) remains open. Cloud storage, merging diverged copies,
+  configurable layout and simultaneous multi-user editing remain out of scope.
 - **Built-in PDF viewer (REQ-387, REQ-388, REQ-389, ADR-067, D-2026-10-06-a, issue #732).** Three phases, one PR each: (1) viewer window + every PDF route + off-thread read-ahead cache + `BENCH PDFVIEW`; (2) annotations, Save As; (3) split by page range. **No code until the spec PR is merged and a Workshop task cites the phase's REQ.** Text search, forms, signatures and printing stay out.
 - **PDF measure, compare and change detection (REQ-390, REQ-391, REQ-392, REQ-393, ADR-067 addendum 2, D-2026-10-06-f, issue #732).** Four phases, one PR each: (4) page scale (calibrate / preset, standard Viewport + Measure data); (5) scaled dimensions (length, polylength, area and perimeter, angle); (6) overlay two revisions (tint / opacity / blink) with manual one- and two-point alignment; (7) automatic alignment, automatic change detection, change list and write-as-markups; and, added by D-2026-10-06-h after real-sheet testing, scale blunder detection: (8) a manual Check tool with verdicts and best-fit scale (REQ-394), (9) an automatic audit that reads the sheet's dimension text (REQ-395). **No code until this spec PR is merged and a Workshop task cites the phase's REQ.** Other Bluebeam-style markup tools are unspecified and wait for the user's choice.
 - **File Format Specs (REQ-170–REQ-174, ADR-041/042, D-2026-08-29-g).** Matrix:
@@ -324,14 +330,11 @@ A lightweight board that complements the milestones. Keep each column honest.
   objects. Export ordinary AutoCAD entities and style records that AutoCAD accepts without Recover; do not
   author Civil 3D custom objects. Use Rapides Substation as the baseline and log unmapped source data.
   No Civil 3D/AutoCAD runtime bridge, Object Enabler, or ODA Civil SDK is shipped or required.
-- **Alignments (REQ-480..503, ADR-075, D-2026-11-02-b, issue #121). Accepted 2026-11-02; Phase 1 in progress.**
-  Six increments: (1) foundation: domain object, tangent + circular curve, stationing/equations, station/offset
-  API, `ALIGNMENT` / `CREATEALIGNMENTFROMOBJECTS`, render, core snaps, DWG round trip, Properties; (2) layout
-  editor, constraints, grips, `REVERSEALIGNMENT`, `OFFSETALIGNMENT`, intersections; (3) clothoid spirals and
-  continuity validation; (4) styles, label sets, labels, tables, reports; (5) surface ground elevation,
-  feature-line link, profile seam, COGO; (6) design criteria and checks. **Each increment needs a
-  Workshop task cites the increment's REQs.** Later: widening, spiral offsets, non-clothoid spirals, profiles,
-  corridors, superelevation calculation.
+- **Alignments (REQ-480..503, ADR-075, issue #121).** All six increments are merged to beta and issue #121
+  is closed: horizontal geometry, stationing, layout/editing, clothoids, styles/labels/tables/reports,
+  surface sampling, feature-line link, COGO and design criteria. Surface existing-ground profiles and
+  profile views are now REQ-513; full vertical design profiles remain deferred to issue #1163.
+  Widening, spiral offsets, non-clothoid spirals, corridors and superelevation calculation remain later work.
 - **M-Surfaces-119 — Issue #119 remainder** (D-2026-08-27-a, ADR-039, D-2026-08-27-b). Phases 1–3
   (REQ-124…135) implemented on the 119 branch. REQ-136 TIN volume surface in progress. Grid /
   corridor / contour smoothing and labels / TIN swap remain out of scope.
