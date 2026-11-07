@@ -139,7 +139,7 @@ bottom opens the full dialog.
 |---|---|
 | **Styles:** | The list of styles, with **All styles** filtering |
 | **Font** | Font Name (`(default)` unless set), **Use Big Font**, Font Style (Regular / Bold / Italic / Bold Italic) |
-| **Size** | Height, **Annotative** |
+| **Size** | Height, **Annotative** (new text made with an annotative style is annotative and follows the annotation scale; text already drawn keeps its own setting) |
 | **Effects** | Backwards, Oblique Angle |
 | **Preview** | Live `AaBb12` sample |
 | **Buttons** | **New…**, **Set Current**, **Apply**, **Delete**, **Cancel**, **Help** |
