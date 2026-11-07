@@ -16284,6 +16284,30 @@ private Q_SLOTS:
     manager->close();
   }
 
+  void issue807DrapeImageBuildsTerrainTextureGeometry() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 800);
+    window.show();
+    auto& st = window.State();
+    Issue893Fixture(st);
+    window.Submit("ZOOMEXTENTS");
+    QTest::qWait(100);
+    QVERIFY(window.m_Viewport->IsRendererReady());
+
+    const std::filesystem::path imagePath = std::filesystem::path(GOSURVEY_SOURCE_DIR) /
+                                            "samples" / "01-main-window.png";
+    std::vector<std::string> log;
+    QVERIFY(AttachModelRasterImage(st, imagePath.u8string(), 0.0f, 0.0f, 20.0f, 10.0f, 0.0f, log));
+    QVERIFY(SetModelRasterDrape(st, 0, 0, log));
+    window.Submit("");
+    QTRY_VERIFY(!window.m_Viewport->m_RasterDrapeCache.empty());
+    QCOMPARE(window.m_Viewport->m_RasterDrapeCache.size(), size_t(1));
+    QVERIFY(window.m_Viewport->m_RasterDrapeCache[0].texture != 0);
+    QVERIFY(window.m_Viewport->m_RasterDrapeCache[0].xyuv.size() >= 15);
+    QVERIFY(window.m_Viewport->grabFramebuffer().save(Issue914Shot("issue807-drape-image-render.png")));
+  }
+
   void homeSurfacesOpensCreateSurfaceAndCancelLeavesDrawingUnchanged() {
     EditorWindow window;
     window.CreateDrawingFromTemplate();

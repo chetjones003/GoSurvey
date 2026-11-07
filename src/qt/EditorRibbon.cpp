@@ -1873,17 +1873,24 @@ void EditorWindow::RunRibbonAction(const QString& id) {
           QLineEdit::Normal, "0, 0, 100, 100, 0", &accepted);
       if (accepted) {
         const QStringList fields = values.split(',');
-        float v[5]{};
+        double v[5]{};
         bool valid = fields.size() == 5;
         for (int i = 0; valid && i < 5; ++i) {
           bool parsed = false;
-          v[i] = fields[i].trimmed().toFloat(&parsed);
+          v[i] = fields[i].trimmed().toDouble(&parsed);
           valid = parsed && std::isfinite(v[i]);
         }
-        if (!valid || v[2] <= 0.f || v[3] <= 0.f) {
+        const float localX = valid ? static_cast<float>(v[0] - m_State.worldDocumentOriginX) : 0.f;
+        const float localY = valid ? static_cast<float>(v[1] - m_State.worldDocumentOriginY) : 0.f;
+        const float width = static_cast<float>(v[2]);
+        const float height = static_cast<float>(v[3]);
+        const float rotation = static_cast<float>(v[4] * (3.14159265358979323846 / 180.0));
+        if (!valid || !std::isfinite(localX) || !std::isfinite(localY) ||
+            !std::isfinite(width) || !std::isfinite(height) || !std::isfinite(rotation) ||
+            width <= 0.f || height <= 0.f) {
           m_Log.push_back("Drape Image — enter finite coordinates, positive width and height, and a finite rotation.");
-        } else if (AttachModelRasterImage(m_State, path.toUtf8().constData(), v[0], v[1], v[2], v[3],
-                      v[4] * static_cast<float>(3.14159265358979323846 / 180.0), m_Log)) {
+        } else if (AttachModelRasterImage(m_State, path.toUtf8().constData(), localX, localY, width, height,
+                                          rotation, m_Log)) {
           SetModelRasterDrape(m_State, m_State.cadRasterImages.size() - 1, static_cast<size_t>(surface), m_Log);
         }
       }

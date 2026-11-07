@@ -4330,7 +4330,11 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
         profile.sourceStatus = unavailable;
         log.push_back("Profile \"" + profile.name + "\" unavailable: " + unavailable + " Last saved view retained.");
       }
-    } else if (!profile.sourceStatus.empty()) {
+    } else if (profile.sourceStatus == "Source alignment is missing." ||
+               profile.sourceStatus == "Source surface is missing." ||
+               profile.sourceStatus == "Source surface has no built TIN." ||
+               profile.sourceStatus == "Source alignment unavailable." ||
+               profile.sourceStatus == "Source surface unavailable.") {
       const std::string priorStatus = profile.sourceStatus;
       appliedSurface = RefreshSurfaceProfilesForSurface(
           st, st.cadSurfaces[static_cast<size_t>(surfaceIndex)], false,
@@ -4346,6 +4350,17 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
     if (label.surfaceLabelForId != 0 && presentSurfaceIds.find(label.surfaceLabelForId) == presentSurfaceIds.end() &&
         label.text != "Surface value unavailable") {
       label.text = "Surface value unavailable";
+      invalidatedMissingLabel = true;
+    }
+  }
+  const std::vector<std::string> unavailableLegend = {
+      "Analysis", "Surface value unavailable", "—"};
+  for (CadTable& table : st.cadTables) {
+    if (table.surfaceLegendForId == 0 || presentSurfaceIds.find(table.surfaceLegendForId) != presentSurfaceIds.end())
+      continue;
+    if (table.cells != unavailableLegend || table.cols != 3) {
+      table.cells = unavailableLegend;
+      table.cols = 3;
       invalidatedMissingLabel = true;
     }
   }
@@ -7055,7 +7070,10 @@ bool SurfaceSightVisible(const CadTin& tin, double ox, double oy, double oz,
     const double x0 = ox + dx * interval.first, y0 = oy + dy * interval.first;
     const double x1 = ox + dx * interval.last, y1 = oy + dy * interval.last;
     if (!TinElevationAt(tin.vertsXyz, tin.indices, x0, y0, &z0) ||
-        !TinElevationAt(tin.vertsXyz, tin.indices, x1, y1, &z1)) continue;
+        !TinElevationAt(tin.vertsXyz, tin.indices, x1, y1, &z1)) {
+      if (fullyCovered) *fullyCovered = false;
+      return false;
+    }
     const double d0 = z0 - (oz + (tz - oz) * interval.first);
     const double d1 = z1 - (oz + (tz - oz) * interval.last);
     if (d0 > 0.002 || d1 > 0.002 || (d0 <= 0.002 && d1 > 0.002)) {
@@ -7092,7 +7110,7 @@ void RunSurfaceVisibility(AppCommandState& st, const std::string& args, std::vec
   }
   const CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
   const auto query = MakeSurfaceQueryForCommands(st, surface);
-  if (!query) {
+  if (!query || !surface.tin || surface.tin->indices.empty()) {
     log.push_back("SURFACEVISIBILITY — surface \"" + surface.name + "\" has no built TIN.");
     return;
   }

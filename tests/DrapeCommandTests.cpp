@@ -327,6 +327,31 @@ TEST_CASE("Surface LOD and Move to Surface have typed command routes", "[surface
   CHECK(LogHas(log, "moved 1 block reference"));
 }
 
+TEST_CASE("Surface LOD changes only the generated viewport triangle geometry", "[surface][req508]") {
+  AppCommandState st;
+  AddGround(st, "EG");
+  SurfaceStyles::EnsureStandard(st.surfaceStyles);
+  st.surfaceStyles[0].triangles.visible = true;
+  st.cadSurfaces[0].styleName = st.surfaceStyles[0].name;
+  EnsureEntityIds(st);
+  RefreshSurfaceDisplayGeometry(st);
+  REQUIRE(st.surfaceDisplayCache.size() == 1);
+  const auto fullDetailEdges = st.surfaceDisplayCache[0].triangleEdges;
+  REQUIRE(!fullDetailEdges.empty());
+
+  std::vector<std::string> log;
+  Type(st, "SURFLODLOW EG", log);
+  RefreshSurfaceDisplayGeometry(st);
+  REQUIRE(st.surfaceDisplayCache.size() == 1);
+  CHECK(st.surfaceDisplayCache[0].triangleEdges.size() < fullDetailEdges.size());
+  CHECK(st.cadSurfaces[0].tin->indices.size() == 6);
+
+  Type(st, "SURFLODHIGH EG", log);
+  RefreshSurfaceDisplayGeometry(st);
+  CHECK(st.surfaceDisplayCache[0].triangleEdges == fullDetailEdges);
+  CHECK(st.cadSurfaces[0].tin->indices.size() == 6);
+}
+
 TEST_CASE("Surface visibility commands draw LOS and ZVI results without changing the TIN",
           "[surface][req510]") {
   AppCommandState st;
@@ -346,6 +371,41 @@ TEST_CASE("Surface visibility commands draw LOS and ZVI results without changing
   for (const CadFilledRegion& region : st.cadFilledRegions)
     for (size_t i = 0; i + 2 < region.vertsXyz.size(); i += 3)
       CHECK(std::hypot(region.vertsXyz[i] - 50.0, region.vertsXyz[i + 1] - 50.0) <= 10.0 + 1.e-8);
+}
+
+TEST_CASE("Surface visibility refuses a queryable grid surface without a TIN", "[surface][req510]") {
+  AppCommandState st;
+  CadSurface surface;
+  surface.name = "Grid";
+  surface.kind = SurfaceKind::Grid;
+  surface.gridOriginX = 0.0;
+  surface.gridOriginY = 0.0;
+  surface.gridSpacingX = 1.0;
+  surface.gridSpacingY = 1.0;
+  surface.gridCols = 2;
+  surface.gridRows = 2;
+  surface.gridZ = {1.0, 1.0, 1.0, 1.0};
+  st.cadSurfaces.push_back(surface);
+  st.cadSurfaceAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  Type(st, "SURFACEVISIBILITY Grid, LOS, 0, 0, 1, 1, 1, 1", log);
+  CHECK(st.userLinesFlat.empty());
+  CHECK(LogHas(log, "no built TIN"));
+}
+
+TEST_CASE("Linked surface legends become unavailable after their source is deleted", "[surface][req507]") {
+  AppCommandState st;
+  AddGround(st, "EG");
+  st.surfaceStyles[0].analysisMode = SurfaceAnalysisMode::Elevation;
+  st.surfaceStyles[0].bands = {{5.0, "#00ff00"}};
+  st.cadSurfaces[0].styleName = st.surfaceStyles[0].name;
+  std::vector<std::string> log;
+  Type(st, "SURFACELEGEND EG, ELEVATION, 10, 10", log);
+  REQUIRE(st.cadTables.size() == 1);
+  REQUIRE(st.cadTables[0].cells.size() > 3);
+  Type(st, "SURFACEDELETE EG", log);
+  TickSurfaceRebuilds(st, log);
+  CHECK((st.cadTables[0].cells == std::vector<std::string>{"Analysis", "Surface value unavailable", "—"}));
 }
 
 TEST_CASE("ZVI refuses when no clipped cell has complete surface coverage", "[surface][req510]") {
