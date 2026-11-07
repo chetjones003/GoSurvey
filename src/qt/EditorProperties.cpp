@@ -830,7 +830,7 @@ void EditorWindow::RefreshProperties() {
         auto speed = [major, minor](double t) { return std::hypot(major * std::sin(t), minor * std::cos(t)); };
         double integral = speed(a.startRad) + speed(static_cast<double>(a.startRad) + a.sweepRad);
         for (int step = 1; step < steps; ++step)
-          integral += (step % 2 ? 4.0 : 2.0) * speed(static_cast<double>(a.startRad) + step * dt);
+          integral += ((step % 2) ? 4.0 : 2.0) * speed(static_cast<double>(a.startRad) + step * dt);
         readOnly(details, "Length", fmt(std::fabs(dt) * integral / 3.0), "propEllipseLength");
         const double area = EllipseIsFullTurn(a) ? kPi * major * minor
             : 0.5 * major * minor * (std::fabs(static_cast<double>(a.sweepRad)) - std::sin(std::fabs(static_cast<double>(a.sweepRad))));
