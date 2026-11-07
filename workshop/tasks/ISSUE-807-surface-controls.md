@@ -131,5 +131,6 @@ Visibility, Drape Image, Move to Surface, Create Profile, and Data Shortcut.
 - PR-agent follow-up findings were checked against the code and fixed: shortcut creation now refuses
   dirty source drawings and surfaces without a saved stable ID; profile-source recovery contributes
   to render-cache invalidation; crossing corrections split at the recomputed world-space intersection
-  after source edits. Regression coverage passes: Release build plus 98 assertions in five focused
-  REQ-509/513/514 test cases. The PR full-validation workflow is rerunning on the fixes.
+  after source edits; profile graph coordinates retain double precision. Regression coverage passes:
+  Release build plus 99 assertions in five focused REQ-509/513/514 test cases, including large-coordinate
+  short profile segments. The PR full-validation workflow is rerunning on the fixes.
