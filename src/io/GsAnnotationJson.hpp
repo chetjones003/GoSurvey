@@ -137,7 +137,8 @@ inline CadAnnotation CadAnnotationFromJson(const nlohmann::json& o) {
   a.ovOblique = o.value("ovOblique", a.ovOblique);
   a.ovBold = o.value("ovBold", a.ovBold);
   a.ovItalic = o.value("ovItalic", a.ovItalic);
-  a.annotative = o.value("annotative", a.annotative);
+  // Survey point labels are annotative by default (D-2026-11-06-a), including drawings saved before the flag.
+  a.annotative = o.value("annotative", o.value("surveyPointLabelForId", -1) >= 0);
   if (o.contains("annotativeVisibleScaleNames") && o["annotativeVisibleScaleNames"].is_array())
     a.annotativeVisibleScaleNames = o["annotativeVisibleScaleNames"].get<std::vector<std::string>>();
   a.dimExt1X = o.value("dimExt1X", a.dimExt1X);

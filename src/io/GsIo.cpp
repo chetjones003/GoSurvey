@@ -2697,6 +2697,7 @@ json BuildRoot(const AppCommandState& st) {
       item["labelStyleName"] = style.labelStyleName;
       item["markerVisible"] = style.markerVisible;
       item["labelVisible"] = style.labelVisible;
+      item["annotative"] = style.annotative;
       item["hasExplicitMarkerGeometry"] = style.hasExplicitMarkerGeometry;
       item["markerType"] = style.markerType;
       item["customMarker"] = style.customMarker;
@@ -5146,6 +5147,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       style.labelStyleName = o.value("labelStyleName", style.labelStyleName);
       style.markerVisible = o.value("markerVisible", style.markerVisible);
       style.labelVisible = o.value("labelVisible", style.labelVisible);
+      style.annotative = o.value("annotative", style.annotative);
       style.hasExplicitMarkerGeometry = o.value("hasExplicitMarkerGeometry", false);
       style.markerType = o.value("markerType", style.markerType);
       style.customMarker = o.value("customMarker", style.customMarker);

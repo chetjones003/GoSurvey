@@ -181,6 +181,9 @@ void DrawQtSurveyPoints(QPainter& painter, const AppCommandState& state, float w
         [&point](const auto& row) { return row.name == point.layer; });
     if (layer != state.drawingLayerTable.end() && (!layer->on || layer->frozen)) continue;
     const SurveyPointStyleDefinition* pointStyle = FindSurveyPointStyle(state.surveyPointStyles, point.styleName);
+    const float pointMup = ModelObjectUnitsPerPlottedInch(pointStyle == nullptr || pointStyle->annotative,
+        state.activeSpaceIndex == kModelSpaceIndex, state.modelUnitsPerPlottedInch, state.annotationScales,
+        state.currentAnnotationScaleIndex);
     const bool explicitGeometry = pointStyle != nullptr && pointStyle->hasExplicitMarkerGeometry;
     const std::size_t componentIndex = std::fabs(camera.ForwardWorld().z) > .999 ? 0 : 2;
     const auto* component = explicitGeometry ? &pointStyle->displayComponents[componentIndex] : nullptr;
@@ -199,7 +202,7 @@ void DrawQtSurveyPoints(QPainter& painter, const AppCommandState& state, float w
     if (!markerVisible && !(labelVisible && state.surveyPointShowIdInViewport)) continue;
     double arm = explicitGeometry && pointStyle->markerSizeType == 2 ? pointStyle->markerSize * .5 :
         SurveyPointCrossHalfWorldFromPaper(explicitGeometry ? pointStyle->crossSpanPlottedInches :
-            state.surveyPointCrossSpanPlottedInches, state.modelUnitsPerPlottedInch);
+            state.surveyPointCrossSpanPlottedInches, pointMup);
     float x = 0, y = 0, ex = 0, ey = 0;
     camera.WorldToScreen(point.easting, point.northing, point.elevation, width, height, &x, &y);
     camera.WorldToScreen(point.easting + right.x * arm, point.northing + right.y * arm,
@@ -863,7 +866,9 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     if (dimension) {
       const DimensionStyle& dimStyle = CadDimensionStyleForAnnotation(state, annotation);
       CadDimStrokeParams parameters;
-      parameters.modelUnitsPerPlottedInch = state.modelUnitsPerPlottedInch;
+      parameters.modelUnitsPerPlottedInch = ModelObjectUnitsPerPlottedInch(
+          annotation.annotative || StyleFlag(dimStyle.props, "annotative"), state.activeSpaceIndex == kModelSpaceIndex,
+          state.modelUnitsPerPlottedInch, state.annotationScales, state.currentAnnotationScaleIndex);
       parameters.arrowSizeInches = dimStyle.arrowSizeInches;
       parameters.arrowScale = state.viewportDimArrowScale;
       parameters.arrowType = dimStyle.arrowType;
@@ -1048,7 +1053,9 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
         textColor = QColor::fromRgbF(trgb[0], trgb[1], trgb[2]);
       }
       CadDimStrokeParams parameters;
-      parameters.modelUnitsPerPlottedInch = state.modelUnitsPerPlottedInch;
+      parameters.modelUnitsPerPlottedInch = ModelObjectUnitsPerPlottedInch(
+          StyleFlag(state.activeDimensionStyle.props, "annotative"), state.activeSpaceIndex == kModelSpaceIndex,
+          state.modelUnitsPerPlottedInch, state.annotationScales, state.currentAnnotationScaleIndex);
       parameters.arrowSizeInches = state.activeDimensionStyle.arrowSizeInches;
       parameters.arrowScale = state.viewportDimArrowScale;
       parameters.arrowType = state.activeDimensionStyle.arrowType;
@@ -1081,8 +1088,12 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     CadMultileader ml = state.cadMultileaders[i];
     const auto* namedStyle = MultileaderStyles::Find(state.multileaderStyles, ml.styleName);
     const MultileaderStyle& style = namedStyle ? *namedStyle : state.activeMultileaderStyle;
-    const float leaderArrow = ml.arrowSizeWorld > 0.f ? ml.arrowSizeWorld :
-        std::max(style.arrowSizeInches, .001f) * std::max(state.modelUnitsPerPlottedInch, 1.e-6f);
+    // Annotative multileaders take their arrow and text size from the annotation scale (D-2026-11-06-a).
+    const float mlMup = ModelObjectUnitsPerPlottedInch(ml.annotative, state.activeSpaceIndex == kModelSpaceIndex,
+        state.modelUnitsPerPlottedInch, state.annotationScales, state.currentAnnotationScaleIndex);
+    const bool mlFollowsAnnotationScale = ml.annotative && state.activeSpaceIndex == kModelSpaceIndex;
+    const float leaderArrow = ml.arrowSizeWorld > 0.f && !mlFollowsAnnotationScale ? ml.arrowSizeWorld :
+        std::max(style.arrowSizeInches, .001f) * std::max(mlMup, 1.e-6f);
     if (style.props.count("leaderType")) ml.splinePath = StyleProperty(style.props, "leaderType") == "Spline";
     if (StyleProperty(style.props, "arrowSymbol") == "None") ml.showArrow = false;
     const EntityAttributes* attrs = i < state.cadMultileaderAttrs.size() ? &state.cadMultileaderAttrs[i] : nullptr;
@@ -1113,7 +1124,7 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
         const auto* textStyle = TextStyles::Find(state.textStyles, style.textFont);
         label.fontFamily = textStyle ? textStyle->fontFamily : style.textFont;
       }
-      const double textWorld = std::max(label.plottedHeightInches * state.modelUnitsPerPlottedInch, 1.e-6f);
+      const double textWorld = std::max(label.plottedHeightInches * mlMup, 1.e-6f);
       const QPointF anchor = project(label.insX, label.insY, label.insZ);
       const QPointF cap = project(label.insX, label.insY + textWorld, label.insZ);
       const float pixels = static_cast<float>(std::hypot(cap.x() - anchor.x(), cap.y() - anchor.y()));

@@ -91,7 +91,7 @@ presets
 | **Object snap tracking, temporary tracking points** | Not present |
 | **Polar coordinate entry** (`@100<45`) | Use bearing lock: `A 45` then the distance |
 | **Parametric constraints** | Not present |
-| **Annotative scaling of existing text** | Changing the plot scale does not resize existing text; it does reposition survey point labels |
+| **Annotative scaling of existing text** | Changing the plot scale does not resize existing text; it does reposition survey point labels. In model space the annotation scale resizes annotative objects only |
 | **Coordinate system / projection library** | Coordinates are unprojected numbers. Use `ALIGN` to fit to control |
 | **Unit conversion** | The `UNITS` insertion setting is a **relabel only** — coordinates are never scaled |
 | **Table styles** | Styles can be created and modified in the table style manager and are stored in GoSurvey drawing data; they are not written to DWG table-style records |

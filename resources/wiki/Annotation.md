@@ -277,6 +277,19 @@ inch**. Changing it:
 
 Existing text is not resized. See [[Plotting]].
 
+### Annotation scale in model space
+
+The **annotation scale** list on the status bar sizes annotative objects in model space, as in AutoCAD.
+Choosing a scale resizes them and never moves the view. Annotative objects are:
+
+- **survey points**, their markers and their labels (annotative by default; a point style's marker is
+  sized from the annotation scale);
+- **position markers**;
+- dimensions, multileaders and text marked **Annotative**.
+
+Objects that are not annotative keep the plot scale above. Paper space keeps its own viewport
+annotation scale. See [[Views and Navigation]].
+
 ---
 
 ## Tables

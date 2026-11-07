@@ -255,6 +255,16 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
   return drawingModelUnitsPerPlottedInch;
 }
 
+/// Plotted-inch scale for a drawing object (D-2026-11-06-a). In model space an annotative object takes the
+/// current annotation scale; everything else, and everything in paper space, keeps the drawing plot scale.
+[[nodiscard]] inline float ModelObjectUnitsPerPlottedInch(bool annotative, bool modelSpace, float drawingMup,
+                                                          const std::vector<CadAnnotationScale>& scales,
+                                                          int currentScaleIndex) {
+  if (!annotative || !modelSpace)
+    return drawingMup;
+  return ModelSpaceAnnotativeModelUnitsPerPlottedInch(drawingMup, &scales, currentScaleIndex);
+}
+
 /// Issue #622: annotative TEXT/MTEXT/dimensions use the viewport's scale on a layout sheet, or the
 /// current annotation scale in model space. Non-annotative objects keep the drawing plot scale.
 [[nodiscard]] inline float AnnotativeModelUnitsPerPlottedInch(
