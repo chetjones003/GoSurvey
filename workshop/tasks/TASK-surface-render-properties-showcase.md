@@ -40,10 +40,11 @@
 - `README.md`: reviewed; added a link and contents summary for the authored showcase.
 - `PRIVACY.md`: reviewed; no privacy behavior or data handling changes, so no update needed.
 - `resources/wiki/Properties.md`: reviewed and updated to describe the additional object-specific details.
-- Public manual/wiki: `https://github.com/chetjones003/GoSurvey/wiki` redirects to the repository and `gh repo view` reports `hasWikiEnabled=false`; `https://gosurveycad.com/docs/` was inaccessible through the available web tool. The external manual could not be updated. Per repository pre-PR rule, do not open a PR until access to the affected public manual is available and its Properties guide is updated.
+- Public manual: reviewed `gosurveycad-site/docs/properties.html`, the Properties guide linked from gosurveycad.com. Updated it on `docs/properties-object-details`; submitted as [gosurveycad-site PR #4](https://github.com/chetjones003/gosurveycad-site/pull/4). The legacy GitHub Wiki URL redirects to the repository and `hasWikiEnabled=false`; the website manual source is the authoritative public guide.
 
 ## Implementation evidence
 
 - Release build: `build.bat` succeeded.
 - Showcase generation completed; generation output reports 500 surface points, 912 triangles, seven exported native solids, and four native pipe runs. The pipe catalog reports missing matching elbow fittings, so those runs have no catalog elbows.
+- Website documentation change passed its Cloudflare Pages PR check; no review decision or comments were present when checked.
 - Automated tests and visible UI screenshot review were not run.
