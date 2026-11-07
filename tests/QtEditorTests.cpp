@@ -16278,6 +16278,7 @@ private Q_SLOTS:
     QVERIFY(fileRow);
     QVERIFY(manager->findChild<QPushButton*>("surfaceManagerImport")->isEnabled());
     QCOMPARE(manager->findChild<QPushButton*>("surfaceManagerRemove")->text(), QString("Remove link"));
+    QVERIFY(manager->grab().save(Issue914Shot("issue807-point-files-manager.png")));
     manager->findChild<QPushButton*>("surfaceManagerRemove")->click();
     QVERIFY(st.cadSurfaces[0].sourcePointFiles.empty());
     manager->close();
