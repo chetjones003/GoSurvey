@@ -48,3 +48,4 @@
 - Showcase generation completed; generation output reports 500 surface points, 912 triangles, seven exported native solids, and four native pipe runs. The pipe catalog reports missing matching elbow fittings, so those runs have no catalog elbows.
 - Website documentation change passed its Cloudflare Pages PR check; no review decision or comments were present when checked.
 - Automated tests and visible UI screenshot review were not run.
+- PR review follow-up: corrected authored DXF elevation encoding to use 3D `POLYLINE`/`VERTEX` records or shared `LWPOLYLINE` elevation, added mixed core-object counts in Geometry, and added polyline plan/spatial length and bulge-aware closed area. Rebuilt successfully and regenerated all showcase DWGs.

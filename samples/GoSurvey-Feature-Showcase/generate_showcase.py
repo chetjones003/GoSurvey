@@ -36,11 +36,19 @@ class Dxf:
         self.entity("ARC", (10, p[0]), (20, p[1]), (30, p[2]), (40, r), (50, start), (51, end))
 
     def poly(self, pts, closed=False, bulges=None):
-        data = [(90, len(pts)), (70, 1 if closed else 0)]
+        elevations = [p[2] if len(p) > 2 else 0 for p in pts]
+        elevation = elevations[0] if elevations else 0
+        if any(z != elevation for z in elevations):
+            if bulges and any(bulges):
+                raise ValueError("DXF 3D polylines cannot contain bulged segments")
+            self.entity("POLYLINE", (66, 1), (10, 0), (20, 0), (30, 0), (70, 8 | (1 if closed else 0)))
+            for p, z in zip(pts, elevations):
+                self.entity("VERTEX", (10, p[0]), (20, p[1]), (30, z), (70, 32))
+            self.entity("SEQEND")
+            return
+        data = [(90, len(pts)), (70, 1 if closed else 0), (38, elevation)]
         for i, p in enumerate(pts):
             data += [(10, p[0]), (20, p[1])]
-            if len(p) > 2:
-                data.append((30, p[2]))
             if bulges and bulges[i]:
                 data.append((42, bulges[i]))
         self.entity("LWPOLYLINE", *data)

@@ -19,6 +19,7 @@
 #include "CadPropertyEdit.hpp"
 #include "CadUiStyleWidgets.hpp"
 #include "util/AngleFormat.hpp"
+#include "util/geom2d.hpp"
 #include "util/NumFormat.hpp"
 
 #include <QColorDialog>
@@ -564,6 +565,12 @@ void EditorWindow::RefreshProperties() {
   } else if (!pure) {
     // Keep the shared geometry editor reserved for homogeneous line/circle/text selections;
     // object-specific, read-only geometry is reported below for every other entity kind.
+    if (st.selection.size() > 1) {
+      if (lines.size()) readOnly(geometryRows, "Lines", QString::number(lines.size()), "propMixedLines");
+      if (circles.size()) readOnly(geometryRows, "Circles", QString::number(circles.size()), "propMixedCircles");
+      if (texts.size()) readOnly(geometryRows, "Annotations", QString::number(texts.size()), "propMixedAnnotations");
+      if (nOther) readOnly(geometryRows, "Other objects", QString::number(nOther), "propMixedOther");
+    }
   } else if (lines.size() == 1 && static_cast<size_t>(lines[0].index) < lineCount) {
     const int i = lines[0].index;
     const double* v = &st.userLinesFlat[static_cast<size_t>(i) * 6];
@@ -731,11 +738,39 @@ void EditorWindow::RefreshProperties() {
       if (e.type == SelectedEntity::Type::Polyline && valid(st.userPolylineOffsets.size() - (st.userPolylineOffsets.empty() ? 0u : 1u))) {
         const int first = st.userPolylineOffsets[static_cast<size_t>(i)], last = st.userPolylineOffsets[static_cast<size_t>(i + 1)];
         readOnly(details, "Vertices", QString::number(std::max(0, last - first)), "propPolylineVertices");
-        readOnly(details, "Closed", valid(st.userPolylineClosed.size()) && st.userPolylineClosed[static_cast<size_t>(i)] ? "Yes" : "No", "propPolylineClosed");
+        const bool closed = valid(st.userPolylineClosed.size()) && st.userPolylineClosed[static_cast<size_t>(i)];
+        readOnly(details, "Closed", closed ? "Yes" : "No", "propPolylineClosed");
         if (last > first && static_cast<size_t>(last) <= st.userPolylineVerts.size() / 3) {
           double lo = st.userPolylineVerts[static_cast<size_t>(first) * 3 + 2], hi = lo;
           for (int v = first; v < last; ++v) { const double z = st.userPolylineVerts[static_cast<size_t>(v) * 3 + 2]; lo = std::min(lo, z); hi = std::max(hi, z); }
           readOnly(details, "Elevation range", fmt(lo) + " to " + fmt(hi), "propPolylineElevation");
+          const int vertexCount = last - first;
+          const int segmentCount = std::max(0, vertexCount - 1) + (closed && vertexCount > 1 ? 1 : 0);
+          double planLength = 0.0, spatialLength = 0.0, signedArea = 0.0;
+          for (int seg = 0; seg < segmentCount; ++seg) {
+            const int va = first + seg;
+            const int vb = seg == vertexCount - 1 ? first : va + 1;
+            const size_t a = static_cast<size_t>(va) * 3, b = static_cast<size_t>(vb) * 3;
+            const double x0 = st.userPolylineVerts[a], y0 = st.userPolylineVerts[a + 1], z0 = st.userPolylineVerts[a + 2];
+            const double x1 = st.userPolylineVerts[b], y1 = st.userPolylineVerts[b + 1], z1 = st.userPolylineVerts[b + 2];
+            const double bulge = static_cast<size_t>(va) < st.userPolylineVertsBulge.size()
+                ? st.userPolylineVertsBulge[static_cast<size_t>(va)] : 0.0;
+            const double segmentPlan = BulgeSegmentLength(x0, y0, x1, y1, bulge);
+            planLength += segmentPlan;
+            spatialLength += std::hypot(segmentPlan, z1 - z0);
+            if (closed) {
+              signedArea += 0.5 * (x0 * y1 - x1 * y0);
+              if (std::fabs(bulge) > 1e-12) {
+                const BulgeArcSpan arc = BulgeArc(x0, y0, x1, y1, bulge);
+                if (arc.valid) {
+                  signedArea += 0.5 * arc.radius * arc.radius * (arc.sweep - std::sin(arc.sweep));
+                }
+              }
+            }
+          }
+          readOnly(details, "Plan length", fmt(planLength), "propPolylinePlanLength");
+          readOnly(details, "Spatial length", fmt(spatialLength), "propPolylineSpatialLength");
+          if (closed) readOnly(details, "Area", fmt(std::fabs(signedArea)), "propPolylineArea");
         }
       } else if (e.type == SelectedEntity::Type::FeatureLine && valid(st.featureLineInfo.size())) {
         const auto& fl = st.featureLineInfo[static_cast<size_t>(i)];
