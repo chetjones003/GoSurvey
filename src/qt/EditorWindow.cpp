@@ -2866,7 +2866,6 @@ void EditorWindow::RefreshToolspace() {
 void EditorWindow::Refresh() {
   if (m_Refreshing) return;
   m_Refreshing = true;
-  const bool modelSpace = m_State.activeSpaceIndex == kModelSpaceIndex && !InFloatingModelSpace(m_State);
   if (auto* annotationScale = findChild<QComboBox*>("statusAnnotationScale")) {
     // AutoCAD's Default Scale List, imperial or metric by the drawing's units (D-2026-11-06-a). Only a drawing
     // that has no list gets one; a list the user or a file defined is kept.
