@@ -3382,8 +3382,8 @@ void ApplySurfaceCrossingCorrections(const CadSurface& surface, SurfaceBuildInpu
         const auto split = [&](size_t index) {
           const TinConstraint original = inputs.constraints[index];
           TinConstraint first = original, second = original;
-          const double x = correction.x + inputs.originX;
-          const double y = correction.y + inputs.originY;
+          const double x = issue.x;
+          const double y = issue.y;
           first.bx = x; first.by = y; first.bz = z;
           second.ax = x; second.ay = y; second.az = z;
           inputs.constraints[index] = first;
@@ -4332,8 +4332,9 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
       }
     } else if (!profile.sourceStatus.empty()) {
       const std::string priorStatus = profile.sourceStatus;
-      (void)RefreshSurfaceProfilesForSurface(st, st.cadSurfaces[static_cast<size_t>(surfaceIndex)], false,
-                                             profile.alignmentId);
+      appliedSurface = RefreshSurfaceProfilesForSurface(
+          st, st.cadSurfaces[static_cast<size_t>(surfaceIndex)], false,
+          profile.alignmentId) || appliedSurface;
       if (profile.sourceStatus.empty())
         log.push_back("Profile \"" + profile.name + "\" source is available again; profile view refreshed.");
       else if (profile.sourceStatus != priorStatus)

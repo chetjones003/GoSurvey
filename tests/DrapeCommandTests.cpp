@@ -215,12 +215,24 @@ TEST_CASE("Project data shortcuts create read-only references and refresh from s
   source.cadSurfaceAttrs[0].id = 4200;
   std::vector<std::string> log;
   REQUIRE(SaveDrawingDocument(source, drawingPath.u8string().c_str(), log));
+  source.activeDocSavedRevision = source.cadGpuRevision;
 
   AppCommandState::ProjectSession session;
   session.uid = 7;
   session.project = project;
   source.openProjects.push_back(session);
   source.drawingTabs[1].projectUid = 7;
+  source.cadSurfaces[0].name = "Unsaved EG";
+  BumpCadGpuCache(source);
+  CHECK_FALSE(CreateSurfaceDataShortcut(source, 0, log));
+  CHECK(LogHas(log, "save the source drawing and its surface changes"));
+  REQUIRE(SaveDrawingDocument(source, drawingPath.u8string().c_str(), log));
+  source.activeDocSavedRevision = source.cadGpuRevision;
+  const std::uint64_t savedSurfaceId = source.cadSurfaceAttrs[0].id;
+  source.cadSurfaceAttrs[0].id = 0;
+  CHECK_FALSE(CreateSurfaceDataShortcut(source, 0, log));
+  CHECK(LogHas(log, "no saved stable identity"));
+  source.cadSurfaceAttrs[0].id = savedSurfaceId;
   REQUIRE(CreateSurfaceDataShortcut(source, 0, log));
 
   AppCommandState reference;
@@ -396,6 +408,21 @@ TEST_CASE("Crossing breakline decisions are local, undoable and persistent", "[s
                          50.0, 50.0, &crossingElevation));
   CHECK(crossingElevation == Approx(5.0).margin(0.002));
 
+  // Source edits can move the crossing slightly while the saved correction still identifies it.
+  st.userLinesFlat[6] = 50.02f;
+  st.userLinesFlat[9] = 50.02f;
+  REQUIRE(BuildSurfaceFromSources(st, st.cadSurfaces[0], log));
+  bool splitAtUpdatedCrossing = false;
+  for (size_t i = 0; i + 2 < st.cadSurfaces[0].tin->vertsXyz.size(); i += 3) {
+    if (std::abs(st.cadSurfaces[0].tin->vertsXyz[i] - 50.02) < 0.002 &&
+        std::abs(st.cadSurfaces[0].tin->vertsXyz[i + 1] - 50.0) < 0.002 &&
+        std::abs(st.cadSurfaces[0].tin->vertsXyz[i + 2] - 5.0) < 0.002) {
+      splitAtUpdatedCrossing = true;
+      break;
+    }
+  }
+  CHECK(splitAtUpdatedCrossing);
+
   const std::string json = SerializeGoSurveyJson(st);
   AppCommandState reopened;
   REQUIRE(LoadGoSurveyFromJsonUtf8(reopened, json, log));
@@ -556,9 +583,16 @@ TEST_CASE("Create Profile samples an alignment and persists its placed graph", "
   CHECK(st.surfaceProfiles[0].stations.size() == oldSampleCount);
   CHECK(st.surfaceProfiles[0].sourceStatus == "Source alignment unavailable.");
   CHECK(LogHas(log, "Profile \"EG Profile\" unavailable"));
+  auto changedWhileUnavailable = std::make_shared<CadTin>(*st.cadSurfaces[0].tin);
+  for (size_t i = 2; i < changedWhileUnavailable->vertsXyz.size(); i += 3)
+    changedWhileUnavailable->vertsXyz[i] += 2.0;
+  st.cadSurfaces[0].tin = std::move(changedWhileUnavailable);
+  const std::uint32_t cacheRevisionBeforeRestore = st.cadGpuCacheRevision;
   st.alignments.push_back(baseline);
   TickSurfaceRebuilds(st, log);
   CHECK(st.surfaceProfiles[0].sourceStatus.empty());
+  CHECK(st.surfaceProfiles[0].elevations[2] == Approx(GroundZ(50) + 3.0).margin(0.002));
+  CHECK(st.cadGpuCacheRevision > cacheRevisionBeforeRestore);
   CHECK(LogHas(log, "source is available again"));
 
   const std::string json = SerializeGoSurveyJson(st);

@@ -128,3 +128,8 @@ Visibility, Drape Image, Move to Surface, Create Profile, and Data Shortcut.
 - Autodesk visual comparison: INCONCLUSIVE because Civil 3D is not installed (only its Object Enabler
   is present); see `build/artifacts/issue807/visual-comparison.md`. No comparison pass is claimed.
 - Final implementation verification: PASS. Findings from all four change-request review rounds are fixed and covered by regressions. The fifth and final diff review approved the implementation with no findings. PR checks and merge remain. The recorded Civil 3D comparison is inconclusive; no comparison pass is claimed.
+- PR-agent follow-up findings were checked against the code and fixed: shortcut creation now refuses
+  dirty source drawings and surfaces without a saved stable ID; profile-source recovery contributes
+  to render-cache invalidation; crossing corrections split at the recomputed world-space intersection
+  after source edits. Regression coverage passes: Release build plus 98 assertions in five focused
+  REQ-509/513/514 test cases. The PR full-validation workflow is rerunning on the fixes.

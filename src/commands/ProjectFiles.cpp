@@ -528,11 +528,17 @@ bool CreateSurfaceDataShortcut(AppCommandState& st, size_t surfaceIndex, std::ve
     log.push_back("Data Shortcut — the selected surface no longer exists."); return false;
   }
   if (st.activeDocFilePath.empty()) { log.push_back("Data Shortcut — save the source drawing inside the project first."); return false; }
+  if (st.cadGpuRevision != st.activeDocSavedRevision) {
+    log.push_back("Data Shortcut — save the source drawing and its surface changes before creating a shortcut.");
+    return false;
+  }
   const std::string rel = DrawingRel(session->project, st.activeDocFilePath);
   if (rel.empty()) { log.push_back("Data Shortcut — the source drawing must be inside this project."); return false; }
-  EnsureEntityIds(st);
   const std::uint64_t surfaceId = st.cadSurfaceAttrs[surfaceIndex].id;
-  if (!surfaceId) { log.push_back("Data Shortcut — the surface has no stable identity."); return false; }
+  if (!surfaceId) {
+    log.push_back("Data Shortcut — the surface has no saved stable identity; save the drawing before creating a shortcut.");
+    return false;
+  }
   json extra = json::parse(session->project.extraJson, nullptr, false);
   if (!extra.is_object()) extra = json::object();
   json shortcuts = extra.value("surfaceShortcuts", json::array());
