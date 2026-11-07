@@ -689,8 +689,13 @@ QMenu* EditorWindow::BuildToolspaceMenu(QTreeWidgetItem* item) {
   } else if (kind == "trackedItem") {
     const QString path = item->data(0, Qt::UserRole + 5).toString();
     const bool linked = item->data(0, Qt::UserRole + 6).toBool();
-    const bool isPdf = QFileInfo(path).suffix().compare(QStringLiteral("pdf"), Qt::CaseInsensitive) == 0;
-    add("Open", "toolspaceOpenTrackedItem", isPdf && QFileInfo::exists(path), [this, path] { ShowPdfFile(path); });
+    const QString suffix = QFileInfo(path).suffix();
+    const bool isPdf = suffix.compare(QStringLiteral("pdf"), Qt::CaseInsensitive) == 0;
+    const bool isDrawing = suffix.compare(QStringLiteral("dwg"), Qt::CaseInsensitive) == 0;
+    if (isDrawing)
+      add("Open", "toolspaceOpenTrackedDrawing", QFileInfo::exists(path), [this, path] { OpenDrawing(path); });
+    else
+      add("Open", "toolspaceOpenTrackedItem", isPdf && QFileInfo::exists(path), [this, path] { ShowPdfFile(path); });
     if (linked) add("Copy Into Project", "toolspaceCopyLinkIntoProject", activeWritable, [this] { Submit("PROJECTHEALTH"); });
   } else if (kind == "drawingsFolder") {
     add("Refresh Project Files", "toolspaceRefreshDrawings", activeWritable, [this] { Submit("REFRESH"); });

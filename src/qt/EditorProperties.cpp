@@ -33,6 +33,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPixmap>
+#include <QMap>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
@@ -561,10 +562,8 @@ void EditorWindow::RefreshProperties() {
     note->setWordWrap(true);
     geometryRows->addWidget(note);
   } else if (!pure) {
-    auto* mixed = new QLabel("Mixed object types — geometry is read-only here. Edit General above, or select only lines, circles, or text.", body);
-    mixed->setObjectName("propertiesMixedNote");
-    mixed->setWordWrap(true);
-    geometryRows->addWidget(mixed);
+    // Keep the shared geometry editor reserved for homogeneous line/circle/text selections;
+    // object-specific, read-only geometry is reported below for every other entity kind.
   } else if (lines.size() == 1 && static_cast<size_t>(lines[0].index) < lineCount) {
     const int i = lines[0].index;
     const double* v = &st.userLinesFlat[static_cast<size_t>(i) * 6];
@@ -694,6 +693,76 @@ void EditorWindow::RefreshProperties() {
     auto* hint = new QLabel("Select a single TEXT or MTEXT to edit content and box here.", body);
     hint->setWordWrap(true);
     geometryRows->addWidget(hint);
+  }
+  if (nOther > 0) {
+    auto* details = section("Object details", "propertiesObjectDetails");
+    auto typeName = [](SelectedEntity::Type type) -> const char* {
+      switch (type) {
+        case SelectedEntity::Type::Polyline: return "Polyline";
+        case SelectedEntity::Type::Arc: return "Arc";
+        case SelectedEntity::Type::Ellipse: return "Ellipse";
+        case SelectedEntity::Type::PdfUnderlay: return "PDF underlay";
+        case SelectedEntity::Type::FilledRegion: return "Filled region";
+        case SelectedEntity::Type::Mesh: return "Mesh";
+        case SelectedEntity::Type::FeatureLine: return "Feature line";
+        case SelectedEntity::Type::Surface: return "TIN surface";
+        case SelectedEntity::Type::Table: return "Table";
+        case SelectedEntity::Type::BlockRef: return "Block reference";
+        case SelectedEntity::Type::Solid: return "3D solid";
+        case SelectedEntity::Type::PipeRun: return "Pipe run";
+        case SelectedEntity::Type::PointCloud: return "Point cloud";
+        case SelectedEntity::Type::Multileader: return "Multileader";
+        case SelectedEntity::Type::Spline: return "Spline";
+        case SelectedEntity::Type::Point: return "CAD point";
+        case SelectedEntity::Type::Alignment: return "Alignment";
+        default: return "Object";
+      }
+    };
+    QMap<QString, int> counts;
+    for (const auto& e : st.selection) if (e.type != SelectedEntity::Type::LineSeg &&
+        e.type != SelectedEntity::Type::Circle && e.type != SelectedEntity::Type::Annotation)
+      ++counts[QString::fromLatin1(typeName(e.type))];
+    for (auto it = counts.cbegin(); it != counts.cend(); ++it)
+      readOnly(details, it.key(), QString("%1 selected").arg(it.value()), "propObjectKind");
+    if (st.selection.size() == 1) {
+      const auto& e = st.selection.front();
+      const int i = e.index;
+      const auto valid = [i](size_t n) { return i >= 0 && static_cast<size_t>(i) < n; };
+      if (e.type == SelectedEntity::Type::Polyline && valid(st.userPolylineOffsets.size() - (st.userPolylineOffsets.empty() ? 0u : 1u))) {
+        const int first = st.userPolylineOffsets[static_cast<size_t>(i)], last = st.userPolylineOffsets[static_cast<size_t>(i + 1)];
+        readOnly(details, "Vertices", QString::number(std::max(0, last - first)), "propPolylineVertices");
+        readOnly(details, "Closed", valid(st.userPolylineClosed.size()) && st.userPolylineClosed[static_cast<size_t>(i)] ? "Yes" : "No", "propPolylineClosed");
+        if (last > first && static_cast<size_t>(last) <= st.userPolylineVerts.size() / 3) {
+          double lo = st.userPolylineVerts[static_cast<size_t>(first) * 3 + 2], hi = lo;
+          for (int v = first; v < last; ++v) { const double z = st.userPolylineVerts[static_cast<size_t>(v) * 3 + 2]; lo = std::min(lo, z); hi = std::max(hi, z); }
+          readOnly(details, "Elevation range", fmt(lo) + " to " + fmt(hi), "propPolylineElevation");
+        }
+      } else if (e.type == SelectedEntity::Type::FeatureLine && valid(st.featureLineInfo.size())) {
+        const auto& fl = st.featureLineInfo[static_cast<size_t>(i)];
+        readOnly(details, "Name", Text(fl.name), "propFeatureLineName");
+        readOnly(details, "Description", Text(fl.description), "propFeatureLineDescription");
+        if (valid(st.featureLineOffsets.size() - (st.featureLineOffsets.empty() ? 0u : 1u)))
+          readOnly(details, "Vertices", QString::number(st.featureLineOffsets[static_cast<size_t>(i + 1)] - st.featureLineOffsets[static_cast<size_t>(i)]), "propFeatureLineVertices");
+      } else if (e.type == SelectedEntity::Type::Arc && valid(st.userArcs.size())) {
+        const auto& a = st.userArcs[static_cast<size_t>(i)];
+        readOnly(details, "Center", fmt(a.cx + ox) + ", " + fmt(a.cy + oy) + ", " + fmt(a.z), "propArcCenter");
+        readOnly(details, "Radius", fmt(a.r), "propArcRadius");
+        readOnly(details, "Sweep", fmt(std::fabs(a.sweepRad) * 180.0 / 3.14159265358979323846) + "°", "propArcSweep");
+      } else if (e.type == SelectedEntity::Type::Ellipse && valid(st.userEllipses.size())) {
+        const auto& a = st.userEllipses[static_cast<size_t>(i)];
+        readOnly(details, "Center", fmt(a.cx + ox) + ", " + fmt(a.cy + oy) + ", " + fmt(a.z), "propEllipseCenter");
+        readOnly(details, "Major radius", fmt(std::hypot(a.majVx, a.majVy)), "propEllipseMajor");
+        readOnly(details, "Axis ratio", fmt(a.ratio), "propEllipseRatio");
+      } else if (e.type == SelectedEntity::Type::PipeRun && valid(st.cadPipeRuns.size())) {
+        const auto& p = st.cadPipeRuns[static_cast<size_t>(i)];
+        readOnly(details, "Name", Text(p.name), "propPipeRunName");
+        readOnly(details, "Nominal size", Text(p.nominalSize), "propPipeRunSize");
+        readOnly(details, "Route vertices", QString::number(p.vertsXyz.size() / 3), "propPipeRunVertices");
+      } else if (e.type == SelectedEntity::Type::Point && valid(st.cadPoints.size())) {
+        const auto& p = st.cadPoints[static_cast<size_t>(i)];
+        readOnly(details, "Position", fmt(p.x + ox) + ", " + fmt(p.y + oy) + ", " + fmt(p.z), "propCadPointPosition");
+      }
+    }
   }
   if (st.selection.size() == 1 && st.selection.front().type == SelectedEntity::Type::FeatureLine) {
     const int index = st.selection.front().index;

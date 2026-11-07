@@ -17012,17 +17012,25 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Build/Platform (GitHub Actions)
 - Status: accepted (2026-11-05, user approved scope and GitHub issue alert route)
 
-### REQ-504 — Shared PR/release validation and failed release alerts
-- Purpose: make PR validation exercise the same build and full test path used by beta and stable releases, and make post-merge release failures visible.
+### REQ-507 — Useful Properties for every selected object type
+- Purpose: make the Properties panel useful for inspection of the full drawing, not only its original line, circle, and text editors.
 - Priority: must
-- Type: quality
-- Statement: PRs targeting `beta` or `master` and release runs targeting either branch use one shared Release configure/build/full-CTest validation path, including matching compiler, Qt kit, CMake options, Qt test sharding, CTest parallelism, Mesa runtime staging, hosted display preparation, and runtime cleanup. Release version metadata is supplied by the caller. Existing static analysis, security checks, PR coverage/performance evidence, and release packaging stay in their existing workflows. If the build or package job fails on a beta/master release run, CI creates one GitHub issue labeled `bug` and `needs-triage`, mentions the repository owner, identifies the branch and failed jobs/steps, and links the run and job logs. Reruns reuse or reopen that issue. Successful runs create no issue. Existing release triggers and package/publish behavior remain governed by REQ-202: beta push remains automatic; stable release remains manual.
+- Type: functional
+- Decision: D-2026-11-06-c. Supersedes TASK-891's earlier deferral of object-specific property reporting for polyline, arc, ellipse, survey point, surface, solid, mesh, block, table, pipe-run and related object types.
+- Statement: When an entity is selected, the Properties panel shows its object type and useful object-specific values available from the drawing model. Calculated geometry and imported reference data may be read-only. Existing editing behavior for line, circle, text, general attributes, feature-line grading, surface and alignment properties remains intact. Heterogeneous selection identifies the selected kinds and summarizes useful values by kind where practical; it must not describe known selected objects as an empty or generic geometry set.
+- Minimum object-specific information for a single selection:
+  - Polyline: vertex count, open/closed, planar and spatial length, elevation range, and area when closed.
+  - Arc and ellipse: center/elevation, radii or axis dimensions, angular sweep/rotation, and derived length/area where defined.
+  - Feature line: name, vertex count, closed state, length, and elevation range; preserve its existing grading criteria report.
+  - Survey point / CAD point: identifier and stored coordinates/elevation; survey description when present.
+  - Surface: name, source/style or kind, point and triangle counts, elevation range, and current build state.
+  - Alignment: preserve REQ-501's existing station, entity, curve, spiral and continuity information.
+  - Solid, mesh, point cloud, and pipe run: their available defining dimensions, topology/counts, bounds, route length/size/class, or other model-owned metadata; do not recompute or mutate source geometry solely for display.
+  - Block reference, table, filled region, multileader, PDF underlay, spline, and position marker: identify the object and show available name, placement, dimensions, counts, text, or path/page metadata.
 - Acceptance:
-  - PRs targeting `beta` and `master` invoke the same shared configure/build/full-CTest action as release runs targeting those branches.
-  - Both callers use the same compiler setup, Qt kit, CMake options, 6 Qt editor shards, 8-way hosted CTest parallelism, Mesa runtime, hosted display preparation, and cleanup; release version metadata is supplied by the release caller.
-  - Existing clang-tidy, MSVC `/analyze`, security scans, PR coverage/performance evidence, and release package/publish steps remain active.
-  - A failed beta/master release build or package job creates one issue labeled `bug` and `needs-triage`, mentions the repository owner, and includes the branch, failed job/step names, and run/job log links.
-  - A rerun updates or reopens the same issue instead of creating another; successful runs create no issue.
-  - Beta push and stable manual release triggers and all package/publish outcomes are unchanged (REQ-202).
-- Owner-layer: Build/Platform (GitHub Actions)
-- Status: accepted (2026-11-05, user approved scope and GitHub issue alert route)
+  1. Selecting each currently selectable entity type shows an object-type label and at least one meaningful object-specific value when the model has such data.
+  2. Selecting a polyline, arc, ellipse, feature line, survey point, surface, solid, or pipe run shows the minimum information above without requiring a command-line query.
+  3. Mixed selections identify their member types and do not show the prior "select only lines, circles, or text" dead-end message.
+  4. Read-only reports cannot mutate the drawing; existing editable fields retain validation, persistence, and undo behavior.
+- Owner-layer: Qt Properties UI reads domain/command state; existing model and edit services remain the source of truth.
+- Status: accepted 2026-11-06 (D-2026-11-06-c).

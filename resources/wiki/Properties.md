@@ -42,6 +42,13 @@ Set a value to **ByLayer** to hand control back to the object's layer ([[Layers]
 
 ## Geometry by object type
 
+The **Object details** section also reports read-only geometry and model data for selected object
+types that do not use the editable line, circle, or annotation fields. Examples include polyline
+vertex count, closure and elevation range; arc center, radius and sweep; ellipse center, major radius
+and axis ratio; feature-line name, description and vertex count; and pipe-run name, nominal size and
+route vertex count. TIN surfaces and alignments have their own detail sections. These values come
+from the drawing model and are recalculated when geometry changes.
+
 ### Line
 
 | Field | Notes |
@@ -59,6 +66,24 @@ Set a value to **ByLayer** to hand control back to the object's layer ([[Layers]
 | **Derived:** Diameter · Circumference · **Area** | Read-only, computed from the radius |
 
 A circle's area is also listed here. `AREA` reports typed points or a closed polyline or circle.
+
+### Polyline, arc and ellipse
+
+These objects show read-only geometry in **Object details**: polylines report vertex count, closure
+and elevation range; arcs report center, radius and sweep; ellipses report center, major radius and
+axis ratio.
+
+### Feature line, surface and alignment
+
+Feature lines report their name, description and vertex count, plus grading criteria when present.
+TIN surfaces report point and triangle counts, elevation range and definition state. Alignments
+report station range, length, endpoints, bearings and design criteria where configured.
+
+### 3D and reference objects
+
+Pipe runs report their name, nominal size and route vertex count. Other selected model and reference
+objects are identified by type in **Object details**; available model-specific fields are shown
+there when the drawing contains them.
 
 ### Annotation — TEXT and MTEXT
 
