@@ -4,6 +4,7 @@
 #include "CadCommands.hpp"
 #include "ViewportZoomScale.hpp"
 #include "GsIo.hpp"
+#include "CadCommandsInternal.hpp"
 #include "io/GsAnnotationJson.hpp"
 #include "io/LibreDwgCad.hpp"
 
@@ -210,4 +211,25 @@ TEST_CASE("Survey labels saved before the annotative flag load annotative (D-202
   nlohmann::json plainSaved;
   CadAnnotationToJson(plain, plainSaved);
   CHECK_FALSE(CadAnnotationFromJson(plainSaved).annotative);
+}
+
+TEST_CASE("New text takes the Annotative setting of its text style (D-2026-11-06-a)", "[req458]") {
+  AppCommandState st;
+  TextStyles::EnsureStandard(st.textStyles);
+  TextStyle annotativeStyle;
+  annotativeStyle.name = "Annotative Text";
+  annotativeStyle.props["annotative"] = "1";  // what the style editor's checkbox stores when ticked
+  st.textStyles.push_back(annotativeStyle);
+
+  st.activeTextStyleName = "Annotative Text";
+  CadAnnotation text;
+  text.kind = CadAnnotation::Kind::Mtext;
+  StampActiveTextStyleOnNewText(st, text);
+  CHECK(text.annotative);
+
+  st.activeTextStyleName = TextStyles::kStandardName;
+  CadAnnotation plain;
+  plain.kind = CadAnnotation::Kind::Mtext;
+  StampActiveTextStyleOnNewText(st, plain);
+  CHECK_FALSE(plain.annotative);
 }

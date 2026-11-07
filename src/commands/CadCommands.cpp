@@ -27654,6 +27654,9 @@ void StampActiveTextStyleOnNewText(AppCommandState& st, CadAnnotation& a) {
   a.obliqueDeg = s->obliqueDeg;
   a.bold = s->bold;
   a.italic = s->italic;
+  // The style's Annotative setting (D-2026-11-06-a): new text made with an annotative style is annotative.
+  // An object already annotative (survey and position marker labels) stays so.
+  a.annotative = a.annotative || StyleFlag(s->props, "annotative");
 }
 
 static bool ValidNewLayerNameChars(const std::string& n) {
