@@ -42,6 +42,13 @@ Set a value to **ByLayer** to hand control back to the object's layer ([[Layers]
 
 ## Geometry by object type
 
+The **Object details** section also reports read-only geometry and model data for selected object
+types that do not use the editable line, circle, or annotation fields. Examples include polyline
+vertex count, closure and elevation range; arc center, radius and sweep; ellipse center, major radius
+and axis ratio; feature-line name, description and vertex count; and pipe-run name, nominal size and
+route vertex count. TIN surfaces and alignments have their own detail sections. These values come
+from the drawing model and are recalculated when geometry changes.
+
 ### Line
 
 | Field | Notes |
@@ -59,6 +66,31 @@ Set a value to **ByLayer** to hand control back to the object's layer ([[Layers]
 | **Derived:** Diameter · Circumference · **Area** | Read-only, computed from the radius |
 
 A circle's area is also listed here. `AREA` reports typed points or a closed polyline or circle.
+
+### Polyline, arc and ellipse
+
+These objects show read-only geometry in **Object details**: polylines report vertex count, closure
+elevation range, planar and spatial lengths, and closed area; arcs report center, radius, sweep and
+length; ellipses report center, major and minor radii, major-axis rotation, sweep, curve length, and
+area (or arc-segment area for a partial ellipse).
+
+### Feature line, surface and alignment
+
+Feature lines report their name, description, vertex count, closure, elevation range, and plan and
+spatial lengths, plus grading criteria when present. TIN surfaces report point and triangle counts,
+elevation range and definition state. Alignments
+report station range, length, endpoints, bearings and design criteria where configured.
+
+### 3D and reference objects
+
+Pipe runs report their name, nominal size, route vertices and length, pressure class, and stated wall
+thickness. Solids show topology counts and XYZ bounds; meshes show source, vertex and triangle
+counts, and bounds; block references show definition, insertion, scale, rotation, and attribute
+count; tables show rows, columns, insertion, dimensions, and style; filled regions show loops,
+vertices, and pattern; multileaders show branches, path vertices, text, and style; PDF underlays show
+file, page, insertion, scale, rotation, and page size. Point clouds show source and total/preview
+counts. A single selected survey point shows ID, easting, northing, elevation, description, and raw
+code. Values are read-only; use the relevant contextual tools or manager to edit the object.
 
 ### Annotation — TEXT and MTEXT
 
