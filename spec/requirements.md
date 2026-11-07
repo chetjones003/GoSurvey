@@ -17246,7 +17246,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   9. **Deleting an alignment** deletes its frame groups in the same undo step. One undo restores both.
   10. Frames do not change surfaces or any other object. Groups persist with the drawing and survive save and reopen.
 - Acceptance:
-  - A 5000 ft alignment, sheet width 36 in, scale 1 in = 50 ft (frame length 1800 ft), overlap 100 ft and Centred placement give three frames: 0+00 to 1800+00, 1700+00 to 3500+00 and 3400+00 to 5200+00. The third is not shortened.
+  - An alignment from 0+00 to 50+00 (5000 ft), sheet width 36 in, scale 1 in = 50 ft (frame length 1800 ft), overlap 100 ft and Centred placement give three frames: 0+00 to 18+00, 17+00 to 35+00 and 34+00 to 52+00 (1800 ft each, starting 1700 ft apart). The third is not shortened and runs past the end station, as item 5 requires.
   - With Left placement the alignment lies on each frame's left edge; with Right, on its right edge; with Centred, down its middle.
   - A frame's height across the alignment equals the sheet height times the scale.
   - Editing the alignment's geometry regenerates its frame group in the same undo step; one undo restores the alignment and its frames together.
@@ -17273,8 +17273,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
      supplies the paper size and the title-block content. No external template file is used.
   2. For each chosen frame, one new paper layout is created. It is a copy of the template's paper content
      (REQ-037) with one viewport. The viewport's model view is centred on the frame's centre and set to the
-     frame's scale (GitHub #1017). The viewport takes the rectangle of the template's first viewport. A template
-     with no viewport gets one covering the full sheet, as the full-sheet fit does (REQ-490).
+     frame's scale (GitHub #1017). The viewport covers the full sheet at the frame's size, so its coverage equals the frame's.
+     The template supplies only title-block content; a template's own viewport rectangle is ignored (REQ-490).
+     [OPEN, user decision: the frame is rotated to the alignment tangent, but the spec has no view rotation for paper viewports. Options: (a) add view rotation so the viewport turns with the frame; (b) keep the viewport unrotated, so the alignment is not horizontal on the sheet. Not implemented until the user chooses.]
   3. A layout is named after its frame (`VF-1`, `VF-2`, ...). If that name is taken, a numbered suffix is added.
   4. **Refusals (REQ-201).** No frame group, no template layout, or a template that is in model space refuses
      the command and creates nothing.
@@ -17290,7 +17291,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - The three layouts appear in the layout tabs and export to PDF under REQ-488.
   - The Create Sheets button is enabled and runs the command; its "not implemented yet" tooltip is gone.
 - Owner-layer: Domain / Commands / IO / UI
-- Assumptions (recorded, not asked): the viewport takes the template's first viewport rectangle; a sheet number
+- Assumptions (recorded, not asked): the viewport is the full sheet at the frame's size, not the template's viewport rectangle; a sheet number
   is not drawn because GoSurvey has no sheet-number field.
 - Status: proposed (2026-11-07, D-2026-11-07-a; GitHub #1000).
 
@@ -17309,8 +17310,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      line is placed perpendicular to the alignment at each interval station in the range. Each is named by its
      station (for example `0+00`), is stored with the alignment as a drawing object and is drawn in plan.
   2. **Sections.** A sample line is sampled against one chosen TIN surface. Along each half-line (left and right),
-     the section records the distance from the alignment and the ground elevation at each point where the line
-     crosses a surface triangle edge or vertex. Ground elevation uses the method of REQ-497. A sample line with
+     the section records the distance from the alignment and the ground elevation at each sample point. Sample points are the alignment origin, each swath end inside the surface's coverage, and each point where the line crosses a surface triangle edge or vertex or the coverage boundary. A line wholly inside one triangle still produces a section. Ground elevation uses the method of REQ-497. A sample line with
      no surface coverage gets an empty section and is reported under REQ-201. The command continues with the rest.
   3. **Section sheets.** A typed `CREATESECTIONSHEETS` command and the Output → Plan Production → Create Section
      Sheets button create paper layouts from chosen sample lines, using a template layout (as REQ-518). Each sheet
@@ -17324,7 +17324,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   5. Creating sample lines, and creating section sheets, are each one undo step.
   6. Sample lines do not change the surface or the alignment. Sample lines and their sections persist with the drawing.
 - Acceptance:
-  - An alignment from 0+00 to 500+00 with interval 50 creates 11 sample lines, named 0+00 through 500+00.
+  - An alignment from 0+00 to 5+00 (500 ft) with interval 50 ft creates 11 sample lines, named 0+00, 0+50, 1+00, ... through 5+00.
   - Sampling a flat surface at elevation 100 gives every section point the ground elevation 100.
   - On a surface that rises 1 ft for every 10 ft from the alignment, a section 20 ft from the alignment is 2.0 ft
     higher than the alignment's own surface elevation at that station.
