@@ -111,9 +111,12 @@ Visibility, Drape Image, Move to Surface, Create Profile, and Data Shortcut.
   read-only reference rebuild guards, asynchronous label/profile refresh and worker generation
   invalidation, world/local crossing conversions, face-intersection sight analysis, guide-path contour
   labels, unavailable linked labels, and content-sensitive legend refresh.
-- Proof: `.\build.bat` PASS (Release); focused Issue #807 and project-file tests PASS (3,736 assertions
-  in 16 test cases); final `ctest --preset ninja-release` PASS (194/194, including six Qt editor shards,
-  `build.output-layout`, `qt.deployment`, and `qt.parity-ledger`); `git diff --check` PASS.
+- Proof: Release build PASS; focused Issue #807 and project-file tests PASS (3,736 assertions in 16
+  test cases); pre-rebase full `ctest --preset ninja-release` PASS (194/194). On the rebased head, the
+  Release build PASS; full CTest had one Qt shard timeout (193/194 passed), then isolated shard 3
+  rerun PASS (57 functions in 153 seconds), covering all 194 tests across those two runs.
+  `build.output-layout`, `qt.deployment`, and `qt.parity-ledger` passed on the full run;
+  `git diff --check` PASS.
 - Hidden-desktop Qt screenshots are in
   `build/artifacts/qt-editor/manual/shard-5/artifacts/`: `issue807-surface-context.png`,
   `issue807-no-surface-selection.png`, and `issue807-surface-visibility-menu.png`. They are grouped
@@ -124,6 +127,4 @@ Visibility, Drape Image, Move to Surface, Create Profile, and Data Shortcut.
   command forms were checked against this implementation. No other manual pages needed changes.
 - Autodesk visual comparison: INCONCLUSIVE because Civil 3D is not installed (only its Object Enabler
   is present); see `build/artifacts/issue807/visual-comparison.md`. No comparison pass is claimed.
-- Final implementation verification: PASS. All findings from four review rounds are fixed and
-  covered by regressions. The fifth and final diff review approved the implementation with no findings. PR checks and merge remain. The recorded
-  Civil 3D comparison is inconclusive; no comparison pass is claimed.
+- Final implementation verification: PASS. Findings from all four change-request review rounds are fixed and covered by regressions. The fifth and final diff review approved the implementation with no findings. PR checks and merge remain. The recorded Civil 3D comparison is inconclusive; no comparison pass is claimed.
