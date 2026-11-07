@@ -206,7 +206,7 @@ Bottom of the window.
 | **GRID** | Drawing grid on and off |
 | **POLAR** | Polar tracking — **the button toggles but has no effect yet** |
 | **Plot scale** | Annotation-scale dropdown, e.g. `1" = 50'`. Same as `PLOTSCALE` |
-| **Viewport zoom** | Sets the current model editor zoom to a ratio such as **1:50**. **Add custom scale…** adds a preset saved with this drawing in DWG/DXF; the list is separate from annotation scales. See [[Views and Navigation]] |
+| **Annotation scale** | Sets the scale that annotative objects are sized for, in model space and paper space. It never moves the view. A new drawing starts with AutoCAD's standard list. See [[Views and Navigation]] |
 | **SEL** | Opens the Selection panel, which lists the selected entities so you can toggle each one |
 
 ---

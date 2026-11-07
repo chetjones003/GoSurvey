@@ -17,6 +17,12 @@ inline constexpr const char* kViewportZoomScaleDwgPrefix = "GS_VZ_";
 
 void EnsureDefaultViewportZoomScales(std::vector<CadAnnotationScale>& scales);
 
+/// Fills an empty annotation scale list with AutoCAD's standard list (D-2026-11-06-a), in AutoCAD's order.
+/// `drawingInsUnits` is the drawing's INSUNITS code. Metric drawings (4 mm, 6 m) get the 1:1 to 100:1 list
+/// with its drawing units in millimetres or metres; every other drawing gets the imperial 1" = 1" to
+/// 1" = 5000' list, in feet (INSUNITS 2, the default) or inches (1). A non-empty list is left alone.
+void EnsureStandardAnnotationScales(std::vector<CadAnnotationScale>& scales, int drawingInsUnits);
+
 [[nodiscard]] bool TryParseViewportZoomRatio(const std::string& text, float* paperUnits, float* drawingUnits);
 
 bool AddViewportZoomScale(AppCommandState& st, const std::string& name, float paperUnits, float drawingUnits);

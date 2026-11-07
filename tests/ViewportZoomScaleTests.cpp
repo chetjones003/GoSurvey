@@ -129,3 +129,42 @@ TEST_CASE("Native DWG and DXF preserve zoom presets independently from annotatio
                       [](const auto& scale) { return scale.name == "1:25"; }));
   }
 }
+
+TEST_CASE("Standard annotation scale list is AutoCAD's default list", "[req458]") {
+  // D-2026-11-06-a: a drawing with no annotation scales gets AutoCAD's Default Scale List, in AutoCAD's order.
+  std::vector<CadAnnotationScale> metric;
+  EnsureStandardAnnotationScales(metric, 4);  // mm: 1:50 is 25.4 * 50 = 1270 mm per plotted inch
+  REQUIRE(metric.size() == 17);
+  CHECK(metric.front().name == "1:1");
+  CHECK(metric[10].name == "1:50");
+  CHECK(metric.back().name == "100:1");
+  CHECK(CadAnnotationScaleModelUnitsPerPlottedInch(metric[10]) == Catch::Approx(1270.0f));
+  CHECK(CadAnnotationScaleModelUnitsPerPlottedInch(metric.back()) == Catch::Approx(0.254f));
+
+  std::vector<CadAnnotationScale> metricMeters;
+  EnsureStandardAnnotationScales(metricMeters, 6);  // m: 1:50 is 0.0254 * 50 = 1.27 m per plotted inch
+  REQUIRE(metricMeters.size() == 17);
+  CHECK(CadAnnotationScaleModelUnitsPerPlottedInch(metricMeters[10]) == Catch::Approx(1.27f));
+
+  std::vector<CadAnnotationScale> imperial;
+  EnsureStandardAnnotationScales(imperial, 1);  // inches
+  REQUIRE(imperial.size() == 19);
+  CHECK(imperial.front().name == "1\" = 1\"");
+  CHECK(imperial[1].name == "1\" = 5'");
+  CHECK(CadAnnotationScaleModelUnitsPerPlottedInch(imperial[1]) == Catch::Approx(60.0f));
+  CHECK(imperial.back().name == "1\" = 5000'");
+
+  // Feet drawings (INSUNITS 2, the default) use the same labels but 1 foot = 12 inches of drawing units.
+  std::vector<CadAnnotationScale> feet;
+  EnsureStandardAnnotationScales(feet, 2);
+  REQUIRE(feet.size() == 19);
+  CHECK(feet[1].name == "1\" = 5'");
+  CHECK(CadAnnotationScaleModelUnitsPerPlottedInch(feet[1]) == Catch::Approx(5.0f));
+  CHECK(CadAnnotationScaleModelUnitsPerPlottedInch(feet.back()) == Catch::Approx(5000.0f));
+
+  // A list that already has entries is kept as it is.
+  std::vector<CadAnnotationScale> kept{{"1:25", 1.f, 25.f}};
+  EnsureStandardAnnotationScales(kept, 2);
+  REQUIRE(kept.size() == 1);
+  CHECK(kept.front().name == "1:25");
+}
