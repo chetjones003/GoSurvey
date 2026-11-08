@@ -358,6 +358,7 @@ void RunAlignmentDelete(AppCommandState& st, const std::string& args, std::vecto
   PushUndoSnapshot(st, "Delete alignment");
   st.alignments.erase(st.alignments.begin() + ix);
   RefreshViewFrameGroups(st, log);  // REQ-517.9: the alignment's view frame groups go with it, in the same step
+  BumpCadGpuCache(st);  // the plan drops the alignment's drawing at once, not at the next redraw
   log.push_back("ALIGNMENTDELETE - removed \"" + name + "\".");
 }
 
@@ -367,6 +368,7 @@ void RefreshViewFrameGroups(AppCommandState& st, std::vector<std::string>& log) 
   std::vector<std::string> notes;
   alignment::SyncViewFrameGroups(st.alignments, st.viewFrameGroups, &notes);
   for (const std::string& n : notes) log.push_back(n);
+  alignment::SyncSampleLines(st.alignments, st.sampleLines);  // REQ-519.13: a deleted alignment takes its lines
 }
 
 namespace {
@@ -698,6 +700,67 @@ void CopyTitleBlockOntoSheet(PaperLayout& sheet, const AppCommandState& tb, doub
   }
 }
 
+// REQ-518.8 / REQ-519.12: an ARCH D sheet is 36 x 24 in, landscape.
+constexpr double kSheetW = 36.0, kSheetH = 24.0;
+
+// The title block read for a sheet command, placed on the ARCH D sheet (REQ-518.8, .10).
+struct SheetTitleBlock {
+  AppCommandState state;
+  Box bounds;                 // the block's own extent, in its DWG coordinates
+  Box border;                 // its main border, in its DWG coordinates
+  Box borderOnSheet;          // the border once the block is centred on the sheet
+  Box inner;                  // the usable area inside the 0.5 in margin
+  double dx = 0.0, dy = 0.0;  // the move from the block's coordinates to the sheet's
+};
+
+// Reads the title block DWG and centres it on the sheet. `cmd` names the command in the log. Refuses (with the reason in
+// `log`, and nothing created) when the file is missing or unreadable, has no border, or its border is bigger than the sheet.
+bool LoadSheetTitleBlock(const char* cmd, const std::string& path, SheetTitleBlock& out, std::vector<std::string>& log) {
+  const std::string prefix = std::string(cmd) + " - ";
+  if (path.empty() || !std::filesystem::exists(std::filesystem::u8path(path))) {
+    log.push_back(prefix + "title block not found: \"" + path + "\". No sheets were created.");
+    return false;
+  }
+  if (!ImportDwgFile(out.state, path.c_str(), log)) {
+    log.push_back(prefix + "the title block could not be read. No sheets were created.");
+    return false;
+  }
+  if (!TitleBlockBounds(out.state, &out.bounds) || !TitleBlockBorder(out.state, &out.border)) {
+    log.push_back(prefix + "the title block has no border to fit. No sheets were created.");
+    return false;
+  }
+  // REQ-518.8: the sheets are fixed at ARCH D, so a title block whose border is bigger would be clipped on the sheet.
+  if (out.border.width() > kSheetW + 1e-6 || out.border.height() > kSheetH + 1e-6) {
+    std::ostringstream size;
+    size << std::fixed << std::setprecision(2) << out.border.width() << " x " << out.border.height();
+    log.push_back(prefix + "the title block's border is " + size.str() +
+                  " in, larger than the ARCH D sheet (36 x 24 in). No sheets were created.");
+    return false;
+  }
+  // Centre the title block on the sheet, so its border lies in the same place on every sheet.
+  out.dx = (kSheetW - out.bounds.width()) * 0.5 - out.bounds.minX;
+  out.dy = (kSheetH - out.bounds.height()) * 0.5 - out.bounds.minY;
+  out.borderOnSheet = Box{out.border.minX + out.dx, out.border.minY + out.dy, out.border.maxX + out.dx,
+                          out.border.maxY + out.dy};
+  out.inner = Box{out.borderOnSheet.minX + kSheetMarginIn, out.borderOnSheet.minY + kSheetMarginIn,
+                  out.borderOnSheet.maxX - kSheetMarginIn, out.borderOnSheet.maxY - kSheetMarginIn};
+  return true;
+}
+
+// The ARCH D entry in the paper size list, or -1 when the list has none.
+int ArchDPresetIndex() {
+  for (int i = 0; i < kPaperSizePresetCount; ++i)
+    if (std::string(kPaperSizePresets[i].name).rfind("ARCH D", 0) == 0) return i;
+  return -1;
+}
+
+// One straight line of native paper-space geometry (REQ-037), in sheet inches.
+void AddSheetLine(PaperLayout& sheet, double ax, double ay, double bx, double by) {
+  sheet.paperLines.insert(sheet.paperLines.end(), {static_cast<float>(ax), static_cast<float>(ay), 0.f,
+                                                    static_cast<float>(bx), static_cast<float>(by), 0.f});
+  sheet.paperLineAttrs.push_back(EntityAttributes{});
+}
+
 // REQ-518.9: one line of text on a sheet, in paper inches from its lower-left corner, with no style of its own.
 void AddSheetText(PaperLayout& sheet, const std::string& text, double insX, double insY, double heightIn) {
   CadAnnotation a;
@@ -833,39 +896,16 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
     return;
   }
 
-  // REQ-518.8: the title block is 36 in x 24 in landscape (ARCH D).
-  constexpr double kSheetW = 36.0, kSheetH = 24.0;
-
   // REQ-518.8: the title block DWG. The default is the Generic 24in x 36in block in the AutoCAD template folder.
   const std::string titleBlockPath = f.size() == 3 ? Trim(f[2]) : DefaultTitleBlockPath();
-  if (titleBlockPath.empty() || !std::filesystem::exists(std::filesystem::u8path(titleBlockPath))) {
-    log.push_back("CREATESHEETS - title block not found: \"" + titleBlockPath + "\". No sheets were created.");
-    return;
-  }
-  AppCommandState titleBlock;
-  if (!ImportDwgFile(titleBlock, titleBlockPath.c_str(), log)) {
-    log.push_back("CREATESHEETS - the title block could not be read. No sheets were created.");
-    return;
-  }
-  Box tbBounds, border;
-  if (!TitleBlockBounds(titleBlock, &tbBounds) || !TitleBlockBorder(titleBlock, &border)) {
-    log.push_back("CREATESHEETS - the title block has no border to fit. No sheets were created.");
-    return;
-  }
-  // REQ-518.8: the sheets are fixed at ARCH D, so a title block whose border is bigger would be clipped on the sheet.
-  if (border.width() > kSheetW + 1e-6 || border.height() > kSheetH + 1e-6) {
-    std::ostringstream size;
-    size << std::fixed << std::setprecision(2) << border.width() << " x " << border.height();
-    log.push_back("CREATESHEETS - the title block's border is " + size.str() +
-                  " in, larger than the ARCH D sheet (36 x 24 in). No sheets were created.");
-    return;
-  }
-  // Centre the title block on the sheet, so its border lies in the same place on every sheet.
-  const double dx = (kSheetW - tbBounds.width()) * 0.5 - tbBounds.minX;
-  const double dy = (kSheetH - tbBounds.height()) * 0.5 - tbBounds.minY;
-  const Box borderOnSheet{border.minX + dx, border.minY + dy, border.maxX + dx, border.maxY + dy};
-  const Box inner{borderOnSheet.minX + kSheetMarginIn, borderOnSheet.minY + kSheetMarginIn,
-                  borderOnSheet.maxX - kSheetMarginIn, borderOnSheet.maxY - kSheetMarginIn};
+  SheetTitleBlock tb;
+  if (!LoadSheetTitleBlock("CREATESHEETS", titleBlockPath, tb, log)) return;
+  const AppCommandState& titleBlock = tb.state;
+  const Box& tbBounds = tb.bounds;
+  const Box& border = tb.border;
+  const Box& borderOnSheet = tb.borderOnSheet;
+  const Box& inner = tb.inner;
+  const double dx = tb.dx, dy = tb.dy;
 
   // REQ-518.2 / .10: the frames are sized to the usable area inside the margin, at the same scale, so each sheet's
   // viewport covers its whole frame. The stored group changes only when the sheets are made (one undo step).
@@ -903,11 +943,7 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
     }
   }
 
-  const int archD = [] {
-    for (int i = 0; i < kPaperSizePresetCount; ++i)
-      if (std::string(kPaperSizePresets[i].name).rfind("ARCH D", 0) == 0) return i;
-    return -1;
-  }();
+  const int archD = ArchDPresetIndex();
 
   // REQ-518.9: the right-hand column's horizontal box lines (in sheet coordinates) give the field rows: one per cell.
   double columnLeft = borderOnSheet.maxX;
@@ -994,6 +1030,281 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
                 a->name.c_str(), inner.width(), inner.height(), sized.frames.size(), framesBefore);
   log.push_back("CREATESHEETS - " + std::to_string(chosen.size()) + " sheet(s) from \"" + a->name + "\" on \"" +
                 kTitleBlockFile + "\": " + names + "." + resize);
+}
+
+// REQ-519.1, .2, .9: CREATESAMPLELINES <alignment>, <start station>, <end station>, <interval>, <left swath>, <right
+// swath>[, <surface>]. One sample line at each interval station in the range, named by its station. A named TIN surface
+// samples every line's section at once. One undo step for all the lines.
+void RunCreateSampleLines(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() < 6 || f.size() > 7) {
+    log.push_back("CREATESAMPLELINES - usage: CREATESAMPLELINES <alignment>, <start station>, <end station>, <interval>, "
+                  "<left swath>, <right swath>[, <surface>]");
+    return;
+  }
+  if (ActiveProjectPointsReadOnly(st)) {  // REQ-519.4: a read-only project refuses before any change
+    log.push_back("CREATESAMPLELINES - the project is read-only; no sample lines were created.");
+    return;
+  }
+  const alignment::Alignment* a = Resolve(st, "CREATESAMPLELINES", f[0], log);
+  if (a == nullptr) return;
+
+  alignment::SampleLineSettings s;
+  if (!ParseSta(st, f[1], &s.startStation) || !ParseSta(st, f[2], &s.endStation) || !ParseNum(Trim(f[3]), &s.interval) ||
+      !ParseNum(Trim(f[4]), &s.leftWidth) || !ParseNum(Trim(f[5]), &s.rightWidth)) {
+    log.push_back("CREATESAMPLELINES - a station, the interval or a swath is not understood. No sample lines were created.");
+    return;
+  }
+
+  // REQ-519.9: the optional surface. Leaving it out, or NONE, makes lines with no section.
+  const std::string surfaceText = f.size() == 7 ? Trim(f[6]) : std::string();
+  int surfaceIndex = -1;
+  if (!surfaceText.empty() && Lower(surfaceText) != "none") {
+    surfaceIndex = FindSurfaceIndex(st, surfaceText);
+    if (surfaceIndex < 0) {
+      log.push_back("CREATESAMPLELINES - no surface named \"" + surfaceText + "\". No sample lines were created.");
+      return;
+    }
+    const CadSurface& surface = st.cadSurfaces[static_cast<size_t>(surfaceIndex)];
+    if (surface.kind != SurfaceKind::Tin || !surface.tin) {
+      log.push_back("CREATESAMPLELINES - \"" + surfaceText +
+                    "\" is not a built TIN surface; sections need a TIN. No sample lines were created.");
+      return;
+    }
+  }
+
+  std::vector<alignment::SampleLine> lines;
+  std::string why;
+  if (!alignment::ComputeSampleLines(*a, s, st.alignmentStationFormat, &lines, &why)) {
+    log.push_back("CREATESAMPLELINES - refused: " + why + ". No sample lines were created.");
+    return;
+  }
+  // A name already on this alignment would leave two lines the command cannot tell apart.
+  for (const alignment::SampleLine& line : lines) {
+    for (const alignment::SampleLine& have : st.sampleLines) {
+      if (have.alignmentId == a->id && Lower(have.name) == Lower(line.name)) {
+        log.push_back("CREATESAMPLELINES - refused: a sample line named \"" + line.name + "\" already exists on \"" +
+                      a->name + "\". No sample lines were created.");
+        return;
+      }
+    }
+  }
+
+  // REQ-519.2: sample each line against the surface. A line the surface does not cover keeps an empty section.
+  const std::uint64_t alignmentId = a->id;
+  const std::string alignmentName = a->name;
+  std::string surfaceName;
+  std::string noData;
+  size_t withGround = 0;
+  if (surfaceIndex >= 0) {
+    const CadSurface& surface = st.cadSurfaces[static_cast<size_t>(surfaceIndex)];
+    const std::unique_ptr<ISurfaceQuery> query = MakeSurfaceQueryForCommands(st, surface);
+    if (!query) {
+      log.push_back("CREATESAMPLELINES - \"" + surfaceText + "\" is not a built surface. No sample lines were created.");
+      return;
+    }
+    surfaceName = surface.name;
+    for (alignment::SampleLine& line : lines) {
+      line.hasSection = true;
+      line.surfaceName = surfaceName;
+      alignment::SampleSection(surface.tin->vertsXyz, surface.tin->indices, *query, line);
+      if (line.section.empty()) {
+        noData += (noData.empty() ? "" : ", ") + line.name;
+      } else {
+        ++withGround;
+      }
+    }
+  }
+
+  PushUndoSnapshot(st, "Create sample lines");  // REQ-519.5: one undo step removes every line
+  const std::string first = lines.front().name, last = lines.back().name;
+  const size_t count = lines.size();
+  for (alignment::SampleLine& line : lines) {
+    line.id = st.nextEntityId++;
+    line.alignmentId = alignmentId;
+    st.sampleLines.push_back(std::move(line));
+  }
+  BumpCadGpuCache(st);
+  std::string message = "CREATESAMPLELINES - " + std::to_string(count) + " sample line(s) on \"" + alignmentName + "\", " +
+                        first + " to " + last + ".";
+  if (surfaceIndex >= 0) {
+    message += " Sections sampled from \"" + surfaceName + "\": " + std::to_string(withGround) + " with ground, " +
+               std::to_string(count - withGround) + " with no data.";
+    if (!noData.empty()) message += " No data (no surface coverage) at " + noData + ".";
+  } else {
+    message += " No surface was named, so the lines have no sections.";
+  }
+  log.push_back(message);
+}
+
+// REQ-519.3, .4, .11, .12: CREATESECTIONSHEETS <alignment>, <sample lines>, <sections per sheet>, <axis elevation>. Each
+// ARCH D sheet holds the chosen sections, in station order, from left to right, on the title block (REQ-518.8). One
+// undo step for all the sheets.
+void RunCreateSectionSheets(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  constexpr int kMaxSectionsPerSheet = 10;
+  constexpr double kPlotMarginIn = 1.0;  // the bands above and below the plot hold the scale text and station labels
+  constexpr double kColumnPadIn = 0.1;   // clear space between a section and its column's edge
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() != 4) {
+    log.push_back("CREATESECTIONSHEETS - usage: CREATESECTIONSHEETS <alignment>, <sample lines>, <sections per sheet>, "
+                  "<axis elevation>");
+    return;
+  }
+  if (ActiveProjectPointsReadOnly(st)) {  // REQ-519.4: a read-only project refuses before any change
+    log.push_back("CREATESECTIONSHEETS - the project is read-only; no sheets were created.");
+    return;
+  }
+  const alignment::Alignment* a = Resolve(st, "CREATESECTIONSHEETS", f[0], log);
+  if (a == nullptr) return;
+
+  double perSheetValue = 0.0, axisElevation = 0.0;
+  if (!ParseNum(Trim(f[2]), &perSheetValue) || perSheetValue != std::floor(perSheetValue) || perSheetValue < 1.0 ||
+      perSheetValue > kMaxSectionsPerSheet) {
+    log.push_back("CREATESECTIONSHEETS - sections per sheet must be a whole number from 1 to " +
+                  std::to_string(kMaxSectionsPerSheet) + ". No sheets were created.");
+    return;
+  }
+  if (!ParseNum(Trim(f[3]), &axisElevation) || !std::isfinite(axisElevation)) {
+    log.push_back("CREATESECTIONSHEETS - the axis elevation \"" + f[3] + "\" is not a number. No sheets were created.");
+    return;
+  }
+  const size_t perSheet = static_cast<size_t>(perSheetValue);
+
+  // REQ-519.4: the chosen lines must belong to this alignment. ALL (or none given) is every line on it.
+  std::vector<const alignment::SampleLine*> pool;
+  for (const alignment::SampleLine& line : st.sampleLines)
+    if (line.alignmentId == a->id) pool.push_back(&line);
+  if (pool.empty()) {
+    log.push_back("CREATESECTIONSHEETS - \"" + a->name + "\" has no sample lines. Make them with CREATESAMPLELINES first. "
+                  "No sheets were created.");
+    return;
+  }
+  std::vector<const alignment::SampleLine*> chosen;
+  const std::string linesText = Trim(f[1]);
+  if (linesText.empty()) {
+    log.push_back("CREATESECTIONSHEETS - give ALL or the sample line names. No sheets were created.");
+    return;
+  }
+  if (Lower(linesText) == "all") {
+    chosen = pool;
+  } else {
+    std::istringstream words(linesText);
+    std::string word;
+    while (words >> word) {
+      const alignment::SampleLine* found = nullptr;
+      for (const alignment::SampleLine* line : pool)
+        if (Lower(line->name) == Lower(word)) found = line;
+      if (found == nullptr) {
+        log.push_back("CREATESECTIONSHEETS - no sample line named \"" + word + "\" on \"" + a->name +
+                      "\". No sheets were created.");
+        return;
+      }
+      if (std::find(chosen.begin(), chosen.end(), found) == chosen.end()) chosen.push_back(found);
+    }
+  }
+  // REQ-519.4: with no surface behind any chosen line there is nothing to draw, so the command refuses.
+  const bool anySection = std::any_of(chosen.begin(), chosen.end(),
+                                      [](const alignment::SampleLine* line) { return line->hasSection; });
+  if (!anySection) {
+    log.push_back("CREATESECTIONSHEETS - none of the chosen sample lines has a section (no surface was named when they "
+                  "were made). No sheets were created.");
+    return;
+  }
+  std::stable_sort(chosen.begin(), chosen.end(), [](const alignment::SampleLine* p, const alignment::SampleLine* q) {
+    return p->internalStation < q->internalStation;  // REQ-519.3: left to right in station order
+  });
+
+  // REQ-519.12: the same title block and margin as CREATESHEETS (REQ-518.8, .10).
+  const std::string titleBlockPath = DefaultTitleBlockPath();
+  SheetTitleBlock tb;
+  if (!LoadSheetTitleBlock("CREATESECTIONSHEETS", titleBlockPath, tb, log)) return;
+  const Box& inner = tb.inner;
+  const double plotMinY = inner.minY + kPlotMarginIn, plotMaxY = inner.maxY - kPlotMarginIn;
+  const double plotHeight = plotMaxY - plotMinY;
+  const double axisY = (plotMinY + plotMaxY) * 0.5;  // every section's axis sits at the middle of the plot
+  const double columnWidth = inner.width() / static_cast<double>(perSheet);
+
+  std::vector<std::string> takenNames;
+  for (const PaperLayout& layout : st.paperLayouts) takenNames.push_back(Lower(layout.name));
+  auto nameTaken = [&takenNames](const std::string& name) {
+    return std::find(takenNames.begin(), takenNames.end(), Lower(name)) != takenNames.end();
+  };
+
+  std::vector<PaperLayout> sheets;
+  const size_t sheetCount = (chosen.size() + perSheet - 1) / perSheet;
+  for (size_t sheetIndex = 0; sheetIndex < sheetCount; ++sheetIndex) {
+    const size_t first = sheetIndex * perSheet;
+    const size_t last = std::min(chosen.size(), first + perSheet);
+
+    // REQ-519.11: one horizontal and one vertical scale for every section on the sheet, the finest step at which all fit.
+    bool anyPoint = false;
+    double maxOffset = 0.0, maxDeviation = 0.0;
+    for (size_t i = first; i < last; ++i) {
+      for (const alignment::SectionPoint& p : chosen[i]->section) {
+        anyPoint = true;
+        maxOffset = std::max(maxOffset, std::fabs(p.offset));
+        maxDeviation = std::max(maxDeviation, std::fabs(p.ground - axisElevation));
+      }
+    }
+    const alignment::SectionScale fit = alignment::FitSectionScale(
+        anyPoint, maxOffset, maxDeviation, columnWidth * 0.5 - kColumnPadIn, plotHeight * 0.5 - kColumnPadIn);
+    const double feetPerInchAcross = fit.feetPerInchAcross;
+    const double feetPerInchDown = fit.feetPerInchDown;
+
+    const std::string base = "SEC-" + std::to_string(sheetIndex + 1);
+    std::string name = base;
+    for (int suffix = 2; nameTaken(name); ++suffix) name = base + " (" + std::to_string(suffix) + ")";
+    takenNames.push_back(Lower(name));
+
+    PaperLayout sheet;
+    sheet.name = name;
+    sheet.landscape = true;
+    sheet.portraitWidthIn = static_cast<float>(kSheetH);  // landscape: width = portrait height
+    sheet.portraitHeightIn = static_cast<float>(kSheetW);
+    sheet.presetIdx = ArchDPresetIndex();
+    CopyTitleBlockOntoSheet(sheet, tb.state, tb.dx, tb.dy);
+
+    std::ostringstream scale;
+    scale << std::fixed << std::setprecision(0) << "Horizontal 1\" = " << feetPerInchAcross << "'    Vertical 1\" = "
+          << feetPerInchDown << "'";
+    AddSheetText(sheet, scale.str(), inner.minX + 0.3, inner.maxY - 0.45, 0.14);
+
+    for (size_t i = first; i < last; ++i) {
+      const alignment::SampleLine& line = *chosen[i];
+      const double columnLeft = inner.minX + static_cast<double>(i - first) * columnWidth;
+      const double centre = columnLeft + columnWidth * 0.5;
+      AddSheetLine(sheet, columnLeft + kColumnPadIn, axisY, columnLeft + columnWidth - kColumnPadIn, axisY);
+      // The ground line: each section point at its offset across and its elevation above or below the axis (REQ-519.3).
+      for (size_t p = 0; p + 1 < line.section.size(); ++p) {
+        const alignment::SectionPoint& p0 = line.section[p];
+        const alignment::SectionPoint& p1 = line.section[p + 1];
+        AddSheetLine(sheet, centre + p0.offset / feetPerInchAcross,
+                     axisY + (p0.ground - axisElevation) / feetPerInchDown, centre + p1.offset / feetPerInchAcross,
+                     axisY + (p1.ground - axisElevation) / feetPerInchDown);
+      }
+      AddSheetText(sheet, line.name, centre - 0.3, plotMinY - 0.35, 0.12);
+      if (line.section.empty()) AddSheetText(sheet, "no data", centre - 0.3, axisY + 0.15, 0.12);
+    }
+    sheet.viewInit = false;  // fit the new sheet to the window on first entry
+    sheets.push_back(std::move(sheet));
+  }
+
+  PushUndoSnapshot(st, "Create section sheets");  // REQ-519.5: one undo step removes every sheet
+  // The title block's layers come into this drawing where they are not already here (as CREATESHEETS).
+  for (const CadLayerRow& row : tb.state.drawingLayerTable) {
+    const bool present = std::any_of(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+                                     [&row](const CadLayerRow& have) { return have.name == row.name; });
+    if (!present) st.drawingLayerTable.push_back(row);
+  }
+  std::string names;
+  for (PaperLayout& sheet : sheets) {
+    if (!names.empty()) names += ", ";
+    names += sheet.name;
+    st.paperLayouts.push_back(std::move(sheet));
+  }
+  BumpCadGpuCache(st);
+  log.push_back("CREATESECTIONSHEETS - " + std::to_string(chosen.size()) + " section(s) on " + std::to_string(sheetCount) +
+                " sheet(s) from \"" + a->name + "\" on \"" + kTitleBlockFile + "\": " + names + ".");
 }
 
 // GETSTATIONOFFSET <alignment>, <x>, <y>[, SURFACE=<surface>]  (WORLD x/y) - REQ-484.4

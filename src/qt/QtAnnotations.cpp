@@ -1380,6 +1380,16 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
         painter.drawText(project(frame.centre.x, frame.centre.y, 0.0) + QPointF(4.0, -4.0), QString::fromStdString(frame.name));
     }
   }
+  // REQ-519.1: each sample line carries its station at its right-hand end, in plan, on layer 0 like the frames.
+  if (!state.sampleLines.empty() && !frameLayerHidden) {
+    painter.setPen(QColor(230, 230, 230));
+    for (const alignment::SampleLine& line : state.sampleLines) {
+      if (CadEntityIdHidden(&state.hiddenEntityIds, line.id)) continue;
+      const double rx = line.origin.x + line.rightWidth * line.direction.x;
+      const double ry = line.origin.y + line.rightWidth * line.direction.y;
+      painter.drawText(project(rx, ry, 0.0) + QPointF(4.0, -4.0), QString::fromStdString(line.name));
+    }
+  }
   painter.restore();
 }
 

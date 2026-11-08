@@ -2948,6 +2948,29 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             }
           }
         }
+        // REQ-519.1: sample lines, one swath each in plan, on layer 0 like the view frames they sit beside.
+        if (extended->sampleLines && !frameLayerHidden) {
+          EntityAttributes lineAttr{};
+          lineAttr.layer = "0";
+          float lineRgba[4];
+          ResolveEntityRgbaForViewport(lineAttr, frameLr, kLineDefaultR, kLineDefaultG, kLineDefaultB, lineRgba);
+          for (const alignment::SampleLine& line : *extended->sampleLines) {
+            if (CadEntityIdHidden(hiddenIds, line.id)) continue;
+            const double x0 = line.origin.x - line.leftWidth * line.direction.x;
+            const double y0 = line.origin.y - line.leftWidth * line.direction.y;
+            const double x1 = line.origin.x + line.rightWidth * line.direction.x;
+            const double y1 = line.origin.y + line.rightWidth * line.direction.y;
+            std::vector<float> xy(4);
+            xy[0] = static_cast<float>(x0 - viewAnchorX);
+            xy[1] = static_cast<float>(y0 - viewAnchorY);
+            xy[2] = static_cast<float>(x1 - viewAnchorX);
+            xy[3] = static_cast<float>(y1 - viewAnchorY);
+            const int vb = static_cast<int>(cpuVcLines_.size() / 7);
+            maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(lineAttr, frameLr)));
+            CadTessellateLinetypeChainVc(xy.data(), 2, 0.f, false, "Continuous", dashPatScale, lineRgba, &cpuVcLines_);
+            lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
+          }
+        }
         if (extended->points && !extended->points->empty()) {
           const double viewH = 2.0 * static_cast<double>(halfH);
           const double halfSize = CadPointMarkerSize(extended->pdSize, viewH);

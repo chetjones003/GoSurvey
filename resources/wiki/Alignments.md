@@ -133,7 +133,16 @@ offset and a curve's radius are always exact.
 - The sheet is named after its frame (`VF-1`, `VF-2`, ...); a name already in use gets ` (2)`, ` (3)` and so on.
 - The frames are resized to the usable area inside the margin (29.75 x 19.5 in for the Generic block), at the same scale, when the sheets are made. The group then records ARCH D and has the new frames, so the frame count can change (1800 ft frames become 1487.5 ft frames). This is part of the same undo step. The command refuses an alignment with more than one frame group, an alignment with no frames, a frame name it cannot find, a title block it cannot find or read, and a title block with no border. Frames are chosen with `ALL` (the default) or names separated by spaces, such as `VF-1 VF-3`.
 - One undo removes all the sheets one command made. Sheets are not updated when the frames change later; create them again.
-- Not built yet: section sheets from sample lines.
+
+## Sample lines and section sheets
+
+- `CREATESAMPLELINES <alignment>, <start station>, <end station>, <interval>, <left swath>, <right swath>[, <surface>]` places one sample line at each interval station from the start to the end station. Each line is perpendicular to the alignment, runs out to the left and right swath widths you give, and is named by its station (for example `0+50`). The Home tab's Profile & Section Views group runs it from a dialog.
+- Give a TIN surface name to sample each line's section from that surface. Without one, the lines have no sections. A section records the ground along the swath at the points where the swath crosses a triangle edge or vertex of the surface, and at its ends where the surface covers them. A point the surface does not cover is left out, and a line the surface does not cover at all is reported as "no data".
+- Sample lines are saved with the drawing. They do not change when the alignment is edited, and deleting the alignment deletes its sample lines. One undo removes every line one command made.
+- `CREATESECTIONSHEETS <alignment>, <sample lines>, <sections per sheet>, <axis elevation>` makes ARCH D paper layouts named `SEC-1`, `SEC-2`, ... on the same Generic 24in x 36in title block as the view-frame sheets. `<sample lines>` is `ALL` or line names separated by spaces. Sections go on the sheets from left to right in station order, `<sections per sheet>` (1 to 10) to a sheet, each drawn about the axis elevation you give. The Output tab's Plan Production group runs it from a dialog.
+- All the sections on one sheet share one horizontal scale and one vertical scale: the finest of 1, 2, 5, 10, 20, 50, 100 ... feet per inch at which every section fits. The scales are printed on the sheet as text, for example `Horizontal 1" = 20'`. Each section has its station under it and a "no data" label when the surface gave no ground.
+- The dialogs start at a 50 ft interval, 50 ft swaths on each side, 4 sections per sheet, and an axis elevation at the lowest ground, rounded down to 10 ft. Change any of them before you press OK; the typed commands take every value.
+- Not built yet: the title-block fields on section sheets are not filled in, and Civil 3D's section-view styles are not reproduced.
 
 ## Limits so far
 

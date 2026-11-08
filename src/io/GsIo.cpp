@@ -2499,6 +2499,32 @@ json BuildRoot(const AppCommandState& st) {
     doc["viewFrameGroups"] = std::move(arr);
   }
 
+  // Sample lines (REQ-519). Their geometry is stored in plan coordinates and their sections as sampled, so a line and its
+  // section persist with the drawing and stay put when the alignment is edited (REQ-519.13).
+  if (!st.sampleLines.empty()) {
+    json arr = json::array();
+    for (const alignment::SampleLine& l : st.sampleLines) {
+      json o;
+      o["id"] = l.id;
+      o["alignmentId"] = l.alignmentId;
+      o["name"] = l.name;
+      o["internalStation"] = l.internalStation;
+      o["originX"] = l.origin.x;
+      o["originY"] = l.origin.y;
+      o["directionX"] = l.direction.x;
+      o["directionY"] = l.direction.y;
+      o["leftWidth"] = l.leftWidth;
+      o["rightWidth"] = l.rightWidth;
+      o["hasSection"] = l.hasSection;
+      o["surfaceName"] = l.surfaceName;
+      json points = json::array();
+      for (const alignment::SectionPoint& p : l.section) points.push_back(json::array({p.offset, p.ground}));
+      o["section"] = std::move(points);
+      arr.push_back(std::move(o));
+    }
+    doc["sampleLines"] = std::move(arr);
+  }
+
   if (!st.surfaceProfiles.empty()) {
     json profiles = json::array();
     for (const CadSurfaceProfile& profile : st.surfaceProfiles) {
@@ -4812,6 +4838,38 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     alignment::SyncViewFrameGroups(st.alignments, st.viewFrameGroups, &notes);
     for (const std::string& n : notes) log.push_back(n);
   }
+  // Sample lines (REQ-519): loaded as saved. A line whose alignment is missing is dropped.
+  st.sampleLines.clear();
+  if (doc.contains("sampleLines") && doc["sampleLines"].is_array()) {
+    for (const auto& el : doc["sampleLines"]) {
+      if (!el.is_object()) continue;
+      alignment::SampleLine l;
+      if (el.contains("id") && el["id"].is_number_unsigned()) l.id = el["id"].get<std::uint64_t>();
+      if (el.contains("alignmentId") && el["alignmentId"].is_number_unsigned())
+        l.alignmentId = el["alignmentId"].get<std::uint64_t>();
+      if (el.contains("name") && el["name"].is_string()) l.name = el["name"].get<std::string>();
+      if (el.contains("surfaceName") && el["surfaceName"].is_string()) l.surfaceName = el["surfaceName"].get<std::string>();
+      if (el.contains("hasSection") && el["hasSection"].is_boolean()) l.hasSection = el["hasSection"].get<bool>();
+      auto num = [&](const char* key, double* out) {
+        if (el.contains(key) && el[key].is_number()) *out = el[key].get<double>();
+      };
+      num("internalStation", &l.internalStation);
+      num("originX", &l.origin.x);
+      num("originY", &l.origin.y);
+      num("directionX", &l.direction.x);
+      num("directionY", &l.direction.y);
+      num("leftWidth", &l.leftWidth);
+      num("rightWidth", &l.rightWidth);
+      if (el.contains("section") && el["section"].is_array()) {
+        for (const auto& pt : el["section"]) {
+          if (pt.is_array() && pt.size() == 2 && pt[0].is_number() && pt[1].is_number())
+            l.section.push_back({pt[0].get<double>(), pt[1].get<double>()});
+        }
+      }
+      st.sampleLines.push_back(std::move(l));
+    }
+  }
+  alignment::SyncSampleLines(st.alignments, st.sampleLines);
   st.surfaceProfiles.clear();
   if (doc.contains("surfaceProfiles") && doc["surfaceProfiles"].is_array()) {
     for (const auto& el : doc["surfaceProfiles"]) {
@@ -5659,7 +5717,7 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
              "annotationAttrs", "tables", "tableAttrs", "positionMarkers", "positionMarkerAttrs", "multileaders",
              "multileaderAttrs", "cadPoints", "cadPointAttrs", "blockRefs", "blockRefAttrs", "filledRegions",
              "filledRegionAttrs", "meshes", "meshAttrs", "pointClouds",
-             "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "alignments", "viewFrameGroups", "surfaceProfiles", "surfaces",
+             "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "alignments", "viewFrameGroups", "sampleLines", "surfaceProfiles", "surfaces",
              "surfaceAttrs", "surveyPoints", "modelImages", "blockFavorites", "blockRecent"})
       doc[key] = json::array();
 

@@ -7,6 +7,7 @@
 #include "util/surfacequery.hpp"  // ISurfaceQuery, for MakeSurfaceQueryForCommands (REQ-497)
 #include "alignment/Alignment.hpp"  // REQ-480 / ADR-075: per-drawing alignment store
 #include "alignment/AlignmentViewFrames.hpp"  // REQ-517: view frame groups that follow an alignment
+#include "alignment/AlignmentSampleLines.hpp"  // REQ-519: sample lines and their sections
 #include "alignment/AlignmentDesign.hpp"  // REQ-502: check sets
 #include "CadDimGeom.hpp"
 #include "EntityId.hpp"
@@ -865,6 +866,8 @@ struct CadExtendedGeometryInput {
   const std::vector<alignment::Alignment>* alignments = nullptr;
   /// REQ-517: view frame groups, drawn in plan as closed outlines of each frame.
   const std::vector<alignment::ViewFrameGroup>* viewFrameGroups = nullptr;
+  /// REQ-519: sample lines, drawn in plan as short swaths across each alignment station.
+  const std::vector<alignment::SampleLine>* sampleLines = nullptr;
   /// Named alignment styles (REQ-491); read when drawing each alignment entity.
   const std::vector<AlignmentStyle>* alignmentStyles = nullptr;
   /// Layers frozen in the paper-space viewport being drawn (REQ-028); alignments on them are not drawn (REQ-495.4).
@@ -945,6 +948,8 @@ template <class VT>
   if (e.alignments != nullptr && !e.alignments->empty())
     return true;
   if (e.viewFrameGroups != nullptr && !e.viewFrameGroups->empty())
+    return true;
+  if (e.sampleLines != nullptr && !e.sampleLines->empty())
     return true;
   if (e.points != nullptr && !e.points->empty())
     return true;
@@ -1400,6 +1405,7 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadPipeRunAttrs;
   std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
   std::vector<alignment::ViewFrameGroup> viewFrameGroups;  ///< REQ-517: view frame groups that follow an alignment
+  std::vector<alignment::SampleLine> sampleLines;  ///< REQ-519: sample lines and their sections (persist with the drawing)
   std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
   /// Named piping networks (issue #486 increment B3 / REQ-345) — swapped alongside `cadPipeRuns`
   /// for the same BEDIT-isolation reason the comment above states: a network's indices are only
@@ -1603,6 +1609,7 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadPipeRunAttrs;
   std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
   std::vector<alignment::ViewFrameGroup> viewFrameGroups;  ///< REQ-517: view frame groups that follow an alignment
+  std::vector<alignment::SampleLine> sampleLines;  ///< REQ-519: sample lines and their sections (persist with the drawing)
   std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
   std::vector<CadPipingSystem>  cadPipingSystems;
   std::vector<CadBlockDefinition> blockDefs;
@@ -2568,6 +2575,7 @@ struct AppCommandState {
     std::vector<CadSolidPtr> savedSolids;             ///< restored verbatim after a solid run
     std::vector<EntityAttributes> savedSolidAttrs;
     std::vector<alignment::Alignment> savedAlignments;  ///< restored verbatim after an alignment run
+    std::vector<alignment::SampleLine> savedSampleLines;  ///< REQ-519: restored with the alignments they belong to
     /// The mesh profile forces Shaded (REQ-100 (b) measures *shaded* meshes, and REQ-064's budget
     /// condition is stated in Shaded). Saved so a bench run cannot leave the user in a style they
     /// did not choose — which would also silently invalidate ADR-026 (e)'s 2D Wireframe parity.
@@ -3653,6 +3661,7 @@ struct AppCommandState {
   std::vector<EntityAttributes> cadPipeRunAttrs;
   std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
   std::vector<alignment::ViewFrameGroup> viewFrameGroups;  ///< REQ-517: view frame groups that follow an alignment
+  std::vector<alignment::SampleLine> sampleLines;  ///< REQ-519: sample lines and their sections (persist with the drawing)
   std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
   std::vector<CadSolidPtr> pipeRunWorldSolids;
   std::vector<EntityAttributes> pipeRunWorldSolidAttrs;
@@ -8221,6 +8230,10 @@ void RunCreateViewFrames(AppCommandState& st, const std::string& args, std::vect
 void RunViewFrameDelete(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// REQ-518: CREATESHEETS <alignment>[, <frames>[, <title block DWG>]]. One rotated paper layout per frame, one undo step.
 void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-519: CREATESAMPLELINES <alignment>, <start>, <end>, <interval>, <left>, <right>[, <surface>]. One undo step.
+void RunCreateSampleLines(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-519: CREATESECTIONSHEETS <alignment>, <sample lines>, <sections per sheet>, <axis elevation>. One undo step.
+void RunCreateSectionSheets(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// REQ-517.8/.9: keeps view frame groups in step with the alignments. Logs a group it could not regenerate.
 void RefreshViewFrameGroups(AppCommandState& st, std::vector<std::string>& log);
 /// True when the active tab's survey-point project is read-only (REQ-517.6 uses the same rule as paste).

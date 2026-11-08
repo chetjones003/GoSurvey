@@ -77,3 +77,14 @@ TEST_CASE("Issue #807 implemented surface controls are wired", "[ribbon][issue80
     CHECK_FALSE(button->placeholder);
   }
 }
+
+TEST_CASE("Issue #1001 Sample Lines and Create Section Sheets are wired to their commands", "[ribbon][issue1001][req519]") {
+  const auto* samples = FindButton("##PsvSampleLines");
+  REQUIRE(samples != nullptr);
+  CHECK(std::string(samples->command) == "CREATESAMPLELINES");
+  CHECK_FALSE(samples->placeholder);
+  const auto* sections = FindButton("##OutSectionSheets");
+  REQUIRE(sections != nullptr);
+  CHECK(std::string(sections->command) == "CREATESECTIONSHEETS");
+  CHECK_FALSE(sections->placeholder);
+}
