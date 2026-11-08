@@ -3317,6 +3317,38 @@ private Q_SLOTS:
     QVERIFY(!action->isEnabled());
   }
 
+  // REQ-517 / issue #999: the Create View Frames dialog and the plan view with its frames, for the visual check.
+  void viewFrameScreenshots() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.Submit("ALIGNMENT Road");
+    window.Submit("ALIGNMENTADD Road, TANGENT, 0, 0, 0, 5000");
+    window.resize(1280, 820);
+    window.show();
+    QCoreApplication::processEvents();
+    const QString artifacts = QtTestArtifactDirectory() + "/";
+
+    // The dialog is modal; grab it from a timer, then accept it so the typed command runs.
+    QTimer::singleShot(200, [&]() {
+      QWidget* dialog = QApplication::activeModalWidget();
+      if (dialog == nullptr) return;
+      dialog->grab().save(artifacts + "qt-999-create-view-frames-dialog.png");
+      static_cast<QDialog*>(dialog)->accept();
+    });
+    window.Submit("CREATEVIEWFRAMES");  // no arguments: the dialog runs and submits its own command
+    QCOMPARE(window.State().viewFrameGroups.size(), size_t(1));
+    QCOMPARE(window.State().viewFrameGroups[0].frames.size(), size_t(3));
+
+    window.Submit("ZOOMEXTENTS");
+    auto* viewportWidget = window.findChild<QWidget*>("modelViewport");
+    QVERIFY(viewportWidget);
+    auto* viewport = static_cast<EditorViewport*>(viewportWidget);
+    QTest::qWait(100);
+    viewport->update();
+    QCoreApplication::processEvents();
+    QVERIFY(viewport->grabFramebuffer().save(artifacts + "qt-999-view-frames-plan.png"));
+  }
+
   void paperTrimHighlightScreenshots() {
     EditorWindow window;
     window.CreateDrawingFromTemplate(0);

@@ -657,6 +657,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/alignment/AlignmentGrips.cpp
   src/alignment/AlignmentGround.cpp
   src/alignment/AlignmentFeatureLine.cpp
+  src/alignment/AlignmentViewFrames.cpp
   src/alignment/AlignmentDesign.cpp
   src/alignment/AlignmentTables.cpp
   src/alignment/AlignmentDisplayCache.cpp
@@ -1227,6 +1228,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/CadPipeRunTests.cpp
     tests/AlignmentTests.cpp
     tests/AlignmentCommandTests.cpp
+    tests/AlignmentViewFrameTests.cpp
     tests/AlignmentStyleTests.cpp
     tests/AlignmentLabelTests.cpp
     tests/AlignmentReportTests.cpp

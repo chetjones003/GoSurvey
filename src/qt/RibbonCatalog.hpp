@@ -226,7 +226,7 @@ inline constexpr Button kButtons[] = {
   {"Insert", "Point Cloud", "##RibbonPcAttach", "Attach", "Attach", "POINTCLOUDATTACH", "Attach — import an E57, LAS, LAZ, PTS or PTX laser scan as reference geometry.\nCommand bar: POINTCLOUDATTACH", false, false},
   {"Insert", "Data", "##RibbonDataField", "Field", "Field", "", "Field — not implemented yet.", false, true},
   {"Insert", "Data", "##RibbonDataHyperlink", "Hyperlink", "Hyperlink", "", "Hyperlink — not implemented yet.", false, true},
-  {"Output", "Plan Production", "##OutViewFrames", "Create View\nFrames", "c3d_viewframes", "", "Create View Frames — not implemented yet.", true, true},
+  {"Output", "Plan Production", "##OutViewFrames", "Create View\nFrames", "c3d_viewframes", "CREATEVIEWFRAMES", "Create View Frames — lay out plan sheet frames along an alignment (REQ-517).\nCommand bar: CREATEVIEWFRAMES", false, false},
   {"Output", "Plan Production", "##OutCreateSheets", "Create\nSheets", "c3d_createsheets", "", "Create Sheets — not implemented yet.", true, true},
   {"Output", "Plan Production", "##OutSectionSheets", "Create Section\nSheets", "c3d_sectionsheets", "", "Create Section Sheets — not implemented yet.", true, true},
   {"Output", "Plot", "##RibbonPlot", "Plot", "Plot", "PLOT", "Plot the current layout to a vector PDF.\nCommand bar: PLOT", true, false},

@@ -117,6 +117,16 @@ offset and a curve's radius are always exact.
 - A set can also limit the deflection at a corner between two tangents that has no curve (`MAXDEFLECTION`), and can be saved to or loaded from a criteria file (`ALIGNMENTCHECKSET SAVE` / `LOAD`).
 - Not yet built: superelevation and sight-distance checks, and a check of a compound spiral's length.
 
+## View frames
+
+- `CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale>, <overlap>[, CENTRED|LEFT|RIGHT]` lays plan frames along an alignment. The Output tab's Plan Production group runs it from a dialog.
+- The sheet is one of the Page Setup paper sizes, such as ARCH D; the scale is one of the drawing's named scales, such as `1" = 50'`. The longer side of the sheet runs along the alignment.
+- Each frame is `VF-1`, `VF-2`, ... Consecutive frames overlap by the overlap you set. The last frame keeps its full length past the end station.
+- Placement is CENTRED (the default), LEFT or RIGHT. It sets where the alignment sits across each frame.
+- Frames follow the alignment. Editing its geometry rebuilds the frames, and deleting the alignment deletes its frame groups. Each step is one undo.
+- Frame groups are saved with the drawing and rebuilt when it reopens.
+- Not built yet: sheets from frames (Create Sheets) and section sheets from sample lines.
+
 ## Limits so far
 
 - Geometry is built from typed commands, the Alignment Layout Tools (Tangent-Tangent), the layout table, grips or

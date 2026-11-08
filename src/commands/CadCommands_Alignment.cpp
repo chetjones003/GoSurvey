@@ -23,6 +23,9 @@
 #include "alignment/AlignmentTables.hpp"
 #include "alignment/AlignmentLabels.hpp"
 #include "alignment/AlignmentDesign.hpp"  // REQ-502
+#include "alignment/AlignmentViewFrames.hpp"  // REQ-517
+#include "PaperSpace.hpp"  // REQ-517: paper sizes for sheets
+#include "ViewportZoomScale.hpp"  // REQ-517: named scales
 #include "util/cadtable.hpp"
 #include "util/cadtablestyle.hpp"
 #include "SpreadsheetIo.hpp"
@@ -348,7 +351,138 @@ void RunAlignmentDelete(AppCommandState& st, const std::string& args, std::vecto
   }
   PushUndoSnapshot(st, "Delete alignment");
   st.alignments.erase(st.alignments.begin() + ix);
+  RefreshViewFrameGroups(st, log);  // REQ-517.9: the alignment's view frame groups go with it, in the same step
   log.push_back("ALIGNMENTDELETE - removed \"" + name + "\".");
+}
+
+// Keeps view frame groups in step with the alignments (REQ-517.8, REQ-517.9). Called from RefreshAlignmentOffsetsOnly,
+// which every geometry edit and the alignment erase path already call, so no caller has to remember it.
+void RefreshViewFrameGroups(AppCommandState& st, std::vector<std::string>& log) {
+  std::vector<std::string> notes;
+  alignment::SyncViewFrameGroups(st.alignments, st.viewFrameGroups, &notes);
+  for (const std::string& n : notes) log.push_back(n);
+}
+
+namespace {
+
+// Typed station to the alignment's internal station (REQ-483). Without station equations the two are equal; with them
+// the displayed station is monotone in the internal station, so bisect over the alignment's range.
+double InternalFromDisplayedStation(const alignment::Alignment& a, double displayed) {
+  if (a.equations.empty()) return displayed;
+  double lo = a.StartStation();
+  double hi = a.EndStation();
+  for (int i = 0; i < 80; ++i) {
+    const double mid = 0.5 * (lo + hi);
+    if (a.DisplayedStation(mid, true) < displayed) lo = mid;
+    else hi = mid;
+  }
+  return 0.5 * (lo + hi);
+}
+
+std::string NormalizeName(const std::string& text) {
+  std::string out;
+  for (unsigned char ch : text)
+    if (!std::isspace(ch)) out.push_back(static_cast<char>(std::toupper(ch)));
+  return out;
+}
+
+const PaperSizePreset* FindSheetSize(const std::string& text) {
+  const std::string want = NormalizeName(text);
+  if (want.empty()) return nullptr;
+  for (int i = 0; i < kPaperSizePresetCount; ++i) {
+    const std::string have = NormalizeName(kPaperSizePresets[i].name);
+    if (have == want || have.compare(0, want.size(), want) == 0) return &kPaperSizePresets[i];
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+// CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale>, <overlap>[, CENTRED|LEFT|RIGHT]
+// REQ-517: frames along the alignment, sized by the sheet (landscape, so the long side runs along the alignment) and
+// the named scale. The group follows the alignment from then on.
+void RunCreateViewFrames(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const char* usage =
+      "CREATEVIEWFRAMES - usage: CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale>, "
+      "<overlap>[, CENTRED|LEFT|RIGHT]";
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() < 6 || f.size() > 7) {
+    log.push_back(usage);
+    return;
+  }
+  if (ActiveProjectPointsReadOnly(st)) {  // REQ-517.6: a read-only project refuses before any change
+    log.push_back("CREATEVIEWFRAMES - the project is read-only; no view frames were created.");
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "CREATEVIEWFRAMES", f[0], log);
+  if (a == nullptr) return;
+
+  double startDisplayed = 0.0;
+  double endDisplayed = 0.0;
+  if (!ParseSta(st, f[1], &startDisplayed) || !ParseSta(st, f[2], &endDisplayed)) {
+    log.push_back("CREATEVIEWFRAMES - a station is not understood: "" + f[1] + "" and "" + f[2] + "".");
+    return;
+  }
+  const PaperSizePreset* sheet = FindSheetSize(f[3]);
+  if (sheet == nullptr) {
+    log.push_back("CREATEVIEWFRAMES - no sheet size "" + f[3] + "". Use a name from Page Setup, such as ARCH D.");
+    return;
+  }
+  EnsureStandardAnnotationScales(st.viewportZoomScales, st.drawingInsUnits);
+  const CadAnnotationScale* scale = nullptr;
+  for (const CadAnnotationScale& candidate : st.viewportZoomScales)
+    if (NormalizeName(candidate.name) == NormalizeName(f[4])) scale = &candidate;
+  if (scale == nullptr) {  // REQ-517.3: named scales only
+    log.push_back("CREATEVIEWFRAMES - "" + f[4] + "" is not a named scale in this drawing's scale list.");
+    return;
+  }
+  double overlap = 0.0;
+  if (!ParseNum(f[5], &overlap)) {
+    log.push_back("CREATEVIEWFRAMES - the overlap "" + f[5] + "" is not a number.");
+    return;
+  }
+  alignment::ViewFramePlacement placement = alignment::ViewFramePlacement::Centred;
+  if (f.size() == 7) {
+    const std::string p = Lower(f[6]);
+    if (p == "centred" || p == "centered" || p == "center" || p == "centre") placement = alignment::ViewFramePlacement::Centred;
+    else if (p == "left") placement = alignment::ViewFramePlacement::Left;
+    else if (p == "right") placement = alignment::ViewFramePlacement::Right;
+    else {
+      log.push_back("CREATEVIEWFRAMES - placement must be CENTRED, LEFT or RIGHT.");
+      return;
+    }
+  }
+
+  alignment::ViewFrameSettings s;
+  s.startStation = InternalFromDisplayedStation(*a, startDisplayed);
+  s.endStation = InternalFromDisplayedStation(*a, endDisplayed);
+  // Landscape: the longer side of the sheet runs along the alignment (a plan sheet's usual orientation).
+  s.sheetWidthIn = std::max(sheet->widthIn, sheet->heightIn);
+  s.sheetHeightIn = std::min(sheet->widthIn, sheet->heightIn);
+  s.groundPerInch = scale->paperUnits > 0.f ? static_cast<double>(scale->drawingUnits) / scale->paperUnits : 0.0;
+  s.overlap = overlap;
+  s.placement = placement;
+  s.sheetName = sheet->name;
+  s.scaleName = scale->name;
+
+  const std::string why = alignment::ViewFrameSettingsRefusal(*a, s);
+  if (!why.empty()) {
+    log.push_back("CREATEVIEWFRAMES - refused: " + why + ". No view frames were created.");
+    return;
+  }
+
+  PushUndoSnapshot(st, "Create view frames");
+  alignment::ViewFrameGroup g;
+  g.id = st.nextEntityId++;
+  g.alignmentId = a->id;
+  g.name = a->name;
+  g.settings = s;
+  g.frames = alignment::ComputeViewFrames(*a, s);
+  const size_t count = g.frames.size();
+  st.viewFrameGroups.push_back(std::move(g));
+  BumpCadGpuCache(st);
+  log.push_back("CREATEVIEWFRAMES - " + std::to_string(count) + " view frame(s) along \"" + a->name + "\" (" +
+                s.sheetName + ", " + s.scaleName + ", overlap " + Lin(st, overlap) + ").");
 }
 
 // GETSTATIONOFFSET <alignment>, <x>, <y>[, SURFACE=<surface>]  (WORLD x/y) - REQ-484.4
@@ -948,6 +1082,7 @@ void RunAlignmentTable(AppCommandState& st, const std::string& args, std::vector
 void RefreshAlignmentOffsetsOnly(AppCommandState& st, std::vector<std::string>& log) {
   RefreshLinkedOffsetsImpl(st, log);
   RefreshDynamicTables(st, log);  // REQ-493.2: dynamic tables follow the geometry
+  RefreshViewFrameGroups(st, log);  // REQ-517.8: view frame groups regenerate with the alignment
 }
 
 void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log) {
