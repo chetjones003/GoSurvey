@@ -11,6 +11,8 @@
 #include <QDoubleValidator>
 #include <QFormLayout>
 #include <QLineEdit>
+#include <QLocale>
+#include <QMessageBox>
 #include <QVBoxLayout>
 
 #include <vector>
@@ -94,7 +96,15 @@ QString RunCreateViewFramesDialog(QWidget* parent, const AppCommandState& state)
 
   // Every value goes in as typed text, so the command's own checks report any problem in the log.
   const QString name = alignmentBox->currentText();
+  // The overlap is read in the user's locale (a decimal comma is fine here) and written back in the C locale, so the
+  // command's comma-separated fields never contain a decimal comma.
+  bool overlapOk = false;
+  const double overlap = QLocale().toDouble(overlapEdit->text().trimmed(), &overlapOk);
+  if (!overlapOk) {
+    QMessageBox::warning(parent, "Create View Frames", "The overlap must be a number.");
+    return {};
+  }
   return "CREATEVIEWFRAMES " + name + ", " + startEdit->text().trimmed() + ", " + endEdit->text().trimmed() + ", " +
-         sheetBox->currentText() + ", " + scaleBox->currentText() + ", " + overlapEdit->text().trimmed() + ", " +
+         sheetBox->currentText() + ", " + scaleBox->currentText() + ", " + QString::number(overlap, 'f', 6) + ", " +
          placementBox->currentData().toString();
 }
