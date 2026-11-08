@@ -15,6 +15,9 @@ namespace alignment {
 struct SectionPoint {
   double offset = 0.0;
   double ground = 0.0;
+  /// True when the swath leaves the surface's coverage between this point and the next one. The ground line is not
+  /// drawn across that uncovered stretch (REQ-519.2).
+  bool gapAfter = false;
 };
 
 /// A sample line (REQ-519.1, .2). Stored with the drawing and kept in plan coordinates, so it does not move when the

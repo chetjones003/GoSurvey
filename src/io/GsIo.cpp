@@ -2518,7 +2518,7 @@ json BuildRoot(const AppCommandState& st) {
       o["hasSection"] = l.hasSection;
       o["surfaceName"] = l.surfaceName;
       json points = json::array();
-      for (const alignment::SectionPoint& p : l.section) points.push_back(json::array({p.offset, p.ground}));
+      for (const alignment::SectionPoint& p : l.section) points.push_back(json::array({p.offset, p.ground, p.gapAfter}));
       o["section"] = std::move(points);
       arr.push_back(std::move(o));
     }
@@ -4862,8 +4862,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       num("rightWidth", &l.rightWidth);
       if (el.contains("section") && el["section"].is_array()) {
         for (const auto& pt : el["section"]) {
-          if (pt.is_array() && pt.size() == 2 && pt[0].is_number() && pt[1].is_number())
-            l.section.push_back({pt[0].get<double>(), pt[1].get<double>()});
+          if (pt.is_array() && pt.size() >= 2 && pt[0].is_number() && pt[1].is_number()) {
+            const bool gap = pt.size() >= 3 && pt[2].is_boolean() && pt[2].get<bool>();
+            l.section.push_back({pt[0].get<double>(), pt[1].get<double>(), gap});
+          }
         }
       }
       st.sampleLines.push_back(std::move(l));

@@ -17352,7 +17352,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
      button ask for a start station, an end station, an interval, and left and right swath widths. One sample
      line is placed perpendicular to the alignment at each interval station in the range. Each is named by its
      station (for example `0+00`), is stored with the alignment as a drawing object and is drawn in plan.
-  2. **Sections.** A sample line is sampled against one chosen TIN surface. Along each half-line (left and right),
+  2. **Sections.** A sample line is sampled against one chosen TIN surface. Where the swath leaves the surface's coverage (a
+     hole, or the edge of the surface), the points either side are kept and marked as a break, and no ground is drawn across the
+     uncovered stretch (D-2026-11-08-h, PR #1176 review). Along each half-line (left and right),
      the section records the distance from the alignment and the ground elevation at each sample point. Sample points are the alignment origin, each swath end inside the surface's coverage, and each point where the line crosses a surface triangle edge or vertex or the coverage boundary. A line wholly inside one triangle still produces a section. Ground elevation uses the method of REQ-497. A sample line with
      no surface coverage gets an empty section and is reported under REQ-201. The command continues with the rest.
   3. **Section sheets.** A typed `CREATESECTIONSHEETS` command and the Output → Plan Production → Create Section

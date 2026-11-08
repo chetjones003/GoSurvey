@@ -248,3 +248,23 @@ TEST_CASE("sample lines: an interval too fine for the station format is refused,
   CHECK(why.find("share a name") != std::string::npos);
   CHECK(lines.empty());
 }
+
+TEST_CASE("sample sections: a hole in the surface is a break, not ground drawn across it (REQ-519.2)",
+          "[req519][samplelines]") {
+  // Two separated flat patches, x in [-200, -50] and x in [50, 200]. The uncovered stretch is -50 to 50 along the swath.
+  const std::vector<double> verts = {
+      -200, -200, 100,  -50, -200, 100,  -50, 200, 100,  -200, 200, 100,   // west patch
+      50,   -200, 100,  200, -200, 100,  200, 200, 100,  50,   200, 100,   // east patch
+  };
+  const std::vector<std::uint32_t> idx = {0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7};
+  const TinSurfaceQuery surface(verts, idx);
+
+  alignment::SampleLine line = EastLine(0.0, 0.0, 200.0, 200.0);
+  alignment::SampleSection(verts, idx, surface, line);
+  // Each patch is two triangles, so the swath also crosses its diagonal (at -125 and 125). The origin lies in the hole
+  // and is not kept: -200, -125, -50 | 50, 125, 200.
+  REQUIRE(line.section.size() == 6);
+  const double expected[6] = {-200.0, -125.0, -50.0, 50.0, 125.0, 200.0};
+  for (size_t i = 0; i < 6; ++i) CHECK(line.section[i].offset == Approx(expected[i]));
+  for (size_t i = 0; i < 6; ++i) CHECK(line.section[i].gapAfter == (i == 2));  // the break is after -50 only
+}

@@ -1278,6 +1278,7 @@ void RunCreateSectionSheets(AppCommandState& st, const std::string& args, std::v
       for (size_t p = 0; p + 1 < line.section.size(); ++p) {
         const alignment::SectionPoint& p0 = line.section[p];
         const alignment::SectionPoint& p1 = line.section[p + 1];
+        if (p0.gapAfter) continue;  // REQ-519.2: no ground is drawn across an uncovered stretch
         AddSheetLine(sheet, centre + p0.offset / feetPerInchAcross,
                      axisY + (p0.ground - axisElevation) / feetPerInchDown, centre + p1.offset / feetPerInchAcross,
                      axisY + (p1.ground - axisElevation) / feetPerInchDown);

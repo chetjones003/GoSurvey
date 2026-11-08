@@ -75,12 +75,13 @@
   found one blocking defect: a BENCH run dropped the user's sample lines. Fixed by saving and restoring them with the
   alignments (CadCommands_Bench.cpp). That fix and two spec and dialog wording corrections were made after round 3 and were
   checked by the build and the full suite, not by a fourth council round.
+- Hole in the surface: fixed after PR #1176 review. A section point is marked gapAfter where the swath leaves coverage,
+  and the sheet does not draw ground across it (REQ-519.2).
 - Known edge, not fixed: a TIN literally named "None" cannot be chosen in the Sample Lines dialog, because the command
   reads NONE as no surface.
 - Technical debt, not fixed in this change:
   - SampleSection tests every triangle edge for every line on the UI thread. A large TIN times 2000 lines is slow. Needs a
     spatial index (the TIN index is private to TinSurfaceQuery).
-  - A hole in the TIN draws a straight ground line across the void. The spec is silent on gaps.
   - The sheet-layout test needs the installed Generic 24in x 36in title block and skips otherwise (the repo's convention
     for ViewFrameSheetTests too).
   - Pre-existing, REQ-517: ClearCadGeometry and the block load do not clear view frame groups (only sample lines were

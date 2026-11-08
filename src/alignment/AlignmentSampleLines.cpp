@@ -157,6 +157,14 @@ void SampleSection(const std::vector<double>& verts, const std::vector<std::uint
     }
     i = j;
   }
+
+  // REQ-519.2: where the swath leaves coverage, the points either side stay and are marked as a break. Each stretch
+  // between two kept points is checked at its midpoint: a hole in the surface lies inside such a stretch.
+  for (size_t p = 0; p + 1 < line.section.size(); ++p) {
+    const double mid = 0.5 * (line.section[p].offset + line.section[p + 1].offset);
+    double z = 0.0;
+    line.section[p].gapAfter = !surface.elevationAt(ox + mid * nx, oy + mid * ny, &z);
+  }
 }
 
 void SyncSampleLines(const std::vector<Alignment>& alignments, std::vector<SampleLine>& lines) {
