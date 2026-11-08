@@ -1286,6 +1286,10 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     }
     glUseProgram(static_cast<GLuint>(previousProgram));
   };
+  // The programs must exist before their uPaperInk uniform is set: on the first paint they are created here, so the flag
+  // reaches them and is not left at its default.
+  if (!EnsureShader())
+    return;
   setPaperInk(tuning.paperInk);
   struct PaperInkOff {
     std::function<void(bool)> set;

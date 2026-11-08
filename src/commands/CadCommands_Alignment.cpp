@@ -49,6 +49,7 @@
 #include <iterator>
 #include <limits>
 #include <optional>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -849,6 +850,14 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
   Box tbBounds, border;
   if (!TitleBlockBounds(titleBlock, &tbBounds) || !TitleBlockBorder(titleBlock, &border)) {
     log.push_back("CREATESHEETS - the title block has no border to fit. No sheets were created.");
+    return;
+  }
+  // REQ-518.8: the sheets are fixed at ARCH D, so a title block whose border is bigger would be clipped on the sheet.
+  if (border.width() > kSheetW + 1e-6 || border.height() > kSheetH + 1e-6) {
+    std::ostringstream size;
+    size << std::fixed << std::setprecision(2) << border.width() << " x " << border.height();
+    log.push_back("CREATESHEETS - the title block's border is " + size.str() +
+                  " in, larger than the ARCH D sheet (36 x 24 in). No sheets were created.");
     return;
   }
   // Centre the title block on the sheet, so its border lies in the same place on every sheet.

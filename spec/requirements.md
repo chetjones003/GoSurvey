@@ -17286,8 +17286,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
      (` (2)`, ` (3)`, as REQ-489 duplicates do).
   4. **Refusals (REQ-201).** The command refuses and creates nothing when: the project is read-only; the alignment
      has no view frame group, or more than one (the sheets cannot tell which group to use); the title block DWG is
-     missing, cannot be read, or has no border; the frame group's sheet is not the title block's size (ARCH D,
-     36 in x 24 in, landscape), because the viewport must fit the sheet; or a named frame is not in the group.
+     missing, cannot be read, or has no border, or its border is larger than the ARCH D sheet (36 in x 24 in,
+     landscape), because the sheet would clip it; or a named frame is not in the group. The frames are resized to the
+     usable area inside the margin when the sheets are made (item 12), so the sheet size of the group need not match.
      *(Decided 2026-11-07, D-2026-11-07-c: the multiple-group refusal is added here; the spec left it unstated.
      The template-layout refusals are replaced by the title-block refusals, D-2026-11-08-f.)*
   4a. **Command syntax (decided 2026-11-07, D-2026-11-07-c; amended D-2026-11-08-f).** `CREATESHEETS <alignment>[, <frames>]`.
