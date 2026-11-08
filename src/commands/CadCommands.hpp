@@ -8217,6 +8217,8 @@ void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<
 void RunAlignmentDelete(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// REQ-517: CREATEVIEWFRAMES <alignment>, <start>, <end>, <sheet>, <scale>, <overlap>[, CENTRED|LEFT|RIGHT].
 void RunCreateViewFrames(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-517.7: VIEWFRAMEDELETE <alignment>. Deletes the alignment's view frame groups in one undo step.
+void RunViewFrameDelete(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// REQ-517.8/.9: keeps view frame groups in step with the alignments. Logs a group it could not regenerate.
 void RefreshViewFrameGroups(AppCommandState& st, std::vector<std::string>& log);
 /// True when the active tab's survey-point project is read-only (REQ-517.6 uses the same rule as paste).

@@ -312,3 +312,19 @@ TEST_CASE("a station equation at the alignment's end still resolves its boundary
   REQUIRE(alignment::ResolveDisplayedStation(st.alignments[0], 5000.0, &internal, &why));
   CHECK(internal == Approx(5000.0));
 }
+
+TEST_CASE("VIEWFRAMEDELETE removes an alignment's frame groups in one undo step", "[req517][viewframes]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  NorthRoad(st, log);
+  Submit(st, "CREATEVIEWFRAMES Road, 0+00, 50+00, ARCH D, 1\" = 50', 100", log);
+  Submit(st, "CREATEVIEWFRAMES Road, 0+00, 20+00, ARCH D, 1\" = 50', 100", log);
+  REQUIRE(st.viewFrameGroups.size() == 2);
+  Submit(st, "VIEWFRAMEDELETE Road", log);
+  CHECK(st.viewFrameGroups.empty());
+  CHECK(st.alignments.size() == 1);
+  Submit(st, "UNDO", log);  // one undo restores both groups
+  CHECK(st.viewFrameGroups.size() == 2);
+  Submit(st, "VIEWFRAMEDELETE Nowhere", log);
+  CHECK(LogHas(log, "no alignment named"));
+}

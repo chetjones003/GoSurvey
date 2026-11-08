@@ -8756,6 +8756,7 @@ const CmdEntry kRegistry[] = {
     {"alignmentlist", "", "Report alignments, stations and entities: ALIGNMENTLIST [<name>]"},
     {"alignmentdelete", "", "Delete an alignment: ALIGNMENTDELETE <name>"},
     {"createviewframes", "", "Create view frames along an alignment: CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale>, <overlap>[, CENTRED|LEFT|RIGHT]"},
+    {"viewframedelete", "", "Delete an alignment's view frame groups: VIEWFRAMEDELETE <alignment>"},
     {"getstationoffset", "", "Station and offset of a point: GETSTATIONOFFSET <alignment>[, <x>, <y> | , POINT, <number>][, SURFACE=<surface>] (alignment alone: pick until ESC)"},
     {"getpointfromstationoffset", "", "Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset>"},
     {"createalignmentfromobjects", "createalignmententities", "Alignment from lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS (pick them) | <name>[, START=][, FILLET=][, REVERSE][, ERASE]"},
@@ -49804,7 +49805,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "surfacevisibility" || plotTok == "surfvis" || plotTok == "surfcrossbl" || plotTok == "surflabel" || plotTok == "surfacelegend" || plotTok == "createprofilefromsurface" || plotTok == "profileview" ||
         plotTok == "quickprofile" || plotTok == "qprof" ||
         plotTok == "alignment" || plotTok == "createalignment" || plotTok == "alignmentadd" ||
-        plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "createviewframes" || plotTok == "getstationoffset" ||
+        plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "createviewframes" || plotTok == "viewframedelete" || plotTok == "getstationoffset" ||
         plotTok == "getpointfromstationoffset" || plotTok == "createalignmentfromobjects" ||
         plotTok == "createalignmententities" || plotTok == "createalignmentlayout" ||
         plotTok == "alignmentlayout" || plotTok == "alignmentcurvesettings" || plotTok == "stationformat" || plotTok == "alignmentmeta" ||
@@ -49937,6 +49938,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunAlignmentDelete(st, rest, log);
       else if (plotTok == "createviewframes")
         RunCreateViewFrames(st, rest, log);
+      else if (plotTok == "viewframedelete")
+        RunViewFrameDelete(st, rest, log);
       else if (plotTok == "getstationoffset")
         RunGetStationOffset(st, rest, log);
       else if (plotTok == "getpointfromstationoffset")

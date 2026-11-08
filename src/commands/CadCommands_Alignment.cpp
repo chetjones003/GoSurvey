@@ -384,6 +384,33 @@ const PaperSizePreset* FindSheetSize(const std::string& text) {
 
 }  // namespace
 
+// VIEWFRAMEDELETE <alignment> (REQ-517.7): deletes every view frame group that follows the alignment, as one undo step.
+void RunViewFrameDelete(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::string name = Trim(args);
+  if (name.empty()) {
+    log.push_back("VIEWFRAMEDELETE - usage: VIEWFRAMEDELETE <alignment>");
+    return;
+  }
+  const int ix = FindAlignment(st, name);
+  if (ix < 0) {
+    log.push_back("VIEWFRAMEDELETE - no alignment named \"" + name + "\".");
+    return;
+  }
+  const std::uint64_t id = st.alignments[static_cast<size_t>(ix)].id;
+  size_t count = 0;
+  for (const alignment::ViewFrameGroup& g : st.viewFrameGroups) count += g.alignmentId == id ? 1 : 0;
+  if (count == 0) {
+    log.push_back("VIEWFRAMEDELETE - \"" + name + "\" has no view frame groups.");
+    return;
+  }
+  PushUndoSnapshot(st, "Delete view frames");
+  st.viewFrameGroups.erase(std::remove_if(st.viewFrameGroups.begin(), st.viewFrameGroups.end(),
+                                          [id](const alignment::ViewFrameGroup& g) { return g.alignmentId == id; }),
+                           st.viewFrameGroups.end());
+  BumpCadGpuCache(st);
+  log.push_back("VIEWFRAMEDELETE - removed " + std::to_string(count) + " view frame group(s) from \"" + name + "\".");
+}
+
 // CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale>, <overlap>[, CENTRED|LEFT|RIGHT]
 // REQ-517: frames along the alignment, sized by the sheet (landscape, so the long side runs along the alignment) and
 // the named scale. The group follows the alignment from then on.
