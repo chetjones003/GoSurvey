@@ -18,6 +18,7 @@
 #include "PaperSpace.hpp"
 #include "alignment/Alignment.hpp"
 #include "alignment/AlignmentViewFrames.hpp"
+#include "io/DwgIo.hpp"
 #include "io/PdfPlot.hpp"
 #include "render/ViewportProjection.hpp"
 
@@ -146,6 +147,28 @@ TEST_CASE("each sheet is filled from its view frame and carries a north arrow (R
   CHECK(sta.find("to 35+00") != std::string::npos);
   CHECK(TextStartingWith(sheet, "DATE  ").size() == std::string("DATE  11/08/2026").size());
   CHECK(TextStartingWith(sheet, "N") == "N");  // the north arrow's N
+}
+
+TEST_CASE("the title block's own text comes onto every sheet, moved with its lines (REQ-518.8)", "[req518][sheets]") {
+  if (!TitleBlockAvailable()) return;
+  const char* local = std::getenv("LOCALAPPDATA");
+  const std::string tbPath = std::string(local) + "\\Autodesk\\C3D 2026\\enu\\Template\\AutoCAD Template\\Generic 24in x 36in Title Block.dwg";
+  AppCommandState source;
+  std::vector<std::string> importLog;
+  REQUIRE(ImportDwgFile(source, tbPath.c_str(), importLog));
+  size_t blockTexts = 0;
+  for (const CadAnnotation& a : source.cadAnnotations)
+    if (a.kind == CadAnnotation::Kind::Text || a.kind == CadAnnotation::Kind::Mtext) ++blockTexts;
+  INFO("title block text annotations: " << blockTexts);
+
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  MakeThreeFrames(st, log);
+  Submit(st, "CREATESHEETS Road, VF-1", log);
+  const PaperLayout& sheet = st.paperLayouts[static_cast<size_t>(FindLayout(st, "VF-1"))];
+  // The six generated fields and the north arrow's N sit alongside the block's own text.
+  CHECK(sheet.paperTexts.size() == blockTexts + 7);
+  CHECK(sheet.paperTextAttrs.size() == sheet.paperTexts.size());
 }
 
 TEST_CASE("the title block's layers come into the drawing with the sheets", "[req518][sheets]") {

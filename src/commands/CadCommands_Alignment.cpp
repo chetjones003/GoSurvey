@@ -616,6 +616,28 @@ void CopyTitleBlockOntoSheet(PaperLayout& sheet, const AppCommandState& tb, doub
     sheet.paperPolyAttrs.push_back(attr);
     sheet.paperPolyOffsets.push_back(static_cast<int>(sheet.paperPolyVerts.size() / 3));
   }
+  // REQ-518.8: the block's own text (labels and notes) comes across too. Styles and annotative scales name entries
+  // the sheet's drawing does not have, so they are dropped; the baked height, font and style values are kept.
+  for (const CadAnnotation& src : tb.cadAnnotations) {
+    if (src.kind != CadAnnotation::Kind::Text && src.kind != CadAnnotation::Kind::Mtext) continue;
+    CadAnnotation a = src;
+    a.insX = static_cast<float>(src.insX + dx);
+    a.insY = static_cast<float>(src.insY + dy);
+    a.insZ = 0.f;
+    if (src.kind == CadAnnotation::Kind::Mtext) {
+      a.boxMinX = static_cast<float>(src.boxMinX + dx);
+      a.boxMaxX = static_cast<float>(src.boxMaxX + dx);
+      a.boxMinY = static_cast<float>(src.boxMinY + dy);
+      a.boxMaxY = static_cast<float>(src.boxMaxY + dy);
+    }
+    a.styleName.clear();
+    a.dimensionStyleName.clear();
+    a.dimensionTextOverride.clear();
+    a.annotative = false;
+    a.annotativeVisibleScaleNames.clear();
+    sheet.paperTexts.push_back(std::move(a));
+    sheet.paperTextAttrs.push_back(EntityAttributes{});
+  }
 }
 
 // REQ-518.9: one line of text on a sheet, in paper inches from its lower-left corner, with no style of its own.
@@ -867,8 +889,14 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
     st.paperLayouts.push_back(std::move(sheet));
   }
   BumpCadGpuCache(st);
+  // The viewport is smaller than the frame's sheet (the margin), at the frame's scale, so the frame's edges are cut off.
+  char coverage[256];
+  std::snprintf(coverage, sizeof(coverage),
+                " Each viewport shows about %.0f%% of its frame's width and %.0f%% of its height at the frame scale; "
+                "the rest of each frame is not on the sheet (see REQ-518, D-2026-11-08-f).",
+                100.0 * inner.width() / kSheetW, 100.0 * inner.height() / kSheetH);
   log.push_back("CREATESHEETS - " + std::to_string(chosen.size()) + " sheet(s) from \"" + a->name + "\" on \"" +
-                kTitleBlockFile + "\": " + names + ".");
+                kTitleBlockFile + "\": " + names + "." + coverage);
 }
 
 // GETSTATIONOFFSET <alignment>, <x>, <y>[, SURFACE=<surface>]  (WORLD x/y) - REQ-484.4
