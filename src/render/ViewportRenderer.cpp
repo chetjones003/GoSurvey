@@ -2908,11 +2908,13 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
           }
         }
         // REQ-517: view frames, one closed outline per frame in plan (Z = 0, as the alignment itself). Drawn in the
-        // layer-0 default colour; frames have no style or layer of their own yet.
-        if (extended->viewFrameGroups) {
+        // layer-0 default colour; frames have no style or layer of their own yet. They follow layer 0's visibility: a
+        // layer 0 that is off or frozen hides them, as it hides any entity on it (REQ-495.4).
+        const CadLayerRow* frameLr = LookupLayerRowCi(drawingLayers, std::string("0"));
+        const bool frameLayerHidden = frameLr != nullptr && (!frameLr->on || frameLr->frozen);
+        if (extended->viewFrameGroups && !frameLayerHidden) {
           EntityAttributes frameAttr{};
           frameAttr.layer = "0";
-          const CadLayerRow* frameLr = LookupLayerRowCi(drawingLayers, std::string("0"));
           float frameRgba[4];
           ResolveEntityRgbaForViewport(frameAttr, frameLr, kLineDefaultR, kLineDefaultG, kLineDefaultB, frameRgba);
           for (const alignment::ViewFrameGroup& group : *extended->viewFrameGroups) {

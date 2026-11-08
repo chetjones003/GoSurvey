@@ -1367,7 +1367,9 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
 
   for (const alignment::Alignment& al : state.alignments) DrawQtAlignmentOverlay(painter, state, AlignmentView{camera, width, height}, al);
   // REQ-517: each view frame carries its name at its centre, in plan. Its outline is drawn with the model geometry.
-  if (!state.viewFrameGroups.empty()) {
+  const CadLayerRow* frameLayer = FindDrawingLayerRowCi(state, "0");  // frames follow layer 0 (REQ-495.4)
+  const bool frameLayerHidden = frameLayer != nullptr && (!frameLayer->on || frameLayer->frozen);
+  if (!state.viewFrameGroups.empty() && !frameLayerHidden) {
     QFont frameFont;
     frameFont.setPointSizeF(9.0);
     painter.setFont(frameFont);

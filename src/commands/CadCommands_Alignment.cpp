@@ -391,6 +391,10 @@ void RunViewFrameDelete(AppCommandState& st, const std::string& args, std::vecto
     log.push_back("VIEWFRAMEDELETE - usage: VIEWFRAMEDELETE <alignment>");
     return;
   }
+  if (ActiveProjectPointsReadOnly(st)) {  // REQ-517.6: refused before any snapshot or change
+    log.push_back("VIEWFRAMEDELETE - the project is read-only; no view frames were deleted.");
+    return;
+  }
   const int ix = FindAlignment(st, name);
   if (ix < 0) {
     log.push_back("VIEWFRAMEDELETE - no alignment named \"" + name + "\".");
