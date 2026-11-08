@@ -5088,6 +5088,11 @@ private Q_SLOTS:
   // REQ-449 / issue #1032.
   void issue1032SettingsWindowStagesAndPersists() {
     IsolatedUserData userData;
+    // The spin-button rules this test checks come from the application appearance. Apply it here instead of relying on
+    // an earlier test in the shard to have set it.
+    const bool oldLightTheme = qApp->property("cadLightTheme").toBool();
+    auto restoreAppearance = qScopeGuard([&] { ApplyQtAppearance(*qApp, oldLightTheme); });
+    ApplyQtAppearance(*qApp, false);
     EditorWindow window;
     window.ShowSettings();
     auto* dialog = window.findChild<QDialog*>("applicationSettings");
