@@ -21,13 +21,14 @@
 namespace {
 
 // Typed station text for a stored internal station, so the dialog opens on the alignment's own stationing. The text
-// keeps six decimals (the drawing's display precision could round an endpoint outside the alignment), and the start
-// is nudged up and the end down by a millionth so that rounding at six decimals stays inside the range.
+// keeps six decimals (the drawing's display precision could round an endpoint outside the alignment). The start is
+// nudged up and the end down by a millionth of an INTERNAL station, and the displayed value is then taken from that
+// point, so a station equation at the endpoint cannot move the default into its gap.
 QString StationText(const AppCommandState& state, const alignment::Alignment& a, double internalStation, bool isEnd) {
   alignment::StationFormat fmt = state.alignmentStationFormat;
   fmt.decimals = std::max(fmt.decimals, 6);
-  const double displayed = a.DisplayedStation(internalStation, true) + (isEnd ? -1e-6 : 1e-6);
-  return QString::fromStdString(alignment::FormatStation(displayed, fmt));
+  const double nudged = internalStation + (isEnd ? -1e-6 : 1e-6);
+  return QString::fromStdString(alignment::FormatStation(a.DisplayedStation(nudged, true), fmt));
 }
 
 }  // namespace
