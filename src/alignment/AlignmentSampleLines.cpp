@@ -2,6 +2,7 @@
 
 #include "alignment/AlignmentViewFrames.hpp"
 #include "util/surfacequery.hpp"
+#include "util/surfacevolume.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -100,6 +101,40 @@ bool ComputeSampleLines(const Alignment& a, const SampleLineSettings& s, const S
 
 void SampleSection(const std::vector<double>& verts, const std::vector<std::uint32_t>& idx, const ISurfaceQuery& surface,
                    SampleLine& line) {
+  const TinSpatialIndex index = BuildTinSpatialIndex(verts, idx);
+  SampleSection(verts, idx, index, surface, line);
+}
+
+namespace {
+
+// The triangle ordinals in the cells the box from (x0, y0) to (x1, y1) touches, each once. A triangle that crosses the
+// box has its own box in one of these cells, because the index stores a triangle in every cell its box touches.
+std::vector<std::uint32_t> CandidateTriangles(const TinSpatialIndex& index, double x0, double y0, double x1, double y1) {
+  std::vector<std::uint32_t> out;
+  if (index.empty()) return out;
+  // Clamp in floating point before the cast, so a station far off the TIN cannot overflow the cell index.
+  const auto colOf = [&index](double x) {
+    return static_cast<int>(std::clamp((x - index.minX) / index.cellSize, 0.0, index.cols - 1.0));
+  };
+  const auto rowOf = [&index](double y) {
+    return static_cast<int>(std::clamp((y - index.minY) / index.cellSize, 0.0, index.rows - 1.0));
+  };
+  const int c0 = colOf(std::min(x0, x1)), c1 = colOf(std::max(x0, x1));
+  const int r0 = rowOf(std::min(y0, y1)), r1 = rowOf(std::max(y0, y1));
+  for (int r = r0; r <= r1; ++r)
+    for (int c = c0; c <= c1; ++c) {
+      const auto& cell = index.cells[static_cast<size_t>(r) * static_cast<size_t>(index.cols) + static_cast<size_t>(c)];
+      out.insert(out.end(), cell.begin(), cell.end());
+    }
+  std::sort(out.begin(), out.end());
+  out.erase(std::unique(out.begin(), out.end()), out.end());
+  return out;
+}
+
+}  // namespace
+
+void SampleSection(const std::vector<double>& verts, const std::vector<std::uint32_t>& idx, const TinSpatialIndex& index,
+                   const ISurfaceQuery& surface, SampleLine& line) {
   line.section.clear();
   const double left = line.leftWidth, right = line.rightWidth;
   const double ox = line.origin.x, oy = line.origin.y;
@@ -114,11 +149,13 @@ void SampleSection(const std::vector<double>& verts, const std::vector<std::uint
     double ground = 0.0;
   };
   std::vector<Candidate> candidates{{-left, false, 0.0}, {0.0, false, 0.0}, {right, false, 0.0}};
-  const size_t triangleCount = idx.size() / 3;
-  for (size_t t = 0; t < triangleCount; ++t) {
+  const std::vector<std::uint32_t> nearby = CandidateTriangles(index, ox - left * nx, oy - left * ny, ox + right * nx,
+                                                              oy + right * ny);
+  for (const std::uint32_t t : nearby) {
+    if (3 * static_cast<size_t>(t) + 2 >= idx.size()) continue;
     for (size_t e = 0; e < 3; ++e) {
-      const std::uint32_t ia = idx[3 * t + e];
-      const std::uint32_t ib = idx[3 * t + (e + 1) % 3];
+      const std::uint32_t ia = idx[3 * static_cast<size_t>(t) + e];
+      const std::uint32_t ib = idx[3 * static_cast<size_t>(t) + (e + 1) % 3];
       if (3 * static_cast<size_t>(ia) + 2 >= verts.size() || 3 * static_cast<size_t>(ib) + 2 >= verts.size()) continue;
       const double ax = verts[3 * static_cast<size_t>(ia)], ay = verts[3 * static_cast<size_t>(ia) + 1];
       const double bx = verts[3 * static_cast<size_t>(ib)], by = verts[3 * static_cast<size_t>(ib) + 1];

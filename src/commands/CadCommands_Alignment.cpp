@@ -1121,10 +1121,12 @@ void RunCreateSampleLines(AppCommandState& st, const std::string& args, std::vec
       return;
     }
     surfaceName = surface.name;
+    // REQ-519.2: the index is built once for the run, so each station looks only at the triangles near its swath.
+    const TinSpatialIndex index = BuildTinSpatialIndex(surface.tin->vertsXyz, surface.tin->indices);
     for (alignment::SampleLine& line : lines) {
       line.hasSection = true;
       line.surfaceName = surfaceName;
-      alignment::SampleSection(surface.tin->vertsXyz, surface.tin->indices, *query, line);
+      alignment::SampleSection(surface.tin->vertsXyz, surface.tin->indices, index, *query, line);
       if (line.section.empty()) {
         noData += (noData.empty() ? "" : ", ") + line.name;
       } else {

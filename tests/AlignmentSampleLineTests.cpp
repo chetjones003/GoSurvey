@@ -12,6 +12,7 @@
 #include "alignment/Alignment.hpp"
 #include "alignment/AlignmentSampleLines.hpp"
 #include "util/surfacequery.hpp"
+#include "util/surfacevolume.hpp"
 
 using Catch::Approx;
 
@@ -267,4 +268,15 @@ TEST_CASE("sample sections: a hole in the surface is a break, not ground drawn a
   const double expected[6] = {-200.0, -125.0, -50.0, 50.0, 125.0, 200.0};
   for (size_t i = 0; i < 6; ++i) CHECK(line.section[i].offset == Approx(expected[i]));
   for (size_t i = 0; i < 6; ++i) CHECK(line.section[i].gapAfter == (i == 2));  // the break is after -50 only
+}
+
+TEST_CASE("sample sections: a station far off the surface is no data, not an overflowed cell (REQ-519.2)",
+          "[req519][samplelines]") {
+  const std::vector<double> verts = {-200, -200, 100, 200, -200, 100, 200, 200, 100, -200, 200, 100};
+  const std::vector<std::uint32_t> idx = {0, 1, 2, 0, 2, 3};
+  const TinSpatialIndex index = BuildTinSpatialIndex(verts, idx);
+  const TinSurfaceQuery surface(verts, idx);
+  alignment::SampleLine line = EastLine(1.0e12, 1.0e12, 50.0, 50.0);
+  alignment::SampleSection(verts, idx, index, surface, line);
+  CHECK(line.section.empty());
 }
