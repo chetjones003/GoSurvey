@@ -295,3 +295,20 @@ TEST_CASE("view frames: a range shorter than one frame gives one frame; bad numb
   huge.groundPerInch = 1.0e12;
   CHECK(alignment::ViewFrameSettingsRefusal(road, huge).find("larger than") != std::string::npos);
 }
+
+TEST_CASE("a station equation at the alignment's end still resolves its boundary station", "[req517][viewframes]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  NorthRoad(st, log);
+  alignment::StationEquation eq;  // raw 5000 (the end) is displayed as 5100
+  eq.rawBack = 5000.0;
+  eq.ahead = 5100.0;
+  eq.increasing = true;
+  REQUIRE(st.alignments[0].AddStationEquation(eq));
+  double internal = 0.0;
+  std::string why;
+  REQUIRE(alignment::ResolveDisplayedStation(st.alignments[0], 5100.0, &internal, &why));
+  CHECK(internal == Approx(5000.0));
+  REQUIRE(alignment::ResolveDisplayedStation(st.alignments[0], 5000.0, &internal, &why));
+  CHECK(internal == Approx(5000.0));
+}

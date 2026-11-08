@@ -109,6 +109,15 @@ bool ResolveDisplayedStation(const Alignment& a, double displayed, double* inter
       if (!seen) matches.push_back(candidate);
     }
   }
+  // A station equation sitting exactly on a boundary, including at either end, has no interval on one side. Test each
+  // boundary point directly: its displayed station before and after the equation both name it.
+  for (double x : cuts) {
+    if (std::fabs(a.DisplayedStation(x, true) - displayed) > kEps && std::fabs(a.DisplayedStation(x, false) - displayed) > kEps)
+      continue;
+    bool seen = false;
+    for (double m : matches) seen = seen || std::fabs(m - x) <= kEps;
+    if (!seen) matches.push_back(x);
+  }
   if (matches.empty()) {
     if (why != nullptr) *why = "a station is not on the alignment (it falls in a gap made by a station equation)";
     return false;
