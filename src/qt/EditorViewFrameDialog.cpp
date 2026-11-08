@@ -15,13 +15,19 @@
 #include <QMessageBox>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <vector>
 
 namespace {
 
-// Typed station text for a stored internal station, so the dialog opens on the alignment's own stationing.
-QString StationText(const AppCommandState& state, const alignment::Alignment& a, double internalStation) {
-  return QString::fromStdString(alignment::FormatStation(a.DisplayedStation(internalStation, true), state.alignmentStationFormat));
+// Typed station text for a stored internal station, so the dialog opens on the alignment's own stationing. The text
+// keeps six decimals (the drawing's display precision could round an endpoint outside the alignment), and the start
+// is nudged up and the end down by a millionth so that rounding at six decimals stays inside the range.
+QString StationText(const AppCommandState& state, const alignment::Alignment& a, double internalStation, bool isEnd) {
+  alignment::StationFormat fmt = state.alignmentStationFormat;
+  fmt.decimals = std::max(fmt.decimals, 6);
+  const double displayed = a.DisplayedStation(internalStation, true) + (isEnd ? -1e-6 : 1e-6);
+  return QString::fromStdString(alignment::FormatStation(displayed, fmt));
 }
 
 }  // namespace
@@ -42,8 +48,8 @@ QString RunCreateViewFramesDialog(QWidget* parent, const AppCommandState& state)
   auto* endEdit = new QLineEdit(&dialog);
   auto fillRange = [&](int index) {
     const alignment::Alignment& a = state.alignments[static_cast<size_t>(index)];
-    startEdit->setText(StationText(state, a, a.StartStation()));
-    endEdit->setText(StationText(state, a, a.EndStation()));
+    startEdit->setText(StationText(state, a, a.StartStation(), false));
+    endEdit->setText(StationText(state, a, a.EndStation(), true));
   };
   fillRange(0);
   QObject::connect(alignmentBox, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&](int index) {
