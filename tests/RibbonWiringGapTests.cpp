@@ -51,6 +51,13 @@ TEST_CASE("Issue #1003 Import LandXML is wired to its command", "[ribbon][issue1
   CHECK_FALSE(landXml->placeholder);
 }
 
+TEST_CASE("Issue #1000 Create Sheets is wired to its command", "[ribbon][issue1000][req518]") {
+  const auto* sheets = FindButton("##OutCreateSheets");
+  REQUIRE(sheets != nullptr);
+  CHECK(std::string(sheets->command) == "CREATESHEETS");
+  CHECK_FALSE(sheets->placeholder);
+}
+
 TEST_CASE("Issue #802 decided-out Civil 3D placeholders are removed from the Qt ribbon", "[ribbon][issue802]") {
   for (const char* id : {"##CdParcel", "##CdIntersections", "##CdAssembly", "##CdPond", "##CdUgStorage", "##CdChannel"})
     CHECK(FindButton(id) == nullptr);

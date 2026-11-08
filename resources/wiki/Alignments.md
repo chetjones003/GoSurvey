@@ -125,7 +125,11 @@ offset and a curve's radius are always exact.
 - Placement is CENTRED (the default), LEFT or RIGHT. It sets where the alignment sits across each frame.
 - Frames follow the alignment. Editing its geometry rebuilds the frames, and deleting the alignment deletes its frame groups. Each step is one undo.
 - Frame groups are saved with the drawing and rebuilt when it reopens.
-- Not built yet: sheets from frames (Create Sheets) and section sheets from sample lines.
+- `CREATESHEETS <alignment>, <template layout>[, <frames>]` makes one paper layout per frame. The Output tab's Plan Production group runs it from a dialog.
+- Each sheet is a copy of the template layout's paper content with one viewport. The viewport is centred on its frame, at the frame's scale, and turned so the alignment runs left to right across the sheet. The sheet is named after its frame (`VF-1`, `VF-2`, ...); a name already in use gets ` (2)`, ` (3)` and so on.
+- The template must be a landscape paper layout with the same sheet size as the frame group (for example ARCH D, 36 in x 24 in). The command refuses a model-space template, a template of another size, or an alignment with more than one frame group. Frames are chosen with `ALL` (the default) or names separated by spaces, such as `VF-1 VF-3`.
+- One undo removes all the sheets one command made. Sheets are not updated when the frames change later; create them again.
+- Not built yet: section sheets from sample lines.
 
 ## Limits so far
 

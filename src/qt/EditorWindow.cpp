@@ -1,5 +1,6 @@
 #include "EditorWindow.hpp"
 #include "EditorViewFrameDialog.hpp"  // REQ-517.1
+#include "EditorSheetsDialog.hpp"  // REQ-518.1
 #include "DrawingDocumentTabBar.hpp"
 #include "StylePreview.hpp"
 #include "QtAccent.hpp"
@@ -1482,6 +1483,13 @@ void EditorWindow::Submit(const QString& command) {
     if (ActiveDrawingReadOnly()) { QMessageBox::information(this, "Read-only drawing", "View frames cannot be created in a read-only drawing."); return; }
     if (m_State.alignments.empty()) { m_Log.push_back("CREATEVIEWFRAMES - this drawing has no alignment to frame."); Refresh(); return; }
     const QString commandText = RunCreateViewFramesDialog(this, m_State);
+    if (!commandText.isEmpty()) Submit(commandText);
+    return;
+  }
+  if (verb == "CREATESHEETS") {  // REQ-518.1: no arguments opens the dialog; the dialog then submits the command
+    if (m_State.activeDrawingIdx == 0) { m_Log.push_back("CREATESHEETS - open a drawing first."); Refresh(); return; }
+    if (ActiveDrawingReadOnly()) { QMessageBox::information(this, "Read-only drawing", "Sheets cannot be created in a read-only drawing."); return; }
+    const QString commandText = RunCreateSheetsDialog(this, m_State);
     if (!commandText.isEmpty()) Submit(commandText);
     return;
   }

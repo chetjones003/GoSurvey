@@ -1229,6 +1229,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AlignmentTests.cpp
     tests/AlignmentCommandTests.cpp
     tests/AlignmentViewFrameTests.cpp
+    tests/ViewFrameSheetTests.cpp
     tests/AlignmentStyleTests.cpp
     tests/AlignmentLabelTests.cpp
     tests/AlignmentReportTests.cpp

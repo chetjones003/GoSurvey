@@ -17276,10 +17276,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
      (REQ-037) with one viewport. The viewport's model view is centred on the frame's centre and set to the
      frame's scale (GitHub #1017). The viewport covers the full sheet at the frame's size, so its coverage equals the frame's.
      The template supplies only title-block content; a template's own viewport rectangle is ignored (REQ-490).
-     [OPEN, user decision: the frame is rotated to the alignment tangent, but the spec has no view rotation for paper viewports. Options: (a) add view rotation so the viewport turns with the frame; (b) keep the viewport unrotated, so the alignment is not horizontal on the sheet. Not implemented until the user chooses.]
-  3. A layout is named after its frame (`VF-1`, `VF-2`, ...). If that name is taken, a numbered suffix is added.
-  4. **Refusals (REQ-201).** No frame group, no template layout, or a template that is in model space refuses
-     the command and creates nothing.
+     **Rotation (decided 2026-11-07, D-2026-11-07-c, option (a)).** The viewport turns with its frame: the
+     viewport's view is rotated (its per-viewport camera roll, REQ-061) so the alignment tangent at the frame's
+     centre station runs horizontally across the sheet, with increasing stationing to the right. The frame's
+     corners then fall exactly on the viewport's sheet rectangle.
+  3. A layout is named after its frame (`VF-1`, `VF-2`, ...). If that name is taken, a numbered suffix is added
+     (` (2)`, ` (3)`, as REQ-489 duplicates do).
+  4. **Refusals (REQ-201).** The command refuses and creates nothing when: the project is read-only; the alignment
+     has no view frame group, or more than one (the sheets cannot tell which group to use); the template layout
+     is missing or is model space; the template's paper is not the frame group's sheet size in landscape (width and
+     height each within 0.01 in of the frame sheet, long side across the alignment), because the viewport must cover
+     exactly the frame; or a named frame is not in the group. *(Decided 2026-11-07, D-2026-11-07-c: the paper-size and multiple-group refusals are added here;
+     the spec left both unstated.)*
+  4a. **Command syntax (decided 2026-11-07, D-2026-11-07-c).** `CREATESHEETS <alignment>, <template layout>[, <frames>]`.
+     `<frames>` is `ALL` (or left out) for every frame in the group, or frame names separated by spaces, such as
+     `VF-1 VF-3`. With no argument the command opens the Create Sheets dialog, as CREATEVIEWFRAMES does.
   5. Creating the sheets is one undo step. The new layouts appear in the layout tabs and export to PDF under
      REQ-488 like any other layout.
   6. Sheets are not regenerated when frames later change. Updating existing sheets is out of scope.
@@ -17294,7 +17305,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Domain / Commands / IO / UI
 - Assumptions (recorded, not asked): the viewport is the full sheet at the frame's size, not the template's viewport rectangle; a sheet number
   is not drawn because GoSurvey has no sheet-number field.
-- Status: proposed (2026-11-07, D-2026-11-07-a; GitHub #1000).
+- Traceability: `[req518]` tests (`tests/ViewFrameSheetTests.cpp`).
+- Status: accepted (2026-11-07, D-2026-11-07-c; GitHub #1000). Accepted by the user with the rotation choice (a) and the
+  amendments in items 2, 4 and 4a.
 
 ### REQ-519 — Sample lines and section sheets (GitHub issue #1001, part of #802)
 

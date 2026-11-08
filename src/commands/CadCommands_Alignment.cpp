@@ -507,6 +507,150 @@ void RunCreateViewFrames(AppCommandState& st, const std::string& args, std::vect
                 s.sheetName + ", " + s.scaleName + ", overlap " + Lin(st, overlap) + ").");
 }
 
+namespace {
+
+// REQ-518.2: the one viewport a sheet shows its frame through. It covers the whole sheet, so its coverage is the
+// frame's, and it is rotated (per-viewport camera roll, REQ-061) so the alignment tangent at the frame's centre
+// station runs left to right: the roll that puts the tangent's left normal up the screen.
+// The centre is the midpoint of the frame RECTANGLE, not the alignment point: LEFT and RIGHT placement put the
+// alignment on an edge, so `f.centre` is off the rectangle's middle by half its width. Viewport centres are WORLD
+// coordinates (world = local + worldDocumentOrigin, as the Qt overlay and the PDF plot read them), and the frame is
+// stored in local coordinates, so the origin is added here in double.
+Viewport SheetViewportForFrame(const alignment::Alignment& a, const alignment::ViewFrame& f,
+                               const alignment::ViewFrameSettings& s, float sheetWidthIn, float sheetHeightIn,
+                               double originX, double originY) {
+  const alignment::Point2 t = a.GetTangentAtStation(f.centreStation);
+  Viewport vp;
+  vp.paperXIn = 0.f;
+  vp.paperYIn = 0.f;
+  vp.paperWIn = sheetWidthIn;
+  vp.paperHIn = sheetHeightIn;
+  vp.modelCenterX = (f.corner[0].x + f.corner[2].x) * 0.5 + originX;
+  vp.modelCenterY = (f.corner[0].y + f.corner[2].y) * 0.5 + originY;
+  vp.scaleModelPerPaperIn = static_cast<float>(s.groundPerInch);  // REQ-518.2: the frame's scale
+  vp.annotationScaleName = s.scaleName;
+  vp.camRollDeg = Camera::RollToPlaceUp(0.f, 90.f, ray3d::Vec3{-t.y, t.x, 0.0});
+  return vp;
+}
+
+}  // namespace
+
+// CREATESHEETS <alignment>, <template layout>[, <frames>]  (REQ-518). One paper layout per chosen frame of the
+// alignment's single view frame group, copied from the template's paper content with one rotated viewport. One undo
+// step for all of them. ALL (or no frames field) takes every frame; otherwise frame names separated by spaces.
+void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() < 2 || f.size() > 3) {
+    log.push_back("CREATESHEETS - usage: CREATESHEETS <alignment>, <template layout>[, <frames>]");
+    return;
+  }
+  if (ActiveProjectPointsReadOnly(st)) {  // REQ-518.4: a read-only project refuses before any change
+    log.push_back("CREATESHEETS - the project is read-only; no sheets were created.");
+    return;
+  }
+  const alignment::Alignment* a = Resolve(st, "CREATESHEETS", f[0], log);
+  if (a == nullptr) return;
+
+  // REQ-518.4: exactly one view frame group follows the alignment; with two, the sheets could not tell which to use.
+  std::vector<const alignment::ViewFrameGroup*> groups;
+  for (const alignment::ViewFrameGroup& g : st.viewFrameGroups)
+    if (g.alignmentId == a->id) groups.push_back(&g);
+  if (groups.empty()) {
+    log.push_back("CREATESHEETS - \"" + a->name + "\" has no view frame group. No sheets were created.");
+    return;
+  }
+  if (groups.size() > 1) {
+    log.push_back("CREATESHEETS - \"" + a->name + "\" has " + std::to_string(groups.size()) +
+                  " view frame groups; sheets need one. Delete the extra groups with VIEWFRAMEDELETE first. "
+                  "No sheets were created.");
+    return;
+  }
+  const alignment::ViewFrameGroup& g = *groups[0];
+  if (g.frames.empty()) {
+    log.push_back("CREATESHEETS - \"" + a->name + "\" has no frames to make sheets from. No sheets were created.");
+    return;
+  }
+
+  // REQ-518.4: the template is a paper layout. Model space is not one, so naming it is a separate refusal.
+  const std::string templateName = Trim(f[1]);
+  int templateIx = -1;
+  for (size_t i = 0; i < st.paperLayouts.size(); ++i)
+    if (Lower(st.paperLayouts[i].name) == Lower(templateName)) templateIx = static_cast<int>(i);
+  if (templateIx < 0) {
+    log.push_back(Lower(templateName) == "model"
+                      ? "CREATESHEETS - the template is model space; name a paper layout. No sheets were created."
+                      : "CREATESHEETS - no layout named \"" + templateName + "\". No sheets were created.");
+    return;
+  }
+  const PaperLayout tmpl = st.paperLayouts[static_cast<size_t>(templateIx)];  // copy: st.paperLayouts grows below
+
+  // REQ-518.4 (decided with REQ-518.2): the viewport must cover exactly the frame, so the template's sheet has to be
+  // the frame group's sheet, landscape, with the frame's long side across the sheet.
+  if (std::fabs(tmpl.sheetWidthIn() - g.settings.sheetWidthIn) > 0.01 ||
+      std::fabs(tmpl.sheetHeightIn() - g.settings.sheetHeightIn) > 0.01) {
+    char buf[320];
+    std::snprintf(buf, sizeof(buf),
+                  "CREATESHEETS - the template sheet is %.2f x %.2f in, but the view frames are %.2f x %.2f in "
+                  "(a landscape sheet of that size is needed). No sheets were created.",
+                  static_cast<double>(tmpl.sheetWidthIn()), static_cast<double>(tmpl.sheetHeightIn()),
+                  g.settings.sheetWidthIn, g.settings.sheetHeightIn);
+    log.push_back(buf);
+    return;
+  }
+
+  // Which frames: ALL (or none given) is every frame; otherwise named frames, each of which must exist.
+  std::vector<size_t> chosen;
+  const std::string framesText = f.size() == 3 ? Trim(f[2]) : std::string();
+  if (framesText.empty() || Lower(framesText) == "all") {
+    for (size_t i = 0; i < g.frames.size(); ++i) chosen.push_back(i);
+  } else {
+    std::istringstream words(framesText);
+    std::string word;
+    while (words >> word) {
+      size_t found = g.frames.size();
+      for (size_t i = 0; i < g.frames.size(); ++i)
+        if (Lower(g.frames[i].name) == Lower(word)) found = i;
+      if (found == g.frames.size()) {
+        log.push_back("CREATESHEETS - no frame named \"" + word + "\" in \"" + a->name + "\". No sheets were created.");
+        return;
+      }
+      if (std::find(chosen.begin(), chosen.end(), found) == chosen.end()) chosen.push_back(found);
+    }
+  }
+
+  // Build every sheet before the undo snapshot, so a refusal above leaves history untouched.
+  std::vector<std::string> takenNames;
+  for (const PaperLayout& layout : st.paperLayouts) takenNames.push_back(Lower(layout.name));
+  auto nameTaken = [&takenNames](const std::string& name) {
+    return std::find(takenNames.begin(), takenNames.end(), Lower(name)) != takenNames.end();
+  };
+  std::vector<PaperLayout> sheets;
+  for (size_t i : chosen) {
+    const alignment::ViewFrame& fr = g.frames[i];
+    std::string name = fr.name;
+    for (int suffix = 2; nameTaken(name); ++suffix) name = fr.name + " (" + std::to_string(suffix) + ")";
+    takenNames.push_back(Lower(name));
+
+    PaperLayout sheet = tmpl;  // REQ-518.2: the template's paper content, title block included
+    sheet.name = name;
+    sheet.viewports.assign(1, SheetViewportForFrame(*a, fr, g.settings, tmpl.sheetWidthIn(), tmpl.sheetHeightIn(),
+                                                     st.worldDocumentOriginX, st.worldDocumentOriginY));
+    sheet.viewInit = false;  // fit the new sheet to the window on first entry
+    sheets.push_back(std::move(sheet));
+  }
+
+  PushUndoSnapshot(st, "Create sheets");  // REQ-518.5: one undo step removes every sheet
+  std::string names;
+  for (PaperLayout& sheet : sheets) {
+    if (!names.empty()) names += ", ";
+    names += sheet.name;
+    st.paperLayouts.push_back(std::move(sheet));
+  }
+  BumpCadGpuCache(st);
+  log.push_back("CREATESHEETS - " + std::to_string(chosen.size()) + " sheet(s) from \"" + a->name + "\" on \"" +
+                templateName + "\": " + names + ".");
+}
+
 // GETSTATIONOFFSET <alignment>, <x>, <y>[, SURFACE=<surface>]  (WORLD x/y) - REQ-484.4
 void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   std::vector<std::string> f = SplitFields(args);
