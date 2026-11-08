@@ -49,6 +49,9 @@ struct ViewFrameGroup {
 /// Frames per group at most. A guard against a tiny overlap or a huge range producing an unusable number of sheets.
 inline constexpr int kMaxViewFramesPerGroup = 2000;
 
+/// Largest frame length or width accepted, in drawing units. Keeps derived geometry finite and well inside double range.
+inline constexpr double kMaxFrameExtent = 1.0e9;
+
 /// Why these settings cannot make frames on this alignment, or an empty string when they can (REQ-517.6). The
 /// message is written to the command log as it stands, so it names the value that failed.
 [[nodiscard]] std::string ViewFrameSettingsRefusal(const Alignment& a, const ViewFrameSettings& s);

@@ -406,12 +406,12 @@ void RunCreateViewFrames(AppCommandState& st, const std::string& args, std::vect
   double startDisplayed = 0.0;
   double endDisplayed = 0.0;
   if (!ParseSta(st, f[1], &startDisplayed) || !ParseSta(st, f[2], &endDisplayed)) {
-    log.push_back("CREATEVIEWFRAMES - a station is not understood: "" + f[1] + "" and "" + f[2] + "".");
+    log.push_back("CREATEVIEWFRAMES - a station is not understood: \"" + f[1] + "\" and \"" + f[2] + "\".");
     return;
   }
   const PaperSizePreset* sheet = FindSheetSize(f[3]);
   if (sheet == nullptr) {
-    log.push_back("CREATEVIEWFRAMES - no sheet size "" + f[3] + "". Use a name from Page Setup, such as ARCH D.");
+    log.push_back("CREATEVIEWFRAMES - no sheet size \"" + f[3] + "\". Use a name from Page Setup, such as ARCH D.");
     return;
   }
   EnsureStandardAnnotationScales(st.viewportZoomScales, st.drawingInsUnits);
@@ -419,12 +419,12 @@ void RunCreateViewFrames(AppCommandState& st, const std::string& args, std::vect
   for (const CadAnnotationScale& candidate : st.viewportZoomScales)
     if (NormalizeName(candidate.name) == NormalizeName(f[4])) scale = &candidate;
   if (scale == nullptr) {  // REQ-517.3: named scales only
-    log.push_back("CREATEVIEWFRAMES - "" + f[4] + "" is not a named scale in this drawing's scale list.");
+    log.push_back("CREATEVIEWFRAMES - \"" + f[4] + "\" is not a named scale in this drawing's scale list.");
     return;
   }
   double overlap = 0.0;
   if (!ParseNum(f[5], &overlap)) {
-    log.push_back("CREATEVIEWFRAMES - the overlap "" + f[5] + "" is not a number.");
+    log.push_back("CREATEVIEWFRAMES - the overlap \"" + f[5] + "\" is not a number.");
     return;
   }
   alignment::ViewFramePlacement placement = alignment::ViewFramePlacement::Centred;

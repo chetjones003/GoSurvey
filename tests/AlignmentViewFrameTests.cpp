@@ -277,3 +277,21 @@ TEST_CASE("a view frame group that no longer fits its alignment shows no frames"
   CHECK(!alignment::RegenerateViewFrameGroup(st.alignments[0], g).empty());
   CHECK(g.frames.empty());  // frames are derived and not saved, so none are kept in memory either
 }
+
+TEST_CASE("view frames: a range shorter than one frame gives one frame; bad numbers are refused", "[req517][viewframes]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  NorthRoad(st, log);
+  const alignment::Alignment& road = st.alignments[0];
+  // 1000 ft of range with an 1800 ft frame: one frame, not refused (the first frame covers a whole frame length).
+  CHECK(alignment::ViewFrameSettingsRefusal(road, Settings(0.0, 1000.0)).empty());
+  CHECK(alignment::ComputeViewFrames(road, Settings(0.0, 1000.0)).size() == 1);
+
+  alignment::ViewFrameSettings nan = Settings(0.0, 5000.0);
+  nan.sheetWidthIn = std::nan("");
+  CHECK(alignment::ViewFrameSettingsRefusal(road, nan).find("not a finite number") != std::string::npos);
+
+  alignment::ViewFrameSettings huge = Settings(0.0, 5000.0);
+  huge.groundPerInch = 1.0e12;
+  CHECK(alignment::ViewFrameSettingsRefusal(road, huge).find("larger than") != std::string::npos);
+}

@@ -52,6 +52,9 @@ std::string ViewFrameSettingsRefusal(const Alignment& a, const ViewFrameSettings
   char buf[256];
   if (a.Empty())
     return "the alignment has no geometry";
+  if (!std::isfinite(s.startStation) || !std::isfinite(s.endStation) || !std::isfinite(s.sheetWidthIn) ||
+      !std::isfinite(s.sheetHeightIn) || !std::isfinite(s.groundPerInch) || !std::isfinite(s.overlap))
+    return "a value is not a finite number";
   if (!(s.endStation > s.startStation))
     return "the station range is empty or reversed";
   if (s.startStation < a.StartStation() || s.endStation > a.EndStation()) {
@@ -65,10 +68,16 @@ std::string ViewFrameSettingsRefusal(const Alignment& a, const ViewFrameSettings
     return "the scale is not known";
   if (!(s.overlap >= 0.0) || !std::isfinite(s.overlap))
     return "the overlap must be zero or more";
+  if (FrameLength(s) > kMaxFrameExtent || FrameWidth(s) > kMaxFrameExtent)
+    return "the frame would be larger than " + std::to_string(static_cast<long long>(kMaxFrameExtent)) + " units";
   if (s.overlap >= FrameLength(s))
     return "the overlap is not less than the frame length";
-  const double step = FrameLength(s) - s.overlap;
-  if ((s.endStation - s.startStation) / step > kMaxViewFramesPerGroup)
+  // The first frame covers one frame length; each further frame adds one step (REQ-517.5).
+  const double length = FrameLength(s);
+  const double step = length - s.overlap;
+  const double span = s.endStation - s.startStation;
+  const double frames = span <= length ? 1.0 : 1.0 + std::ceil((span - length) / step);
+  if (frames > kMaxViewFramesPerGroup)
     return "the range would make more than " + std::to_string(kMaxViewFramesPerGroup) + " frames";
   return {};
 }
