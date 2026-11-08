@@ -169,6 +169,7 @@ for a compact list inside the program.
 | `ALIGNMENTADD` | — | Add tangent, curve or spiral: ALIGNMENTADD <name>, TANGENT\|TANGENTTO\|CURVE\|CURVELEN\|SPIRAL, ... | [[Commands/alignmentadd]] |
 | `ALIGNMENTLIST` | — | Report alignments, stations and entities: ALIGNMENTLIST [<name>] | [[Commands/alignmentlist]] |
 | `ALIGNMENTDELETE` | — | Delete an alignment: ALIGNMENTDELETE <name> | [[Commands/alignmentdelete]] |
+| `CREATEVIEWFRAMES` | — | Create view frames along an alignment: CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale>, <overlap>[, CENTRED, LEFT or RIGHT] | [[Commands/createviewframes]] |
 | `GETSTATIONOFFSET` | — | Station and offset of a point: GETSTATIONOFFSET <alignment>[, <x>, <y> \| , POINT, <number>][, SURFACE=<surface>] (alignment alone: pick until ESC) | [[Commands/getstationoffset]] |
 | `GETPOINTFROMSTATIONOFFSET` | — | Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset> | [[Commands/getpointfromstationoffset]] |
 | `CREATEALIGNMENTFROMOBJECTS` | `CREATEALIGNMENTENTITIES` | Alignment from lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS (pick them) \| <name>[, START=][, FILLET=][, REVERSE][, ERASE] | [[Commands/createalignmentfromobjects]] |
@@ -324,6 +325,7 @@ for a compact list inside the program.
 | `ALIGNMENTCONTINUITY` | — | [[Commands/alignmentcontinuity]] |
 | `ALIGNMENTCURVESETTINGS` | — | [[Commands/alignmentcurvesettings]] |
 | `ALIGNMENTDELETE` | — | [[Commands/alignmentdelete]] |
+| `CREATEVIEWFRAMES` | — | [[Commands/createviewframes]] |
 | `ALIGNMENTDETACH` | — | [[Commands/alignmentdetach]] |
 | `ALIGNMENTDISTANCE` | — | [[Commands/alignmentdistance]] |
 | `ALIGNMENTCHECKSET` | — | [[Commands/alignmentcheckset]] |

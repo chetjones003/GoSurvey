@@ -167,6 +167,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadPipeRuns            = cmd.cadPipeRuns;      // pipe runs are per-drawing (issue #486 / REQ-345)
   doc.cadPipeRunAttrs        = cmd.cadPipeRunAttrs;
   doc.alignments             = cmd.alignments;       // REQ-480: per-drawing
+  doc.viewFrameGroups        = cmd.viewFrameGroups;  // REQ-517: per-drawing
   doc.surfaceProfiles        = cmd.surfaceProfiles;  // REQ-513
   doc.cadPipingSystems       = cmd.cadPipingSystems;  // indices into cadPipeRuns — travels with it
   doc.blockDefs              = cmd.blockDefs;
@@ -296,6 +297,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadPipeRuns                = doc.cadPipeRuns;      // issue #486 / REQ-345
   cmd.cadPipeRunAttrs            = doc.cadPipeRunAttrs;
   cmd.alignments                 = doc.alignments;       // REQ-480
+  cmd.viewFrameGroups            = doc.viewFrameGroups;  // REQ-517
   cmd.surfaceProfiles            = doc.surfaceProfiles;  // REQ-513
   cmd.cadPipingSystems           = doc.cadPipingSystems;
   // The derived swept solids belong to the drawing we are leaving. Their rebuild is gated on a
@@ -2161,6 +2163,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.cadPipeRuns          = st.cadPipeRuns;      // issue #486 / REQ-345
   snap.cadPipeRunAttrs      = st.cadPipeRunAttrs;
   snap.alignments           = st.alignments;       // REQ-480
+  snap.viewFrameGroups      = st.viewFrameGroups;  // REQ-517: undo restores frames with their alignment
   snap.surfaceProfiles      = st.surfaceProfiles;  // REQ-513
   snap.cadPipingSystems     = st.cadPipingSystems; // issue #486 increment B3 / REQ-345
   snap.blockDefs            = st.blockDefs;
@@ -2289,6 +2292,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.cadPipeRuns          = snap.cadPipeRuns;      // issue #486 / REQ-345
   st.cadPipeRunAttrs      = snap.cadPipeRunAttrs;
   st.alignments           = snap.alignments;       // REQ-480
+  st.viewFrameGroups      = snap.viewFrameGroups;  // REQ-517
   st.surfaceProfiles      = snap.surfaceProfiles;  // REQ-513
   st.cadPipingSystems     = snap.cadPipingSystems; // issue #486 increment B3 / REQ-345
   st.pipeRunWorldSolidsSig = 0;  // force RebuildPipeRunWorldSolids to re-derive from the swap
@@ -8751,6 +8755,8 @@ const CmdEntry kRegistry[] = {
     {"alignmentadd", "", "Add tangent, curve or spiral: ALIGNMENTADD <name>, TANGENT|TANGENTTO|CURVE|CURVELEN|SPIRAL, ..."},
     {"alignmentlist", "", "Report alignments, stations and entities: ALIGNMENTLIST [<name>]"},
     {"alignmentdelete", "", "Delete an alignment: ALIGNMENTDELETE <name>"},
+    {"createviewframes", "", "Create view frames along an alignment: CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale>, <overlap>[, CENTRED|LEFT|RIGHT]"},
+    {"viewframedelete", "", "Delete an alignment's view frame groups: VIEWFRAMEDELETE <alignment>"},
     {"getstationoffset", "", "Station and offset of a point: GETSTATIONOFFSET <alignment>[, <x>, <y> | , POINT, <number>][, SURFACE=<surface>] (alignment alone: pick until ESC)"},
     {"getpointfromstationoffset", "", "Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset>"},
     {"createalignmentfromobjects", "createalignmententities", "Alignment from lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS (pick them) | <name>[, START=][, FILLET=][, REVERSE][, ERASE]"},
@@ -11671,9 +11677,10 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
   return skipped;
 }
 
-// Paste clipboard geometry into the ACTIVE space (model or the active paper layout) with (dx, dy) applied.
-// Routes by ActivePaperGeometryTarget (ADR-009/013). Caller pushes the undo snapshot.
-static bool ActiveProjectPointsReadOnly(const AppCommandState& st) {
+}  // namespace
+
+// Shared with CREATEVIEWFRAMES (REQ-517.6): true when the active tab's project is read-only.
+bool ActiveProjectPointsReadOnly(const AppCommandState& st) {
   const int tab = st.activeDrawingIdx;
   if (tab <= 0 || tab >= static_cast<int>(st.drawingTabs.size())) return false;
   const auto& drawing = st.drawingTabs[static_cast<size_t>(tab)];
@@ -11682,6 +11689,11 @@ static bool ActiveProjectPointsReadOnly(const AppCommandState& st) {
     if (project.uid == drawing.projectUid) return project.readOnly;
   return false;
 }
+
+namespace {
+
+// Paste clipboard geometry into the ACTIVE space (model or the active paper layout) with (dx, dy) applied.
+// Routes by ActivePaperGeometryTarget (ADR-009/013). Caller pushes the undo snapshot.
 
 static void CommitPasteFromClipboard(AppCommandState& st, double dx, double dy, std::vector<std::string>& log) {
   // A pasted entity is a *different* entity and must not inherit its source's identity (REQ-076).
@@ -49793,7 +49805,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "surfacevisibility" || plotTok == "surfvis" || plotTok == "surfcrossbl" || plotTok == "surflabel" || plotTok == "surfacelegend" || plotTok == "createprofilefromsurface" || plotTok == "profileview" ||
         plotTok == "quickprofile" || plotTok == "qprof" ||
         plotTok == "alignment" || plotTok == "createalignment" || plotTok == "alignmentadd" ||
-        plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "getstationoffset" ||
+        plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "createviewframes" || plotTok == "viewframedelete" || plotTok == "getstationoffset" ||
         plotTok == "getpointfromstationoffset" || plotTok == "createalignmentfromobjects" ||
         plotTok == "createalignmententities" || plotTok == "createalignmentlayout" ||
         plotTok == "alignmentlayout" || plotTok == "alignmentcurvesettings" || plotTok == "stationformat" || plotTok == "alignmentmeta" ||
@@ -49924,6 +49936,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunAlignmentList(st, rest, log);
       else if (plotTok == "alignmentdelete")
         RunAlignmentDelete(st, rest, log);
+      else if (plotTok == "createviewframes")
+        RunCreateViewFrames(st, rest, log);
+      else if (plotTok == "viewframedelete")
+        RunViewFrameDelete(st, rest, log);
       else if (plotTok == "getstationoffset")
         RunGetStationOffset(st, rest, log);
       else if (plotTok == "getpointfromstationoffset")

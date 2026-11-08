@@ -1366,6 +1366,20 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
   }
 
   for (const alignment::Alignment& al : state.alignments) DrawQtAlignmentOverlay(painter, state, AlignmentView{camera, width, height}, al);
+  // REQ-517: each view frame carries its name at its centre, in plan. Its outline is drawn with the model geometry.
+  const CadLayerRow* frameLayer = FindDrawingLayerRowCi(state, "0");  // frames follow layer 0 (REQ-495.4)
+  const bool frameLayerHidden = frameLayer != nullptr && (!frameLayer->on || frameLayer->frozen);
+  if (!state.viewFrameGroups.empty() && !frameLayerHidden) {
+    QFont frameFont;
+    frameFont.setPointSizeF(9.0);
+    painter.setFont(frameFont);
+    painter.setPen(QColor(230, 230, 230));
+    for (const alignment::ViewFrameGroup& group : state.viewFrameGroups) {
+      if (CadEntityIdHidden(&state.hiddenEntityIds, group.id)) continue;
+      for (const alignment::ViewFrame& frame : group.frames)
+        painter.drawText(project(frame.centre.x, frame.centre.y, 0.0) + QPointF(4.0, -4.0), QString::fromStdString(frame.name));
+    }
+  }
   painter.restore();
 }
 

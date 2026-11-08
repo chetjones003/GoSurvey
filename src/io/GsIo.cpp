@@ -2476,6 +2476,29 @@ json BuildRoot(const AppCommandState& st) {
     doc["alignments"] = std::move(arr);
   }
 
+  // View frame groups (REQ-517). Only the settings are stored; the frames are rebuilt from them on load, so the file
+  // holds no derived geometry and cannot disagree with the alignment it follows.
+  if (!st.viewFrameGroups.empty()) {
+    json arr = json::array();
+    for (const alignment::ViewFrameGroup& g : st.viewFrameGroups) {
+      json o;
+      o["id"] = g.id;
+      o["alignmentId"] = g.alignmentId;
+      o["name"] = g.name;
+      o["startStation"] = g.settings.startStation;
+      o["endStation"] = g.settings.endStation;
+      o["sheetWidthIn"] = g.settings.sheetWidthIn;
+      o["sheetHeightIn"] = g.settings.sheetHeightIn;
+      o["groundPerInch"] = g.settings.groundPerInch;
+      o["overlap"] = g.settings.overlap;
+      o["placement"] = static_cast<int>(g.settings.placement);
+      o["sheetName"] = g.settings.sheetName;
+      o["scaleName"] = g.settings.scaleName;
+      arr.push_back(std::move(o));
+    }
+    doc["viewFrameGroups"] = std::move(arr);
+  }
+
   if (!st.surfaceProfiles.empty()) {
     json profiles = json::array();
     for (const CadSurfaceProfile& profile : st.surfaceProfiles) {
@@ -4753,6 +4776,42 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
                   "\"; using Standard.");
     a.style = AlignmentStyles::kStandardName;
   }
+  // View frame groups (REQ-517). Frames are regenerated from the stored settings against their alignment. A group
+  // whose alignment is missing is dropped (REQ-517.9); one whose settings no longer fit is kept and logged.
+  st.viewFrameGroups.clear();
+  if (doc.contains("viewFrameGroups") && doc["viewFrameGroups"].is_array()) {
+    for (const auto& el : doc["viewFrameGroups"]) {
+      if (!el.is_object()) continue;
+      alignment::ViewFrameGroup g;
+      if (el.contains("id") && el["id"].is_number_unsigned()) g.id = el["id"].get<std::uint64_t>();
+      if (el.contains("alignmentId") && el["alignmentId"].is_number_unsigned())
+        g.alignmentId = el["alignmentId"].get<std::uint64_t>();
+      if (el.contains("name") && el["name"].is_string()) g.name = el["name"].get<std::string>();
+      auto num = [&](const char* key, double* out) {
+        if (el.contains(key) && el[key].is_number()) *out = el[key].get<double>();
+      };
+      num("startStation", &g.settings.startStation);
+      num("endStation", &g.settings.endStation);
+      num("sheetWidthIn", &g.settings.sheetWidthIn);
+      num("sheetHeightIn", &g.settings.sheetHeightIn);
+      num("groundPerInch", &g.settings.groundPerInch);
+      num("overlap", &g.settings.overlap);
+      if (el.contains("placement") && el["placement"].is_number_integer()) {
+        const int p = el["placement"].get<int>();
+        g.settings.placement = p == 1 ? alignment::ViewFramePlacement::Left
+                               : p == 2 ? alignment::ViewFramePlacement::Right
+                                        : alignment::ViewFramePlacement::Centred;
+      }
+      if (el.contains("sheetName") && el["sheetName"].is_string()) g.settings.sheetName = el["sheetName"].get<std::string>();
+      if (el.contains("scaleName") && el["scaleName"].is_string()) g.settings.scaleName = el["scaleName"].get<std::string>();
+      st.viewFrameGroups.push_back(std::move(g));
+    }
+  }
+  {
+    std::vector<std::string> notes;
+    alignment::SyncViewFrameGroups(st.alignments, st.viewFrameGroups, &notes);
+    for (const std::string& n : notes) log.push_back(n);
+  }
   st.surfaceProfiles.clear();
   if (doc.contains("surfaceProfiles") && doc["surfaceProfiles"].is_array()) {
     for (const auto& el : doc["surfaceProfiles"]) {
@@ -5600,7 +5659,7 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
              "annotationAttrs", "tables", "tableAttrs", "positionMarkers", "positionMarkerAttrs", "multileaders",
              "multileaderAttrs", "cadPoints", "cadPointAttrs", "blockRefs", "blockRefAttrs", "filledRegions",
              "filledRegionAttrs", "meshes", "meshAttrs", "pointClouds",
-             "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "alignments", "surfaceProfiles", "surfaces",
+             "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "alignments", "viewFrameGroups", "surfaceProfiles", "surfaces",
              "surfaceAttrs", "surveyPoints", "modelImages", "blockFavorites", "blockRecent"})
       doc[key] = json::array();
 
