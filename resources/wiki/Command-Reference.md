@@ -169,7 +169,7 @@ for a compact list inside the program.
 | `ALIGNMENTADD` | — | Add tangent, curve or spiral: ALIGNMENTADD <name>, TANGENT\|TANGENTTO\|CURVE\|CURVELEN\|SPIRAL, ... | [[Commands/alignmentadd]] |
 | `ALIGNMENTLIST` | — | Report alignments, stations and entities: ALIGNMENTLIST [<name>] | [[Commands/alignmentlist]] |
 | `ALIGNMENTDELETE` | — | Delete an alignment: ALIGNMENTDELETE <name> | [[Commands/alignmentdelete]] |
-| `CREATEVIEWFRAMES` | — | Create view frames along an alignment: CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale>, <overlap>[, CENTRED, LEFT or RIGHT] | [[Commands/createviewframes]] |
+| `CREATEVIEWFRAMES` | — | Create view frames along an alignment: CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale or AUTO>, <overlap>[, CENTRED, LEFT or RIGHT] | [[Commands/createviewframes]] |
 | `CREATESHEETS` | — | Create paper sheets from view frames: CREATESHEETS <alignment>[, <frames>] (frames: ALL or names such as VF-1 VF-3) | [[Commands/createsheets]] |
 | `GETSTATIONOFFSET` | — | Station and offset of a point: GETSTATIONOFFSET <alignment>[, <x>, <y> \| , POINT, <number>][, SURFACE=<surface>] (alignment alone: pick until ESC) | [[Commands/getstationoffset]] |
 | `GETPOINTFROMSTATIONOFFSET` | — | Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset> | [[Commands/getpointfromstationoffset]] |

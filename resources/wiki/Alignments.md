@@ -119,7 +119,7 @@ offset and a curve's radius are always exact.
 
 ## View frames
 
-- `CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale>, <overlap>[, CENTRED|LEFT|RIGHT]` lays plan frames along an alignment. The Output tab's Plan Production group runs it from a dialog.
+- `CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale or AUTO>, <overlap>[, CENTRED|LEFT|RIGHT]` lays plan frames (AUTO picks the best-fit named scale for the alignment on one sheet) along an alignment. The Output tab's Plan Production group runs it from a dialog.
 - The sheet is one of the Page Setup paper sizes, such as ARCH D; the scale is one of the drawing's named scales, such as `1" = 50'`. The longer side of the sheet runs along the alignment.
 - Each frame is `VF-1`, `VF-2`, ... Consecutive frames overlap by the overlap you set. The last frame keeps its full length past the end station.
 - Placement is CENTRED (the default), LEFT or RIGHT. It sets where the alignment sits across each frame.
