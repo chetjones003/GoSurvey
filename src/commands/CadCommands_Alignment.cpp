@@ -754,6 +754,23 @@ int ArchDPresetIndex() {
   return -1;
 }
 
+// REQ-519.12: the sheet x where the title block's right-hand field column starts, found the way CREATESHEETS finds it (the
+// horizontal field rules beside the main border). Sections stay to its left. Returns the inner edge when there is none.
+double FieldColumnLeftOnSheet(const SheetTitleBlock& tb) {
+  double left = tb.inner.maxX;
+  bool found = false;
+  for (size_t i = 0; i + 5 < tb.state.userLinesFlat.size(); i += 6) {
+    const double x0 = tb.state.userLinesFlat[i], y0 = tb.state.userLinesFlat[i + 1];
+    const double y1 = tb.state.userLinesFlat[i + 4];
+    if (std::fabs(y0 - y1) > 1e-6) continue;                                // horizontal lines only
+    if (x0 < tb.border.maxX - 0.05) continue;                               // the column beside the main border
+    if (y0 < (tb.border.minY + tb.border.maxY) * 0.5) continue;             // the field cells above the middle
+    left = found ? std::min(left, x0 + tb.dx) : x0 + tb.dx;
+    found = true;
+  }
+  return found ? left : tb.inner.maxX;
+}
+
 // One straight line of native paper-space geometry (REQ-037), in sheet inches.
 void AddSheetLine(PaperLayout& sheet, double ax, double ay, double bx, double by) {
   sheet.paperLines.insert(sheet.paperLines.end(), {static_cast<float>(ax), static_cast<float>(ay), 0.f,
@@ -1219,10 +1236,13 @@ void RunCreateSectionSheets(AppCommandState& st, const std::string& args, std::v
   SheetTitleBlock tb;
   if (!LoadSheetTitleBlock("CREATESECTIONSHEETS", titleBlockPath, tb, log)) return;
   const Box& inner = tb.inner;
+  // REQ-519.12: the sections stop short of the title block's field column, so they never cross the fields.
+  const double plotMinX = inner.minX;
+  const double plotMaxX = std::min(inner.maxX, FieldColumnLeftOnSheet(tb) - kColumnPadIn);
   const double plotMinY = inner.minY + kPlotMarginIn, plotMaxY = inner.maxY - kPlotMarginIn;
   const double plotHeight = plotMaxY - plotMinY;
   const double axisY = (plotMinY + plotMaxY) * 0.5;  // every section's axis sits at the middle of the plot
-  const double columnWidth = inner.width() / static_cast<double>(perSheet);
+  const double columnWidth = (plotMaxX - plotMinX) / static_cast<double>(perSheet);
 
   std::vector<std::string> takenNames;
   for (const PaperLayout& layout : st.paperLayouts) takenNames.push_back(Lower(layout.name));
@@ -1271,7 +1291,7 @@ void RunCreateSectionSheets(AppCommandState& st, const std::string& args, std::v
 
     for (size_t i = first; i < last; ++i) {
       const alignment::SampleLine& line = *chosen[i];
-      const double columnLeft = inner.minX + static_cast<double>(i - first) * columnWidth;
+      const double columnLeft = plotMinX + static_cast<double>(i - first) * columnWidth;
       const double centre = columnLeft + columnWidth * 0.5;
       AddSheetLine(sheet, columnLeft + kColumnPadIn, axisY, columnLeft + columnWidth - kColumnPadIn, axisY);
       // The ground line: each section point at its offset across and its elevation above or below the axis (REQ-519.3).
