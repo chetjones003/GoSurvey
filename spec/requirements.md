@@ -17312,7 +17312,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
       measured inward from the border (the user confirmed 0.5 in).
   11. **Real locked viewport (D-2026-11-08-f).** The sheet's plan viewport is a paper viewport with a fixed scale and
       a fixed model centre. Zooming or panning the paper layout does not move the plan. It is stored as a viewport
-      (REQ-490), not drawn as an overlay. Its model content is clipped to the viewport rectangle.
+      (REQ-490), not drawn as an overlay. Its model content is clipped to the viewport rectangle. Floating-space
+      ZOOM EXTENTS and UCSFOLLOW refuse a locked viewport, so its centre, scale and view angles stay put.
+  12. **Frames fit the usable area (D-2026-11-08-g, user's choice "A").** Because the plan viewport is inside the
+      margin, the view frames of the alignment are sized to that usable area, 29.75 x 19.5 in for the Generic block,
+      at the same named scale, so every sheet's viewport covers its whole frame. CREATESHEETS makes this change: it
+      regenerates the group's frames from its stations, scale and overlap at that size, records the sheet name as
+      ARCH D, and does it in the same undo step as the sheets. A group made on another sheet size is resized the same
+      way. The frame count can therefore change (ARCH D frames of 1800 ft become 1487.5 ft frames: four frames where
+      there were three). Item 4's refusal for a frame sheet that is not 36 x 24 is removed by this item.
 - Acceptance:
   - Creating sheets for three frames creates three layouts, each with one viewport. Each viewport's centre equals
     its frame's centre and its scale equals the frame's scale.

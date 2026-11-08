@@ -97,10 +97,15 @@ TEST_CASE("CREATESHEETS makes one ARCH D layout per frame, each built on the tit
   std::vector<std::string> log;
   MakeThreeFrames(st, log);
   Submit(st, "CREATESHEETS Road", log);
-  REQUIRE(LogHas(log, "3 sheet(s)"));
-  REQUIRE(st.paperLayouts.size() == 3);
+  REQUIRE(LogHas(log, "4 sheet(s)"));
+  REQUIRE(st.paperLayouts.size() == 4);
+  // The frames are resized to the usable area inside the margin (29.75 x 19.5 in), so 1487.5 ft frames at 50 ft/in
+  // with 100 ft overlap make four frames where the ARCH D frames made three.
+  REQUIRE(st.viewFrameGroups[0].frames.size() == 4);
+  CHECK(st.viewFrameGroups[0].settings.sheetWidthIn == Approx(29.75).margin(0.01));
+  CHECK(st.viewFrameGroups[0].settings.sheetHeightIn == Approx(19.5).margin(0.01));
 
-  for (const char* name : {"VF-1", "VF-2", "VF-3"}) {
+  for (const char* name : {"VF-1", "VF-2", "VF-3", "VF-4"}) {
     const int ix = FindLayout(st, name);
     REQUIRE(ix >= 0);
     const PaperLayout& sheet = st.paperLayouts[static_cast<size_t>(ix)];
@@ -141,10 +146,9 @@ TEST_CASE("each sheet is filled from its view frame and carries a north arrow (R
   CHECK(TextStartingWith(sheet, "SHEET  VF-2") == "SHEET  VF-2");
   CHECK(TextStartingWith(sheet, "SCALE  ") == "SCALE  1\" = 50'");
   CHECK(TextStartingWith(sheet, "SIZE  ").find("ARCH D") != std::string::npos);
-  // VF-2 runs 17+00 to 35+00 (1800 ft at 50 ft per inch).
+  // VF-2 runs from 1387.5 ft to 2875 ft (the frame is 1487.5 ft at 50 ft per inch, stepping 1387.5 ft).
   const std::string sta = TextStartingWith(sheet, "STA  ");
-  CHECK(sta.find("17+00") != std::string::npos);
-  CHECK(sta.find("to 35+00") != std::string::npos);
+  CHECK(sta.find("to 28+75") != std::string::npos);
   CHECK(TextStartingWith(sheet, "DATE  ").size() == std::string("DATE  11/08/2026").size());
   CHECK(TextStartingWith(sheet, "N") == "N");  // the north arrow's N
 }
@@ -201,7 +205,7 @@ TEST_CASE("the plan's along-alignment edge runs left to right across the viewpor
     const PaperLayout& sheet = st.paperLayouts[static_cast<size_t>(FindLayout(st, "VF-2"))];
     const Viewport& vp = sheet.viewports[0];
     const alignment::ViewFrame& frame = st.viewFrameGroups[0].frames[1];
-    // The frame's centre lands on the viewport's centre, and its along-alignment edge is horizontal and 36 in long.
+    // The frame's centre lands on the viewport's centre, and its along-alignment edge is horizontal and 29.75 in long.
     float cx = 0.f, cy = 0.f;
     ModelToPaperInThroughCamera(vp, frame.centre.x, frame.centre.y, 0.0, &cx, &cy);
     CHECK(cx == Approx(vp.paperXIn + vp.paperWIn / 2).margin(1e-3));
@@ -209,7 +213,7 @@ TEST_CASE("the plan's along-alignment edge runs left to right across the viewpor
     float px[2], py[2];
     for (int k = 0; k < 2; ++k) ModelToPaperInThroughCamera(vp, frame.corner[k].x, frame.corner[k].y, 0.0, &px[k], &py[k]);
     CHECK(py[1] == Approx(py[0]).margin(1e-3));
-    CHECK(std::fabs(px[1] - px[0]) == Approx(36.0).margin(1e-3));
+    CHECK(std::fabs(px[1] - px[0]) == Approx(29.75).margin(1e-3));
     CHECK(px[1] > px[0]);  // increasing stationing runs to the right
   }
 }
@@ -255,11 +259,15 @@ TEST_CASE("one undo step removes every sheet that one command made", "[req518][s
   MakeThreeFrames(st, log);
   const size_t before = st.paperLayouts.size();
   Submit(st, "CREATESHEETS Road", log);
-  REQUIRE(st.paperLayouts.size() == before + 3);
+  REQUIRE(st.paperLayouts.size() == before + 4);
+  REQUIRE(st.viewFrameGroups[0].frames.size() == 4);
   Submit(st, "UNDO", log);
   CHECK(st.paperLayouts.size() == before);
   CHECK(FindLayout(st, "VF-1") < 0);
-  CHECK(FindLayout(st, "VF-3") < 0);
+  CHECK(FindLayout(st, "VF-4") < 0);
+  // The frame resize is part of the same step: the group is back to ARCH D frames.
+  CHECK(st.viewFrameGroups[0].frames.size() == 3);
+  CHECK(st.viewFrameGroups[0].settings.sheetWidthIn == Approx(36.0));
 }
 
 TEST_CASE("CREATESHEETS refuses and creates nothing when it cannot run", "[req518][sheets]") {
@@ -287,13 +295,14 @@ TEST_CASE("CREATESHEETS refuses and creates nothing when it cannot run", "[req51
     CHECK(LogHas(log, "2 view frame groups"));
     CHECK(st.paperLayouts.empty());
   }
-  {  // frames on another sheet size do not match the title block
+  if (TitleBlockAvailable()) {  // frames made on another sheet size are resized to the title block's usable area
     AppCommandState st = Drawing();
     NorthRoad(st, log);
     Submit(st, "CREATEVIEWFRAMES Road, 0+00, 50+00, ANSI B, 1\" = 50', 100", log);
     Submit(st, "CREATESHEETS Road", log);
-    CHECK(LogHas(log, "Create the view frames on ARCH D"));
-    CHECK(st.paperLayouts.empty());
+    CHECK(LogHas(log, "resized to the usable area"));
+    CHECK(!st.paperLayouts.empty());
+    CHECK(st.viewFrameGroups[0].settings.sheetName == "ARCH D");
   }
   {  // a title block that is not there
     AppCommandState st = Drawing();
@@ -317,10 +326,8 @@ TEST_CASE("CREATESHEETS refuses and creates nothing when it cannot run", "[req51
   }
 }
 
-// The sheet's plotted geometry, read back from the PDF. VF-1's viewport shows stations 156.25 to 1643.75 ft (its frame
-// centre is 900 ft, and the viewport is 29.75 in = 1487.5 ft wide at 50 ft per inch), with its left edge at 2.75 in. So
-// station 300 ft is 2.75 + (300 - 156.25) / 50 = 5.625 in = 405 pt, and 600 ft is 837 pt. The alignment runs across the
-// viewport's centre line, at 12 in = 864 pt. PDF points are 72 per inch.
+// The sheet's plotted geometry, read back from the PDF. The model line's two ends are placed by the same viewport
+// transform the sheet uses on screen, and the PDF must put them at those points (72 per inch, within 3 pt).
 TEST_CASE("a sheet plots its model geometry turned with its frame, read back from the PDF", "[req518][sheets][plot]") {
   if (!TitleBlockAvailable()) return;
   AppCommandState st = Drawing();
@@ -333,6 +340,11 @@ TEST_CASE("a sheet plots its model geometry turned with its frame, read back fro
   // One model line, north from station 300 ft to 600 ft: flat (x0,y0,z0,x1,y1,z1).
   st.userLinesFlat = {0, 300, 0, 0, 600, 0};
   st.userLineAttrs.resize(1);
+  const Viewport& vp = st.paperLayouts[static_cast<size_t>(sheetIx)].viewports[0];
+  float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
+  ModelToPaperInThroughCamera(vp, 0.0, 300.0, 0.0, &ax, &ay);
+  ModelToPaperInThroughCamera(vp, 0.0, 600.0, 0.0, &bx, &by);
+  const float wantAX = ax * 72.f, wantAY = ay * 72.f, wantBX = bx * 72.f, wantBY = by * 72.f;
 
   const std::filesystem::path path = std::filesystem::temp_directory_path() / "gosurvey-viewframe-sheet.pdf";
   std::vector<std::string> plotLog;
@@ -357,7 +369,7 @@ TEST_CASE("a sheet plots its model geometry turned with its frame, read back fro
     }
     for (const auto& a : points)
       for (const auto& b : points)
-        if (atPoint(a.first, a.second, 405.f, 864.f) && atPoint(b.first, b.second, 837.f, 864.f)) found = true;
+        if (atPoint(a.first, a.second, wantAX, wantAY) && atPoint(b.first, b.second, wantBX, wantBY)) found = true;
   }
   FPDF_ClosePage(page);
   FPDF_CloseDocument(doc);

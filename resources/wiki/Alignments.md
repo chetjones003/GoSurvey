@@ -131,7 +131,7 @@ offset and a curve's radius are always exact.
 - A north arrow sits above the right-hand column and turns with the view, so it points north on the sheet.
 - Each sheet has one locked paper viewport, inside a 0.5 in margin inside the border. The viewport is centred on its frame, at the frame's scale, and turned so the alignment runs left to right across the sheet.
 - The sheet is named after its frame (`VF-1`, `VF-2`, ...); a name already in use gets ` (2)`, ` (3)` and so on.
-- The frame group must be ARCH D (36 in x 24 in), which is the size of the title block. The command refuses an alignment with more than one frame group, an alignment with no frames, a frame name it cannot find, a title block it cannot find or read, and a title block with no border. Frames are chosen with `ALL` (the default) or names separated by spaces, such as `VF-1 VF-3`.
+- The frames are resized to the usable area inside the margin (29.75 x 19.5 in for the Generic block), at the same scale, when the sheets are made. The group then records ARCH D and has the new frames, so the frame count can change (1800 ft frames become 1487.5 ft frames). This is part of the same undo step. The command refuses an alignment with more than one frame group, an alignment with no frames, a frame name it cannot find, a title block it cannot find or read, and a title block with no border. Frames are chosen with `ALL` (the default) or names separated by spaces, such as `VF-1 VF-3`.
 - One undo removes all the sheets one command made. Sheets are not updated when the frames change later; create them again.
 - Not built yet: section sheets from sample lines.
 

@@ -769,37 +769,8 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
     return;
   }
 
-  // REQ-518.8: the title block is 36 in x 24 in landscape (ARCH D), so the frames must be on that sheet.
+  // REQ-518.8: the title block is 36 in x 24 in landscape (ARCH D).
   constexpr double kSheetW = 36.0, kSheetH = 24.0;
-  if (std::fabs(g.settings.sheetWidthIn - kSheetW) > 0.01 || std::fabs(g.settings.sheetHeightIn - kSheetH) > 0.01) {
-    char buf[320];
-    std::snprintf(buf, sizeof(buf),
-                  "CREATESHEETS - the title block is %.0f x %.0f in (ARCH D, landscape), but the view frames are %.2f x "
-                  "%.2f in. Create the view frames on ARCH D. No sheets were created.",
-                  kSheetW, kSheetH, g.settings.sheetWidthIn, g.settings.sheetHeightIn);
-    log.push_back(buf);
-    return;
-  }
-
-  // Which frames: ALL (or none given) is every frame; otherwise named frames, each of which must exist.
-  std::vector<size_t> chosen;
-  const std::string framesText = f.size() >= 2 ? Trim(f[1]) : std::string();
-  if (framesText.empty() || Lower(framesText) == "all") {
-    for (size_t i = 0; i < g.frames.size(); ++i) chosen.push_back(i);
-  } else {
-    std::istringstream words(framesText);
-    std::string word;
-    while (words >> word) {
-      size_t found = g.frames.size();
-      for (size_t i = 0; i < g.frames.size(); ++i)
-        if (Lower(g.frames[i].name) == Lower(word)) found = i;
-      if (found == g.frames.size()) {
-        log.push_back("CREATESHEETS - no frame named \"" + word + "\" in \"" + a->name + "\". No sheets were created.");
-        return;
-      }
-      if (std::find(chosen.begin(), chosen.end(), found) == chosen.end()) chosen.push_back(found);
-    }
-  }
 
   // REQ-518.8: the title block DWG. The default is the Generic 24in x 36in block in the AutoCAD template folder.
   const std::string titleBlockPath = f.size() == 3 ? Trim(f[2]) : DefaultTitleBlockPath();
@@ -823,6 +794,42 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
   const Box borderOnSheet{border.minX + dx, border.minY + dy, border.maxX + dx, border.maxY + dy};
   const Box inner{borderOnSheet.minX + kSheetMarginIn, borderOnSheet.minY + kSheetMarginIn,
                   borderOnSheet.maxX - kSheetMarginIn, borderOnSheet.maxY - kSheetMarginIn};
+
+  // REQ-518.2 / .10: the frames are sized to the usable area inside the margin, at the same scale, so each sheet's
+  // viewport covers its whole frame. The stored group changes only when the sheets are made (one undo step).
+  alignment::ViewFrameGroup sized = g;
+  sized.settings.sheetWidthIn = inner.width();
+  sized.settings.sheetHeightIn = inner.height();
+  sized.settings.sheetName = "ARCH D";  // the sheets are ARCH D; the SIZE field and reports read this
+  if (const std::string refusal = alignment::RegenerateViewFrameGroup(*a, sized); !refusal.empty()) {
+    log.push_back("CREATESHEETS - " + refusal + " No sheets were created.");
+    return;
+  }
+  if (sized.frames.empty()) {
+    log.push_back("CREATESHEETS - no frames fit the title block's usable area. No sheets were created.");
+    return;
+  }
+
+  // Which frames: ALL (or none given) is every frame; otherwise named frames, each of which must exist.
+  std::vector<size_t> chosen;
+  const std::string framesText = f.size() >= 2 ? Trim(f[1]) : std::string();
+  if (framesText.empty() || Lower(framesText) == "all") {
+    for (size_t i = 0; i < sized.frames.size(); ++i) chosen.push_back(i);
+  } else {
+    std::istringstream words(framesText);
+    std::string word;
+    while (words >> word) {
+      size_t found = sized.frames.size();
+      for (size_t i = 0; i < sized.frames.size(); ++i)
+        if (Lower(sized.frames[i].name) == Lower(word)) found = i;
+      if (found == sized.frames.size()) {
+        log.push_back("CREATESHEETS - no frame named \"" + word + "\" in \"" + a->name +
+                      "\" at the title block's size. No sheets were created.");
+        return;
+      }
+      if (std::find(chosen.begin(), chosen.end(), found) == chosen.end()) chosen.push_back(found);
+    }
+  }
 
   const int archD = [] {
     for (int i = 0; i < kPaperSizePresetCount; ++i)
@@ -856,7 +863,7 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
   };
   std::vector<PaperLayout> sheets;
   for (size_t i : chosen) {
-    const alignment::ViewFrame& fr = g.frames[i];
+    const alignment::ViewFrame& fr = sized.frames[i];
     std::string name = fr.name;
     for (int suffix = 2; nameTaken(name); ++suffix) name = fr.name + " (" + std::to_string(suffix) + ")";
     takenNames.push_back(Lower(name));
@@ -868,14 +875,17 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
     sheet.portraitHeightIn = static_cast<float>(kSheetW);
     sheet.presetIdx = archD;
     CopyTitleBlockOntoSheet(sheet, titleBlock, dx, dy);
-    sheet.viewports.assign(1, SheetViewportForFrame(*a, fr, g.settings, inner));
-    AddSheetFields(sheet, *a, fr, g.settings, st.alignmentStationFormat, columnLeft, rowMids);
+    sheet.viewports.assign(1, SheetViewportForFrame(*a, fr, sized.settings, inner));
+    AddSheetFields(sheet, *a, fr, sized.settings, st.alignmentStationFormat, columnLeft, rowMids);
     AddNorthArrow(sheet, sheet.viewports[0], borderOnSheet);
     sheet.viewInit = false;  // fit the new sheet to the window on first entry
     sheets.push_back(std::move(sheet));
   }
 
-  PushUndoSnapshot(st, "Create sheets");  // REQ-518.5: one undo step removes every sheet
+  PushUndoSnapshot(st, "Create sheets");  // REQ-518.5: one undo step removes every sheet and the frame resize
+  const size_t framesBefore = g.frames.size();
+  for (alignment::ViewFrameGroup& stored : st.viewFrameGroups)
+    if (stored.id == g.id) stored = sized;
   // The title block's layers come into this drawing where they are not already here.
   for (const CadLayerRow& row : titleBlock.drawingLayerTable) {
     const bool present = std::any_of(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
@@ -889,14 +899,13 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
     st.paperLayouts.push_back(std::move(sheet));
   }
   BumpCadGpuCache(st);
-  // The viewport is smaller than the frame's sheet (the margin), at the frame's scale, so the frame's edges are cut off.
-  char coverage[256];
-  std::snprintf(coverage, sizeof(coverage),
-                " Each viewport shows about %.0f%% of its frame's width and %.0f%% of its height at the frame scale; "
-                "the rest of each frame is not on the sheet (see REQ-518, D-2026-11-08-f).",
-                100.0 * inner.width() / kSheetW, 100.0 * inner.height() / kSheetH);
+  char resize[320];
+  std::snprintf(resize, sizeof(resize),
+                " The view frames of \"%s\" were resized to the usable area inside the margin, %.2f x %.2f in at the "
+                "same scale: %zu frame(s), was %zu (REQ-518, D-2026-11-08-f).",
+                a->name.c_str(), inner.width(), inner.height(), sized.frames.size(), framesBefore);
   log.push_back("CREATESHEETS - " + std::to_string(chosen.size()) + " sheet(s) from \"" + a->name + "\" on \"" +
-                kTitleBlockFile + "\": " + names + "." + coverage);
+                kTitleBlockFile + "\": " + names + "." + resize);
 }
 
 // GETSTATIONOFFSET <alignment>, <x>, <y>[, SURFACE=<surface>]  (WORLD x/y) - REQ-484.4
