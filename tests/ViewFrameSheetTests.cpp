@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -14,7 +15,12 @@
 #include "PaperSpace.hpp"
 #include "alignment/Alignment.hpp"
 #include "alignment/AlignmentViewFrames.hpp"
+#include "io/PdfPlot.hpp"
 #include "render/ViewportProjection.hpp"
+
+// PDFium last, as the other PDF readback tests do: its headers must not precede the project's own.
+#include <fpdf_edit.h>
+#include <fpdfview.h>
 
 using Catch::Approx;
 
@@ -305,6 +311,64 @@ TEST_CASE("CREATESHEETS refuses and creates nothing when it cannot run", "[req51
     CHECK(LogHas(log, "read-only"));
     CHECK(st.paperLayouts.size() == before);
   }
+}
+
+// The plotted PDF, not just the viewport maths: a model line along the alignment (stations 100 to 700 ft, inside VF-1)
+// must come out of PlotLayoutsToPdf as a horizontal path on the sheet, starting 2 in from the sheet's left edge (100 ft
+// at 50 ft per inch) and 12 in long, across the middle of the 24 in sheet. PDF points are 72 per inch.
+TEST_CASE("a sheet plots its model geometry turned with its frame, read back from the PDF", "[req518][sheets][plot]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  NorthRoad(st, log);
+  Submit(st, "CREATEVIEWFRAMES Road, 0+00, 50+00, ARCH D, 1\" = 50', 100", log);
+  REQUIRE(st.viewFrameGroups.size() == 1);
+  AddArchDTemplate(st, "Title");
+  Submit(st, "CREATESHEETS Road, Title, VF-1", log);
+  const int sheetIx = FindLayout(st, "VF-1");
+  REQUIRE(sheetIx >= 0);
+
+  // One model line, north from station 100 ft to 700 ft: flat (x0,y0,z0,x1,y1,z1).
+  st.userLinesFlat = {0, 100, 0, 0, 700, 0};
+  st.userLineAttrs.resize(1);
+
+  const std::filesystem::path path = std::filesystem::temp_directory_path() / "gosurvey-viewframe-sheet.pdf";
+  std::vector<std::string> plotLog;
+  FPDF_InitLibrary();
+  REQUIRE(PlotLayoutsToPdf(st, {sheetIx}, path.string().c_str(), plotLog));
+  FPDF_DOCUMENT doc = FPDF_LoadDocument(path.string().c_str(), nullptr);
+  REQUIRE(doc != nullptr);
+  FPDF_PAGE page = FPDF_LoadPage(doc, 0);
+  REQUIRE(page != nullptr);
+  // The plotter may merge several entities into one path object, so match the model line's end points rather than an
+  // object's bounds: some pair of points must be the line from (144 pt, 864 pt) to (1008 pt, 864 pt), in either order.
+  auto atPoint = [](float x, float y, float wantX, float wantY) {  // not `near`: windows.h defines that as a macro
+    return std::fabs(x - wantX) < 3.f && std::fabs(y - wantY) < 3.f;
+  };
+  bool found = false;
+  std::string dump;  // every path's points, shown only if the model line is not among them
+  for (int i = 0; i < FPDFPage_CountObjects(page) && !found; ++i) {
+    FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
+    if (FPDFPageObj_GetType(obj) != FPDF_PAGEOBJ_PATH) continue;
+    std::vector<std::pair<float, float>> points;
+    for (int s = 0; s < FPDFPath_CountSegments(obj); ++s) {
+      FPDF_PATHSEGMENT segment = FPDFPath_GetPathSegment(obj, s);
+      float x = 0.f, y = 0.f;
+      if (segment && FPDFPathSegment_GetPoint(segment, &x, &y)) points.emplace_back(x, y);
+    }
+    for (const auto& [x, y] : points) dump += "(" + std::to_string(x) + "," + std::to_string(y) + ")";
+    dump += " | ";
+    for (const auto& a : points)
+      for (const auto& b : points)
+        if (atPoint(a.first, a.second, 144.f, 864.f) && atPoint(b.first, b.second, 1008.f, 864.f)) found = true;
+  }
+  FPDF_ClosePage(page);
+  FPDF_CloseDocument(doc);
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  INFO("path points on the sheet, in points: " << dump);
+  // 144 pt is station 100 ft (2 in from the frame's start at 50 ft per inch); 1008 pt is station 700 ft; 864 pt is the
+  // middle of the 24 in sheet, where CENTRED placement puts the alignment.
+  REQUIRE(found);
 }
 
 namespace {
