@@ -53,16 +53,20 @@ inline constexpr int kMaxViewFramesPerGroup = 2000;
 /// message is written to the command log as it stands, so it names the value that failed.
 [[nodiscard]] std::string ViewFrameSettingsRefusal(const Alignment& a, const ViewFrameSettings& s);
 
+/// REQ-517.6a: the internal station a DISPLAYED station names on `a`. Exactly one match gives true and `internal`. A
+/// station in a repeated range (a backward equation) or in a gap (a forward equation) gives false and `why`.
+[[nodiscard]] bool ResolveDisplayedStation(const Alignment& a, double displayed, double* internal, std::string* why);
+
 /// The frames for `s` on `a` (REQ-517.5). Returns an empty vector when ViewFrameSettingsRefusal is not empty.
 [[nodiscard]] std::vector<ViewFrame> ComputeViewFrames(const Alignment& a, const ViewFrameSettings& s);
 
 /// Rebuilds `group.frames` from its settings on the alignment `a` (REQ-517.8). Returns the refusal text when the
-/// stored settings no longer fit the alignment, and leaves the old frames in place in that case.
+/// stored settings no longer fit the alignment; the group then has no frames until they fit again.
 [[nodiscard]] std::string RegenerateViewFrameGroup(const Alignment& a, ViewFrameGroup& group);
 
 /// Keeps `groups` in step with `alignments` (REQ-517.8, REQ-517.9). A group whose alignment is gone is removed. Every
-/// other group regenerates from its settings. A group whose settings no longer fit its alignment keeps the frames it
-/// had and gets a line in `notes` naming the group and the reason. Called after every alignment change and on load.
+/// other group regenerates from its settings. A group whose settings no longer fit its alignment shows no frames and
+/// gets a line in `notes` naming the group and the reason. Called after every alignment change and on load.
 void SyncViewFrameGroups(const std::vector<Alignment>& alignments, std::vector<ViewFrameGroup>& groups,
                          std::vector<std::string>* notes);
 

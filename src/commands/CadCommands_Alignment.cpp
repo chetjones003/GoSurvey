@@ -365,20 +365,6 @@ void RefreshViewFrameGroups(AppCommandState& st, std::vector<std::string>& log) 
 
 namespace {
 
-// Typed station to the alignment's internal station (REQ-483). Without station equations the two are equal; with them
-// the displayed station is monotone in the internal station, so bisect over the alignment's range.
-double InternalFromDisplayedStation(const alignment::Alignment& a, double displayed) {
-  if (a.equations.empty()) return displayed;
-  double lo = a.StartStation();
-  double hi = a.EndStation();
-  for (int i = 0; i < 80; ++i) {
-    const double mid = 0.5 * (lo + hi);
-    if (a.DisplayedStation(mid, true) < displayed) lo = mid;
-    else hi = mid;
-  }
-  return 0.5 * (lo + hi);
-}
-
 std::string NormalizeName(const std::string& text) {
   std::string out;
   for (unsigned char ch : text)
@@ -454,8 +440,13 @@ void RunCreateViewFrames(AppCommandState& st, const std::string& args, std::vect
   }
 
   alignment::ViewFrameSettings s;
-  s.startStation = InternalFromDisplayedStation(*a, startDisplayed);
-  s.endStation = InternalFromDisplayedStation(*a, endDisplayed);
+  // REQ-517.6a: typed stations are displayed stations; each must name exactly one internal station.
+  std::string whyStart, whyEnd;
+  if (!alignment::ResolveDisplayedStation(*a, startDisplayed, &s.startStation, &whyStart) ||
+      !alignment::ResolveDisplayedStation(*a, endDisplayed, &s.endStation, &whyEnd)) {
+    log.push_back("CREATEVIEWFRAMES - refused: " + (whyStart.empty() ? whyEnd : whyStart) + ". No view frames were created.");
+    return;
+  }
   // Landscape: the longer side of the sheet runs along the alignment (a plan sheet's usual orientation).
   s.sheetWidthIn = std::max(sheet->widthIn, sheet->heightIn);
   s.sheetHeightIn = std::min(sheet->widthIn, sheet->heightIn);

@@ -1,5 +1,6 @@
 #include "alignment/AlignmentViewFrames.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -72,6 +73,45 @@ std::string ViewFrameSettingsRefusal(const Alignment& a, const ViewFrameSettings
   return {};
 }
 
+bool ResolveDisplayedStation(const Alignment& a, double displayed, double* internal, std::string* why) {
+  if (a.equations.empty()) {
+    *internal = displayed;
+    return true;
+  }
+  // Within each piece between equation points, displayed = internal + c. Collect the pieces' cut points first.
+  std::vector<double> cuts{a.StartStation(), a.EndStation()};
+  for (const StationEquation& q : a.equations) {
+    if (q.rawBack > a.StartStation() && q.rawBack < a.EndStation()) cuts.push_back(q.rawBack);
+  }
+  std::sort(cuts.begin(), cuts.end());
+  cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+  constexpr double kEps = 1e-9;
+  std::vector<double> matches;
+  for (size_t i = 0; i + 1 < cuts.size(); ++i) {
+    const double lo = cuts[i];
+    const double hi = cuts[i + 1];
+    const double c = a.DisplayedStation(0.5 * (lo + hi), true) - 0.5 * (lo + hi);
+    const double dLo = lo + c;
+    const double dHi = hi + c;
+    if (displayed >= std::min(dLo, dHi) - kEps && displayed <= std::max(dLo, dHi) + kEps) {
+      const double candidate = displayed - c;
+      bool seen = false;
+      for (double m : matches) seen = seen || std::fabs(m - candidate) <= kEps;
+      if (!seen) matches.push_back(candidate);
+    }
+  }
+  if (matches.empty()) {
+    if (why != nullptr) *why = "a station is not on the alignment (it falls in a gap made by a station equation)";
+    return false;
+  }
+  if (matches.size() > 1) {
+    if (why != nullptr) *why = "a station is ambiguous (a station equation makes it occur more than once)";
+    return false;
+  }
+  *internal = matches[0];
+  return true;
+}
+
 std::vector<ViewFrame> ComputeViewFrames(const Alignment& a, const ViewFrameSettings& s) {
   std::vector<ViewFrame> out;
   if (!ViewFrameSettingsRefusal(a, s).empty())
@@ -113,8 +153,11 @@ std::vector<ViewFrame> ComputeViewFrames(const Alignment& a, const ViewFrameSett
 
 std::string RegenerateViewFrameGroup(const Alignment& a, ViewFrameGroup& group) {
   std::string why = ViewFrameSettingsRefusal(a, group.settings);
-  if (!why.empty())
+  if (!why.empty()) {
+    // Frames are derived and never saved, so a group that no longer fits shows none: memory then matches a reopened file.
+    group.frames.clear();
     return why;
+  }
   group.frames = ComputeViewFrames(a, group.settings);
   return {};
 }
@@ -135,7 +178,7 @@ void SyncViewFrameGroups(const std::vector<Alignment>& alignments, std::vector<V
       continue;  // REQ-517.9: deleting the alignment deletes its groups
     const std::string why = RegenerateViewFrameGroup(*owner, g);
     if (!why.empty() && notes != nullptr)
-      notes->push_back("VIEWFRAMES - group \"" + g.name + "\" not regenerated: " + why + ".");
+      notes->push_back("VIEWFRAMES - group \"" + g.name + "\" shows no frames: " + why + ".");
     kept.push_back(std::move(g));
   }
   groups = std::move(kept);

@@ -225,3 +225,55 @@ TEST_CASE("view frame groups survive save and reopen with their frames rebuilt",
   REQUIRE(g.frames.size() == 3);
   CHECK(g.frames[2].endStation == Approx(5200.0));
 }
+
+TEST_CASE("view frames follow a forward station equation and refuse a station in its gap", "[req517][viewframes]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  NorthRoad(st, log);
+  alignment::StationEquation eq;  // raw 600 is displayed as 700: displayed 600..700 is a gap
+  eq.rawBack = 600.0;
+  eq.ahead = 700.0;
+  eq.increasing = true;
+  REQUIRE(st.alignments[0].AddStationEquation(eq));
+  Submit(st, "CREATEVIEWFRAMES Road, 0+00, 50+00, ARCH D, 1\" = 50', 100", log);
+  REQUIRE(st.viewFrameGroups.size() == 1);
+  CHECK(st.viewFrameGroups[0].settings.endStation == Approx(4900.0));  // displayed 5000 is internal 4900
+  CHECK(st.viewFrameGroups[0].frames.size() == 3);
+
+  double internal = 0.0;
+  std::string why;
+  CHECK(!alignment::ResolveDisplayedStation(st.alignments[0], 650.0, &internal, &why));
+  CHECK(why.find("not on the alignment") != std::string::npos);
+}
+
+TEST_CASE("a station that a backward equation repeats is refused as ambiguous", "[req517][viewframes]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  NorthRoad(st, log);
+  alignment::StationEquation eq;  // raw 600 is displayed as 500: displayed 500..600 occurs twice
+  eq.rawBack = 600.0;
+  eq.ahead = 500.0;
+  eq.increasing = false;
+  REQUIRE(st.alignments[0].AddStationEquation(eq));
+  double internal = 0.0;
+  std::string why;
+  CHECK(!alignment::ResolveDisplayedStation(st.alignments[0], 550.0, &internal, &why));
+  CHECK(why.find("ambiguous") != std::string::npos);
+  Submit(st, "CREATEVIEWFRAMES Road, 0+00, 50+00, ARCH D, 1\" = 50', 100", log);
+  CHECK(st.viewFrameGroups.empty());  // displayed 5000 is past the displayed end (4900), so the range is refused
+}
+
+TEST_CASE("a view frame group that no longer fits its alignment shows no frames", "[req517][viewframes]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  NorthRoad(st, log);
+  alignment::ViewFrameGroup g;
+  g.alignmentId = st.alignments[0].id;
+  g.settings = Settings(0.0, 5000.0);
+  REQUIRE(alignment::RegenerateViewFrameGroup(st.alignments[0], g).empty());
+  REQUIRE(g.frames.size() == 3);
+
+  g.settings.endStation = 9000.0;  // past the 5000 ft alignment
+  CHECK(!alignment::RegenerateViewFrameGroup(st.alignments[0], g).empty());
+  CHECK(g.frames.empty());  // frames are derived and not saved, so none are kept in memory either
+}
