@@ -125,9 +125,13 @@ offset and a curve's radius are always exact.
 - Placement is CENTRED (the default), LEFT or RIGHT. It sets where the alignment sits across each frame.
 - Frames follow the alignment. Editing its geometry rebuilds the frames, and deleting the alignment deletes its frame groups. Each step is one undo.
 - Frame groups are saved with the drawing and rebuilt when it reopens.
-- `CREATESHEETS <alignment>, <template layout>[, <frames>]` makes one paper layout per frame. The Output tab's Plan Production group runs it from a dialog.
-- Each sheet is a copy of the template layout's paper content with one viewport. The viewport is centred on its frame, at the frame's scale, and turned so the alignment runs left to right across the sheet. The sheet is named after its frame (`VF-1`, `VF-2`, ...); a name already in use gets ` (2)`, ` (3)` and so on.
-- The template must be a landscape paper layout with the same sheet size as the frame group (for example ARCH D, 36 in x 24 in). The command refuses a model-space template, a template of another size, or an alignment with more than one frame group. Frames are chosen with `ALL` (the default) or names separated by spaces, such as `VF-1 VF-3`.
+- `CREATESHEETS <alignment>[, <frames>]` makes one paper layout per frame, in this drawing. The Output tab's Plan Production group runs it from a dialog.
+- Each sheet is built on the **Generic 24in x 36in Title Block.dwg** from the AutoCAD Template folder of the Civil 3D install (`%LOCALAPPDATA%\Autodesk\C3D 2026\enu\Template\AutoCAD Template`). Its border and lines are copied onto the sheet.
+- The sheet's title block cells are filled from the frame: alignment name, sheet (frame name), scale, sheet size, date, and the station range (`STA`).
+- A north arrow sits above the right-hand column and turns with the view, so it points north on the sheet.
+- Each sheet has one locked paper viewport, inside a 0.5 in margin inside the border. The viewport is centred on its frame, at the frame's scale, and turned so the alignment runs left to right across the sheet.
+- The sheet is named after its frame (`VF-1`, `VF-2`, ...); a name already in use gets ` (2)`, ` (3)` and so on.
+- The frame group must be ARCH D (36 in x 24 in), which is the size of the title block. The command refuses an alignment with more than one frame group, an alignment with no frames, a frame name it cannot find, a title block it cannot find or read, and a title block with no border. Frames are chosen with `ALL` (the default) or names separated by spaces, such as `VF-1 VF-3`.
 - One undo removes all the sheets one command made. Sheets are not updated when the frames change later; create them again.
 - Not built yet: section sheets from sample lines.
 

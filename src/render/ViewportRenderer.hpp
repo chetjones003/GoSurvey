@@ -30,6 +30,8 @@ struct RenderTuning {
   float bgR = 0.f;                  ///< Display → Window Elements: viewport background (clear) color. Default black preserves prior behavior.
   float bgG = 0.f;
   float bgB = 0.f;
+  /// REQ-518 paper ink: on a white paper viewport, near-white linework is drawn black (see kPaperInkGlsl).
+  bool paperInk = false;
   float gridR = 0.14f;               ///< Qt Dark may tint the drafting grid; other callers keep the legacy gray.
   float gridG = 0.14f;
   float gridB = 0.15f;

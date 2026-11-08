@@ -307,6 +307,10 @@ void ApplyPlanViewOf(AppCommandState& st, const ucs::Ucs& frame, std::vector<std
   // viewport does not animate, so the angles are written straight onto it.
   if (InFloatingModelSpace(st)) {
     if (Viewport* vp = CurrentViewport(st)) {
+      if (vp->locked) {  // REQ-518.11: a locked viewport keeps its view angles
+        log.push_back("UCSFOLLOW - the viewport is locked; its view is unchanged.");
+        return;
+      }
       vp->camAzimuthDeg = az;
       vp->camElevationDeg = el;
       vp->camRollDeg = roll;

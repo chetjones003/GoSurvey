@@ -17270,12 +17270,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
   named scale (GitHub #1017); native paper-space geometry (REQ-037); layout PDF export (REQ-488).
 - Statement:
   1. A typed `CREATESHEETS` command and the Output → Plan Production → Create Sheets button ask for a view frame
-     group, the frames to use (default: all of them) and a template layout in the current drawing. The template
-     supplies the paper size and the title-block content. No external template file is used.
-  2. For each chosen frame, one new paper layout is created. It is a copy of the template's paper content
-     (REQ-037) with one viewport. The viewport's model view is centred on the frame's centre and set to the
-     frame's scale (GitHub #1017). The viewport covers the full sheet at the frame's size, so its coverage equals the frame's.
-     The template supplies only title-block content; a template's own viewport rectangle is ignored (REQ-490).
+     group and the frames to use (default: all of them). The sheet's paper size and title block come from the
+     title-block DWG in item 8, not from a layout in the current drawing. *(Updated by D-2026-11-08-f: the earlier
+     template-layout source is replaced.)*
+  2. For each chosen frame, one new paper layout is created. It is built on the title block (item 8) with one
+     viewport. The viewport's model view is centred on the frame's centre and set to the frame's scale (GitHub
+     #1017). The viewport sits inside the sheet's margin (item 10), so its coverage equals the frame's.
+     *(Updated by D-2026-11-08-f: the full-sheet viewport is replaced by item 10's margin.)*
      **Rotation (decided 2026-11-07, D-2026-11-07-c, option (a)).** The viewport turns with its frame: the
      viewport's view is rotated (its per-viewport camera roll, REQ-061) so the alignment tangent at the frame's
      centre station runs horizontally across the sheet, with increasing stationing to the right. The frame's
@@ -17283,28 +17284,46 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. A layout is named after its frame (`VF-1`, `VF-2`, ...). If that name is taken, a numbered suffix is added
      (` (2)`, ` (3)`, as REQ-489 duplicates do).
   4. **Refusals (REQ-201).** The command refuses and creates nothing when: the project is read-only; the alignment
-     has no view frame group, or more than one (the sheets cannot tell which group to use); the template layout
-     is missing or is model space; the template's paper is not the frame group's sheet size in landscape (width and
-     height each within 0.01 in of the frame sheet, long side across the alignment), because the viewport must cover
-     exactly the frame; or a named frame is not in the group. *(Decided 2026-11-07, D-2026-11-07-c: the paper-size and multiple-group refusals are added here;
-     the spec left both unstated.)*
-  4a. **Command syntax (decided 2026-11-07, D-2026-11-07-c).** `CREATESHEETS <alignment>, <template layout>[, <frames>]`.
+     has no view frame group, or more than one (the sheets cannot tell which group to use); the title block DWG is
+     missing, cannot be read, or has no border; the frame group's sheet is not the title block's size (ARCH D,
+     36 in x 24 in, landscape), because the viewport must fit the sheet; or a named frame is not in the group.
+     *(Decided 2026-11-07, D-2026-11-07-c: the multiple-group refusal is added here; the spec left it unstated.
+     The template-layout refusals are replaced by the title-block refusals, D-2026-11-08-f.)*
+  4a. **Command syntax (decided 2026-11-07, D-2026-11-07-c; amended D-2026-11-08-f).** `CREATESHEETS <alignment>[, <frames>]`.
+     The template-layout field is removed.
      `<frames>` is `ALL` (or left out) for every frame in the group, or frame names separated by spaces, such as
      `VF-1 VF-3`. With no argument the command opens the Create Sheets dialog, as CREATEVIEWFRAMES does.
   5. Creating the sheets is one undo step. The new layouts appear in the layout tabs and export to PDF under
      REQ-488 like any other layout.
   6. Sheets are not regenerated when frames later change. Updating existing sheets is out of scope.
+  7. **Sheet label — SUPERSEDED by item 9 (D-2026-11-08-f).** The two-line label added on 2026-11-08 (D-2026-11-08-d)
+     is replaced by the filled title-block fields in item 9 and is no longer drawn.
+  8. **Title block source (D-2026-11-08-f).** The title block comes from the file
+     `C:\Users\chetj\AppData\Local\Autodesk\C3D 2026\enu\Template\AutoCAD Template\Generic 24in x 36in Title Block.dwg`.
+     Its paper geometry and text are imported onto each new sheet, so the sheet holds its own copy. The Civil 3D
+     Plan Production templates are NOT used: they depend on Civil 3D objects GoSurvey cannot draw. The template's
+     own layout (the one chosen in `CREATESHEETS`) is no longer the title-block source.
+  9. **Sheet fields and north arrow (D-2026-11-08-f).** Each sheet's title-block fields are filled from its view
+     frame: sheet name (`VF-n`), alignment name, displayed start and end stations, named scale, sheet size and the
+     drawing date. A north arrow is drawn on each sheet, turned by the viewport's rotation so it points north on the
+     sheet.
+  10. **Margin (D-2026-11-08-f).** The plan viewport sits inside the sheet's border, leaving the title block and
+      border visible, as in the Civil 3D sheets. This replaces item 2's full-sheet rule. The margin is 0.5 in,
+      measured inward from the border (the user confirmed 0.5 in).
+  11. **Real locked viewport (D-2026-11-08-f).** The sheet's plan viewport is a paper viewport with a fixed scale and
+      a fixed model centre. Zooming or panning the paper layout does not move the plan. It is stored as a viewport
+      (REQ-490), not drawn as an overlay. Its model content is clipped to the viewport rectangle.
 - Acceptance:
   - Creating sheets for three frames creates three layouts, each with one viewport. Each viewport's centre equals
     its frame's centre and its scale equals the frame's scale.
-  - The template layout is unchanged.
-  - A missing template or a model-space template refuses and creates nothing.
+  - The title-block DWG is not changed; each sheet holds its own copy of it.
+  - A missing or unreadable title-block DWG refuses and creates nothing.
   - One undo step removes all created layouts.
   - The three layouts appear in the layout tabs and export to PDF under REQ-488.
   - The Create Sheets button is enabled and runs the command; its "not implemented yet" tooltip is gone.
 - Owner-layer: Domain / Commands / IO / UI
-- Assumptions (recorded, not asked): the viewport is the full sheet at the frame's size, not the template's viewport rectangle; a sheet number
-  is not drawn because GoSurvey has no sheet-number field.
+- Assumptions (recorded, not asked): the viewport is the frame's size inside the 0.5 in margin (item 10), not the title
+  block's own viewport rectangle; the sheet number shown is the frame name (`VF-n`) in the title block's sheet field.
 - Traceability: `[req518]` tests (`tests/ViewFrameSheetTests.cpp`).
 - Status: accepted (2026-11-07, D-2026-11-07-c; GitHub #1000). Accepted by the user with the rotation choice (a) and the
   amendments in items 2, 4 and 4a.

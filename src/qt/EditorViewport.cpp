@@ -966,7 +966,8 @@ void EditorViewport::paintGL() {
       camera.projection = viewport.camPerspective ? Camera::Projection::Perspective : Camera::Projection::Orthographic;
       camera.fovDeg = viewport.camFovDeg;
       RenderTuning tuning;
-      tuning.bgR = 0.f; tuning.bgG = 0.f; tuning.bgB = 0.f;
+      // REQ-518 paper: white paper viewports (the sheet colour #f4f4f2), with near-white linework drawn in dark ink.
+      tuning.bgR = 0.957f; tuning.bgG = 0.957f; tuning.bgB = 0.949f; tuning.paperInk = true;
       tuning.visualStyle = viewport.visualStyle;
       ext.viewportFrozenLayers = &viewport.frozenLayers;
       m_Renderer->SetSize(viewW, viewH);

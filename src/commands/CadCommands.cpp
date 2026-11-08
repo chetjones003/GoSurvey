@@ -8757,7 +8757,7 @@ const CmdEntry kRegistry[] = {
     {"alignmentdelete", "", "Delete an alignment: ALIGNMENTDELETE <name>"},
     {"createviewframes", "", "Create view frames along an alignment: CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale>, <overlap>[, CENTRED|LEFT|RIGHT]"},
     {"viewframedelete", "", "Delete an alignment's view frame groups: VIEWFRAMEDELETE <alignment>"},
-    {"createsheets", "", "Create paper sheets from view frames: CREATESHEETS <alignment>, <template layout>[, <frames>] (frames: ALL or names such as VF-1 VF-3)"},
+    {"createsheets", "", "Create paper sheets from view frames: CREATESHEETS <alignment>[, <frames>] (frames: ALL or names such as VF-1 VF-3)"},
     {"getstationoffset", "", "Station and offset of a point: GETSTATIONOFFSET <alignment>[, <x>, <y> | , POINT, <number>][, SURFACE=<surface>] (alignment alone: pick until ESC)"},
     {"getpointfromstationoffset", "", "Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset>"},
     {"createalignmentfromobjects", "createalignmententities", "Alignment from lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS (pick them) | <name>[, START=][, FILLET=][, REVERSE][, ERASE]"},
@@ -46687,6 +46687,10 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
     }
     if (!vp) {
       log.push_back("ZOOM EXTENTS — no active viewport to frame into.");
+      return;
+    }
+    if (vp->locked) {  // REQ-518.11: a locked viewport keeps its model centre and scale
+      log.push_back("ZOOM EXTENTS — the viewport is locked; its view is unchanged.");
       return;
     }
     double mnX = 0.;

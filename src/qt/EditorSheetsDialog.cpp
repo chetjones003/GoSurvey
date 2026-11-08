@@ -1,7 +1,6 @@
 #include "EditorSheetsDialog.hpp"
 
 #include "CadCommands.hpp"
-#include "PaperSpace.hpp"
 #include "alignment/AlignmentViewFrames.hpp"
 
 #include <QComboBox>
@@ -28,11 +27,6 @@ QString RunCreateSheetsDialog(QWidget* parent, const AppCommandState& state) {
                              "Create one view frame group for an alignment first. Sheets need exactly one per alignment.");
     return {};
   }
-  if (state.paperLayouts.empty()) {
-    QMessageBox::information(parent, "Create Sheets", "Create a paper layout to use as the sheet template first.");
-    return {};
-  }
-
   QDialog dialog(parent);
   dialog.setWindowTitle("Create Sheets");
   auto* form = new QFormLayout;
@@ -40,10 +34,6 @@ QString RunCreateSheetsDialog(QWidget* parent, const AppCommandState& state) {
   auto* alignmentBox = new QComboBox(&dialog);
   for (const QString& name : alignments) alignmentBox->addItem(name);
   form->addRow("Alignment:", alignmentBox);
-
-  auto* templateBox = new QComboBox(&dialog);
-  for (const PaperLayout& layout : state.paperLayouts) templateBox->addItem(QString::fromStdString(layout.name));
-  form->addRow("Template layout:", templateBox);
 
   // ALL, or frame names separated by spaces (for example VF-1 VF-3). The command reports any name it cannot find.
   auto* framesEdit = new QLineEdit(QStringLiteral("ALL"), &dialog);
@@ -59,10 +49,9 @@ QString RunCreateSheetsDialog(QWidget* parent, const AppCommandState& state) {
   layout->addWidget(buttons);
 
   if (dialog.exec() != QDialog::Accepted) return {};
-  if (alignmentBox->currentIndex() < 0 || templateBox->currentIndex() < 0) return {};
+  if (alignmentBox->currentIndex() < 0) return {};
 
   // Commas separate the command's fields, so a list typed with commas is read as frame names separated by spaces.
   const QString frames = framesEdit->text().replace(',', ' ').simplified();
-  return "CREATESHEETS " + alignmentBox->currentText() + ", " + templateBox->currentText() +
-         (frames.isEmpty() ? QString() : ", " + frames);
+  return "CREATESHEETS " + alignmentBox->currentText() + (frames.isEmpty() ? QString() : ", " + frames);
 }

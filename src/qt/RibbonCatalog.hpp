@@ -227,7 +227,7 @@ inline constexpr Button kButtons[] = {
   {"Insert", "Data", "##RibbonDataField", "Field", "Field", "", "Field — not implemented yet.", false, true},
   {"Insert", "Data", "##RibbonDataHyperlink", "Hyperlink", "Hyperlink", "", "Hyperlink — not implemented yet.", false, true},
   {"Output", "Plan Production", "##OutViewFrames", "Create View\nFrames", "c3d_viewframes", "CREATEVIEWFRAMES", "Create View Frames — lay out plan sheet frames along an alignment (REQ-517).\nCommand bar: CREATEVIEWFRAMES", false, false},
-  {"Output", "Plan Production", "##OutCreateSheets", "Create\nSheets", "c3d_createsheets", "CREATESHEETS", "Create Sheets — one paper layout per view frame, from a template layout (REQ-518).\nCommand bar: CREATESHEETS", true, false},
+  {"Output", "Plan Production", "##OutCreateSheets", "Create\nSheets", "c3d_createsheets", "CREATESHEETS", "Create Sheets — one paper layout per view frame, on the title block (REQ-518).\nCommand bar: CREATESHEETS", true, false},
   {"Output", "Plan Production", "##OutSectionSheets", "Create Section\nSheets", "c3d_sectionsheets", "", "Create Section Sheets — not implemented yet.", true, true},
   {"Output", "Plot", "##RibbonPlot", "Plot", "Plot", "PLOT", "Plot the current layout to a vector PDF.\nCommand bar: PLOT", true, false},
   {"Output", "Plot", "##RibbonBatchPlot", "Batch Plot", "Plot", "@batchPlot", "Batch plot — pick layouts to plot into one multi-page PDF.", false, false},

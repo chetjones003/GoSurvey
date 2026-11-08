@@ -8219,7 +8219,7 @@ void RunAlignmentDelete(AppCommandState& st, const std::string& args, std::vecto
 void RunCreateViewFrames(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// REQ-517.7: VIEWFRAMEDELETE <alignment>. Deletes the alignment's view frame groups in one undo step.
 void RunViewFrameDelete(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
-/// REQ-518: CREATESHEETS <alignment>, <template layout>[, <frames>]. One rotated paper layout per frame, one undo step.
+/// REQ-518: CREATESHEETS <alignment>[, <frames>[, <title block DWG>]]. One rotated paper layout per frame, one undo step.
 void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// REQ-517.8/.9: keeps view frame groups in step with the alignments. Logs a group it could not regenerate.
 void RefreshViewFrameGroups(AppCommandState& st, std::vector<std::string>& log);
