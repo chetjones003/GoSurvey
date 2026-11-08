@@ -119,13 +119,21 @@ offset and a curve's radius are always exact.
 
 ## View frames
 
-- `CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale>, <overlap>[, CENTRED|LEFT|RIGHT]` lays plan frames along an alignment. The Output tab's Plan Production group runs it from a dialog.
+- `CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale or AUTO>, <overlap>[, CENTRED|LEFT|RIGHT]` lays plan frames (AUTO picks the best-fit named scale for the alignment on one sheet) along an alignment. The Output tab's Plan Production group runs it from a dialog.
 - The sheet is one of the Page Setup paper sizes, such as ARCH D; the scale is one of the drawing's named scales, such as `1" = 50'`. The longer side of the sheet runs along the alignment.
 - Each frame is `VF-1`, `VF-2`, ... Consecutive frames overlap by the overlap you set. The last frame keeps its full length past the end station.
 - Placement is CENTRED (the default), LEFT or RIGHT. It sets where the alignment sits across each frame.
 - Frames follow the alignment. Editing its geometry rebuilds the frames, and deleting the alignment deletes its frame groups. Each step is one undo.
 - Frame groups are saved with the drawing and rebuilt when it reopens.
-- Not built yet: sheets from frames (Create Sheets) and section sheets from sample lines.
+- `CREATESHEETS <alignment>[, <frames>]` makes one paper layout per frame, in this drawing. The Output tab's Plan Production group runs it from a dialog.
+- Each sheet is built on the **Generic 24in x 36in Title Block.dwg** from the AutoCAD Template folder of the Civil 3D install (`%LOCALAPPDATA%\Autodesk\C3D 2026\enu\Template\AutoCAD Template`). Its border and lines are copied onto the sheet.
+- The sheet's title block cells are filled from the frame: alignment name, sheet (frame name), scale, sheet size, date, and the station range (`STA`).
+- A north arrow sits above the right-hand column and turns with the view, so it points north on the sheet.
+- Each sheet has one locked paper viewport, inside a 0.5 in margin inside the border. The viewport is centred on its frame, at the frame's scale, and turned so the alignment runs left to right across the sheet.
+- The sheet is named after its frame (`VF-1`, `VF-2`, ...); a name already in use gets ` (2)`, ` (3)` and so on.
+- The frames are resized to the usable area inside the margin (29.75 x 19.5 in for the Generic block), at the same scale, when the sheets are made. The group then records ARCH D and has the new frames, so the frame count can change (1800 ft frames become 1487.5 ft frames). This is part of the same undo step. The command refuses an alignment with more than one frame group, an alignment with no frames, a frame name it cannot find, a title block it cannot find or read, and a title block with no border. Frames are chosen with `ALL` (the default) or names separated by spaces, such as `VF-1 VF-3`.
+- One undo removes all the sheets one command made. Sheets are not updated when the frames change later; create them again.
+- Not built yet: section sheets from sample lines.
 
 ## Limits so far
 

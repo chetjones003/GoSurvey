@@ -15,6 +15,7 @@
 #include <limits>
 #include <memory>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -47,13 +48,18 @@ void main() {
 }
 )";
 
-const char* kLineFs = R"(#version 330 core
-uniform vec4 uColor;
-out vec4 FragColor;
-void main() {
-  FragColor = uColor;
+// REQ-518 (paper ink): on a white paper viewport, near-white linework is drawn black, as AutoCAD does on a white
+// sheet. `uPaperInk` is set only for the duration of a paper viewport's scene (SetPaperInk), so model space is unchanged.
+const char* kPaperInkGlsl = R"(
+uniform float uPaperInk;
+vec4 PaperInk(vec4 c) {
+  if (uPaperInk > 0.5 && min(c.r, min(c.g, c.b)) > 0.85) return vec4(0.05, 0.05, 0.05, c.a);
+  return c;
 }
 )";
+
+const std::string kLineFs = std::string("#version 330 core\nuniform vec4 uColor;\nout vec4 FragColor;\n") + kPaperInkGlsl +
+                           "void main() {\n  FragColor = PaperInk(uColor);\n}\n";
 
 const char* kLineVcVs = R"(#version 330 core
 layout(location = 0) in vec3 aPos;
@@ -68,13 +74,8 @@ void main() {
 }
 )";
 
-const char* kLineVcFs = R"(#version 330 core
-in vec4 vColor;
-out vec4 FragColor;
-void main() {
-  FragColor = vColor;
-}
-)";
+const std::string kLineVcFs = std::string("#version 330 core\nin vec4 vColor;\nout vec4 FragColor;\n") + kPaperInkGlsl +
+                              "void main() {\n  FragColor = PaperInk(vColor);\n}\n";
 
 // Diffuse-lit triangles for the Shaded visual style (REQ-064 / ADR-026 (f)).
 //
@@ -104,19 +105,14 @@ void main() {
 }
 )";
 
-const char* kShadedFs = R"(#version 330 core
-in vec3 vNormal;
-uniform vec4 uColor;
-uniform vec3 uViewDir;   // world-space direction the camera looks ALONG
-uniform float uAmbient;
-out vec4 FragColor;
-void main() {
-  vec3 n = normalize(vNormal);
-  float d = abs(dot(n, normalize(uViewDir)));
-  float i = uAmbient + (1.0 - uAmbient) * d;
-  FragColor = vec4(uColor.rgb * i, uColor.a);
-}
-)";
+const std::string kShadedFs = std::string("#version 330 core\nin vec3 vNormal;\nuniform vec4 uColor;\n"
+                              "uniform vec3 uViewDir;   // world-space direction the camera looks ALONG\n"
+                              "uniform float uAmbient;\nout vec4 FragColor;\n") +
+                              kPaperInkGlsl +
+                              "void main() {\n  vec3 n = normalize(vNormal);\n"
+                              "  float d = abs(dot(n, normalize(uViewDir)));\n"
+                              "  float i = uAmbient + (1.0 - uAmbient) * d;\n"
+                              "  FragColor = PaperInk(vec4(uColor.rgb * i, uColor.a));\n}\n";
 
 // Textured geometry — used for PDF underlays and terrain drapes. The VAO chooses vec2 XY for
 // underlays/map tiles (Z defaults to zero) or vec3 XYZ for draped TIN triangles.
@@ -905,7 +901,7 @@ bool ViewportRenderer::EnsureShader() {
     return true;
 
   GLuint vs = CompileShader(GL_VERTEX_SHADER, kLineVs);
-  GLuint fs = CompileShader(GL_FRAGMENT_SHADER, kLineFs);
+  GLuint fs = CompileShader(GL_FRAGMENT_SHADER, kLineFs.c_str());
   if (!vs || !fs)
     return false;
   lineProgram_ = LinkProgram(vs, fs);
@@ -916,7 +912,7 @@ bool ViewportRenderer::EnsureShader() {
   gridProgram_ = lineProgram_;
 
   GLuint vcVs = CompileShader(GL_VERTEX_SHADER, kLineVcVs);
-  GLuint vcFs = CompileShader(GL_FRAGMENT_SHADER, kLineVcFs);
+  GLuint vcFs = CompileShader(GL_FRAGMENT_SHADER, kLineVcFs.c_str());
   if (!vcVs || !vcFs)
     return false;
   vcLineProgram_ = LinkProgram(vcVs, vcFs);
@@ -925,7 +921,7 @@ bool ViewportRenderer::EnsureShader() {
   clipLocVcLine_ = glGetUniformLocation(vcLineProgram_, "uClipPlane");
 
   GLuint shVs = CompileShader(GL_VERTEX_SHADER, kShadedVs);
-  GLuint shFs = CompileShader(GL_FRAGMENT_SHADER, kShadedFs);
+  GLuint shFs = CompileShader(GL_FRAGMENT_SHADER, kShadedFs.c_str());
   if (!shVs || !shFs)
     return false;
   shadedProgram_ = LinkProgram(shVs, shFs);
@@ -1279,6 +1275,26 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const std::vector<std::shared_ptr<const CadPointCloud>>* pointClouds,
                                    const std::vector<EntityAttributes>* pointCloudAttrs,
                                    const PointCloudDisplaySettings* pointCloudDisplay) {
+  // REQ-518 paper ink (kPaperInkGlsl): on for this scene only, so model space keeps its colours. The caller's
+  // program is restored each time, so the flag and the bound program never leak past this call.
+  const auto setPaperInk = [this](bool on) {
+    GLint previousProgram = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+    for (GLuint program : {lineProgram_, vcLineProgram_, shadedProgram_}) {
+      glUseProgram(program);
+      glUniform1f(glGetUniformLocation(program, "uPaperInk"), on ? 1.f : 0.f);
+    }
+    glUseProgram(static_cast<GLuint>(previousProgram));
+  };
+  // The programs must exist before their uPaperInk uniform is set: on the first paint they are created here, so the flag
+  // reaches them and is not left at its default.
+  if (!EnsureShader())
+    return;
+  setPaperInk(tuning.paperInk);
+  struct PaperInkOff {
+    std::function<void(bool)> set;
+    ~PaperInkOff() { set(false); }
+  } paperInkOff{setPaperInk};
   viewW_ = fbWidth;
   viewH_ = fbHeight;
   if (!EnsureFramebuffer(viewW_, viewH_))

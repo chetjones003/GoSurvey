@@ -2,6 +2,7 @@
 #include <GL/glew.h>
 #include "EditorViewport.hpp"
 #include "ViewportRenderer.hpp"
+#include "render/ViewportProjection.hpp"  // REQ-061/REQ-518: viewport overlay through its camera
 #include "CadRubberPreview.hpp"
 #include "CadDynInput.hpp"
 #include "TransformPreview.hpp"
@@ -965,7 +966,8 @@ void EditorViewport::paintGL() {
       camera.projection = viewport.camPerspective ? Camera::Projection::Perspective : Camera::Projection::Orthographic;
       camera.fovDeg = viewport.camFovDeg;
       RenderTuning tuning;
-      tuning.bgR = 0.f; tuning.bgG = 0.f; tuning.bgB = 0.f;
+      // REQ-518 paper: white paper viewports (the sheet colour #f4f4f2), with near-white linework drawn in dark ink.
+      tuning.bgR = 0.957f; tuning.bgG = 0.957f; tuning.bgB = 0.949f; tuning.paperInk = true;
       tuning.visualStyle = viewport.visualStyle;
       ext.viewportFrozenLayers = &viewport.frozenLayers;
       m_Renderer->SetSize(viewW, viewH);
@@ -1275,8 +1277,9 @@ void EditorViewport::paintGL() {
       if (viewport.on) {
       auto modelProject = [&](double x, double y) {
         float paperX = 0.f, paperY = 0.f;
-        ModelToPaperIn(viewport, x + m_State.worldDocumentOriginX,
-            y + m_State.worldDocumentOriginY, &paperX, &paperY);
+        // Through the viewport's camera (REQ-518 rotated sheets): plan views take the same path as before.
+        ModelToPaperInThroughCamera(viewport, x + m_State.worldDocumentOriginX,
+            y + m_State.worldDocumentOriginY, 0.0, &paperX, &paperY);
         return project(paperX, paperY);
       };
       painter.setPen(QPen(QColor("#394d5a"), 1));

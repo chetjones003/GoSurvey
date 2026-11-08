@@ -40,10 +40,16 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
+#include <functional>
+#include <filesystem>
+#include "io/DwgIo.hpp"  // REQ-518.8: the title block DWG
+#include "render/ViewportProjection.hpp"  // REQ-518.9: the north arrow follows the view
 #include <fstream>
 #include <iterator>
 #include <limits>
 #include <optional>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -415,12 +421,57 @@ void RunViewFrameDelete(AppCommandState& st, const std::string& args, std::vecto
   log.push_back("VIEWFRAMEDELETE - removed " + std::to_string(count) + " view frame group(s) from \"" + name + "\".");
 }
 
+namespace {
+
+// REQ-517.8 (AUTO scale): the title block and margins take this much of an ARCH D sheet across and down, so the
+// usable area is 29.75 x 19.5 in, the same area CREATESHEETS gives the viewport.
+constexpr double kSheetAllowanceWidthIn = 6.25;
+constexpr double kSheetAllowanceHeightIn = 4.5;
+
+// REQ-517.8 (D-2026-11-08-h, amended): AUTO picks the most detailed named scale on which the whole alignment fits one
+// sheet, when that scale is 1" = 50' (1:50 in a metric drawing) or finer. A longer alignment gets the plan scale itself
+// and as many sheets as it needs, so no sheet is drawn at a coarse scale just to hold a long run.
+// Returns false (with a reason) when the scale list has no plan scale to fall back to.
+bool ChooseBestFitScale(const alignment::Alignment& a, alignment::ViewFrameSettings& s,
+                        const std::vector<CadAnnotationScale>& scales, std::string& why) {
+  std::vector<const CadAnnotationScale*> byDetail;
+  for (const CadAnnotationScale& candidate : scales)
+    if (candidate.paperUnits > 0.f && candidate.drawingUnits > 0.f) byDetail.push_back(&candidate);
+  auto groundPerInch = [](const CadAnnotationScale* c) { return static_cast<double>(c->drawingUnits) / c->paperUnits; };
+  std::sort(byDetail.begin(), byDetail.end(), [&groundPerInch](const CadAnnotationScale* p, const CadAnnotationScale* q) {
+    return groundPerInch(p) < groundPerInch(q);  // most detailed (smallest ground per inch) first
+  });
+  const CadAnnotationScale* plan = nullptr;
+  for (const CadAnnotationScale* c : byDetail)
+    if (NormalizeName(c->name) == NormalizeName("1\" = 50'") || NormalizeName(c->name) == "1:50") plan = c;
+  if (plan == nullptr) {
+    why = "this drawing's scale list has no 1\" = 50' (or 1:50) plan scale for AUTO to use";
+    return false;
+  }
+  const CadAnnotationScale* chosen = plan;
+  for (const CadAnnotationScale* candidate : byDetail) {
+    if (groundPerInch(candidate) > groundPerInch(plan)) break;  // coarser than the plan scale: not wanted
+    s.groundPerInch = groundPerInch(candidate);
+    s.scaleName = candidate->name;
+    if (!alignment::ViewFrameSettingsRefusal(a, s).empty()) continue;
+    if (alignment::ComputeViewFrames(a, s).size() == 1) {
+      chosen = candidate;
+      break;
+    }
+  }
+  s.groundPerInch = groundPerInch(chosen);
+  s.scaleName = chosen->name;
+  return true;
+}
+
+}  // namespace
+
 // CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale>, <overlap>[, CENTRED|LEFT|RIGHT]
 // REQ-517: frames along the alignment, sized by the sheet (landscape, so the long side runs along the alignment) and
-// the named scale. The group follows the alignment from then on.
+// the named scale. The group follows the alignment from then on. <scale> AUTO (REQ-517.8) picks the best-fit scale.
 void RunCreateViewFrames(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const char* usage =
-      "CREATEVIEWFRAMES - usage: CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale>, "
+      "CREATEVIEWFRAMES - usage: CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale or AUTO>, "
       "<overlap>[, CENTRED|LEFT|RIGHT]";
   const std::vector<std::string> f = SplitFields(args);
   if (f.size() < 6 || f.size() > 7) {
@@ -446,10 +497,11 @@ void RunCreateViewFrames(AppCommandState& st, const std::string& args, std::vect
     return;
   }
   EnsureStandardAnnotationScales(st.viewportZoomScales, st.drawingInsUnits);
+  const bool autoScale = NormalizeName(f[4]) == "AUTO";
   const CadAnnotationScale* scale = nullptr;
   for (const CadAnnotationScale& candidate : st.viewportZoomScales)
-    if (NormalizeName(candidate.name) == NormalizeName(f[4])) scale = &candidate;
-  if (scale == nullptr) {  // REQ-517.3: named scales only
+    if (!autoScale && NormalizeName(candidate.name) == NormalizeName(f[4])) scale = &candidate;
+  if (!autoScale && scale == nullptr) {  // REQ-517.3: named scales only
     log.push_back("CREATEVIEWFRAMES - \"" + f[4] + "\" is not a named scale in this drawing's scale list.");
     return;
   }
@@ -481,11 +533,21 @@ void RunCreateViewFrames(AppCommandState& st, const std::string& args, std::vect
   // Landscape: the longer side of the sheet runs along the alignment (a plan sheet's usual orientation).
   s.sheetWidthIn = std::max(sheet->widthIn, sheet->heightIn);
   s.sheetHeightIn = std::min(sheet->widthIn, sheet->heightIn);
-  s.groundPerInch = scale->paperUnits > 0.f ? static_cast<double>(scale->drawingUnits) / scale->paperUnits : 0.0;
+  s.groundPerInch = scale != nullptr && scale->paperUnits > 0.f ? static_cast<double>(scale->drawingUnits) / scale->paperUnits : 0.0;
   s.overlap = overlap;
   s.placement = placement;
   s.sheetName = sheet->name;
-  s.scaleName = scale->name;
+  s.scaleName = scale != nullptr ? scale->name : std::string();
+  if (autoScale) {
+    // REQ-517.8: frames are sized to the usable area inside the title block, so AUTO's one-sheet test uses that area.
+    s.sheetWidthIn = std::max(s.sheetWidthIn - kSheetAllowanceWidthIn, 0.0);
+    s.sheetHeightIn = std::max(s.sheetHeightIn - kSheetAllowanceHeightIn, 0.0);
+    std::string whyScale;
+    if (!ChooseBestFitScale(*a, s, st.viewportZoomScales, whyScale)) {
+      log.push_back("CREATEVIEWFRAMES - refused: " + whyScale + ". No view frames were created.");
+      return;
+    }
+  }
 
   const std::string why = alignment::ViewFrameSettingsRefusal(*a, s);
   if (!why.empty()) {
@@ -504,7 +566,434 @@ void RunCreateViewFrames(AppCommandState& st, const std::string& args, std::vect
   st.viewFrameGroups.push_back(std::move(g));
   BumpCadGpuCache(st);
   log.push_back("CREATEVIEWFRAMES - " + std::to_string(count) + " view frame(s) along \"" + a->name + "\" (" +
-                s.sheetName + ", " + s.scaleName + ", overlap " + Lin(st, overlap) + ").");
+                s.sheetName + ", " + s.scaleName + (autoScale ? " chosen automatically" : "") + ", overlap " +
+                Lin(st, overlap) + ").");
+}
+
+namespace {
+
+// REQ-518.10: the plan viewport sits this far inside the title block's main border.
+constexpr double kSheetMarginIn = 0.5;
+// REQ-518.8: the title block every sheet is built on. Its paper geometry is copied onto each new sheet.
+constexpr const char* kTitleBlockFile = "Generic 24in x 36in Title Block.dwg";
+
+// The title block DWG on this machine: the AutoCAD template folder of the Civil 3D install.
+std::string DefaultTitleBlockPath() {
+  const char* local = std::getenv("LOCALAPPDATA");
+  if (local == nullptr || *local == '\0') return {};
+  return std::string(local) + "\\Autodesk\\C3D 2026\\enu\\Template\\AutoCAD Template\\" + kTitleBlockFile;
+}
+
+struct Box {
+  double minX = 0.0, minY = 0.0, maxX = 0.0, maxY = 0.0;
+  double width() const { return maxX - minX; }
+  double height() const { return maxY - minY; }
+};
+
+// Bounding box of a title block's lines and polylines, in its own DWG coordinates.
+bool TitleBlockBounds(const AppCommandState& tb, Box* out) {
+  bool any = false;
+  auto add = [&](double x, double y) {
+    if (!any) {
+      out->minX = out->maxX = x;
+      out->minY = out->maxY = y;
+      any = true;
+      return;
+    }
+    out->minX = std::min(out->minX, x);
+    out->maxX = std::max(out->maxX, x);
+    out->minY = std::min(out->minY, y);
+    out->maxY = std::max(out->maxY, y);
+  };
+  for (size_t i = 0; i + 5 < tb.userLinesFlat.size(); i += 6) {
+    add(tb.userLinesFlat[i], tb.userLinesFlat[i + 1]);
+    add(tb.userLinesFlat[i + 3], tb.userLinesFlat[i + 4]);
+  }
+  for (size_t v = 0; v + 2 < tb.userPolylineVerts.size(); v += 3) add(tb.userPolylineVerts[v], tb.userPolylineVerts[v + 1]);
+  return any;
+}
+
+// The title block's main border: the four-vertex polyline with the largest area.
+bool TitleBlockBorder(const AppCommandState& tb, Box* out) {
+  bool found = false;
+  double bestArea = -1.0;
+  for (size_t p = 0; p + 1 < tb.userPolylineOffsets.size(); ++p) {
+    const int v0 = tb.userPolylineOffsets[p], v1 = tb.userPolylineOffsets[p + 1];
+    if (v1 - v0 != 4) continue;
+    Box b;
+    bool first = true;
+    for (int v = v0; v < v1; ++v) {
+      const double x = tb.userPolylineVerts[3 * static_cast<size_t>(v)];
+      const double y = tb.userPolylineVerts[3 * static_cast<size_t>(v) + 1];
+      if (first) {
+        b.minX = b.maxX = x;
+        b.minY = b.maxY = y;
+        first = false;
+        continue;
+      }
+      b.minX = std::min(b.minX, x);
+      b.maxX = std::max(b.maxX, x);
+      b.minY = std::min(b.minY, y);
+      b.maxY = std::max(b.maxY, y);
+    }
+    const double area = b.width() * b.height();
+    if (area > bestArea) {
+      bestArea = area;
+      *out = b;
+      found = true;
+    }
+  }
+  return found;
+}
+
+// REQ-518.8: copies the title block's lines and polylines onto `sheet`, moved by (dx, dy) paper inches.
+void CopyTitleBlockOntoSheet(PaperLayout& sheet, const AppCommandState& tb, double dx, double dy) {
+  for (size_t i = 0; i + 5 < tb.userLinesFlat.size(); i += 6) {
+    sheet.paperLines.push_back(static_cast<float>(tb.userLinesFlat[i] + dx));
+    sheet.paperLines.push_back(static_cast<float>(tb.userLinesFlat[i + 1] + dy));
+    sheet.paperLines.push_back(0.f);
+    sheet.paperLines.push_back(static_cast<float>(tb.userLinesFlat[i + 3] + dx));
+    sheet.paperLines.push_back(static_cast<float>(tb.userLinesFlat[i + 4] + dy));
+    sheet.paperLines.push_back(0.f);
+    EntityAttributes attr = i / 6 < tb.userLineAttrs.size() ? tb.userLineAttrs[i / 6] : EntityAttributes{};
+    attr.id = 0;  // the sheet's own copy takes a fresh identity when it is saved
+    sheet.paperLineAttrs.push_back(attr);
+  }
+  if (sheet.paperPolyOffsets.empty()) sheet.paperPolyOffsets.push_back(0);
+  for (size_t p = 0; p + 1 < tb.userPolylineOffsets.size(); ++p) {
+    for (int v = tb.userPolylineOffsets[p]; v < tb.userPolylineOffsets[p + 1]; ++v) {
+      const size_t vi = static_cast<size_t>(v);
+      sheet.paperPolyVerts.push_back(static_cast<float>(tb.userPolylineVerts[3 * vi] + dx));
+      sheet.paperPolyVerts.push_back(static_cast<float>(tb.userPolylineVerts[3 * vi + 1] + dy));
+      sheet.paperPolyVerts.push_back(0.f);
+      sheet.paperPolyVertsBulge.push_back(vi < tb.userPolylineVertsBulge.size() ? tb.userPolylineVertsBulge[vi] : 0.f);
+    }
+    sheet.paperPolyClosed.push_back(p < tb.userPolylineClosed.size() ? tb.userPolylineClosed[p] : 0);
+    EntityAttributes attr = p < tb.userPolylineAttrs.size() ? tb.userPolylineAttrs[p] : EntityAttributes{};
+    attr.id = 0;
+    sheet.paperPolyAttrs.push_back(attr);
+    sheet.paperPolyOffsets.push_back(static_cast<int>(sheet.paperPolyVerts.size() / 3));
+  }
+  // REQ-518.8: the block's own text (labels and notes) comes across too. Styles and annotative scales name entries
+  // the sheet's drawing does not have, so they are dropped; the baked height, font and style values are kept.
+  for (const CadAnnotation& src : tb.cadAnnotations) {
+    if (src.kind != CadAnnotation::Kind::Text && src.kind != CadAnnotation::Kind::Mtext) continue;
+    CadAnnotation a = src;
+    a.insX = static_cast<float>(src.insX + dx);
+    a.insY = static_cast<float>(src.insY + dy);
+    a.insZ = 0.f;
+    if (src.kind == CadAnnotation::Kind::Mtext) {
+      a.boxMinX = static_cast<float>(src.boxMinX + dx);
+      a.boxMaxX = static_cast<float>(src.boxMaxX + dx);
+      a.boxMinY = static_cast<float>(src.boxMinY + dy);
+      a.boxMaxY = static_cast<float>(src.boxMaxY + dy);
+    }
+    a.styleName.clear();
+    a.dimensionStyleName.clear();
+    a.dimensionTextOverride.clear();
+    a.annotative = false;
+    a.annotativeVisibleScaleNames.clear();
+    sheet.paperTexts.push_back(std::move(a));
+    sheet.paperTextAttrs.push_back(EntityAttributes{});
+  }
+}
+
+// REQ-518.9: one line of text on a sheet, in paper inches from its lower-left corner, with no style of its own.
+void AddSheetText(PaperLayout& sheet, const std::string& text, double insX, double insY, double heightIn) {
+  CadAnnotation a;
+  a.kind = CadAnnotation::Kind::Text;
+  a.insX = static_cast<float>(insX);
+  a.insY = static_cast<float>(insY);
+  a.plottedHeightInches = static_cast<float>(heightIn);
+  a.text = text;
+  sheet.paperTexts.push_back(std::move(a));
+  sheet.paperTextAttrs.push_back(EntityAttributes{});
+}
+
+// REQ-518.2 / .10 / .11: the sheet's viewport. Its rectangle is the inner area of the border; it shows the frame's centre
+// at the frame's scale, turned by the view roll that puts the alignment tangent across the sheet, and it is locked.
+Viewport SheetViewportForFrame(const alignment::Alignment& a, const alignment::ViewFrame& f,
+                               const alignment::ViewFrameSettings& s, const Box& inner) {
+  const alignment::Point2 t = a.GetTangentAtStation(f.centreStation);
+  Viewport vp;
+  vp.paperXIn = static_cast<float>(inner.minX);
+  vp.paperYIn = static_cast<float>(inner.minY);
+  vp.paperWIn = static_cast<float>(inner.width());
+  vp.paperHIn = static_cast<float>(inner.height());
+  vp.modelCenterX = (f.corner[0].x + f.corner[2].x) * 0.5;
+  vp.modelCenterY = (f.corner[0].y + f.corner[2].y) * 0.5;
+  vp.scaleModelPerPaperIn = static_cast<float>(s.groundPerInch);
+  vp.annotationScaleName = s.scaleName;
+  vp.camRollDeg = Camera::RollToPlaceUp(0.f, 90.f, ray3d::Vec3{-t.y, t.x, 0.0});
+  vp.locked = true;  // REQ-518.11: a locked sheet viewport keeps its model view when the sheet is navigated
+  return vp;
+}
+
+// REQ-518.9: the fields of the title block, filled from the view frame, down the right-hand column of the border.
+void AddSheetFields(PaperLayout& sheet, const alignment::Alignment& a, const alignment::ViewFrame& f,
+                    const alignment::ViewFrameSettings& s, const alignment::StationFormat& fmt, double columnLeft,
+                    double fieldRight, const std::vector<double>& rowMids) {
+  alignment::StationFormat whole = fmt;  // whole stations: "17+00", so the field fits its column
+  whole.decimals = 0;
+  const std::string from = alignment::FormatStation(a.DisplayedStation(f.startStation, true), whole);
+  const std::string to = alignment::FormatStation(a.DisplayedStation(f.endStation, true), whole);
+  const std::time_t now = std::time(nullptr);
+  std::tm local{};
+  localtime_s(&local, &now);
+  char date[16] = {};
+  std::strftime(date, sizeof(date), "%m/%d/%Y", &local);
+  const std::string size = s.sheetName.substr(0, s.sheetName.find(" ("));  // "ARCH D"
+  const std::string rows[] = {
+      "ALIGNMENT  " + a.name,
+      "SHEET  " + f.name,
+      "SCALE  " + s.scaleName,
+      "SIZE  " + size,
+      "DATE  " + std::string(date),
+      "STA  " + from + " to " + to,
+  };
+  // One row per cell of the column: the row sits on the cell's middle, so no text runs along a box line. The height is
+  // 0.1 in unless the longest row would run past the field's right-hand line, then it shrinks to fit (REQ-518.9).
+  // A character takes about 0.75 of the height across, which is generous for the capitals in these rows.
+  size_t longest = 0;
+  for (const std::string& row : rows) longest = std::max(longest, row.size());
+  const double insetIn = 0.08, rightPadIn = 0.05;
+  const double availableIn = fieldRight - (columnLeft + insetIn) - rightPadIn;
+  const double textIn = std::max(0.04, std::min(0.1, availableIn / (0.75 * static_cast<double>(longest))));
+  for (size_t i = 0; i < std::size(rows) && i < rowMids.size(); ++i)
+    AddSheetText(sheet, rows[i], columnLeft + insetIn, rowMids[i] - textIn * 0.4, textIn);
+}
+
+// REQ-518.9: a north arrow in the title block's empty right-hand column, centred at (cx, cy) in sheet inches, turned by
+// the view roll so it points north on the sheet. The arrow is paper lines and its N is paper text.
+void AddNorthArrow(PaperLayout& sheet, const Viewport& vp, double cx, double cy) {
+  const double r = 0.4;
+  float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
+  ModelToPaperInThroughCamera(vp, vp.modelCenterX, vp.modelCenterY, 0.0, &x0, &y0);
+  ModelToPaperInThroughCamera(vp, vp.modelCenterX, vp.modelCenterY + 1.0, 0.0, &x1, &y1);
+  double dx = x1 - x0, dy = y1 - y0;
+  const double len = std::hypot(dx, dy);
+  if (len < 1e-9) {
+    dx = 0.0;
+    dy = 1.0;
+  } else {
+    dx /= len;
+    dy /= len;
+  }
+  auto segment = [&sheet](double ax, double ay, double bx, double by) {
+    sheet.paperLines.insert(sheet.paperLines.end(), {static_cast<float>(ax), static_cast<float>(ay), 0.f,
+                                                      static_cast<float>(bx), static_cast<float>(by), 0.f});
+    sheet.paperLineAttrs.push_back(EntityAttributes{});
+  };
+  const double tipX = cx + dx * r, tipY = cy + dy * r;
+  segment(cx - dx * r, cy - dy * r, tipX, tipY);
+  // Head: two short barbs back from the tip, 30 degrees either side of the shaft.
+  for (double side : {-1.0, 1.0}) {
+    const double ang = side * 30.0 * 3.14159265358979323846 / 180.0;
+    const double bx = -(dx * std::cos(ang) - dy * std::sin(ang));
+    const double by = -(dx * std::sin(ang) + dy * std::cos(ang));
+    segment(tipX, tipY, tipX + bx * 0.18, tipY + by * 0.18);
+  }
+  AddSheetText(sheet, "N", tipX + dx * 0.12, tipY + dy * 0.12, 0.12);
+}
+
+}  // namespace
+
+// CREATESHEETS <alignment>[, <frames>[, <title block DWG>]]  (REQ-518). One paper layout per chosen frame of the
+// alignment's single view frame group, built on the title block DWG (REQ-518.8). One undo step for all of them.
+void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.empty() || f.size() > 3) {
+    log.push_back("CREATESHEETS - usage: CREATESHEETS <alignment>[, <frames>[, <title block DWG>]]");
+    return;
+  }
+  if (ActiveProjectPointsReadOnly(st)) {  // REQ-518.4: a read-only project refuses before any change
+    log.push_back("CREATESHEETS - the project is read-only; no sheets were created.");
+    return;
+  }
+  const alignment::Alignment* a = Resolve(st, "CREATESHEETS", f[0], log);
+  if (a == nullptr) return;
+
+  // REQ-518.4: exactly one view frame group follows the alignment; with two, the sheets could not tell which to use.
+  std::vector<const alignment::ViewFrameGroup*> groups;
+  for (const alignment::ViewFrameGroup& g : st.viewFrameGroups)
+    if (g.alignmentId == a->id) groups.push_back(&g);
+  if (groups.empty()) {
+    log.push_back("CREATESHEETS - \"" + a->name + "\" has no view frame group. No sheets were created.");
+    return;
+  }
+  if (groups.size() > 1) {
+    log.push_back("CREATESHEETS - \"" + a->name + "\" has " + std::to_string(groups.size()) +
+                  " view frame groups; sheets need one. Delete the extra groups with VIEWFRAMEDELETE first. "
+                  "No sheets were created.");
+    return;
+  }
+  const alignment::ViewFrameGroup& g = *groups[0];
+  if (g.frames.empty()) {
+    log.push_back("CREATESHEETS - \"" + a->name + "\" has no frames to make sheets from. No sheets were created.");
+    return;
+  }
+
+  // REQ-518.8: the title block is 36 in x 24 in landscape (ARCH D).
+  constexpr double kSheetW = 36.0, kSheetH = 24.0;
+
+  // REQ-518.8: the title block DWG. The default is the Generic 24in x 36in block in the AutoCAD template folder.
+  const std::string titleBlockPath = f.size() == 3 ? Trim(f[2]) : DefaultTitleBlockPath();
+  if (titleBlockPath.empty() || !std::filesystem::exists(std::filesystem::u8path(titleBlockPath))) {
+    log.push_back("CREATESHEETS - title block not found: \"" + titleBlockPath + "\". No sheets were created.");
+    return;
+  }
+  AppCommandState titleBlock;
+  if (!ImportDwgFile(titleBlock, titleBlockPath.c_str(), log)) {
+    log.push_back("CREATESHEETS - the title block could not be read. No sheets were created.");
+    return;
+  }
+  Box tbBounds, border;
+  if (!TitleBlockBounds(titleBlock, &tbBounds) || !TitleBlockBorder(titleBlock, &border)) {
+    log.push_back("CREATESHEETS - the title block has no border to fit. No sheets were created.");
+    return;
+  }
+  // REQ-518.8: the sheets are fixed at ARCH D, so a title block whose border is bigger would be clipped on the sheet.
+  if (border.width() > kSheetW + 1e-6 || border.height() > kSheetH + 1e-6) {
+    std::ostringstream size;
+    size << std::fixed << std::setprecision(2) << border.width() << " x " << border.height();
+    log.push_back("CREATESHEETS - the title block's border is " + size.str() +
+                  " in, larger than the ARCH D sheet (36 x 24 in). No sheets were created.");
+    return;
+  }
+  // Centre the title block on the sheet, so its border lies in the same place on every sheet.
+  const double dx = (kSheetW - tbBounds.width()) * 0.5 - tbBounds.minX;
+  const double dy = (kSheetH - tbBounds.height()) * 0.5 - tbBounds.minY;
+  const Box borderOnSheet{border.minX + dx, border.minY + dy, border.maxX + dx, border.maxY + dy};
+  const Box inner{borderOnSheet.minX + kSheetMarginIn, borderOnSheet.minY + kSheetMarginIn,
+                  borderOnSheet.maxX - kSheetMarginIn, borderOnSheet.maxY - kSheetMarginIn};
+
+  // REQ-518.2 / .10: the frames are sized to the usable area inside the margin, at the same scale, so each sheet's
+  // viewport covers its whole frame. The stored group changes only when the sheets are made (one undo step).
+  alignment::ViewFrameGroup sized = g;
+  sized.settings.sheetWidthIn = inner.width();
+  sized.settings.sheetHeightIn = inner.height();
+  sized.settings.sheetName = "ARCH D";  // the sheets are ARCH D; the SIZE field and reports read this
+  if (const std::string refusal = alignment::RegenerateViewFrameGroup(*a, sized); !refusal.empty()) {
+    log.push_back("CREATESHEETS - " + refusal + " No sheets were created.");
+    return;
+  }
+  if (sized.frames.empty()) {
+    log.push_back("CREATESHEETS - no frames fit the title block's usable area. No sheets were created.");
+    return;
+  }
+
+  // Which frames: ALL (or none given) is every frame; otherwise named frames, each of which must exist.
+  std::vector<size_t> chosen;
+  const std::string framesText = f.size() >= 2 ? Trim(f[1]) : std::string();
+  if (framesText.empty() || Lower(framesText) == "all") {
+    for (size_t i = 0; i < sized.frames.size(); ++i) chosen.push_back(i);
+  } else {
+    std::istringstream words(framesText);
+    std::string word;
+    while (words >> word) {
+      size_t found = sized.frames.size();
+      for (size_t i = 0; i < sized.frames.size(); ++i)
+        if (Lower(sized.frames[i].name) == Lower(word)) found = i;
+      if (found == sized.frames.size()) {
+        log.push_back("CREATESHEETS - no frame named \"" + word + "\" in \"" + a->name +
+                      "\" at the title block's size. No sheets were created.");
+        return;
+      }
+      if (std::find(chosen.begin(), chosen.end(), found) == chosen.end()) chosen.push_back(found);
+    }
+  }
+
+  const int archD = [] {
+    for (int i = 0; i < kPaperSizePresetCount; ++i)
+      if (std::string(kPaperSizePresets[i].name).rfind("ARCH D", 0) == 0) return i;
+    return -1;
+  }();
+
+  // REQ-518.9: the right-hand column's horizontal box lines (in sheet coordinates) give the field rows: one per cell.
+  double columnLeft = borderOnSheet.maxX;
+  std::vector<double> lineYs;
+  for (size_t i = 0; i + 5 < titleBlock.userLinesFlat.size(); i += 6) {
+    const double x0 = titleBlock.userLinesFlat[i], y0 = titleBlock.userLinesFlat[i + 1];
+    const double y1 = titleBlock.userLinesFlat[i + 4];
+    if (std::fabs(y0 - y1) > 1e-6) continue;                                      // horizontal lines only
+    if (x0 < border.maxX - 0.05) continue;                                        // the column beside the main border
+    if (y0 < (border.minY + border.maxY) * 0.5) continue;                         // the cells above the middle of the block
+    lineYs.push_back(y0 + dy);
+    columnLeft = lineYs.size() == 1 ? x0 + dx : std::min(columnLeft, x0 + dx);
+  }
+  std::sort(lineYs.begin(), lineYs.end(), std::greater<double>());
+  lineYs.erase(std::unique(lineYs.begin(), lineYs.end(), [](double p, double q) { return std::fabs(p - q) < 1e-6; }),
+               lineYs.end());
+  std::vector<double> rowMids;
+  for (size_t i = 0; i + 1 < lineYs.size(); ++i) rowMids.push_back((lineYs[i] + lineYs[i + 1]) * 0.5);
+  // REQ-518.9: a field's text stops at the first vertical line inside the column, so it stays in its own cell.
+  const double columnRight = tbBounds.maxX + dx;
+  double fieldRight = columnRight;
+  if (lineYs.size() >= 2) {
+    const double fieldsLow = lineYs.back(), fieldsHigh = lineYs.front();
+    for (size_t i = 0; i + 5 < titleBlock.userLinesFlat.size(); i += 6) {
+      const double x0 = titleBlock.userLinesFlat[i] + dx, x1 = titleBlock.userLinesFlat[i + 3] + dx;
+      const double y0 = titleBlock.userLinesFlat[i + 1] + dy, y1 = titleBlock.userLinesFlat[i + 4] + dy;
+      if (std::fabs(x0 - x1) > 1e-6) continue;                                  // vertical lines only
+      if (std::max(y0, y1) < fieldsLow || std::min(y0, y1) > fieldsHigh) continue;  // beside the fields
+      if (x0 > columnLeft + 0.05 && x0 < fieldRight - 0.01) fieldRight = x0;
+    }
+  }
+  // REQ-518.9: the north arrow sits in the empty part of the column, below the fields and centred across the column.
+  const double arrowX = (columnLeft + columnRight) * 0.5;
+  const double arrowY = lineYs.size() >= 2 ? lineYs.back() - 1.3 : borderOnSheet.maxY - 3.0;
+
+  // Build every sheet before the undo snapshot, so a refusal above leaves history untouched.
+  std::vector<std::string> takenNames;
+  for (const PaperLayout& layout : st.paperLayouts) takenNames.push_back(Lower(layout.name));
+  auto nameTaken = [&takenNames](const std::string& name) {
+    return std::find(takenNames.begin(), takenNames.end(), Lower(name)) != takenNames.end();
+  };
+  std::vector<PaperLayout> sheets;
+  for (size_t i : chosen) {
+    const alignment::ViewFrame& fr = sized.frames[i];
+    std::string name = fr.name;
+    for (int suffix = 2; nameTaken(name); ++suffix) name = fr.name + " (" + std::to_string(suffix) + ")";
+    takenNames.push_back(Lower(name));
+
+    PaperLayout sheet;
+    sheet.name = name;
+    sheet.landscape = true;
+    sheet.portraitWidthIn = static_cast<float>(kSheetH);  // landscape: width = portrait height
+    sheet.portraitHeightIn = static_cast<float>(kSheetW);
+    sheet.presetIdx = archD;
+    CopyTitleBlockOntoSheet(sheet, titleBlock, dx, dy);
+    sheet.viewports.assign(1, SheetViewportForFrame(*a, fr, sized.settings, inner));
+    AddSheetFields(sheet, *a, fr, sized.settings, st.alignmentStationFormat, columnLeft, fieldRight, rowMids);
+    AddNorthArrow(sheet, sheet.viewports[0], arrowX, arrowY);
+    sheet.viewInit = false;  // fit the new sheet to the window on first entry
+    sheets.push_back(std::move(sheet));
+  }
+
+  PushUndoSnapshot(st, "Create sheets");  // REQ-518.5: one undo step removes every sheet and the frame resize
+  const size_t framesBefore = g.frames.size();
+  for (alignment::ViewFrameGroup& stored : st.viewFrameGroups)
+    if (stored.id == g.id) stored = sized;
+  // The title block's layers come into this drawing where they are not already here.
+  for (const CadLayerRow& row : titleBlock.drawingLayerTable) {
+    const bool present = std::any_of(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+                                     [&row](const CadLayerRow& have) { return have.name == row.name; });
+    if (!present) st.drawingLayerTable.push_back(row);
+  }
+  std::string names;
+  for (PaperLayout& sheet : sheets) {
+    if (!names.empty()) names += ", ";
+    names += sheet.name;
+    st.paperLayouts.push_back(std::move(sheet));
+  }
+  BumpCadGpuCache(st);
+  char resize[320];
+  std::snprintf(resize, sizeof(resize),
+                " The view frames of \"%s\" were resized to the usable area inside the margin, %.2f x %.2f in at the "
+                "same scale: %zu frame(s), was %zu (REQ-518, D-2026-11-08-f).",
+                a->name.c_str(), inner.width(), inner.height(), sized.frames.size(), framesBefore);
+  log.push_back("CREATESHEETS - " + std::to_string(chosen.size()) + " sheet(s) from \"" + a->name + "\" on \"" +
+                kTitleBlockFile + "\": " + names + "." + resize);
 }
 
 // GETSTATIONOFFSET <alignment>, <x>, <y>[, SURFACE=<surface>]  (WORLD x/y) - REQ-484.4

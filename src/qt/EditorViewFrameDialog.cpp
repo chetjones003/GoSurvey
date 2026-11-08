@@ -72,12 +72,11 @@ QString RunCreateViewFramesDialog(QWidget* parent, const AppCommandState& state)
   std::vector<CadAnnotationScale> scales = state.viewportZoomScales;
   if (scales.empty()) EnsureStandardAnnotationScales(scales, state.drawingInsUnits);
   auto* scaleBox = new QComboBox(&dialog);
-  int scaleDefault = 0;
-  for (size_t i = 0; i < scales.size(); ++i) {
-    scaleBox->addItem(QString::fromStdString(scales[i].name));
-    if (scales[i].name == "1\" = 50'") scaleDefault = static_cast<int>(i);  // a plan sheet's usual scale, when listed
-  }
-  scaleBox->setCurrentIndex(scaleDefault);
+  // REQ-517.8: AUTO is the first choice and the default; it picks the best-fit scale when the frames are made.
+  scaleBox->addItem(QStringLiteral("AUTO"));
+  scaleBox->setItemData(0, QStringLiteral("Best-fit scale: the most detailed scale that fits the alignment on one sheet, or 1\" = 50' for longer alignments."), Qt::ToolTipRole);
+  for (size_t i = 0; i < scales.size(); ++i) scaleBox->addItem(QString::fromStdString(scales[i].name));
+  scaleBox->setCurrentIndex(0);  // AUTO
   form->addRow("Scale:", scaleBox);
 
   auto* overlapEdit = new QLineEdit(QStringLiteral("0"), &dialog);

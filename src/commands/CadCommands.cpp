@@ -8755,8 +8755,9 @@ const CmdEntry kRegistry[] = {
     {"alignmentadd", "", "Add tangent, curve or spiral: ALIGNMENTADD <name>, TANGENT|TANGENTTO|CURVE|CURVELEN|SPIRAL, ..."},
     {"alignmentlist", "", "Report alignments, stations and entities: ALIGNMENTLIST [<name>]"},
     {"alignmentdelete", "", "Delete an alignment: ALIGNMENTDELETE <name>"},
-    {"createviewframes", "", "Create view frames along an alignment: CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale>, <overlap>[, CENTRED|LEFT|RIGHT]"},
+    {"createviewframes", "", "Create view frames along an alignment: CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale or AUTO>, <overlap>[, CENTRED|LEFT|RIGHT]"},
     {"viewframedelete", "", "Delete an alignment's view frame groups: VIEWFRAMEDELETE <alignment>"},
+    {"createsheets", "", "Create paper sheets from view frames: CREATESHEETS <alignment>[, <frames>] (frames: ALL or names such as VF-1 VF-3)"},
     {"getstationoffset", "", "Station and offset of a point: GETSTATIONOFFSET <alignment>[, <x>, <y> | , POINT, <number>][, SURFACE=<surface>] (alignment alone: pick until ESC)"},
     {"getpointfromstationoffset", "", "Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset>"},
     {"createalignmentfromobjects", "createalignmententities", "Alignment from lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS (pick them) | <name>[, START=][, FILLET=][, REVERSE][, ERASE]"},
@@ -46688,6 +46689,10 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
       log.push_back("ZOOM EXTENTS — no active viewport to frame into.");
       return;
     }
+    if (vp->locked) {  // REQ-518.11: a locked viewport keeps its model centre and scale
+      log.push_back("ZOOM EXTENTS — the viewport is locked; its view is unchanged.");
+      return;
+    }
     double mnX = 0.;
     double mxX = 0.;
     double mnY = 0.;
@@ -49805,7 +49810,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "surfacevisibility" || plotTok == "surfvis" || plotTok == "surfcrossbl" || plotTok == "surflabel" || plotTok == "surfacelegend" || plotTok == "createprofilefromsurface" || plotTok == "profileview" ||
         plotTok == "quickprofile" || plotTok == "qprof" ||
         plotTok == "alignment" || plotTok == "createalignment" || plotTok == "alignmentadd" ||
-        plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "createviewframes" || plotTok == "viewframedelete" || plotTok == "getstationoffset" ||
+        plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "createviewframes" || plotTok == "viewframedelete" || plotTok == "createsheets" || plotTok == "getstationoffset" ||
         plotTok == "getpointfromstationoffset" || plotTok == "createalignmentfromobjects" ||
         plotTok == "createalignmententities" || plotTok == "createalignmentlayout" ||
         plotTok == "alignmentlayout" || plotTok == "alignmentcurvesettings" || plotTok == "stationformat" || plotTok == "alignmentmeta" ||
@@ -49940,6 +49945,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunCreateViewFrames(st, rest, log);
       else if (plotTok == "viewframedelete")
         RunViewFrameDelete(st, rest, log);
+      else if (plotTok == "createsheets")
+        RunCreateSheets(st, rest, log);
       else if (plotTok == "getstationoffset")
         RunGetStationOffset(st, rest, log);
       else if (plotTok == "getpointfromstationoffset")
