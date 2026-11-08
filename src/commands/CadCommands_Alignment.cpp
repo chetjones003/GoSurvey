@@ -427,24 +427,30 @@ namespace {
 constexpr double kSheetAllowanceWidthIn = 6.25;
 constexpr double kSheetAllowanceHeightIn = 4.5;
 
-// REQ-517.8: AUTO picks the most detailed named scale on which the whole alignment fits on one sheet's usable area.
-// When no scale in the list fits the alignment on one sheet, it takes the coarsest scale, which needs the fewest.
-// Returns false (with a reason) when no scale can be used at all.
+// REQ-517.8 (D-2026-11-08-h, amended): AUTO picks the most detailed named scale on which the whole alignment fits one
+// sheet, when that scale is 1" = 50' (1:50 in a metric drawing) or finer. A longer alignment gets the plan scale itself
+// and as many sheets as it needs, so no sheet is drawn at a coarse scale just to hold a long run.
+// Returns false (with a reason) when the scale list has no plan scale to fall back to.
 bool ChooseBestFitScale(const alignment::Alignment& a, alignment::ViewFrameSettings& s,
                         const std::vector<CadAnnotationScale>& scales, std::string& why) {
   std::vector<const CadAnnotationScale*> byDetail;
   for (const CadAnnotationScale& candidate : scales)
     if (candidate.paperUnits > 0.f && candidate.drawingUnits > 0.f) byDetail.push_back(&candidate);
-  if (byDetail.empty()) {
-    why = "this drawing has no named scale to choose from";
+  auto groundPerInch = [](const CadAnnotationScale* c) { return static_cast<double>(c->drawingUnits) / c->paperUnits; };
+  std::sort(byDetail.begin(), byDetail.end(), [&groundPerInch](const CadAnnotationScale* p, const CadAnnotationScale* q) {
+    return groundPerInch(p) < groundPerInch(q);  // most detailed (smallest ground per inch) first
+  });
+  const CadAnnotationScale* plan = nullptr;
+  for (const CadAnnotationScale* c : byDetail)
+    if (NormalizeName(c->name) == NormalizeName("1\" = 50'") || NormalizeName(c->name) == "1:50") plan = c;
+  if (plan == nullptr) {
+    why = "this drawing's scale list has no 1\" = 50' (or 1:50) plan scale for AUTO to use";
     return false;
   }
-  std::sort(byDetail.begin(), byDetail.end(), [](const CadAnnotationScale* p, const CadAnnotationScale* q) {
-    return p->drawingUnits / p->paperUnits < q->drawingUnits / q->paperUnits;  // most detailed (smallest per inch) first
-  });
-  const CadAnnotationScale* chosen = byDetail.back();  // coarsest, if nothing fits one sheet
+  const CadAnnotationScale* chosen = plan;
   for (const CadAnnotationScale* candidate : byDetail) {
-    s.groundPerInch = static_cast<double>(candidate->drawingUnits) / candidate->paperUnits;
+    if (groundPerInch(candidate) > groundPerInch(plan)) break;  // coarser than the plan scale: not wanted
+    s.groundPerInch = groundPerInch(candidate);
     s.scaleName = candidate->name;
     if (!alignment::ViewFrameSettingsRefusal(a, s).empty()) continue;
     if (alignment::ComputeViewFrames(a, s).size() == 1) {
@@ -452,7 +458,7 @@ bool ChooseBestFitScale(const alignment::Alignment& a, alignment::ViewFrameSetti
       break;
     }
   }
-  s.groundPerInch = static_cast<double>(chosen->drawingUnits) / chosen->paperUnits;
+  s.groundPerInch = groundPerInch(chosen);
   s.scaleName = chosen->name;
   return true;
 }

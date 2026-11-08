@@ -3337,7 +3337,10 @@ private Q_SLOTS:
     });
     window.Submit("CREATEVIEWFRAMES");  // no arguments: the dialog runs and submits its own command
     QCOMPARE(window.State().viewFrameGroups.size(), size_t(1));
-    QCOMPARE(window.State().viewFrameGroups[0].frames.size(), size_t(3));
+    // The dialog's default is AUTO: a 5000 ft run is longer than one sheet at 1" = 50', so it gets that scale and four
+    // frames on the usable 29.75 in (REQ-517.8).
+    QCOMPARE(window.State().viewFrameGroups[0].settings.scaleName, std::string("1\" = 50'"));
+    QCOMPARE(window.State().viewFrameGroups[0].frames.size(), size_t(4));
 
     window.Submit("ZOOMEXTENTS");
     auto* viewportWidget = window.findChild<QWidget*>("modelViewport");

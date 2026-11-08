@@ -178,8 +178,9 @@ TEST_CASE("CREATEVIEWFRAMES refuses an unnamed scale, an unknown sheet and a bad
 
 TEST_CASE("CREATEVIEWFRAMES AUTO picks the most detailed named scale that fits the alignment on one sheet",
           "[req517][viewframes]") {
-  // REQ-517.8: one ARCH D sheet's usable width is 36 - 6.25 = 29.75 in. A 1000 ft run fits at 1" = 40' (29.75 x 40 =
-  // 1190 ft; 1" = 30' gives only 892 ft), and the whole 5000 ft run at 1" = 200' (5950 ft; 1" = 150' gives 4462 ft).
+  // REQ-517.8: one ARCH D sheet's usable width is 36 - 6.25 = 29.75 in. A 1000 ft run fits one sheet at 1" = 40' (29.75 x
+  // 40 = 1190 ft; 1" = 30' gives only 892 ft). The 5000 ft run fits no one-sheet scale at 1" = 50' or finer, so it takes
+  // 1" = 50' over several sheets.
   AppCommandState st = Drawing();
   std::vector<std::string> log;
   NorthRoad(st, log);
@@ -192,10 +193,13 @@ TEST_CASE("CREATEVIEWFRAMES AUTO picks the most detailed named scale that fits t
   CHECK(st.viewFrameGroups[0].settings.groundPerInch == Approx(40.0));
   CHECK(st.viewFrameGroups[0].frames.size() == 1);
 
+  // A run longer than one sheet at 1" = 50' gets the plan scale and as many sheets as it needs, not a coarse scale.
   Submit(st, "CREATEVIEWFRAMES Road, 0+00, 50+00, ARCH D, auto, 100", log);
   REQUIRE(st.viewFrameGroups.size() == 2);
-  CHECK(st.viewFrameGroups[1].settings.scaleName == "1\" = 200'");
-  CHECK(st.viewFrameGroups[1].frames.size() == 1);
+  CHECK(st.viewFrameGroups[1].settings.scaleName == "1\" = 50'");
+  CHECK(st.viewFrameGroups[1].settings.groundPerInch == Approx(50.0));
+  // 29.75 in x 50 ft = 1487.5 ft frames, stepping 1387.5 ft (100 ft overlap): starts at 0, 1387.5, 2775, 4162.5.
+  CHECK(st.viewFrameGroups[1].frames.size() == 4);
 }
 
 TEST_CASE("view frames follow the alignment and are removed with it", "[req517][viewframes]") {
