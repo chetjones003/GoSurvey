@@ -2525,8 +2525,8 @@ json BuildRoot(const AppCommandState& st) {
     doc["sampleLines"] = std::move(arr);
   }
 
-  // Design vertical profiles (REQ-520): the PVIs and the alignment id each belongs to. A deleted alignment's id is kept,
-  // so the profile reports "alignment missing" rather than vanishing (REQ-520.7). Omitted when there are none.
+  // Design vertical profiles (REQ-521): the PVIs and the alignment id each belongs to. A deleted alignment's id is kept,
+  // so the profile reports "alignment missing" rather than vanishing (REQ-521.7). Omitted when there are none.
   if (!st.profiles.empty()) {
     json arr = json::array();
     for (const alignment::VerticalProfile& p : st.profiles) {
@@ -4891,10 +4891,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   }
   alignment::SyncSampleLines(st.alignments, st.sampleLines);
 
-  // Design vertical profiles (REQ-520). Loaded as saved, with type guards: a field of the wrong type is ignored, never
+  // Design vertical profiles (REQ-521). Loaded as saved, with type guards: a field of the wrong type is ignored, never
   // thrown on. A profile is NOT loaded, and the load log names it, when its name is missing or repeats an earlier name,
-  // or when its points are missing or malformed (REQ-520.8): a partial profile would show elevations the designer never
-  // drew. A profile whose alignment is gone is kept (REQ-520.7).
+  // or when its points are missing or malformed (REQ-521.8): a partial profile would show elevations the designer never
+  // drew. A profile whose alignment is gone is kept (REQ-521.7).
   st.profiles.clear();
   if (doc.contains("designProfiles") && doc["designProfiles"].is_array()) {
     size_t entry = 0;  // 1-based position, so a skipped entry with no usable name can still be named
@@ -4917,7 +4917,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         log.push_back("Design profile entry " + std::to_string(entry) + " was not loaded: its name is missing or blank.");
         continue;
       }
-      bool repeats = false;  // REQ-520.1: names are unique within the drawing, ignoring capitals
+      bool repeats = false;  // REQ-521.1: names are unique within the drawing, ignoring capitals
       for (const alignment::VerticalProfile& q : st.profiles) {
         std::string a = q.name, b = p.name;
         for (char& c : a) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');

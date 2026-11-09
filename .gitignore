@@ -26,6 +26,9 @@ gosurvey_imgui.ini
 !/installer/GoSurvey.iss
 !/installer/License.txt
 !/installer/InfoAfter.txt
+# The licence texts that License.txt names are installed beside GoSurvey (REQ-520, issue #1025).
+!/installer/licenses/
+!/installer/licenses/**
 
 # --- Compiled artifacts (also produced beside tree sometimes) ---
 *.exe

@@ -169,7 +169,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.alignments             = cmd.alignments;       // REQ-480: per-drawing
   doc.viewFrameGroups        = cmd.viewFrameGroups;  // REQ-517: per-drawing
   doc.sampleLines            = cmd.sampleLines;      // REQ-519: per-drawing
-  doc.profiles               = cmd.profiles;         // REQ-520: per-drawing
+  doc.profiles               = cmd.profiles;         // REQ-521: per-drawing
   doc.surfaceProfiles        = cmd.surfaceProfiles;  // REQ-513
   doc.cadPipingSystems       = cmd.cadPipingSystems;  // indices into cadPipeRuns — travels with it
   doc.blockDefs              = cmd.blockDefs;
@@ -301,7 +301,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.alignments                 = doc.alignments;       // REQ-480
   cmd.viewFrameGroups            = doc.viewFrameGroups;  // REQ-517
   cmd.sampleLines                = doc.sampleLines;      // REQ-519
-  cmd.profiles                   = doc.profiles;         // REQ-520
+  cmd.profiles                   = doc.profiles;         // REQ-521
   cmd.surfaceProfiles            = doc.surfaceProfiles;  // REQ-513
   cmd.cadPipingSystems           = doc.cadPipingSystems;
   // The derived swept solids belong to the drawing we are leaving. Their rebuild is gated on a
@@ -2169,7 +2169,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.alignments           = st.alignments;       // REQ-480
   snap.viewFrameGroups      = st.viewFrameGroups;  // REQ-517: undo restores frames with their alignment
   snap.sampleLines          = st.sampleLines;      // REQ-519: undo restores sample lines and sections
-  snap.profiles             = st.profiles;         // REQ-520: undo restores design profiles
+  snap.profiles             = st.profiles;         // REQ-521: undo restores design profiles
   snap.surfaceProfiles      = st.surfaceProfiles;  // REQ-513
   snap.cadPipingSystems     = st.cadPipingSystems; // issue #486 increment B3 / REQ-345
   snap.blockDefs            = st.blockDefs;
@@ -2300,7 +2300,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.alignments           = snap.alignments;       // REQ-480
   st.viewFrameGroups      = snap.viewFrameGroups;  // REQ-517
   st.sampleLines          = snap.sampleLines;      // REQ-519
-  st.profiles             = snap.profiles;         // REQ-520
+  st.profiles             = snap.profiles;         // REQ-521
   st.surfaceProfiles      = snap.surfaceProfiles;  // REQ-513
   st.cadPipingSystems     = snap.cadPipingSystems; // issue #486 increment B3 / REQ-345
   st.pipeRunWorldSolidsSig = 0;  // force RebuildPipeRunWorldSolids to re-derive from the swap
@@ -19416,6 +19416,138 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
                   "duplicate one in place.");
 }
 
+// Cut (REQ-084 (c) shortcut menu's Clipboard submenu, issue #805): copy the selection, then delete it. The check runs
+// first and refuses with nothing changed unless the clipboard can carry every selected object. The
+// delete that follows erases whatever is selected, so an object the copy does not carry would be lost.
+// The allow-lists below name exactly the types CopySelectionToClipboard and CopyPaperSelectionToClipboard
+// handle. Any type not on them, now or added later, is refused; the message names it when the name is known
+// and says "an object" otherwise.
+namespace {
+bool ClipboardCarriesModelType(SelectedEntity::Type type) {
+  switch (type) {
+  case SelectedEntity::Type::LineSeg: case SelectedEntity::Type::Circle: case SelectedEntity::Type::Arc:
+  case SelectedEntity::Type::Ellipse: case SelectedEntity::Type::Spline: case SelectedEntity::Type::Point:
+  case SelectedEntity::Type::Polyline: case SelectedEntity::Type::Annotation: case SelectedEntity::Type::Table:
+  case SelectedEntity::Type::BlockRef: case SelectedEntity::Type::FilledRegion:
+    return true;
+  default:
+    return false;
+  }
+}
+
+std::string ClipboardCannotCarryModelName(SelectedEntity::Type type) {
+  switch (type) {
+  case SelectedEntity::Type::Surface: return "a surface";
+  case SelectedEntity::Type::FeatureLine: return "a feature line";
+  case SelectedEntity::Type::Mesh: return "a mesh";
+  case SelectedEntity::Type::PdfUnderlay: return "a PDF underlay";
+  case SelectedEntity::Type::Solid: return "a solid";
+  case SelectedEntity::Type::PipeRun: return "a pipe run";
+  case SelectedEntity::Type::PointCloud: return "a point cloud";
+  case SelectedEntity::Type::PositionMarker: return "a position marker";
+  case SelectedEntity::Type::Multileader: return "a multileader";
+  case SelectedEntity::Type::Alignment: return "an alignment";
+  default: return "an object";
+  }
+}
+
+bool ClipboardCarriesPaperType(PaperRef::Type type) {
+  switch (type) {
+  case PaperRef::Type::Line: case PaperRef::Type::Circle: case PaperRef::Type::Arc:
+  case PaperRef::Type::Ellipse: case PaperRef::Type::Polyline: case PaperRef::Type::Text:
+  case PaperRef::Type::Spline: case PaperRef::Type::Point:
+    return true;
+  default:
+    return false;
+  }
+}
+
+std::string ClipboardCannotCarryPaperName(PaperRef::Type type) {
+  switch (type) {
+  case PaperRef::Type::Block: return "a block";
+  case PaperRef::Type::Leader: return "a leader";
+  case PaperRef::Type::Table: return "a table";
+  default: return "an object";
+  }
+}
+}  // namespace
+
+void CutSelectionToClipboard(AppCommandState& st, std::vector<std::string>& log) {
+  const bool paper = ActivePaperGeometryTarget(st) != nullptr;
+  // A stale layout index routes the copy to the model selection while DELETE takes the paper path, so refuse it.
+  if (!paper && st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
+    log.push_back("CUT — not done: the active layout is not available. Switch to model space first.");
+    return;
+  }
+  if (paper) {
+    if (st.selectedPaperEntities.empty() && st.selectedViewports.empty()) {
+      log.push_back("CUT — nothing selected. Select objects first.");
+      return;
+    }
+    if (!st.selectedViewports.empty()) {
+      log.push_back("CUT — not done: a paper viewport cannot be copied to the clipboard, so Cut would erase it "
+                    "for good. Deselect it, then Cut again.");
+      return;
+    }
+    for (const PaperRef& ref : st.selectedPaperEntities) {
+      if (!ClipboardCarriesPaperType(ref.type)) {
+        log.push_back("CUT — not done: " + ClipboardCannotCarryPaperName(ref.type) +
+                      " cannot be copied to the clipboard, so Cut would erase it for good. Deselect it, then Cut again.");
+        return;
+      }
+    }
+  } else {
+    if (st.sectionPlaneSelected) {
+      log.push_back("CUT — not done: a section plane cannot be copied to the clipboard, so Cut would erase it "
+                    "for good. Deselect it, then Cut again.");
+      return;
+    }
+    if (st.selection.empty() && st.selectedSurveyPointIndices.empty()) {
+      log.push_back("CUT — nothing selected. Select objects first.");
+      return;
+    }
+    for (const SelectedEntity& e : st.selection) {
+      if (!ClipboardCarriesModelType(e.type)) {
+        log.push_back("CUT — not done: " + ClipboardCannotCarryModelName(e.type) +
+                      " cannot be copied to the clipboard, so Cut would erase it for good. Deselect it, then Cut again.");
+        return;
+      }
+    }
+  }
+
+  // A survey point and its label are deleted in two steps, and each step pushes an undo frame. The point's step
+  // runs first, so the frame it pushes holds the state from before the whole Cut. The entity step pushes its frame
+  // last, and dropping that frame leaves one undo step for the whole Cut. The history cap is switched off while
+  // both steps run, so neither frame can evict the pre-Cut frame (this matters at the minimum limit of 1). The cap
+  // is restored and enforced afterwards.
+  const bool deletesTwice = !st.selectedSurveyPointIndices.empty() && !st.selection.empty();
+  const int savedHistoryCap = st.undoHistoryMaxSize;
+  if (deletesTwice) st.undoHistoryMaxSize = 0;
+  CopySelectionToClipboard(st, log);
+  StartDeleteCommand(st, log);
+  st.undoHistoryMaxSize = savedHistoryCap;
+  const int idx = st.activeDrawingIdx;
+  if (deletesTwice && idx >= 0 && static_cast<size_t>(idx) < st.documents.size()) {
+    auto& undo = st.documents[static_cast<size_t>(idx)].undoStack;
+    if (!undo.empty() && undo.back().description == "Delete") {
+      undo.pop_back();
+      if (!undo.empty()) undo.back().description = "Cut";
+    }
+    if (savedHistoryCap > 0)
+      while (static_cast<int>(undo.size()) > savedHistoryCap) undo.erase(undo.begin());
+  }
+  // Success is the erase clearing the selection. ExecuteDeleteSelection stops early, and keeps the selection,
+  // when a grading group cannot be rebuilt; the paper erase clears its selection only when it completes.
+  const bool erased = paper ? st.selectedPaperEntities.empty() : st.selection.empty();
+  if (!erased) {
+    log.push_back(deletesTwice
+                      ? "CUT — only the survey points were erased; the lines could not be. Undo restores the survey points."
+                      : "CUT — nothing was erased; the selection could not be removed. The copy is on the clipboard.");
+    return;
+  }
+  log.push_back("CUT — copied to the clipboard and erased. Undo restores the objects.");
+}
+
 /// REQ-383 clauses 1 and 3: true when this paste must not start now — it is blocked, or it waits for
 /// the user's answer to the warning the UI is about to show. "Paste anyway" and "Convert and paste" set
 /// `pasteWarningAnswered` and start the paste again, which lets it through once.
@@ -30494,7 +30626,7 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadPointAttrs.clear();
   st.alignments.clear();  // REQ-480
   st.sampleLines.clear();  // REQ-519: sample lines belong to the alignments just removed
-  st.profiles.clear();  // REQ-520: profiles belong to the alignments just removed
+  st.profiles.clear();  // REQ-521: profiles belong to the alignments just removed
   st.pdMode = 0;
   st.pdSize = 0.0;
   // Pipe runs are CAD geometry too (issue #486 / REQ-345). Left behind, an import into a drawing

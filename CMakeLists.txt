@@ -659,7 +659,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/alignment/AlignmentFeatureLine.cpp
   src/alignment/AlignmentViewFrames.cpp
   src/alignment/AlignmentSampleLines.cpp
-  src/alignment/AlignmentProfile.cpp  # REQ-520 (issue #1163)
+  src/alignment/AlignmentProfile.cpp  # REQ-521 (issue #1163)
   src/alignment/AlignmentDesign.cpp
   src/alignment/AlignmentTables.cpp
   src/alignment/AlignmentDisplayCache.cpp
@@ -1233,7 +1233,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AlignmentViewFrameTests.cpp
     tests/ViewFrameSheetTests.cpp
     tests/AlignmentSampleLineTests.cpp
-    tests/AlignmentProfileTests.cpp  # REQ-520 (issue #1163)
+    tests/AlignmentProfileTests.cpp  # REQ-521 (issue #1163)
     tests/SectionSheetTests.cpp
     tests/AlignmentStyleTests.cpp
     tests/AlignmentLabelTests.cpp

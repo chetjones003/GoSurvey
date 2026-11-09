@@ -1,73 +1,231 @@
-The GoSurvey application, when linked with GNU LibreDWG (REQ-170 / ADR-041),
-is licensed under the GNU General Public License v3.0 or later. Source for
-LibreDWG is at https://github.com/LibreDWG/libredwg ; the GPL text is at
-https://www.gnu.org/licenses/gpl-3.0.html
+GoSurvey is licensed under the GNU General Public License, version 3 or any
+later version (GPL-3.0-or-later). The full GPL text is in the file
+licenses\GPL-3.0-or-later.txt, and at https://www.gnu.org/licenses/gpl-3.0.html
+
+GoSurvey links the GNU LibreDWG library (REQ-170 / ADR-041). LibreDWG is
+GPL-3.0-or-later, so the whole GoSurvey application is GPL-3.0-or-later.
+Source for GoSurvey and LibreDWG: https://github.com/chetjones003/GoSurvey and
+https://github.com/LibreDWG/libredwg
+
+The licence texts named below are in the licenses folder, named by licence
+identifier. They are the standard versions; the copyright lines for each
+component are given in this file.
 
 -------------------------------------------------------------------------------
-THIRD-PARTY — GNU LibreDWG
+QT (LGPL-3.0)
 -------------------------------------------------------------------------------
-LibreDWG is Copyright (C) Free Software Foundation, Inc. and contributors.
-License: GPL-3.0-or-later.
+GoSurvey uses the Qt framework, version 6.8.3, copyright The Qt Company Ltd.
+and other Qt contributors. Qt is used under the GNU Lesser General Public
+License, version 3 (LGPL-3.0). The full LGPL-3.0 text is in the file
+licenses\LGPL-3.0.txt, and at https://www.gnu.org/licenses/lgpl-3.0.html
 
-The remainder of this file records other third-party components and the
-historical MIT grant for GoSurvey sources that do not include LibreDWG.
+Qt is also offered under the GPL and under a commercial licence. GoSurvey uses
+Qt under the LGPL-3.0.
 
-MIT License
+Qt modules used: Qt Core, Qt Gui, Qt Network, Qt OpenGL, Qt OpenGL Widgets,
+Qt SVG and Qt Widgets.
 
-Copyright (c) 2026 Chet Jones
+Qt is linked dynamically. Its DLLs and the qt-plugins folder are separate files
+installed beside GoSurvey.exe. You may replace them with a modified version of
+Qt, or with another version of Qt compatible with 6.8, as LGPL-3.0 allows.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Source code for Qt 6.8.3:
+  https://download.qt.io/archive/qt/6.8/6.8.3/submodules/
+  https://code.qt.io/cgit/qt/qtbase.git/tag/?h=v6.8.3
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Qt files in this installation:
+  Qt DLLs: Qt6Core.dll, Qt6Gui.dll, Qt6Network.dll, Qt6OpenGL.dll,
+           Qt6OpenGLWidgets.dll, Qt6Svg.dll, Qt6Widgets.dll
+  Plugins (qt-plugins\), all Qt Company, LGPL-3.0:
+           generic\qtuiotouchplugin.dll
+           iconengines\qsvgicon.dll
+           imageformats\qgif.dll, qico.dll, qjpeg.dll, qsvg.dll
+           networkinformation\qnetworklistmanager.dll
+           platforms\qwindows.dll
+           styles\qmodernwindowsstyle.dll
+           tls\qcertonlybackend.dll, qschannelbackend.dll
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+The complete list of third-party components that Qt itself ships is Qt's
+software bill of materials (SBOM), in the Qt source archive and the Qt source
+repositories linked above.
 
 -------------------------------------------------------------------------------
-THIRD-PARTY COMPONENTS
+NOTICES FOR THIRD-PARTY CODE INSIDE THE QT DLLS AND PLUGINS
 -------------------------------------------------------------------------------
+Qt bundles the following components. Each is named with its licence and
+copyright, as recorded in Qt's SBOM for version 6.8.3 or in the component's own files.
 
-GoSurvey incorporates the following open-source libraries.  Their licenses are
-reproduced below or can be found in the "licenses" folder of the installation
-directory.
+Qt6Core.dll
+  PCRE2 10.45 (regular expressions)
+    Copyright (c) University of Cambridge and the PCRE2 contributors.
+    BSD-3-Clause with PCRE2 exception. Text:
+      LicenseRef-BSD-3-Clause-with-PCRE2-Binary-Like-Packages-Exception.txt
+    Includes SLJIT, Copyright Zoltan Herczeg, BSD-2-Clause. Text: BSD-2-Clause.txt
+  double-conversion 3.3.0 (number formatting)
+    Copyright 2006-2011, the V8 project authors. BSD-3-Clause. Text: BSD-3-Clause.txt
+  tinycbor 0.6.1 (CBOR encoding)
+    Copyright (c) 2017 Intel Corporation. MIT. Text: MIT.txt
+  Unicode Character Database and CLDR (character and locale data)
+    Copyright Unicode, Inc. Unicode-3.0. Text: Unicode-3.0.txt
+  zlib (compression)
+    Copyright (C) Jean-loup Gailly and Mark Adler. Zlib. Text: Zlib.txt
+  SipHash
+    Copyright (C) 2012-2014 Jean-Philippe Aumasson and Daniel J. Bernstein. CC0-1.0. Text: CC0-1.0.txt
+  BLAKE2 (hashing)
+    Copyright Samuel Neves and contributors. Offered by Qt under CC0-1.0 or
+    Apache-2.0. Text: CC0-1.0.txt
+  Keccak / SHA-3 (hashing)
+    Keccak team, CC0-1.0. Text: CC0-1.0.txt
+    Byte-order code: Copyright (c) 1998-2013, Brian Gladman. BSD-2-Clause.
+    Text: BSD-2-Clause.txt
+  RFC 6234 SHA implementation
+    Copyright (c) 2011 IETF Trust and the persons identified as authors.
+    BSD-3-Clause. Text: BSD-3-Clause.txt
+  Easing curves
+    Copyright (c) 2001 Robert Penner. BSD-3-Clause. Text: BSD-3-Clause.txt
+  Apache Tika MIME type database
+    Copyright The Apache Software Foundation. Apache-2.0. Text: Apache-2.0.txt
+  MD4 and MD5 (hashing)
+    Public domain, per the source files.
+  SHA-1 (hashing)
+    Copyright Dominik Reichl; 2016 The Qt Company Ltd. Public domain
+    (LicenseRef-SHA1-Public-Domain).
+
+Qt6Network.dll
+  libpsl (public suffix library)
+    Copyright 2014-2016 The Chromium Authors. BSD-3-Clause.
+    Text: BSD-3-Clause.txt
+  Public Suffix List data
+    Copyright the Public Suffix List contributors.
+    MPL-2.0. Text: MPL-2.0.txt
+    Source: https://publicsuffix.org/list/public_suffix_list.dat
+  zlib: see Qt6Core.dll above.
+
+Qt6Gui.dll and the Qt image plugins
+  FreeType 2.13.3 (font rendering)
+    Copyright The FreeType Project and its contributors. Licensed under the
+    FreeType License (FTL). Text: FTL.txt
+    Rasteriser (grayraster): Copyright 2000-2016 by David Turner, Robert
+    Wilhelm, and Werner Lemberg. FTL, or GPL-2.0 at the user's option.
+    Text: FTL.txt
+    Also: Copyright (C) 1995-2023 Jean-loup Gailly and Mark Adler, zlib.
+    Text: Zlib.txt
+    Font drivers (MIT unless stated):
+      BDF: Copyright (c) 2000 Computing Research Labs, New Mexico State
+      University; Copyright (C) 2001-2002 Francesco Zappa Nardelli.
+      PCF: Copyright (c) 2001, 2012 David Turner, Robert Wilhelm, and Werner
+      Lemberg (MIT AND MIT-open-group); Copyright (C) 2000 Francesco Zappa
+      Nardelli.
+      MIT-open-group (PCF): Copyright 1990, 1994, 1998 The Open Group.
+      Text: MIT.txt and MIT-open-group.txt
+  HarfBuzz 10.4.0 (text shaping)
+    Copyright 2010-2022 Google, Inc.; 2015-2020 Ebrahim Byagowi; 2019-2020 Facebook, Inc.;
+    2012-2015 Mozilla Foundation; 2011 Codethink Limited; 2008-2010 Nokia Corporation and/or
+    its subsidiary(-ies); 2009 Keith Stribley; 2011 Martin Hosken and SIL International; 2007
+    Chris Wilson; 2005-2023 Behdad Esfahbod; 2004-2023 Red Hat, Inc.; 1998-2005 David Turner
+    and Werner Lemberg; 2016 Igalia S.L.; 2022 Matthias Clasen; 2018-2021 Khaled Hosny; 2018-2020
+    Adobe, Inc; 2013-2015 Alexei Podtelezhnikov.
+    The "Old MIT" grant is not the same text as MIT. The full notice is in
+    licenses\HarfBuzz-COPYING.txt.
+  libpng 1.6.47 (PNG images)
+    Copyright (c) 1995-2025 The PNG Reference Library Authors; Copyright (c)
+    2018-2025 Cosmin Truta; Copyright (c) 1998-2018 Glenn Randers-Pehrson;
+    Copyright (c) 1996-1997 Andreas Dilger; Copyright (c) 1995-1996 Guy Eric
+    Schalnat, Group 42, Inc. Libpng licence and libpng-2.0. Text: Libpng.txt
+    and libpng-2.0.txt
+  libjpeg-turbo 3.1.0 (JPEG images, qjpeg.dll)
+    Copyright (C) 2009-2024 D. R. Commander and the other libjpeg-turbo
+    contributors. IJG licence (Copyright (C) 1991-2020, Thomas G. Lane, Guido
+    Vollbeding) and BSD-3-Clause. Text: IJG.txt and BSD-3-Clause.txt
+  md4c (Markdown parser)
+    Copyright (c) 2016-2024 Martin Mitáš. MIT. Text: MIT.txt
+  Khronos OpenGL and EGL headers
+    Copyright (c) 2014-2020 The Khronos Group Inc. MIT-Khronos-old.
+    Text: MIT-Khronos-old.txt
+  AMD D3D12 Memory Allocator
+    Copyright (c) 2019-2022 Advanced Micro Devices, Inc. MIT. Text: MIT.txt
+  AMD Vulkan Memory Allocator
+    Copyright (c) 2017-2022 Advanced Micro Devices, Inc. MIT. Text: MIT.txt
+  Microsoft Direct3D 12 mipmap sample code (rhi-miniengine)
+    Copyright (c) 2015 Microsoft. MIT. Text: MIT.txt
+  Gradient presets (webgradients)
+    Copyright (c) 2017 itmeo. MIT. Text: MIT.txt
+  Image scaling (smooth-scaling-algorithm)
+    Copyright (C) 2004, 2005 Daniel M. Duley; (C) Carsten Haitzler and various
+    contributors; (C) Willem Monsuwe. BSD-2-Clause AND Imlib2.
+    Text: BSD-2-Clause.txt and Imlib2.txt
+  Adobe Glyph List for New Fonts (aglfn)
+    Copyright 2002, 2003, 2005, 2006, 2008, 2010, 2015 Adobe Systems.
+    BSD-3-Clause. Text: BSD-3-Clause.txt
+  X server helper (xserverhelper)
+    Copyright (c) 1987, 1988 X Consortium; Copyright 1987, 1988 by Digital
+    Equipment Corporation. X11 AND HPND. Text: X11.txt and HPND.txt
+  ICC colour profile code
+    Copyright International Color Consortium, 2015. LicenseRef-ICC-License.
+    Text: LicenseRef-ICC-License.txt
+
+Qt6Svg.dll
+  xsvg (SVG parser)
+    Copyright 2002 USC/Information Sciences Institute.
+    HPND-sell-variant licence (the wording allows sale). Full text:
+    licenses\XSVG-LICENSE.txt
+
+qt-plugins\platforms\qwindows.dll
+  Wintab API headers
+    Copyright 1991-1998 LCS/Telegraphics. Text: LicenseRef-Lcs-Telegraphics.txt
+
+-------------------------------------------------------------------------------
+OTHER SHIPPED LIBRARIES THAT ARE NOT FROM THE QT MODULE LIST
+-------------------------------------------------------------------------------
+Mesa 3D software OpenGL (opengl32sw.dll, Mesa 11.2.2)
+  Copyright (C) 1999-2007 Brian Paul and other Mesa contributors. The core
+  library is MIT-licensed; other components carry their own terms. The full
+  notices are in licenses\Mesa-LICENSE.txt, which is Mesa's licence page for
+  version 11.2.2 (tag mesa-11.2.2).
+  Source: https://gitlab.freedesktop.org/mesa/mesa
+
+DirectX Shader Compiler (dxcompiler.dll, version 1.8.2502.11)
+  Copyright (c) Microsoft Corporation. Licensed under the University of
+  Illinois/NCSA Open Source License. Text: licenses\NCSA-DirectXShaderCompiler.txt
+  Source: https://github.com/microsoft/DirectXShaderCompiler
+
+Microsoft runtime DLLs (d3dcompiler_47.dll, dxil.dll)
+  Copyright (c) Microsoft Corporation. Redistributed under Microsoft's
+  redistribution terms for Direct3D components.
+
+Microsoft Visual C++ runtime (vc_redist.x64.exe, and, where the release
+workflow copies them, the runtime DLLs beside GoSurvey.exe)
+  Copyright (c) Microsoft Corporation. Redistributed under Microsoft's
+  Visual C++ Redistributable licence terms.
+
+-------------------------------------------------------------------------------
+OTHER THIRD-PARTY COMPONENTS
+-------------------------------------------------------------------------------
 
 GNU LibreDWG
   Copyright (C) Free Software Foundation, Inc. and contributors.
   GPL-3.0-or-later.
   Source: https://github.com/LibreDWG/libredwg
-  Pin: 0.13.3 (REQ-170). Linking this library makes the GoSurvey binary GPL-3.0-or-later.
+  Vendored base: upstream tag 0.14 (REQ-170).
+  Linking this library makes the GoSurvey binary GPL-3.0-or-later.
 
-PDFium
-  Copyright 2014 The PDFium Authors.
-  BSD 3-Clause License.
+PDFium (pdfium.dll)
+  PDFium library: Copyright 2014 The PDFium Authors. BSD-3-Clause. Text:
+    licenses\PDFium-BSD-3-Clause.txt
   Source: https://pdfium.googlesource.com/pdfium/
-
-  Copyright (c) 2002-2006 Marcus Geelnard
-  Copyright (c) 2006-2019 Camilla Löwy
-  zlib/libpng License.
+  Vendored prebuilt binaries: Copyright 2014-2025 Benoit Blanchon. MIT.
+  Text: licenses\PDFium-LICENSE.txt
 
 GLEW (OpenGL Extension Wrangler Library)
   Copyright (C) 2002-2007, Milan Ikits <milan ikits@ieee.org>
   Copyright (C) 2002-2007, Marcelo E. Magallon <mmagallo@debian.org>
-  Copyright (C) 2002, Lev Walkin <vlm@lionet.info>
-  Modified BSD License / MIT License.
+  Copyright (C) 2002, Lev Povalahev
+  Copyright (C) 1999-2007 Brian Paul (Mesa code included in GLEW)
+  Copyright (c) 2007 The Khronos Group Inc.
+  Modified BSD License and MIT License. Text: licenses\GLEW-LICENSE.txt
   Source: https://glew.sourceforge.net/
 
-  Copyright (c) 2014-2024 Omar Cornut
-  MIT License.
-
-CS-MAP (OSGeo MetaCRS) — coordinate systems (REQ-358)
+CS-MAP (OSGeo MetaCRS) - coordinate systems (REQ-358)
   Copyright (c) 2008, Autodesk, Inc. All rights reserved.
   BSD 3-Clause License:
   Redistribution and use in source and binary forms, with or without modification, are permitted

@@ -248,14 +248,17 @@ are reported in the command log.
 
 | Action | Shortcut | Menu | Command |
 |---|---|---|---|
-| **Cut** | *(see note)* | Right-click ▸ Clipboard ▸ Cut | — |
+| **Cut** | `Ctrl+X` | Right-click ▸ Clipboard ▸ Cut, ribbon Cut | `CUT` |
 | **Copy** | `Ctrl+C` | Edit ▸ Copy, ribbon Copy | — |
 | **Paste** | `Ctrl+V` | Edit ▸ Paste, ribbon Paste | `PASTE` |
-| **Paste at Original Coordinates** | — | Edit ▸ Paste at Original Coordinates | `PASTEORIG`, `PO` |
+| **Paste at Original Coordinates** | — | Right-click ▸ Clipboard ▸ Paste at Original Coordinates | `PASTEORIG`, `PO` |
 
-> **Note on Cut** — the menu item is labelled `Ctrl+X`, but that key is only wired inside the
-> MTEXT text editor; in the drawing it does nothing. Use the menu item. Cut is copy followed by
-> erase, so it works on an existing selection.
+> **Note on Cut** — Cut copies the selection to the clipboard, then erases it, so one Undo brings
+> the objects back. It needs a selection. Cut works only when the clipboard can carry every selected
+> object. Otherwise Cut does nothing, erases nothing, and names the first object it cannot carry: for example a surface, feature line, alignment, mesh, solid, pipe run, point cloud or PDF
+> underlay in model space, or a table, block or leader in a paper layout. A selected section plane
+> or paper viewport also refuses Cut. Deselect those objects first. Cut is refused in a read-only
+> drawing.
 
 - **Paste** places the copied objects at the cursor, with a live preview before you click:
   `PASTE: Click destination point | ESC cancel`

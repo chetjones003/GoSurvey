@@ -286,7 +286,7 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   st.cadPipingSystems.clear();  // issue #486 increment B3 / REQ-345 — same reason as cadPipeRuns above
   st.alignments.clear();  // REQ-480: model-space objects, never block content
   st.sampleLines.clear();  // REQ-519: sample lines belong to the alignments just removed
-  st.profiles.clear();  // REQ-520: profiles belong to the alignments just removed
+  st.profiles.clear();  // REQ-521: profiles belong to the alignments just removed
   st.cadBlockRefs.clear();
   st.cadBlockRefAttrs.clear();
   st.surveyPoints.clear();

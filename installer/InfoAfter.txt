@@ -117,6 +117,9 @@ SUPPORT
 ================================================================================
   Third-Party Notices
 ================================================================================
-  PDFium      BSD 3-Clause  —  https://pdfium.googlesource.com/pdfium/
-  GLEW        BSD/MIT       —  https://glew.sourceforge.net/
+  GNU LibreDWG  GPL-3.0-or-later  -  https://github.com/LibreDWG/libredwg
+  Qt            LGPL-3.0          -  https://download.qt.io/archive/qt/6.8/6.8.3/submodules/
+  PDFium        BSD-3 / MIT       -  https://pdfium.googlesource.com/pdfium/
+  GLEW          BSD / MIT         -  https://glew.sourceforge.net/
+  Full notices: licenses\NOTICE.txt. Licence texts: the licenses folder.
 ================================================================================

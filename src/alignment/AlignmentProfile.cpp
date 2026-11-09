@@ -8,14 +8,14 @@ namespace alignment {
 namespace {
 
 constexpr double kStationEps = 1e-6;  // matches the other station tolerances in the alignment code
-constexpr double kOverlapEps = 1e-9;  // curves may meet exactly; a real overlap is refused (REQ-520.3)
+constexpr double kOverlapEps = 1e-9;  // curves may meet exactly; a real overlap is refused (REQ-521.3)
 
 // Grade of the tangent from points[i] to points[i + 1]. Points must be strictly increasing in station (validated first).
 double SegmentGrade(const std::vector<VerticalPoint>& pts, size_t i) {
   return (pts[i + 1].elevation - pts[i].elevation) / (pts[i + 1].station - pts[i].station);
 }
 
-// The symmetric parabola of `pt` (curve length L > 0) between the incoming grade g1 and the outgoing grade g2 (REQ-520.2).
+// The symmetric parabola of `pt` (curve length L > 0) between the incoming grade g1 and the outgoing grade g2 (REQ-521.2).
 // It starts on the incoming tangent at L/2 before the PVI, so Eb = Ep - g1 L/2, and its elevation and grade follow the
 // standard parabola: E(x) = Eb + g1 x + (g2 - g1) x^2 / (2L), G(x) = g1 + (g2 - g1) x / L, with x measured from the start.
 ProfileSample CurveSample(const VerticalPoint& pt, double g1, double g2, double station) {
@@ -40,7 +40,7 @@ std::string Fmt(const char* format, double a) {
   return buf;
 }
 
-// A query answer must be a finite number; a profile that cannot give one here says so instead (REQ-520.3).
+// A query answer must be a finite number; a profile that cannot give one here says so instead (REQ-521.3).
 ProfileSample Finish(ProfileSample s) {
   if (!std::isfinite(s.elevation) || !std::isfinite(s.grade)) {
     s.hasValue = false;
@@ -69,12 +69,12 @@ std::string ProfileGeometryRefusal(const VerticalProfile& p) {
       return Fmt("the PVI at station %.6f is not after the PVI before it", q.station);
   }
   if (pts.empty()) return std::string();
-  // REQ-520.3: a curve needs a tangent on both sides, so the first and last PVIs carry no curve.
+  // REQ-521.3: a curve needs a tangent on both sides, so the first and last PVIs carry no curve.
   if (pts.front().curveLength > 0.0)
     return Fmt("the first PVI (station %.6f) cannot have a curve; add a PVI before it", pts.front().station);
   if (pts.back().curveLength > 0.0)
     return Fmt("the last PVI (station %.6f) cannot have a curve; add a PVI after it", pts.back().station);
-  // REQ-520.3: the two curves bounding a tangent must not overlap. Touching is allowed.
+  // REQ-521.3: the two curves bounding a tangent must not overlap. Touching is allowed.
   for (size_t i = 0; i + 1 < pts.size(); ++i) {
     const double spacing = pts[i + 1].station - pts[i].station;
     const double used = 0.5 * pts[i].curveLength + 0.5 * pts[i + 1].curveLength;
@@ -92,7 +92,7 @@ ProfileSample ProfileAtStation(const VerticalProfile& p, double station) {
   ProfileSample out;
   out.station = station;
   const std::vector<VerticalPoint>& pts = p.points;
-  if (pts.size() < 2) {  // REQ-520.3: no geometry is reported before anything else
+  if (pts.size() < 2) {  // REQ-521.3: no geometry is reported before anything else
     out.reason = "no geometry: the profile needs at least two PVIs";
     return out;
   }
@@ -104,7 +104,7 @@ ProfileSample ProfileAtStation(const VerticalProfile& p, double station) {
     out.reason = "the profile geometry is not valid: " + why;
     return out;
   }
-  if (station < pts.front().station || station > pts.back().station) {  // exact: REQ-520.4
+  if (station < pts.front().station || station > pts.back().station) {  // exact: REQ-521.4
     out.reason = "outside the profile";
     return out;
   }
@@ -119,7 +119,7 @@ ProfileSample ProfileAtStation(const VerticalProfile& p, double station) {
 
   const double g = SegmentGrade(pts, i);
 
-  // Inside the curve at the PVI that ends this segment (REQ-520.2): its first half.
+  // Inside the curve at the PVI that ends this segment (REQ-521.2): its first half.
   if (i + 1 < n - 1 && pts[i + 1].curveLength > 0.0) {
     const VerticalPoint& end = pts[i + 1];
     if (station >= end.station - 0.5 * end.curveLength)  // exact: the curve meets its tangent here, so no tolerance

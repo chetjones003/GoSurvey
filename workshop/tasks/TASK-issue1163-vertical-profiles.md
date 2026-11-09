@@ -1,6 +1,6 @@
 # TASK-issue1163 — Vertical profiles along an alignment
 
-**Requirement authority:** REQ-520 (accepted 2026-11-08, D-2026-11-08-j). Builds on REQ-480, REQ-483, REQ-484, REQ-500.
+**Requirement authority:** REQ-521 (accepted 2026-11-08, D-2026-11-08-k). Builds on REQ-480, REQ-483, REQ-484, REQ-500.
 Does not change REQ-145 (`QUICKPROFILE`) or REQ-513 (`CREATEPROFILEFROMSURFACE`).
 
 **Constraints:** CON-NN not applicable beyond the project rules; no new dependencies; geometry stays XY-only in alignments.
@@ -59,7 +59,7 @@ then the council review (three Claude Haiku reviewers, iterated).
   when empty.
 - Round 2: scores 8, 8, 8. Fixed: remaining `%.3f` station formats (now `%.6f`); message buffers widened; "no geometry" checked
   before the NaN station; load path type-guarded so a wrong-typed field cannot throw and leave a half-loaded drawing; a profile
-  with a malformed stored point is not loaded and the load log names it (REQ-520.8, decision D-2026-11-08-j); tests for
+  with a malformed stored point is not loaded and the load log names it (REQ-521.8, decision D-2026-11-08-k); tests for
   exact undo and the exact-touch boundary; the vacuous `alignment missing` assertion replaced.
 - Round 3: scores 9, 9, 8. Fixed: touch-point test asserts 107.5 (continuity); load now rejects a profile with no name or a
   repeated name (capitals ignored) and names a missing points array correctly; SPEC wording of PROFILEQUERY, PROFILELIST and the
@@ -67,7 +67,7 @@ then the council review (three Claude Haiku reviewers, iterated).
 - Round 4: scores 8, 8, 7. Fixed: a query past the profile's end reports "outside the profile" (the profile answers first);
   a stored name is trimmed, and a blank name is not loaded; a point must be exactly three finite numbers; an entry that is not
   an object is logged. New tests cover each.
-- Round 5: scores 9, 9, 8. Fixed: the exact elevation at a tangent's far PVI; the SPEC REQ-520.3 finite-grade rule now matches
+- Round 5: scores 9, 9, 8. Fixed: the exact elevation at a tangent's far PVI; the SPEC REQ-521.3 finite-grade rule now matches
   the code; tests for PROFILEDELETE with a missing alignment and a typed `nan`.
 - Round 6: scores 8, 8, 8. Fixed: a station span that overflows is refused (the grade would have read as zero); PROFILEDELPVI
   removes a PVI left beyond a shortened alignment; a skipped entry is named by its position; the SPEC records the
@@ -79,8 +79,8 @@ then the council review (three Claude Haiku reviewers, iterated).
 ## Verification
 
 - `build.bat` (Release): succeeds.
-- `GoSurveyTests "[req520]"`: 41 test cases, 185 assertions, all pass.
-- Full `ctest --preset ninja-release`: 100% passed, 0 failed out of 194 (log: `build/artifacts/ctest-final5-req520.log`).
+- `GoSurveyTests "[req521]"`: 41 test cases, 185 assertions, all pass.
+- Full `ctest --preset ninja-release`: 100% passed, 0 failed out of 194 (log: `build/artifacts/ctest-final5-req521.log`).
   The one comment-only edit after that build (a note in `CadCommands_Alignment.cpp`) changes no behaviour.
 - A full single-process `GoSurveyTests.exe` run was not used as evidence: it is sharded by ctest, and its single-process
   output included four failures that came from running the binary outside the repository root (fitting-library paths).

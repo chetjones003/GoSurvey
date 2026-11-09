@@ -1330,7 +1330,7 @@ void RunCreateSectionSheets(AppCommandState& st, const std::string& args, std::v
                 " sheet(s) from \"" + a->name + "\" on \"" + kTitleBlockFile + "\": " + names + ".");
 }
 
-// ---- REQ-520: design vertical profiles along an alignment (GitHub issue #1163) ----
+// ---- REQ-521: design vertical profiles along an alignment (GitHub issue #1163) ----
 
 namespace {
 
@@ -1344,7 +1344,7 @@ int FindProfileIndex(const AppCommandState& st, const std::string& name) {
   return -1;
 }
 
-// The alignment with stable id \p id, or nullptr when it has been deleted (REQ-520.7).
+// The alignment with stable id \p id, or nullptr when it has been deleted (REQ-521.7).
 const alignment::Alignment* AlignmentById(const AppCommandState& st, std::uint64_t id) {
   for (const alignment::Alignment& a : st.alignments)
     if (a.id == id) return &a;
@@ -1373,14 +1373,14 @@ std::string GradePercent(double grade) {
 
 }  // namespace
 
-// CREATEDESIGNPROFILE <alignment>, <profile name> (REQ-520.6): an empty profile on the alignment. One undo step.
+// CREATEDESIGNPROFILE <alignment>, <profile name> (REQ-521.6): an empty profile on the alignment. One undo step.
 void RunCreateDesignProfile(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
   if (f.size() != 2) {
     log.push_back("CREATEDESIGNPROFILE - usage: CREATEDESIGNPROFILE <alignment>, <profile name>");
     return;
   }
-  if (ActiveProjectPointsReadOnly(st)) {  // REQ-520.6: a read-only project refuses before any change
+  if (ActiveProjectPointsReadOnly(st)) {  // REQ-521.6: a read-only project refuses before any change
     log.push_back("CREATEDESIGNPROFILE - the project is read-only; no profile was created.");
     return;
   }
@@ -1406,7 +1406,7 @@ void RunCreateDesignProfile(AppCommandState& st, const std::string& args, std::v
   log.push_back("CREATEDESIGNPROFILE - profile \"" + name + "\" on \"" + alignmentName + "\" created with no PVIs.");
 }
 
-// PROFILEPVI <profile>, <station>, <elevation>[, <curve length>] (REQ-520.6): adds the PVI at that station, or changes the
+// PROFILEPVI <profile>, <station>, <elevation>[, <curve length>] (REQ-521.6): adds the PVI at that station, or changes the
 // elevation and curve length of the PVI already there. Leaving out the curve length means no curve. One undo step.
 void RunProfilePvi(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
@@ -1458,7 +1458,7 @@ void RunProfilePvi(AppCommandState& st, const std::string& args, std::vector<std
     candidate.points.insert(pos, alignment::VerticalPoint{station, elevation, curveLength});
   }
   const std::string refusal = alignment::ProfileGeometryRefusal(candidate);
-  if (!refusal.empty()) {  // REQ-520.3: refused input changes nothing
+  if (!refusal.empty()) {  // REQ-521.3: refused input changes nothing
     log.push_back("PROFILEPVI - refused: " + refusal + ". No PVI was changed.");
     return;
   }
@@ -1471,7 +1471,7 @@ void RunProfilePvi(AppCommandState& st, const std::string& args, std::vector<std
                 (curveLength > 0.0 ? ", curve length " + Lin(st, curveLength) : std::string(", no curve")) + ").");
 }
 
-// PROFILEDELPVI <profile>, <station> (REQ-520.6): removes the PVI at that station. Refused when the rest is not valid.
+// PROFILEDELPVI <profile>, <station> (REQ-521.6): removes the PVI at that station. Refused when the rest is not valid.
 void RunProfileDelPvi(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
   if (f.size() != 2) {
@@ -1495,8 +1495,8 @@ void RunProfileDelPvi(AppCommandState& st, const std::string& args, std::vector<
   }
   double displayed = 0.0, station = 0.0;
   std::string why;
-  // Removal matches the PVI by its station, so a PVI left beyond a shortened alignment can still be removed (REQ-520.6),
-  // unless the alignment has station equations: then the gap reason refuses it (REQ-520 item 6).
+  // Removal matches the PVI by its station, so a PVI left beyond a shortened alignment can still be removed (REQ-521.6),
+  // unless the alignment has station equations: then the gap reason refuses it (REQ-521 item 6).
   if (!ParseSta(st, f[1], &displayed) || !alignment::ResolveDisplayedStation(*a, displayed, &station, &why)) {
     log.push_back("PROFILEDELPVI - " + (why.empty() ? std::string("the station is not understood") : why) +
                   ". No PVI was removed.");
@@ -1523,7 +1523,7 @@ void RunProfileDelPvi(AppCommandState& st, const std::string& args, std::vector<
   log.push_back("PROFILEDELPVI - profile \"" + profileName + "\": PVI at " + staText + " removed.");
 }
 
-// PROFILEQUERY <profile>, <station> (REQ-520.4, .5): elevation, grade and the derived 3D design point at a displayed
+// PROFILEQUERY <profile>, <station> (REQ-521.4, .5): elevation, grade and the derived 3D design point at a displayed
 // station. Refused, with the reason, when the profile's alignment is missing.
 void RunProfileQuery(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
@@ -1544,7 +1544,7 @@ void RunProfileQuery(AppCommandState& st, const std::string& args, std::vector<s
   }
   double displayed = 0.0, station = 0.0;
   std::string why;
-  // REQ-520.4: the profile's range answers first ("outside the profile"). A displayed station the alignment cannot resolve
+  // REQ-521.4: the profile's range answers first ("outside the profile"). A displayed station the alignment cannot resolve
   // (a station-equation gap) is refused by ResolveDisplayedStation before that; DesignPathPoint checks the alignment range.
   if (!ParseSta(st, f[1], &displayed) || !alignment::ResolveDisplayedStation(*a, displayed, &station, &why)) {
     log.push_back("PROFILEQUERY - " + (why.empty() ? std::string("the station is not understood") : why) + ".");
@@ -1565,7 +1565,7 @@ void RunProfileQuery(AppCommandState& st, const std::string& args, std::vector<s
                 ", " + Lin(st, pt.y) + ", " + Lin(st, pt.z) + ").");
 }
 
-// PROFILELIST (REQ-520.7): every profile, its alignment and its PVI count. A profile whose alignment is gone says so.
+// PROFILELIST (REQ-521.7): every profile, its alignment and its PVI count. A profile whose alignment is gone says so.
 void RunProfileList(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   if (!Trim(args).empty()) {
     log.push_back("PROFILELIST - usage: PROFILELIST");
@@ -1586,7 +1586,7 @@ void RunProfileList(AppCommandState& st, const std::string& args, std::vector<st
   }
 }
 
-// PROFILEDELETE <profile> (REQ-520.6): deletes the profile. One undo step.
+// PROFILEDELETE <profile> (REQ-521.6): deletes the profile. One undo step.
 void RunProfileDelete(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
   if (f.size() != 1) {
