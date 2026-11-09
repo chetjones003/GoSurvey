@@ -799,3 +799,26 @@ TEST_CASE("PROFILEDELPVI removes a PVI left beyond a shortened alignment (REQ-52
   CHECK(LogHas(delLog, "removed"));
   CHECK(back.profiles[0].points.size() == 2);
 }
+
+// ---- PR #1179 review (REQ-520): an overflowing grade difference, and no extrapolation past a tiny curve ----
+
+TEST_CASE("profile: a curve between grades so large that their difference overflows still gives its value", "[req520][profile]") {
+  alignment::VerticalProfile p;
+  // Grades +1e308 then -1e308; the midpoint is 1e308 - (1e308 / 4) = 7.5e307 with zero grade.
+  p.points = {{0.0, 0.0, 0.0}, {1.0, 1e308, 1.0}, {2.0, 0.0, 0.0}};
+  REQUIRE(alignment::ProfileGeometryRefusal(p).empty());
+  const alignment::ProfileSample s = alignment::ProfileAtStation(p, 1.0);
+  REQUIRE(s.hasValue);
+  CHECK(s.elevation == Approx(7.5e307).epsilon(1e-12));
+  CHECK(s.grade == Approx(0.0).margin(1.0));
+}
+
+TEST_CASE("profile: a station just before a tiny curve follows the tangent, not the parabola", "[req520][profile]") {
+  alignment::VerticalProfile p;
+  // The curve is 1e-12 ft long around station 1, so the tangent from 0 to 1 is the grade line of slope 1.
+  p.points = {{0.0, 0.0, 0.0}, {1.0, 1.0, 1e-12}, {2.0, 0.0, 0.0}};
+  REQUIRE(alignment::ProfileGeometryRefusal(p).empty());
+  const alignment::ProfileSample s = alignment::ProfileAtStation(p, 0.9999995);
+  REQUIRE(s.hasValue);
+  CHECK(s.elevation == Approx(0.9999995).margin(1e-9));
+}

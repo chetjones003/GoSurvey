@@ -20,13 +20,16 @@ double SegmentGrade(const std::vector<VerticalPoint>& pts, size_t i) {
 // standard parabola: E(x) = Eb + g1 x + (g2 - g1) x^2 / (2L), G(x) = g1 + (g2 - g1) x / L, with x measured from the start.
 ProfileSample CurveSample(const VerticalPoint& pt, double g1, double g2, double station) {
   const double L = pt.curveLength;
-  const double x = station - (pt.station - 0.5 * L);
-  const double eb = pt.elevation - g1 * 0.5 * L;
+  // Position along the curve, 0 at its start and 1 at its end. Clamped so rounding never extrapolates the parabola.
+  double t = (station - (pt.station - 0.5 * L)) / L;
+  t = std::min(1.0, std::max(0.0, t));
+  // Written with no difference of two grades (which can overflow): E = Ep + (L/2)(g2 t^2 - g1 (1-t)^2), G = g1(1-t) + g2 t.
+  // At t = 0 this is Ep - g1 L/2 (the start on the incoming tangent); at t = 1 it is Ep + g2 L/2 (the end on the outgoing one).
   ProfileSample out;
   out.hasValue = true;
   out.station = station;
-  out.elevation = eb + g1 * x + (g2 - g1) * x * x / (2.0 * L);
-  out.grade = g1 + (g2 - g1) * x / L;
+  out.elevation = pt.elevation + (0.5 * L) * (g2 * t * t - g1 * (1.0 - t) * (1.0 - t));
+  out.grade = g1 * (1.0 - t) + g2 * t;
   return out;
 }
 
@@ -119,13 +122,13 @@ ProfileSample ProfileAtStation(const VerticalProfile& p, double station) {
   // Inside the curve at the PVI that ends this segment (REQ-520.2): its first half.
   if (i + 1 < n - 1 && pts[i + 1].curveLength > 0.0) {
     const VerticalPoint& end = pts[i + 1];
-    if (station >= end.station - 0.5 * end.curveLength - kStationEps)
+    if (station >= end.station - 0.5 * end.curveLength)  // exact: the curve meets its tangent here, so no tolerance
       return Finish(CurveSample(end, g, SegmentGrade(pts, i + 1), station));
   }
   // Inside the curve at the PVI that starts this segment: its second half.
   if (i > 0 && pts[i].curveLength > 0.0) {
     const VerticalPoint& start = pts[i];
-    if (station <= start.station + 0.5 * start.curveLength + kStationEps)
+    if (station <= start.station + 0.5 * start.curveLength)
       return Finish(CurveSample(start, SegmentGrade(pts, i - 1), g, station));
   }
 

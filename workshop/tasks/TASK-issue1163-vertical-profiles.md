@@ -89,3 +89,8 @@ then the council review (three Claude Haiku reviewers, iterated).
 ## Public wiki
 
 - Pushed to `chetjones003/GoSurvey.wiki` as commit `c738dce` (before the PR was opened, per REQ-453).
+
+## PR #1179 review (PR-Agent, one review at the first push)
+
+1. A curve between very large grades overflowed in the grade difference (`g2 - g1`), so a valid midpoint returned no value. Fixed: the curve is written without any difference of grades (`E = Ep + (L/2)(g2 t^2 - g1 (1-t)^2)`, `G = g1(1-t) + g2 t`), and the position `t` is clamped to [0, 1]. Test: `a curve between grades so large that their difference overflows still gives its value`.
+2. The curve-zone checks used a 1e-6 tolerance, so a station just before a tiny curve was evaluated on the parabola. Fixed: the zone checks are exact (the curve meets its tangent at both ends, so no tolerance is needed). Test: `a station just before a tiny curve follows the tangent, not the parabola`.
