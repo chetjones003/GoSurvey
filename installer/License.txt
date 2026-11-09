@@ -119,8 +119,14 @@ Qt6Gui.dll and the Qt image plugins
       MIT-open-group (PCF): Copyright 1990, 1994, 1998 The Open Group.
       Text: MIT.txt and MIT-open-group.txt
   HarfBuzz 10.4.0 (text shaping)
-    Copyright 2010-2022 Google, Inc., and the other HarfBuzz contributors listed
-    in the HarfBuzz COPYING file in Qt's source. MIT ("Old MIT"). Text: MIT.txt
+    Copyright 2010-2022 Google, Inc.; 2015-2020 Ebrahim Byagowi; 2019-2020 Facebook, Inc.;
+    2012-2015 Mozilla Foundation; 2011 Codethink Limited; 2008-2010 Nokia Corporation and/or
+    its subsidiary(-ies); 2009 Keith Stribley; 2011 Martin Hosken and SIL International; 2007
+    Chris Wilson; 2005-2023 Behdad Esfahbod; 2004-2023 Red Hat, Inc.; 1998-2005 David Turner
+    and Werner Lemberg; 2016 Igalia S.L.; 2022 Matthias Clasen; 2018-2021 Khaled Hosny; 2018-2020
+    Adobe, Inc; 2013-2015 Alexei Podtelezhnikov.
+    The "Old MIT" grant is not the same text as MIT. The full notice is in
+    licenses\HarfBuzz-COPYING.txt.
   libpng 1.6.47 (PNG images)
     Copyright (c) 1995-2025 The PNG Reference Library Authors; Copyright (c)
     2018-2025 Cosmin Truta; Copyright (c) 1998-2018 Glenn Randers-Pehrson;
@@ -161,8 +167,8 @@ Qt6Gui.dll and the Qt image plugins
 Qt6Svg.dll
   xsvg (SVG parser)
     Copyright 2002 USC/Information Sciences Institute.
-    Licence identifier HPND-sell-variant (Qt's SBOM). The standard HPND text is in
-    HPND.txt; the sell variant's own wording is in Qt's qtsvg source, not in this folder.
+    HPND-sell-variant licence (the wording allows sale). Full text:
+    licenses\XSVG-LICENSE.txt
 
 qt-plugins\platforms\qwindows.dll
   Wintab API headers
