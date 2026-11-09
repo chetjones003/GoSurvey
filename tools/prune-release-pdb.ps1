@@ -7,7 +7,7 @@ param(
 
 # REQ-425 / D-2026-11-09-b: symbol retention follows the versions, not the age of the objects.
 #   stable  keeps every PDB in the newest minor series (0.N.x) and deletes older minor series.
-#   beta    keeps only the newest beta PDB.
+#   beta    keeps every PDB of the newest beta version number (normally one build).
 # The archived key is always kept, and nothing outside symbols/<channel>/ is ever listed or deleted.
 
 Set-StrictMode -Version Latest

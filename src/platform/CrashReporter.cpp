@@ -44,8 +44,9 @@ constexpr wchar_t kTestCrashArg[]         = L"--gosurvey-test-crash";
 constexpr uintmax_t kMaxCrashDumpBytes   = 10u * 1024u * 1024u;
 constexpr size_t    kMaxCrashReportBytes = 16384;
 
-// Until SetReportChannel runs, a report says "dev": an unset channel must never look like a release.
-char g_reportChannel[16] = "dev";
+// Until SetReportChannel runs, a report carries this build's own channel (GOSURVEY_BUILD_CHANNEL), so
+// a crash during startup in a release build is still reported under that release channel.
+char g_reportChannel[16] = GOSURVEY_BUILD_CHANNEL;
 
 std::string ExceptionCodeToHumanSummary(unsigned long code) {
   switch (code) {
@@ -503,7 +504,7 @@ bool ParseBundleFile(const std::filesystem::path& path, CrashReport& out) {
     return false;
 
   out.wireReason = "unhandled_exception";
-  out.channel    = "stable";
+  out.channel    = "dev";  // a bundle without a channel line cannot be matched to a release PDB
   const std::string rest = line.substr(metaPrefix.size());
   size_t             pos = 0;
   while (pos < rest.size()) {
