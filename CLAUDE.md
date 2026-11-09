@@ -53,6 +53,48 @@ the task log or pull request description, record each source as reviewed and
 either identify its update or state that no update was needed. If an affected
 external wiki cannot be updated due to missing access, keep the pull request
 unopened until access is available and the update is made.
+### PR review loop: fix everything in one push (D-2026-11-08-i)
+
+Every PR-Agent run costs money, and a PR that needs 10 runs costs 10 times as much as one that
+needs 2. PR-Agent now reviews **once** when a PR is opened or marked ready; it does **not**
+re-run on pushes. The owner posts `/review` for a confirmation pass. The goal is that the first
+review's findings are all fixed in one push and the confirmation pass finds nothing.
+
+**Before opening the PR (pre-review self-check).** The reviewer reads the whole diff and checks
+error paths, boundary values, locale/unit handling, read-only and permission guards, undo steps,
+and the cited REQ's acceptance criteria. Do that yourself first, against the finished diff:
+
+1. Re-read `git diff <base>...HEAD` as a reviewer would, one changed function at a time.
+2. For each new command, dialog or parser, walk the list above and write a test or note for each
+   item that applies. Compare with the sibling command that already solves the same problem
+   (for example, how `CREATEVIEWFRAMES` guards read-only projects) and copy its guards.
+3. Check every REQ acceptance criterion the PR cites against the code, not only the tests.
+4. Run the `code-review` skill on the branch and resolve its findings before pushing.
+
+**When PR-Agent comments (fix-all protocol).** Do not fix findings one at a time and push after
+each.
+
+1. **Collect every finding first.** Read the persistent review comment, every inline review
+   comment, and any `/improve` suggestions:
+   `gh pr view <n> --comments`, `gh api repos/{owner}/{repo}/pulls/<n>/comments --paginate`, and
+   `gh api repos/{owner}/{repo}/pulls/<n>/reviews --paginate`. Write them into the task log as one
+   numbered list.
+2. **Fix the class, not the instance.** For each finding, search the whole diff (and the sibling
+   code paths it was copied from) for the same pattern and fix every occurrence. Findings that
+   say "for example" or name one input are examples of a class: handle the class.
+3. **Test each fix**, including the boundary the finding names.
+4. **Re-run the pre-review self-check** on the new diff: every fix is new code that the next
+   review will read, so apply the same list to it before pushing.
+5. **Push once.** One commit (or one push of several commits) addresses the whole list. Never
+   push a partial fix to "see what the reviewer says".
+6. **Reply to disagreements, do not ignore them.** If a finding is wrong, say why in a PR
+   comment with evidence, instead of leaving it for the reviewer to re-raise.
+7. **Request the confirmation pass once.** Only after step 5, the owner comments `/review`.
+   Agents do not trigger extra reviews.
+
+If a confirmation pass still returns findings, treat that as a process failure: apply steps 1–5
+to the new list, and record in the task log which self-check item would have caught each finding.
+
 ### Emergency repository-admin bypass
 
 When the repository admin explicitly directs an emergency action on `beta` or `master`, the admin

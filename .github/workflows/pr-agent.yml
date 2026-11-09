@@ -1,9 +1,13 @@
 name: PR Agent
 
+# Cost control (D-2026-11-08-i): PR Agent reviews a pull request ONCE when it is
+# opened or marked ready, and reports every finding in that single pass. It does
+# not re-run on each push. After the fixes are in, the repository owner posts
+# `/review` for one confirmation pass (or `/improve` for suggestions).
 on:
   pull_request:
     branches: [master, beta]
-    types: [opened, reopened, ready_for_review, synchronize]
+    types: [opened, reopened, ready_for_review]
   issue_comment:
     types: [created]
 
@@ -33,9 +37,26 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "false"
-          github_action_config.auto_improve: "true"
-          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "synchronize"]'
+          # /improve duplicates /review findings and doubles the model cost of
+          # every run; the owner can still post `/improve` on demand.
+          github_action_config.auto_improve: "false"
+          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review"]'
           pr_reviewer.inline_key_issues: "true"
+          # The default cap is 3 findings per review, which drip-feeds problems
+          # over many pushes. Report every real finding in the first pass.
+          pr_reviewer.num_max_findings: "15"
+          pr_reviewer.extra_instructions: >-
+            Report EVERY distinct defect you can find in this pass, not only the
+            most important few; a later pass will not be run unless asked. Review
+            each changed file completely, including error paths, boundary
+            values, locale and unit handling, read-only and permission guards,
+            undo behavior, and the spec requirement the change cites. When one
+            defect is an instance of a pattern, name every other place in the
+            diff with the same pattern in the same finding. Do not report style
+            preferences or speculative concerns without a concrete failing input.
+          # Same diff, same answer: lower temperature makes a repeat run less
+          # likely to surface different findings from unchanged code.
+          config.temperature: "0"
           pr_code_suggestions.committable_code_suggestions: "true"
-          pr_code_suggestions.num_code_suggestions_per_chunk: "3"
+          pr_code_suggestions.num_code_suggestions_per_chunk: "6"
           pr_code_suggestions.suggestions_score_threshold: "7"
