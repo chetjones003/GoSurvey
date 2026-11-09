@@ -17462,3 +17462,79 @@ capability that does not exist. They are recorded here rather than quietly dropp
   covered by this REQ; they are a separate follow-up.
 - Status: accepted (2026-11-08, D-2026-11-08-j; GitHub #1025). The user accepted the drafted criteria as written and
   chose to remove the MIT grant and install a `licenses` folder.
+### REQ-521 — Vertical profiles along an alignment: design grades and vertical curves (GitHub issue #1163, follow-up to #121)
+- Purpose: a designer needs a design profile (grades and vertical curves) that belongs to a horizontal alignment, so a
+  3D design path can be derived from the pair. REQ-500 reserved the seam; REQ-513 supplies only an existing-ground
+  sampled profile. This REQ is the design profile, kept separate from horizontal geometry (REQ-480.3, REQ-500.2).
+- Priority: must
+- Type: functional
+- Decision: D-2026-11-08-k.
+- Depends on: REQ-480, REQ-483, REQ-484, REQ-500. Does not change REQ-145 (`QUICKPROFILE`) or REQ-513.
+- Statement:
+  1. A **vertical profile** is a drawing-owned object with a stable id, a name unique within the drawing
+     (case-insensitive), the stable id of its alignment, and an ordered list of **vertical points** (PVIs). Each PVI
+     has an internal station (REQ-483), an elevation, and a **curve length** (0 = no curve). Stations strictly increase.
+  2. Between two consecutive PVIs the profile is a straight grade line through both PVIs (a tangent). At an interior
+     PVI with curve length L > 0, the profile is a symmetric parabolic vertical curve of length L, running from L/2
+     before the PVI to L/2 after it. The curve starts on the incoming tangent and ends on the outgoing tangent, so it
+     has no kink there. The PVI itself is not on the curve; the curve's middle is (g2 - g1) x L / 8 from the PVI
+     elevation, where g1 and g2 are the incoming and outgoing grades.
+  3. A profile is **valid** when every elevation and length is finite and every tangent has a finite grade (stations too close together for one are refused); stations strictly increase; the curve length is
+     0 at the first and last PVI (a curve needs a tangent on both sides); and, for each tangent, the half-lengths of its
+     two bounding curves together do not exceed the tangent's length (curves may meet, but not overlap). A profile with
+     fewer than two PVIs has no geometry and reports "no geometry" to every query. Invalid input is refused with the
+     reason named; the drawing does not change.
+  4. Queries take an internal station (REQ-483) and answer only within the first and last PVI stations. Outside them
+     the answer is "outside the profile" with no value. Each query gives the elevation, the grade (rise over run;
+     reported as a percent), and the profile point (station and elevation). At a PVI with no curve, a station exactly
+     there reports the grade of the tangent that starts there.
+  5. A **design path** is derived, never stored. For a station inside the alignment, its 3D point is the alignment's plan
+     point at that station (REQ-484) with z = the profile elevation (item 4). Alignment entities keep no Z (REQ-480.3).
+     The alignment's own vertical stubs (REQ-500.1) still answer "no profile", since they take only the alignment. The
+     profile's alignment id is the single link; the alignment's REQ-500 profile-id list stays empty.
+  6. Commands, typed on the command line (no Qt control in this increment; see item 9). Station arguments are displayed
+     stations resolved as REQ-517.6a, so each must match exactly one internal station:
+     - `CREATEDESIGNPROFILE <alignment>, <name>` makes an empty profile on the alignment. Refuses an unknown alignment or
+       a duplicate name.
+     - `PROFILEPVI <profile>, <station>, <elevation>[, <curve length>]` adds a PVI, or replaces the elevation and curve
+       length of the PVI already at that station. Refuses a station outside the alignment and any result that is not valid.
+     - `PROFILEDELPVI <profile>, <station>` removes the PVI at that station. Refused when the result is not valid.
+     - `PROFILEQUERY <profile>, <station>` logs the elevation, grade (percent) and the 3D design point. It is refused, with the reason, when the alignment is missing. On an alignment with station equations, a displayed station that falls in an equation gap, or lies past the alignment's end, is refused with the gap reason before the profile's range is checked. This applies to PROFILEQUERY, PROFILEPVI and PROFILEDELPVI, so a PVI beyond the end of such an alignment cannot be removed one by one; delete the profile instead.
+     - `PROFILELIST` logs each profile with its alignment name and PVI count, or `alignment missing`. A profile whose points break item 3 is marked `geometry not valid`, with the reason.
+     - `PROFILEDELETE <profile>` deletes the profile.
+     Each command that changes a profile is one undo step (REQ-480.4). A read-only project refuses the changing commands
+     and changes nothing, as REQ-519.4.
+  7. **Missing alignment (explicit, non-destructive).** Deleting an alignment keeps its profiles (unlike sample lines,
+     REQ-519.13): the profile is kept and PROFILELIST reports `alignment missing`. PROFILEQUERY and design-path queries
+     refuse with that reason and invent nothing. The user removes it with PROFILEDELETE. The same state applies to a
+     file whose alignment id is not in the drawing; loading does not fail or drop the profile.
+  8. **Persistence.** Profiles, their PVIs, curve lengths and alignment ids are saved with the drawing and reopen with the
+     same names, PVIs and ids. A drawing with no profiles is written exactly as before. A profile whose name is missing, blank
+     or repeats an earlier name (capitals and surrounding spaces ignored), or whose stored points are missing or are not
+     three finite numbers each, is not loaded, and the
+     load log names it: a partial profile would show elevations no one drew. A field of the wrong type never fails the load.
+  9. **Out of scope for this REQ** (recorded so they are not silently added): profiles from surface samples as input (the
+     issue marks this "may"); grip or dialog editing; a profile-view or plan-and-profile drawing; K-value, grade and
+     design-speed checks (REQ-502); asymmetric curves; Qt UI, ribbon, and Prospector listing. Because no visible Qt
+     control changes, the Civil 3D comparison panel of CLAUDE.md §3.6 does not apply. The user waived it for this work.
+- Acceptance:
+  1. A north-running alignment of 500 ft with PVIs (0, elev 100), (250, elev 110, curve 100), (500, elev 100): at station
+     200 the elevation is 108.0 and the grade is +4%; at 250 it is 109.0 and the grade is 0; at 300 it is 108.0 and -4%.
+     On the straight tangents, station 50 is 102.0 (grade +4%) and station 400 is 104.0 (grade -4%).
+  2. The design path at station 250 is (0, 250, 109.0) and at station 100 is (0, 100, 104.0).
+  3. A query outside 0 to 500 reports "outside the profile" with no value. A profile with one PVI reports "no geometry".
+  4. Each invalid input is refused with a named reason and leaves the profile unchanged: a curve on the first or last PVI;
+     two curves whose bounds overlap; a non-increasing or duplicate station; a non-finite value; a station outside the
+     alignment; a duplicate name.
+  5. Saving the drawing and loading it again gives the same profile names, PVIs, curve lengths and alignment ids.
+     Queries on the reloaded profile give the same results.
+  6. Deleting the alignment keeps the profile, PROFILELIST reports `alignment missing`, and PROFILEQUERY refuses without a crash.
+  7. Each changing command undoes in one step, and the undo restores the previous profile list exactly.
+  8. QUICKPROFILE and CREATEPROFILEFROMSURFACE behave as before (existing tests pass unchanged).
+- Owner-layer: Alignment (Domain), Commands, IO.
+- Assumptions (recorded, not asked): PVIs are stored at internal stations, and typed stations are displayed stations
+  (REQ-483, REQ-517.6a). The curve is the symmetric parabola of a given length, which is the Civil 3D curve-length layout
+  (Autodesk Profile Layout Tools; "To Add Free Vertical Curves to a Profile"). No command reports K = L / |g2 - g1| in
+  this increment (item 9). Grade is rise over run.
+- Status: accepted (2026-11-08, D-2026-11-08-k; GitHub #1163). The user asked for #1163 to be implemented, which is the
+  acceptance (as D-2026-11-08-h). This REQ is the profile-specific SPEC that the issue says must exist before code.
