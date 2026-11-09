@@ -349,13 +349,14 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
       const QString typedCommand = typedLine.trimmed();
       const auto exactSuggestions = FuzzyCommandSuggestions(typedCommand.toStdString(), 1);
       const bool exactRegisteredCommand = !exactSuggestions.empty() && exactSuggestions.front().exactMatch;
-      // OPEN is routed by EditorWindow::Submit rather than the command registry, so it needs the
-      // same exact-name precedence when a registered prefix such as OPENPACK is highlighted.
-      const bool exactOpen = typedCommand.compare(QStringLiteral("OPEN"), Qt::CaseInsensitive) == 0;
+      // OPEN and CUT are routed by EditorWindow::Submit rather than the command registry, so they need the
+      // same exact-name precedence when a fuzzy suggestion such as OPENPACK or CREATEDATASHORTCUT is highlighted.
+      const bool exactRoutedVerb = typedCommand.compare(QStringLiteral("OPEN"), Qt::CaseInsensitive) == 0 ||
+                                   typedCommand.compare(QStringLiteral("CUT"), Qt::CaseInsensitive) == 0;
       const bool hasArguments = typedCommand.contains(' ') || typedCommand.contains('\t');
       QString command;
-      if (exactOpen)
-        command = QStringLiteral("OPEN");
+      if (exactRoutedVerb)
+        command = typedCommand.toUpper();
       else if (exactRegisteredCommand)
         command = QString::fromStdString(exactSuggestions.front().name);
       else if (hasArguments)
@@ -375,7 +376,7 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
     return true;  // Keep this Enter from bubbling to the window's blank-Enter handler.
   }
   const bool editShortcut = ctrl && (key->key() == Qt::Key_Z || key->key() == Qt::Key_Y ||
-      key->key() == Qt::Key_C || key->key() == Qt::Key_V);
+      key->key() == Qt::Key_C || key->key() == Qt::Key_V || key->key() == Qt::Key_X);
   if (editShortcut && event->type() == QEvent::ShortcutOverride) {
     key->accept(); return false; // Block QAction activation, then route the following KeyPress once.
   }
@@ -384,6 +385,7 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
     else if (key->key() == Qt::Key_Z || key->key() == Qt::Key_Y) DoRedo(m_State, m_Log);
     else if (key->key() == Qt::Key_C) CopySelectionToClipboard(m_State, m_Log);
     else if (key->key() == Qt::Key_V) StartPasteCommand(m_State, m_Log);
+    else if (key->key() == Qt::Key_X) CutSelection();
     ResetDraftingInput(); Refresh(); return true;
   }
   bool modeKey = false;

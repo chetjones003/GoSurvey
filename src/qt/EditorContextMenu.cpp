@@ -123,7 +123,7 @@ void EditorWindow::ShowDrawingContextMenu(const QPoint& globalPosition) {
 
   auto* clipboard = menu->addMenu("Clipboard");
   clipboard->setObjectName("ctxClipboard");
-  add(clipboard, "Cut\tCtrl+X", [this] { CopySelectionToClipboard(m_State, m_Log); StartDeleteCommand(m_State, m_Log); }, hasSel, "ctxCut");
+  add(clipboard, "Cut\tCtrl+X", [this] { CutSelection(); }, hasSel, "ctxCut");
   add(clipboard, "Copy\tCtrl+C", [this] { CopySelectionToClipboard(m_State, m_Log); }, hasSel, "ctxCopy");
   add(clipboard, "Paste\tCtrl+V", [this] { StartPasteCommand(m_State, m_Log); }, hasClip, "ctxPaste");
   add(clipboard, "Paste at Original Coordinates", [this] { StartPasteOrigCommand(m_State, m_Log); }, hasClip, "ctxPasteOriginal");

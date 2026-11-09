@@ -32,6 +32,13 @@ TEST_CASE("Issue #762 Qt ribbon actions remain connected", "[ribbon][issue762]")
   CHECK_FALSE(points->placeholder);
 }
 
+TEST_CASE("Issue #805 Cut is wired to its command", "[ribbon][issue805]") {
+  const auto* cut = FindButton("##ClipCut");
+  REQUIRE(cut != nullptr);
+  CHECK(std::string(cut->command) == "CUT");
+  CHECK_FALSE(cut->placeholder);
+}
+
 TEST_CASE("Issue #1002 Export to LandXML is wired to its command", "[ribbon][issue1002]") {
   const auto* landXml = FindButton("##RibbonExpLandXml");
   REQUIRE(landXml != nullptr);

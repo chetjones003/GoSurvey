@@ -58,7 +58,7 @@ inline constexpr Button kButtons[] = {
   {"Layout", "Layout", "##RibbonPolyVp", "Poly VP", "viewportpoly", "", "Vertex-drawn polygonal viewports are unavailable. Use MVIEW Object to follow a closed paper-space polyline.", false, true},
   {"Home", "Clipboard", "##RibbonPasteHome", "Paste", "Paste", "PASTE", "Paste (Ctrl+V) — place clipboard objects at cursor position.", true, false},
   {"Home", "Clipboard", "##RibbonCopyClipHome", "Copy", "Copy_Clip", "COPYCLIP", "Copy (Ctrl+C) — copy selected objects to clipboard.", false, false},
-  {"Home", "Clipboard", "##ClipCut", "Cut", "c3d_cut", "", "Cut — not implemented yet.", false, true},
+  {"Home", "Clipboard", "##ClipCut", "Cut", "Cut", "CUT", "Cut (Ctrl+X) — copy selected objects to the clipboard, then delete them.\nCommand bar: CUT", false, false},
   {"Home", "Clipboard", "##ClipMatchProps", "Match Properties", "c3d_matchprops", "MATCHPROP", "Match Properties — copy one object's layer, color, linetype and lineweight onto others.\nCommand bar: MATCHPROP or MA", false, false},
   {"Home", "Clipboard", "##ClipPasteSpecial", "Paste Special", "c3d_pastespecial", "", "Paste Special — not implemented yet.", false, true},
   {"Annotate", "Labels & Tables", "##AnnAddLabels", "Add\nLabels", "Annotation_Add", "", "Add Labels — not implemented yet.", true, true},

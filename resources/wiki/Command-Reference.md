@@ -99,6 +99,7 @@ for a compact list inside the program.
 | `OVERKILL` | `OK` | Remove duplicate geometry | [[Commands/overkill]] |
 | `PASTE` | — | Paste from clipboard | [[Commands/paste]] |
 | `PASTEORIG` | `PO` | Paste at original coordinates | [[Commands/pasteorig]] |
+| `CUT` | — | Cut the selection: copy it to the clipboard, then erase it (refused for objects the clipboard cannot carry) | — |
 | `ROTATE` | `RO` | Rotate objects | [[Commands/rotate]] |
 | `SCALE` | `SC` | Scale objects | [[Commands/scale]] |
 | `STRETCH` | `S` | Crossing/window-select, then move only the vertices inside the box | [[Commands/stretch]] |
@@ -572,7 +573,6 @@ Some things are only reachable from the interface:
 | Import and Export DXF / DWG | **File** menu |
 | Undo / Redo | `Ctrl+Z` / `Ctrl+Shift+Z`, Edit menu, ribbon |
 | Copy / Paste to clipboard | `Ctrl+C` / `Ctrl+V`, Edit menu, ribbon |
-| Cut | Right-click ▸ Clipboard ▸ Cut, `Ctrl+X` |
 | Options | **View → Settings…** |
 | Plot and Batch Plot | **Layout ribbon** in paper space |
 | Page Setup Manager, Viewports, Move or Copy layout | Right-click a layout tab |
