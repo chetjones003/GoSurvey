@@ -169,6 +169,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.alignments             = cmd.alignments;       // REQ-480: per-drawing
   doc.viewFrameGroups        = cmd.viewFrameGroups;  // REQ-517: per-drawing
   doc.sampleLines            = cmd.sampleLines;      // REQ-519: per-drawing
+  doc.profiles               = cmd.profiles;         // REQ-520: per-drawing
   doc.surfaceProfiles        = cmd.surfaceProfiles;  // REQ-513
   doc.cadPipingSystems       = cmd.cadPipingSystems;  // indices into cadPipeRuns — travels with it
   doc.blockDefs              = cmd.blockDefs;
@@ -300,6 +301,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.alignments                 = doc.alignments;       // REQ-480
   cmd.viewFrameGroups            = doc.viewFrameGroups;  // REQ-517
   cmd.sampleLines                = doc.sampleLines;      // REQ-519
+  cmd.profiles                   = doc.profiles;         // REQ-520
   cmd.surfaceProfiles            = doc.surfaceProfiles;  // REQ-513
   cmd.cadPipingSystems           = doc.cadPipingSystems;
   // The derived swept solids belong to the drawing we are leaving. Their rebuild is gated on a
@@ -2167,6 +2169,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.alignments           = st.alignments;       // REQ-480
   snap.viewFrameGroups      = st.viewFrameGroups;  // REQ-517: undo restores frames with their alignment
   snap.sampleLines          = st.sampleLines;      // REQ-519: undo restores sample lines and sections
+  snap.profiles             = st.profiles;         // REQ-520: undo restores design profiles
   snap.surfaceProfiles      = st.surfaceProfiles;  // REQ-513
   snap.cadPipingSystems     = st.cadPipingSystems; // issue #486 increment B3 / REQ-345
   snap.blockDefs            = st.blockDefs;
@@ -2297,6 +2300,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.alignments           = snap.alignments;       // REQ-480
   st.viewFrameGroups      = snap.viewFrameGroups;  // REQ-517
   st.sampleLines          = snap.sampleLines;      // REQ-519
+  st.profiles             = snap.profiles;         // REQ-520
   st.surfaceProfiles      = snap.surfaceProfiles;  // REQ-513
   st.cadPipingSystems     = snap.cadPipingSystems; // issue #486 increment B3 / REQ-345
   st.pipeRunWorldSolidsSig = 0;  // force RebuildPipeRunWorldSolids to re-derive from the swap
@@ -8764,6 +8768,12 @@ const CmdEntry kRegistry[] = {
     {"createsheets", "", "Create paper sheets from view frames: CREATESHEETS <alignment>[, <frames>] (frames: ALL or names such as VF-1 VF-3)"},
     {"createsamplelines", "", "Create sample lines along an alignment: CREATESAMPLELINES <alignment>, <start station>, <end station>, <interval>, <left swath>, <right swath>[, <surface>]"},
     {"createsectionsheets", "", "Create section sheets from sample lines: CREATESECTIONSHEETS <alignment>, <sample lines>, <sections per sheet>, <axis elevation>"},
+    {"createdesignprofile", "", "Create an empty design profile on an alignment: CREATEDESIGNPROFILE <alignment>, <profile name>"},
+    {"profilepvi", "", "Add or edit a vertical point of a design profile: PROFILEPVI <profile>, <station>, <elevation>[, <curve length>]"},
+    {"profiledelpvi", "", "Remove a vertical point from a design profile: PROFILEDELPVI <profile>, <station>"},
+    {"profilequery", "", "Report a design profile at a station: PROFILEQUERY <profile>, <station>"},
+    {"profilelist", "", "List the design profiles in the drawing: PROFILELIST"},
+    {"profiledelete", "", "Delete a design profile: PROFILEDELETE <profile>"},
     {"getstationoffset", "", "Station and offset of a point: GETSTATIONOFFSET <alignment>[, <x>, <y> | , POINT, <number>][, SURFACE=<surface>] (alignment alone: pick until ESC)"},
     {"getpointfromstationoffset", "", "Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset>"},
     {"createalignmentfromobjects", "createalignmententities", "Alignment from lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS (pick them) | <name>[, START=][, FILLET=][, REVERSE][, ERASE]"},
@@ -30484,6 +30494,7 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadPointAttrs.clear();
   st.alignments.clear();  // REQ-480
   st.sampleLines.clear();  // REQ-519: sample lines belong to the alignments just removed
+  st.profiles.clear();  // REQ-520: profiles belong to the alignments just removed
   st.pdMode = 0;
   st.pdSize = 0.0;
   // Pipe runs are CAD geometry too (issue #486 / REQ-345). Left behind, an import into a drawing
@@ -49818,7 +49829,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "surfacevisibility" || plotTok == "surfvis" || plotTok == "surfcrossbl" || plotTok == "surflabel" || plotTok == "surfacelegend" || plotTok == "createprofilefromsurface" || plotTok == "profileview" ||
         plotTok == "quickprofile" || plotTok == "qprof" ||
         plotTok == "alignment" || plotTok == "createalignment" || plotTok == "alignmentadd" ||
-        plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "createviewframes" || plotTok == "viewframedelete" || plotTok == "createsheets" || plotTok == "createsamplelines" || plotTok == "createsectionsheets" || plotTok == "getstationoffset" ||
+        plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "createviewframes" || plotTok == "viewframedelete" || plotTok == "createsheets" || plotTok == "createsamplelines" || plotTok == "createsectionsheets" || plotTok == "createdesignprofile" || plotTok == "profilepvi" || plotTok == "profiledelpvi" || plotTok == "profilequery" || plotTok == "profilelist" || plotTok == "profiledelete" || plotTok == "getstationoffset" ||
         plotTok == "getpointfromstationoffset" || plotTok == "createalignmentfromobjects" ||
         plotTok == "createalignmententities" || plotTok == "createalignmentlayout" ||
         plotTok == "alignmentlayout" || plotTok == "alignmentcurvesettings" || plotTok == "stationformat" || plotTok == "alignmentmeta" ||
@@ -49959,6 +49970,18 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunCreateSampleLines(st, rest, log);
       else if (plotTok == "createsectionsheets")
         RunCreateSectionSheets(st, rest, log);
+      else if (plotTok == "createdesignprofile")
+        RunCreateDesignProfile(st, rest, log);
+      else if (plotTok == "profilepvi")
+        RunProfilePvi(st, rest, log);
+      else if (plotTok == "profiledelpvi")
+        RunProfileDelPvi(st, rest, log);
+      else if (plotTok == "profilequery")
+        RunProfileQuery(st, rest, log);
+      else if (plotTok == "profilelist")
+        RunProfileList(st, rest, log);
+      else if (plotTok == "profiledelete")
+        RunProfileDelete(st, rest, log);
       else if (plotTok == "getstationoffset")
         RunGetStationOffset(st, rest, log);
       else if (plotTok == "getpointfromstationoffset")

@@ -2525,6 +2525,24 @@ json BuildRoot(const AppCommandState& st) {
     doc["sampleLines"] = std::move(arr);
   }
 
+  // Design vertical profiles (REQ-520): the PVIs and the alignment id each belongs to. A deleted alignment's id is kept,
+  // so the profile reports "alignment missing" rather than vanishing (REQ-520.7). Omitted when there are none.
+  if (!st.profiles.empty()) {
+    json arr = json::array();
+    for (const alignment::VerticalProfile& p : st.profiles) {
+      json o;
+      o["id"] = p.id;
+      o["name"] = p.name;
+      o["alignmentId"] = p.alignmentId;
+      json pvis = json::array();
+      for (const alignment::VerticalPoint& q : p.points)
+        pvis.push_back(json::array({q.station, q.elevation, q.curveLength}));
+      o["points"] = std::move(pvis);
+      arr.push_back(std::move(o));
+    }
+    doc["designProfiles"] = std::move(arr);
+  }
+
   if (!st.surfaceProfiles.empty()) {
     json profiles = json::array();
     for (const CadSurfaceProfile& profile : st.surfaceProfiles) {
@@ -4872,6 +4890,65 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     }
   }
   alignment::SyncSampleLines(st.alignments, st.sampleLines);
+
+  // Design vertical profiles (REQ-520). Loaded as saved, with type guards: a field of the wrong type is ignored, never
+  // thrown on. A profile is NOT loaded, and the load log names it, when its name is missing or repeats an earlier name,
+  // or when its points are missing or malformed (REQ-520.8): a partial profile would show elevations the designer never
+  // drew. A profile whose alignment is gone is kept (REQ-520.7).
+  st.profiles.clear();
+  if (doc.contains("designProfiles") && doc["designProfiles"].is_array()) {
+    size_t entry = 0;  // 1-based position, so a skipped entry with no usable name can still be named
+    for (const auto& el : doc["designProfiles"]) {
+      ++entry;
+      if (!el.is_object()) {
+        log.push_back("Design profile entry " + std::to_string(entry) + " was not loaded: it is not an object.");
+        continue;
+      }
+      alignment::VerticalProfile p;
+      if (el.contains("id") && el["id"].is_number_unsigned()) p.id = el["id"].get<std::uint64_t>();
+      if (el.contains("name") && el["name"].is_string()) p.name = el["name"].get<std::string>();
+      if (el.contains("alignmentId") && el["alignmentId"].is_number_unsigned())
+        p.alignmentId = el["alignmentId"].get<std::uint64_t>();
+      {  // the commands trim a name they are given, so a stored name is trimmed the same way
+        const size_t first = p.name.find_first_not_of(" \t\r\n");
+        p.name = first == std::string::npos ? std::string() : p.name.substr(first, p.name.find_last_not_of(" \t\r\n") - first + 1);
+      }
+      if (p.name.empty()) {
+        log.push_back("Design profile entry " + std::to_string(entry) + " was not loaded: its name is missing or blank.");
+        continue;
+      }
+      bool repeats = false;  // REQ-520.1: names are unique within the drawing, ignoring capitals
+      for (const alignment::VerticalProfile& q : st.profiles) {
+        std::string a = q.name, b = p.name;
+        for (char& c : a) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        for (char& c : b) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        if (a == b) repeats = true;
+      }
+      if (repeats) {
+        log.push_back("Design profile \"" + p.name + "\" was not loaded: another profile in the file already has that name.");
+        continue;
+      }
+      if (!el.contains("points") || !el["points"].is_array()) {
+        log.push_back("Design profile \"" + p.name + "\" was not loaded: its stored points are missing.");
+        continue;
+      }
+      bool wellFormed = true;
+      for (const auto& pt : el["points"]) {
+        if (pt.is_array() && pt.size() == 3 && pt[0].is_number() && pt[1].is_number() && pt[2].is_number() &&
+            std::isfinite(pt[0].get<double>()) && std::isfinite(pt[1].get<double>()) && std::isfinite(pt[2].get<double>())) {
+          p.points.push_back({pt[0].get<double>(), pt[1].get<double>(), pt[2].get<double>()});
+        } else {
+          wellFormed = false;
+          break;
+        }
+      }
+      if (!wellFormed) {
+        log.push_back("Design profile \"" + p.name + "\" was not loaded: a stored vertical point is malformed.");
+        continue;
+      }
+      st.profiles.push_back(std::move(p));
+    }
+  }
   st.surfaceProfiles.clear();
   if (doc.contains("surfaceProfiles") && doc["surfaceProfiles"].is_array()) {
     for (const auto& el : doc["surfaceProfiles"]) {
@@ -5719,7 +5796,7 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
              "annotationAttrs", "tables", "tableAttrs", "positionMarkers", "positionMarkerAttrs", "multileaders",
              "multileaderAttrs", "cadPoints", "cadPointAttrs", "blockRefs", "blockRefAttrs", "filledRegions",
              "filledRegionAttrs", "meshes", "meshAttrs", "pointClouds",
-             "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "alignments", "viewFrameGroups", "sampleLines", "surfaceProfiles", "surfaces",
+             "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "alignments", "viewFrameGroups", "sampleLines", "designProfiles", "surfaceProfiles", "surfaces",
              "surfaceAttrs", "surveyPoints", "modelImages", "blockFavorites", "blockRecent"})
       doc[key] = json::array();
 

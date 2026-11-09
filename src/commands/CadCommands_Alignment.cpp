@@ -1330,6 +1330,284 @@ void RunCreateSectionSheets(AppCommandState& st, const std::string& args, std::v
                 " sheet(s) from \"" + a->name + "\" on \"" + kTitleBlockFile + "\": " + names + ".");
 }
 
+// ---- REQ-520: design vertical profiles along an alignment (GitHub issue #1163) ----
+
+namespace {
+
+constexpr double kProfileStationTol = 1e-6;
+
+// Index of the profile named \p name (case-insensitive), or -1.
+int FindProfileIndex(const AppCommandState& st, const std::string& name) {
+  const std::string key = Lower(Trim(name));
+  for (size_t i = 0; i < st.profiles.size(); ++i)
+    if (Lower(st.profiles[i].name) == key) return static_cast<int>(i);
+  return -1;
+}
+
+// The alignment with stable id \p id, or nullptr when it has been deleted (REQ-520.7).
+const alignment::Alignment* AlignmentById(const AppCommandState& st, std::uint64_t id) {
+  for (const alignment::Alignment& a : st.alignments)
+    if (a.id == id) return &a;
+  return nullptr;
+}
+
+// The internal station for the displayed station \p displayed on \p a (REQ-517.6a), which must lie on the alignment.
+// False with `why` when it is not exactly one station or is outside the alignment.
+bool InternalStationOnAlignment(const AppCommandState& st, const alignment::Alignment& a, double displayed,
+                                double* internal, std::string* why) {
+  if (!alignment::ResolveDisplayedStation(a, displayed, internal, why)) return false;
+  if (*internal < a.StartStation() - kProfileStationTol || *internal > a.EndStation() + kProfileStationTol) {
+    *why = "the station " + StaFmt(st, displayed) + " is outside the alignment (" + Sta(st, a, a.StartStation()) +
+           " to " + Sta(st, a, a.EndStation()) + ")";
+    return false;
+  }
+  return true;
+}
+
+// The grade as a percent, two decimals (rise over run x 100).
+std::string GradePercent(double grade) {
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%.2f%%", grade * 100.0);
+  return buf;
+}
+
+}  // namespace
+
+// CREATEDESIGNPROFILE <alignment>, <profile name> (REQ-520.6): an empty profile on the alignment. One undo step.
+void RunCreateDesignProfile(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() != 2) {
+    log.push_back("CREATEDESIGNPROFILE - usage: CREATEDESIGNPROFILE <alignment>, <profile name>");
+    return;
+  }
+  if (ActiveProjectPointsReadOnly(st)) {  // REQ-520.6: a read-only project refuses before any change
+    log.push_back("CREATEDESIGNPROFILE - the project is read-only; no profile was created.");
+    return;
+  }
+  const alignment::Alignment* a = Resolve(st, "CREATEDESIGNPROFILE", f[0], log);
+  if (a == nullptr) return;
+  const std::string name = Trim(f[1]);
+  if (name.empty()) {
+    log.push_back("CREATEDESIGNPROFILE - a profile name is required. No profile was created.");
+    return;
+  }
+  if (FindProfileIndex(st, name) >= 0) {
+    log.push_back("CREATEDESIGNPROFILE - a profile named \"" + name + "\" already exists. No profile was created.");
+    return;
+  }
+  const std::uint64_t alignmentId = a->id;
+  const std::string alignmentName = a->name;
+  PushUndoSnapshot(st, "Create design profile");
+  alignment::VerticalProfile p;
+  p.id = st.nextEntityId++;
+  p.name = name;
+  p.alignmentId = alignmentId;
+  st.profiles.push_back(std::move(p));
+  log.push_back("CREATEDESIGNPROFILE - profile \"" + name + "\" on \"" + alignmentName + "\" created with no PVIs.");
+}
+
+// PROFILEPVI <profile>, <station>, <elevation>[, <curve length>] (REQ-520.6): adds the PVI at that station, or changes the
+// elevation and curve length of the PVI already there. Leaving out the curve length means no curve. One undo step.
+void RunProfilePvi(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() < 3 || f.size() > 4) {
+    log.push_back("PROFILEPVI - usage: PROFILEPVI <profile>, <station>, <elevation>[, <curve length>]");
+    return;
+  }
+  if (ActiveProjectPointsReadOnly(st)) {
+    log.push_back("PROFILEPVI - the project is read-only; no PVI was changed.");
+    return;
+  }
+  const int pi = FindProfileIndex(st, f[0]);
+  if (pi < 0) {
+    log.push_back("PROFILEPVI - no profile named \"" + Trim(f[0]) + "\". No PVI was changed.");
+    return;
+  }
+  const std::string profileName = st.profiles[static_cast<size_t>(pi)].name;
+  const alignment::Alignment* a = AlignmentById(st, st.profiles[static_cast<size_t>(pi)].alignmentId);
+  if (a == nullptr) {
+    log.push_back("PROFILEPVI - profile \"" + profileName + "\" has no alignment (alignment missing). No PVI was changed.");
+    return;
+  }
+  double displayed = 0.0, elevation = 0.0, curveLength = 0.0;
+  if (!ParseSta(st, f[1], &displayed) || !ParseNum(Trim(f[2]), &elevation) ||
+      (f.size() == 4 && !ParseNum(Trim(f[3]), &curveLength))) {
+    log.push_back("PROFILEPVI - a station, elevation or curve length is not understood. No PVI was changed.");
+    return;
+  }
+  double station = 0.0;
+  std::string why;
+  if (!InternalStationOnAlignment(st, *a, displayed, &station, &why)) {
+    log.push_back("PROFILEPVI - " + why + ". No PVI was changed.");
+    return;
+  }
+
+  alignment::VerticalProfile candidate = st.profiles[static_cast<size_t>(pi)];
+  bool replaced = false;
+  for (alignment::VerticalPoint& q : candidate.points) {
+    if (std::abs(q.station - station) <= kProfileStationTol) {  // edit: keep the PVI's station
+      q.elevation = elevation;
+      q.curveLength = curveLength;
+      replaced = true;
+      break;
+    }
+  }
+  if (!replaced) {
+    const auto pos = std::find_if(candidate.points.begin(), candidate.points.end(),
+                                  [station](const alignment::VerticalPoint& q) { return q.station > station; });
+    candidate.points.insert(pos, alignment::VerticalPoint{station, elevation, curveLength});
+  }
+  const std::string refusal = alignment::ProfileGeometryRefusal(candidate);
+  if (!refusal.empty()) {  // REQ-520.3: refused input changes nothing
+    log.push_back("PROFILEPVI - refused: " + refusal + ". No PVI was changed.");
+    return;
+  }
+
+  const std::string staText = Sta(st, *a, station);
+  PushUndoSnapshot(st, replaced ? "Edit profile PVI" : "Add profile PVI");
+  st.profiles[static_cast<size_t>(pi)].points = std::move(candidate.points);
+  log.push_back("PROFILEPVI - profile \"" + profileName + "\": PVI at " + staText + (replaced ? " changed" : " added") +
+                " (elevation " + Lin(st, elevation) +
+                (curveLength > 0.0 ? ", curve length " + Lin(st, curveLength) : std::string(", no curve")) + ").");
+}
+
+// PROFILEDELPVI <profile>, <station> (REQ-520.6): removes the PVI at that station. Refused when the rest is not valid.
+void RunProfileDelPvi(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() != 2) {
+    log.push_back("PROFILEDELPVI - usage: PROFILEDELPVI <profile>, <station>");
+    return;
+  }
+  if (ActiveProjectPointsReadOnly(st)) {
+    log.push_back("PROFILEDELPVI - the project is read-only; no PVI was removed.");
+    return;
+  }
+  const int pi = FindProfileIndex(st, f[0]);
+  if (pi < 0) {
+    log.push_back("PROFILEDELPVI - no profile named \"" + Trim(f[0]) + "\". No PVI was removed.");
+    return;
+  }
+  const std::string profileName = st.profiles[static_cast<size_t>(pi)].name;
+  const alignment::Alignment* a = AlignmentById(st, st.profiles[static_cast<size_t>(pi)].alignmentId);
+  if (a == nullptr) {
+    log.push_back("PROFILEDELPVI - profile \"" + profileName + "\" has no alignment (alignment missing). No PVI was removed.");
+    return;
+  }
+  double displayed = 0.0, station = 0.0;
+  std::string why;
+  // Removal matches the PVI by its station, so a PVI left beyond a shortened alignment can still be removed (REQ-520.6),
+  // unless the alignment has station equations: then the gap reason refuses it (REQ-520 item 6).
+  if (!ParseSta(st, f[1], &displayed) || !alignment::ResolveDisplayedStation(*a, displayed, &station, &why)) {
+    log.push_back("PROFILEDELPVI - " + (why.empty() ? std::string("the station is not understood") : why) +
+                  ". No PVI was removed.");
+    return;
+  }
+  alignment::VerticalProfile candidate = st.profiles[static_cast<size_t>(pi)];
+  const auto found = std::find_if(candidate.points.begin(), candidate.points.end(), [station](const alignment::VerticalPoint& q) {
+    return std::abs(q.station - station) <= kProfileStationTol;
+  });
+  if (found == candidate.points.end()) {
+    log.push_back("PROFILEDELPVI - profile \"" + profileName + "\" has no PVI at " + Sta(st, *a, station) +
+                  ". No PVI was removed.");
+    return;
+  }
+  candidate.points.erase(found);
+  const std::string refusal = alignment::ProfileGeometryRefusal(candidate);
+  if (!refusal.empty()) {
+    log.push_back("PROFILEDELPVI - refused: " + refusal + ". No PVI was removed.");
+    return;
+  }
+  const std::string staText = Sta(st, *a, station);
+  PushUndoSnapshot(st, "Delete profile PVI");
+  st.profiles[static_cast<size_t>(pi)].points = std::move(candidate.points);
+  log.push_back("PROFILEDELPVI - profile \"" + profileName + "\": PVI at " + staText + " removed.");
+}
+
+// PROFILEQUERY <profile>, <station> (REQ-520.4, .5): elevation, grade and the derived 3D design point at a displayed
+// station. Refused, with the reason, when the profile's alignment is missing.
+void RunProfileQuery(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() != 2) {
+    log.push_back("PROFILEQUERY - usage: PROFILEQUERY <profile>, <station>");
+    return;
+  }
+  const int pi = FindProfileIndex(st, f[0]);
+  if (pi < 0) {
+    log.push_back("PROFILEQUERY - no profile named \"" + Trim(f[0]) + "\".");
+    return;
+  }
+  const alignment::VerticalProfile& p = st.profiles[static_cast<size_t>(pi)];
+  const alignment::Alignment* a = AlignmentById(st, p.alignmentId);
+  if (a == nullptr) {
+    log.push_back("PROFILEQUERY - profile \"" + p.name + "\" has no alignment (alignment missing), so it has no design path.");
+    return;
+  }
+  double displayed = 0.0, station = 0.0;
+  std::string why;
+  // REQ-520.4: the profile's range answers first ("outside the profile"). A displayed station the alignment cannot resolve
+  // (a station-equation gap) is refused by ResolveDisplayedStation before that; DesignPathPoint checks the alignment range.
+  if (!ParseSta(st, f[1], &displayed) || !alignment::ResolveDisplayedStation(*a, displayed, &station, &why)) {
+    log.push_back("PROFILEQUERY - " + (why.empty() ? std::string("the station is not understood") : why) + ".");
+    return;
+  }
+  const alignment::ProfileSample sample = alignment::ProfileAtStation(p, station);
+  if (!sample.hasValue) {
+    log.push_back("PROFILEQUERY - profile \"" + p.name + "\" at " + Sta(st, *a, station) + ": no value (" + sample.reason + ").");
+    return;
+  }
+  alignment::DesignPoint pt;
+  if (!alignment::DesignPathPoint(*a, p, station, &pt, &why)) {
+    log.push_back("PROFILEQUERY - profile \"" + p.name + "\" at " + Sta(st, *a, station) + ": " + why + ".");
+    return;
+  }
+  log.push_back("PROFILEQUERY - profile \"" + p.name + "\" at " + Sta(st, *a, station) + ": elevation " +
+                Lin(st, sample.elevation) + ", grade " + GradePercent(sample.grade) + ". Design point (" + Lin(st, pt.x) +
+                ", " + Lin(st, pt.y) + ", " + Lin(st, pt.z) + ").");
+}
+
+// PROFILELIST (REQ-520.7): every profile, its alignment and its PVI count. A profile whose alignment is gone says so.
+void RunProfileList(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  if (!Trim(args).empty()) {
+    log.push_back("PROFILELIST - usage: PROFILELIST");
+    return;
+  }
+  if (st.profiles.empty()) {
+    log.push_back("PROFILELIST - no profiles in this drawing.");
+    return;
+  }
+  for (const alignment::VerticalProfile& p : st.profiles) {
+    const alignment::Alignment* a = AlignmentById(st, p.alignmentId);
+    std::string line = "PROFILELIST - \"" + p.name + "\" on " +
+                       (a != nullptr ? "\"" + a->name + "\"" : std::string("alignment missing")) + ", " +
+                       std::to_string(p.points.size()) + " PVI(s)";
+    const std::string refusal = alignment::ProfileGeometryRefusal(p);
+    if (!refusal.empty()) line += "; geometry not valid: " + refusal;
+    log.push_back(line + ".");
+  }
+}
+
+// PROFILEDELETE <profile> (REQ-520.6): deletes the profile. One undo step.
+void RunProfileDelete(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() != 1) {
+    log.push_back("PROFILEDELETE - usage: PROFILEDELETE <profile>");
+    return;
+  }
+  if (ActiveProjectPointsReadOnly(st)) {
+    log.push_back("PROFILEDELETE - the project is read-only; no profile was deleted.");
+    return;
+  }
+  const int pi = FindProfileIndex(st, f[0]);
+  if (pi < 0) {
+    log.push_back("PROFILEDELETE - no profile named \"" + Trim(f[0]) + "\".");
+    return;
+  }
+  const std::string name = st.profiles[static_cast<size_t>(pi)].name;
+  PushUndoSnapshot(st, "Delete design profile");
+  st.profiles.erase(st.profiles.begin() + pi);
+  log.push_back("PROFILEDELETE - profile \"" + name + "\" deleted.");
+}
+
 // GETSTATIONOFFSET <alignment>, <x>, <y>[, SURFACE=<surface>]  (WORLD x/y) - REQ-484.4
 void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   std::vector<std::string> f = SplitFields(args);
