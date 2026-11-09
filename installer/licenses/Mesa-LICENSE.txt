@@ -19,7 +19,7 @@ vendor.
 
 Please do not refer to the library as MesaGL (for legal
 reasons). It's just Mesa or The Mesa 3-D graphics
-library. 
+library.
 
 * OpenGL is a trademark of Silicon Graphics Incorporated.
 
