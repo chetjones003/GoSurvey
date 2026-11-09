@@ -39,6 +39,13 @@ TEST_CASE("Issue #805 Cut is wired to its command", "[ribbon][issue805]") {
   CHECK_FALSE(cut->placeholder);
 }
 
+TEST_CASE("Issue #805 Paste Special opens its paste menu", "[ribbon][issue805]") {
+  const auto* pasteSpecial = FindButton("##ClipPasteSpecial");
+  REQUIRE(pasteSpecial != nullptr);
+  CHECK(std::string(pasteSpecial->command) == "@pasteSpecialMenu");
+  CHECK_FALSE(pasteSpecial->placeholder);
+}
+
 TEST_CASE("Issue #1002 Export to LandXML is wired to its command", "[ribbon][issue1002]") {
   const auto* landXml = FindButton("##RibbonExpLandXml");
   REQUIRE(landXml != nullptr);

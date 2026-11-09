@@ -1,6 +1,7 @@
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
 #include "CadRubberPreview.hpp"
+#include "ProjectWarnings.hpp"  // REQ-383: CheckClipboardPaste, the paste guard PASTEBLOCK shares with PASTE
 #include "StringUtil.hpp"
 #include "util/cadsolid.hpp"
 #include "util/cadpiperun.hpp"  // CadPipeRunEndPorts (issue #486, "pipe end" connection port)
@@ -4241,22 +4242,45 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
         return true;
       }
     }
+    // Issue #805: Paste Special's menu runs this command from the ribbon, so it takes the same guards as
+    // PASTE and PASTEORIG. A stale layout index refuses (as Cut does), and a coordinate-system mismatch refuses
+    // before any change. A paper layout receives the references on its sheet, as PASTEORIG does.
+    PaperLayout* paperTarget = ActivePaperGeometryTarget(st);
+    if (paperTarget == nullptr && st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
+      log.push_back("PASTEBLOCK — the active layout is not available. Switch to model space first.");
+      return true;
+    }
     if (st.clipboard.blockRefs.empty()) {
       log.push_back("PASTEBLOCK — clipboard has no block references.");
+      return true;
+    }
+    const PasteCheck pc = CheckClipboardPaste(st);
+    if (pc.verdict != PasteCheck::Verdict::Ok) {
+      // This command has no warning dialog, so it cannot offer "Paste anyway" or Convert. The message says so.
+      log.push_back(std::string("PASTEBLOCK — not pasted (") + (pc.verdict == PasteCheck::Verdict::Block ? "blocked" : "needs a check") +
+                    "): " + pc.text +
+                    " Paste (Ctrl+V) shows the warning, but it pastes the whole clipboard, not only block references.");
       return true;
     }
     PushUndoSnapshot(st, "Pasteblock");
     for (size_t i = 0; i < st.clipboard.blockRefs.size(); ++i) {
       CadBlockRef r = st.clipboard.blockRefs[i];
       CadBlockTranslate(&r, dx, dy, 0.f);
-      st.cadBlockRefs.push_back(std::move(r));
-      EntityAttributes a = NewBlockAttr(st);
-      if (i < st.clipboard.blockRefAttrs.size())
-        a = st.clipboard.blockRefAttrs[i];
+      // REQ-076: a paste gets new entity ids, so the copied source's id is cleared on both sheet and model.
+      EntityAttributes a = i < st.clipboard.blockRefAttrs.size() ? st.clipboard.blockRefAttrs[i]
+                           : paperTarget != nullptr              ? EntityAttributes{}
+                                                                 : NewBlockAttr(st);
       a.id = 0;
+      if (paperTarget != nullptr) {
+        paperTarget->paperBlockRefs.push_back(std::move(r));
+        paperTarget->paperBlockRefAttrs.push_back(std::move(a));
+        continue;
+      }
+      st.cadBlockRefs.push_back(std::move(r));
       st.cadBlockRefAttrs.push_back(std::move(a));
     }
-    EnsureEntityIds(st);
+    if (paperTarget == nullptr)
+      EnsureEntityIds(st);
     BumpCadGpuCache(st);
     log.push_back("PASTEBLOCK — " + std::to_string(st.clipboard.blockRefs.size()) + " reference(s).");
     return true;
