@@ -1087,6 +1087,10 @@ void EditorWindow::BuildRibbonPages() {
             add("Add Segment", "ALIGNMENTTABLE {alignment}, SEGMENT", "c3d_alignment");
             add("Add Station Equation", "ALIGNMENTTABLE {alignment}, EQUATIONS", "c3d_alignment");
           }
+          else if (id == "##ClipPasteSpecial") {  // Paste Special: the two existing paste variants (issue #805)
+            add("Paste Block References", "PASTEBLOCK", "Paste");
+            add("Paste at Original Coordinates", "PASTEORIG", "Paste_Original_Coordinates");
+          }
           else if (id == "##GeoCaptureArea") { add("Capture Area", "@captureViewport"); add("Pick Area", "@captureArea"); menu->addSeparator(); add("Remove Captured Areas", "@removeCaptures"); }
           else if (id == "##TsAddData") {
             add("Breaklines", "@surfaceBreaklines"); add("Contours", "@surfaceContours"); add("Boundary", "@surfaceBoundary"); add("Point Groups", "@surfaceManager");
@@ -1509,6 +1513,7 @@ void EditorWindow::RefreshRibbon() {
     if (id == "##RibbonPlotPreview" || id == "##RibbonViewDetails" || id == "##OutDwfxExport") enabled = enabled && paper &&
         m_State.activeSpaceIndex >= 0 && static_cast<size_t>(m_State.activeSpaceIndex) < m_State.paperLayouts.size();
     if (id == "##RibbonPasteHome") enabled = enabled && !m_State.clipboard.empty();
+    if (id == "##ClipPasteSpecial") enabled = enabled && !m_State.clipboard.empty();
     if (id == "##RibbonCopyClipHome") enabled = enabled && (!m_State.selection.empty() || !m_State.selectedPaperEntities.empty());
     // REQ-084 (c): Cut is disabled on an empty selection. Survey points are included because Cut copies them.
     if (id == "##ClipCut") {

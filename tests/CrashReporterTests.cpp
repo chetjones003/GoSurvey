@@ -9,7 +9,7 @@
 #endif
 
 TEST_CASE("NormalizeReportChannel keeps stable and beta and maps every other value to dev", "[crash][platform]") {
-  // REQ-425 §8 / D-2026-11-09-a: a developer build must never be reported as a release channel.
+  // REQ-425 §8 / D-2026-11-09-d: a developer build must never be reported as a release channel.
   REQUIRE(crashReporter::NormalizeReportChannel("stable") == "stable");
   REQUIRE(crashReporter::NormalizeReportChannel("beta") == "beta");
   REQUIRE(crashReporter::NormalizeReportChannel("dev") == "dev");

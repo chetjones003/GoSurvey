@@ -558,7 +558,7 @@ bool CommandLineHasArg(const wchar_t* arg) {
 #ifdef _WIN32
 void SetReportChannel(std::string_view channel) {
   // The build's own channel (GOSURVEY_BUILD_CHANNEL), never the user's update preference: a local
-  // build that has the beta preference switched on must still report "dev" (D-2026-11-09-a).
+  // build that has the beta preference switched on must still report "dev" (D-2026-11-09-d).
   const std::string normalized(NormalizeReportChannel(channel));
   std::strncpy(g_reportChannel, normalized.c_str(), sizeof(g_reportChannel) - 1);
   g_reportChannel[sizeof(g_reportChannel) - 1] = '\0';

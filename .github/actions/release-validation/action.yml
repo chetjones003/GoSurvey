@@ -14,7 +14,7 @@ inputs:
     required: false
     default: ''
   build-channel:
-    description: Crash-report channel compiled into the build (stable, beta, or dev). Non-release builds use dev (D-2026-11-09-a).
+    description: Crash-report channel compiled into the build (stable, beta, or dev). Non-release builds use dev (D-2026-11-09-d).
     required: false
     default: 'dev'
   test-parallel:

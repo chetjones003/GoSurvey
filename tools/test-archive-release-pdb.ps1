@@ -16,7 +16,7 @@ $stableKey = Get-PdbObjectKey -Channel 'stable' -Version '0.7.4' -Commit '012345
 if ($stableKey -cne 'symbols/stable/0.7.4/0123456789ab/B9EAF39516DC48E4AE8D7BE49BB99584,9.pdb') {
   throw "Unexpected stable object key: $stableKey"
 }
-# D-2026-11-09-a: a developer build is never archived, so it has no symbol channel of its own.
+# D-2026-11-09-d: a developer build is never archived, so it has no symbol channel of its own.
 $threw = $false
 try { Get-PdbObjectKey -Channel 'dev' -Version '0.7.4' -Commit '0123456789ab' -Identity $identity | Out-Null } catch { $threw = $true }
 if (-not $threw) { throw 'A developer channel was accepted as a symbol channel.' }
