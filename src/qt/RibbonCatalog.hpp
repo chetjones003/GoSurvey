@@ -60,7 +60,7 @@ inline constexpr Button kButtons[] = {
   {"Home", "Clipboard", "##RibbonCopyClipHome", "Copy", "Copy_Clip", "COPYCLIP", "Copy (Ctrl+C) — copy selected objects to clipboard.", false, false},
   {"Home", "Clipboard", "##ClipCut", "Cut", "Cut", "CUT", "Cut (Ctrl+X) — copy selected objects to the clipboard, then delete them.\nCommand bar: CUT", false, false},
   {"Home", "Clipboard", "##ClipMatchProps", "Match Properties", "c3d_matchprops", "MATCHPROP", "Match Properties — copy one object's layer, color, linetype and lineweight onto others.\nCommand bar: MATCHPROP or MA", false, false},
-  {"Home", "Clipboard", "##ClipPasteSpecial", "Paste Special", "c3d_pastespecial", "", "Paste Special — not implemented yet.", false, true},
+  {"Home", "Clipboard", "##ClipPasteSpecial", "Paste Special", "c3d_pastespecial", "@pasteSpecialMenu", "Paste Special — paste the clipboard's block references, or the clipboard at its original coordinates.\nCommand bar: PASTEBLOCK, PASTEORIG", false, false},
   {"Annotate", "Labels & Tables", "##AnnAddLabels", "Add\nLabels", "Annotation_Add", "", "Add Labels — not implemented yet.", true, true},
   {"Annotate", "Labels & Tables", "##AnnAddTables", "Add\nTables", "Table", "@addTablesMenu", "Add Tables — a point table, or a line, curve, spiral, segment or station equation table of the selected alignment.\nCommand bar: ADDPOINTTABLE, ALIGNMENTTABLE", true, false},
   {"Annotate", "Text", "##RibbonMtextLarge", "Multiline\nText", "mtext", "MTEXT", "Multiline Text — multiline in a frame; after box, edit in the on-drawing editor (Ctrl+Enter reformats; Save to place). Double-click MTEXT to edit.\nCommand bar: MTEXT or MT", true, false},

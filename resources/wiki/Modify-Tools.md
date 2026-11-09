@@ -252,6 +252,7 @@ are reported in the command log.
 | **Copy** | `Ctrl+C` | Edit ▸ Copy, ribbon Copy | — |
 | **Paste** | `Ctrl+V` | Edit ▸ Paste, ribbon Paste | `PASTE` |
 | **Paste at Original Coordinates** | — | Right-click ▸ Clipboard ▸ Paste at Original Coordinates | `PASTEORIG`, `PO` |
+| **Paste Special** | — | Home ribbon ▸ Clipboard ▸ Paste Special: Paste Block References, or Paste at Original Coordinates | `PASTEBLOCK`, `PASTEORIG` |
 
 > **Note on Cut** — Cut copies the selection to the clipboard, then erases it, so one Undo brings
 > the objects back. It needs a selection. Cut works only when the clipboard can carry every selected

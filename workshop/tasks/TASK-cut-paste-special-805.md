@@ -113,6 +113,38 @@ ASSUMPTION-3: The allow-lists match the types the copy loops handle.
   no new behaviour; (B) real PASTESPEC for external formats — a new feature, large; (C) keep it
   not-implemented and track separately.
 - **Recommendation:** (A), with (B) as a separate issue.
+- **Council round 1 (3 Haiku reviewers, read-only; scores 7, 5, 6) and fixes (fix-all):**
+  1. Blocker: PASTEBLOCK skipped the REQ-383 coordinate-system check that PASTE and PASTEORIG run. Fixed:
+     `CheckClipboardPaste` runs first; any Block or Warn verdict refuses before any change and points to
+     Paste (Ctrl+V) for the full warning. Test `pasteBlockRefusesCoordinateMismatch`.
+  2. Should-fix: the paper refusal I first added rested on a false premise. PASTE and PASTEORIG already
+     place block references on the sheet (`CommitPasteIntoPaper`). Replaced: PASTEBLOCK now places them in
+     `paperBlockRefs` in a paper layout. Test `pasteBlockPlacesReferencesInActiveSpace`.
+  3. Should-fix: a stale layout index (activeSpaceIndex past the layout list) wrote into the model store.
+     Fixed with Cut's guard (`activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace`). Test
+     `pasteBlockRefusesStaleLayoutIndex`.
+  4. Should-fix: tooltip overclaimed ("paste the clipboard as block references"). Reworded to
+     "the clipboard's block references".
+  5. Recorded in D-2026-11-09-a and REQ-038: the typed PASTEBLOCK changes are the paper routing and the
+     guards above. Wiki row (in-repo and public, commits adfa384 then f56fbf6) keeps the plain Paste Special row.
+- **Council round 2 (3 fresh Haiku reviewers; scores 6, 6, 7) and fixes:**
+  1. Blocker (REQ-076): the paper branch kept the copied source's entity id. Fixed: both branches clear the id
+     (`a.id = 0`). Test `pasteBlockPlacesReferencesInActiveSpace` sets source id 42 and asserts the sheet copy
+     has id 0.
+  2. Should-fix: the Warn refusal's hint pointed at Ctrl+V, which pastes the whole clipboard. The message now
+     says "not pasted (needs a check)", names that limit, and points at Ctrl+V for the warning. Still a known
+     gap: no block-only override (recorded in D-2026-11-09-a).
+  3. Should-fix: the spec said PASTE applies the stale-index guard. It does not; only Cut does. Wording
+     corrected in D-2026-11-09-a and REQ-038. REQ-038 now also names the paper routing.
+  4. Should-fix: the coordinate-mismatch test asserted only the count. It now asserts the `blocked` line and
+     the zone name in `m_Log`.
+  5. Nit, kept: the menu item stays enabled on a line-only clipboard; the typed `PASTEBLOCK dx, dy` still
+     takes offsets (the menu uses zero).
+- **Known limits, kept on purpose:** the Paste Special menu stays enabled on any non-empty clipboard. On a
+  line-only clipboard "Paste Block References" logs "clipboard has no block references" rather than being
+  greyed out, because menu items are built once and not refreshed with the clipboard. With no offset,
+  PASTEBLOCK places references where they were copied (zero offset, no cursor preview). Neither PASTE nor
+  PASTEBLOCK has a read-only-drawing guard (pre-existing; Ctrl+V has the same gap).
 
 ## 9. REQ-453 documentation review (product sources)
 - `README.md` — reviewed; no mention of Cut, Paste Special or Ctrl+X. No update needed.
@@ -124,3 +156,8 @@ ASSUMPTION-3: The allow-lists match the types the copy loops handle.
 - Public GitHub wiki (chetjones003/GoSurvey.wiki) — updated to match: Modify-Tools.md, Known-Limitations.md,
   Keyboard-Shortcuts.md, Command-Reference.md. Pushed as commits b8b85e33 and 33ee34e (master), checked with
   `git ls-remote` (HEAD 33ee34e).
+- Paste Special (this PR): in-repo `resources/wiki/Modify-Tools.md` gained a Paste Special row (the note
+  names PASTEBLOCK and PASTEORIG). Public wiki: same row pushed as 181006a, then the paper-sheet row
+  confirmed as f56fbf6 (after adfa384 briefly said "model space only"; that was reverted before the PR).
+  Known-Limitations, Keyboard-Shortcuts and Command-Reference need no change: no new key or command.
+- `README.md` and `PRIVACY.md` — reviewed for Paste Special; no update needed.

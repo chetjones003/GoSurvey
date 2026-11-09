@@ -643,7 +643,7 @@ requirements is a planning failure, not a sign of rigor.
   uses 1:1 raw units (a copied known length transfers numerically unchanged).
 - Owner-layer: Commands / UI / Domain / IO
 - Status: accepted
-- Revisions: 2026-06-17 — initial (clipboard copy/paste across spaces; ADR-013).
+- Revisions: 2026-06-17 — initial (clipboard copy/paste across spaces; ADR-013). 2026-11-09 — Home ▸ Clipboard ▸ Paste Special is a menu of the two existing paste variants, PASTEBLOCK and PASTEORIG (D-2026-11-09-a, GitHub issue #805). No new paste behaviour: PASTEBLOCK places block references in the active space (the sheet in a paper layout, the model otherwise), refuses a layout index that names no layout (as Cut does), and takes the REQ-383 clipboard check that PASTE and PASTEORIG take (D-2026-11-09-a).
 
 ### REQ-039 — Paper-space objects have full model-space parity
 - Purpose: paper space is a peer object space, not a second-class one — the user edits a
