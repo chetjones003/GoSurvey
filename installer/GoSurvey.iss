@@ -112,6 +112,8 @@ Source: "{#BuildDir}\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\qt.conf"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\qt-plugins\*"; DestDir: "{app}\qt-plugins"; Flags: ignoreversion recursesubdirs createallsubdirs
+; The licence texts that installer/License.txt names (REQ-520). Relative to this script's folder.
+Source: "licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Redistributable under Microsoft's license terms; installed quietly during setup (see [Run]).
 Source: "{#BuildDir}\vc_redist.x64.exe"; DestDir: "{app}\redist"; DestName: "VC_redist.x64.exe"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
