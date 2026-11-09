@@ -955,6 +955,7 @@ if(GOSURVEY_BUILD_HEADLESS)
     src/platform/HeadlessFileDialogs.cpp
     src/platform/HeadlessPdfAttach.cpp
     tests/headless/HeadlessDriver.cpp
+    tests/TestSoundGuard.cpp
     src/qt/QtText.cpp
     tests/headless/FuzzGenerator.cpp
     tests/headless/Minimizer.cpp
@@ -1065,6 +1066,8 @@ if(GOSURVEY_BUILD_TESTS)
 
   enable_testing()
   add_executable(GoSurveyTests
+    tests/TestSoundGuard.cpp
+    tests/TestSoundGuardTests.cpp
     tests/TraverseTests.cpp
     tests/EcefTransformTests.cpp
     tests/NumFormatTests.cpp
