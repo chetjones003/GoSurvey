@@ -17422,3 +17422,43 @@ capability that does not exist. They are recorded here rather than quietly dropp
   elevation are decided by D-2026-11-08-h (items 8 and 11) and can be changed by the user.
 - Status: accepted (2026-11-08, D-2026-11-08-h; GitHub #1001). The user's request to implement #1001 is the
   acceptance, as for REQ-518 (D-2026-11-07-c). Items 7 to 14 settle the open choices above.
+
+### REQ-520 — Installer licence notices name Qt and match the installed files (GitHub issue #1025)
+
+- Purpose: the installer shows the licence and third-party notices a user reads before installing. It ships Qt's DLLs
+  and plugins, but the notice does not name Qt. Qt is LGPL-3.0, which requires the product to say it uses Qt, name the
+  licence and give the licence text or a link. The notice also points at a `licenses` folder that the installer never
+  installed, keeps notices for two libraries that are no longer shipped (GLFW and Dear ImGui), and keeps an MIT grant
+  that reads as an alternative to the GPL.
+- Priority: must
+- Type: functional (installer content)
+- Depends on: ADR-041(e) (the product is GPL-3.0-or-later because it links LibreDWG); REQ-440 (Qt is the only
+  frontend); ADR-029 (the installer and its licence screen).
+- Statement:
+  1. **Qt is named.** `installer/License.txt` states that GoSurvey uses Qt, copyright The Qt Company Ltd. and other
+     contributors, licensed under LGPL-3.0. It names the Qt version shipped (6.8.3 for the current kit), the Qt
+     modules used (Core, Gui, Network, OpenGL, OpenGLWidgets, Svg, Widgets), the fact that Qt is linked dynamically
+     and may be replaced by a modified or compatible build, and where the Qt source is available.
+  2. **Every shipped Qt file is covered.** Each Qt DLL and each plugin in the installer payload (`qt-plugins/`) is
+     named in the notice, and each Qt-bundled third-party component in those files (for example PCRE2, zlib,
+     libpng, libjpeg, FreeType, HarfBuzz, double-conversion) is named with its licence and copyright holder.
+  3. **Other shipped DLLs are covered.** The notice also names the other DLLs in the payload that do not come from
+     Qt's own module list: the Mesa software OpenGL (`opengl32sw.dll`), the DirectX shader compiler
+     (`dxcompiler.dll`), and the Microsoft runtime DLLs (`d3dcompiler_47.dll`, `dxil.dll`).
+  4. **One licence statement for GoSurvey.** The notice says GoSurvey is licensed under GPL-3.0-or-later, because it
+     links LibreDWG (ADR-041(e)). The historical MIT grant is removed; no alternative licence is offered.
+  5. **Stale notices are removed.** Notices for libraries that are not in the installer (GLFW and Dear ImGui) are
+     removed.
+  6. **The licences folder exists.** The licence texts that the notice refers to (GPL-3.0, LGPL-3.0, and the full text
+     of every permissive licence that requires its text to be distributed) are kept in `installer/licenses/` and
+     installed to `{app}\licenses\` by `installer/GoSurvey.iss`. The notice refers to that folder only because it
+     exists.
+  7. **Verified on the built installer.** The built installer contains every Qt DLL and plugin file, the `licenses`
+     folder, and the updated `License.txt`.
+- Owner-layer: Packaging (`installer/`); no application code.
+- Assumptions (recorded, not asked): the Qt version named in the notice is the kit version that `build.bat` uses by
+  default (6.8.3). When the kit changes, the notice changes with it. Vendored libraries that the notice does not yet
+  name (for example OpenXLSX, libe57format, xerces-c, laszip, miniz, nlohmann, pugixml, stb_image) are not
+  covered by this REQ; they are a separate follow-up.
+- Status: accepted (2026-11-08, D-2026-11-08-j; GitHub #1025). The user accepted the drafted criteria as written and
+  chose to remove the MIT grant and install a `licenses` folder.
