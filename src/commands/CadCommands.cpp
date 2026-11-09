@@ -19505,13 +19505,17 @@ void CutSelectionToClipboard(AppCommandState& st, std::vector<std::string>& log)
     }
   }
 
-  // A survey point and its label are deleted in two steps. The point's step runs first, and the entity step
-  // pushes its own undo frame last. Dropping that last frame leaves the frame taken before the whole Cut, so one
-  // Undo restores everything. Matching the frame by its label, not by counting, keeps this right when the undo
-  // history is full: the cap drops the oldest frame, so the count alone cannot show that a frame was added.
+  // A survey point and its label are deleted in two steps, and each step pushes an undo frame. The point's step
+  // runs first, so the frame it pushes holds the state from before the whole Cut. The entity step pushes its frame
+  // last, and dropping that frame leaves one undo step for the whole Cut. The history cap is switched off while
+  // both steps run, so neither frame can evict the pre-Cut frame (this matters at the minimum limit of 1). The cap
+  // is restored and enforced afterwards.
   const bool deletesTwice = !st.selectedSurveyPointIndices.empty() && !st.selection.empty();
+  const int savedHistoryCap = st.undoHistoryMaxSize;
+  if (deletesTwice) st.undoHistoryMaxSize = 0;
   CopySelectionToClipboard(st, log);
   StartDeleteCommand(st, log);
+  st.undoHistoryMaxSize = savedHistoryCap;
   const int idx = st.activeDrawingIdx;
   if (deletesTwice && idx >= 0 && static_cast<size_t>(idx) < st.documents.size()) {
     auto& undo = st.documents[static_cast<size_t>(idx)].undoStack;
@@ -19519,6 +19523,17 @@ void CutSelectionToClipboard(AppCommandState& st, std::vector<std::string>& log)
       undo.pop_back();
       if (!undo.empty()) undo.back().description = "Cut";
     }
+    if (savedHistoryCap > 0)
+      while (static_cast<int>(undo.size()) > savedHistoryCap) undo.erase(undo.begin());
+  }
+  // Success is the erase clearing the selection. ExecuteDeleteSelection stops early, and keeps the selection,
+  // when a grading group cannot be rebuilt; the paper erase clears its selection only when it completes.
+  const bool erased = paper ? st.selectedPaperEntities.empty() : st.selection.empty();
+  if (!erased) {
+    log.push_back(deletesTwice
+                      ? "CUT — only the survey points were erased; the lines could not be. Undo restores the survey points."
+                      : "CUT — nothing was erased; the selection could not be removed. The copy is on the clipboard.");
+    return;
   }
   log.push_back("CUT — copied to the clipboard and erased. Undo restores the objects.");
 }

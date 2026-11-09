@@ -12259,6 +12259,26 @@ private Q_SLOTS:
     QCOMPARE(state.userLinesFlat.size(), std::size_t(6));
   }
 
+  // Issue #805: at the minimum undo history of 1, a survey point + line Cut still undoes in one step.
+  void cutOfSurveyPointAndLineUndoesInOneStepAtHistoryLimitOne() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    state.undoHistoryMaxSize = 1;
+    SurveyPoint point; point.id = 9; point.easting = 10.0; point.northing = 20.0; point.description = "ONE";
+    state.surveyPoints = {point};
+    state.selectedSurveyPointIndices = {0};
+    state.userLinesFlat = {100, 100, 0, 110, 100, 0};
+    state.selection = {{SelectedEntity::Type::LineSeg, 0}};
+    std::vector<std::string> log;
+    CutSelectionToClipboard(state, log);
+    QVERIFY(state.surveyPoints.empty());
+    QVERIFY(state.userLinesFlat.empty());
+    QCOMPARE(state.documents[static_cast<std::size_t>(state.activeDrawingIdx)].undoStack.size(), std::size_t(1));
+    DoUndo(state, log);
+    QCOMPARE(state.surveyPoints.size(), std::size_t(1));
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(6));
+  }
+
   // Issue #805: a paper viewport is not copied, so a paper Cut that selects one is refused and nothing is erased.
   void cutRefusesPaperViewport() {
     EditorWindow window; window.CreateDrawingFromTemplate(0);

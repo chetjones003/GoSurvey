@@ -90,10 +90,11 @@ ASSUMPTION-3: The allow-lists match the types the copy loops handle.
   was made and no three-reviewer score panel was run, so the paired comparison is INCONCLUSIVE (the Civil 3D
   blocker is recorded here, not claimed as a pass). GoSurvey-only captures: build/artifacts/qt-editor/manual/shard-4/artifacts/
   (issue805-cut-disabled-empty-selection.png, issue805-cut-enabled-with-selection.png).
-- Known limit: with the undo history set to its minimum of 1, a survey-point + line Cut keeps only the
-  newest frame, so one Undo cannot restore the point. Two steps are needed at that setting. Not fixed here.
-- Known limit: if the grading-group rebuild stops an erase early (ExecuteDeleteSelection), the survey points
-  are gone and the lines stay, but the log still says the objects were copied and erased.
+- Fixed after PR-Agent review (PR #1182): the undo history cap is switched off while a survey-point + line Cut
+  runs, so the minimum limit of 1 also undoes in one step (test cutOfSurveyPointAndLineUndoesInOneStepAtHistoryLimitOne).
+- Fixed after PR-Agent review: a grading-group rebuild that stops the erase now reports "only the survey points
+  were erased" (or "nothing was erased") instead of success. Undo restores the survey points. No regression test:
+  building a grading group in the test harness was not attempted; verified by reading the early return.
 - Known limit: a single-step Cut records its undo frame as "Delete", so Undo's log says "UNDO: Delete".
 
 ## 8. SPEC GAP — Paste Special (evidence pass done)
