@@ -44,7 +44,8 @@ constexpr wchar_t kTestCrashArg[]         = L"--gosurvey-test-crash";
 constexpr uintmax_t kMaxCrashDumpBytes   = 10u * 1024u * 1024u;
 constexpr size_t    kMaxCrashReportBytes = 16384;
 
-char g_reportChannel[16] = "stable";
+// Until SetReportChannel runs, a report says "dev": an unset channel must never look like a release.
+char g_reportChannel[16] = "dev";
 
 std::string ExceptionCodeToHumanSummary(unsigned long code) {
   switch (code) {
@@ -555,15 +556,11 @@ bool CommandLineHasArg(const wchar_t* arg) {
 
 #ifdef _WIN32
 void SetReportChannel(std::string_view channel) {
-  assert(!channel.empty());
-  const std::string ch(channel);
-  if (ch == "beta") {
-    std::strncpy(g_reportChannel, "beta", sizeof(g_reportChannel) - 1);
-    g_reportChannel[sizeof(g_reportChannel) - 1] = '\0';
-  } else {
-    std::strncpy(g_reportChannel, "stable", sizeof(g_reportChannel) - 1);
-    g_reportChannel[sizeof(g_reportChannel) - 1] = '\0';
-  }
+  // The build's own channel (GOSURVEY_BUILD_CHANNEL), never the user's update preference: a local
+  // build that has the beta preference switched on must still report "dev" (D-2026-11-09-a).
+  const std::string normalized(NormalizeReportChannel(channel));
+  std::strncpy(g_reportChannel, normalized.c_str(), sizeof(g_reportChannel) - 1);
+  g_reportChannel[sizeof(g_reportChannel) - 1] = '\0';
 }
 
 bool WriteMinidumpWithHelper(const std::filesystem::path& dumpPath, void* exceptionPointers) {

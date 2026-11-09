@@ -273,13 +273,18 @@ jobs:
           version-suffix: ${{ steps.ver.outputs.suffix }}
           version-build: ${{ steps.ver.outputs.buildField }}
           beta-version: ${{ steps.ver.outputs.betaVersion }}
+          # D-2026-11-09-a: only a published channel build reports stable or beta; a feature build reports dev.
+          build-channel: ${{ contains('stable beta', steps.ver.outputs.channel) && steps.ver.outputs.channel || 'dev' }}
           test-parallel: '8'
 
       - name: Test release PDB archive validation
         shell: pwsh
-        run: ./tools/test-archive-release-pdb.ps1
+        run: |
+          ./tools/test-archive-release-pdb.ps1
+          ./tools/test-prune-release-pdb.ps1
 
       - name: Archive private release PDB
+        id: archive-pdb
         # REQ-425 / issue #1004: archive symbols from this exact build before any package
         # artifact is staged. The R2 key is separate from the crash-dumps/ lifecycle prefix.
         if: >-
@@ -296,7 +301,25 @@ jobs:
             -ExecutablePath 'build/GoSurvey.exe' `
             -PdbPath 'build/.cmake/release/symbols/GoSurvey.pdb' `
             -Version '${{ steps.ver.outputs.version }}' `
+            -Channel '${{ steps.ver.outputs.channel }}' `
             -Commit (git rev-parse --short=12 HEAD)
+
+      - name: Prune superseded private release PDBs
+        # D-2026-11-09-b: runs only after the new PDB is in R2 (a failed archive stops the job first).
+        # It deletes older PDBs of this channel only, and never the one just archived.
+        if: >-
+          (github.ref_name == 'beta' ||
+           (github.ref_name == 'master' && steps.gate.outputs.publish == 'true')) &&
+          inputs.beta_notes_validation != true
+        shell: pwsh
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          ./tools/prune-release-pdb.ps1 `
+            -Channel '${{ steps.ver.outputs.channel }}' `
+            -CurrentKey '${{ steps.archive-pdb.outputs.pdb-key }}'
 
       - name: REQ-336 assert whats-new.md is packaged
         # Runtime falls back if the file is missing; CI must still refuse to ship without it.

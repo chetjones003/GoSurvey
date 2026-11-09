@@ -8,10 +8,18 @@ $pdbIdentity = ConvertFrom-PdbSummaryOutput -Lines $pdbSummary
 $identity = Assert-PdbMatchesExecutable -ExecutableIdentity $exeIdentity -PdbIdentity $pdbIdentity
 if ($identity -cne 'B9EAF39516DC48E4AE8D7BE49BB99584,9') { throw "Unexpected report PDB identity: $identity" }
 
-$key = Get-PdbObjectKey -Version '0.7.4' -Commit '0123456789ab' -Identity $identity
-if ($key -cne 'symbols/0.7.4/0123456789ab/B9EAF39516DC48E4AE8D7BE49BB99584,9.pdb') {
+$key = Get-PdbObjectKey -Channel 'beta' -Version '0.7.4' -Commit '0123456789ab' -Identity $identity
+if ($key -cne 'symbols/beta/0.7.4/0123456789ab/B9EAF39516DC48E4AE8D7BE49BB99584,9.pdb') {
   throw "Unexpected object key: $key"
 }
+$stableKey = Get-PdbObjectKey -Channel 'stable' -Version '0.7.4' -Commit '0123456789ab' -Identity $identity
+if ($stableKey -cne 'symbols/stable/0.7.4/0123456789ab/B9EAF39516DC48E4AE8D7BE49BB99584,9.pdb') {
+  throw "Unexpected stable object key: $stableKey"
+}
+# D-2026-11-09-a: a developer build is never archived, so it has no symbol channel of its own.
+$threw = $false
+try { Get-PdbObjectKey -Channel 'dev' -Version '0.7.4' -Commit '0123456789ab' -Identity $identity | Out-Null } catch { $threw = $true }
+if (-not $threw) { throw 'A developer channel was accepted as a symbol channel.' }
 
 foreach ($badCodeView in @(
   @('no CodeView directory'),
@@ -27,14 +35,14 @@ try { ConvertFrom-PdbSummaryOutput -Lines @('not a PDB summary') | Out-Null } ca
 if (-not $threw) { throw 'A PDB summary without GUID/age was accepted.' }
 
 $threw = $false
-try { Get-PdbObjectKey -Version '0.7.4' -Commit 'short' -Identity $identity | Out-Null } catch { $threw = $true }
+try { Get-PdbObjectKey -Channel 'beta' -Version '0.7.4' -Commit 'short' -Identity $identity | Out-Null } catch { $threw = $true }
 if (-not $threw) { throw 'A non-build-identified commit was accepted.' }
 
 $missingPath = Join-Path $env:TEMP 'gosurvey-missing-release-pdb-test-input'
 $threw = $false
 try {
   & (Join-Path $PSScriptRoot 'archive-release-pdb.ps1') `
-    -ExecutablePath $missingPath -PdbPath $missingPath -Version '0.7.4' -Commit '0123456789ab' -DryRun
+    -ExecutablePath $missingPath -PdbPath $missingPath -Version '0.7.4' -Commit '0123456789ab' -Channel 'beta' -DryRun
 } catch { $threw = $true }
 if (-not $threw) { throw 'Missing executable/PDB inputs were accepted.' }
 

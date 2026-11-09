@@ -8,6 +8,17 @@
 #include <windows.h>
 #endif
 
+TEST_CASE("NormalizeReportChannel keeps stable and beta and maps every other value to dev", "[crash][platform]") {
+  // REQ-425 §8 / D-2026-11-09-a: a developer build must never be reported as a release channel.
+  REQUIRE(crashReporter::NormalizeReportChannel("stable") == "stable");
+  REQUIRE(crashReporter::NormalizeReportChannel("beta") == "beta");
+  REQUIRE(crashReporter::NormalizeReportChannel("dev") == "dev");
+  REQUIRE(crashReporter::NormalizeReportChannel("") == "dev");
+  REQUIRE(crashReporter::NormalizeReportChannel("none") == "dev");
+  REQUIRE(crashReporter::NormalizeReportChannel("Beta") == "dev");
+  REQUIRE(crashReporter::NormalizeReportChannel("beta ") == "dev");
+}
+
 TEST_CASE("ExceptionCodeToWireReason maps common Windows codes", "[crash][platform]") {
 #ifdef _WIN32
   REQUIRE(crashReporter::ExceptionCodeToWireReason(EXCEPTION_ACCESS_VIOLATION) == "access_violation");

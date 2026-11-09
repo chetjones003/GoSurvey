@@ -99,6 +99,14 @@ set(GOSURVEY_VERSION_SUFFIX "" CACHE STRING
 set(GOSURVEY_VERSION_BUILD "0" CACHE STRING
     "Fourth field of the Windows VERSIONINFO quad (default: 0)")
 
+# REQ-425 §8 / D-2026-11-09-a: the channel a build reports in crash and startup reports. CI release
+# builds pass stable or beta; every other build is dev, so it is never matched to a published PDB.
+set(GOSURVEY_BUILD_CHANNEL "dev" CACHE STRING
+    "Crash-report channel of this build: stable, beta, or dev (default for developer builds)")
+if(NOT GOSURVEY_BUILD_CHANNEL MATCHES "^(stable|beta|dev)$")
+  message(FATAL_ERROR "GOSURVEY_BUILD_CHANNEL must be stable, beta or dev (got '${GOSURVEY_BUILD_CHANNEL}').")
+endif()
+
 set(GOSURVEY_GIT_COMMIT "" CACHE STRING
     "Short git commit recorded in crash reports (empty: read from git at configure time)")
 if(NOT GOSURVEY_GIT_COMMIT)

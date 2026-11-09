@@ -19,6 +19,12 @@ std::string TruncateUtf8(std::string_view text, std::size_t maxBytes) {
   return std::string(text.substr(0, cut));
 }
 
+std::string_view NormalizeReportChannel(std::string_view channel) {
+  if (channel == "stable" || channel == "beta")
+    return channel;
+  return "dev";
+}
+
 std::string ExceptionCodeToWireReason(unsigned long exceptionCode) {
 #ifdef _WIN32
   switch (exceptionCode) {

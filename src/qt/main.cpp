@@ -6,6 +6,7 @@
 #include "PdfAttach.hpp"
 #include "StartupFailure.hpp"
 #include "UserPrefs.hpp"
+#include "Version.hpp"
 #include <QApplication>
 #include <QGuiApplication>
 #include <QFile>
@@ -212,7 +213,7 @@ int main(int argc, char** argv) {
     // REQ-093: the minimum display time counts from here, so the bar animates for its whole span
     // instead of sitting still while the window above is being built.
     if (!smoke) { splashClock.restart(); advanceSplash(); }
-    crashReporter::SetReportChannel(window.State().updatePrefs.useBetaChannel ? "beta" : "stable");
+    crashReporter::SetReportChannel(GOSURVEY_BUILD_CHANNEL);
     if (!smoke) {
       // REQ-080: launch the anonymous ping on its own worker immediately; no network result
       // participates in splash timing, update handling, or opening the editor.
