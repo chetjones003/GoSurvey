@@ -1,3 +1,6 @@
+Source: Mesa 11.2.2 licence page, docs/license.html at tag mesa-11.2.2 of
+https://gitlab.freedesktop.org/mesa/mesa, converted to plain text.
+
 License / Copyright Information
 
   The Mesa 3D Graphics Library

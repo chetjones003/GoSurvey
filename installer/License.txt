@@ -70,7 +70,7 @@ Qt6Core.dll
   zlib (compression)
     Copyright (C) Jean-loup Gailly and Mark Adler. Zlib. Text: Zlib.txt
   SipHash
-    Copyright (C) 2012-2014 Jean-Philippe Aumasson. CC0-1.0. Text: CC0-1.0.txt
+    Copyright (C) 2012-2014 Jean-Philippe Aumasson and Daniel J. Bernstein. CC0-1.0. Text: CC0-1.0.txt
   BLAKE2 (hashing)
     Copyright Samuel Neves and contributors. Offered by Qt under CC0-1.0 or
     Apache-2.0. Text: CC0-1.0.txt
@@ -85,8 +85,11 @@ Qt6Core.dll
     Copyright (c) 2001 Robert Penner. BSD-3-Clause. Text: BSD-3-Clause.txt
   Apache Tika MIME type database
     Copyright The Apache Software Foundation. Apache-2.0. Text: Apache-2.0.txt
-  MD4, MD5 and SHA-1 (hashing)
-    Public domain.
+  MD4 and MD5 (hashing)
+    Public domain, per the source files.
+  SHA-1 (hashing)
+    Copyright Dominik Reichl; 2016 The Qt Company Ltd. Public domain
+    (LicenseRef-SHA1-Public-Domain).
 
 Qt6Network.dll
   libpsl (public suffix library)
@@ -157,8 +160,9 @@ Qt6Gui.dll and the Qt image plugins
 
 Qt6Svg.dll
   xsvg (SVG parser)
-    HPND-sell-variant licence. Text: HPND.txt
-    Copyright holder as recorded in Qt's SBOM: USC/Information Sciences Institute.
+    Copyright 2002 USC/Information Sciences Institute.
+    Licence identifier HPND-sell-variant (Qt's SBOM). The standard HPND text is in
+    HPND.txt; the sell variant's own wording is in Qt's qtsvg source, not in this folder.
 
 qt-plugins\platforms\qwindows.dll
   Wintab API headers
@@ -168,10 +172,10 @@ qt-plugins\platforms\qwindows.dll
 OTHER SHIPPED LIBRARIES THAT ARE NOT FROM THE QT MODULE LIST
 -------------------------------------------------------------------------------
 Mesa 3D software OpenGL (opengl32sw.dll, Mesa 11.2.2)
-  The Mesa 3D Graphics Library. The core library is MIT-licensed; other
-  components carry their own terms. The full licence and copyright notices
-  are in licenses\Mesa-LICENSE.txt, which is Mesa's own licence page for
-  this version.
+  Copyright (C) 1999-2007 Brian Paul and other Mesa contributors. The core
+  library is MIT-licensed; other components carry their own terms. The full
+  notices are in licenses\Mesa-LICENSE.txt, which is Mesa's licence page for
+  version 11.2.2 (tag mesa-11.2.2).
   Source: https://gitlab.freedesktop.org/mesa/mesa
 
 DirectX Shader Compiler (dxcompiler.dll, version 1.8.2502.11)
@@ -183,8 +187,8 @@ Microsoft runtime DLLs (d3dcompiler_47.dll, dxil.dll)
   Copyright (c) Microsoft Corporation. Redistributed under Microsoft's
   redistribution terms for Direct3D components.
 
-Microsoft Visual C++ runtime (vc_redist.x64.exe, and the runtime DLLs that
-release builds carry beside GoSurvey.exe)
+Microsoft Visual C++ runtime (vc_redist.x64.exe, and, where the release
+workflow copies them, the runtime DLLs beside GoSurvey.exe)
   Copyright (c) Microsoft Corporation. Redistributed under Microsoft's
   Visual C++ Redistributable licence terms.
 

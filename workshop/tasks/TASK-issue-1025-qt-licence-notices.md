@@ -114,10 +114,10 @@ platforms, styles, tls).
   4. One licence statement for GoSurvey (GPL-3.0-or-later; MIT grant removed): MET.
   5. Stale notices removed (GLFW, Dear ImGui): MET.
   6. The licences folder exists and its texts are shipped: MET (27 files, packed by GoSurvey.iss).
-  7. The built installer contains the files: MET AT COMPILE TIME (compile record), NOT on an installed machine.
-     The item says "verified on the built installer"; the installed files were not listed (see section 9).
-- Issue #1025's own criterion 5 ("a built installer is inspected to confirm the files are present") is met by the
-  compile record, which is the compiler's list of every file packed into the installer. The reviewers asked for a
-  stronger check; that needs a machine without a live GoSurvey install, or innoextract with an Inno-6.7-capable
-  build.
+  7. The built installer contains the files: PARTLY MET. The compile record lists every packed file; the installed
+     files were not listed (see section 9). REQ-520 says "verified on the built installer", which needs a clean-machine
+     install check that has not been done.
+- Issue #1025's own criterion 5 ("a built installer is inspected to confirm the files are present") is PARTLY MET:
+  the compile record shows every packed file, but nothing was inspected on an installed machine. The PR therefore says
+  "Refs #1025", not "Closes", so the issue stays open until a clean-machine install check is done.
 - Follow-up: #1180 (vendored libraries not named; treat as a release gate for the notice's completeness).
