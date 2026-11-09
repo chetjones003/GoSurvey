@@ -13,6 +13,10 @@ inputs:
     description: Optional rolling beta version supplied by the release caller.
     required: false
     default: ''
+  build-channel:
+    description: Crash-report channel compiled into the build (stable, beta, or dev). Non-release builds use dev (D-2026-11-09-d).
+    required: false
+    default: 'dev'
   test-parallel:
     description: Number of CTest processes to run concurrently.
     required: false
@@ -80,6 +84,7 @@ runs:
         VERSION_SUFFIX: ${{ inputs.version-suffix }}
         VERSION_BUILD: ${{ inputs.version-build }}
         BETA_VERSION: ${{ inputs.beta-version }}
+        BUILD_CHANNEL: ${{ inputs.build-channel }}
       run: |
         cmake --preset ninja-release `
           -DCMAKE_C_COMPILER_LAUNCHER=sccache `
@@ -87,6 +92,7 @@ runs:
           -DGOSURVEY_USE_PCH=OFF `
           -DGOSURVEY_ENABLE_ANALYZE=ON `
           -DGOSURVEY_QT_TEST_SHARDS=6 `
+          "-DGOSURVEY_BUILD_CHANNEL=$env:BUILD_CHANNEL" `
           "-DGOSURVEY_BETA_VERSION=$env:BETA_VERSION" `
           "-DGOSURVEY_VERSION_SUFFIX=$env:VERSION_SUFFIX" `
           "-DGOSURVEY_VERSION_BUILD=$env:VERSION_BUILD"

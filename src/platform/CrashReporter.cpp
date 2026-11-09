@@ -44,7 +44,9 @@ constexpr wchar_t kTestCrashArg[]         = L"--gosurvey-test-crash";
 constexpr uintmax_t kMaxCrashDumpBytes   = 10u * 1024u * 1024u;
 constexpr size_t    kMaxCrashReportBytes = 16384;
 
-char g_reportChannel[16] = "stable";
+// Until SetReportChannel runs, a report carries this build's own channel (GOSURVEY_BUILD_CHANNEL), so
+// a crash during startup in a release build is still reported under that release channel.
+char g_reportChannel[16] = GOSURVEY_BUILD_CHANNEL;
 
 std::string ExceptionCodeToHumanSummary(unsigned long code) {
   switch (code) {
@@ -502,7 +504,7 @@ bool ParseBundleFile(const std::filesystem::path& path, CrashReport& out) {
     return false;
 
   out.wireReason = "unhandled_exception";
-  out.channel    = "stable";
+  out.channel    = "dev";  // a bundle without a channel line cannot be matched to a release PDB
   const std::string rest = line.substr(metaPrefix.size());
   size_t             pos = 0;
   while (pos < rest.size()) {
@@ -555,15 +557,11 @@ bool CommandLineHasArg(const wchar_t* arg) {
 
 #ifdef _WIN32
 void SetReportChannel(std::string_view channel) {
-  assert(!channel.empty());
-  const std::string ch(channel);
-  if (ch == "beta") {
-    std::strncpy(g_reportChannel, "beta", sizeof(g_reportChannel) - 1);
-    g_reportChannel[sizeof(g_reportChannel) - 1] = '\0';
-  } else {
-    std::strncpy(g_reportChannel, "stable", sizeof(g_reportChannel) - 1);
-    g_reportChannel[sizeof(g_reportChannel) - 1] = '\0';
-  }
+  // The build's own channel (GOSURVEY_BUILD_CHANNEL), never the user's update preference: a local
+  // build that has the beta preference switched on must still report "dev" (D-2026-11-09-d).
+  const std::string normalized(NormalizeReportChannel(channel));
+  std::strncpy(g_reportChannel, normalized.c_str(), sizeof(g_reportChannel) - 1);
+  g_reportChannel[sizeof(g_reportChannel) - 1] = '\0';
 }
 
 bool WriteMinidumpWithHelper(const std::filesystem::path& dumpPath, void* exceptionPointers) {

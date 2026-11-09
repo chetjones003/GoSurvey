@@ -13,6 +13,11 @@ std::string ExceptionCodeToWireReason(unsigned long exceptionCode);
 /// The report is JSON-encoded for upload, and the encoder rejects invalid UTF-8.
 std::string TruncateUtf8(std::string_view text, std::size_t maxBytes);
 
+/// REQ-425 §8 / D-2026-11-09-d: the channel written into a report. "stable" and "beta" pass
+/// through; any other value, including an empty or unknown one, is "dev", so a developer build is
+/// never reported as a published release and never matched to archived symbols.
+std::string_view NormalizeReportChannel(std::string_view channel);
+
 /// REQ-425 §2: a crash report read back from the bundle file the crash handler wrote.
 struct CrashReport {
   std::string wireReason;

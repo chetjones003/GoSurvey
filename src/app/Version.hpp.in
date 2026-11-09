@@ -28,3 +28,8 @@
 /// -DGOSURVEY_GIT_COMMIT; a developer build reads the commit at configure time. CMake
 /// watches the current Git ref and reconfigures when it changes.
 #define GOSURVEY_GIT_COMMIT "@GOSURVEY_GIT_COMMIT@"
+
+/// Channel of this build, written into every crash and startup report (REQ-425 §8, D-2026-11-09-d):
+/// "stable" or "beta" for a CI release build, "dev" for any other build. CI passes
+/// -DGOSURVEY_BUILD_CHANNEL; a developer build defaults to "dev" whatever the update preference is.
+#define GOSURVEY_BUILD_CHANNEL "@GOSURVEY_BUILD_CHANNEL@"
