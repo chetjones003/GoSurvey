@@ -1,6 +1,8 @@
 #include "EditorWindow.hpp"
 #include "EditorViewFrameDialog.hpp"  // REQ-517.1
 #include "EditorSheetsDialog.hpp"  // REQ-518.1
+#include "EditorSampleLinesDialog.hpp"  // REQ-519.1
+#include "EditorSectionSheetsDialog.hpp"  // REQ-519.3
 #include "DrawingDocumentTabBar.hpp"
 #include "StylePreview.hpp"
 #include "QtAccent.hpp"
@@ -1490,6 +1492,20 @@ void EditorWindow::Submit(const QString& command) {
     if (m_State.activeDrawingIdx == 0) { m_Log.push_back("CREATESHEETS - open a drawing first."); Refresh(); return; }
     if (ActiveDrawingReadOnly()) { QMessageBox::information(this, "Read-only drawing", "Sheets cannot be created in a read-only drawing."); return; }
     const QString commandText = RunCreateSheetsDialog(this, m_State);
+    if (!commandText.isEmpty()) Submit(commandText);
+    return;
+  }
+  if (verb == "CREATESAMPLELINES") {  // REQ-519.1: no arguments opens the dialog; the dialog then submits the command
+    if (m_State.activeDrawingIdx == 0) { m_Log.push_back("CREATESAMPLELINES - open a drawing first."); Refresh(); return; }
+    if (ActiveDrawingReadOnly()) { QMessageBox::information(this, "Read-only drawing", "Sample lines cannot be created in a read-only drawing."); return; }
+    const QString commandText = RunCreateSampleLinesDialog(this, m_State);
+    if (!commandText.isEmpty()) Submit(commandText);
+    return;
+  }
+  if (verb == "CREATESECTIONSHEETS") {  // REQ-519.3: no arguments opens the dialog; the dialog then submits the command
+    if (m_State.activeDrawingIdx == 0) { m_Log.push_back("CREATESECTIONSHEETS - open a drawing first."); Refresh(); return; }
+    if (ActiveDrawingReadOnly()) { QMessageBox::information(this, "Read-only drawing", "Sheets cannot be created in a read-only drawing."); return; }
+    const QString commandText = RunCreateSectionSheetsDialog(this, m_State);
     if (!commandText.isEmpty()) Submit(commandText);
     return;
   }

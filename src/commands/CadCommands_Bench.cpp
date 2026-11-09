@@ -78,6 +78,7 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   b.savedSolids = st.cadSolids;
   b.savedSolidAttrs = st.cadSolidAttrs;
   b.savedAlignments = st.alignments;
+  b.savedSampleLines = st.sampleLines;  // REQ-519
   b.savedVisualStyle = st.viewportVisualStyle;
   b.savedAzimuthDeg = st.viewportAzimuthDeg;
   b.savedElevationDeg = st.viewportElevationDeg;
@@ -230,6 +231,7 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
     st.userPolylineClosed.clear();
     st.userPolylineAttrs.clear();
     st.alignments = BenchAlignmentScene(b.alignmentCount, b.alignmentEntityCount, st.nextEntityId);
+    st.sampleLines.clear();  // REQ-519: the bench scene has no sample lines; the saved ones come back after the run
     st.nextEntityId += static_cast<std::uint64_t>(b.alignmentCount);
     b.segmentCount = 0;
   } else {
@@ -387,6 +389,7 @@ bool StartPointCloudBench(AppCommandState& st, const std::string& path, std::vec
   b.savedSolids = st.cadSolids;
   b.savedSolidAttrs = st.cadSolidAttrs;
   b.savedAlignments = st.alignments;
+  b.savedSampleLines = st.sampleLines;  // REQ-519
   b.savedVisualStyle = st.viewportVisualStyle;
   b.savedAzimuthDeg = st.viewportAzimuthDeg;
   b.savedElevationDeg = st.viewportElevationDeg;
@@ -534,6 +537,8 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
     st.cadSolids = std::move(b.savedSolids);
     st.cadSolidAttrs = std::move(b.savedSolidAttrs);
     st.alignments = std::move(b.savedAlignments);
+    st.sampleLines = std::move(b.savedSampleLines);  // REQ-519
+    b.savedSampleLines.clear();
     b.savedAlignments.clear();
     st.viewportVisualStyle = b.savedVisualStyle;
     b.savedMeshes.clear();

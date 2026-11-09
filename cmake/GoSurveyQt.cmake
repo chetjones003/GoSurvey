@@ -68,6 +68,8 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorAlignmentCreate.cpp
   src/qt/EditorViewFrameDialog.cpp
   src/qt/EditorSheetsDialog.cpp
+  src/qt/EditorSampleLinesDialog.cpp
+  src/qt/EditorSectionSheetsDialog.cpp
   src/qt/EditorAlignmentStyle.cpp
   src/qt/EditorPointTableDialog.cpp
   src/qt/EditorLayerManager.cpp

@@ -17352,7 +17352,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
      button ask for a start station, an end station, an interval, and left and right swath widths. One sample
      line is placed perpendicular to the alignment at each interval station in the range. Each is named by its
      station (for example `0+00`), is stored with the alignment as a drawing object and is drawn in plan.
-  2. **Sections.** A sample line is sampled against one chosen TIN surface. Along each half-line (left and right),
+  2. **Sections.** A sample line is sampled against one chosen TIN surface. Where the swath leaves the surface's coverage (a
+     hole, or the edge of the surface), the points either side are kept and marked as a break, and no ground is drawn across the
+     uncovered stretch (D-2026-11-08-h, PR #1176 review). Along each half-line (left and right),
      the section records the distance from the alignment and the ground elevation at each sample point. Sample points are the alignment origin, each swath end inside the surface's coverage, and each point where the line crosses a surface triangle edge or vertex or the coverage boundary. A line wholly inside one triangle still produces a section. Ground elevation uses the method of REQ-497. A sample line with
      no surface coverage gets an empty section and is reported under REQ-201. The command continues with the rest.
   3. **Section sheets.** A typed `CREATESECTIONSHEETS` command and the Output → Plan Production → Create Section
@@ -17361,11 +17363,47 @@ capability that does not exist. They are recorded here rather than quietly dropp
      as native paper-space geometry (REQ-037): a ground line, a horizontal axis at an elevation chosen in the dialog,
      a station label, and the horizontal and vertical scales as text. All sections on one sheet share one
      horizontal scale and one vertical scale.
-  4. **Refusals (REQ-201).** No alignment, no surface, an interval that is zero or negative, or an end station
-     before the start station refuses the command and creates nothing. An empty section is drawn with the label
+  4. **Refusals (REQ-201).** No alignment, an interval that is zero or negative, or an end station
+     before the start station refuses the command and creates nothing. A named surface that is not a built TIN refuses
+     CREATESAMPLELINES, and CREATESECTIONSHEETS refuses when none of the chosen lines has a section (item 9). An empty section is drawn with the label
      "no data" and does not stop the sheet.
   5. Creating sample lines, and creating section sheets, are each one undo step.
   6. Sample lines do not change the surface or the alignment. Sample lines and their sections persist with the drawing.
+  7. **Command syntax (D-2026-11-08-h).** `CREATESAMPLELINES <alignment>, <start station>, <end station>, <interval>,
+     <left swath>, <right swath>[, <surface>]` and `CREATESECTIONSHEETS <alignment>, <sample lines>, <sections per sheet>,
+     <axis elevation>`. `<sample lines>` is `ALL` or sample line names separated by spaces. Every value is typed; the only
+     optional one is `<surface>`. The dialogs prefill the defaults in item 8.
+  8. **Dialog defaults (D-2026-11-08-h).** Interval 50 ft, left and right swath 50 ft each, 4 sections per sheet. The axis
+     elevation defaults to the lowest ground elevation of the alignment's sample lines' sections (what ALL chooses), rounded
+     down to the nearest 10 ft, or 0 when there is none. `<sections per sheet>` is a whole number from 1 to 10.
+  9. **Surface and sections (D-2026-11-08-h).** A sample line is sampled against the TIN surface named by the optional
+     `<surface>` argument (or the dialog's surface box, set to None for no sections). The spec names no separate command
+     that samples a surface, so sampling happens when the lines are created. A line with no surface has no section. A
+     surface that is not a built TIN refuses the command (REQ-201). Section points are the points in item 2 that have
+     ground coverage; a point off the surface is omitted, and a section with none is empty. The alignment origin is a
+     section point only when it is covered.
+  10. **Stations and count (D-2026-11-08-h).** The start and end stations are displayed stations, resolved as REQ-517.6a.
+     Lines sit at internal stations stepping from the start by the interval, and each is named by its displayed station.
+     A command makes at most 2 000 lines, and refuses (REQ-201) when a line it would make shares a name with a line already
+     on the alignment or with another line of the same command. A second run over a range already made is refused the same way, and a
+     fine interval can also repeat names the station format cannot show. Swath widths are zero or more, and at least one is above zero; a negative
+     width, or two zero widths, refuses the command.
+  11. **Section scales (D-2026-11-08-h).** Each sheet's horizontal and vertical scales are the most detailed of the
+     steps 1, 2, 5, 10, 20, 50, 100, ... feet per inch (`1" = N'`) at which every section on the sheet fits: horizontally
+     within its column, vertically within half the plot height either side of its axis, each with 0.1 in clear to the column or plot edge. Both scales are shared by every
+     section on the sheet. With no points on a sheet, both are `1" = 10'`. The scale text reads `Horizontal 1" = N'` and
+     `Vertical 1" = N'`.
+  12. **Sheet layout (D-2026-11-08-h).** One ARCH D paper layout per group of sections, named `SEC-1`, `SEC-2`, ... (a
+     ` (2)` suffix on collision, as REQ-489). Each sheet is built on the title block of REQ-518 item 8, inside the same
+     0.5 in margin (REQ-518 item 10). The plot area is the margin-inset border less 1 in at its top and bottom. Sections
+     fill equal-width columns from left to right in station order. Each column holds its axis at the vertical middle of
+     the plot area, the ground line, and its station label beneath. A section with no points is drawn with its axis and
+     the label "no data". The title-block fields are not filled, because item 3 does not ask for them.
+  13. **Changes after creation (D-2026-11-08-h).** Sample lines and their sections do not regenerate when the alignment
+     changes (as REQ-518 item 6). Deleting an alignment deletes its sample lines. Sample lines are drawn in plan on layer 0,
+     with the same visibility rule as view frames (REQ-517).
+  14. **Ribbon (D-2026-11-08-h).** Home → Profile & Section Views → Sample Lines runs CREATESAMPLELINES, and Output →
+     Plan Production → Create Section Sheets runs CREATESECTIONSHEETS. Their "not implemented yet" tooltips are removed.
 - Acceptance:
   - An alignment from 0+00 to 5+00 (500 ft) with interval 50 ft creates 11 sample lines, named 0+00, 0+50, 1+00, ... through 5+00.
   - Sampling a flat surface at elevation 100 gives every section point the ground elevation 100.
@@ -17380,6 +17418,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
     tooltips are gone.
 - Owner-layer: Alignment / Domain / Commands / Renderer / IO / UI
 - Assumptions (recorded, not asked): sections are sampled where the line crosses triangle edges or vertices, which is
-  exact for a TIN and needs no extra sample spacing. Default interval, swath widths, sections per sheet and axis elevation
-  are open choices for the user; this spec does not fix them.
-- Status: proposed (2026-11-07, D-2026-11-07-a; GitHub #1001).
+  exact for a TIN and needs no extra sample spacing. The default interval, swath widths, sections per sheet and axis
+  elevation are decided by D-2026-11-08-h (items 8 and 11) and can be changed by the user.
+- Status: accepted (2026-11-08, D-2026-11-08-h; GitHub #1001). The user's request to implement #1001 is the
+  acceptance, as for REQ-518 (D-2026-11-07-c). Items 7 to 14 settle the open choices above.

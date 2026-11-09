@@ -696,6 +696,7 @@ void EditorViewport::paintGL() {
     ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
     ext.alignments = &m_State.alignments;
     ext.viewFrameGroups = &m_State.viewFrameGroups;
+    ext.sampleLines = &m_State.sampleLines;
     ext.alignmentStyles = &m_State.alignmentStyles;
     ext.points = &m_State.cadPoints; ext.pointAttrs = &m_State.cadPointAttrs;
     ext.pdMode = m_State.pdMode;
@@ -927,6 +928,7 @@ void EditorViewport::paintGL() {
     ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
     ext.alignments = &m_State.alignments;
     ext.viewFrameGroups = &m_State.viewFrameGroups;
+    ext.sampleLines = &m_State.sampleLines;
     ext.alignmentStyles = &m_State.alignmentStyles;
     ext.points = &m_State.cadPoints; ext.pointAttrs = &m_State.cadPointAttrs;
     ext.pdMode = m_State.pdMode;

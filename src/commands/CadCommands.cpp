@@ -168,6 +168,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadPipeRunAttrs        = cmd.cadPipeRunAttrs;
   doc.alignments             = cmd.alignments;       // REQ-480: per-drawing
   doc.viewFrameGroups        = cmd.viewFrameGroups;  // REQ-517: per-drawing
+  doc.sampleLines            = cmd.sampleLines;      // REQ-519: per-drawing
   doc.surfaceProfiles        = cmd.surfaceProfiles;  // REQ-513
   doc.cadPipingSystems       = cmd.cadPipingSystems;  // indices into cadPipeRuns — travels with it
   doc.blockDefs              = cmd.blockDefs;
@@ -298,6 +299,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadPipeRunAttrs            = doc.cadPipeRunAttrs;
   cmd.alignments                 = doc.alignments;       // REQ-480
   cmd.viewFrameGroups            = doc.viewFrameGroups;  // REQ-517
+  cmd.sampleLines                = doc.sampleLines;      // REQ-519
   cmd.surfaceProfiles            = doc.surfaceProfiles;  // REQ-513
   cmd.cadPipingSystems           = doc.cadPipingSystems;
   // The derived swept solids belong to the drawing we are leaving. Their rebuild is gated on a
@@ -2164,6 +2166,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.cadPipeRunAttrs      = st.cadPipeRunAttrs;
   snap.alignments           = st.alignments;       // REQ-480
   snap.viewFrameGroups      = st.viewFrameGroups;  // REQ-517: undo restores frames with their alignment
+  snap.sampleLines          = st.sampleLines;      // REQ-519: undo restores sample lines and sections
   snap.surfaceProfiles      = st.surfaceProfiles;  // REQ-513
   snap.cadPipingSystems     = st.cadPipingSystems; // issue #486 increment B3 / REQ-345
   snap.blockDefs            = st.blockDefs;
@@ -2293,6 +2296,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.cadPipeRunAttrs      = snap.cadPipeRunAttrs;
   st.alignments           = snap.alignments;       // REQ-480
   st.viewFrameGroups      = snap.viewFrameGroups;  // REQ-517
+  st.sampleLines          = snap.sampleLines;      // REQ-519
   st.surfaceProfiles      = snap.surfaceProfiles;  // REQ-513
   st.cadPipingSystems     = snap.cadPipingSystems; // issue #486 increment B3 / REQ-345
   st.pipeRunWorldSolidsSig = 0;  // force RebuildPipeRunWorldSolids to re-derive from the swap
@@ -8758,6 +8762,8 @@ const CmdEntry kRegistry[] = {
     {"createviewframes", "", "Create view frames along an alignment: CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale or AUTO>, <overlap>[, CENTRED|LEFT|RIGHT]"},
     {"viewframedelete", "", "Delete an alignment's view frame groups: VIEWFRAMEDELETE <alignment>"},
     {"createsheets", "", "Create paper sheets from view frames: CREATESHEETS <alignment>[, <frames>] (frames: ALL or names such as VF-1 VF-3)"},
+    {"createsamplelines", "", "Create sample lines along an alignment: CREATESAMPLELINES <alignment>, <start station>, <end station>, <interval>, <left swath>, <right swath>[, <surface>]"},
+    {"createsectionsheets", "", "Create section sheets from sample lines: CREATESECTIONSHEETS <alignment>, <sample lines>, <sections per sheet>, <axis elevation>"},
     {"getstationoffset", "", "Station and offset of a point: GETSTATIONOFFSET <alignment>[, <x>, <y> | , POINT, <number>][, SURFACE=<surface>] (alignment alone: pick until ESC)"},
     {"getpointfromstationoffset", "", "Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset>"},
     {"createalignmentfromobjects", "createalignmententities", "Alignment from lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS (pick them) | <name>[, START=][, FILLET=][, REVERSE][, ERASE]"},
@@ -30477,6 +30483,7 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadPoints.clear();  // REQ-456
   st.cadPointAttrs.clear();
   st.alignments.clear();  // REQ-480
+  st.sampleLines.clear();  // REQ-519: sample lines belong to the alignments just removed
   st.pdMode = 0;
   st.pdSize = 0.0;
   // Pipe runs are CAD geometry too (issue #486 / REQ-345). Left behind, an import into a drawing
@@ -31055,6 +31062,7 @@ static void EraseSelectedSolidsAndPipeRuns(AppCommandState& st) {
     if (!alignIx.empty()) {
       std::vector<std::string> quiet;
       RefreshAlignmentOffsetsOnly(st, quiet);  // feature links are checked by ExecuteDeleteSelection, which logs drops
+      BumpCadGpuCache(st);  // the plan drops the erased alignment and its sample lines and frames at once
     }
   }
 }
@@ -49810,7 +49818,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "surfacevisibility" || plotTok == "surfvis" || plotTok == "surfcrossbl" || plotTok == "surflabel" || plotTok == "surfacelegend" || plotTok == "createprofilefromsurface" || plotTok == "profileview" ||
         plotTok == "quickprofile" || plotTok == "qprof" ||
         plotTok == "alignment" || plotTok == "createalignment" || plotTok == "alignmentadd" ||
-        plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "createviewframes" || plotTok == "viewframedelete" || plotTok == "createsheets" || plotTok == "getstationoffset" ||
+        plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "createviewframes" || plotTok == "viewframedelete" || plotTok == "createsheets" || plotTok == "createsamplelines" || plotTok == "createsectionsheets" || plotTok == "getstationoffset" ||
         plotTok == "getpointfromstationoffset" || plotTok == "createalignmentfromobjects" ||
         plotTok == "createalignmententities" || plotTok == "createalignmentlayout" ||
         plotTok == "alignmentlayout" || plotTok == "alignmentcurvesettings" || plotTok == "stationformat" || plotTok == "alignmentmeta" ||
@@ -49947,6 +49955,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunViewFrameDelete(st, rest, log);
       else if (plotTok == "createsheets")
         RunCreateSheets(st, rest, log);
+      else if (plotTok == "createsamplelines")
+        RunCreateSampleLines(st, rest, log);
+      else if (plotTok == "createsectionsheets")
+        RunCreateSectionSheets(st, rest, log);
       else if (plotTok == "getstationoffset")
         RunGetStationOffset(st, rest, log);
       else if (plotTok == "getpointfromstationoffset")

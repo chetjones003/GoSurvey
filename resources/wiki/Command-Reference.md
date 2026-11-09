@@ -171,6 +171,8 @@ for a compact list inside the program.
 | `ALIGNMENTDELETE` | — | Delete an alignment: ALIGNMENTDELETE <name> | [[Commands/alignmentdelete]] |
 | `CREATEVIEWFRAMES` | — | Create view frames along an alignment: CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale or AUTO>, <overlap>[, CENTRED, LEFT or RIGHT] | [[Commands/createviewframes]] |
 | `CREATESHEETS` | — | Create paper sheets from view frames: CREATESHEETS <alignment>[, <frames>] (frames: ALL or names such as VF-1 VF-3) | [[Commands/createsheets]] |
+| `CREATESAMPLELINES` | — | Create sample lines along an alignment: CREATESAMPLELINES <alignment>, <start station>, <end station>, <interval>, <left swath>, <right swath>[, <surface>] | [[Commands/createsamplelines]] |
+| `CREATESECTIONSHEETS` | — | Create section sheets from sample lines: CREATESECTIONSHEETS <alignment>, <sample lines>, <sections per sheet>, <axis elevation> | [[Commands/createsectionsheets]] |
 | `GETSTATIONOFFSET` | — | Station and offset of a point: GETSTATIONOFFSET <alignment>[, <x>, <y> \| , POINT, <number>][, SURFACE=<surface>] (alignment alone: pick until ESC) | [[Commands/getstationoffset]] |
 | `GETPOINTFROMSTATIONOFFSET` | — | Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset> | [[Commands/getpointfromstationoffset]] |
 | `CREATEALIGNMENTFROMOBJECTS` | `CREATEALIGNMENTENTITIES` | Alignment from lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS (pick them) \| <name>[, START=][, FILLET=][, REVERSE][, ERASE] | [[Commands/createalignmentfromobjects]] |
@@ -328,6 +330,8 @@ for a compact list inside the program.
 | `ALIGNMENTDELETE` | — | [[Commands/alignmentdelete]] |
 | `CREATEVIEWFRAMES` | — | [[Commands/createviewframes]] |
 | `CREATESHEETS` | — | [[Commands/createsheets]] |
+| `CREATESAMPLELINES` | — | [[Commands/createsamplelines]] |
+| `CREATESECTIONSHEETS` | — | [[Commands/createsectionsheets]] |
 | `ALIGNMENTDETACH` | — | [[Commands/alignmentdetach]] |
 | `ALIGNMENTDISTANCE` | — | [[Commands/alignmentdistance]] |
 | `ALIGNMENTCHECKSET` | — | [[Commands/alignmentcheckset]] |
