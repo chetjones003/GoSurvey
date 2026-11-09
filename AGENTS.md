@@ -18,6 +18,14 @@ user authority.
 
 Complete the [pre-PR product documentation review in `CLAUDE.md`](CLAUDE.md#pre-pr-product-documentation-review-req-453): inspect `README.md`, `PRIVACY.md`, `resources/wiki/`, and the public manual wiki linked from `gosurveycad.com`. Update affected sources before opening the PR, and record each review and its outcome in the task log or PR description. An affected external wiki update must be completed before opening the PR.
 
+## PR-Agent findings: fix them all in one push
+
+PR-Agent reviews a PR once, when it is opened or marked ready, and runs again only when the owner
+comments `/review`. Follow the [fix-all protocol in `CLAUDE.md`](CLAUDE.md#pr-review-loop-fix-everything-in-one-push-d-2026-11-08-i):
+self-review the diff before opening the PR, collect every finding into one list, fix each finding's
+whole class across the diff, test it, and push once. Never push partial fixes to see what the
+reviewer says next.
+
 ## Build, test and clean output
 
 Use the Windows MSVC/CMake/Ninja workflow in [CLAUDE.md §1](CLAUDE.md#1-environment).
