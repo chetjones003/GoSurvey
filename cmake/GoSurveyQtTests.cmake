@@ -1,5 +1,5 @@
 find_package(Qt6 6.8 REQUIRED COMPONENTS Test)
-add_executable(GoSurveyQtTests tests/QtEditorTests.cpp)
+add_executable(GoSurveyQtTests tests/QtEditorTests.cpp tests/TestSoundGuard.cpp)
 set_target_properties(GoSurveyQtTests PROPERTIES AUTOMOC ON)
 target_link_libraries(GoSurveyQtTests PRIVATE gosurvey_qt_frontend Qt6::Test)
 gosurvey_assert_no_imgui_in_link_graph(GoSurveyQtTests)
