@@ -5,13 +5,21 @@
 
 #include "util/NumFormat.hpp"
 
+#include <array>
 #include <cassert>
+#include <cstdio>
 #include <string>
 
 namespace alignment {
 namespace {
 
 constexpr double kDegToRad = kPi / 180.0;
+
+std::string FormatFixed4(double v) {
+  std::array<char, 32> text{};
+  std::snprintf(text.data(), text.size(), "%.4f", v);
+  return text.data();
+}
 
 const char* AlignmentTypeLabel(AlignmentType type) {
   switch (type) {
@@ -189,8 +197,20 @@ void BuildAlignmentReportLines(const Alignment& a, const AlignmentReportFormat& 
     for (const DesignFinding& f : findings)
       lines->push_back("  Entity " + std::to_string(f.entity) + ": " + f.text);
   }
-  lines->push_back("Superelevation: not calculated (stub, REQ-502).");
-  lines->push_back("Sight distance: not calculated (stub, REQ-502).");
+  // REQ-522: the limits and assumptions behind the superelevation and sight checks, or why each is off.
+  if (format.checkSet == nullptr || format.checkSet->maxSuperelevation <= 0.0) {
+    lines->push_back("Superelevation: not checked (no maximum rate).");
+  } else {
+    lines->push_back("Superelevation: maximum " + FormatFixed4(format.checkSet->maxSuperelevation) + ", side friction " +
+                     FormatFixed4(format.checkSet->sideFriction) + ", circular curves only.");
+  }
+  if (format.checkSet == nullptr || format.checkSet->minSightDistance <= 0.0 || format.checkSet->sightClearance <= 0.0) {
+    lines->push_back("Sight distance: not checked (no minimum sight distance or no clearance).");
+  } else {
+    lines->push_back("Sight distance: minimum " + FormatLinear(format.checkSet->minSightDistance, format.linearPrecision) +
+                     "', clearance " + FormatLinear(format.checkSet->sightClearance, format.linearPrecision) +
+                     "', circular curves only, sight beyond the curve not counted.");
+  }
   if (a.Empty()) {
     lines->push_back("");
     lines->push_back("(no entities)");

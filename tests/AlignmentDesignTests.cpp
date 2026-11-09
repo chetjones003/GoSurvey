@@ -3,6 +3,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -181,7 +182,8 @@ TEST_CASE("FindCheckSet matches names without regard to capitalisation (REQ-502)
   CHECK(alignment::FindCheckSet(sets, "") == nullptr);
 }
 
-TEST_CASE("ALIGNMENTLIST warns about design failures and the report shows the stubs (REQ-502)", "[req502][alignment]") {
+TEST_CASE("ALIGNMENTLIST warns about design failures and the report shows the check assumptions (REQ-502, REQ-522)",
+          "[req502][req522][alignment]") {
   AppCommandState st = Drawing();
   std::vector<std::string> log;
   MakeRoadWithCurve(st, log);
@@ -198,8 +200,8 @@ TEST_CASE("ALIGNMENTLIST warns about design failures and the report shows the st
 
   log.clear();
   Submit(st, "ALIGNMENTREPORT CR1", log);
-  CHECK(LogHas(log, "Superelevation: not calculated (stub, REQ-502)."));
-  CHECK(LogHas(log, "Sight distance: not calculated (stub, REQ-502)."));
+  CHECK(LogHas(log, "Superelevation: maximum 0.0600, side friction 0.0000, circular curves only."));
+  CHECK(LogHas(log, "Sight distance: not checked (no minimum sight distance or no clearance)."));
 
   REQUIRE(st.alignmentCheckSets.size() == 1);
   CHECK(st.alignmentCheckSets[0].maxSuperelevation == 0.06);
@@ -281,4 +283,168 @@ TEST_CASE("A style's missing check set is reported and cleared on load (REQ-502)
   for (const AlignmentStyle& s : back.alignmentStyles) {
     if (s.name == "Wide") CHECK(s.checkSetName.empty());
   }
+}
+
+// REQ-522 / GitHub issue #1164: superelevation and sight-distance checks on circular curves.
+
+namespace {
+
+/// A 100-unit northbound tangent, then a right curve of radius `radius` and central angle `delta` degrees.
+void MakeCurveOf(AppCommandState& st, const std::string& radius, const std::string& delta, std::vector<std::string>& log) {
+  Submit(st, "ALIGNMENT CR1, , 0+00", log);
+  Submit(st, "ALIGNMENTADD CR1, TANGENT, 0, 0, 0, 100", log);
+  Submit(st, "ALIGNMENTADD CR1, CURVE, " + radius + ", " + delta + ", RIGHT", log);
+}
+
+}  // namespace
+
+TEST_CASE("Superelevation is required e = V^2/(gR) - f and fails above the maximum rate (REQ-522 AC1)", "[req522][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  MakeCurveOf(st, "1000", "30", log);
+  Submit(st, "ALIGNMENTCHECKSET NEW, Rural", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, SUPERELEVATION, 0.06", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, FRICTION, 0.10", log);
+  Submit(st, "ALIGNMENTSPEED CR1, 0+00, 60", log);
+  Submit(st, "ALIGNMENTCRITERIA CR1, Rural", log);
+
+  // 60 mph is 88 ft/s: 88^2 / (32.174 * 1000) - 0.10 = 0.14069.
+  CHECK(std::fabs(alignment::RequiredSuperelevation(60.0, 1000.0, 0.10) - 0.1406912) < 1e-6);
+  log.clear();
+  Submit(st, "ALIGNMENTCHECK CR1", log);
+  CHECK(LogHas(log, "Required superelevation 0.1407 exceeds the maximum of 0.0600 at design speed 60 mph with side friction 0.1000."));
+
+  // A maximum above the required rate passes, and so does one that equals it at display precision.
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, SUPERELEVATION, 0.15", log);
+  log.clear();
+  Submit(st, "ALIGNMENTCHECK CR1", log);
+  CHECK_FALSE(LogHas(log, "Required superelevation"));
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, SUPERELEVATION, 0.1407", log);
+  log.clear();
+  Submit(st, "ALIGNMENTCHECK CR1", log);
+  CHECK_FALSE(LogHas(log, "Required superelevation"));
+}
+
+TEST_CASE("Superelevation uses the highest design speed across the curve and is off with no maximum (REQ-522 AC4)",
+          "[req522][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  MakeCurveOf(st, "1000", "30", log);
+  Submit(st, "ALIGNMENTCHECKSET NEW, Rural", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, SUPERELEVATION, 0.06", log);
+  Submit(st, "ALIGNMENTCRITERIA CR1, Rural", log);
+
+  // No design speed at all: the curve is not checked.
+  log.clear();
+  Submit(st, "ALIGNMENTCHECK CR1", log);
+  CHECK_FALSE(LogHas(log, "Required superelevation"));
+
+  // 30 mph at the start, then 60 mph inside the curve's span: the curve is checked at 60.
+  Submit(st, "ALIGNMENTSPEED CR1, 0+00, 30", log);
+  Submit(st, "ALIGNMENTSPEED CR1, 1+50, 60", log);
+  log.clear();
+  Submit(st, "ALIGNMENTCHECK CR1", log);
+  CHECK(LogHas(log, "at design speed 60 mph"));
+
+  // A maximum rate of zero switches the check off.
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, SUPERELEVATION, 0", log);
+  log.clear();
+  Submit(st, "ALIGNMENTCHECK CR1", log);
+  CHECK_FALSE(LogHas(log, "Required superelevation"));
+}
+
+TEST_CASE("Sight distance is 2R acos(1 - m/R), capped at the curve length, and fails below the minimum (REQ-522 AC2)",
+          "[req522][alignment]") {
+  // R = 500 and m = 25 give 317.56 ft; m = R gives the arc length, not the half circle.
+  CHECK(std::fabs(alignment::AvailableSightDistance(500.0, 785.398, 25.0) - 317.5604) < 1e-3);
+  CHECK(std::fabs(alignment::AvailableSightDistance(500.0, 785.398, 500.0) - 785.398) < 1e-3);
+  CHECK(std::fabs(alignment::AvailableSightDistance(500.0, 1000.0, 500.0) - 1000.0) < 1e-3);
+
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  MakeCurveOf(st, "500", "90", log);
+  Submit(st, "ALIGNMENTCHECKSET NEW, Rural", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, SIGHT, 300", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, CLEARANCE, 25", log);
+  Submit(st, "ALIGNMENTCRITERIA CR1, Rural", log);
+  log.clear();
+  Submit(st, "ALIGNMENTCHECK CR1", log);
+  CHECK_FALSE(LogHas(log, "Sight distance"));  // 317.56 ft clears 300 ft
+
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, SIGHT, 350", log);
+  log.clear();
+  Submit(st, "ALIGNMENTCHECK CR1", log);
+  CHECK(LogHas(log, "Sight distance 317.56' is below the minimum of 350.00' with a sight clearance of 25.00'."));
+
+  // A 20 degree curve is shorter than the formula's distance, so its arc length is the sight distance counted.
+  AppCommandState shortCurve = Drawing();
+  std::vector<std::string> shortLog;
+  MakeCurveOf(shortCurve, "500", "20", shortLog);
+  Submit(shortCurve, "ALIGNMENTCHECKSET NEW, Rural", shortLog);
+  Submit(shortCurve, "ALIGNMENTCHECKSET SET, Rural, SIGHT, 200", shortLog);
+  Submit(shortCurve, "ALIGNMENTCHECKSET SET, Rural, CLEARANCE, 25", shortLog);
+  Submit(shortCurve, "ALIGNMENTCRITERIA CR1, Rural", shortLog);
+  shortLog.clear();
+  Submit(shortCurve, "ALIGNMENTCHECK CR1", shortLog);
+  CHECK(LogHas(shortLog, "Sight distance 174.53' is below the minimum of 200.00' with a sight clearance of 25.00'."));
+}
+
+TEST_CASE("The sight check is off without a clearance, and the criteria column shows the limits (REQ-522 AC3, AC6)",
+          "[req522][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  MakeCurveOf(st, "500", "90", log);
+  Submit(st, "ALIGNMENTCHECKSET NEW, Rural", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, SIGHT, 350", log);  // no clearance
+  Submit(st, "ALIGNMENTCRITERIA CR1, Rural", log);
+  log.clear();
+  Submit(st, "ALIGNMENTCHECK CR1", log);
+  CHECK_FALSE(LogHas(log, "Sight distance"));
+
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, CLEARANCE, 25", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, SUPERELEVATION, 0.06", log);
+  Submit(st, "ALIGNMENTSPEED CR1, 0+00, 60", log);  // the curve has a design speed, so its e limit is shown
+  REQUIRE(st.alignmentCheckSets.size() == 1);
+  const alignment::AlignmentCheckSet& set = st.alignmentCheckSets[0];
+  // Entity 2 is the curve: its limits are the maximum rate and the minimum sight distance. Entity 1 is the tangent.
+  CHECK(alignment::CriteriaRequirementText(st.alignments[0], set, 1, 2) == "e \xE2\x89\xA4 0.0600, S \xE2\x89\xA5 350.00'");
+  CHECK(alignment::CriteriaRequirementText(st.alignments[0], set, 0, 2).empty());
+}
+
+TEST_CASE("Negative friction or clearance is refused and the set is unchanged (REQ-522 AC6)", "[req522][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENTCHECKSET NEW, Rural", log);
+  log.clear();
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, FRICTION, -0.1", log);
+  CHECK(LogHas(log, "takes one value, zero or more"));
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, CLEARANCE, -5", log);
+  CHECK(LogHas(log, "takes one value, zero or more"));
+  CHECK(st.alignmentCheckSets[0].sideFriction == 0.0);
+  CHECK(st.alignmentCheckSets[0].sightClearance == 0.0);
+}
+
+TEST_CASE("Friction and clearance save and reload with the set; a drawing without them omits them (REQ-522 AC7)",
+          "[req522][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  MakeCurveOf(st, "1000", "30", log);
+  Submit(st, "ALIGNMENTCHECKSET NEW, Rural", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, FRICTION, 0.10", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, CLEARANCE, 25", log);
+  const std::string json = SerializeGoSurveyJson(st);
+  AppCommandState back = Drawing();
+  std::vector<std::string> loadLog;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, json, loadLog));
+  REQUIRE(back.alignmentCheckSets.size() == 1);
+  CHECK(back.alignmentCheckSets[0].sideFriction == 0.10);
+  CHECK(back.alignmentCheckSets[0].sightClearance == 25.0);
+  CHECK(back.alignmentCheckSets[0] == st.alignmentCheckSets[0]);
+
+  AppCommandState plain = Drawing();
+  std::vector<std::string> plainLog;
+  Submit(plain, "ALIGNMENTCHECKSET NEW, Plain", plainLog);
+  const std::string plainJson = SerializeGoSurveyJson(plain);
+  CHECK(plainJson.find("sideFriction") == std::string::npos);
+  CHECK(plainJson.find("sightClearance") == std::string::npos);
 }

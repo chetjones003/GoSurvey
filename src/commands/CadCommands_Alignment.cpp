@@ -4383,13 +4383,14 @@ int FindCheckSetIndex(const AppCommandState& st, const std::string& name) {
 // ALIGNMENTCHECKSET DELETE, <name>
 // ALIGNMENTCHECKSET LIST
 // ALIGNMENTCHECKSET SET, <name>, RADIUS, <speed>, <minRadius>   (minRadius 0 removes the row for that speed)
-// ALIGNMENTCHECKSET SET, <name>, MINTANGENT|MINSPIRAL|MINA|MAXA|MINLINE|SUPERELEVATION|SIGHT, <value>   (0 switches the check off)
+// ALIGNMENTCHECKSET SET, <name>, MINTANGENT|MINSPIRAL|MINA|MAXA|MINLINE|MAXDEFLECTION|SUPERELEVATION|FRICTION|SIGHT|CLEARANCE, <value>
+//   (0 switches the check off; SUPERELEVATION and FRICTION are REQ-522 rates, SIGHT and CLEARANCE are REQ-522 feet)
 void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
   const char* usage =
       "ALIGNMENTCHECKSET - usage: ALIGNMENTCHECKSET NEW, <name>[, ROAD|RAIL] | DELETE, <name> | LIST | "
       "SET, <name>, RADIUS, <speed>, <minRadius> | SET, <name>, MINTANGENT|MINSPIRAL|MINA|MAXA|MINLINE|MAXDEFLECTION|"
-      "SUPERELEVATION|SIGHT, <value> | LOAD, <file> | SAVE, <name>, <file>.";
+      "SUPERELEVATION|FRICTION|SIGHT|CLEARANCE, <value> | LOAD, <file> | SAVE, <name>, <file>.";
   if (f.empty()) {
     log.push_back(usage);
     return;
@@ -4490,7 +4491,8 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
       std::sort(table.begin(), table.end(),
                 [](const alignment::RadiusRequirement& x, const alignment::RadiusRequirement& y) { return x.speed < y.speed; });
     } else if (what == "mintangent" || what == "minspiral" || what == "mina" || what == "maxa" ||
-               what == "minline" || what == "maxdeflection" || what == "superelevation" || what == "sight") {
+               what == "minline" || what == "maxdeflection" || what == "superelevation" || what == "friction" ||
+               what == "sight" || what == "clearance") {
       double value = 0.0;
       if (f.size() != 4 || !ParseNum(f[3], &value) || value < 0.0) {
         log.push_back("ALIGNMENTCHECKSET - " + what + " takes one value, zero or more.");
@@ -4502,8 +4504,10 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
       else if (what == "maxa") edited.maxA = value;
       else if (what == "minline") edited.minLineLength = value;
       else if (what == "maxdeflection") edited.maxTangentDeflection = value;  // degrees, at a curveless PI
-      else if (what == "superelevation") edited.maxSuperelevation = value;  // REQ-502 stub
-      else edited.minSightDistance = value;  // REQ-502 stub
+      else if (what == "superelevation") edited.maxSuperelevation = value;  // REQ-522: maximum rate, ft/ft
+      else if (what == "friction") edited.sideFriction = value;              // REQ-522: side friction factor f
+      else if (what == "clearance") edited.sightClearance = value;           // REQ-522: lateral sight clearance, ft
+      else edited.minSightDistance = value;  // REQ-522: minimum sight distance, ft
     } else {
       log.push_back(usage);
       return;

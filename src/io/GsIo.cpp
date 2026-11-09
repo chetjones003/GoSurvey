@@ -1149,9 +1149,12 @@ json CheckSetToJson(const alignment::AlignmentCheckSet& s) {
   o["minSpiralLength"] = s.minSpiralLength;
   o["minA"] = s.minA;
   o["maxA"] = s.maxA;
-  o["maxSuperelevation"] = s.maxSuperelevation;  // REQ-502 stub
+  o["maxSuperelevation"] = s.maxSuperelevation;  // REQ-522
   o["minLineLength"] = s.minLineLength;
-  o["minSightDistance"] = s.minSightDistance;    // REQ-502 stub
+  o["minSightDistance"] = s.minSightDistance;    // REQ-522
+  // REQ-522: friction and clearance are written only when set, so a drawing without them saves exactly as before.
+  if (s.sideFriction > 0.0) o["sideFriction"] = s.sideFriction;
+  if (s.sightClearance > 0.0) o["sightClearance"] = s.sightClearance;
   if (s.maxTangentDeflection > 0.0) o["maxTangentDeflection"] = s.maxTangentDeflection;
   return o;
 }
@@ -1181,8 +1184,10 @@ bool CheckSetFromJson(const json& o, alignment::AlignmentCheckSet* s) {
   number("minA", &r.minA);
   number("maxA", &r.maxA);
   number("maxSuperelevation", &r.maxSuperelevation);
+  number("sideFriction", &r.sideFriction);
   number("minLineLength", &r.minLineLength);
   number("minSightDistance", &r.minSightDistance);
+  number("sightClearance", &r.sightClearance);
   number("maxTangentDeflection", &r.maxTangentDeflection);
   *s = std::move(r);
   return true;
