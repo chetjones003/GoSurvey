@@ -8,6 +8,7 @@
 #include "alignment/Alignment.hpp"  // REQ-480 / ADR-075: per-drawing alignment store
 #include "alignment/AlignmentViewFrames.hpp"  // REQ-517: view frame groups that follow an alignment
 #include "alignment/AlignmentSampleLines.hpp"  // REQ-519: sample lines and their sections
+#include "alignment/AlignmentProfile.hpp"  // REQ-521: design vertical profiles along alignments
 #include "alignment/AlignmentDesign.hpp"  // REQ-502: check sets
 #include "CadDimGeom.hpp"
 #include "EntityId.hpp"
@@ -1406,6 +1407,7 @@ struct DrawingGeometrySnapshot {
   std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
   std::vector<alignment::ViewFrameGroup> viewFrameGroups;  ///< REQ-517: view frame groups that follow an alignment
   std::vector<alignment::SampleLine> sampleLines;  ///< REQ-519: sample lines and their sections (persist with the drawing)
+  std::vector<alignment::VerticalProfile> profiles;  ///< REQ-521: design vertical profiles (persist with the drawing)
   std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
   /// Named piping networks (issue #486 increment B3 / REQ-345) — swapped alongside `cadPipeRuns`
   /// for the same BEDIT-isolation reason the comment above states: a network's indices are only
@@ -1610,6 +1612,7 @@ struct DrawingDocument {
   std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
   std::vector<alignment::ViewFrameGroup> viewFrameGroups;  ///< REQ-517: view frame groups that follow an alignment
   std::vector<alignment::SampleLine> sampleLines;  ///< REQ-519: sample lines and their sections (persist with the drawing)
+  std::vector<alignment::VerticalProfile> profiles;  ///< REQ-521: design vertical profiles (persist with the drawing)
   std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
   std::vector<CadPipingSystem>  cadPipingSystems;
   std::vector<CadBlockDefinition> blockDefs;
@@ -3662,6 +3665,7 @@ struct AppCommandState {
   std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
   std::vector<alignment::ViewFrameGroup> viewFrameGroups;  ///< REQ-517: view frame groups that follow an alignment
   std::vector<alignment::SampleLine> sampleLines;  ///< REQ-519: sample lines and their sections (persist with the drawing)
+  std::vector<alignment::VerticalProfile> profiles;  ///< REQ-521: design vertical profiles (persist with the drawing)
   std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
   std::vector<CadSolidPtr> pipeRunWorldSolids;
   std::vector<EntityAttributes> pipeRunWorldSolidAttrs;
@@ -8234,6 +8238,12 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
 void RunCreateSampleLines(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// REQ-519: CREATESECTIONSHEETS <alignment>, <sample lines>, <sections per sheet>, <axis elevation>. One undo step.
 void RunCreateSectionSheets(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunCreateDesignProfile(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-521
+void RunProfilePvi(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-521
+void RunProfileDelPvi(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-521
+void RunProfileQuery(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-521
+void RunProfileList(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-521
+void RunProfileDelete(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-521
 /// REQ-517.8/.9: keeps view frame groups in step with the alignments. Logs a group it could not regenerate.
 void RefreshViewFrameGroups(AppCommandState& st, std::vector<std::string>& log);
 /// True when the active tab's survey-point project is read-only (REQ-517.6 uses the same rule as paste).

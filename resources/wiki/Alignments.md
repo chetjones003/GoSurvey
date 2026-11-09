@@ -144,6 +144,17 @@ offset and a curve's radius are always exact.
 - The dialogs start at a 50 ft interval, 50 ft swaths on each side, 4 sections per sheet, and an axis elevation at the lowest ground, rounded down to 10 ft. Change any of them before you press OK; the typed commands take every value.
 - Not built yet: the title-block fields on section sheets are not filled in, and Civil 3D's section-view styles are not reproduced.
 
+## Design profiles (vertical)
+
+A design profile is the vertical shape of an alignment: grades between points, and parabolic vertical curves at the points. It belongs to one alignment and is saved with the drawing. The alignment itself stays flat; its 3D design path is the plan line with the profile's elevation as height.
+
+- `CREATEDESIGNPROFILE <alignment>, <profile name>` makes an empty profile. Names are unique in the drawing.
+- `PROFILEPVI <profile>, <station>, <elevation>[, <curve length>]` adds a vertical point (PVI) at a station, or changes the point already there. A curve is a symmetric parabola of the curve length, centred on the point. Leave the curve length out for a sharp corner.
+- The first and last points cannot have a curve, and two curves on one tangent cannot overlap. A change that breaks these rules is refused, with the reason, and nothing changes.
+- `PROFILEDELPVI <profile>, <station>` removes a point. `PROFILEQUERY <profile>, <station>` reports the elevation, the grade and the 3D design point. `PROFILELIST` lists the profiles. `PROFILEDELETE <profile>` deletes one.
+- Deleting an alignment keeps its profiles. They show as `alignment missing` in `PROFILELIST`, and queries and point changes on them are refused until you delete them with `PROFILEDELETE`.
+- Each change is one undo step. The surface-sampled profile (`CREATEPROFILEFROMSURFACE`) and `QUICKPROFILE` are separate and unchanged.
+
 ## Limits so far
 
 - Geometry is built from typed commands, the Alignment Layout Tools (Tangent-Tangent), the layout table, grips or

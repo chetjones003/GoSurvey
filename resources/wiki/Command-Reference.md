@@ -174,6 +174,12 @@ for a compact list inside the program.
 | `CREATESHEETS` | — | Create paper sheets from view frames: CREATESHEETS <alignment>[, <frames>] (frames: ALL or names such as VF-1 VF-3) | [[Commands/createsheets]] |
 | `CREATESAMPLELINES` | — | Create sample lines along an alignment: CREATESAMPLELINES <alignment>, <start station>, <end station>, <interval>, <left swath>, <right swath>[, <surface>] | [[Commands/createsamplelines]] |
 | `CREATESECTIONSHEETS` | — | Create section sheets from sample lines: CREATESECTIONSHEETS <alignment>, <sample lines>, <sections per sheet>, <axis elevation> | [[Commands/createsectionsheets]] |
+| `CREATEDESIGNPROFILE` | — | Create an empty design profile on an alignment: CREATEDESIGNPROFILE <alignment>, <profile name> | [[Commands/createdesignprofile]] |
+| `PROFILEPVI` | — | Add or edit a vertical point of a design profile: PROFILEPVI <profile>, <station>, <elevation>[, <curve length>] | [[Commands/profilepvi]] |
+| `PROFILEDELPVI` | — | Remove a vertical point from a design profile: PROFILEDELPVI <profile>, <station> | [[Commands/profiledelpvi]] |
+| `PROFILEQUERY` | — | Report a design profile at a station: PROFILEQUERY <profile>, <station> | [[Commands/profilequery]] |
+| `PROFILELIST` | — | List the design profiles in the drawing: PROFILELIST | [[Commands/profilelist]] |
+| `PROFILEDELETE` | — | Delete a design profile: PROFILEDELETE <profile> | [[Commands/profiledelete]] |
 | `GETSTATIONOFFSET` | — | Station and offset of a point: GETSTATIONOFFSET <alignment>[, <x>, <y> \| , POINT, <number>][, SURFACE=<surface>] (alignment alone: pick until ESC) | [[Commands/getstationoffset]] |
 | `GETPOINTFROMSTATIONOFFSET` | — | Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset> | [[Commands/getpointfromstationoffset]] |
 | `CREATEALIGNMENTFROMOBJECTS` | `CREATEALIGNMENTENTITIES` | Alignment from lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS (pick them) \| <name>[, START=][, FILLET=][, REVERSE][, ERASE] | [[Commands/createalignmentfromobjects]] |
@@ -333,6 +339,12 @@ for a compact list inside the program.
 | `CREATESHEETS` | — | [[Commands/createsheets]] |
 | `CREATESAMPLELINES` | — | [[Commands/createsamplelines]] |
 | `CREATESECTIONSHEETS` | — | [[Commands/createsectionsheets]] |
+| `CREATEDESIGNPROFILE` | — | [[Commands/createdesignprofile]] |
+| `PROFILEPVI` | — | [[Commands/profilepvi]] |
+| `PROFILEDELPVI` | — | [[Commands/profiledelpvi]] |
+| `PROFILEQUERY` | — | [[Commands/profilequery]] |
+| `PROFILELIST` | — | [[Commands/profilelist]] |
+| `PROFILEDELETE` | — | [[Commands/profiledelete]] |
 | `ALIGNMENTDETACH` | — | [[Commands/alignmentdetach]] |
 | `ALIGNMENTDISTANCE` | — | [[Commands/alignmentdistance]] |
 | `ALIGNMENTCHECKSET` | — | [[Commands/alignmentcheckset]] |
