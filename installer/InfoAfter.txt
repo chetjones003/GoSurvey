@@ -117,6 +117,8 @@ SUPPORT
 ================================================================================
   Third-Party Notices
 ================================================================================
-  PDFium      BSD 3-Clause  —  https://pdfium.googlesource.com/pdfium/
-  GLEW        BSD/MIT       —  https://glew.sourceforge.net/
+  Qt          LGPL-3.0      —  https://download.qt.io/archive/qt/6.8/6.8.3/submodules/
+  PDFium      BSD-3 / MIT   —  https://pdfium.googlesource.com/pdfium/
+  GLEW        BSD / MIT     —  https://glew.sourceforge.net/
+  Licence texts are in the licenses folder beside GoSurvey.exe.
 ================================================================================

@@ -104,12 +104,15 @@ Type: files; Name: "{app}\GoSurvey.exe"
 Type: filesandordirs; Name: "{app}\resources\icons"
 Type: filesandordirs; Name: "{app}\resources\hatches"
 Type: filesandordirs; Name: "{app}\resources\blocks"
+; The licence texts are rebuilt each release (REQ-520), so a licence removed between releases must not linger.
+Type: filesandordirs; Name: "{app}\licenses"
 
 [Files]
 Source: "{#BuildDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\resources\*"; DestDir: "{app}\resources"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#BuildDir}\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#BuildDir}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
+; Qt6Test.dll is for the test runner only (cmake/GoSurveyQtTests.cmake); tools/verify-qt-deployment.ps1 excludes it from the deployed set too.
+Source: "{#BuildDir}\*.dll"; DestDir: "{app}"; Excludes: "Qt6Test.dll"; Flags: ignoreversion
 Source: "{#BuildDir}\qt.conf"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\qt-plugins\*"; DestDir: "{app}\qt-plugins"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; The licence texts that installer/License.txt names (REQ-520). Relative to this script's folder.

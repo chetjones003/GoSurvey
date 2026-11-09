@@ -4,7 +4,12 @@ licenses\GPL-3.0-or-later.txt, and at https://www.gnu.org/licenses/gpl-3.0.html
 
 GoSurvey links the GNU LibreDWG library (REQ-170 / ADR-041). LibreDWG is
 GPL-3.0-or-later, so the whole GoSurvey application is GPL-3.0-or-later.
-Source for LibreDWG: https://github.com/LibreDWG/libredwg
+Source for GoSurvey and LibreDWG: https://github.com/chetjones003/GoSurvey and
+https://github.com/LibreDWG/libredwg
+
+The licence texts named below are in the licenses folder, named by licence
+identifier. They are the standard versions; the copyright lines for each
+component are given in this file.
 
 -------------------------------------------------------------------------------
 QT (LGPL-3.0)
@@ -18,7 +23,7 @@ Qt is also offered under the GPL and under a commercial licence. GoSurvey uses
 Qt under the LGPL-3.0.
 
 Qt modules used: Qt Core, Qt Gui, Qt Network, Qt OpenGL, Qt OpenGL Widgets,
-Qt SVG, Qt Widgets and Qt Test (Qt Test is used by the GoSurvey test runner).
+Qt SVG and Qt Widgets.
 
 Qt is linked dynamically. Its DLLs and the qt-plugins folder are separate files
 installed beside GoSurvey.exe. You may replace them with a modified version of
@@ -30,7 +35,7 @@ Source code for Qt 6.8.3:
 
 Qt files in this installation:
   Qt DLLs: Qt6Core.dll, Qt6Gui.dll, Qt6Network.dll, Qt6OpenGL.dll,
-           Qt6OpenGLWidgets.dll, Qt6Svg.dll, Qt6Test.dll, Qt6Widgets.dll
+           Qt6OpenGLWidgets.dll, Qt6Svg.dll, Qt6Widgets.dll
   Plugins (qt-plugins\), all Qt Company, LGPL-3.0:
            generic\qtuiotouchplugin.dll
            iconengines\qsvgicon.dll
@@ -41,14 +46,14 @@ Qt files in this installation:
            tls\qcertonlybackend.dll, qschannelbackend.dll
 
 The complete list of third-party components that Qt itself ships is Qt's
-software bill of materials (SBOM). It is in the Qt source archive, under sbom/
-in the 6.8.3 binary kit, and in the Qt source repositories linked above.
+software bill of materials (SBOM), in the Qt source archive and the Qt source
+repositories linked above.
 
 -------------------------------------------------------------------------------
 NOTICES FOR THIRD-PARTY CODE INSIDE THE QT DLLS AND PLUGINS
 -------------------------------------------------------------------------------
-Qt bundles the following components. Each is named with its licence. Full texts
-are in the licenses folder, named by licence identifier.
+Qt bundles the following components. Each is named with its licence and
+copyright, as recorded in Qt's SBOM for version 6.8.3.
 
 Qt6Core.dll
   PCRE2 10.45 (regular expressions)
@@ -65,14 +70,14 @@ Qt6Core.dll
   zlib (compression)
     Copyright (C) Jean-loup Gailly and Mark Adler. Zlib. Text: Zlib.txt
   SipHash
-    Copyright Jean-Philippe Aumasson and Daniel J. Bernstein. CC0-1.0.
-    Text: CC0-1.0.txt
+    Copyright (C) 2012-2014 Jean-Philippe Aumasson. CC0-1.0. Text: CC0-1.0.txt
   BLAKE2 (hashing)
-    Copyright Samuel Neves and contributors. CC0-1.0 (also available under
-    Apache-2.0; GoSurvey uses it under CC0-1.0). Text: CC0-1.0.txt
+    Copyright Samuel Neves and contributors. Offered by Qt under CC0-1.0 or
+    Apache-2.0. Text: CC0-1.0.txt
   Keccak / SHA-3 (hashing)
     Keccak team, CC0-1.0. Text: CC0-1.0.txt
     Byte-order code: Copyright (c) 1998-2013, Brian Gladman. BSD-2-Clause.
+    Text: BSD-2-Clause.txt
   RFC 6234 SHA implementation
     Copyright (c) 2011 IETF Trust and the persons identified as authors.
     BSD-3-Clause. Text: BSD-3-Clause.txt
@@ -85,9 +90,10 @@ Qt6Core.dll
 
 Qt6Network.dll
   libpsl (public suffix library)
-    BSD-3-Clause. Text: BSD-3-Clause.txt
+    Copyright 2014-2016 The Chromium Authors. BSD-3-Clause.
+    Text: BSD-3-Clause.txt
   Public Suffix List data
-    Copyright the Public Suffix List contributors (Mozilla).
+    Copyright the Public Suffix List contributors.
     MPL-2.0. Text: MPL-2.0.txt
     Source: https://publicsuffix.org/list/public_suffix_list.dat
   zlib: see Qt6Core.dll above.
@@ -96,10 +102,18 @@ Qt6Gui.dll and the Qt image plugins
   FreeType 2.13.3 (font rendering)
     Copyright The FreeType Project and its contributors. Licensed under the
     FreeType License (FTL). Text: FTL.txt
-    Also: Copyright (C) 2000-2002 by Francesco Zappa Nardelli (BDF and PCF font
-    drivers), MIT. Text: MIT.txt
-    Also: Copyright (C) 1995-2002 Jean-loup Gailly and Mark Adler, zlib.
+    Rasteriser (grayraster): Copyright 2000-2016 by David Turner, Robert
+    Wilhelm, and Werner Lemberg. FTL, or GPL-2.0 at the user's option.
+    Text: FTL.txt
+    Also: Copyright (C) 1995-2023 Jean-loup Gailly and Mark Adler, zlib.
     Text: Zlib.txt
+    Font drivers (MIT unless stated):
+      BDF: Copyright (c) 2000 Computing Research Labs, New Mexico State
+      University; Copyright (C) 2001-2002 Francesco Zappa Nardelli.
+      PCF: Copyright (c) 2001, 2012 David Turner, Robert Wilhelm, and Werner
+      Lemberg (MIT AND MIT-open-group); Copyright (C) 2000 Francesco Zappa
+      Nardelli.
+      Text: MIT.txt and MIT-open-group.txt
   HarfBuzz 10.4.0 (text shaping)
     Copyright 2010-2022 Google, Inc., and the other HarfBuzz contributors listed
     in the HarfBuzz COPYING file in Qt's source. MIT ("Old MIT"). Text: MIT.txt
@@ -122,13 +136,26 @@ Qt6Gui.dll and the Qt image plugins
     Copyright (c) 2019-2022 Advanced Micro Devices, Inc. MIT. Text: MIT.txt
   AMD Vulkan Memory Allocator
     Copyright (c) 2017-2022 Advanced Micro Devices, Inc. MIT. Text: MIT.txt
+  Microsoft Direct3D 12 mipmap sample code (rhi-miniengine)
+    Copyright (c) 2015 Microsoft. MIT. Text: MIT.txt
+  Gradient presets (webgradients)
+    Copyright (c) 2017 itmeo. MIT. Text: MIT.txt
+  Image scaling (smooth-scaling-algorithm)
+    Copyright (C) 2004, 2005 Daniel M. Duley. BSD-2-Clause AND Imlib2.
+    Text: BSD-2-Clause.txt and Imlib2.txt
+  Adobe Glyph List for New Fonts (aglfn)
+    Copyright 2002, 2003, 2005, 2006, 2008, 2010, 2015 Adobe Systems.
+    BSD-3-Clause. Text: BSD-3-Clause.txt
+  X server helper (xserverhelper)
+    Copyright (c) 1987, 1988 X Consortium. X11 AND HPND. Text: X11.txt and HPND.txt
   ICC colour profile code
     Copyright International Color Consortium, 2015. LicenseRef-ICC-License.
     Text: LicenseRef-ICC-License.txt
 
 Qt6Svg.dll
   xsvg (SVG parser)
-    HPND licence (copyright notice in Qt's qtsvg source). Text: HPND.txt
+    HPND-sell-variant licence. Text: HPND.txt
+    Copyright holder as recorded in Qt's SBOM: USC/Information Sciences Institute.
 
 qt-plugins\platforms\qwindows.dll
   Wintab API headers
@@ -138,9 +165,10 @@ qt-plugins\platforms\qwindows.dll
 OTHER SHIPPED LIBRARIES THAT ARE NOT FROM THE QT MODULE LIST
 -------------------------------------------------------------------------------
 Mesa 3D software OpenGL (opengl32sw.dll, Mesa 11.2.2)
-  Copyright the Mesa authors (listed in Mesa-LICENSE.txt). Mesa is available
-  under the MIT licence and other permissive terms, set out in
-  licenses\Mesa-LICENSE.txt.
+  The Mesa 3D Graphics Library. The core library is MIT-licensed; other
+  components carry their own terms. The full licence and copyright notices
+  are in licenses\Mesa-LICENSE.txt, which is Mesa's own licence page for
+  this version.
   Source: https://gitlab.freedesktop.org/mesa/mesa
 
 DirectX Shader Compiler (dxcompiler.dll, version 1.8.2502.11)
@@ -168,15 +196,16 @@ GNU LibreDWG
   Pin: 0.13.3 (REQ-170). Linking this library makes the GoSurvey binary GPL-3.0-or-later.
 
 PDFium (pdfium.dll)
-  Copyright 2014 The PDFium Authors.
-  BSD 3-Clause License.
+  PDFium library: Copyright 2014 The PDFium Authors. BSD-3-Clause.
   Source: https://pdfium.googlesource.com/pdfium/
+  Vendored prebuilt binaries: Copyright 2014-2025 Benoit Blanchon. MIT.
+  Text: licenses\PDFium-LICENSE.txt
 
 GLEW (OpenGL Extension Wrangler Library)
   Copyright (C) 2002-2007, Milan Ikits <milan ikits@ieee.org>
   Copyright (C) 2002-2007, Marcelo E. Magallon <mmagallo@debian.org>
-  Copyright (C) 2002, Lev Walkin <vlm@lionet.info>
-  Modified BSD License / MIT License.
+  Copyright (C) 2002, Lev Povalahev
+  Modified BSD License and MIT License. Text: licenses\GLEW-LICENSE.txt
   Source: https://glew.sourceforge.net/
 
 CS-MAP (OSGeo MetaCRS) — coordinate systems (REQ-358)
