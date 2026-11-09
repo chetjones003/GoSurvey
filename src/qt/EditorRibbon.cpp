@@ -1510,6 +1510,16 @@ void EditorWindow::RefreshRibbon() {
         m_State.activeSpaceIndex >= 0 && static_cast<size_t>(m_State.activeSpaceIndex) < m_State.paperLayouts.size();
     if (id == "##RibbonPasteHome") enabled = enabled && !m_State.clipboard.empty();
     if (id == "##RibbonCopyClipHome") enabled = enabled && (!m_State.selection.empty() || !m_State.selectedPaperEntities.empty());
+    // REQ-084 (c): Cut is disabled on an empty selection. Survey points are included because Cut copies them.
+    if (id == "##ClipCut") {
+      // The same paper test CutSelectionToClipboard uses. A selected section plane counts as a selection: Cut
+      // refuses it with a message, which a greyed button would not show.
+      const bool cutPaper = ActivePaperGeometryTarget(m_State) != nullptr;
+      const bool cutHasSelection = cutPaper ? (!m_State.selectedPaperEntities.empty() || !m_State.selectedViewports.empty())
+                                            : (!m_State.selection.empty() || !m_State.selectedSurveyPointIndices.empty() ||
+                                               m_State.sectionPlaneSelected);
+      enabled = enabled && cutHasSelection;
+    }
     action->setEnabled(enabled);
     if (id == "##GeoMap") {
       const auto& map = OnlineMapInfoOf(m_State.drawingSettings.onlineMap);

@@ -1518,6 +1518,7 @@ void EditorWindow::Submit(const QString& command) {
   }
   if (verb == "NEW") NewDrawing();
   else if (verb == "COPYCLIP") CopySelectionToClipboard(m_State, m_Log);
+  else if (verb == "CUT") CutSelection();
   else if (verb == "PASTECLIP") StartPasteCommand(m_State, m_Log);
   else if (verb == "NEWPROJECT") NewProject();
   else if (verb == "OPENPROJECT") {
@@ -1628,6 +1629,13 @@ bool EditorWindow::ActiveDrawingReadOnly() const {
   const auto uid = m_State.drawingTabs[static_cast<size_t>(m_State.activeDrawingIdx)].projectUid;
   for (const auto& session : m_State.openProjects) if (session.uid == uid) return session.readOnly;
   return false;
+}
+
+void EditorWindow::CutSelection() {
+  // Cut erases what it copies, so a read-only drawing refuses it (REQ-382). DELETE does not check this yet.
+  if (ActiveDrawingReadOnly()) { QMessageBox::information(this, "Read-only drawing", "Objects cannot be cut from a read-only drawing."); return; }
+  CutSelectionToClipboard(m_State, m_Log);
+  Refresh();
 }
 
 void EditorWindow::ShowLayoutManager() {

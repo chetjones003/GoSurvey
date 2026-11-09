@@ -162,6 +162,7 @@ private:
   void ShowViewportScale();
   void ShowViewportsManager();
   bool ActiveDrawingReadOnly() const;
+  void CutSelection();  // Cut (issue #805): ribbon, context menu and Ctrl+X share the read-only guard.
   /// LandXML import (REQ-506): asks Overwrite or Offset for point numbers that already exist.
   void AskLandXmlPointConflicts();
   void ShowToolspaceContextMenu(QTreeWidget* tree, const QPoint& position);

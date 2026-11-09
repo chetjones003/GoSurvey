@@ -12171,6 +12171,217 @@ private Q_SLOTS:
     QVERIFY(SurveyPointIndexForId(state, 10) >= 0);
   }
 
+  // Issue #805: Cut copies the selection, then deletes it. One Undo restores the object.
+  void cutCopiesDeletesAndUndoRestores() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    state.userLinesFlat = {100, 100, 0, 110, 100, 0};
+    state.selection = {{SelectedEntity::Type::LineSeg, 0}};
+    std::vector<std::string> log;
+    CutSelectionToClipboard(state, log);
+    QVERIFY(state.userLinesFlat.empty());
+    QCOMPARE(state.clipboard.lines.size(), std::size_t(6));
+    QVERIFY(state.selection.empty());
+    DoUndo(state, log);
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(6));
+  }
+
+  // Issue #805: a type the copy does not carry is refused, and the whole Cut then erases nothing.
+  void cutRefusesEveryTypeTheClipboardCannotCarry() {
+    for (const auto type : {SelectedEntity::Type::Surface, SelectedEntity::Type::FeatureLine, SelectedEntity::Type::Mesh,
+                            SelectedEntity::Type::Solid, SelectedEntity::Type::PipeRun,
+                            SelectedEntity::Type::PointCloud, SelectedEntity::Type::PdfUnderlay,
+                            SelectedEntity::Type::Alignment}) {
+      EditorWindow window; window.CreateDrawingFromTemplate();
+      auto& state = window.State();
+      state.userLinesFlat = {100, 100, 0, 110, 100, 0};
+      state.selection = {{SelectedEntity::Type::LineSeg, 0}, {type, 0}};
+      std::vector<std::string> log;
+      CutSelectionToClipboard(state, log);
+      QCOMPARE(state.userLinesFlat.size(), std::size_t(6));
+      QVERIFY(state.clipboard.empty());
+      QVERIFY(!log.empty());
+      QVERIFY(log.back().find("CUT — not done") != std::string::npos);
+    }
+  }
+
+  // Issue #805: a paper table is not copied, so a paper Cut that includes one is refused.
+  void cutRefusesPaperTable() {
+    EditorWindow window; window.CreateDrawingFromTemplate(0);
+    if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
+    auto& state = window.State();
+    state.activeSpaceIndex = 0;
+    PaperEntityRef table; table.type = PaperEntityRef::Type::Table; table.index = 0;
+    state.selectedPaperEntities = {table};
+    std::vector<std::string> log;
+    CutSelectionToClipboard(state, log);
+    QVERIFY(state.clipboard.empty());
+    QVERIFY(!log.empty());
+    QVERIFY(log.back().find("a table cannot be copied to the clipboard") != std::string::npos);
+  }
+
+  // Issue #805: a survey point and a line are deleted in two steps, but one Undo restores both.
+  void cutOfSurveyPointAndLineUndoesInOneStep() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    SurveyPoint point; point.id = 7; point.easting = 10.0; point.northing = 20.0; point.description = "CUT";
+    state.surveyPoints = {point};
+    state.selectedSurveyPointIndices = {0};
+    state.userLinesFlat = {100, 100, 0, 110, 100, 0};
+    state.selection = {{SelectedEntity::Type::LineSeg, 0}};
+    std::vector<std::string> log;
+    CutSelectionToClipboard(state, log);
+    QVERIFY(state.surveyPoints.empty());
+    QVERIFY(state.userLinesFlat.empty());
+    DoUndo(state, log);
+    QCOMPARE(state.surveyPoints.size(), std::size_t(1));
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(6));
+  }
+
+  // Issue #805: with the undo history full, the cap drops the oldest frame. One Undo must still restore the
+  // survey point and the line, which a frame-count check would miss.
+  void cutOfSurveyPointAndLineUndoesInOneStepWhenHistoryIsFull() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    state.undoHistoryMaxSize = 3;
+    for (int i = 0; i < 3; ++i) PushUndoSnapshot(state, "filler");
+    SurveyPoint point; point.id = 8; point.easting = 10.0; point.northing = 20.0; point.description = "FULL";
+    state.surveyPoints = {point};
+    state.selectedSurveyPointIndices = {0};
+    state.userLinesFlat = {100, 100, 0, 110, 100, 0};
+    state.selection = {{SelectedEntity::Type::LineSeg, 0}};
+    std::vector<std::string> log;
+    CutSelectionToClipboard(state, log);
+    QVERIFY(state.surveyPoints.empty());
+    QVERIFY(state.userLinesFlat.empty());
+    DoUndo(state, log);
+    QCOMPARE(state.surveyPoints.size(), std::size_t(1));
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(6));
+  }
+
+  // Issue #805: a paper viewport is not copied, so a paper Cut that selects one is refused and nothing is erased.
+  void cutRefusesPaperViewport() {
+    EditorWindow window; window.CreateDrawingFromTemplate(0);
+    if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
+    auto& state = window.State();
+    state.activeSpaceIndex = 0;
+    state.selectedViewports = {0};
+    std::vector<std::string> log;
+    CutSelectionToClipboard(state, log);
+    QVERIFY(state.clipboard.empty());
+    QVERIFY(!log.empty());
+    QVERIFY(log.back().find("a paper viewport cannot be copied") != std::string::npos);
+    QCOMPARE(state.selectedViewports.size(), std::size_t(1));
+  }
+
+  // Issue #805: typing CUT with the suggestion popup open runs Cut, not the highlighted fuzzy match.
+  void issue805TypedCutWinsOverHighlightedSuggestion() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
+    window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto* command = window.findChild<QLineEdit*>("commandInput"); QVERIFY(command);
+    auto* popup = window.m_CommandSuggestions; QVERIFY(popup);
+    auto* model = window.m_CommandSuggestionModel; QVERIFY(model);
+    auto& state = window.State();
+    state.userLinesFlat = {100, 100, 0, 110, 100, 0};
+    state.selection = {{SelectedEntity::Type::LineSeg, 0}};
+
+    command->setFocus(); QTest::keyClicks(command, "CUT");
+    QTRY_VERIFY(popup->isVisible());
+    QVERIFY(model->rowCount() > 0);
+    QVERIFY(model->index(0, 0).data().toString() != QString("CUT"));
+    popup->setCurrentIndex(model->index(0, 0));
+    QTest::keyClick(command, Qt::Key_Return);
+    QVERIFY(state.userLinesFlat.empty());
+    QCOMPARE(state.clipboard.lines.size(), std::size_t(6));
+    window.CancelDraftingInput();
+  }
+
+  // Issue #805: a layout index that names no layout must refuse Cut. Otherwise the copy takes the model
+  // selection while DELETE takes the paper path.
+  void cutRefusesStaleLayoutIndex() {
+    EditorWindow window; window.CreateDrawingFromTemplate(0);
+    if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
+    auto& state = window.State();
+    state.userLinesFlat = {100, 100, 0, 110, 100, 0};
+    state.selection = {{SelectedEntity::Type::LineSeg, 0}};
+    state.activeSpaceIndex = static_cast<int>(state.paperLayouts.size()) + 5;
+    std::vector<std::string> log;
+    CutSelectionToClipboard(state, log);
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(6));
+    QVERIFY(state.clipboard.empty());
+    QVERIFY(!log.empty());
+    QVERIFY(log.back().find("not available") != std::string::npos);
+  }
+
+  // Issue #805 / REQ-084 (c): the ribbon Cut button is disabled on an empty selection.
+  void cutRibbonButtonFollowsSelection() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    state.userLinesFlat = {100, 100, 0, 110, 100, 0};
+    state.selection.clear();
+    window.Refresh();
+    auto cutAction = [&window]() -> QAction* {
+      for (auto* action : window.findChildren<QAction*>())
+        if (action->property("ribbonId").toString() == "##ClipCut") return action;
+      return nullptr;
+    };
+    QVERIFY(cutAction() != nullptr);
+    QVERIFY(!cutAction()->isEnabled());
+    QVERIFY(window.grab().save(Issue914Shot("issue805-cut-disabled-empty-selection.png")));
+    state.selection = {{SelectedEntity::Type::LineSeg, 0}};
+    window.Refresh();
+    QVERIFY(cutAction()->isEnabled());
+    QVERIFY(window.grab().save(Issue914Shot("issue805-cut-enabled-with-selection.png")));
+  }
+
+  void cutWithNothingSelectedDoesNotStartAnInteractiveDelete() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    state.userLinesFlat = {100, 100, 0, 110, 100, 0};
+    std::vector<std::string> log;
+    CutSelectionToClipboard(state, log);
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(6));
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QVERIFY(state.clipboard.empty());
+  }
+
+  // Issue #805: the ribbon Cut button and Ctrl+X both run the same Cut as the context menu.
+  void cutRibbonButtonAndCtrlXRunCut() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    state.userLinesFlat = {100, 100, 0, 110, 100, 0};
+    state.selection = {{SelectedEntity::Type::LineSeg, 0}};
+    window.RunRibbonAction("##ClipCut");
+    QVERIFY(state.userLinesFlat.empty());
+    QCOMPARE(state.clipboard.lines.size(), std::size_t(6));
+    state.userLinesFlat = {100, 100, 0, 110, 100, 0};
+    state.selection = {{SelectedEntity::Type::LineSeg, 0}};
+    QTest::keyClick(&window, Qt::Key_X, Qt::ControlModifier);
+    QVERIFY(state.userLinesFlat.empty());
+  }
+
+  // Issue #805: Cut deletes, so a read-only drawing refuses it (REQ-382) and nothing is copied or erased.
+  void cutRefusedInReadOnlyDrawing() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    state.userLinesFlat = {100, 100, 0, 110, 100, 0};
+    state.selection = {{SelectedEntity::Type::LineSeg, 0}};
+    state.activeDrawingIdx = state.prevDrawingIdx = 1;
+    AppCommandState::ProjectSession session; session.uid = 45; session.readOnly = true;
+    state.drawingTabs[1].projectUid = session.uid;
+    state.openProjects.push_back(session);
+    bool warned = false;
+    QTimer::singleShot(0, [&warned] {
+      if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) { warned = true; box->accept(); }
+    });
+    window.CutSelection();
+    QVERIFY(warned);
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(6));
+    QVERIFY(state.clipboard.empty());
+    state.openProjects.clear();
+    state.drawingTabs[1].projectUid = 0;
+  }
+
   void clipboardPointNumberConflictUsesExistingQuestion() {
     EditorWindow window; window.CreateDrawingFromTemplate();
     auto& state = window.State();

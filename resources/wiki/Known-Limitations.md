@@ -16,7 +16,6 @@ Current as of **version 0.7.6**.
 | **Poly VP** | Layout ribbon | Button is **disabled**. *"Polygonal viewport — coming in a later increment"* |
 | **POLAR** | Status bar | Toggles and lights up; **polar tracking is not implemented**. *"Polar tracking (UI only for now)"* |
 | **Layer On / Freeze / Lock** | Layer Manager | Stored and round-tripped, **not enforced**. *"On / Freeze / Lock are stored for future visibility and editing rules; all layers still draw"* |
-| **Ctrl+X** | Right-click ▸ Clipboard ▸ Cut | The label is shown, but the key is only wired inside the MTEXT editor. Use the menu item |
 | **Insert Field…** (`Ctrl+F`) | MTEXT editor | *"Fields are not supported yet"* |
 | **Background Mask…** | MTEXT editor | *"Background masking is not supported yet"* |
 | **Paragraph…**, Paragraph Alignment, Bullets and Lists, Columns, Combine Paragraphs | MTEXT editor | *"Paragraph and column properties are not stored yet"* |
