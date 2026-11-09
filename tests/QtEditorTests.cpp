@@ -12279,6 +12279,83 @@ private Q_SLOTS:
     QCOMPARE(state.userLinesFlat.size(), std::size_t(6));
   }
 
+  // Issue #805: Paste Special offers the two existing paste variants, and it is enabled only with a clipboard.
+  void pasteSpecialMenuOffersBothPasteVariants() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    auto pasteSpecial = [&window]() -> QAction* {
+      for (auto* action : window.findChildren<QAction*>())
+        if (action->property("ribbonId").toString() == "##ClipPasteSpecial") return action;
+      return nullptr;
+    };
+    auto hasItem = [&window](const char* command) {
+      for (auto* action : window.findChildren<QAction*>())
+        if (action->property("ribbonCommand").toString() == QString::fromUtf8(command)) return true;
+      return false;
+    };
+    QVERIFY(pasteSpecial() != nullptr);
+    state.clipboard = CadClipboard{};
+    window.Refresh();
+    QVERIFY(!pasteSpecial()->isEnabled());
+    state.clipboard.lines = {0, 0, 0, 1, 1, 0};
+    window.Refresh();
+    QVERIFY(pasteSpecial()->isEnabled());
+    QVERIFY(hasItem("PASTEBLOCK"));
+    QVERIFY(hasItem("PASTEORIG"));
+  }
+
+  // Issue #805: PASTEBLOCK places block references in the active space, as PASTEORIG does. The model-space run
+  // comes first and proves the command was dispatched, so the paper result is not a silent no-op.
+  void pasteBlockPlacesReferencesInActiveSpace() {
+    EditorWindow window; window.CreateDrawingFromTemplate(0);
+    if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
+    auto& state = window.State();
+    state.clipboard.blockRefs.push_back(CadBlockRef{});
+    state.clipboard.blockRefAttrs.push_back(EntityAttributes{});
+    state.clipboard.blockRefAttrs.back().id = 42;  // the source's id: REQ-076 says the paste must not keep it
+    state.activeSpaceIndex = kModelSpaceIndex;
+    const auto modelBefore = state.cadBlockRefs.size();
+    window.Submit("PASTEBLOCK");
+    QCOMPARE(state.cadBlockRefs.size(), modelBefore + 1);
+    state.activeSpaceIndex = 0;
+    const auto modelAfterControl = state.cadBlockRefs.size();
+    window.Submit("PASTEBLOCK");
+    QCOMPARE(state.cadBlockRefs.size(), modelAfterControl);
+    QCOMPARE(state.paperLayouts[0].paperBlockRefs.size(), std::size_t(1));
+    QCOMPARE(state.paperLayouts[0].paperBlockRefAttrs.size(), std::size_t(1));
+    QVERIFY(state.paperLayouts[0].paperBlockRefAttrs[0].id == 0);
+  }
+
+  // Issue #805: a layout index that names no layout refuses PASTEBLOCK before any change. Otherwise the
+  // references would be written to the model store while the user is looking at a missing layout.
+  void pasteBlockRefusesStaleLayoutIndex() {
+    EditorWindow window; window.CreateDrawingFromTemplate(0);
+    auto& state = window.State();
+    state.clipboard.blockRefs.push_back(CadBlockRef{});
+    state.activeSpaceIndex = 7;
+    const auto modelBefore = state.cadBlockRefs.size();
+    window.Submit("PASTEBLOCK");
+    QCOMPARE(state.cadBlockRefs.size(), modelBefore);
+  }
+
+  // Issue #805: PASTEBLOCK takes the REQ-383 guard that PASTE and PASTEORIG take. A clipboard from another
+  // coordinate system is refused before any change, so the references are not placed on the wrong ground.
+  void pasteBlockRefusesCoordinateMismatch() {
+    EditorWindow window; window.CreateDrawingFromTemplate(0);
+    auto& state = window.State();
+    state.clipboard.blockRefs.push_back(CadBlockRef{});
+    state.clipboard.srcZone = "TX83-CF";
+    state.drawingSettings.zoneCode = "TX83-NF";
+    state.activeSpaceIndex = kModelSpaceIndex;
+    const auto modelBefore = state.cadBlockRefs.size();
+    window.Submit("PASTEBLOCK");
+    QCOMPARE(state.cadBlockRefs.size(), modelBefore);
+    QVERIFY(std::any_of(window.m_Log.begin(), window.m_Log.end(), [](const std::string& line) {
+      return line.find("PASTEBLOCK — not pasted (blocked)") != std::string::npos &&
+             line.find("TX83-CF") != std::string::npos;
+    }));
+  }
+
   // Issue #805: a paper viewport is not copied, so a paper Cut that selects one is refused and nothing is erased.
   void cutRefusesPaperViewport() {
     EditorWindow window; window.CreateDrawingFromTemplate(0);
