@@ -16,7 +16,7 @@
 - In scope:        installer/License.txt; installer/licenses/ (new licence texts); installer/GoSurvey.iss
                    ([Files] entry for the licences folder); workshop task log.
 - Out of scope:    vendored libraries not named today (OpenXLSX, libe57format, xerces-c, laszip, miniz, nlohmann,
-                   pugixml, md4c, stb_image): follow-up, recorded in D-2026-11-08-j. Code changes. Changing the
+                   pugixml, stb_image): follow-up, recorded in D-2026-11-08-j. Code changes. Changing the
                    Qt version.
 - Smallest change: correct the notice, add the licence texts the notice refers to, and install them.
 
@@ -78,23 +78,46 @@ platforms, styles, tls).
   libpsl; GoSurvey.iss excludes Qt6Test.dll and clears {app}\licenses on upgrade; InfoAfter.txt third-party block
   now lists Qt, PDFium and GLEW.
 - 2026-11-08 Follow-up for the vendored libraries not yet named: issue #1180.
+- 2026-11-08 Council pass 2 (three fresh Haiku agents, read-only) on 9cae444b: no blocking findings; confirmed the
+  pass-1 fixes. Fixed in this round: PDFium library licence text (BSD-3-Clause with its copyright line) added as
+  PDFium-BSD-3-Clause.txt; LibreDWG pin corrected to tag 0.14 (the vendored base); GLEW notice lists the Brian Paul
+  and Khronos lines its licence file carries; Open Group line added for the PCF driver's MIT-open-group; smooth-scaling
+  and xserverhelper holders completed from the SBOM; md4c removed from the unnamed list (it is named).
+  The full notice is installed as licenses\NOTICE.txt and the post-install block lists LibreDWG, Qt, PDFium and GLEW.
+  innoextract cannot read Inno Setup 6.7; installing the setup on this machine is unsafe (live GoSurvey install).
 
 ## 9. Self-verification
-- [x] build-project        — PASS: `.\build.bat` (Release) on the rebased branch, exit 0 (before the fixes below;
-      the fixes touch only installer/spec files, not the build)
+- [x] build-project        — PASS: `.\build.bat` (Release) on the rebased branch, exit 0 (before the notice fixes;
+      those files are not compiled into the application)
 - [x] architecture-review  — n-a (packaging only, no code path)
-- [ ] code-review          — council review done (three Haiku agents); findings fixed as recorded in section 8;
-      confirmation pass pending
+- [ ] code-review          — council pass 1 (three Haiku agents) and pass 2 done; findings fixed as recorded in
+      section 8; the pass-3 confirmation is recorded in section 8 when it runs
 - [x] dependency-audit     — n-a (no dependency change; Qt 6.8.3 unchanged)
 - [x] performance-review   — n-a
-- [x] testing              — PASS (partly): Inno Setup compile of installer/GoSurvey.iss after the fixes; compile log
-      lists 26 licence files, 11 qt-plugins files and every Qt DLL except Qt6Test.dll, which is excluded on purpose.
-      Payload check: 23 shipped files, all named. Licence-reference check: every named file exists, every staged file
-      is named. The installer was NOT executed on the dev machine (its AppId is shared with the user's real install).
-      Install-time display of the UTF-8 characters in License.txt is not verified (Inno documents UTF-8 without a BOM
-      as accepted).
+- [x] testing              — PASS (packaging): Inno Setup compile of installer/GoSurvey.iss after the latest fixes.
+      The compile record (build/artifacts/issue-1025/iscc-packed-files.log) lists 27 licence files, the NOTICE copy,
+      11 qt-plugins files, 7 Qt DLLs and 5 other DLLs, and no Qt6Test.dll. Payload check: 23 of 23 shipped files named.
+      Licence-reference check: every named licence file exists; every staged file is named.
+      NOT done: the installer was not run and its installed files were not listed. This machine has a live GoSurvey
+      install (per-user registration, folder, Start Menu shortcut, %APPDATA%\GoSurvey and a running process) that
+      shares the installer's AppId, so running the setup here would touch it. innoextract 1.9 cannot read Inno Setup
+      6.7's loader (revision 2).
+      Not verified: how the UTF-8 characters in License.txt display on the installer's licence page (Inno documents
+      UTF-8 with or without a BOM as accepted).
 
 ## 10. Verification result
 - Submitted: PR #1178.
-- Acceptance (REQ-520): items 1, 2, 3, 4 and 6 are checked against the notice and the compile packing list. Item 5
-  (a built installer inspected) is PARTLY met: the packed-file list was checked; the installer was not run.
+- Acceptance, by REQ-520's own numbering (spec/requirements.md):
+  1. Qt is named (name, LGPL-3.0, version 6.8.3, modules, source location): MET.
+  2. Every shipped Qt DLL and plugin is covered by a notice: MET for the 23 files in the local build payload.
+  3. Other shipped DLLs (Mesa, DXC, Microsoft runtimes) are covered: MET.
+  4. One licence statement for GoSurvey (GPL-3.0-or-later; MIT grant removed): MET.
+  5. Stale notices removed (GLFW, Dear ImGui): MET.
+  6. The licences folder exists and its texts are shipped: MET (27 files, packed by GoSurvey.iss).
+  7. The built installer contains the files: MET AT COMPILE TIME (compile record), NOT on an installed machine.
+     The item says "verified on the built installer"; the installed files were not listed (see section 9).
+- Issue #1025's own criterion 5 ("a built installer is inspected to confirm the files are present") is met by the
+  compile record, which is the compiler's list of every file packed into the installer. The reviewers asked for a
+  stronger check; that needs a machine without a live GoSurvey install, or innoextract with an Inno-6.7-capable
+  build.
+- Follow-up: #1180 (vendored libraries not named; treat as a release gate for the notice's completeness).

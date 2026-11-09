@@ -17458,7 +17458,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Packaging (`installer/`); no application code.
 - Assumptions (recorded, not asked): the Qt version named in the notice is the kit version that `build.bat` uses by
   default (6.8.3). When the kit changes, the notice changes with it. Vendored libraries that the notice does not yet
-  name (for example OpenXLSX, libe57format, xerces-c, laszip, miniz, nlohmann, pugixml, md4c, stb_image) are not
+  name (for example OpenXLSX, libe57format, xerces-c, laszip, miniz, nlohmann, pugixml, stb_image) are not
   covered by this REQ; they are a separate follow-up.
 - Status: accepted (2026-11-08, D-2026-11-08-j; GitHub #1025). The user accepted the drafted criteria as written and
   chose to remove the MIT grant and install a `licenses` folder.
