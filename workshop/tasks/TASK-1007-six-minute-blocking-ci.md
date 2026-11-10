@@ -104,3 +104,14 @@ still run. Duplicate review: a scan of `tests/QtEditorTests.cpp` found no test w
 assertion, no screenshot file written by two tests, and no identical test bodies, so no
 tests were removed. Build-once binary sharing was not implemented: the runtime tree is
 about 1 GB, so uploading and downloading it would add to the critical path.
+
+### sccache root cause — 2026-11-10
+
+Diagnostic run 42850779996 (debug log per runner, 9 artifacts): the sccache GitHub backend
+logged 902 reads and 339 writes rejected with `RateLimited (temporary)` (HTTP 429) on the
+results cache service, plus 563 `AlreadyExists` writes for objects another job had just
+stored. The entries existed; the 17 parallel jobs exceeded the per-object request rate, so
+most cache hits were treated as misses and recompiled. The change replaces the per-object
+backend with a local `SCCACHE_DIR` that is restored from one `actions/cache` archive and
+saved by the full-target build only. Test workers restore the newest archive, so their
+compiles use cached objects without per-object requests.

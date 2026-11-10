@@ -103,11 +103,25 @@ runs:
     - name: Set up sccache
       uses: mozilla-actions/sccache-action@v0.0.11
 
-    - name: Capture sccache write errors
+    # GitHub's per-object sccache backend is rate-limited (429) when 17 jobs read and write thousands of
+    # entries, so most hits became recompiles. Workers instead use one local directory that is restored
+    # from a single cache archive and saved once by the full-target build.
+    - name: Use local sccache directory
       shell: pwsh
       run: |
-        "SCCACHE_LOG=sccache=debug" | Add-Content $env:GITHUB_ENV
-        "SCCACHE_ERROR_LOG=$env:RUNNER_TEMP\sccache-error.log" | Add-Content $env:GITHUB_ENV
+        try { sccache --stop-server | Out-Null } catch { }
+        $dir = Join-Path $env:RUNNER_TEMP 'sccache'
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        "SCCACHE_GHA_ENABLED=false" | Add-Content $env:GITHUB_ENV
+        "SCCACHE_DIR=$dir" | Add-Content $env:GITHUB_ENV
+
+    - name: Restore sccache archive
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/sccache
+        key: sccache-msvc-release-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          sccache-msvc-release-${{ runner.os }}-
 
     - name: Register MSVC /analyze problem matcher
       shell: pwsh
@@ -169,34 +183,12 @@ runs:
         }
         if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
 
-    - name: Report sccache write errors
-      if: always()
-      shell: pwsh
-      run: |
-        $log = Join-Path $env:RUNNER_TEMP 'sccache-error.log'
-        if (Test-Path $log) {
-          $lines = @(Get-Content $log)
-          Write-Host "sccache error log: $($lines.Count) lines; showing matches for write/error:"
-          # Distinct error messages with timestamps and object names removed, most frequent first.
-          $lines | Where-Object { $_ -match 'ERROR|WARN' } |
-            ForEach-Object { ($_ -replace '\x1b\[[0-9;]*m', '') -replace '^\S+\s+', '' -replace '\[[^\]]*\.obj\]', '' } |
-            Group-Object | Sort-Object Count -Descending | Select-Object -First 20 |
-            ForEach-Object { Write-Host ("{0,6}  {1}" -f $_.Count, $_.Name) }
-          Write-Host 'HTTP status and rate-limit lines (first 20):'
-          $lines | Select-String -Pattern 'status|429|5\d\d |rate|reqwest|HTTP|unauthori|forbidden' |
-            Select-Object -First 20 | ForEach-Object { Write-Host ($_.Line -replace '\x1b\[[0-9;]*m', '') }
-        } else {
-          Write-Host 'sccache error log was not written.'
-        }
-    - name: Upload sccache debug log
-      if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - name: Save sccache archive
+      if: inputs.build-targets == 'all' && success()
+      uses: actions/cache/save@v4
       with:
-        name: sccache-debug-${{ runner.name }}-${{ github.run_attempt }}
-        path: ${{ runner.temp }}/sccache-error.log
-        if-no-files-found: ignore
-        overwrite: true
-        retention-days: 3
+        path: ${{ runner.temp }}/sccache
+        key: sccache-msvc-release-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
     - name: Stage Mesa runtime dependencies for tests
       if: inputs.run-tests == 'true' && inputs.prepare-qt-tests == 'true'
