@@ -106,7 +106,7 @@ runs:
     - name: Capture sccache write errors
       shell: pwsh
       run: |
-        "SCCACHE_LOG=sccache=warn" | Add-Content $env:GITHUB_ENV
+        "SCCACHE_LOG=sccache=debug" | Add-Content $env:GITHUB_ENV
         "SCCACHE_ERROR_LOG=$env:RUNNER_TEMP\sccache-error.log" | Add-Content $env:GITHUB_ENV
 
     - name: Register MSVC /analyze problem matcher
@@ -177,10 +177,26 @@ runs:
         if (Test-Path $log) {
           $lines = @(Get-Content $log)
           Write-Host "sccache error log: $($lines.Count) lines; showing matches for write/error:"
-          $lines | Select-String -Pattern 'write|error|fail' | Select-Object -First 40 | ForEach-Object { Write-Host $_.Line }
+          # Distinct error messages with timestamps and object names removed, most frequent first.
+          $lines | Where-Object { $_ -match 'ERROR|WARN' } |
+            ForEach-Object { ($_ -replace '\x1b\[[0-9;]*m', '') -replace '^\S+\s+', '' -replace '\[[^\]]*\.obj\]', '' } |
+            Group-Object | Sort-Object Count -Descending | Select-Object -First 20 |
+            ForEach-Object { Write-Host ("{0,6}  {1}" -f $_.Count, $_.Name) }
+          Write-Host 'HTTP status and rate-limit lines (first 20):'
+          $lines | Select-String -Pattern 'status|429|5\d\d |rate|reqwest|HTTP|unauthori|forbidden' |
+            Select-Object -First 20 | ForEach-Object { Write-Host ($_.Line -replace '\x1b\[[0-9;]*m', '') }
         } else {
           Write-Host 'sccache error log was not written.'
         }
+    - name: Upload sccache debug log
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: sccache-debug-${{ runner.name }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/sccache-error.log
+        if-no-files-found: ignore
+        overwrite: true
+        retention-days: 3
 
     - name: Stage Mesa runtime dependencies for tests
       if: inputs.run-tests == 'true' && inputs.prepare-qt-tests == 'true'
