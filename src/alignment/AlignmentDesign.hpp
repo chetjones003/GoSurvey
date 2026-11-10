@@ -28,8 +28,10 @@ struct AlignmentCheckSet {
   double minSpiralLength = 0.0;  ///< Shortest single spiral (not part of a compound).
   double minA = 0.0;             ///< Smallest spiral A parameter.
   double maxA = 0.0;             ///< Largest spiral A parameter.
-  double maxSuperelevation = 0.0;  ///< Stub (REQ-502): stored and reported, not checked in this epic.
-  double minSightDistance = 0.0;   ///< Stub (REQ-502): stored and reported, not checked in this epic.
+  double maxSuperelevation = 0.0;  ///< Largest superelevation rate, ft/ft. Zero switches the check off (REQ-522).
+  double sideFriction = 0.0;       ///< Side friction factor f for the superelevation check (REQ-522). Dimensionless.
+  double minSightDistance = 0.0;   ///< Shortest sight distance on a curve. Zero switches the check off (REQ-522).
+  double sightClearance = 0.0;     ///< Lateral clearance m from the inside lane centreline to an obstruction (REQ-522).
   double minLineLength = 0.0;      ///< Shortest tangent (Line entity) allowed. Decision 2026-11-04 (user).
   /// Tangent intersection check (REQ-502): the largest deflection, degrees, where two tangents meet with no curve.
   double maxTangentDeflection = 0.0;
@@ -37,8 +39,9 @@ struct AlignmentCheckSet {
   bool operator==(const AlignmentCheckSet& o) const {
     return name == o.name && kind == o.kind && minTangent == o.minTangent && minSpiralLength == o.minSpiralLength &&
            maxTangentDeflection == o.maxTangentDeflection &&
-           minA == o.minA && maxA == o.maxA && maxSuperelevation == o.maxSuperelevation &&
-           minSightDistance == o.minSightDistance && minLineLength == o.minLineLength && radiusTable.size() == o.radiusTable.size() &&
+           minA == o.minA && maxA == o.maxA && maxSuperelevation == o.maxSuperelevation && sideFriction == o.sideFriction &&
+           minSightDistance == o.minSightDistance && sightClearance == o.sightClearance && minLineLength == o.minLineLength &&
+           radiusTable.size() == o.radiusTable.size() &&
            std::equal(radiusTable.begin(), radiusTable.end(), o.radiusTable.begin(),
                       [](const RadiusRequirement& x, const RadiusRequirement& y) {
                         return x.speed == y.speed && x.minRadius == y.minRadius;
@@ -70,6 +73,14 @@ struct DesignFinding {
 
 /// Every failed check on the alignment, in travel order (REQ-502). Empty when the alignment meets the set, or when it has none.
 [[nodiscard]] std::vector<DesignFinding> CheckDesign(const Alignment& a, const AlignmentCheckSet& set, int linearPrecision);
+
+/// REQ-522: the superelevation rate a curve of `radius` (ft) needs at `speedMph` with side friction `sideFriction`:
+/// V^2 / (g R) - f, with V in ft/s and g = 32.174 ft/s^2. Negative when the friction alone is enough.
+[[nodiscard]] double RequiredSuperelevation(double speedMph, double radius, double sideFriction);
+
+/// REQ-522: the sight distance counted on a curve of radius `radius` and arc length `arcLength` (ft) with lateral clearance
+/// `clearance` (ft) from the inside lane centreline. S = 2 R acos(1 - m / R), with m limited to 0..R, capped at the arc length.
+[[nodiscard]] double AvailableSightDistance(double radius, double arcLength, double clearance);
 
 /// REQ-486.5: what the check set requires of entity `i` (0-based), for the layout table's criteria column, e.g.
 /// "R ≥ 120.00'" for a curve at its design speed, "L ≥ 50.00'" for a tangent, "Ls ≥ …, A ≥ …" for a spiral. Empty when

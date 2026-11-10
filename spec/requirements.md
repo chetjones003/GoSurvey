@@ -16980,7 +16980,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   editing in this epic. Compound spiral length is not validated `[A:888F1041]`. Reference check values are
   user-entered or loaded from a user file; GoSurvey ships no AASHTO/regional table as authoritative, and Rail uses
   separate criteria `[A:888F1041]`. Superelevation and sight distance are **stubs** (data fields and report
-  placeholders; no calculation) in this epic.
+  placeholders; no calculation) in this epic. **Amended by REQ-522 (GitHub #1164, D-2026-11-09-e):** both are now calculated on circular curves.
   1. R=250 with a minimum-radius check of 400 produces `Curve radius 250' is below the selected minimum design
      radius of 400'.` and still saves.
   2. A station with two speeds uses the higher for validation.
@@ -17544,3 +17544,83 @@ capability that does not exist. They are recorded here rather than quietly dropp
   this increment (item 9). Grade is rise over run.
 - Status: accepted (2026-11-08, D-2026-11-08-k; GitHub #1163). The user asked for #1163 to be implemented, which is the
   acceptance (as D-2026-11-08-h). This REQ is the profile-specific SPEC that the issue says must exist before code.
+
+### REQ-522 — Superelevation and sight-distance checks on alignment curves (GitHub issue #1164, follow-up to #121)
+- Purpose: REQ-502 left superelevation and sight distance as stubs (stored values and report placeholders with no
+  calculation). A designer needs each circular curve checked against the superelevation and sight-distance limits the
+  designer enters, and a failure must show the same way as a failing radius does. This REQ replaces the two REQ-502 stubs
+  and changes nothing else in REQ-502.
+- Priority: should
+- Type: functional
+- Depends on: REQ-502, REQ-480, REQ-481, REQ-491.
+- Statement:
+  1. **Criteria are user-supplied.** A check set holds the REQ-502 values `SUPERELEVATION` (maximum superelevation rate)
+     and `SIGHT` (minimum sight distance), and two new values: `FRICTION` (side friction factor, default 0) and
+     `CLEARANCE` (lateral sight clearance, default 0). All four are entered with `ALIGNMENTCHECKSET SET`. A negative
+     value is refused with the same "takes one value, zero or more" message as the other SET values and leaves the set unchanged. GoSurvey ships no superelevation, friction or
+     sight value as a default and no regional table (REQ-502). Units: superelevation rate and friction factor are
+     dimensionless (0.06 = 6 %); design speed is in miles per hour; distances are in drawing linear units (feet).
+  2. **Circular curves only.** Both checks apply to each circular curve (an Arc entity). Tangents, spirals and compound
+     spirals are not checked by this REQ. Spiral superelevation runoff is not modelled.
+  3. **Superelevation.** On a curve of radius R (feet) at design speed V (miles per hour, the highest speed over the
+     curve's span, REQ-502 AC2), the side friction and superelevation together balance the vehicle: e + f = V² / (g R),
+     with V converted to feet per second (V × 5280 / 3600) and g = 32.174 ft/s². The superelevation required is
+     e_req = V² / (g R) − f. The curve fails when e_req is greater than the maximum rate e_max. The check is off when e_max
+     is zero, and a curve with no design speed is not checked.
+  4. **Sight distance.** On a circular curve of radius R with lateral clearance m (measured from the centreline of the
+     inside lane to the obstruction), the sight distance is the solution of m = R (1 − cos(28.65 S / R)), that is
+     S = 2 R acos(1 − m / R), with m limited to the range 0 to R. The sight distance counted for the curve is the smaller of
+     that value and the curve's own arc length L: sight beyond the curve's ends is not counted, so the result is
+     conservative where the formula would reach onto the tangents (the modified formula for S > L is not used). The check
+     fails when the counted sight distance is less than the minimum S_min. The check is off unless S_min and m are both
+     greater than zero.
+  5. **Findings.** Each failure is a design-check finding (REQ-502 item 1 wording), a non-blocking warning, and appears
+     wherever REQ-502 findings appear: the layout table, `ALIGNMENTLIST`, the report and the drawing warning markers.
+     Numbers use the drawing's display precision (D-2026-11-04-a), and the required superelevation rate is written to
+     four decimal places. Two wordings:
+     - `Required superelevation 0.1407 exceeds the maximum of 0.0600 at design speed 60 mph with side friction 0.1000.`
+     - `Sight distance 317.56' is below the minimum of 500.00' with a sight clearance of 25.00'.`
+  6. **Criteria column.** The layout table's criteria column shows, for a curve, `e ≤ <e_max>` when the superelevation
+     check is on and the curve has a design speed, and `S ≥ <S_min>` when the sight check is on.
+  7. **Report.** The two REQ-502 stub lines are replaced by one line per check. When on, the line gives the limit and
+     the assumption used (`Superelevation: maximum 0.0600, side friction 0.1000, circular curves only; a curve with no design speed is not checked.` and
+     `Sight distance: minimum 500.00', clearance 25.00', circular curves only, sight beyond the curve not counted.`).
+     When off, it says why: `Superelevation: not checked (no maximum rate).`, `Sight distance: not checked (no minimum
+     sight distance or no clearance).`
+  8. **Persistence.** `FRICTION` and `CLEARANCE` save and load with the check set, as the other values do. A zero value
+     is omitted from the saved file, so an existing drawing saves exactly as before. A file without the values loads
+     them as zero. A negative value in a file is not loaded (it is read as zero), so the load does not fail and the
+     set never holds a value SET would refuse.
+  9. **Undo.** Each `ALIGNMENTCHECKSET SET` that changes a value undoes in one step (REQ-502).
+  10. **Out of scope** (recorded so they are not silently added): spiral and compound-spiral superelevation runoff and
+     runoff length; regional or AASHTO tables; speed-dependent sight-distance minimums (one minimum per set); the modified
+     sight formula for S > L; the vertical (stopping) sight distance from a profile; the ribbon's disabled Superelevation
+     and Sight Distance buttons, which stay "not implemented yet" in this increment (command-driven only).
+- Acceptance:
+  1. Superelevation (analytical): a curve of R = 1000 ft at 60 mph with f = 0.10 requires e = 0.1407. With e_max = 0.06 it
+     reports the finding above; with e_max = 0.15 it reports nothing; with e_max exactly 0.1407 (within display rounding)
+     it reports nothing.
+  2. Sight distance (analytical): a curve of R = 500 ft with clearance 25 ft counts 317.56 ft. With S_min = 300 it reports
+     nothing; with S_min = 350 it reports the finding above. A clearance of 500 ft (equal to R) counts the curve's arc
+     length, not the half circle of 1570.80 ft.
+  3. A check is off when its limit or input is zero (superelevation with no maximum rate; sight with no minimum or no
+     clearance), and the report says so.
+  4. A curve whose span holds two design speeds is checked at the higher one. A curve with no design speed is not checked.
+  5. Only circular curves are checked: tangents and spirals produce no superelevation or sight finding.
+  6. Negative `FRICTION` or `CLEARANCE` is refused, and the set is unchanged.
+  7. Saving and loading the drawing keeps the four values and the findings. A drawing saved with no `FRICTION` and no
+     `CLEARANCE` loads them as zero. A drawing saved before this REQ with a user-set `SUPERELEVATION` or `SIGHT` keeps
+     that limit live (the value was set on purpose through SET, so it is not dropped): its superelevation check runs at
+     friction zero, which the report states, and its sight check stays off until a clearance is set.
+  8. The layout criteria column, `ALIGNMENTLIST` and `ALIGNMENTREPORT` show the findings and assumptions of acceptance 1,
+     2 and 3. The REQ-502 test that asserted the stub text is updated to the new text, and no other REQ-502 test changes.
+- Owner-layer: Alignment (Domain), Commands, IO. No Qt control changes (the criteria column is the existing text field),
+  so no Civil 3D comparison panel applies; the user waived the Civil 3D parity screenshots for this work.
+- Assumptions (recorded, not asked): the two formulas are the standard highway-geometry relations, checked on
+  2026-11-09 against engineering reference material found by web search (lecture notes and study guides,
+  not design standards) (e + f = V² / gR, and m = R (1 − cos(28.65 S / R)) for the middle
+  ordinate, with the modified S > L form noted as separate). They are not a regional standard and do not select one.
+  Design speed is in miles per hour, as the radius table already assumes. The sight-distance cap at the curve's arc
+  length is GoSurvey's conservative choice (item 4).
+- Status: accepted (2026-11-09, D-2026-11-09-e; GitHub #1164). The user asked for #1164 to be implemented, which is the
+  acceptance (as D-2026-11-08-h and D-2026-11-08-k). This REQ is the SPEC the issue asks for before code.
