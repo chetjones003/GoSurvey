@@ -21,6 +21,22 @@ inputs:
     description: Number of CTest processes; auto uses runner capacity.
     required: false
     default: 'auto'
+  qt-test-shards:
+    description: Number of isolated Qt test processes configured in CTest.
+    required: false
+    default: 'auto'
+  catch-test-shards:
+    description: Number of isolated Catch2 test processes configured in CTest.
+    required: false
+    default: '2'
+  ctest-regex:
+    description: Optional CTest test-name regex to run.
+    required: false
+    default: ''
+  ctest-exclude:
+    description: Optional CTest test-name regex to exclude.
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -88,6 +104,13 @@ runs:
       run: |
         $logicalProcessors = [Environment]::ProcessorCount
         $qtShards = [Math]::Min(16, [Math]::Max(6, [int][Math]::Ceiling($logicalProcessors * 1.5)))
+        $requestedQtShards = '${{ inputs.qt-test-shards }}'
+        if ($requestedQtShards -ne 'auto') {
+          if ($requestedQtShards -notmatch '^[1-9][0-9]*$' -or [int]$requestedQtShards -gt 16) { throw 'qt-test-shards must be auto or an integer from 1 to 16.' }
+          $qtShards = [int]$requestedQtShards
+        }
+        $requestedCatchShards = '${{ inputs.catch-test-shards }}'
+        if ($requestedCatchShards -notmatch '^[1-9][0-9]*$' -or [int]$requestedCatchShards -gt 16) { throw 'catch-test-shards must be an integer from 1 to 16.' }
         $testParallel = [Math]::Min(16, [Math]::Max(8, $logicalProcessors))
         $requestedTestParallel = '${{ inputs.test-parallel }}'
         if ($requestedTestParallel -ne 'auto') {
@@ -101,6 +124,7 @@ runs:
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
           -DGOSURVEY_USE_PCH=OFF `
           "-DGOSURVEY_QT_TEST_SHARDS=$qtShards" `
+          "-DGOSURVEY_CATCH_TEST_SHARDS=$requestedCatchShards" `
           "-DGOSURVEY_BUILD_CHANNEL=$env:BUILD_CHANNEL" `
           "-DGOSURVEY_BETA_VERSION=$env:BETA_VERSION" `
           "-DGOSURVEY_VERSION_SUFFIX=$env:VERSION_SUFFIX" `
@@ -150,7 +174,12 @@ runs:
         $ciArtifacts = Join-Path $env:GITHUB_WORKSPACE 'build/artifacts/ci'
         New-Item -ItemType Directory -Force -Path $ciArtifacts | Out-Null
         $junitPath = Join-Path $ciArtifacts 'ctest.xml'
-        ctest --preset ninja-release --parallel $testParallel --output-on-failure --output-junit $junitPath
+        $ctestArgs = @('--preset', 'ninja-release', '--parallel', "$testParallel", '--output-on-failure', '--output-junit', $junitPath)
+        $testRegex = '${{ inputs.ctest-regex }}'
+        $excludeRegex = '${{ inputs.ctest-exclude }}'
+        if ($testRegex) { $ctestArgs += @('-R', $testRegex) }
+        if ($excludeRegex) { $ctestArgs += @('-E', $excludeRegex) }
+        ctest @ctestArgs
         if ($LASTEXITCODE -ne 0) { throw 'CTest failed.' }
 
     - name: Restore Qt OpenGL runtime files

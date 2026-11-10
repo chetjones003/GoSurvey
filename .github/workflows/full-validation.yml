@@ -84,21 +84,59 @@ jobs:
           PY
 
   # ---------------------------------------------------------------------------
-  # Build and test the supported Qt application and headless helpers.
+  # Run every registered test on independent standard Windows runners. The aggregate job below
+  # keeps the historical required-check name and validates exact Catch2/Qt case coverage.
   # ---------------------------------------------------------------------------
-  build-and-test:
+  test-shards:
     defaults:
       run:
         shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-    name: full / build and test
+    name: full / test shards (${{ matrix.name }})
     needs: classify-docs-only
     if: >-
       always() &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
-    # Configure this repository variable to the label of an organization-owned
-    # GitHub-hosted larger runner. The default keeps personal/fork workflows usable.
     runs-on: ${{ vars.GOSURVEY_FULL_VALIDATION_RUNNER || 'windows-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: qt-00
+            regex: '^qt[.]editor[.]shard-0$'
+          - name: qt-01
+            regex: '^qt[.]editor[.]shard-1$'
+          - name: qt-02
+            regex: '^qt[.]editor[.]shard-2$'
+          - name: qt-03
+            regex: '^qt[.]editor[.]shard-3$'
+          - name: qt-04
+            regex: '^qt[.]editor[.]shard-4$'
+          - name: qt-05
+            regex: '^qt[.]editor[.]shard-5$'
+          - name: qt-06
+            regex: '^qt[.]editor[.]shard-6$'
+          - name: qt-07
+            regex: '^qt[.]editor[.]shard-7$'
+          - name: qt-08
+            regex: '^qt[.]editor[.]shard-8$'
+          - name: qt-09
+            regex: '^qt[.]editor[.]shard-9$'
+          - name: qt-10
+            regex: '^qt[.]editor[.]shard-10$'
+          - name: qt-11
+            regex: '^qt[.]editor[.]shard-11$'
+          - name: catch-00
+            regex: '^unit[.]catch[.]shard-0$'
+          - name: catch-01
+            regex: '^unit[.]catch[.]shard-1$'
+          - name: catch-02
+            regex: '^unit[.]catch[.]shard-2$'
+          - name: catch-03
+            regex: '^unit[.]catch[.]shard-3$'
+          - name: integration
+            regex: ''
+            exclude: '^(qt[.]editor[.]shard-|unit[.]catch[.]shard-)'
     env:
       SCCACHE_GHA_ENABLED: "true"
     steps:
@@ -109,6 +147,7 @@ jobs:
           persist-credentials: false
 
       - name: Test installer manifest parsing
+        if: matrix.name == 'integration'
         run: ./tests/powershell/install-manifest-parser.tests.ps1
 
       - name: Release build and test validation
@@ -117,13 +156,12 @@ jobs:
           version-suffix: ''
           version-build: '0'
           beta-version: ''
-          # Paired experiment after the 4-worker run: measure the same suite at 8 workers.
-          test-parallel: '8'
-
-      - name: Verify CTest shard coverage
-        run: |
-          python tools/verify-test-coverage.py --artifacts build/artifacts --run-id $env:GOSURVEY_TEST_RUN_ID
-          if ($LASTEXITCODE -ne 0) { throw 'Test shard coverage is incomplete.' }
+          # Every matrix member is a separate hosted runner and executes one named CTest group.
+          test-parallel: '1'
+          qt-test-shards: '12'
+          catch-test-shards: '4'
+          ctest-regex: ${{ matrix.regex }}
+          ctest-exclude: ${{ matrix.exclude || '' }}
 
       - name: Summarize CI performance
         if: always()
@@ -133,7 +171,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-evidence-${{ github.job }}-${{ github.run_attempt }}
+          name: ci-evidence-test-${{ matrix.name }}-${{ github.run_attempt }}
           retention-days: 7
           include-hidden-files: true
           path: |
@@ -146,6 +184,55 @@ jobs:
             build/.cmake/release/Testing/Temporary/LastTestsFailed.log
             build/artifacts/qt-editor/**/qt-tests.xml
             build/artifacts/qt-editor/**/qt-tests.log
+
+      - name: Upload test coverage manifests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-coverage-${{ matrix.name }}-${{ github.run_attempt }}
+          retention-days: 7
+          include-hidden-files: true
+          if-no-files-found: ignore
+          path: |
+            build/artifacts/catch/
+            build/artifacts/qt-editor/
+
+  # Retain the branch-protection context while making every individual test/build failure blocking.
+  build-and-test:
+    name: full / build and test
+    needs: [classify-docs-only, test-shards]
+    if: >-
+      always() &&
+      (needs.classify-docs-only.result != 'success' ||
+       needs.classify-docs-only.outputs.docs_only != 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out coverage verifier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Confirm every build and test shard passed
+        env:
+          SHARD_RESULT: ${{ needs.test-shards.result }}
+        run: |
+          if [ "$SHARD_RESULT" != "success" ]; then
+            echo "Build/test matrix result: $SHARD_RESULT" >&2
+            exit 1
+          fi
+
+      - name: Download all Catch2 and Qt coverage evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: test-coverage-*-${{ github.run_attempt }}
+          merge-multiple: true
+          path: build/artifacts
+
+      - name: Verify every discovered test ran exactly once
+        env:
+          TEST_RUN_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}
+        run: python tools/verify-test-coverage.py --artifacts build/artifacts --run-id "$TEST_RUN_ID"
 
   # ---------------------------------------------------------------------------
   # lint / clang-tidy — scoped to LINES the PR actually changed (via clang-tidy's own
