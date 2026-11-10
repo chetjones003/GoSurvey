@@ -275,7 +275,7 @@ jobs:
           beta-version: ${{ steps.ver.outputs.betaVersion }}
           # D-2026-11-09-d: only a published channel build reports stable or beta; a feature build reports dev.
           build-channel: ${{ contains('stable beta', steps.ver.outputs.channel) && steps.ver.outputs.channel || 'dev' }}
-          test-parallel: '8'
+          test-parallel: 'auto'
 
       - name: Test release PDB archive validation
         shell: pwsh

@@ -1115,6 +1115,7 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-445 PDF plot Page Setup options: pure sheet placement rules and the measured PDF output.
     tests/PlotSheetTests.cpp
     tests/CadFontNameTests.cpp
+    tests/CutClipboardTests.cpp
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
     tests/MtextTextOpsTests.cpp
@@ -1677,6 +1678,9 @@ if(GOSURVEY_BUILD_TESTS)
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
     GOSURVEY_CSMAP_DICTIONARY_DIR="$<TARGET_FILE_DIR:GoSurveyQt>/resources/csmap")
   add_dependencies(GoSurveyTests gosurvey_stage_csmap)  # REQ-358 tests load the staged copy
+  # Bundled fittings/blocks/icons are staged beside GoSurveyQt's output; the Catch2 fitting-library
+  # tests read them from there. Without this dependency a GoSurveyTests-only build finds none.
+  add_dependencies(GoSurveyTests gosurvey_stage_resources)
   gosurvey_target_warnings(GoSurveyTests TEST)
   gosurvey_enable_pch(GoSurveyTests)
   # Domain implementations are linked once via gosurvey_domain, not compiled again.

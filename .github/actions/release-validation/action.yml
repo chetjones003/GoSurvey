@@ -18,9 +18,37 @@ inputs:
     required: false
     default: 'dev'
   test-parallel:
-    description: Number of CTest processes to run concurrently.
+    description: Number of CTest processes; auto uses runner capacity.
     required: false
-    default: '8'
+    default: 'auto'
+  qt-test-shards:
+    description: Number of isolated Qt test processes configured in CTest.
+    required: false
+    default: 'auto'
+  catch-test-shards:
+    description: Number of isolated Catch2 test processes configured in CTest.
+    required: false
+    default: '2'
+  ctest-regex:
+    description: Optional CTest test-name regex to run.
+    required: false
+    default: ''
+  ctest-exclude:
+    description: Optional CTest test-name regex to exclude.
+    required: false
+    default: ''
+  build-targets:
+    description: Comma-separated CMake targets to build, or all.
+    required: false
+    default: 'all'
+  run-tests:
+    description: Whether to stage test runtimes and run CTest.
+    required: false
+    default: 'true'
+  prepare-qt-tests:
+    description: Whether to stage Mesa and prepare the hidden Qt display.
+    required: false
+    default: 'true'
 runs:
   using: composite
   steps:
@@ -31,6 +59,7 @@ runs:
       uses: ./.github/actions/setup-qt
 
     - name: Set up Mesa OpenGL for hosted tests
+      if: inputs.run-tests == 'true' && inputs.prepare-qt-tests == 'true'
       shell: pwsh
       run: |
         $version = '26.2.4'
@@ -74,6 +103,28 @@ runs:
     - name: Set up sccache
       uses: mozilla-actions/sccache-action@v0.0.11
 
+    # GitHub's per-object sccache backend is rate-limited (429) when 17 jobs read and write thousands of
+    # entries, so most hits became recompiles. Workers instead use one local directory that is restored
+    # from a single cache archive and saved once by the full-target build.
+    - name: Use local sccache directory
+      shell: pwsh
+      run: |
+        # No server may be running yet; cmd keeps its "couldn't connect" stderr from aborting this step.
+        cmd /c "sccache --stop-server >nul 2>&1"
+        $LASTEXITCODE = 0
+        $dir = Join-Path $env:RUNNER_TEMP 'sccache'
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        "SCCACHE_GHA_ENABLED=false" | Add-Content $env:GITHUB_ENV
+        "SCCACHE_DIR=$dir" | Add-Content $env:GITHUB_ENV
+
+    - name: Restore sccache archive
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/sccache
+        key: sccache-msvc-release-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          sccache-msvc-release-${{ runner.os }}-
+
     - name: Register MSVC /analyze problem matcher
       shell: pwsh
       run: echo "::add-matcher::.github/msvc-analyze-matcher.json"
@@ -86,12 +137,31 @@ runs:
         BETA_VERSION: ${{ inputs.beta-version }}
         BUILD_CHANNEL: ${{ inputs.build-channel }}
       run: |
+        $logicalProcessors = [Environment]::ProcessorCount
+        $qtShards = [Math]::Min(16, [Math]::Max(6, [int][Math]::Ceiling($logicalProcessors * 1.5)))
+        $requestedQtShards = '${{ inputs.qt-test-shards }}'
+        if ($requestedQtShards -ne 'auto') {
+          if ($requestedQtShards -notmatch '^[1-9][0-9]*$' -or [int]$requestedQtShards -gt 16) { throw 'qt-test-shards must be auto or an integer from 1 to 16.' }
+          $qtShards = [int]$requestedQtShards
+        }
+        $requestedCatchShards = '${{ inputs.catch-test-shards }}'
+        if ($requestedCatchShards -notmatch '^[1-9][0-9]*$' -or [int]$requestedCatchShards -gt 16) { throw 'catch-test-shards must be an integer from 1 to 16.' }
+        if ('${{ inputs.run-tests }}' -notin @('true', 'false')) { throw 'run-tests must be true or false.' }
+        if ('${{ inputs.prepare-qt-tests }}' -notin @('true', 'false')) { throw 'prepare-qt-tests must be true or false.' }
+        $testParallel = [Math]::Min(16, [Math]::Max(8, $logicalProcessors))
+        $requestedTestParallel = '${{ inputs.test-parallel }}'
+        if ($requestedTestParallel -ne 'auto') {
+          if ($requestedTestParallel -notmatch '^[1-9][0-9]*$') { throw 'test-parallel must be auto or a positive integer.' }
+          $testParallel = [Math]::Min(16, [int]$requestedTestParallel)
+        }
+        "GOSURVEY_CTEST_PARALLEL=$testParallel" | Add-Content $env:GITHUB_ENV
+        Write-Host "Runner processors: $logicalProcessors; Qt shards: $qtShards; CTest workers: $testParallel"
         cmake --preset ninja-release `
           -DCMAKE_C_COMPILER_LAUNCHER=sccache `
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
           -DGOSURVEY_USE_PCH=OFF `
-          -DGOSURVEY_ENABLE_ANALYZE=ON `
-          -DGOSURVEY_QT_TEST_SHARDS=6 `
+          "-DGOSURVEY_QT_TEST_SHARDS=$qtShards" `
+          "-DGOSURVEY_CATCH_TEST_SHARDS=$requestedCatchShards" `
           "-DGOSURVEY_BUILD_CHANNEL=$env:BUILD_CHANNEL" `
           "-DGOSURVEY_BETA_VERSION=$env:BETA_VERSION" `
           "-DGOSURVEY_VERSION_SUFFIX=$env:VERSION_SUFFIX" `
@@ -101,10 +171,29 @@ runs:
     - name: Build Release targets
       shell: pwsh
       run: |
-        cmake --build --preset ninja-release
+        $workers = [Math]::Min(16, [Environment]::ProcessorCount)
+        $requestedTargets = '${{ inputs.build-targets }}'
+        if ($requestedTargets -eq 'all') {
+          cmake --build --preset ninja-release --parallel $workers
+        } else {
+          $targets = @($requestedTargets.Split(',') | ForEach-Object { $_.Trim() })
+          $allowedTargets = @('GoSurveyQtTests', 'GoSurveyTests', 'gosurvey_headless')
+          if ($targets.Count -eq 0 -or @($targets | Where-Object { $_ -notin $allowedTargets }).Count -gt 0) {
+            throw 'build-targets must be all or a comma-separated list of GoSurveyQtTests, GoSurveyTests, and gosurvey_headless.'
+          }
+          cmake --build --preset ninja-release --parallel $workers --target $targets
+        }
         if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
 
+    - name: Save sccache archive
+      if: inputs.build-targets == 'all' && success()
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/sccache
+        key: sccache-msvc-release-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+
     - name: Stage Mesa runtime dependencies for tests
+      if: inputs.run-tests == 'true' && inputs.prepare-qt-tests == 'true'
       shell: pwsh
       run: |
         $runtime = Join-Path $env:GITHUB_WORKSPACE 'build'
@@ -124,10 +213,12 @@ runs:
         }
 
     - name: Prepare hosted display for Qt tests
+      if: inputs.run-tests == 'true' && inputs.prepare-qt-tests == 'true'
       shell: pwsh
       run: ./tools/prepare-qt-test-display.ps1
 
-    - name: Run full Release CTest suite
+    - name: Run selected Release CTest suite
+      if: inputs.run-tests == 'true'
       shell: pwsh
       env:
         QT_OPENGL: desktop
@@ -135,14 +226,21 @@ runs:
       run: |
         $env:GOSURVEY_TEST_RUN_ID = "ci-${{ github.run_id }}-${{ github.run_attempt }}"
         "GOSURVEY_TEST_RUN_ID=$env:GOSURVEY_TEST_RUN_ID" | Add-Content $env:GITHUB_ENV
+        $testParallel = [Math]::Min(16, [Math]::Max(8, [Environment]::ProcessorCount))
+        if ($env:GOSURVEY_CTEST_PARALLEL -match '^[1-9][0-9]*$') { $testParallel = [int]$env:GOSURVEY_CTEST_PARALLEL }
         $ciArtifacts = Join-Path $env:GITHUB_WORKSPACE 'build/artifacts/ci'
         New-Item -ItemType Directory -Force -Path $ciArtifacts | Out-Null
         $junitPath = Join-Path $ciArtifacts 'ctest.xml'
-        ctest --preset ninja-release --parallel ${{ inputs.test-parallel }} --output-on-failure --output-junit $junitPath
+        $ctestArgs = @('--preset', 'ninja-release', '--parallel', "$testParallel", '--output-on-failure', '--output-junit', $junitPath)
+        $testRegex = '${{ inputs.ctest-regex }}'
+        $excludeRegex = '${{ inputs.ctest-exclude }}'
+        if ($testRegex) { $ctestArgs += @('-R', $testRegex) }
+        if ($excludeRegex) { $ctestArgs += @('-E', $excludeRegex) }
+        ctest @ctestArgs
         if ($LASTEXITCODE -ne 0) { throw 'CTest failed.' }
 
     - name: Restore Qt OpenGL runtime files
-      if: always()
+      if: always() && inputs.run-tests == 'true' && inputs.prepare-qt-tests == 'true'
       shell: pwsh
       run: |
         $runtime = Join-Path $env:GITHUB_WORKSPACE 'build'

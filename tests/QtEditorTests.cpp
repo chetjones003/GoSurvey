@@ -12186,25 +12186,6 @@ private Q_SLOTS:
     QCOMPARE(state.userLinesFlat.size(), std::size_t(6));
   }
 
-  // Issue #805: a type the copy does not carry is refused, and the whole Cut then erases nothing.
-  void cutRefusesEveryTypeTheClipboardCannotCarry() {
-    for (const auto type : {SelectedEntity::Type::Surface, SelectedEntity::Type::FeatureLine, SelectedEntity::Type::Mesh,
-                            SelectedEntity::Type::Solid, SelectedEntity::Type::PipeRun,
-                            SelectedEntity::Type::PointCloud, SelectedEntity::Type::PdfUnderlay,
-                            SelectedEntity::Type::Alignment}) {
-      EditorWindow window; window.CreateDrawingFromTemplate();
-      auto& state = window.State();
-      state.userLinesFlat = {100, 100, 0, 110, 100, 0};
-      state.selection = {{SelectedEntity::Type::LineSeg, 0}, {type, 0}};
-      std::vector<std::string> log;
-      CutSelectionToClipboard(state, log);
-      QCOMPARE(state.userLinesFlat.size(), std::size_t(6));
-      QVERIFY(state.clipboard.empty());
-      QVERIFY(!log.empty());
-      QVERIFY(log.back().find("CUT — not done") != std::string::npos);
-    }
-  }
-
   // Issue #805: a paper table is not copied, so a paper Cut that includes one is refused.
   void cutRefusesPaperTable() {
     EditorWindow window; window.CreateDrawingFromTemplate(0);
