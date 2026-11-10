@@ -148,17 +148,19 @@ either hosted measurement. The slow Qt cases need assertion/REQ review before
 removal; their names alone are not evidence of redundancy. The compile path is
 the larger lever for reducing the 28-minute job.
 
-The build dominates this CI gate, so the shared validation action now has an
-explicit `use-pch` input. Blocking PR validation enables it to shorten feedback;
-the release workflow retains the default PCH-off build as the CI compile guard
-required by REQ-205. This does not remove tests or weaken a blocking check.
+The PCH-on PR validation experiment regressed: the hosted Ninja log recorded
+1,948.7 seconds (32m29s), compared with 1,267.9 seconds (21m08s) in the preceding
+PCH-off run. The compiler-cache report recorded zero requests, so this was not
+a clean comparison of PCH parse-time savings; the cache was bypassed entirely.
+The repository's earlier CI investigation (TASK-1003) found that MSVC PCH flags
+`/Fp` and `/Yc` bypass sccache, and deliberately kept PCH off in the cached CI
+build. The current result confirms that policy. PCH is restored to OFF in the
+shared action.
 
-The local PCH-enabled Ninja log recorded 327.9 seconds, compared with 1,267.9
-seconds in the hosted PCH-off build. They ran on different machines with
-different cache conditions; treat this as direction only. YAML parsing passed,
-and the configured local PCH-enabled build reported no work to do. Use the next
-hosted PR run to determine the actual wall-time improvement; no CI timing claim
-is complete until that run is available.
+The runner report shows four logical processors while Ninja defaulted to six
+workers and reached six simultaneous commands. The shared CI build now passes
+`--parallel 4` to avoid oversubscribing that runner. The next hosted run will
+measure this change; no improvement is claimed before that result.
 
 ## Pre-PR product documentation review
 
