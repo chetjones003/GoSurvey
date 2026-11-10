@@ -337,6 +337,18 @@ TEST_CASE("Superelevation is required e = V^2/(gR) - f and fails above the maxim
   roundedLog.clear();
   Submit(rounded, "ALIGNMENTCHECK CR1", roundedLog);
   CHECK_FALSE(LogHas(roundedLog, "Required superelevation"));
+  // Positive control: a maximum just below the displayed required rate must produce the finding.
+  AppCommandState control = Drawing();
+  std::vector<std::string> controlLog;
+  MakeCurveOf(control, "999.9", "30", controlLog);
+  Submit(control, "ALIGNMENTCHECKSET NEW, Rural", controlLog);
+  Submit(control, "ALIGNMENTCHECKSET SET, Rural, SUPERELEVATION, 0.1406", controlLog);
+  Submit(control, "ALIGNMENTCHECKSET SET, Rural, FRICTION, 0.10", controlLog);
+  Submit(control, "ALIGNMENTSPEED CR1, 0+00, 60", controlLog);
+  Submit(control, "ALIGNMENTCRITERIA CR1, Rural", controlLog);
+  controlLog.clear();
+  Submit(control, "ALIGNMENTCHECK CR1", controlLog);
+  CHECK(LogHas(controlLog, "Required superelevation 0.1407 exceeds the maximum of 0.1406"));
 }
 
 TEST_CASE("Tangents and spirals are never checked for superelevation or sight distance (REQ-522 AC5)", "[req522][alignment]") {
@@ -382,7 +394,7 @@ TEST_CASE("The REQ-522 findings reach LIST and the report, and a reloaded drawin
   Submit(back, "ALIGNMENTCHECK CR1", backLog);
   CHECK(LogHas(backLog, "Required superelevation 0.1407 exceeds the maximum of 0.0600"));
 
-  // A drawing that never set the new values saves without their keys, as a file from before REQ-522 does: the checks load off.
+  // A drawing that never set FRICTION or CLEARANCE saves without those two keys. Loading it leaves both at zero (checks off).
   AppCommandState legacy = Drawing();
   std::vector<std::string> legacyLog;
   Submit(legacy, "ALIGNMENTCHECKSET NEW, Plain", legacyLog);
@@ -445,6 +457,12 @@ TEST_CASE("Sight distance is 2R acos(1 - m/R), capped at the curve length, and f
   log.clear();
   Submit(st, "ALIGNMENTCHECK CR1", log);
   CHECK(LogHas(log, "Sight distance 317.56' is below the minimum of 350.00' with a sight clearance of 25.00'."));
+
+  // Display rounding (REQ-522 AC2): a minimum of 317.5604 prints as 317.56 and the 317.56' distance meets it.
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, SIGHT, 317.5604", log);
+  log.clear();
+  Submit(st, "ALIGNMENTCHECK CR1", log);
+  CHECK_FALSE(LogHas(log, "Sight distance"));
 
   // A 20 degree curve is shorter than the formula's distance, so its arc length is the sight distance counted.
   AppCommandState shortCurve = Drawing();

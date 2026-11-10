@@ -15,7 +15,7 @@ Design check sets: ALIGNMENTCHECKSET NEW|DELETE|LIST|SET|LOAD|SAVE, ...
 - `ALIGNMENTCHECKSET SET, <name>, MINTANGENT|MINSPIRAL|MINA|MAXA, <value>` sets a limit. 0 switches that check off.
 - `ALIGNMENTCHECKSET SET, <name>, MAXDEFLECTION, <degrees>` checks the tangent intersections: a corner between two
   tangents with no curve that turns more than this is reported. 0 switches it off.
-- `ALIGNMENTCHECKSET SET, <name>, SUPERELEVATION, <rate>` sets the maximum superelevation rate (for example 0.06). A curve whose required superelevation is above it is reported. 0 switches it off.
+- `ALIGNMENTCHECKSET SET, <name>, SUPERELEVATION, <rate>` sets the maximum superelevation rate (for example 0.06). A curve whose required superelevation is above it is reported; a curve with no design speed is not checked. 0 switches it off.
 - `ALIGNMENTCHECKSET SET, <name>, FRICTION, <factor>` sets the side friction factor used for that check (default 0, never negative).
 - `ALIGNMENTCHECKSET SET, <name>, SIGHT, <feet>` sets the minimum sight distance on a curve.
 - `ALIGNMENTCHECKSET SET, <name>, CLEARANCE, <feet>` sets the lateral clearance from the inside lane centreline to a sight obstruction. The sight check runs only when both SIGHT and CLEARANCE are above 0.
