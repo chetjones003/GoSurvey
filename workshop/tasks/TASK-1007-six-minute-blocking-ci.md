@@ -81,3 +81,14 @@ once; the separate full-target job is also required by the aggregate gate.
 then runs the same coverage audit. Actionlint, YAML/action input validation,
 diff checks, and the 202-registration partition check pass for this second
 iteration. Hosted timing and cache evidence for this split remain pending.
+
+### Hosted run for 7a3440e — failed, fixed in follow-up
+
+Run 42833741601 failed on `unit.catch.shard-1` (3 cases) and `unit.catch.shard-3`
+(1 case). Cause: the GoSurveyTests-only build never ran `gosurvey_stage_resources`,
+which only `GoSurveyQt` depended on, so the bundled fitting library was absent
+beside the test executable (`fittingsSeen == 0`, pipe palette `di == -1`, LIBEXPORT
+empty). The CS-MAP tests already had this dependency (`gosurvey_stage_csmap`). Fix:
+`add_dependencies(GoSurveyTests gosurvey_stage_resources)` in `CMakeLists.txt`.
+Each fitting case passes after a GoSurveyTests-only build. The full-target job and
+the other shards passed in that run.
