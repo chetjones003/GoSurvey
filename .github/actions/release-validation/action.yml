@@ -21,6 +21,10 @@ inputs:
     description: Number of CTest processes to run concurrently.
     required: false
     default: '8'
+  use-pch:
+    description: Use the precompiled header for a faster validation build.
+    required: false
+    default: 'false'
 runs:
   using: composite
   steps:
@@ -89,7 +93,7 @@ runs:
         cmake --preset ninja-release `
           -DCMAKE_C_COMPILER_LAUNCHER=sccache `
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
-          -DGOSURVEY_USE_PCH=OFF `
+          -DGOSURVEY_USE_PCH=${{ inputs.use-pch }} `
           -DGOSURVEY_ENABLE_ANALYZE=ON `
           -DGOSURVEY_QT_TEST_SHARDS=6 `
           "-DGOSURVEY_BUILD_CHANNEL=$env:BUILD_CHANNEL" `

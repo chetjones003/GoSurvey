@@ -116,6 +116,8 @@ jobs:
           version-build: '0'
           beta-version: ''
           test-parallel: '8'
+          # PCH accelerates PR feedback. The release workflow keeps the full PCH-off compile guard.
+          use-pch: 'true'
 
       - name: Verify CTest shard coverage
         run: |
