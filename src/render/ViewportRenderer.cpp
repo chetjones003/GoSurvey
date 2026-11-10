@@ -42,9 +42,11 @@ const char* kLineVs = R"(#version 330 core
 layout(location = 0) in vec3 aPos;
 uniform mat4 uMVP;
 uniform vec4 uClipPlane;
+uniform float uZOffset;
 void main() {
-  gl_Position = uMVP * vec4(aPos, 1.0);
-  gl_ClipDistance[0] = dot(uClipPlane.xyz, aPos) + uClipPlane.w;
+  vec3 previewPos = vec3(aPos.xy, aPos.z + uZOffset);
+  gl_Position = uMVP * vec4(previewPos, 1.0);
+  gl_ClipDistance[0] = dot(uClipPlane.xyz, previewPos) + uClipPlane.w;
 }
 )";
 
@@ -908,6 +910,7 @@ bool ViewportRenderer::EnsureShader() {
   if (!lineProgram_)
     return false;
   clipLocLine_ = glGetUniformLocation(lineProgram_, "uClipPlane");
+  zOffsetLocLine_ = glGetUniformLocation(lineProgram_, "uZOffset");
 
   gridProgram_ = lineProgram_;
 
@@ -943,6 +946,14 @@ bool ViewportRenderer::EnsureShader() {
 
   glGenVertexArrays(1, &vaoLines_);
   glGenBuffers(1, &vboLines_);
+
+  glGenVertexArrays(1, &vaoGradingPreview_);
+  glGenBuffers(1, &vboGradingPreview_);
+  glBindVertexArray(vaoGradingPreview_);
+  glBindBuffer(GL_ARRAY_BUFFER, vboGradingPreview_);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(3 * sizeof(float)), nullptr);
+  glBindVertexArray(0);
 
   glGenVertexArrays(1, &vaoVcLines_);
   glGenBuffers(1, &vboVcLines_);
@@ -1028,6 +1039,17 @@ void ViewportRenderer::DestroyShader() {
     glDeleteVertexArrays(1, &vaoLines_);
     vaoLines_ = 0;
   }
+  if (vboGradingPreview_) {
+    glDeleteBuffers(1, &vboGradingPreview_);
+    vboGradingPreview_ = 0;
+  }
+  if (vaoGradingPreview_) {
+    glDeleteVertexArrays(1, &vaoGradingPreview_);
+    vaoGradingPreview_ = 0;
+  }
+  gradingPreviewRelativeLines_.clear();
+  gradingPreviewToken_ = 0;
+  gradingPreviewAnchorX_ = gradingPreviewAnchorY_ = std::numeric_limits<double>::quiet_NaN();
   gridProgram_ = 0;
   ReleaseMeshGpu();
   ReleasePointCloudGpu();
@@ -1317,10 +1339,9 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   glViewport(0, 0, viewW_, viewH_);
 
   // --- Visual style (REQ-064 / ADR-026 (e)) ------------------------------------------------------
-  // 2D Wireframe takes exactly the path it always took: depth test off, depth writes off, draw order
-  // decides. That is not a style implemented in terms of the new system — it IS the old code path,
-  // which is what makes the pixel-parity acceptance condition hold by construction rather than by
-  // inspection. The draw ORDER below is untouched for every style, for the same reason.
+  // 2D Wireframe still draws scene geometry without depth testing or writes, so draw order decides
+  // visibility as before. The depth attachment is initialized separately for the transient grading
+  // ghost; this does not change the scene's visual-style draw order.
   const bool depthOn = tuning.visualStyle != VisualStyle::Wireframe2D;
   const bool shadeSurfaces = tuning.visualStyle == VisualStyle::Shaded;
   // Enables depth test + writes for the passes that represent geometry at a real elevation.
@@ -1340,11 +1361,13 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
   };
-  depthForGeometry();
-
   glClearColor(tuning.bgR, tuning.bgG, tuning.bgB, 1.f);
   glClearStencil(0);
+  // glClear obeys GL_DEPTH_WRITEMASK. Wireframe2D normally disables depth writes, but
+  // the transient grading ghost can still use a valid resolved depth buffer.
+  glDepthMask(GL_TRUE);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+  depthForGeometry();
 
   // Paper space: the Qt overlay renders the sheet, viewport rectangles,
   // and model geometry clipped+scaled inside each viewport, all pan/zoom-aware (via its w2s transform).
@@ -1437,6 +1460,10 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
 
   float mvp[16];
   MulMat4(projRot, model, mvp);
+  std::copy(std::begin(mvp), std::end(mvp), std::begin(lastSceneMvp_));
+  lastSceneAnchorX_ = viewAnchorX;
+  lastSceneAnchorY_ = viewAnchorY;
+  hasLastScene_ = true;
 
   // --- REQ-341 / ADR-058: the live section clip ---------------------------------------------------
   //
@@ -2681,6 +2708,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   }
 
   glUseProgram(lineProgram_);
+  if (zOffsetLocLine_ >= 0) glUniform1f(zOffsetLocLine_, 0.f);
   glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
   glBindBuffer(GL_ARRAY_BUFFER, vboLines_);
   glBindVertexArray(vaoLines_);
@@ -3844,7 +3872,8 @@ finish_render:
   if (useMsaa && msFbo_ && fbo_) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, msFbo_);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo_);
-    glBlitFramebuffer(0, 0, viewW_, viewH_, 0, 0, viewW_, viewH_, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBlitFramebuffer(0, 0, viewW_, viewH_, 0, 0, viewW_, viewH_,
+                       GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
   }
@@ -3956,6 +3985,93 @@ void ViewportRenderer::InvalidatePartThumbnail(const std::string& key) {
     partThumbs_.erase(partThumbs_.begin() + static_cast<std::ptrdiff_t>(i));
     return;
   }
+}
+
+void ViewportRenderer::RenderTransientGradingPreview(const std::vector<float>& sourceLines,
+                                                      std::uint64_t previewToken,
+                                                      double elevationOffset,
+                                                      const RenderTuning& tuning) {
+  if (!hasLastScene_ || !fbo_ || !lineProgram_ || !vaoGradingPreview_ || !vboGradingPreview_ ||
+      sourceLines.size() < 6 || sourceLines.size() % 6 != 0 || !std::isfinite(elevationOffset) ||
+      viewW_ < 1 || viewH_ < 1)
+    return;
+  GLint vaoWasBound = 0, arrayBufferWasBound = 0, programWasBound = 0, viewportWas[4] = {};
+  glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vaoWasBound);
+  glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &arrayBufferWasBound);
+  glGetIntegerv(GL_CURRENT_PROGRAM, &programWasBound);
+  glGetIntegerv(GL_VIEWPORT, viewportWas);
+  const bool cacheChanged = gradingPreviewToken_ != previewToken ||
+      gradingPreviewAnchorX_ != lastSceneAnchorX_ || gradingPreviewAnchorY_ != lastSceneAnchorY_;
+  if (cacheChanged) {
+    ConvertLineVertsWorldToView(sourceLines, lastSceneAnchorX_, lastSceneAnchorY_, &gradingPreviewRelativeLines_);
+    gradingPreviewToken_ = previewToken;
+    gradingPreviewAnchorX_ = lastSceneAnchorX_;
+    gradingPreviewAnchorY_ = lastSceneAnchorY_;
+    if (gradingPreviewRelativeLines_.empty()) return;
+    glBindBuffer(GL_ARRAY_BUFFER, vboGradingPreview_);
+    glBufferData(GL_ARRAY_BUFFER,
+                 static_cast<GLsizeiptr>(gradingPreviewRelativeLines_.size() * sizeof(float)),
+                 gradingPreviewRelativeLines_.data(), GL_STATIC_DRAW);
+  }
+  const GLboolean depthWasOn = glIsEnabled(GL_DEPTH_TEST);
+  GLboolean depthMaskWasOn = GL_TRUE;
+  glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMaskWasOn);
+  const GLboolean blendWasOn = glIsEnabled(GL_BLEND);
+  const GLboolean clipWasOn = glIsEnabled(GL_CLIP_DISTANCE0);
+  GLint framebufferWasBound = 0;
+  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &framebufferWasBound);
+
+  GLfloat lineWidthWas = 1.f;
+  glGetFloatv(GL_LINE_WIDTH, &lineWidthWas);
+  GLint srcRgb = GL_ONE, dstRgb = GL_ZERO, srcAlpha = GL_ONE, dstAlpha = GL_ZERO;
+  glGetIntegerv(GL_BLEND_SRC_RGB, &srcRgb);
+  glGetIntegerv(GL_BLEND_DST_RGB, &dstRgb);
+  glGetIntegerv(GL_BLEND_SRC_ALPHA, &srcAlpha);
+  glGetIntegerv(GL_BLEND_DST_ALPHA, &dstAlpha);
+  glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+  glViewport(0, 0, viewW_, viewH_);
+  glEnable(GL_DEPTH_TEST);
+  glDepthMask(GL_FALSE);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glUseProgram(lineProgram_);
+  if (zOffsetLocLine_ >= 0) glUniform1f(zOffsetLocLine_, 0.f);
+  if (tuning.sectionClip.active)
+    glEnable(GL_CLIP_DISTANCE0);
+  glBindBuffer(GL_ARRAY_BUFFER, vboGradingPreview_);
+  glBindVertexArray(vaoGradingPreview_);
+  const GLint mvpLocation = glGetUniformLocation(lineProgram_, "uMVP");
+  if (clipLocLine_ >= 0) {
+    float clip[4];
+    if (tuning.sectionClip.active)
+      SectionClipToShaderVec4(tuning.sectionClip, lastSceneAnchorX_, lastSceneAnchorY_, clip);
+    else
+      SectionClipDisabledVec4(clip);
+    glUniform4fv(clipLocLine_, 1, clip);
+  }
+  const GLsizei vertexCount = static_cast<GLsizei>(gradingPreviewRelativeLines_.size() / 3);
+  glUniform4f(glGetUniformLocation(lineProgram_, "uColor"), 0.70f, 0.78f, 0.88f, 0.52f);
+  glUniformMatrix4fv(mvpLocation, 1, GL_FALSE, lastSceneMvp_);
+  glDrawArrays(GL_LINES, 0, vertexCount);
+  // The candidate is a comparison overlay: keep its full shape legible through the scene and
+  // ghost. The source ghost above remains depth-tested against the resolved scene depth.
+  glDisable(GL_DEPTH_TEST);
+  if (zOffsetLocLine_ >= 0) glUniform1f(zOffsetLocLine_, static_cast<float>(elevationOffset));
+  glUniform4f(glGetUniformLocation(lineProgram_, "uColor"), 0.18f, 0.88f, 1.0f, 1.0f);
+  glDrawArrays(GL_LINES, 0, vertexCount);
+  if (zOffsetLocLine_ >= 0) glUniform1f(zOffsetLocLine_, 0.f);
+  glLineWidth(lineWidthWas);
+  if (clipWasOn) glEnable(GL_CLIP_DISTANCE0); else glDisable(GL_CLIP_DISTANCE0);
+  if (depthWasOn) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+  glDepthMask(depthMaskWasOn);
+  if (blendWasOn) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+  glBlendFuncSeparate(static_cast<GLenum>(srcRgb), static_cast<GLenum>(dstRgb),
+                      static_cast<GLenum>(srcAlpha), static_cast<GLenum>(dstAlpha));
+  glUseProgram(static_cast<GLuint>(programWasBound));
+  glBindVertexArray(static_cast<GLuint>(vaoWasBound));
+  glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(arrayBufferWasBound));
+  glViewport(viewportWas[0], viewportWas[1], viewportWas[2], viewportWas[3]);
+  glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(framebufferWasBound));
 }
 
 bool ViewportRenderer::EnsurePartThumbnail(const std::string& key, const PartThumbnailInput& in, int px) {

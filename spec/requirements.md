@@ -17544,3 +17544,53 @@ capability that does not exist. They are recorded here rather than quietly dropp
   this increment (item 9). Grade is rise over run.
 - Status: accepted (2026-11-08, D-2026-11-08-k; GitHub #1163). The user asked for #1163 to be implemented, which is the
   acceptance (as D-2026-11-08-h). This REQ is the profile-specific SPEC that the issue says must exist before code.
+
+### REQ-523 — Optimize grading-group elevations for cut/fill (GitHub issue #813)
+
+- Purpose: a designer needs to adjust a finished grading group's elevation to balance earthwork or reach a specified net volume without redrawing its footprint.
+- Priority: should
+- Type: functional
+- Decision: D-2026-11-10-b, D-2026-11-10-c.
+- Depends on: REQ-073 (surface volumes), REQ-398 (grading results), REQ-404 (grading groups).
+- Statement:
+  1. Home → Optimize → Grading Optimization opens a nonmodal Qt tool for a built grading-group surface and a built ground surface. Ordinary surfaces cannot be selected as the design group. Missing, stale or non-overlapping surfaces are refused with a visible reason and no drawing changes.
+  2. The user chooses either **Balance cut and fill** (target net volume 0) or **Target net volume** and enters a finite value in cubic yards. Net volume uses REQ-073's `fill - cut` convention with the ground as base and optimized grading group as comparison; positive is net fill.
+  3. V1 changes no XY coordinate or member footprint. It applies one uniform vertical offset to every vertex of the grading group's baked design surface. This single shared offset is the only optimization variable; grading criteria, source baselines and source feature lines are unchanged. The resulting TIN and baked member strips are updated together. The group remains an ordinary REQ-073 surface. The operation is one undo step and survives DWG save/reopen.
+  4. The solver evaluates the current offset, then expands a finite offset in the direction needed to reach the target until it brackets the target, then bisects the monotonic net-volume result. It stops when the absolute target error is at most 0.01 yd³ or after 64 bisections. It does not extrapolate spatial footprints; only common-covered area contributes per REQ-073. No overlap, non-finite data, inability to bracket the target, or failure to meet tolerance is reported and leaves the drawing unchanged.
+  5. The tool reports the chosen offset, cut, fill, net, target error and iteration count before Apply. Cancel leaves the drawing unchanged. Apply revalidates the group and ground surfaces, refuses if either changed since preview, and applies the exact previewed offset.
+  6. A read-only project refuses Apply. Undo restores the group geometry and volume state exactly; redo reapplies them.
+  7. After optimization, a fresh member added from a source grading uses that grading's baked source elevation. A member transferred from another group retains its existing baked snapshot as specified by REQ-404. The user can preview and apply optimization again to shift all current members together. An explicit regrade/refresh from sources may replace optimized elevations as specified by REQ-404.
+  8. Out of scope: independently moving member gradings, slope bounds, locked points, footprint changes, automatic source tracking, clipped plan-area objectives, optimizations other than cut/fill net volume, and automatic application without preview.
+  9. Applying uses the existing surface-replacement refresh path: labels, profiles and geometry draped on the grading group follow its updated elevation. If the selected ground surface uses an entity whose elevation changed during that refresh, the ground is marked stale until rebuilt. These dependent updates are not additional optimization variables; the solver changes only the group's shared vertical offset.
+- Acceptance:
+  - a flat 100 ft² grading group at elevation 98 ft compared with a flat ground at 100 ft reaches zero net at +2 ft; applying changes elevations only, keeps XY and triangle indices unchanged, and reports the zero target;
+  - the same group reaches a user target of +200 ft³ net fill at +4 ft over a 100 ft² footprint, with REQ-073's sign convention;
+  - a multi-member group receives the same offset for every member and preserves relative elevations and plan geometry;
+  - an impossible or invalid preview, a no-overlap pair, stale preview inputs, a cancelled operation, or a read-only project changes nothing and reports why;
+  - one undo restores the prior member strips, TIN and volume report; redo restores the optimized result;
+  - DWG save/reopen preserves the optimized group elevations and volume result; legacy and non-group surfaces behave as before;
+  - linked entities draped on the optimized group follow the new surface, and a ground surface sourced from such an entity is left stale for rebuild;
+  - the Optimize ribbon button opens the tool; empty, invalid, preview and applied states are captured.
+- Owner-layer: Domain / Commands / Surface / IO / Qt UI.
+- Assumptions (recorded): all grading members move together by one vertical offset because a single net-volume objective cannot uniquely determine independent member elevations without a second priority objective. The preview is applied only to baked group output; REQ-404's explicit refresh from source grading results may replace that snapshot, consistent with its baked-output rule.
+- Status: accepted (2026-11-09, D-2026-11-10-b/f; GitHub #813). The user chose fixed-footprint elevation adjustment and both zero-balance and entered-target modes; D-2026-11-10-c records existing membership-edit semantics and the full common-footprint objective.
+
+### REQ-524 — Live grading optimization iteration preview (GitHub #813 follow-up)
+
+- Purpose: a designer needs to see the grading group's temporary shape evolve while the REQ-523 solver evaluates candidate elevations, so the optimization is inspectable before it is applied.
+- Priority: should
+- Type: functional
+- Decision: D-2026-11-10-d; ADR-081.
+- Depends on: REQ-523.
+- Statement:
+  1. While REQ-523 solves, every candidate evaluation (the zero-offset check, finite bracket expansions, and bisection candidates) is published in order with its elevation offset and volume result. The UI automatically displays each evaluation as it arrives; there are no manual play, pause, previous, or next controls.
+  2. The candidate grading is rendered temporarily in the main GoSurvey viewport. The current grading-group geometry remains visible in a ghost style for comparison. The temporary geometry and ghost are presentation-only and are not stored in drawing data.
+  3. Applying remains a separate action after a successful solve and commits the exact final REQ-523 result as its existing single undoable operation. Cancel, close, solver failure, or stale inputs clear the temporary preview and do not alter drawing geometry.
+- Acceptance:
+  - A solver run publishes evaluations in the same order and with the same offset/volume values it computed, including bracket and bisection candidates; the final published successful candidate matches the result Apply will commit.
+  - The main viewport visibly updates to each published candidate while the source grading group remains visible as a ghost; no evaluation is silently replaced by a later one before it is displayed.
+  - The original drawing state, surface revisions and undo history remain unchanged during playback; Apply alone commits the final result as one undo step.
+  - Cancel, closing the tool, a failed solve, or stale inputs removes the temporary preview and ghost and leaves the drawing unchanged.
+  - An optimization already within tolerance displays the zero-offset evaluation before enabling Apply; malformed, no-overlap and unbracketable cases never leave a candidate preview behind.
+- Owner-layer: Domain / Surface / Renderer / Viewport / Qt UI.
+- Status: accepted (2026-11-09, D-2026-11-10-d; GitHub #813 follow-up). The user chose automatic playback only, the source grading as a ghost, and a viewport-owned transient render path separate from saved drawing state.

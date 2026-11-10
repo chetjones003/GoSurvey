@@ -272,6 +272,18 @@ list a group's members and delete a feature line together with its group contrib
 **FLELEVEDIT** table shows station, elevation, length ahead and grades; edit elevations or grades,
 raise/lower elevations, and insert or delete elevation points. Each applied edit is one undo step.
 
+**Grading Optimization** (Home → Optimize) previews a shared vertical shift for a grading group's
+baked design surface against a built ground TIN. Choose **Balance cut and fill** for zero net, or
+enter a target net volume in yd³; positive net means fill. The optimizer keeps the plan footprint,
+member relationships and source grading definitions unchanged. Review the offset and cut/fill
+report while the candidate grading updates automatically in the main viewport; the current group is
+shown as a ghost for comparison. Apply remains separate and makes one undoable change, or Cancel.
+If you freshly add another member later,
+existing baked elevations stay as they are and the new member starts at its source grading elevation.
+A member transferred from another group retains its existing baked snapshot. Run Grading Optimization
+again to shift all current members together. An explicit regrade from source gradings can replace the
+optimized baked snapshot.
+
 ## Common problems
 
 | Problem | Cause | Solution |

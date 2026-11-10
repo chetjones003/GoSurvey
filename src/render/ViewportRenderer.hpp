@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -200,6 +201,11 @@ public:
                    // defaults rather than failing to compile or crashing.
                    const PointCloudDisplaySettings* pointCloudDisplay = nullptr);
 
+  /// Draw the grading solver's ghost and Z-translated candidate over the last model frame. The
+  /// renderer caches immutable source lines in its own VAO/VBO until the token or view anchor changes.
+  void RenderTransientGradingPreview(const std::vector<float>& sourceLines, std::uint64_t previewToken,
+                                     double elevationOffset, const RenderTuning& tuning);
+
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
   [[nodiscard]] bool HasRenderedFrame() const { return renderedW_ > 0 && renderedH_ > 0; }
   [[nodiscard]] int RenderedWidth() const { return renderedW_; }
@@ -304,6 +310,10 @@ private:
   int viewH_ = 0;
   int renderedW_ = 0;
   int renderedH_ = 0;
+  float lastSceneMvp_[16]{};
+  double lastSceneAnchorX_ = 0.0;
+  double lastSceneAnchorY_ = 0.0;
+  bool hasLastScene_ = false;
 
   /// Multisampled pass → blit to \p colorTex_ (reduces aliasing / "sparkle" when zoomed).
   unsigned int msFbo_ = 0;
@@ -317,6 +327,7 @@ private:
   unsigned int vcLineProgram_ = 0;
   /// `uClipPlane` in each clipped program (REQ-341), looked up once at link rather than every frame.
   int clipLocLine_ = -1;
+  int zOffsetLocLine_ = -1;
   int clipLocVcLine_ = -1;
   int clipLocShaded_ = -1;
   int clipLocTex_ = -1;
@@ -553,6 +564,12 @@ private:
   void ReleaseSolidGpu();
   unsigned int vaoLines_ = 0;
   unsigned int vboLines_ = 0;
+  unsigned int vaoGradingPreview_ = 0;
+  unsigned int vboGradingPreview_ = 0;
+  std::vector<float> gradingPreviewRelativeLines_;
+  std::uint64_t gradingPreviewToken_ = 0;
+  double gradingPreviewAnchorX_ = std::numeric_limits<double>::quiet_NaN();
+  double gradingPreviewAnchorY_ = std::numeric_limits<double>::quiet_NaN();
 
   unsigned int vaoVcLines_ = 0;
   unsigned int vboVcLines_ = 0;

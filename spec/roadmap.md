@@ -14,6 +14,7 @@
 2. REQ-459: Copy Create, copied presets and Qt feature-line elevation editing.
 3. REQ-460: reviewed regional/transition semantics and explicitly rebuilt bench chains.
 4. REQ-461: detached snapshots, group/selection raise-lower and reviewed quality utilities.
+5. REQ-523: independent grading-group elevation optimization, accepted by D-2026-11-10-b.
 
 See [grading-toolkit.md](grading-toolkit.md). Each increment requires its own verification
 and Qt screenshot gate. Automatic source tracking and optimizer #813 are separately scoped.

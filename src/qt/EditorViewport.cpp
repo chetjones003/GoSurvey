@@ -19,6 +19,8 @@
 #include "ThumbnailCache.hpp"
 #include "MapTileService.hpp"
 #include <array>
+#include <algorithm>
+#include <cmath>
 
 #include <QDateTime>
 #include <QKeyEvent>
@@ -510,7 +512,93 @@ bool EditorViewport::DrawPaperViewportClipMask(const QPainterPath& path, int fra
 
 void EditorViewport::InvalidateGeometry() {
   ClearTransientInput();
+  ++m_GradingPreviewInvalidationSerial;
+  ClearGradingOptimizationPreview();
   ++m_RenderRevision; // A different document can have the same domain revision.
+  update();
+}
+
+bool EditorViewport::BeginGradingOptimizationPreview(std::uint64_t surfaceId,
+                                                       std::vector<float> sourceLines,
+                                                       std::uint64_t sequence, double offset) {
+  if (!GradingOptimizationPreviewCanPaint() || sourceLines.size() < 6 || sourceLines.size() % 6 != 0 ||
+      !std::isfinite(offset)) {
+    ClearGradingOptimizationPreview();
+    return false;
+  }
+  m_GradingPreviewGhostLines = std::move(sourceLines);
+  // Token lifetime belongs to this viewport, not the dialog/session. The renderer may
+  // retain its VBO after Clear, so a later session must never reuse a prior token.
+  m_GradingPreviewToken = ++m_GradingPreviewTokenSerial;
+  m_GradingPreviewSurfaceId = surfaceId;
+  RefreshSurfaceDisplayGeometry(m_State);
+  m_GradingPreviewOtherSurfaces = {};
+  m_GradingPreviewOtherLineStorage.clear();
+  m_GradingPreviewOtherBandStorage.clear();
+  const auto sourceCache = std::find_if(m_State.surfaceDisplayCache.begin(), m_State.surfaceDisplayCache.end(),
+      [surfaceId](const AppCommandState::SurfaceDisplayCacheEntry& entry) {
+        return entry.surfaceId == surfaceId;
+      });
+  const auto isSourceLine = [this, &sourceCache](const SurfaceDisplayBatch& batch) {
+    if (sourceCache == m_State.surfaceDisplayCache.end()) return false;
+      const std::vector<float>* verts = batch.verts;
+      return verts == &sourceCache->triangleEdges || verts == &sourceCache->borderEdges ||
+             verts == &sourceCache->minorContours || verts == &sourceCache->majorContours ||
+             std::any_of(sourceCache->arrowLineBuffers.begin(), sourceCache->arrowLineBuffers.end(),
+                         [verts](const std::vector<float>& buffer) { return verts == &buffer; });
+  };
+  const auto isSourceBand = [this, &sourceCache](const SurfaceTriangleBatch& batch) {
+    if (sourceCache == m_State.surfaceDisplayCache.end()) return false;
+      return std::any_of(sourceCache->bandTriangleBuffers.begin(), sourceCache->bandTriangleBuffers.end(),
+                         [&batch](const std::vector<float>& buffer) { return batch.verts == &buffer; });
+  };
+  m_GradingPreviewOtherLineStorage.reserve(m_State.surfaceDisplayGeometry.lines.size());
+  m_GradingPreviewOtherSurfaces.lines.reserve(m_State.surfaceDisplayGeometry.lines.size());
+  for (const SurfaceDisplayBatch& sourceBatch : m_State.surfaceDisplayGeometry.lines) {
+    if (isSourceLine(sourceBatch) || !sourceBatch.verts) continue;
+    m_GradingPreviewOtherLineStorage.push_back(*sourceBatch.verts);
+    SurfaceDisplayBatch batch = sourceBatch;
+    batch.verts = &m_GradingPreviewOtherLineStorage.back();
+    m_GradingPreviewOtherSurfaces.lines.push_back(batch);
+  }
+  m_GradingPreviewOtherBandStorage.reserve(m_State.surfaceDisplayGeometry.bandTriangles.size());
+  m_GradingPreviewOtherSurfaces.bandTriangles.reserve(m_State.surfaceDisplayGeometry.bandTriangles.size());
+  for (const SurfaceTriangleBatch& sourceBatch : m_State.surfaceDisplayGeometry.bandTriangles) {
+    if (isSourceBand(sourceBatch) || !sourceBatch.verts) continue;
+    m_GradingPreviewOtherBandStorage.push_back(*sourceBatch.verts);
+    SurfaceTriangleBatch batch = sourceBatch;
+    batch.verts = &m_GradingPreviewOtherBandStorage.back();
+    m_GradingPreviewOtherSurfaces.bandTriangles.push_back(batch);
+  }
+  m_GradingPreviewActive = true;
+  m_GradingPreviewPaintedSequence = 0;
+  return UpdateGradingOptimizationPreview(sequence, offset);
+}
+
+bool EditorViewport::UpdateGradingOptimizationPreview(std::uint64_t sequence, double offset) {
+  if (!m_GradingPreviewActive || !GradingOptimizationPreviewCanPaint() || !std::isfinite(offset))
+    return false;
+  if (sequence != m_GradingPreviewPaintedSequence + 1)
+    return false;
+  m_GradingPreviewOffset = offset;
+  m_GradingPreviewSequence = sequence;
+  update();
+  return true;
+}
+
+void EditorViewport::ClearGradingOptimizationPreview() {
+  if (!m_GradingPreviewActive)
+    return;
+  m_GradingPreviewActive = false;
+  m_GradingPreviewGhostLines.clear();
+  m_GradingPreviewOtherSurfaces = {};
+  m_GradingPreviewOtherLineStorage.clear();
+  m_GradingPreviewOtherBandStorage.clear();
+  m_GradingPreviewOffset = 0.0;
+  m_GradingPreviewSequence = 0;
+  m_GradingPreviewPaintedSequence = 0;
+  m_GradingPreviewSurfaceId = 0;
+  m_GradingPreviewToken = 0;
   update();
 }
 
@@ -870,13 +958,15 @@ void EditorViewport::paintGL() {
                                    &pdfForRender);
       pdfAttachments = &pdfForRender;
     }
+    const CadSurfaceDisplayGeometry* surfaceGeometry = m_GradingPreviewActive
+        ? &m_GradingPreviewOtherSurfaces : &m_State.surfaceDisplayGeometry;
     m_Renderer->RenderScene(camera, w, h, m_State.userLinesFlat, m_State.userCirclesCxCyZR,
         m_State.cadGpuCacheRevision + m_RenderRevision, rubber, &m_Snap, m_State.objectSnapGlyphHalfPx,
         &preview, &previewCircles, &highlight, &highlightCircles, &subHoverLines, nullptr, nullptr,
         &m_State.userLineAttrs, &m_State.userCircleAttrs, &ext, m_Grid, &m_State.drawingLayerTable, tuning,
         pdfAttachments, -1, &m_State.cadFilledRegions, &m_State.cadFilledRegionAttrs,
         &m_State.cadMeshes, &m_State.cadMeshAttrs, &m_State.solidDisplayGeometry,
-        &m_State.surfaceDisplayGeometry, nullptr, &trimRemovalLines, nullptr, nullptr, &subObjectOverlay,
+        surfaceGeometry, nullptr, &trimRemovalLines, nullptr, nullptr, &subObjectOverlay,
         gizmoOverlay.empty() ? nullptr : &gizmoOverlay,
         &m_State.cadPointClouds, &m_State.cadPointCloudAttrs, &m_State.pointCloudDisplay);
     const bool capturePending = m_State.pendingThumbnailTabIdx == m_State.activeDrawingIdx &&
@@ -896,6 +986,10 @@ void EditorViewport::paintGL() {
         if (thumbnailReady) thumbnailReady();
       }
     }
+    if (m_GradingPreviewActive && GradingOptimizationPreviewCanPaint()) {
+      m_Renderer->RenderTransientGradingPreview(m_GradingPreviewGhostLines, m_GradingPreviewToken,
+                                                 m_GradingPreviewOffset, tuning);
+    }
     // RenderScene uses its own FBO. Qt owns the destination FBO and can recreate it on resize.
     // RenderScene unbinds its FBO. Attach the published color texture for a GPU-only copy.
     GLuint readFbo = 0;
@@ -907,6 +1001,12 @@ void EditorViewport::paintGL() {
     glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
     glDeleteFramebuffers(1, &readFbo);
+    if (m_GradingPreviewActive && GradingOptimizationPreviewCanPaint() &&
+        m_GradingPreviewSequence > m_GradingPreviewPaintedSequence) {
+      m_GradingPreviewPaintedSequence = m_GradingPreviewSequence;
+      if (gradingPreviewFrameDrawn)
+        gradingPreviewFrameDrawn(m_GradingPreviewPaintedSequence);
+    }
   } else if (m_Ready && paperSpace) {
     // Render each layout viewport with the same CAD renderer as model space, then composite its
     // color texture into the widget's framebuffer. QPainter draws the paper entities afterward.

@@ -88,6 +88,11 @@
 void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   if (idx < 0 || static_cast<size_t>(idx) >= cmd.documents.size()) return;
   DrawingDocument& doc       = cmd.documents[static_cast<size_t>(idx)];
+  doc.hasLastVolumeResult = cmd.hasLastVolumeResult;
+  doc.lastVolumeResult = cmd.lastVolumeResult;
+  doc.lastVolumeReportText = cmd.lastVolumeReportText;
+  doc.lastVolumeBaseName = cmd.lastVolumeBaseName;
+  doc.lastVolumeComparisonName = cmd.lastVolumeComparisonName;
   doc.viewportZoomScales = cmd.viewportZoomScales;
   doc.currentViewportZoomScaleIndex = cmd.currentViewportZoomScaleIndex;
   doc.viewportPanX           = cmd.viewportPanX;
@@ -221,6 +226,11 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
 void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   if (idx < 0 || static_cast<size_t>(idx) >= cmd.documents.size()) return;
   const DrawingDocument& doc     = cmd.documents[static_cast<size_t>(idx)];
+  cmd.hasLastVolumeResult = doc.hasLastVolumeResult;
+  cmd.lastVolumeResult = doc.lastVolumeResult;
+  cmd.lastVolumeReportText = doc.lastVolumeReportText;
+  cmd.lastVolumeBaseName = doc.lastVolumeBaseName;
+  cmd.lastVolumeComparisonName = doc.lastVolumeComparisonName;
   cmd.viewportZoomScales = doc.viewportZoomScales;
   cmd.currentViewportZoomScaleIndex = doc.currentViewportZoomScaleIndex;
   cmd.viewportPanX               = doc.viewportPanX;
@@ -2171,6 +2181,11 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.sampleLines          = st.sampleLines;      // REQ-519: undo restores sample lines and sections
   snap.profiles             = st.profiles;         // REQ-521: undo restores design profiles
   snap.surfaceProfiles      = st.surfaceProfiles;  // REQ-513
+  snap.hasLastVolumeResult  = st.hasLastVolumeResult;
+  snap.lastVolumeResult     = st.lastVolumeResult; // REQ-523: restore previous earthwork report
+  snap.lastVolumeReportText = st.lastVolumeReportText;
+  snap.lastVolumeBaseName   = st.lastVolumeBaseName;
+  snap.lastVolumeComparisonName = st.lastVolumeComparisonName;
   snap.cadPipingSystems     = st.cadPipingSystems; // issue #486 increment B3 / REQ-345
   snap.blockDefs            = st.blockDefs;
   snap.cadBlockRefs         = st.cadBlockRefs;
@@ -2302,6 +2317,11 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.sampleLines          = snap.sampleLines;      // REQ-519
   st.profiles             = snap.profiles;         // REQ-521
   st.surfaceProfiles      = snap.surfaceProfiles;  // REQ-513
+  st.hasLastVolumeResult  = snap.hasLastVolumeResult;
+  st.lastVolumeResult     = snap.lastVolumeResult;
+  st.lastVolumeReportText = snap.lastVolumeReportText;
+  st.lastVolumeBaseName   = snap.lastVolumeBaseName;
+  st.lastVolumeComparisonName = snap.lastVolumeComparisonName;
   st.cadPipingSystems     = snap.cadPipingSystems; // issue #486 increment B3 / REQ-345
   st.pipeRunWorldSolidsSig = 0;  // force RebuildPipeRunWorldSolids to re-derive from the swap
   st.blockDefs            = snap.blockDefs;
@@ -11704,6 +11724,16 @@ bool ActiveProjectPointsReadOnly(const AppCommandState& st) {
   if (drawing.projectUid == 0 || drawing.pointsMode == AppCommandState::DrawingTab::PointsMode::Detached) return false;
   for (const auto& project : st.openProjects)
     if (project.uid == drawing.projectUid) return project.readOnly;
+  return false;
+}
+
+bool ActiveProjectDrawingReadOnly(const AppCommandState& st) {
+  const int tab = st.activeDrawingIdx;
+  if (tab <= 0 || tab >= static_cast<int>(st.drawingTabs.size())) return false;
+  const std::uint64_t uid = st.drawingTabs[static_cast<size_t>(tab)].projectUid;
+  if (uid == 0) return false;
+  for (const auto& project : st.openProjects)
+    if (project.uid == uid) return project.readOnly;
   return false;
 }
 
@@ -27341,6 +27371,129 @@ void ExecuteGradingInfillCommand(AppCommandState& st, const std::string& name,
   BumpCadGpuCache(st);
   for (size_t i : changed) { st.cadSurfaces[i].builtAtRevision = st.cadGpuRevision; MarkVolumeSurfacesDirtyForParent(st, st.cadSurfaces[i].name); }
   log.push_back("GRADINGINFILL - added/refreshed " + std::to_string(infills.size()) + " boundary member(s) in \"" + name + "\".");
+}
+
+bool ApplyGradingGroupElevationOffset(AppCommandState& st, std::uint64_t groupId,
+                                      std::uint64_t groundId, std::uint32_t expectedRevision,
+                                      double offset, const SurfaceVolumeResult& volumes,
+                                      std::vector<std::string>& log) {
+  const auto refuse = [&](const std::string& reason) {
+    log.push_back("GRADINGOPTIMIZE - " + reason + " No changes were made.");
+    return false;
+  };
+  if (ActiveProjectDrawingReadOnly(st))
+    return refuse("this project is read-only.");
+  if (!std::isfinite(offset)) return refuse("the elevation offset must be finite.");
+  if (!volumes.overlapped || !std::isfinite(volumes.cutFt3) || !std::isfinite(volumes.fillFt3) ||
+      !std::isfinite(volumes.netFt3) || !std::isfinite(volumes.cutAreaFt2) ||
+      !std::isfinite(volumes.fillAreaFt2) || !std::isfinite(volumes.commonAreaFt2))
+    return refuse("the preview volume result is invalid.");
+  if (st.cadGpuRevision != expectedRevision)
+    return refuse("the drawing changed after preview. Preview again before applying.");
+  const int groupIndex = FindSurfaceIndexById(st, groupId);
+  const int groundIndex = FindSurfaceIndexById(st, groundId);
+  if (groupIndex < 0 || groundIndex < 0)
+    return refuse("the grading group or ground surface no longer exists.");
+  const CadSurface& group = st.cadSurfaces[static_cast<size_t>(groupIndex)];
+  const CadSurface& ground = st.cadSurfaces[static_cast<size_t>(groundIndex)];
+  if (groupIndex == groundIndex || !group.gradingGroup || !ground.tin || ground.gradingGroup ||
+      !group.tin || group.gradingMembers.empty() || group.lastBuildIncomplete ||
+      ground.lastBuildIncomplete || group.builtAtRevision != expectedRevision ||
+      ground.builtAtRevision != expectedRevision)
+    return refuse("choose a current built grading group and a current built ground TIN.");
+  std::vector<std::uint64_t> drapedEntityIds;
+  const std::uint64_t groupStableId = st.cadSurfaceAttrs[static_cast<size_t>(groupIndex)].id;
+  const auto gatherDrapedIds = [&](const std::vector<EntityAttributes>& attrs) {
+    for (const EntityAttributes& attributes : attrs)
+      if (attributes.drapedOnSurfaceId == groupStableId && attributes.id != 0)
+        drapedEntityIds.push_back(attributes.id);
+  };
+  gatherDrapedIds(st.userLineAttrs);
+  gatherDrapedIds(st.userPolylineAttrs);
+  gatherDrapedIds(st.featureLineAttrs);
+  const auto usesDrapedEntity = [&](const std::vector<CadSurfaceBreakline>& sources) {
+    return std::any_of(sources.begin(), sources.end(), [&](const CadSurfaceBreakline& source) {
+      return std::find(drapedEntityIds.begin(), drapedEntityIds.end(), source.entityId) != drapedEntityIds.end();
+    });
+  };
+  const CadSurface& unmodifiedGround = ground;
+  bool groundUsesDrapedEntity = usesDrapedEntity(unmodifiedGround.breaklines) ||
+                                usesDrapedEntity(unmodifiedGround.contourSources) ||
+                                usesDrapedEntity(unmodifiedGround.corridorFeatureLines);
+  if (!groundUsesDrapedEntity) {
+    groundUsesDrapedEntity = std::any_of(unmodifiedGround.boundaries.begin(), unmodifiedGround.boundaries.end(),
+        [&](const CadSurfaceBoundary& boundary) {
+          return std::find(drapedEntityIds.begin(), drapedEntityIds.end(), boundary.entityId) != drapedEntityIds.end();
+        });
+  }
+  if (!groundUsesDrapedEntity) {
+    groundUsesDrapedEntity = std::any_of(unmodifiedGround.crossingCorrections.begin(),
+        unmodifiedGround.crossingCorrections.end(), [&](const CadSurfaceCrossingCorrection& correction) {
+          return std::find(drapedEntityIds.begin(), drapedEntityIds.end(), correction.entityA) != drapedEntityIds.end() ||
+                 std::find(drapedEntityIds.begin(), drapedEntityIds.end(), correction.entityB) != drapedEntityIds.end();
+        });
+  }
+  auto shiftedTin = std::make_shared<CadTin>(*group.tin);
+  if (shiftedTin->vertsXyz.size() < 9 || shiftedTin->vertsXyz.size() % 3 != 0 ||
+      !std::all_of(shiftedTin->vertsXyz.begin(), shiftedTin->vertsXyz.end(),
+                   [](double value) { return std::isfinite(value); }) ||
+      std::any_of(shiftedTin->indices.begin(), shiftedTin->indices.end(), [&](std::uint32_t index) {
+        return index >= shiftedTin->vertsXyz.size() / 3;
+      }))
+    return refuse("the grading group TIN is invalid.");
+  for (size_t i = 2; i < shiftedTin->vertsXyz.size(); i += 3) {
+    shiftedTin->vertsXyz[i] += offset;
+    if (!std::isfinite(shiftedTin->vertsXyz[i]))
+      return refuse("the offset would produce a non-finite elevation.");
+  }
+
+  std::vector<CadGradingGroupMember> shiftedMembers = group.gradingMembers;
+  for (auto& member : shiftedMembers) {
+    if (!member.strips) return refuse("a grading member is missing its baked geometry.");
+    auto strips = std::make_shared<std::vector<std::vector<double>>>(*member.strips);
+    for (auto& strip : *strips) {
+      if (strip.size() < 9 || strip.size() % 3 != 0 ||
+          !std::all_of(strip.begin(), strip.end(), [](double value) { return std::isfinite(value); }))
+        return refuse("a grading member has invalid baked geometry.");
+      for (size_t i = 2; i < strip.size(); i += 3) {
+        strip[i] += offset;
+        if (!std::isfinite(strip[i])) return refuse("the offset would produce a non-finite member elevation.");
+      }
+    }
+    member.strips = std::move(strips);
+  }
+
+  PushUndoSnapshot(st, "Optimize grading elevations");
+  if (offset == 0.0) {
+    RememberVolumeResult(st, volumes, ground.name, group.name);
+    std::vector<bool> wasCurrent;
+    wasCurrent.reserve(st.cadSurfaces.size());
+    for (const CadSurface& surface : st.cadSurfaces)
+      wasCurrent.push_back(surface.builtAtRevision == st.cadGpuRevision);
+    BumpCadGpuCache(st);
+    for (size_t i = 0; i < st.cadSurfaces.size(); ++i)
+      if (wasCurrent[i]) st.cadSurfaces[i].builtAtRevision = st.cadGpuRevision;
+    log.push_back("GRADINGOPTIMIZE - the preview requires no elevation change; volume report updated.");
+    return true;
+  }
+  CadSurface& updated = st.cadSurfaces[static_cast<size_t>(groupIndex)];
+  updated.tin = std::move(shiftedTin);
+  updated.gradingMembers = std::move(shiftedMembers);
+  BumpCadGpuCache(st);
+  updated.builtAtRevision = st.cadGpuRevision;
+  updated.lastBuildIncomplete = false;
+  updated.lastBuildMessage.clear();
+  RefreshSurfaceDependentsAfterReplacement(st, static_cast<size_t>(groupIndex), log);
+  st.cadSurfaces[static_cast<size_t>(groupIndex)].builtAtRevision = st.cadGpuRevision;
+  // Re-draping a group-linked entity can change a ground surface's inputs. Keep the ground
+  // current only when its definition does not reference any entity that was re-draped.
+  if (!groundUsesDrapedEntity)
+    st.cadSurfaces[static_cast<size_t>(groundIndex)].builtAtRevision = st.cadGpuRevision;
+  RememberVolumeResult(st, volumes, ground.name, updated.name);
+  MarkVolumeSurfacesDirtyForParent(st, updated.name);
+  log.push_back("GRADINGOPTIMIZE - applied " + std::to_string(offset) +
+                " drawing units to grading group \"" + updated.name + "\".");
+  return true;
 }
 
 void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {

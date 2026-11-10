@@ -2016,6 +2016,8 @@ void EditorWindow::RunRibbonAction(const QString& id) {
   } else if (command == "GRADING") {
     CancelActiveCommand(m_State, m_Log);
     ShowGradingTools();
+  } else if (command == "@gradingOptimization") {
+    ShowGradingOptimization();
   } else if (!command.startsWith('@')) {
     CancelActiveCommand(m_State, m_Log); Submit(command);
   }

@@ -10360,6 +10360,357 @@ private Q_SLOTS:
     QVERIFY(state.cadSurfaces[static_cast<std::size_t>(vi)].tin);
   }
 
+  void gradingOptimizationApplyShiftsAllMembersAndRespectsReadOnlyProjects() {
+    AppCommandState state;
+    state.cadGpuRevision = 7;
+    CadSurface ground;
+    ground.name = "Ground";
+    ground.builtAtRevision = 7;
+    auto groundTin = std::make_shared<CadTin>();
+    groundTin->vertsXyz = {0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0};
+    groundTin->indices = {0, 1, 2, 0, 2, 3};
+    ground.tin = groundTin;
+    CadSurface group;
+    group.name = "Design";
+    group.gradingGroup = true;
+    group.builtAtRevision = 7;
+    auto groupTin = std::make_shared<CadTin>();
+    groupTin->vertsXyz = {0, 0, 10, 10, 0, 10, 10, 10, 10, 0, 10, 10};
+    groupTin->indices = {0, 1, 2, 0, 2, 3};
+    group.tin = groupTin;
+    for (const double z : {10.0, 12.0}) {
+      CadGradingGroupMember member;
+      member.strips = std::make_shared<const std::vector<std::vector<double>>>(
+          std::vector<std::vector<double>>{{0, 0, z, 10, 0, z, 10, 10, z, 0, 10, z}});
+      group.gradingMembers.push_back(std::move(member));
+    }
+    state.cadSurfaces = {ground, group};
+    state.cadSurfaceAttrs.resize(2);
+    state.cadSurfaceAttrs[0].id = 101;
+    state.cadSurfaceAttrs[1].id = 102;
+    EntityAttributes drapedGroupDependent;
+    drapedGroupDependent.drapedOnSurfaceId = 102;
+    state.userLineAttrs.push_back(drapedGroupDependent);
+    std::vector<std::string> log;
+    state.lastVolumeReportText = "previous volume report";
+    state.lastVolumeBaseName = "Ground";
+    state.lastVolumeComparisonName = "Design";
+    state.lastVolumeResult.netFt3 = -25.0;
+    SurfaceVolumeResult previewVolumes;
+    previewVolumes.overlapped = true;
+    previewVolumes.commonAreaFt2 = 100.0;
+    previewVolumes.netFt3 = 25.0;
+    const auto unchangedTin = state.cadSurfaces[1].tin->vertsXyz;
+    QVERIFY(ApplyGradingGroupElevationOffset(state, 102, 101, 7, 0.0, previewVolumes, log));
+    QCOMPARE(state.cadSurfaces[1].tin->vertsXyz, unchangedTin);
+    QCOMPARE(state.cadGpuRevision, std::uint32_t(8));
+    QCOMPARE(state.cadSurfaces[0].builtAtRevision, state.cadGpuRevision);
+    QCOMPARE(state.cadSurfaces[1].builtAtRevision, state.cadGpuRevision);
+    QCOMPARE(state.lastVolumeResult.netFt3, previewVolumes.netFt3);
+    QVERIFY(DoUndo(state, log));
+    QCOMPARE(state.lastVolumeResult.netFt3, -25.0);
+    // Undo advances the drawing revision; model the rebuild tick that makes both selected
+    // surfaces current again before the next optimization.
+    state.cadSurfaces[0].builtAtRevision = state.cadGpuRevision;
+    state.cadSurfaces[1].builtAtRevision = state.cadGpuRevision;
+    previewVolumes.netFt3 = 50.0;
+    QVERIFY(ApplyGradingGroupElevationOffset(state, 102, 101, state.cadGpuRevision, 1.5, previewVolumes, log));
+    QCOMPARE(state.cadSurfaces[0].builtAtRevision, state.cadGpuRevision);
+    QCOMPARE(state.cadSurfaces[1].tin->vertsXyz[0], 0.0);
+    QCOMPARE(state.cadSurfaces[1].tin->vertsXyz[2], 11.5);
+    QCOMPARE((*state.cadSurfaces[1].gradingMembers[0].strips)[0][2], 11.5);
+    QCOMPARE((*state.cadSurfaces[1].gradingMembers[1].strips)[0][2], 13.5);
+    QVERIFY(DoUndo(state, log));
+    QCOMPARE(state.cadSurfaces[1].tin->vertsXyz[2], 10.0);
+    QCOMPARE(state.lastVolumeReportText, std::string("previous volume report"));
+    QCOMPARE(state.lastVolumeResult.netFt3, -25.0);
+    QVERIFY(DoRedo(state, log));
+    QVERIFY(state.lastVolumeReportText.find("Volume report:") == 0);
+    QCOMPARE(state.lastVolumeResult.netFt3, 50.0);
+    QVERIFY(DoUndo(state, log));
+
+    AppCommandState readOnly;
+    readOnly.activeDrawingIdx = 1;
+    readOnly.drawingTabs.resize(2);
+    readOnly.drawingTabs[1].projectUid = 42;
+    AppCommandState::ProjectSession project;
+    project.uid = 42;
+    project.readOnly = true;
+    readOnly.openProjects.push_back(project);
+    QVERIFY(!ApplyGradingGroupElevationOffset(readOnly, 102, 101, 0, 1.0, previewVolumes, log));
+    QVERIFY(!log.empty());
+    QVERIFY(log.back().find("read-only") != std::string::npos);
+  }
+
+  void gradingOptimizationLeavesGroundStaleWhenItUsesRedrapedInputs() {
+    AppCommandState state;
+    state.cadGpuRevision = 1;
+    CadSurface ground;
+    ground.name = "Ground";
+    auto tin = std::make_shared<CadTin>();
+    tin->vertsXyz = {0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0};
+    tin->indices = {0, 1, 2, 0, 2, 3};
+    ground.tin = tin;
+    ground.builtAtRevision = 1;
+    ground.breaklines.push_back({501, "shared grading line"});
+    CadSurface group;
+    group.name = "Design";
+    group.gradingGroup = true;
+    group.tin = tin;
+    group.gradingMembers.push_back({});
+    group.gradingMembers[0].strips = std::make_shared<const std::vector<std::vector<double>>>(
+        std::vector<std::vector<double>>{{0, 0, 0, 10, 0, 0, 10, 10, 0}});
+    group.builtAtRevision = 1;
+    state.cadSurfaces = {ground, group};
+    state.cadSurfaceAttrs.resize(2);
+    state.cadSurfaceAttrs[0].id = 101;
+    state.cadSurfaceAttrs[1].id = 102;
+    state.userLinesFlat = {0, 0, 0, 10, 10, 0};
+    EntityAttributes linkedInput;
+    linkedInput.id = 501;
+    linkedInput.drapedOnSurfaceId = 102;
+    state.userLineAttrs.push_back(linkedInput);
+    SurfaceVolumeResult volumes;
+    volumes.overlapped = true;
+    volumes.commonAreaFt2 = 100;
+    std::vector<std::string> log;
+    QVERIFY(ApplyGradingGroupElevationOffset(state, 102, 101, 1, 1.0, volumes, log));
+    QCOMPARE(state.cadSurfaces[1].builtAtRevision, state.cadGpuRevision);
+    QVERIFY(state.cadSurfaces[0].builtAtRevision != state.cadGpuRevision);
+    QCOMPARE(state.userLinesFlat[2], 1.0);
+    QCOMPARE(state.userLinesFlat[5], 1.0);
+  }
+
+  void gradingOptimizationRibbonPreviewsAppliesAndUndoesSharedElevationOffset() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1440, 900);
+    window.show();
+    auto& state = window.State();
+    auto* action = window.findChild<QAction*>("ribbon_OptGrading");
+    QVERIFY(action);
+    action->trigger();
+    auto* emptyDialog = window.findChild<QDialog*>("gradingOptimization");
+    QVERIFY(emptyDialog);
+    QVERIFY(emptyDialog->grab().save(QtTestArtifactDirectory() + "/qt-813-optimization-empty.png"));
+    emptyDialog->close();
+    BuildGradingSite(window);
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("");
+    state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
+    window.Submit("GRADINGGROUP Earthwork");
+    state.selection.clear();
+    QTRY_VERIFY_WITH_TIMEOUT(state.cadSurfaces.size() == 2 && state.cadSurfaces[1].tin &&
+                             state.cadSurfaces[0].builtAtRevision == state.cadGpuRevision, 10000);
+    window.Submit("ZOOMEXTENTS");
+    window.Refresh();
+    QTRY_VERIFY_WITH_TIMEOUT(!state.pendingZoomExtents, 10000);
+    window.m_Viewport->SetOrientation(45.f, 35.26439f);
+    QTest::qWait(100);
+
+    QCOMPARE(action->property("ribbonCommand").toString(), QString("@gradingOptimization"));
+    QVERIFY(!action->property("releasePlaceholder").toBool());
+    action->trigger();
+    auto* dialog = window.findChild<QDialog*>("gradingOptimization");
+    QVERIFY(dialog);
+    auto* groups = dialog->findChild<QComboBox*>("gradingOptimizationGroup");
+    auto* grounds = dialog->findChild<QComboBox*>("gradingOptimizationGround");
+    auto* mode = dialog->findChild<QComboBox*>("gradingOptimizationMode");
+    auto* target = dialog->findChild<QDoubleSpinBox*>("gradingOptimizationTarget");
+    auto* status = dialog->findChild<QLabel*>("gradingOptimizationStatus");
+    auto* preview = dialog->findChild<QPushButton*>("gradingOptimizationPreview");
+    auto* apply = dialog->findChild<QPushButton*>("gradingOptimizationApply");
+    auto* cancel = dialog->findChild<QPushButton*>("gradingOptimizationCancel");
+    QVERIFY(groups && grounds && mode && target && status && preview && apply && cancel);
+    QCOMPARE(groups->count(), 1);
+    QCOMPARE(grounds->count(), 1);
+    auto standardStyle = std::find_if(state.surfaceStyles.begin(), state.surfaceStyles.end(),
+        [](const SurfaceStyle& style) { return style.name == "Standard"; });
+    if (standardStyle == state.surfaceStyles.end()) {
+      SurfaceStyle standard;
+      standard.name = "Standard";
+      state.surfaceStyles.push_back(standard);
+      standardStyle = state.surfaceStyles.end() - 1;
+    }
+    const SurfaceStyle savedStandardStyle = *standardStyle;
+    state.cadSurfaces[1].reducedDisplayLod = true;
+    standardStyle->triangles.visible = false;
+    standardStyle->border.visible = false;
+    RefreshSurfaceDisplayGeometry(state);
+    const auto* hiddenTrianglesCache = [&]() -> const AppCommandState::SurfaceDisplayCacheEntry* {
+      const auto it = std::find_if(state.surfaceDisplayCache.begin(), state.surfaceDisplayCache.end(),
+          [&](const auto& entry) { return entry.surfaceId == state.cadSurfaceAttrs[1].id; });
+      return it == state.surfaceDisplayCache.end() ? nullptr : &*it;
+    }();
+    QVERIFY(hiddenTrianglesCache);
+    QVERIFY(hiddenTrianglesCache->triangleEdges.empty());
+    preview->click();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->m_GradingPreviewActive, 10000);
+    QCOMPARE(window.m_Viewport->m_GradingPreviewGhostLines.size(), state.cadSurfaces[1].tin->indices.size() * 6);
+    cancel->click();
+    QTRY_VERIFY_WITH_TIMEOUT(status->text().contains("cancelled"), 10000);
+    standardStyle->triangles.visible = true;
+    RefreshSurfaceDisplayGeometry(state);
+    const auto reducedTriangleCount = [&]() {
+      const auto it = std::find_if(state.surfaceDisplayCache.begin(), state.surfaceDisplayCache.end(),
+          [&](const auto& entry) { return entry.surfaceId == state.cadSurfaceAttrs[1].id; });
+      return it == state.surfaceDisplayCache.end() ? size_t(0) : it->triangleEdges.size();
+    }();
+    QVERIFY(reducedTriangleCount > 0);
+    QVERIFY(reducedTriangleCount < state.cadSurfaces[1].tin->indices.size() * 6);
+    preview->click();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->m_GradingPreviewActive, 10000);
+    QCOMPARE(window.m_Viewport->m_GradingPreviewGhostLines.size(), state.cadSurfaces[1].tin->indices.size() * 6);
+    cancel->click();
+    QTRY_VERIFY_WITH_TIMEOUT(status->text().contains("cancelled"), 10000);
+    *standardStyle = savedStandardStyle;
+    state.cadSurfaces[1].reducedDisplayLod = false;
+    RefreshSurfaceDisplayGeometry(state);
+
+    const auto originalGroupTinForInvalidPreview = state.cadSurfaces[1].tin;
+    auto displacedTin = std::make_shared<CadTin>(*originalGroupTinForInvalidPreview);
+    for (size_t i = 0; i < displacedTin->vertsXyz.size(); i += 3)
+      displacedTin->vertsXyz[i] += 1000.0;
+    state.cadSurfaces[1].tin = displacedTin;
+    preview->click();
+    QTRY_VERIFY_WITH_TIMEOUT(status->text().contains("no common area"), 10000);
+    QVERIFY(!window.m_Viewport->m_GradingPreviewActive);
+    QVERIFY(dialog->grab().save(QtTestArtifactDirectory() + "/qt-813-optimization-invalid.png"));
+    state.cadSurfaces[1].tin = originalGroupTinForInvalidPreview;
+    preview->click();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->m_GradingPreviewActive, 10000);
+    cancel->click();
+    QTRY_VERIFY_WITH_TIMEOUT(status->text().contains("cancelled"), 10000);
+    QVERIFY(!window.m_Viewport->m_GradingPreviewActive);
+    QVERIFY(dialog->grab().save(QtTestArtifactDirectory() + "/qt-813-optimization-cancelled.png"));
+    status->setText("Ready to preview.");
+    QCOMPARE(status->text(), QString("Ready to preview."));
+    QApplication::processEvents();
+    QVERIFY(dialog->grab().save(QtTestArtifactDirectory() + "/qt-813-optimization-ready.png"));
+
+    preview->click();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->m_GradingPreviewActive, 10000);
+    window.m_Viewport->InvalidateGeometry();
+    QTRY_VERIFY_WITH_TIMEOUT(status->text().contains("interrupted"), 10000);
+    QVERIFY(!window.m_Viewport->m_GradingPreviewActive);
+    preview->click();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->m_GradingPreviewActive, 10000);
+    state.activeSpaceIndex = 0;
+    QTRY_VERIFY_WITH_TIMEOUT(status->text().contains("interrupted"), 10000);
+    QVERIFY(!window.m_Viewport->m_GradingPreviewActive);
+    state.activeSpaceIndex = kModelSpaceIndex;
+    state.activeSpaceIndex = 0;
+    preview->click();
+    QVERIFY(status->text().contains("Switch to model space"));
+    state.activeSpaceIndex = kModelSpaceIndex;
+
+    preview->click();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->m_GradingPreviewActive &&
+                             window.m_Viewport->m_GradingPreviewPaintedSequence >= 2, 10000);
+    BumpCadGpuCache(state);
+    QTRY_VERIFY_WITH_TIMEOUT(status->text().contains("drawing changed during preview"), 10000);
+    QVERIFY(!window.m_Viewport->m_GradingPreviewActive);
+    std::vector<std::string> changedDuringPreviewRebuildLog;
+    QVERIFY(BuildSurfaceFromSources(state, state.cadSurfaces[0], changedDuringPreviewRebuildLog));
+    QVERIFY(BuildSurfaceFromSources(state, state.cadSurfaces[1], changedDuringPreviewRebuildLog));
+
+    const auto beforePlaybackTin = state.cadSurfaces[1].tin->vertsXyz;
+    const std::uint32_t beforePlaybackRevision = state.cadGpuRevision;
+    const std::size_t beforePlaybackUndoDepth = CadActiveUndoStackSize(state);
+    const std::uint64_t tokenBeforePlayback = window.m_Viewport->m_GradingPreviewTokenSerial;
+    preview->click();
+    QVERIFY(!apply->isEnabled());
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->m_GradingPreviewActive &&
+                             window.m_Viewport->m_GradingPreviewPaintedSequence >= 2, 10000);
+    QVERIFY(window.m_Viewport->m_GradingPreviewToken > tokenBeforePlayback);
+    QCOMPARE(state.cadSurfaces[1].tin->vertsXyz, beforePlaybackTin);
+    QCOMPARE(state.cadGpuRevision, beforePlaybackRevision);
+    QCOMPARE(CadActiveUndoStackSize(state), beforePlaybackUndoDepth);
+    QVERIFY(window.m_Viewport->grabFramebuffer().save(QtTestArtifactDirectory() + "/qt-813-iteration-playback.png"));
+    QVERIFY(dialog->grab().save(QtTestArtifactDirectory() + "/qt-813-iteration-status.png"));
+    QTRY_VERIFY_WITH_TIMEOUT(apply->isEnabled(), 10000);
+    QVERIFY(status->text().contains("Offset:"));
+    QApplication::processEvents();
+    QVERIFY(dialog->grab().save(QtTestArtifactDirectory() + "/qt-813-optimization-preview.png"));
+
+    const auto beforeStaleApply = state.cadSurfaces[1].tin->vertsXyz;
+    BumpCadGpuCache(state);
+    QTRY_VERIFY_WITH_TIMEOUT(!apply->isEnabled() && !window.m_Viewport->m_GradingPreviewActive, 2000);
+    apply->click();
+    QVERIFY(status->text().contains("changed after preview"));
+    QCOMPARE(state.cadSurfaces[1].tin->vertsXyz, beforeStaleApply);
+    std::vector<std::string> rebuildLog;
+    QVERIFY(BuildSurfaceFromSources(state, state.cadSurfaces[0], rebuildLog));
+    QVERIFY(BuildSurfaceFromSources(state, state.cadSurfaces[1], rebuildLog));
+    preview->click();
+    QTRY_VERIFY_WITH_TIMEOUT(apply->isEnabled(), 10000);
+    mode->setCurrentIndex(1);
+    target->setValue(0.0);
+    preview->click();
+    QTRY_VERIFY_WITH_TIMEOUT(apply->isEnabled(), 10000);
+
+    const auto originalTin = state.cadSurfaces[1].tin->vertsXyz;
+    const auto originalStrips = *state.cadSurfaces[1].gradingMembers[0].strips;
+    const auto originalIndices = state.cadSurfaces[1].tin->indices;
+    apply->click();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.findChild<QDialog*>("gradingOptimization"), 1000);
+    QVERIFY(state.cadSurfaces[1].tin->vertsXyz != originalTin);
+    QCOMPARE(state.cadSurfaces[1].tin->indices, originalIndices);
+    for (size_t i = 0; i < originalTin.size(); i += 3) {
+      QCOMPARE(state.cadSurfaces[1].tin->vertsXyz[i], originalTin[i]);
+      QCOMPARE(state.cadSurfaces[1].tin->vertsXyz[i + 1], originalTin[i + 1]);
+    }
+    const double appliedOffset = state.cadSurfaces[1].tin->vertsXyz[2] - originalTin[2];
+    QVERIFY(std::abs(appliedOffset) > 0.001);
+    for (size_t strip = 0; strip < originalStrips.size(); ++strip)
+      for (size_t i = 0; i < originalStrips[strip].size(); ++i)
+        if (i % 3 == 2)
+          QVERIFY(std::abs((*state.cadSurfaces[1].gradingMembers[0].strips)[strip][i] -
+                           originalStrips[strip][i] - appliedOffset) <= 1e-9);
+        else
+          QCOMPARE((*state.cadSurfaces[1].gradingMembers[0].strips)[strip][i], originalStrips[strip][i]);
+    QCOMPARE(state.cadSurfaces[0].builtAtRevision, state.cadGpuRevision);
+    action->trigger();
+    dialog = window.findChild<QDialog*>("gradingOptimization");
+    QVERIFY(dialog);
+    status = dialog->findChild<QLabel*>("gradingOptimizationStatus");
+    preview = dialog->findChild<QPushButton*>("gradingOptimizationPreview");
+    apply = dialog->findChild<QPushButton*>("gradingOptimizationApply");
+    QVERIFY(status && preview && apply);
+    preview->click();
+    QTRY_VERIFY_WITH_TIMEOUT(apply->isEnabled(), 10000);
+    QVERIFY(status->text().contains("Offset: 0"));
+    QVERIFY(window.m_Viewport->m_GradingPreviewToken > tokenBeforePlayback);
+    dialog->reject();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.findChild<QDialog*>("gradingOptimization"), 1000);
+    QVERIFY(DoUndo(state, window.m_Log));
+    QCOMPARE(state.cadSurfaces[1].tin->vertsXyz, originalTin);
+    QVERIFY(DoRedo(state, window.m_Log));
+    QVERIFY(std::abs(state.cadSurfaces[1].tin->vertsXyz[2] - originalTin[2] - appliedOffset) <= 1e-9);
+    QVERIFY(window.grab().save(QtTestArtifactDirectory() + "/qt-813-optimization-applied.png"));
+
+    AppCommandState reopened;
+    std::vector<std::string> ioLog;
+    QVERIFY(LoadGoSurveyFromJsonUtf8(reopened, SerializeGoSurveyJson(state), ioLog));
+    const int reopenedGroup = FindSurfaceIndex(reopened, "Earthwork");
+    QVERIFY(reopenedGroup >= 0);
+    QCOMPARE(reopened.cadSurfaces[static_cast<size_t>(reopenedGroup)].tin->vertsXyz,
+             state.cadSurfaces[1].tin->vertsXyz);
+    QCOMPARE(*reopened.cadSurfaces[static_cast<size_t>(reopenedGroup)].gradingMembers[0].strips,
+             *state.cadSurfaces[1].gradingMembers[0].strips);
+    const auto savedVolume = ComputeSurfaceVolume(
+        reopened.cadSurfaces[0].tin->vertsXyz, reopened.cadSurfaces[0].tin->indices,
+        reopened.cadSurfaces[static_cast<size_t>(reopenedGroup)].tin->vertsXyz,
+        reopened.cadSurfaces[static_cast<size_t>(reopenedGroup)].tin->indices);
+    const auto currentVolume = ComputeSurfaceVolume(
+        state.cadSurfaces[0].tin->vertsXyz, state.cadSurfaces[0].tin->indices,
+        state.cadSurfaces[1].tin->vertsXyz, state.cadSurfaces[1].tin->indices);
+    QVERIFY(savedVolume.overlapped);
+    QVERIFY(currentVolume.overlapped);
+    QVERIFY(std::abs(savedVolume.netFt3 - currentVolume.netFt3) <= 1e-6);
+
+  }
+
   void gradingDistanceNeedsNoTerrainAndUsesSignedGrade() {
     EditorWindow window; window.CreateDrawingFromTemplate();
     auto& state = window.State();
@@ -11180,33 +11531,62 @@ private Q_SLOTS:
     window.Submit("");
     state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
     window.Submit("GRADINGGROUP First");
+    QVERIFY(state.cadSurfaces.size() >= 2 && state.cadSurfaces[1].tin);
+    std::vector<std::string> optimizeLog;
+    QVERIFY(BuildSurfaceFromSources(state, state.cadSurfaces[0], optimizeLog));
+    QVERIFY(BuildSurfaceFromSources(state, state.cadSurfaces[1], optimizeLog));
+    EnsureEntityIds(state);
+    const int firstGroupIndex = FindSurfaceIndex(state, "First");
+    const int groundIndex = FindSurfaceIndex(state, "Ground");
+    QVERIFY(firstGroupIndex >= 0 && groundIndex >= 0);
+    auto shiftedForReport = state.cadSurfaces[static_cast<size_t>(firstGroupIndex)].tin->vertsXyz;
+    for (size_t i = 2; i < shiftedForReport.size(); i += 3) shiftedForReport[i] += 3.0;
+    const SurfaceVolumeResult previewVolumes = ComputeSurfaceVolume(
+        state.cadSurfaces[static_cast<size_t>(groundIndex)].tin->vertsXyz,
+        state.cadSurfaces[static_cast<size_t>(groundIndex)].tin->indices,
+        shiftedForReport,
+        state.cadSurfaces[static_cast<size_t>(firstGroupIndex)].tin->indices);
+    QVERIFY2(ApplyGradingGroupElevationOffset(state,
+                                               state.cadSurfaceAttrs[static_cast<size_t>(firstGroupIndex)].id,
+                                               state.cadSurfaceAttrs[static_cast<size_t>(groundIndex)].id,
+                                               state.cadGpuRevision, 3.0, previewVolumes, optimizeLog),
+             optimizeLog.empty() ? "apply failed" : optimizeLog.back().c_str());
+    QCOMPARE(state.lastVolumeResult.netFt3, previewVolumes.netFt3);
+    QVERIFY(state.hasLastVolumeResult);
+    const auto optimizedSnapshot = state.cadSurfaces[1].tin->vertsXyz;
     window.Submit("GRADINGGROUP Second");
     QCOMPARE(state.cadSurfaces[1].gradingMembers.size(), std::size_t(0));
     QVERIFY(!state.cadSurfaces[1].tin);
     QCOMPARE(state.cadSurfaces[2].gradingMembers.size(), std::size_t(1));
+    QCOMPARE(state.cadSurfaces[2].tin->vertsXyz, optimizedSnapshot);
     window.Submit("UNDO");
     QCOMPARE(state.cadSurfaces.size(), std::size_t(2));
     QCOMPARE(state.cadSurfaces[1].gradingMembers.size(), std::size_t(1));
     const auto memberId = state.featureLineAttrs[1].id;
     const auto vertices = state.cadSurfaces[1].tin->vertsXyz;
     const auto indices = state.cadSurfaces[1].tin->indices;
+    const SurfaceVolumeResult savedReport = state.lastVolumeResult;
     const QByteArray path = directory.filePath("grading-group.dwg").toUtf8();
     std::vector<std::string> log;
     QVERIFY(SaveDrawingDocument(state, path.constData(), log));
-    window.CreateDrawingFromTemplate();
-    QVERIFY(OpenDrawingDocument(state, path.constData(), log));
-    const int si = FindSurfaceIndex(state, "First");
+    AppCommandState reopened;
+    QVERIFY(OpenDrawingDocument(reopened, path.constData(), log));
+    const int si = FindSurfaceIndex(reopened, "First");
     QVERIFY(si >= 0);
-    auto &group = state.cadSurfaces[static_cast<std::size_t>(si)];
+    auto &group = reopened.cadSurfaces[static_cast<std::size_t>(si)];
     QVERIFY(group.gradingGroup);
     QCOMPARE(group.gradingMembers.size(), std::size_t(1));
     QCOMPARE(group.gradingMembers[0].gradingId, memberId);
     QVERIFY(group.tin->vertsXyz == vertices);
     QVERIFY(group.tin->indices == indices);
-    QVERIFY(BuildSurfaceFromSources(state, group, log));
+    QVERIFY(reopened.hasLastVolumeResult);
+    QCOMPARE(reopened.lastVolumeResult.netFt3, savedReport.netFt3);
+    QCOMPARE(reopened.lastVolumeBaseName, std::string("Ground"));
+    QCOMPARE(reopened.lastVolumeComparisonName, std::string("First"));
+    QVERIFY(BuildSurfaceFromSources(reopened, group, log));
     QVERIFY(group.tin->vertsXyz == vertices);
     QVERIFY(group.tin->indices == indices);
-    QVERIFY(!state.cadSurfaces[0]
+    QVERIFY(!reopened.cadSurfaces[0]
                  .gradingGroup); // ordinary/legacy surfaces keep their meaning
   }
 
@@ -11485,7 +11865,8 @@ private Q_SLOTS:
       QVERIFY(!action->property("releasePlaceholder").toBool());
     }
     auto* optimize = window.findChild<QAction*>("ribbon_OptGrading"); QVERIFY(optimize);
-    QVERIFY(!optimize->isEnabled());  // Grading Optimization is #813, still a placeholder
+    QVERIFY(optimize->isEnabled());
+    QCOMPARE(optimize->property("ribbonCommand").toString(), QString("@gradingOptimization"));
 
     auto* create = window.findChild<QAction*>("ribbon_CdGrading");
     QVERIFY(create->isEnabled());

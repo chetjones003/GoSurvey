@@ -11,7 +11,7 @@ inline constexpr Button kButtons[] = {
   {"Home", "Palettes", "##RibbonToolspaceHome", "Toolspace", "toolspace", "TOOLSPACE", "Toolspace — drawing explorer (Project, Prospector and Settings).\nCommand bar: TOOLSPACE", true, false},
   {"Home", "Palettes", "##PalProps", "Properties", "c3d_properties", "@properties", "Properties — the side Properties panel for the current selection.", false, false},
   {"Home", "Palettes", "##PalSettings", "Drawing Settings", "c3d_dwgsettings", "@drawingSettings", "Drawing Settings — the drawing's units, scale and settings.\nCommand bar: DRAWINGSETTINGS", false, false},
-  {"Home", "Optimize", "##OptGrading", "Grading\nOptimization", "c3d_gradingopt", "", "Grading Optimization — not implemented yet.", true, true},
+  {"Home", "Optimize", "##OptGrading", "Grading\nOptimization", "c3d_gradingopt", "@gradingOptimization", "Optimize a grading group to balance cut/fill or reach a target net volume.", true, false},
   {"Home", "Create Ground Data", "##CgdPoints", "Points", "Point_Style", "CREATEPOINTS", "Create Points — pick or type survey points.\nCommand bar: CREATEPOINTS", false, false},
   {"Home", "Create Ground Data", "##CgdFeatureLine", "Feature Line", "c3d_featureline", "FEATURELINE", "Feature Line — draw a named 3D line with an elevation at each point.\nCommand bar: FEATURELINE", false, false},
   {"Home", "Create Ground Data", "##CgdTraverse", "Traverse", "traverse", "TRAVERSE", "Traverse Editor — raw observations, Face 1/Face 2, least-squares closure.\nCommand bar: TRAVERSE", false, false},

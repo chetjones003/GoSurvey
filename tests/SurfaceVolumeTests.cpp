@@ -11,6 +11,9 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <chrono>
+#include <atomic>
+#include <limits>
+#include <string>
 #include <vector>
 
 using Catch::Matchers::WithinAbs;
@@ -73,6 +76,119 @@ TEST_CASE("The sign convention is Base-above-Comparison is CUT, the reverse is F
   CHECK_THAT(r.cutFt3, WithinAbs(0.0, 1e-6));
   CHECK_THAT(r.cutAreaFt2, WithinAbs(0.0, 1e-6));
   CHECK_THAT(r.netFt3, WithinRel(expectedVol, 1e-6));
+}
+
+TEST_CASE("Grading optimization finds a common elevation offset for both net-volume targets", "[volume][REQ-523]") {
+  const FlatRect ground = MakeFlatRect(0, 0, 10, 10, 100.0);
+  const FlatRect grading = MakeFlatRect(0, 0, 10, 10, 98.0);
+
+  const auto balanced = OptimizeGradingElevationOffset(
+      ground.vertsXyz, ground.indices, grading.vertsXyz, grading.indices, 0.0);
+  REQUIRE(balanced.succeeded);
+  CHECK_THAT(balanced.elevationOffset, WithinAbs(2.0, 0.003));
+  CHECK_THAT(balanced.volumes.netFt3, WithinAbs(0.0, 0.27));
+  CHECK(balanced.iterations > 0);
+
+  const auto targetFill = OptimizeGradingElevationOffset(
+      ground.vertsXyz, ground.indices, grading.vertsXyz, grading.indices, 200.0);
+  REQUIRE(targetFill.succeeded);
+  CHECK_THAT(targetFill.elevationOffset, WithinAbs(4.0, 0.003));
+  CHECK_THAT(targetFill.volumes.netFt3, WithinAbs(200.0, 0.27));
+  CHECK(targetFill.volumes.fillFt3 > targetFill.volumes.cutFt3);
+}
+
+TEST_CASE("Grading optimization emits every valid evaluation in solver order", "[volume][REQ-524]") {
+  const FlatRect ground = MakeFlatRect(0, 0, 10, 10, 100.0);
+  const FlatRect grading = MakeFlatRect(0, 0, 10, 10, 98.0);
+  std::vector<GradingOptimizationEvaluation> evaluations;
+  const auto result = OptimizeGradingElevationOffset(
+      ground.vertsXyz, ground.indices, grading.vertsXyz, grading.indices, 0.0, nullptr,
+      [&evaluations](const GradingOptimizationEvaluation& evaluation) {
+        evaluations.push_back(evaluation);
+      });
+
+  REQUIRE(result.succeeded);
+  REQUIRE(evaluations.size() > 4);
+  CHECK(evaluations.front().sequence == 1);
+  CHECK(evaluations.front().elevationOffset == 0.0);
+  CHECK(evaluations[1].elevationOffset == 1.0);
+  CHECK(evaluations[2].elevationOffset == 2.0);
+  for (std::size_t i = 0; i < evaluations.size(); ++i) {
+    CHECK(evaluations[i].sequence == static_cast<int>(i + 1));
+    CHECK(evaluations[i].volumes.overlapped);
+  }
+  CHECK_THAT(evaluations.back().elevationOffset, WithinAbs(result.elevationOffset, 1e-12));
+  CHECK_THAT(evaluations.back().volumes.netFt3, WithinAbs(result.volumes.netFt3, 1e-9));
+}
+
+TEST_CASE("An already balanced grading emits its zero-offset evaluation", "[volume][REQ-524]") {
+  const FlatRect ground = MakeFlatRect(0, 0, 10, 10, 100.0);
+  const FlatRect grading = MakeFlatRect(0, 0, 10, 10, 100.0);
+  std::vector<GradingOptimizationEvaluation> evaluations;
+  const auto result = OptimizeGradingElevationOffset(
+      ground.vertsXyz, ground.indices, grading.vertsXyz, grading.indices, 0.0, nullptr,
+      [&evaluations](const GradingOptimizationEvaluation& evaluation) {
+        evaluations.push_back(evaluation);
+      });
+  REQUIRE(result.succeeded);
+  REQUIRE(evaluations.size() == 1);
+  CHECK(evaluations[0].sequence == 1);
+  CHECK(evaluations[0].elevationOffset == 0.0);
+  CHECK(evaluations[0].volumes.netFt3 == result.volumes.netFt3);
+}
+
+TEST_CASE("Grading optimization rejects no-overlap, malformed, and non-finite targets", "[volume][REQ-523]") {
+  const FlatRect ground = MakeFlatRect(0, 0, 10, 10, 100.0);
+  const FlatRect outside = MakeFlatRect(20, 20, 30, 30, 98.0);
+  auto result = OptimizeGradingElevationOffset(
+      ground.vertsXyz, ground.indices, outside.vertsXyz, outside.indices, 0.0);
+  CHECK_FALSE(result.succeeded);
+  CHECK(result.message.find("no common area") != std::string::npos);
+
+  const std::vector<double> malformed{0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0,
+                                      std::numeric_limits<double>::quiet_NaN()};
+  result = OptimizeGradingElevationOffset(ground.vertsXyz, ground.indices, malformed,
+                                          outside.indices, 0.0);
+  CHECK_FALSE(result.succeeded);
+  CHECK(result.message.find("valid built TIN") != std::string::npos);
+
+  result = OptimizeGradingElevationOffset(ground.vertsXyz, ground.indices, outside.vertsXyz,
+                                          outside.indices, std::numeric_limits<double>::infinity());
+  CHECK_FALSE(result.succeeded);
+  CHECK(result.message.find("finite") != std::string::npos);
+}
+
+TEST_CASE("Grading optimization reports finite unbracketable targets and cancellation", "[volume][REQ-523]") {
+  const FlatRect ground = MakeFlatRect(0, 0, 10, 10, 100.0);
+  const FlatRect grading = MakeFlatRect(0, 0, 10, 10, 98.0);
+  const auto unreachable = OptimizeGradingElevationOffset(
+      ground.vertsXyz, ground.indices, grading.vertsXyz, grading.indices, 1.0e308);
+  CHECK_FALSE(unreachable.succeeded);
+  CHECK(unreachable.message.find("bracket") != std::string::npos);
+
+  std::atomic<bool> cancel{true};
+  const auto cancelled = OptimizeGradingElevationOffset(
+      ground.vertsXyz, ground.indices, grading.vertsXyz, grading.indices, 0.0, &cancel);
+  CHECK_FALSE(cancelled.succeeded);
+  CHECK(cancelled.cancelled);
+  CHECK(cancelled.message.find("cancelled") != std::string::npos);
+}
+
+TEST_CASE("Grading optimization brackets negative targets and above-ground designs", "[volume][REQ-523]") {
+  const FlatRect ground = MakeFlatRect(0, 0, 10, 10, 100.0);
+  const FlatRect below = MakeFlatRect(0, 0, 10, 10, 98.0);
+  const auto negativeTarget = OptimizeGradingElevationOffset(
+      ground.vertsXyz, ground.indices, below.vertsXyz, below.indices, -400.0);
+  REQUIRE(negativeTarget.succeeded);
+  CHECK_THAT(negativeTarget.elevationOffset, WithinAbs(-2.0, 0.003));
+  CHECK_THAT(negativeTarget.volumes.netFt3, WithinAbs(-400.0, 0.27));
+
+  const FlatRect above = MakeFlatRect(0, 0, 10, 10, 102.0);
+  const auto balance = OptimizeGradingElevationOffset(
+      ground.vertsXyz, ground.indices, above.vertsXyz, above.indices, 0.0);
+  REQUIRE(balance.succeeded);
+  CHECK_THAT(balance.elevationOffset, WithinAbs(-2.0, 0.003));
+  CHECK_THAT(balance.volumes.netFt3, WithinAbs(0.0, 0.27));
 }
 
 TEST_CASE("The cut/fill map emits triangles only on its own side, and none for a self-comparison",

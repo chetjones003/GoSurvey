@@ -1336,7 +1336,7 @@ inline constexpr std::array<OnlineMapInfo, 4> kOnlineMaps = {{
   }
 }
 
-/// Geometry-only snapshot for undo/redo.  PDF glTexId is zeroed to avoid stale GPU references.
+/// Drawing snapshot for undo/redo. PDF glTexId is zeroed to avoid stale GPU references.
 struct DrawingGeometrySnapshot {
   std::vector<double>            userLinesFlat;
   std::vector<EntityAttributes> userLineAttrs;
@@ -1409,6 +1409,12 @@ struct DrawingGeometrySnapshot {
   std::vector<alignment::SampleLine> sampleLines;  ///< REQ-519: sample lines and their sections (persist with the drawing)
   std::vector<alignment::VerticalProfile> profiles;  ///< REQ-521: design vertical profiles (persist with the drawing)
   std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
+  /// Last earthwork report follows surface edits through undo/redo (REQ-523).
+  bool hasLastVolumeResult = false;
+  SurfaceVolumeResult lastVolumeResult;
+  std::string lastVolumeReportText;
+  std::string lastVolumeBaseName;
+  std::string lastVolumeComparisonName;
   /// Named piping networks (issue #486 increment B3 / REQ-345) — swapped alongside `cadPipeRuns`
   /// for the same BEDIT-isolation reason the comment above states: a network's indices are only
   /// meaningful against the drawing's OWN `cadPipeRuns`, so it must travel with it, not stay behind.
@@ -1511,6 +1517,11 @@ constexpr size_t kUcsPreviousDepth = 10;
 /// Snapshot of all per-drawing data.  AppCommandState holds the live (active-tab) copy directly;
 /// switching tabs saves the active fields here and restores the target tab's snapshot.
 struct DrawingDocument {
+  bool hasLastVolumeResult = false;
+  SurfaceVolumeResult lastVolumeResult;
+  std::string lastVolumeReportText;
+  std::string lastVolumeBaseName;
+  std::string lastVolumeComparisonName;
   std::vector<CadAnnotationScale> viewportZoomScales;
   int currentViewportZoomScaleIndex = -1;
   double viewportPanX = 0.0;
@@ -6971,6 +6982,12 @@ bool SetModelRasterDrape(AppCommandState& st, size_t imageIndex, size_t surfaceI
 ///
 /// Returns true when a surface was produced.
 bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log);
+/// REQ-523: applies a previously previewed vertical offset if both built surfaces and the drawing
+/// generation still match. One undo step; false leaves drawing geometry untouched.
+bool ApplyGradingGroupElevationOffset(AppCommandState& st, std::uint64_t groupId,
+                                      std::uint64_t groundId, std::uint32_t expectedRevision,
+                                      double offset, const SurfaceVolumeResult& volumes,
+                                      std::vector<std::string>& log);
 /// Refresh linked legend rows for surfaces using an edited style's analysis configuration.
 void RefreshSurfaceLegendTablesForStyle(AppCommandState& st, const std::string& styleName);
 /// Refresh linked entities and analysis results after a project-owned surface reference replaces its TIN.
@@ -8248,6 +8265,8 @@ void RunProfileDelete(AppCommandState& st, const std::string& args, std::vector<
 void RefreshViewFrameGroups(AppCommandState& st, std::vector<std::string>& log);
 /// True when the active tab's survey-point project is read-only (REQ-517.6 uses the same rule as paste).
 bool ActiveProjectPointsReadOnly(const AppCommandState& st);
+/// True when the active drawing tab belongs to a read-only project, regardless of points mode.
+bool ActiveProjectDrawingReadOnly(const AppCommandState& st);
 void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// REQ-484.4: reports the station and offset of one picked point (drawing-local) while GETSTATIONOFFSET picks.
 void CommitStationOffsetPick(AppCommandState& st, double lx, double ly, std::vector<std::string>& log);

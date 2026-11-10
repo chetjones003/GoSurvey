@@ -16,6 +16,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <atomic>
+#include <functional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -63,6 +66,7 @@ struct SurfaceVolumeResult {
   double commonAreaFt2 = 0.0;
   double cutAreaFt2 = 0.0;   ///< Plan area where Base sits above Comparison (REQ-146).
   double fillAreaFt2 = 0.0;  ///< Plan area where Comparison sits above Base (REQ-146).
+  bool cancelled = false;
   /// False when the two surfaces have no common footprint at all — sampling is not attempted, and
   /// every other field is 0, rather than a number derived from no common area (REQ-073).
   bool overlapped = false;
@@ -100,3 +104,41 @@ struct SurfaceVolumeResult {
                                                        std::vector<float>* outCutTrianglesXyz = nullptr,
                                                        std::vector<float>* outFillTrianglesXyz = nullptr,
                                                        const std::vector<std::pair<double, double>>* clipRingXy = nullptr);
+
+/// REQ-523 result for a uniform vertical shift of a design TIN.
+struct GradingOptimizationResult {
+  bool succeeded = false;
+  std::string message;
+  double elevationOffset = 0.0;
+  double targetNetFt3 = 0.0;
+  double targetErrorFt3 = 0.0;
+  int iterations = 0;
+  SurfaceVolumeResult volumes;
+  bool cancelled = false;
+};
+
+/// One valid candidate evaluation emitted while REQ-523 searches for its target.
+struct GradingOptimizationEvaluation {
+  int sequence = 0;
+  double elevationOffset = 0.0;
+  SurfaceVolumeResult volumes;
+};
+
+/// Finds one uniform Z offset that makes the design's REQ-073 net volume approach targetNetFt3.
+/// Plan coordinates and triangle indices remain unchanged. The caller owns any resulting mutation.
+[[nodiscard]] GradingOptimizationResult OptimizeGradingElevationOffset(
+    const std::vector<double>& baseVertsXyz, const std::vector<std::uint32_t>& baseIndices,
+    const std::vector<double>& designVertsXyz, const std::vector<std::uint32_t>& designIndices,
+    double targetNetFt3, const std::atomic<bool>* cancel = nullptr,
+    const std::function<void(const GradingOptimizationEvaluation&)>& onEvaluation = {});
+
+/// REQ-073 variant for repeated comparisons of unchanged XY/topology. Spatial indexes depend only
+/// on XY and indices, so they can be reused while elevations vary.
+[[nodiscard]] SurfaceVolumeResult ComputeSurfaceVolumeIndexed(
+    const std::vector<double>& baseVertsXyz, const std::vector<std::uint32_t>& baseIndices,
+    const TinSpatialIndex& baseIndex, const std::vector<double>& compVertsXyz,
+    const std::vector<std::uint32_t>& compIndices, const TinSpatialIndex& compIndex,
+    std::vector<float>* outCutTrianglesXyz = nullptr,
+    std::vector<float>* outFillTrianglesXyz = nullptr,
+    const std::vector<std::pair<double, double>>* clipRingXy = nullptr,
+    const std::atomic<bool>* cancel = nullptr);

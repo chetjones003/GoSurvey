@@ -1625,10 +1625,7 @@ void EditorWindow::AskLandXmlPointConflicts() {
 }
 
 bool EditorWindow::ActiveDrawingReadOnly() const {
-  if (m_State.activeDrawingIdx <= 0 || m_State.activeDrawingIdx >= static_cast<int>(m_State.drawingTabs.size())) return false;
-  const auto uid = m_State.drawingTabs[static_cast<size_t>(m_State.activeDrawingIdx)].projectUid;
-  for (const auto& session : m_State.openProjects) if (session.uid == uid) return session.readOnly;
-  return false;
+  return ActiveProjectDrawingReadOnly(m_State);
 }
 
 void EditorWindow::CutSelection() {

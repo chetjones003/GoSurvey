@@ -3,6 +3,7 @@
 #include "tinbuild.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 
 namespace {
@@ -137,13 +138,13 @@ constexpr double kTargetVolumeSamples = 250000.0;
 
 } // namespace
 
-SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<double>& baseVertsXyz,
-                                         const std::vector<std::uint32_t>& baseIndices,
-                                         const std::vector<double>& compVertsXyz,
-                                         const std::vector<std::uint32_t>& compIndices,
-                                         std::vector<float>* outCutTrianglesXyz,
-                                         std::vector<float>* outFillTrianglesXyz,
-                                         const std::vector<std::pair<double, double>>* clipRingXy) {
+static SurfaceVolumeResult ComputeSurfaceVolumeImpl(
+    const std::vector<double>& baseVertsXyz, const std::vector<std::uint32_t>& baseIndices,
+    const std::vector<double>& compVertsXyz, const std::vector<std::uint32_t>& compIndices,
+    std::vector<float>* outCutTrianglesXyz, std::vector<float>* outFillTrianglesXyz,
+    const std::vector<std::pair<double, double>>* clipRingXy,
+    const TinSpatialIndex* baseIndexOverride, const TinSpatialIndex* compIndexOverride,
+    const std::atomic<bool>* cancel) {
   SurfaceVolumeResult out;
   if (baseIndices.size() < 3 || compIndices.size() < 3 || baseVertsXyz.size() < 9 || compVertsXyz.size() < 9)
     return out;  // no triangulation on one side: nothing to compare, reported as no overlap
@@ -181,8 +182,10 @@ SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<double>& baseVertsXyz
       return out;  // clip misses the common footprint
   }
 
-  const TinSpatialIndex baseIdx = BuildTinSpatialIndex(baseVertsXyz, baseIndices);
-  const TinSpatialIndex compIdx = BuildTinSpatialIndex(compVertsXyz, compIndices);
+  const TinSpatialIndex builtBaseIdx = baseIndexOverride ? TinSpatialIndex{} : BuildTinSpatialIndex(baseVertsXyz, baseIndices);
+  const TinSpatialIndex builtCompIdx = compIndexOverride ? TinSpatialIndex{} : BuildTinSpatialIndex(compVertsXyz, compIndices);
+  const TinSpatialIndex& baseIdx = baseIndexOverride ? *baseIndexOverride : builtBaseIdx;
+  const TinSpatialIndex& compIdx = compIndexOverride ? *compIndexOverride : builtCompIdx;
   if (baseIdx.empty() || compIdx.empty())
     return out;
 
@@ -297,6 +300,10 @@ SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<double>& baseVertsXyz
   };
 
   for (int j = 0; j < rows; ++j) {
+    if (cancel && cancel->load(std::memory_order_relaxed)) {
+      out.cancelled = true;
+      return out;
+    }
     const double y0 = iyMin + static_cast<double>(j) * cellH;
     const double y1 = y0 + cellH;
     const double sy = y0 + 0.5 * cellH;
@@ -341,4 +348,167 @@ SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<double>& baseVertsXyz
   out.overlapped = out.commonAreaFt2 > 0.0;
   out.netFt3 = out.fillFt3 - out.cutFt3;
   return out;
+}
+
+SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<double>& baseVertsXyz,
+                                         const std::vector<std::uint32_t>& baseIndices,
+                                         const std::vector<double>& compVertsXyz,
+                                         const std::vector<std::uint32_t>& compIndices,
+                                         std::vector<float>* outCutTrianglesXyz,
+                                         std::vector<float>* outFillTrianglesXyz,
+                                         const std::vector<std::pair<double, double>>* clipRingXy) {
+  return ComputeSurfaceVolumeImpl(baseVertsXyz, baseIndices, compVertsXyz, compIndices,
+                                  outCutTrianglesXyz, outFillTrianglesXyz, clipRingXy,
+                                  nullptr, nullptr, nullptr);
+}
+
+SurfaceVolumeResult ComputeSurfaceVolumeIndexed(
+    const std::vector<double>& baseVertsXyz, const std::vector<std::uint32_t>& baseIndices,
+    const TinSpatialIndex& baseIndex, const std::vector<double>& compVertsXyz,
+    const std::vector<std::uint32_t>& compIndices, const TinSpatialIndex& compIndex,
+    std::vector<float>* outCutTrianglesXyz, std::vector<float>* outFillTrianglesXyz,
+    const std::vector<std::pair<double, double>>* clipRingXy,
+    const std::atomic<bool>* cancel) {
+  return ComputeSurfaceVolumeImpl(baseVertsXyz, baseIndices, compVertsXyz, compIndices,
+                                  outCutTrianglesXyz, outFillTrianglesXyz, clipRingXy,
+                                  &baseIndex, &compIndex, cancel);
+}
+
+GradingOptimizationResult OptimizeGradingElevationOffset(
+    const std::vector<double>& baseVertsXyz, const std::vector<std::uint32_t>& baseIndices,
+    const std::vector<double>& designVertsXyz, const std::vector<std::uint32_t>& designIndices,
+    double targetNetFt3, const std::atomic<bool>* cancel,
+    const std::function<void(const GradingOptimizationEvaluation&)>& onEvaluation) {
+  GradingOptimizationResult result;
+  result.targetNetFt3 = targetNetFt3;
+  if (!std::isfinite(targetNetFt3)) {
+    result.message = "Target net volume must be finite.";
+    return result;
+  }
+  const auto validTin = [](const std::vector<double>& xyz, const std::vector<std::uint32_t>& indices) {
+    return xyz.size() >= 9 && xyz.size() % 3 == 0 && indices.size() >= 3 && indices.size() % 3 == 0 &&
+           std::all_of(xyz.begin(), xyz.end(), [](double value) { return std::isfinite(value); }) &&
+           std::all_of(indices.begin(), indices.end(), [&](std::uint32_t index) { return index < xyz.size() / 3; });
+  };
+  if (!validTin(baseVertsXyz, baseIndices) || !validTin(designVertsXyz, designIndices)) {
+    result.message = "Ground and grading group must both have valid built TIN surfaces.";
+    return result;
+  }
+
+  const TinSpatialIndex baseIndex = BuildTinSpatialIndex(baseVertsXyz, baseIndices);
+  const TinSpatialIndex designIndex = BuildTinSpatialIndex(designVertsXyz, designIndices);
+  if (baseIndex.empty() || designIndex.empty()) {
+    result.message = "Ground and grading group must both have valid built TIN surfaces.";
+    return result;
+  }
+  std::vector<double> candidate = designVertsXyz;
+  int evaluationSequence = 0;
+  const auto evaluate = [&](double offset, SurfaceVolumeResult* volume) {
+    if (cancel && cancel->load(std::memory_order_relaxed)) {
+      result.cancelled = true;
+      return false;
+    }
+    if (!std::isfinite(offset)) return false;
+    for (size_t i = 2; i < candidate.size(); i += 3) {
+      candidate[i] = designVertsXyz[i] + offset;
+      if (!std::isfinite(candidate[i])) return false;
+    }
+    *volume = ComputeSurfaceVolumeIndexed(baseVertsXyz, baseIndices, baseIndex,
+                                          candidate, designIndices, designIndex,
+                                          nullptr, nullptr, nullptr, cancel);
+    result.cancelled = volume->cancelled;
+    if (volume->cancelled || !volume->overlapped || !std::isfinite(volume->netFt3))
+      return false;
+    if (onEvaluation) {
+      onEvaluation(GradingOptimizationEvaluation{++evaluationSequence, offset, *volume});
+    }
+    return true;
+  };
+
+  SurfaceVolumeResult atZero;
+  if (!evaluate(0.0, &atZero)) {
+    result.message = result.cancelled ? "Optimization was cancelled."
+                                      : "Ground and grading group have no common area.";
+    return result;
+  }
+  constexpr double kTargetToleranceFt3 = 0.27; // 0.01 yd³, REQ-523.
+  if (std::abs(atZero.netFt3 - targetNetFt3) <= kTargetToleranceFt3) {
+    result.succeeded = true;
+    result.message = "Target reached without changing elevation.";
+    result.volumes = atZero;
+    result.targetErrorFt3 = atZero.netFt3 - targetNetFt3;
+    return result;
+  }
+
+  double low = 0.0, high = 0.0;
+  double step = 1.0;
+  if (atZero.netFt3 < targetNetFt3) {
+    high = step;
+    bool bracketed = false;
+    for (int i = 0; i < 64; ++i) {
+      SurfaceVolumeResult candidateVolume;
+      if (!evaluate(high, &candidateVolume)) break;
+      if (candidateVolume.netFt3 >= targetNetFt3) { bracketed = true; break; }
+      low = high;
+      step *= 2.0;
+      high = step;
+      if (!std::isfinite(high)) break;
+    }
+    if (!bracketed) {
+      result.message = result.cancelled ? "Optimization was cancelled."
+          : "Could not bracket the requested net volume with a finite elevation offset.";
+      return result;
+    }
+  } else {
+    low = -step;
+    bool bracketed = false;
+    for (int i = 0; i < 64; ++i) {
+      SurfaceVolumeResult candidateVolume;
+      if (!evaluate(low, &candidateVolume)) break;
+      if (candidateVolume.netFt3 <= targetNetFt3) { bracketed = true; break; }
+      high = low;
+      step *= 2.0;
+      low = -step;
+      if (!std::isfinite(low)) break;
+    }
+    if (!bracketed) {
+      result.message = result.cancelled ? "Optimization was cancelled."
+          : "Could not bracket the requested net volume with a finite elevation offset.";
+      return result;
+    }
+  }
+
+  bool precisionLimitReached = false;
+  for (int i = 1; i <= 64; ++i) {
+    const double middle = low + (high - low) * 0.5;
+    SurfaceVolumeResult middleVolume;
+    if (!std::isfinite(middle) || !evaluate(middle, &middleVolume)) {
+      result.message = result.cancelled ? "Optimization was cancelled."
+          : "Optimization produced a non-finite candidate or lost the common area.";
+      return result;
+    }
+    result.iterations = i;
+    const double error = middleVolume.netFt3 - targetNetFt3;
+    if (std::abs(error) <= kTargetToleranceFt3) {
+      result.succeeded = true;
+      result.message = "Target reached.";
+      result.elevationOffset = middle;
+      result.targetErrorFt3 = error;
+      result.volumes = middleVolume;
+      return result;
+    }
+    if (middle == low || middle == high) {
+      precisionLimitReached = true;
+      break;
+    }
+    if (error < 0.0) {
+      low = middle;
+    } else {
+      high = middle;
+    }
+  }
+  result.message = precisionLimitReached
+      ? "Could not reach the target net volume within 0.01 yd³ before elevation precision was exhausted."
+      : "Could not reach the target net volume within 0.01 yd³ after 64 bisections.";
+  return result;
 }

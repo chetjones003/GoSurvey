@@ -82,6 +82,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorBlockAuthoring.cpp
   src/qt/EditorPipePalette.cpp
   src/qt/EditorGradingPalette.cpp
+  src/qt/EditorGradingOptimization.cpp
   src/qt/AdjustmentWindow.cpp
   src/qt/AdjustmentEditor.cpp
   src/qt/PdfWindow.cpp

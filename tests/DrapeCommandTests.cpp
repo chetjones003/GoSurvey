@@ -616,6 +616,59 @@ TEST_CASE("Templates omit attached model images and their surface links", "[io][
   fs::remove(path, ec);
 }
 
+TEST_CASE("Volume reports persist per drawing but are excluded from templates", "[io][template][req522]") {
+  namespace fs = std::filesystem;
+  AppCommandState source;
+  source.hasLastVolumeResult = true;
+  source.lastVolumeResult = {12.5, 32.5, 20.0, 100.0, 25.0, 75.0, false};
+  source.lastVolumeReportText = "Volume report: saved";
+  source.lastVolumeBaseName = "Ground A";
+  source.lastVolumeComparisonName = "Design A";
+
+  std::vector<std::string> log;
+  AppCommandState reopened;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(reopened, SerializeGoSurveyJson(source), log));
+  REQUIRE(reopened.hasLastVolumeResult);
+  CHECK(reopened.lastVolumeResult.cutFt3 == Approx(12.5));
+  CHECK(reopened.lastVolumeResult.fillFt3 == Approx(32.5));
+  CHECK(reopened.lastVolumeResult.netFt3 == Approx(20.0));
+  CHECK_FALSE(reopened.lastVolumeResult.overlapped);
+  CHECK(reopened.lastVolumeReportText == source.lastVolumeReportText);
+  CHECK(reopened.lastVolumeBaseName == source.lastVolumeBaseName);
+  CHECK(reopened.lastVolumeComparisonName == source.lastVolumeComparisonName);
+
+  AppCommandState withoutReport;
+  AppCommandState emptyReopened;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(emptyReopened, SerializeGoSurveyJson(withoutReport), log));
+  CHECK_FALSE(emptyReopened.hasLastVolumeResult);
+  CHECK(emptyReopened.lastVolumeReportText.empty());
+
+  source.documents.resize(3);
+  SaveDocumentToSnapshot(source, 1);
+  source.hasLastVolumeResult = false;
+  source.lastVolumeReportText.clear();
+  source.lastVolumeBaseName.clear();
+  source.lastVolumeComparisonName.clear();
+  SaveDocumentToSnapshot(source, 2);
+  RestoreDocumentFromSnapshot(source, 1);
+  CHECK(source.hasLastVolumeResult);
+  CHECK(source.lastVolumeBaseName == "Ground A");
+  RestoreDocumentFromSnapshot(source, 2);
+  CHECK_FALSE(source.hasLastVolumeResult);
+  CHECK(source.lastVolumeReportText.empty());
+
+  const fs::path path = fs::temp_directory_path() /
+      ("gosurvey-volume-report-template-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".gst");
+  REQUIRE(SaveGoSurveyTemplateFile(reopened, path.string().c_str(), log));
+  AppCommandState templateState;
+  REQUIRE(LoadGoSurveyTemplateFile(templateState, path.string().c_str(), log));
+  CHECK_FALSE(templateState.hasLastVolumeResult);
+  CHECK(templateState.lastVolumeReportText.empty());
+  std::error_code ec;
+  fs::remove(path, ec);
+}
+
 TEST_CASE("Surface labels show unavailable after their TIN is removed", "[surface][req515]") {
   AppCommandState st;
   AddGround(st, "EG");

@@ -1238,6 +1238,15 @@ json BuildRoot(const AppCommandState& st) {
   // REQ-076: the id counter is saved so ids are not reused across a save/load, which is what makes a
   // stored reference safe over a file's whole life rather than only within one session.
   doc["nextEntityId"] = st.nextEntityId;
+  if (st.hasLastVolumeResult) {
+    const SurfaceVolumeResult& v = st.lastVolumeResult;
+    doc["lastVolumeResult"] = {{"cutFt3", v.cutFt3}, {"fillFt3", v.fillFt3}, {"netFt3", v.netFt3},
+                                {"commonAreaFt2", v.commonAreaFt2}, {"cutAreaFt2", v.cutAreaFt2},
+                                {"fillAreaFt2", v.fillAreaFt2}, {"overlapped", v.overlapped}};
+    doc["lastVolumeReportText"] = st.lastVolumeReportText;
+    doc["lastVolumeBaseName"] = st.lastVolumeBaseName;
+    doc["lastVolumeComparisonName"] = st.lastVolumeComparisonName;
+  }
   // Named point groups (REQ-067). Additive section — a reader that does not know it ignores it, and
   // a file without it loads with no groups. Rules only: membership is resolved from the current
   // points on demand, so persisting a member list would only let it go stale.
@@ -3375,6 +3384,32 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   // raises the counter above any id actually present, so a hand-edited or newer file cannot make it
   // hand out an id that is already in use.
   st.nextEntityId = doc.value("nextEntityId", static_cast<std::uint64_t>(1));
+  st.hasLastVolumeResult = false;
+  st.lastVolumeResult = SurfaceVolumeResult{};
+  st.lastVolumeReportText.clear();
+  st.lastVolumeBaseName.clear();
+  st.lastVolumeComparisonName.clear();
+  if (doc.contains("lastVolumeResult") && doc["lastVolumeResult"].is_object()) {
+    const json& v = doc["lastVolumeResult"];
+    SurfaceVolumeResult result;
+    result.cutFt3 = v.value("cutFt3", 0.0);
+    result.fillFt3 = v.value("fillFt3", 0.0);
+    result.netFt3 = v.value("netFt3", 0.0);
+    result.commonAreaFt2 = v.value("commonAreaFt2", 0.0);
+    result.cutAreaFt2 = v.value("cutAreaFt2", 0.0);
+    result.fillAreaFt2 = v.value("fillAreaFt2", 0.0);
+    result.overlapped = v.value("overlapped", false);
+    const bool finite = std::isfinite(result.cutFt3) && std::isfinite(result.fillFt3) &&
+        std::isfinite(result.netFt3) && std::isfinite(result.commonAreaFt2) &&
+        std::isfinite(result.cutAreaFt2) && std::isfinite(result.fillAreaFt2);
+    if (finite) {
+      st.hasLastVolumeResult = true;
+      st.lastVolumeResult = result;
+      st.lastVolumeReportText = doc.value("lastVolumeReportText", std::string());
+      st.lastVolumeBaseName = doc.value("lastVolumeBaseName", std::string());
+      st.lastVolumeComparisonName = doc.value("lastVolumeComparisonName", std::string());
+    }
+  }
 
   // The section plane (REQ-343 amended, issue #479 acceptance 8). Absent → off, which is a fresh
   // document's and a pre-#479 file's state alike.
@@ -5799,6 +5834,10 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
              "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "alignments", "viewFrameGroups", "sampleLines", "designProfiles", "surfaceProfiles", "surfaces",
              "surfaceAttrs", "surveyPoints", "modelImages", "blockFavorites", "blockRecent"})
       doc[key] = json::array();
+    doc.erase("lastVolumeResult");
+    doc.erase("lastVolumeReportText");
+    doc.erase("lastVolumeBaseName");
+    doc.erase("lastVolumeComparisonName");
 
     // Captured map tiles are source-drawing imagery, not reusable template settings.
     if (doc.contains("drawingSettings") && doc["drawingSettings"].is_object())

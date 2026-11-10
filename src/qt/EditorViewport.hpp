@@ -33,6 +33,8 @@ public:
   std::function<void()> thumbnailReady;
   /// The Pipe Fittings palette's part pictures changed (REQ-350 (e)); called from inside a paint.
   std::function<void()> partThumbnailsChanged;
+  /// Called after one live grading optimization sample has been drawn into the viewport.
+  std::function<void(std::uint64_t)> gradingPreviewFrameDrawn;
   /// Part pictures rendered for the Pipe Fittings palette, by block name.
   const PartThumbnailImages& PartThumbnails() const { return m_PartThumbs; }
   std::function<void(double, double, double)> cursorChanged;
@@ -50,6 +52,20 @@ public:
   void ClickViewCube(QPointF point);
   void SetGrid(bool enabled) { m_Grid = enabled; update(); }
   void InvalidateGeometry();
+  bool BeginGradingOptimizationPreview(std::uint64_t surfaceId,
+                                       std::vector<float> sourceLines,
+                                       std::uint64_t sequence, double offset);
+  bool UpdateGradingOptimizationPreview(std::uint64_t sequence, double offset);
+  bool GradingOptimizationPreviewActive() const { return m_GradingPreviewActive; }
+  std::uint64_t GradingPreviewInvalidationSerial() const { return m_GradingPreviewInvalidationSerial; }
+  bool GradingOptimizationPreviewCanPaint() const {
+    if (!m_Ready || (m_State.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(m_State)))
+      return false;
+    if (m_GradingPreviewSurfaceId == 0) return true;
+    const int surfaceIndex = FindSurfaceIndexById(m_State, m_GradingPreviewSurfaceId);
+    return surfaceIndex >= 0 && SurfaceVisible(m_State, static_cast<std::size_t>(surfaceIndex));
+  }
+  void ClearGradingOptimizationPreview();
   void CancelSelectionBox();
   bool CancelGripEdit();
   bool IsRendererReady() const { return m_Ready; }
@@ -99,6 +115,18 @@ private:
   std::unordered_map<std::string, unsigned int> m_RasterTextures;
   std::vector<RasterDrapeCache> m_RasterDrapeCache;
   std::vector<MapTileDraw> m_RenderTiles;
+  std::vector<float> m_GradingPreviewGhostLines;
+  CadSurfaceDisplayGeometry m_GradingPreviewOtherSurfaces;
+  std::vector<std::vector<float>> m_GradingPreviewOtherLineStorage;
+  std::vector<std::vector<float>> m_GradingPreviewOtherBandStorage;
+  double m_GradingPreviewOffset = 0.0;
+  std::uint64_t m_GradingPreviewSequence = 0;
+  std::uint64_t m_GradingPreviewPaintedSequence = 0;
+  std::uint64_t m_GradingPreviewSurfaceId = 0;
+  std::uint64_t m_GradingPreviewToken = 0;
+  std::uint64_t m_GradingPreviewTokenSerial = 0;
+  std::uint64_t m_GradingPreviewInvalidationSerial = 0;
+  bool m_GradingPreviewActive = false;
   std::uint32_t m_RasterDrapeRevision = 0;
   std::uint32_t m_RasterDrapeRenderRevision = 0;
   PartThumbnailImages m_PartThumbs;
