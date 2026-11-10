@@ -278,8 +278,7 @@ enter a target net volume in yd³; positive net means fill. The optimizer keeps 
 member relationships and source grading definitions unchanged. Review the offset and cut/fill
 report while the candidate grading updates automatically in the main viewport; the current group is
 shown as a ghost for comparison. Apply remains separate and makes one undoable change, or Cancel.
-If you freshly add another member later,
-existing baked elevations stay as they are and the new member starts at its source grading elevation.
+If you add another member later, existing baked elevations stay as they are and the new member starts at its source grading elevation.
 A member transferred from another group retains its existing baked snapshot. Run Grading Optimization
 again to shift all current members together. An explicit regrade from source gradings can replace the
 optimized baked snapshot.
