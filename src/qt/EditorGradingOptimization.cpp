@@ -31,7 +31,7 @@ struct OptimizationWorker {
 };
 
 struct OptimizationPlayback {
-  std::vector<float> sourceLines;
+  std::vector<double> sourceLines;
   std::deque<GradingOptimizationEvaluation> pending;
   std::uint64_t surfaceId = 0;
   bool previewStarted = false;
@@ -80,8 +80,8 @@ private:
   QPointer<EditorViewport> m_Viewport;
 };
 
-std::vector<float> GradingPreviewLines(const CadSurface& design) {
-  std::vector<float> lines;
+std::vector<double> GradingPreviewLines(const CadSurface& design) {
+  std::vector<double> lines;
   if (!design.tin || design.tin->indices.size() < 3 || design.tin->indices.size() % 3 != 0)
     return lines;
   lines.reserve(design.tin->indices.size() * 6);
@@ -96,10 +96,10 @@ std::vector<float> GradingPreviewLines(const CadSurface& design) {
         return lines;
       }
       for (std::size_t axis = 0; axis < 3; ++axis) {
-        lines.push_back(static_cast<float>(design.tin->vertsXyz[a + axis]));
+        lines.push_back(design.tin->vertsXyz[a + axis]);
       }
       for (std::size_t axis = 0; axis < 3; ++axis) {
-        lines.push_back(static_cast<float>(design.tin->vertsXyz[b + axis]));
+        lines.push_back(design.tin->vertsXyz[b + axis]);
       }
     }
   }
@@ -471,7 +471,8 @@ void EditorWindow::ShowGradingOptimization() {
     if (!preview->ready) return;
     if (dialog->property("documentGeneration").toULongLong() != m_DocumentGeneration ||
         preview->revision != m_State.cadGpuRevision ||
-        session->viewportInvalidationSerial != viewport->GradingPreviewInvalidationSerial()) {
+        session->viewportInvalidationSerial != viewport->GradingPreviewInvalidationSerial() ||
+        !viewport->GradingOptimizationPreviewCanPaint() || !viewport->GradingOptimizationPreviewActive()) {
       viewport->gradingPreviewFrameDrawn = {};
       viewport->ClearGradingOptimizationPreview();
       preview->ready = false;

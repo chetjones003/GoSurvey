@@ -53,7 +53,7 @@ public:
   void SetGrid(bool enabled) { m_Grid = enabled; update(); }
   void InvalidateGeometry();
   bool BeginGradingOptimizationPreview(std::uint64_t surfaceId,
-                                       std::vector<float> sourceLines,
+                                       std::vector<double> sourceLines,
                                        std::uint64_t sequence, double offset);
   bool UpdateGradingOptimizationPreview(std::uint64_t sequence, double offset);
   bool GradingOptimizationPreviewActive() const { return m_GradingPreviewActive; }
@@ -115,7 +115,7 @@ private:
   std::unordered_map<std::string, unsigned int> m_RasterTextures;
   std::vector<RasterDrapeCache> m_RasterDrapeCache;
   std::vector<MapTileDraw> m_RenderTiles;
-  std::vector<float> m_GradingPreviewGhostLines;
+  std::vector<double> m_GradingPreviewGhostLines;
   CadSurfaceDisplayGeometry m_GradingPreviewOtherSurfaces;
   std::vector<std::vector<float>> m_GradingPreviewOtherLineStorage;
   std::vector<std::vector<float>> m_GradingPreviewOtherBandStorage;

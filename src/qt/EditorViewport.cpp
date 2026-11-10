@@ -519,7 +519,7 @@ void EditorViewport::InvalidateGeometry() {
 }
 
 bool EditorViewport::BeginGradingOptimizationPreview(std::uint64_t surfaceId,
-                                                       std::vector<float> sourceLines,
+                                                       std::vector<double> sourceLines,
                                                        std::uint64_t sequence, double offset) {
   if (!GradingOptimizationPreviewCanPaint() || sourceLines.size() < 6 || sourceLines.size() % 6 != 0 ||
       !std::isfinite(offset)) {
@@ -590,7 +590,7 @@ void EditorViewport::ClearGradingOptimizationPreview() {
   if (!m_GradingPreviewActive)
     return;
   m_GradingPreviewActive = false;
-  std::vector<float>().swap(m_GradingPreviewGhostLines);
+  std::vector<double>().swap(m_GradingPreviewGhostLines);
   m_GradingPreviewOtherSurfaces = {};
   m_GradingPreviewOtherLineStorage.clear();
   m_GradingPreviewOtherBandStorage.clear();

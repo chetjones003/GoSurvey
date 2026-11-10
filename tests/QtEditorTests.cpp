@@ -10547,6 +10547,8 @@ private Q_SLOTS:
 
     QCOMPARE(action->property("ribbonCommand").toString(), QString("@gradingOptimization"));
     QVERIFY(!action->property("releasePlaceholder").toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(state.cadSurfaces[0].builtAtRevision == state.cadGpuRevision &&
+                             state.cadSurfaces[1].builtAtRevision == state.cadGpuRevision, 10000);
     action->trigger();
     auto* dialog = window.findChild<QDialog*>("gradingOptimization");
     QVERIFY(dialog);
@@ -10559,8 +10561,10 @@ private Q_SLOTS:
     auto* apply = dialog->findChild<QPushButton*>("gradingOptimizationApply");
     auto* cancel = dialog->findChild<QPushButton*>("gradingOptimizationCancel");
     QVERIFY(groups && grounds && mode && target && status && preview && apply && cancel);
-    QCOMPARE(groups->count(), 1);
-    QCOMPARE(grounds->count(), 1);
+    QVERIFY2(groups->count() == 1 && grounds->count() == 1,
+             qPrintable(QString("groups=%1 grounds=%2 groundRev=%3 groupRev=%4 gpuRev=%5")
+                 .arg(groups->count()).arg(grounds->count()).arg(state.cadSurfaces[0].builtAtRevision)
+                 .arg(state.cadSurfaces[1].builtAtRevision).arg(state.cadGpuRevision)));
     auto standardStyle = std::find_if(state.surfaceStyles.begin(), state.surfaceStyles.end(),
         [](const SurfaceStyle& style) { return style.name == "Standard"; });
     if (standardStyle == state.surfaceStyles.end()) {

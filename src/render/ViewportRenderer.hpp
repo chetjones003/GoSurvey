@@ -203,7 +203,7 @@ public:
 
   /// Draw the grading solver's ghost and Z-translated candidate over the last model frame. The
   /// renderer caches immutable source lines in its own VAO/VBO until the token or view anchor changes.
-  void RenderTransientGradingPreview(const std::vector<float>& sourceLines, std::uint64_t previewToken,
+  void RenderTransientGradingPreview(const std::vector<double>& sourceLines, std::uint64_t previewToken,
                                      double elevationOffset, const RenderTuning& tuning);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }

@@ -3987,7 +3987,7 @@ void ViewportRenderer::InvalidatePartThumbnail(const std::string& key) {
   }
 }
 
-void ViewportRenderer::RenderTransientGradingPreview(const std::vector<float>& sourceLines,
+void ViewportRenderer::RenderTransientGradingPreview(const std::vector<double>& sourceLines,
                                                       std::uint64_t previewToken,
                                                       double elevationOffset,
                                                       const RenderTuning& tuning) {
