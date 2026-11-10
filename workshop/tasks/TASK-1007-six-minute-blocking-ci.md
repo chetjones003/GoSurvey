@@ -92,3 +92,15 @@ empty). The CS-MAP tests already had this dependency (`gosurvey_stage_csmap`). F
 `add_dependencies(GoSurveyTests gosurvey_stage_resources)` in `CMakeLists.txt`.
 Each fitting case passes after a GoSurveyTests-only build. The full-target job and
 the other shards passed in that run.
+
+### Qt shard balancing — 2026-11-10
+
+Measured Qt test time in run 42842150591: 967 s across 12 shards (59–112 s each),
+because shards were assigned round-robin by function index. `tests/qt-test-weights.json`
+records each function's measured seconds, and `tools/run-qt-test-shard.ps1` now assigns
+functions longest-first to the lightest shard. The simulated plan gives every shard
+about 80.6 s. Functions missing from the manifest use the default weight, so new tests
+still run. Duplicate review: a scan of `tests/QtEditorTests.cpp` found no test without an
+assertion, no screenshot file written by two tests, and no identical test bodies, so no
+tests were removed. Build-once binary sharing was not implemented: the runtime tree is
+about 1 GB, so uploading and downloading it would add to the critical path.

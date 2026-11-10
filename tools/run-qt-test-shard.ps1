@@ -20,10 +20,25 @@ if ($LASTEXITCODE -ne 0 -or $functions.Count -eq 0) {
   throw "Could not discover Qt test functions from $exePath."
 }
 
-$selected = @()
-for ($i = 0; $i -lt $functions.Count; ++$i) {
-  if (($i % $ShardCount) -eq $ShardIndex) { $selected += $functions[$i] }
+# Shards are balanced by measured duration (tests/qt-test-weights.json). Longest-processing-time-first:
+# the heaviest function goes to the currently lightest shard. Every shard computes the same plan
+# because the order is fixed (weight, then name), so each function lands in exactly one shard.
+$weightsPath = Join-Path $PSScriptRoot '..\tests\qt-test-weights.json'
+$manifest = Get-Content -LiteralPath $weightsPath -Raw | ConvertFrom-Json
+$defaultWeight = [double]$manifest.defaultSeconds
+$weightOf = @{}
+foreach ($entry in $manifest.weights.PSObject.Properties) { $weightOf[$entry.Name] = [double]$entry.Value }
+$weightFor = { param($name) if ($weightOf.ContainsKey($name)) { $weightOf[$name] } else { $defaultWeight } }
+$ranked = @($functions | Sort-Object @{ Expression = { & $weightFor $_ }; Descending = $true }, @{ Expression = { $_ } })
+$load = @(0.0) * $ShardCount
+$owner = @{}
+foreach ($fn in $ranked) {
+  $lightest = 0
+  for ($s = 1; $s -lt $ShardCount; ++$s) { if ($load[$s] -lt $load[$lightest]) { $lightest = $s } }
+  $load[$lightest] += (& $weightFor $fn)
+  $owner[$fn] = $lightest
 }
+$selected = @($functions | Where-Object { $owner[$_] -eq $ShardIndex })
 if ($selected.Count -eq 0) { throw "Qt test shard $ShardIndex has no test functions." }
 
 $shardName = "shard-$ShardIndex"
