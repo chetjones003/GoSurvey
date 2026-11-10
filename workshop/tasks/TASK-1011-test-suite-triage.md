@@ -272,3 +272,10 @@ the runner, the next run changes only CTest concurrency to 4. Qt shard count,
 coverage audit, tests, and blocking checks remain unchanged. Compare total CTest
 wall time and each shard's JUnit duration; do not infer a speedup from a
 different runner or a changed test set.
+
+The four-worker run on `c2b354d3` passed all blocking checks. With the same six
+Qt shards and full 360-case coverage, CTest wall time fell from 625s to 503s;
+the build-and-test job fell from 13m54s to 11m44s. Qt shard durations fell
+from 558–625s to 220–298s, and Catch2 shard durations fell from 161–209s to
+65–79s. The compile was 109s with 533/534 cache hits. A paired eight-worker
+run is now queued to confirm the concurrency effect on a warmed cache.
