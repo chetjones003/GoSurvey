@@ -10459,7 +10459,7 @@ private Q_SLOTS:
     group.tin = tin;
     group.gradingMembers.push_back({});
     group.gradingMembers[0].strips = std::make_shared<const std::vector<std::vector<double>>>(
-        std::vector<std::vector<double>>{{0, 0, 0, 10, 0, 0, 10, 10, 0}});
+        std::vector<std::vector<double>>{{0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0}});
     group.builtAtRevision = 1;
     state.cadSurfaces = {ground, group};
     state.cadSurfaceAttrs.resize(2);
@@ -10479,6 +10479,43 @@ private Q_SLOTS:
     QVERIFY(state.cadSurfaces[0].builtAtRevision != state.cadGpuRevision);
     QCOMPARE(state.userLinesFlat[2], 1.0);
     QCOMPARE(state.userLinesFlat[5], 1.0);
+  }
+
+  void gradingOptimizationRefusesMalformedNonInfillStripWithoutChanges() {
+    // REQ-522 #7: Apply refuses the same malformed non-infill strips that the group rebuild rejects.
+    AppCommandState state;
+    state.cadGpuRevision = 1;
+    CadSurface ground;
+    ground.name = "Ground";
+    auto groundTin = std::make_shared<CadTin>();
+    groundTin->vertsXyz = {0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0};
+    groundTin->indices = {0, 1, 2, 0, 2, 3};
+    ground.tin = groundTin;
+    ground.builtAtRevision = 1;
+    CadSurface group;
+    group.name = "Design";
+    group.gradingGroup = true;
+    auto groupTin = std::make_shared<CadTin>();
+    groupTin->vertsXyz = {0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0};
+    groupTin->indices = {0, 1, 2, 0, 2, 3};
+    group.tin = groupTin;
+    group.gradingMembers.push_back({});
+    group.gradingMembers[0].strips = std::make_shared<const std::vector<std::vector<double>>>(
+        std::vector<std::vector<double>>{{0, 0, 0, 10, 0, 0, 10, 10, 0}});
+    group.builtAtRevision = 1;
+    state.cadSurfaces = {ground, group};
+    state.cadSurfaceAttrs.resize(2);
+    state.cadSurfaceAttrs[0].id = 101;
+    state.cadSurfaceAttrs[1].id = 102;
+    SurfaceVolumeResult volumes;
+    volumes.overlapped = true;
+    volumes.commonAreaFt2 = 100;
+    std::vector<std::string> log;
+    const auto stripsBefore = state.cadSurfaces[1].gradingMembers[0].strips;
+    const auto tinBefore = state.cadSurfaces[1].tin;
+    QVERIFY(!ApplyGradingGroupElevationOffset(state, 102, 101, 1, 1.0, volumes, log));
+    QVERIFY(state.cadSurfaces[1].gradingMembers[0].strips == stripsBefore);
+    QVERIFY(state.cadSurfaces[1].tin == tinBefore);
   }
 
   void gradingOptimizationRibbonPreviewsAppliesAndUndoesSharedElevationOffset() {

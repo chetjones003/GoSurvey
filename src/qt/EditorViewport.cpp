@@ -590,7 +590,7 @@ void EditorViewport::ClearGradingOptimizationPreview() {
   if (!m_GradingPreviewActive)
     return;
   m_GradingPreviewActive = false;
-  m_GradingPreviewGhostLines.clear();
+  std::vector<float>().swap(m_GradingPreviewGhostLines);
   m_GradingPreviewOtherSurfaces = {};
   m_GradingPreviewOtherLineStorage.clear();
   m_GradingPreviewOtherBandStorage.clear();

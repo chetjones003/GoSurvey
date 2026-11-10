@@ -1047,7 +1047,7 @@ void ViewportRenderer::DestroyShader() {
     glDeleteVertexArrays(1, &vaoGradingPreview_);
     vaoGradingPreview_ = 0;
   }
-  gradingPreviewRelativeLines_.clear();
+  std::vector<float>().swap(gradingPreviewRelativeLines_);
   gradingPreviewToken_ = 0;
   gradingPreviewAnchorX_ = gradingPreviewAnchorY_ = std::numeric_limits<double>::quiet_NaN();
   gridProgram_ = 0;

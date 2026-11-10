@@ -620,7 +620,15 @@ TEST_CASE("Volume reports persist per drawing but are excluded from templates", 
   namespace fs = std::filesystem;
   AppCommandState source;
   source.hasLastVolumeResult = true;
-  source.lastVolumeResult = {12.5, 32.5, 20.0, 100.0, 25.0, 75.0, false};
+  SurfaceVolumeResult report;
+  report.cutFt3 = 12.5;
+  report.fillFt3 = 32.5;
+  report.netFt3 = 20.0;
+  report.commonAreaFt2 = 100.0;
+  report.cutAreaFt2 = 25.0;
+  report.fillAreaFt2 = 75.0;
+  report.overlapped = true;
+  source.lastVolumeResult = report;
   source.lastVolumeReportText = "Volume report: saved";
   source.lastVolumeBaseName = "Ground A";
   source.lastVolumeComparisonName = "Design A";
@@ -632,7 +640,7 @@ TEST_CASE("Volume reports persist per drawing but are excluded from templates", 
   CHECK(reopened.lastVolumeResult.cutFt3 == Approx(12.5));
   CHECK(reopened.lastVolumeResult.fillFt3 == Approx(32.5));
   CHECK(reopened.lastVolumeResult.netFt3 == Approx(20.0));
-  CHECK_FALSE(reopened.lastVolumeResult.overlapped);
+  CHECK(reopened.lastVolumeResult.overlapped);
   CHECK(reopened.lastVolumeReportText == source.lastVolumeReportText);
   CHECK(reopened.lastVolumeBaseName == source.lastVolumeBaseName);
   CHECK(reopened.lastVolumeComparisonName == source.lastVolumeComparisonName);

@@ -431,7 +431,7 @@ GradingOptimizationResult OptimizeGradingElevationOffset(
                                       : "Ground and grading group have no common area.";
     return result;
   }
-  constexpr double kTargetToleranceFt3 = 0.27; // 0.01 yd³, REQ-523.
+  constexpr double kTargetToleranceFt3 = 0.27; // 0.01 yd³, REQ-522.
   if (std::abs(atZero.netFt3 - targetNetFt3) <= kTargetToleranceFt3) {
     result.succeeded = true;
     result.message = "Target reached without changing elevation.";

@@ -235,7 +235,7 @@ void EditorWindow::ShowGradingOptimization() {
   poll->setInterval(25);
   auto* staleWatch = new QTimer(dialog);
   staleWatch->setInterval(100);
-  const auto invalidate = [session, preview, playback, viewport, applyButton, staleWatch]() {
+  const auto invalidate = [session, preview, playback, viewport, applyButton, staleWatch, status]() {
     session->CancelAndJoin();
     preview->ready = false;
     staleWatch->stop();
@@ -246,6 +246,7 @@ void EditorWindow::ShowGradingOptimization() {
     viewport->gradingPreviewFrameDrawn = {};
     viewport->ClearGradingOptimizationPreview();
     applyButton->setEnabled(false);
+    status->setText("Settings changed. Preview again to see the result for these settings.");
   };
   QObject::connect(group, qOverload<int>(&QComboBox::currentIndexChanged), dialog,
                    [invalidate](int) { invalidate(); });
@@ -328,7 +329,7 @@ void EditorWindow::ShowGradingOptimization() {
       playback->frameInFlight = false;
       ++playback->presentedEvaluations;
       const GradingOptimizationEvaluation& evaluation = playback->inFlightEvaluation;
-      status->setText(QString("Showing solver evaluation %1\nOffset: %2 drawing units   Net: %3 yd³")
+      status->setText(QString("Showing solver evaluation %1\nOffset: %2 ft   Net: %3 yd³")
                           .arg(evaluation.sequence)
                           .arg(evaluation.elevationOffset, 0, 'g', 9)
                           .arg(evaluation.volumes.netFt3 / 27.0, 0, 'f', 4));
@@ -430,7 +431,7 @@ void EditorWindow::ShowGradingOptimization() {
     preview->revision = revision;
     preview->offset = result.elevationOffset;
     preview->volumes = result.volumes;
-    status->setText(QString("Offset: %1 drawing units\nCut: %2 yd³   Fill: %3 yd³   Net: %4 yd³\nTarget error: %5 yd³   Iterations: %6")
+    status->setText(QString("Offset: %1 ft\nCut: %2 yd³   Fill: %3 yd³   Net: %4 yd³\nTarget error: %5 yd³   Iterations: %6")
                         .arg(result.elevationOffset, 0, 'g', 10)
                         .arg(result.volumes.cutFt3 / 27.0, 0, 'f', 4)
                         .arg(result.volumes.fillFt3 / 27.0, 0, 'f', 4)

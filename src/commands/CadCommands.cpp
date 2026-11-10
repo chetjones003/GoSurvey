@@ -27452,7 +27452,8 @@ bool ApplyGradingGroupElevationOffset(AppCommandState& st, std::uint64_t groupId
     if (!member.strips) return refuse("a grading member is missing its baked geometry.");
     auto strips = std::make_shared<std::vector<std::vector<double>>>(*member.strips);
     for (auto& strip : *strips) {
-      if (strip.size() < 9 || strip.size() % 3 != 0 ||
+      const bool stripShapeValid = member.infill ? (strip.size() >= 9 && strip.size() % 3 == 0) : strip.size() == 12;
+      if (!stripShapeValid ||
           !std::all_of(strip.begin(), strip.end(), [](double value) { return std::isfinite(value); }))
         return refuse("a grading member has invalid baked geometry.");
       for (size_t i = 2; i < strip.size(); i += 3) {
@@ -27487,8 +27488,11 @@ bool ApplyGradingGroupElevationOffset(AppCommandState& st, std::uint64_t groupId
   st.cadSurfaces[static_cast<size_t>(groupIndex)].builtAtRevision = st.cadGpuRevision;
   // Re-draping a group-linked entity can change a ground surface's inputs. Keep the ground
   // current only when its definition does not reference any entity that was re-draped.
-  if (!groundUsesDrapedEntity)
+  if (!groundUsesDrapedEntity) {
     st.cadSurfaces[static_cast<size_t>(groundIndex)].builtAtRevision = st.cadGpuRevision;
+  } else {
+    log.push_back("GRADINGOPTIMIZE - ground \"" + ground.name + "\" was left stale because its draped inputs moved; rebuild it.");
+  }
   RememberVolumeResult(st, volumes, ground.name, updated.name);
   MarkVolumeSurfacesDirtyForParent(st, updated.name);
   log.push_back("GRADINGOPTIMIZE - applied " + std::to_string(offset) +
