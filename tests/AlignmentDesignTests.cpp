@@ -536,3 +536,40 @@ TEST_CASE("Friction and clearance save and reload with the set; a drawing withou
   CHECK(plainJson.find("sideFriction") == std::string::npos);
   CHECK(plainJson.find("sightClearance") == std::string::npos);
 }
+
+TEST_CASE("A saved superelevation limit with no friction stays live at friction zero (REQ-522 AC7)", "[req522][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  MakeCurveOf(st, "1000", "30", log);
+  Submit(st, "ALIGNMENTCHECKSET NEW, Rural", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, SUPERELEVATION, 0.06", log);  // no FRICTION: a drawing from before REQ-522
+  Submit(st, "ALIGNMENTSPEED CR1, 0+00, 60", log);
+  Submit(st, "ALIGNMENTCRITERIA CR1, Rural", log);
+  AppCommandState back = Drawing();
+  std::vector<std::string> loadLog;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, SerializeGoSurveyJson(st), loadLog));
+  std::vector<std::string> backLog;
+  Submit(back, "ALIGNMENTCHECK CR1", backLog);
+  // 88^2 / (32.174 * 1000) = 0.2407 with no friction, against the stored maximum of 0.0600.
+  CHECK(LogHas(backLog, "Required superelevation 0.2407 exceeds the maximum of 0.0600 at design speed 60 mph with side friction 0.0000."));
+}
+
+TEST_CASE("A negative friction in a saved file is not loaded and reads as zero (REQ-522 item 8)", "[req522][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENTCHECKSET NEW, Rural", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, FRICTION, 0.10", log);
+  std::string json = SerializeGoSurveyJson(st);
+  const std::string key = "\"sideFriction\"";
+  const size_t at = json.find(key);
+  REQUIRE(at != std::string::npos);
+  size_t valueAt = json.find(':', at) + 1;
+  while (valueAt < json.size() && json[valueAt] == ' ') ++valueAt;
+  const size_t end = json.find_first_of(",}", valueAt);
+  json.replace(valueAt, end - valueAt, "-0.1");
+  AppCommandState loaded = Drawing();
+  std::vector<std::string> loadedLog;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(loaded, json, loadedLog));
+  REQUIRE(loaded.alignmentCheckSets.size() == 1);
+  CHECK(loaded.alignmentCheckSets[0].sideFriction == 0.0);
+}

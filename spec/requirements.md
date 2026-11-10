@@ -17588,8 +17588,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
      When off, it says why: `Superelevation: not checked (no maximum rate).`, `Sight distance: not checked (no minimum
      sight distance or no clearance).`
   8. **Persistence.** `FRICTION` and `CLEARANCE` save and load with the check set, as the other values do. A zero value
-     is omitted from the saved file, so an existing drawing saves exactly as before, and a file without the values loads
-     with them off.
+     is omitted from the saved file, so an existing drawing saves exactly as before. A file without the values loads
+     them as zero. A negative value in a file is not loaded (it is read as zero), so the load does not fail and the
+     set never holds a value SET would refuse.
   9. **Undo.** Each `ALIGNMENTCHECKSET SET` that changes a value undoes in one step (REQ-502).
   10. **Out of scope** (recorded so they are not silently added): spiral and compound-spiral superelevation runoff and
      runoff length; regional or AASHTO tables; speed-dependent sight-distance minimums (one minimum per set); the modified
@@ -17607,8 +17608,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. A curve whose span holds two design speeds is checked at the higher one. A curve with no design speed is not checked.
   5. Only circular curves are checked: tangents and spirals produce no superelevation or sight finding.
   6. Negative `FRICTION` or `CLEARANCE` is refused, and the set is unchanged.
-  7. Saving and loading the drawing keeps the four values and the findings; a drawing saved without the new values loads
-     with the checks off.
+  7. Saving and loading the drawing keeps the four values and the findings. A drawing saved with no `FRICTION` and no
+     `CLEARANCE` loads them as zero. A drawing saved before this REQ with a user-set `SUPERELEVATION` or `SIGHT` keeps
+     that limit live (the value was set on purpose through SET, so it is not dropped): its superelevation check runs at
+     friction zero, which the report states, and its sight check stays off until a clearance is set.
   8. The layout criteria column, `ALIGNMENTLIST` and `ALIGNMENTREPORT` show the findings and assumptions of acceptance 1,
      2 and 3. The REQ-502 test that asserted the stub text is updated to the new text, and no other REQ-502 test changes.
 - Owner-layer: Alignment (Domain), Commands, IO. No Qt control changes (the criteria column is the existing text field),

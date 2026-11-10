@@ -1184,10 +1184,14 @@ bool CheckSetFromJson(const json& o, alignment::AlignmentCheckSet* s) {
   number("minA", &r.minA);
   number("maxA", &r.maxA);
   number("maxSuperelevation", &r.maxSuperelevation);
-  number("sideFriction", &r.sideFriction);
+  // REQ-522 item 8: a negative friction or clearance is not loaded (read as zero, the value not set), as SET refuses it.
+  const auto nonNegative = [&](const char* key, double* v) {
+    if (o.contains(key) && o[key].is_number() && o[key].get<double>() >= 0.0) *v = o[key].get<double>();
+  };
+  nonNegative("sideFriction", &r.sideFriction);
   number("minLineLength", &r.minLineLength);
   number("minSightDistance", &r.minSightDistance);
-  number("sightClearance", &r.sightClearance);
+  nonNegative("sightClearance", &r.sightClearance);
   number("maxTangentDeflection", &r.maxTangentDeflection);
   *s = std::move(r);
   return true;
