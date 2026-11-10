@@ -115,3 +115,17 @@ most cache hits were treated as misses and recompiled. The change replaces the p
 backend with a local `SCCACHE_DIR` that is restored from one `actions/cache` archive and
 saved by the full-target build only. Test workers restore the newest archive, so their
 compiles use cached objects without per-object requests.
+
+### Six-minute result — 2026-11-10
+
+Warm-cache runs of commit `bac6e26` (run 42854945049):
+
+| Attempt | Start → end | Duration | Notes |
+| --- | --- | --- | --- |
+| 1 (cold cache) | 16:28:53 → 16:59:45 | 30m52s | No archive yet; build 29m, 535 misses, 0 hits |
+| 2 (warm) | 17:03:30 → 17:10:29 | 6m59s | Build 535/535 hits; `qt-05` started 2.5 min after the run (runner queue) |
+| 3 (warm) | 19:00:31 → 19:06:25 | 5m54s | All jobs started within 16 s of the run; build 535/535 hits |
+
+Attempt 3 is under six minutes. The attempt 2 gap was runner queue delay, not compile
+or test time. Per-worker compile is now about 1 minute (was about 3.7), and the
+`qt-05` shard runs about 4m15s end to end.
