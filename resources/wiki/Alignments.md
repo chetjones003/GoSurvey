@@ -115,7 +115,10 @@ offset and a curve's radius are always exact.
 - Road sets apply to centreline, offset and curb-return alignments. Rail sets apply only to rail alignments. Miscellaneous alignments take no criteria.
 - GoSurvey does not ship a regional standard. The numbers are the ones you enter.
 - A set can also limit the deflection at a corner between two tangents that has no curve (`MAXDEFLECTION`), and can be saved to or loaded from a criteria file (`ALIGNMENTCHECKSET SAVE` / `LOAD`).
-- Not yet built: superelevation and sight-distance checks, and a check of a compound spiral's length.
+- **Superelevation** (`SUPERELEVATION`, a maximum rate such as 0.06 for 6 %, and `FRICTION`, the side friction factor, default 0): each circular curve needs e = V² / (gR) − f, with V the design speed in mph (the highest across the curve) and g = 32.174 ft/s². A curve whose required rate is above the maximum is reported. Off when the maximum is 0.
+- **Sight distance** (`SIGHT`, the minimum in feet, and `CLEARANCE`, the lateral distance in feet from the inside lane centreline to an obstruction): a circular curve counts the sight distance 2R·acos(1 − m / R), capped at the curve's own length, so sight beyond the curve is not counted. Off unless both values are above 0.
+- The report states the maximum rate, the friction, the clearance and the minimum used, or says why a check is off.
+- Not yet built: a superelevation runoff (the spiral transition) or a check of a compound spiral's length, and the ribbon's Superelevation and Sight Distance buttons, which are still disabled.
 
 ## View frames
 

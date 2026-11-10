@@ -18,6 +18,9 @@ std::string Folded(std::string s) {
 
 std::string Lin(int precision, double v) { return FormatLinear(v, precision) + "'"; }
 
+constexpr double kGravityFtPerS2 = 32.174;              // REQ-522: g in feet per second squared.
+constexpr double kFtPerSecondPerMph = 5280.0 / 3600.0;  // REQ-522: miles per hour to feet per second.
+
 /// The shared "stations at or before" rule: the last design speed whose station is not after `s`.
 const DesignSpeed* LastSpeedAtOrBefore(const Alignment& a, double s) {
   const DesignSpeed* found = nullptr;
@@ -79,6 +82,26 @@ bool CriteriaAllowed(AlignmentType type, CheckSetKind kind, std::string* whyNot)
   return true;
 }
 
+namespace {
+/// Rounds to `decimals` places, so a comparison agrees with the number the finding prints (REQ-522 item 5).
+double RoundTo(double v, int decimals) {
+  const double scale = std::pow(10.0, decimals);
+  return std::round(v * scale) / scale;
+}
+}  // namespace
+
+double RequiredSuperelevation(double speedMph, double radius, double sideFriction) {
+  if (radius <= 0.0) return 0.0;
+  const double v = speedMph * kFtPerSecondPerMph;
+  return v * v / (kGravityFtPerS2 * radius) - sideFriction;
+}
+
+double AvailableSightDistance(double radius, double arcLength, double clearance) {
+  if (radius <= 0.0) return 0.0;
+  const double m = std::clamp(clearance, 0.0, radius);
+  return std::min(2.0 * radius * std::acos(1.0 - m / radius), arcLength);
+}
+
 std::vector<DesignFinding> CheckDesign(const Alignment& a, const AlignmentCheckSet& set, int linearPrecision) {
   std::vector<DesignFinding> out;
   const int n = static_cast<int>(a.Entities().size());
@@ -91,6 +114,29 @@ std::vector<DesignFinding> CheckDesign(const Alignment& a, const AlignmentCheckS
         if (required > 0.0 && e.radius < required - 1e-9) {
           out.push_back({number, "Curve radius " + Lin(linearPrecision, e.radius) +
                                      " is below the selected minimum design radius of " + Lin(linearPrecision, required) + "."});
+        }
+      }
+      // REQ-522: superelevation at the curve's highest design speed in its span. Off when the maximum rate is zero.
+      const double speed = DesignSpeedOverEntity(a, i);
+      if (set.maxSuperelevation > 0.0 && speed > 0.0 && e.radius > 0.0) {
+        const double required = RoundTo(RequiredSuperelevation(speed, e.radius, set.sideFriction), 4);
+        const double maximum = RoundTo(set.maxSuperelevation, 4);
+        if (required > maximum + 1e-9) {
+          std::array<char, 160> text{};
+          std::snprintf(text.data(), text.size(),
+                        "Required superelevation %.4f exceeds the maximum of %.4f at design speed %g mph with side friction %.4f.",
+                        required, maximum, speed, set.sideFriction);
+          out.push_back({number, text.data()});
+        }
+      }
+      // REQ-522: sight distance on the curve. Off unless both the minimum and the clearance are above zero.
+      if (set.minSightDistance > 0.0 && set.sightClearance > 0.0) {
+        const double seen = RoundTo(AvailableSightDistance(e.radius, e.length, set.sightClearance), linearPrecision);
+        const double minimum = RoundTo(set.minSightDistance, linearPrecision);
+        if (seen < minimum - 1e-9) {
+          out.push_back({number, "Sight distance " + Lin(linearPrecision, seen) + " is below the minimum of " +
+                                     Lin(linearPrecision, minimum) + " with a sight clearance of " +
+                                     Lin(linearPrecision, set.sightClearance) + "."});
         }
       }
     } else if (e.kind == EntityKind::Line) {
@@ -147,7 +193,17 @@ std::string CriteriaRequirementText(const Alignment& a, const AlignmentCheckSet&
   const auto atLeast = [&](const char* what, double v) { return std::string(what) + " \xE2\x89\xA5 " + Lin(linearPrecision, v); };
   if (e.kind == EntityKind::Arc) {
     const double required = set.radiusTable.empty() ? -1.0 : MinRadiusForSpeed(set, DesignSpeedOverEntity(a, i));
-    return required > 0.0 ? atLeast("R", required) : std::string{};
+    std::string text = required > 0.0 ? atLeast("R", required) : std::string{};
+    // REQ-522: the same two limits CheckDesign applies to a curve.
+    if (set.maxSuperelevation > 0.0 && DesignSpeedOverEntity(a, i) > 0.0) {
+      std::array<char, 32> rate{};
+      std::snprintf(rate.data(), rate.size(), "%.4f", set.maxSuperelevation);
+      text += (text.empty() ? "" : ", ") + std::string("e \xE2\x89\xA4 ") + rate.data();
+    }
+    if (set.minSightDistance > 0.0 && set.sightClearance > 0.0) {
+      text += (text.empty() ? "" : ", ") + atLeast("S", set.minSightDistance);
+    }
+    return text;
   }
   if (e.kind == EntityKind::Line) {
     // The same two limits CheckDesign applies: every line, and a tangent between two curves.
