@@ -103,6 +103,12 @@ runs:
     - name: Set up sccache
       uses: mozilla-actions/sccache-action@v0.0.11
 
+    - name: Capture sccache write errors
+      shell: pwsh
+      run: |
+        "SCCACHE_LOG=sccache=warn" | Add-Content $env:GITHUB_ENV
+        "SCCACHE_ERROR_LOG=$env:RUNNER_TEMP\sccache-error.log" | Add-Content $env:GITHUB_ENV
+
     - name: Register MSVC /analyze problem matcher
       shell: pwsh
       run: echo "::add-matcher::.github/msvc-analyze-matcher.json"
@@ -162,6 +168,19 @@ runs:
           cmake --build --preset ninja-release --parallel $workers --target $targets
         }
         if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
+
+    - name: Report sccache write errors
+      if: always()
+      shell: pwsh
+      run: |
+        $log = Join-Path $env:RUNNER_TEMP 'sccache-error.log'
+        if (Test-Path $log) {
+          $lines = @(Get-Content $log)
+          Write-Host "sccache error log: $($lines.Count) lines; showing matches for write/error:"
+          $lines | Select-String -Pattern 'write|error|fail' | Select-Object -First 40 | ForEach-Object { Write-Host $_.Line }
+        } else {
+          Write-Host 'sccache error log was not written.'
+        }
 
     - name: Stage Mesa runtime dependencies for tests
       if: inputs.run-tests == 'true' && inputs.prepare-qt-tests == 'true'
