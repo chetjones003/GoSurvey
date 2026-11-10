@@ -1115,6 +1115,7 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-445 PDF plot Page Setup options: pure sheet placement rules and the measured PDF output.
     tests/PlotSheetTests.cpp
     tests/CadFontNameTests.cpp
+    tests/CutClipboardTests.cpp
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
     tests/MtextTextOpsTests.cpp

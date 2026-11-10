@@ -274,8 +274,28 @@ wall time and each shard's JUnit duration; do not infer a speedup from a
 different runner or a changed test set.
 
 The four-worker run on `c2b354d3` passed all blocking checks. With the same six
-Qt shards and full 360-case coverage, CTest wall time fell from 625s to 503s;
-the build-and-test job fell from 13m54s to 11m44s. Qt shard durations fell
-from 558–625s to 220–298s, and Catch2 shard durations fell from 161–209s to
-65–79s. The compile was 109s with 533/534 cache hits. A paired eight-worker
-run is now queued to confirm the concurrency effect on a warmed cache.
+Qt shards and full 360-case coverage, CTest wall time was 503s and the
+build-and-test job took 11m44s. Qt shard durations were 220–298s and Catch2
+shards 65–79s. The compile took 109s with 533/534 cache hits. The paired
+eight-worker run on `22bc2693` also passed all checks: CTest wall time was 468s,
+the job took 10m58s, Qt shards 411–468s, and Catch2 shards 125–154s. The
+eight-worker run completed the full suite 35s sooner; the four-worker run had
+less per-process contention, but sequential waves increased wall time. The
+previous eight-worker run on `556f16b8` took 625s in CTest, showing substantial
+run-to-run variation. Keep eight workers pending more controlled repeated
+measurements; do not claim the concurrency adjustment meets the six-minute goal.
+
+### Safe Qt-suite reduction: Issue #805 refusal matrix
+
+The Qt case `cutRefusesEveryTypeTheClipboardCannotCarry` performed no GUI
+interaction. It called `CutSelectionToClipboard` directly for eight unsupported
+entity types, but constructed and initialized a fresh `EditorWindow` for every
+type. Moved the same eight inputs and four assertions per input to the Catch2
+domain suite, where `AppCommandState` is constructed directly. This preserves
+all behavior checks while avoiding eight irrelevant UI startups in a Qt shard.
+
+Local Release build succeeded. Full CTest passed **194/194 in 196.62s** at
+parallelism 8; the coverage audit passed with **3,190 Catch2 cases / 2 shards**
+and **359 Qt functions / 6 shards**, each assigned once. Hosted runtime impact
+is pending; the prior CI run measured this one Qt case at 44.6s, but the saved
+wall time depends on shard critical-path balance.
