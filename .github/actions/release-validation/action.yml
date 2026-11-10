@@ -37,6 +37,18 @@ inputs:
     description: Optional CTest test-name regex to exclude.
     required: false
     default: ''
+  build-targets:
+    description: Comma-separated CMake targets to build, or all.
+    required: false
+    default: 'all'
+  run-tests:
+    description: Whether to stage test runtimes and run CTest.
+    required: false
+    default: 'true'
+  prepare-qt-tests:
+    description: Whether to stage Mesa and prepare the hidden Qt display.
+    required: false
+    default: 'true'
 runs:
   using: composite
   steps:
@@ -47,6 +59,7 @@ runs:
       uses: ./.github/actions/setup-qt
 
     - name: Set up Mesa OpenGL for hosted tests
+      if: inputs.run-tests == 'true' && inputs.prepare-qt-tests == 'true'
       shell: pwsh
       run: |
         $version = '26.2.4'
@@ -111,6 +124,8 @@ runs:
         }
         $requestedCatchShards = '${{ inputs.catch-test-shards }}'
         if ($requestedCatchShards -notmatch '^[1-9][0-9]*$' -or [int]$requestedCatchShards -gt 16) { throw 'catch-test-shards must be an integer from 1 to 16.' }
+        if ('${{ inputs.run-tests }}' -notin @('true', 'false')) { throw 'run-tests must be true or false.' }
+        if ('${{ inputs.prepare-qt-tests }}' -notin @('true', 'false')) { throw 'prepare-qt-tests must be true or false.' }
         $testParallel = [Math]::Min(16, [Math]::Max(8, $logicalProcessors))
         $requestedTestParallel = '${{ inputs.test-parallel }}'
         if ($requestedTestParallel -ne 'auto') {
@@ -135,10 +150,21 @@ runs:
       shell: pwsh
       run: |
         $workers = [Math]::Min(16, [Environment]::ProcessorCount)
-        cmake --build --preset ninja-release --parallel $workers
+        $requestedTargets = '${{ inputs.build-targets }}'
+        if ($requestedTargets -eq 'all') {
+          cmake --build --preset ninja-release --parallel $workers
+        } else {
+          $targets = @($requestedTargets.Split(',') | ForEach-Object { $_.Trim() })
+          $allowedTargets = @('GoSurveyQtTests', 'GoSurveyTests', 'gosurvey_headless')
+          if ($targets.Count -eq 0 -or @($targets | Where-Object { $_ -notin $allowedTargets }).Count -gt 0) {
+            throw 'build-targets must be all or a comma-separated list of GoSurveyQtTests, GoSurveyTests, and gosurvey_headless.'
+          }
+          cmake --build --preset ninja-release --parallel $workers --target $targets
+        }
         if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
 
     - name: Stage Mesa runtime dependencies for tests
+      if: inputs.run-tests == 'true' && inputs.prepare-qt-tests == 'true'
       shell: pwsh
       run: |
         $runtime = Join-Path $env:GITHUB_WORKSPACE 'build'
@@ -158,10 +184,12 @@ runs:
         }
 
     - name: Prepare hosted display for Qt tests
+      if: inputs.run-tests == 'true' && inputs.prepare-qt-tests == 'true'
       shell: pwsh
       run: ./tools/prepare-qt-test-display.ps1
 
-    - name: Run full Release CTest suite
+    - name: Run selected Release CTest suite
+      if: inputs.run-tests == 'true'
       shell: pwsh
       env:
         QT_OPENGL: desktop
@@ -183,7 +211,7 @@ runs:
         if ($LASTEXITCODE -ne 0) { throw 'CTest failed.' }
 
     - name: Restore Qt OpenGL runtime files
-      if: always()
+      if: always() && inputs.run-tests == 'true' && inputs.prepare-qt-tests == 'true'
       shell: pwsh
       run: |
         $runtime = Join-Path $env:GITHUB_WORKSPACE 'build'

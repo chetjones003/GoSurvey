@@ -60,3 +60,24 @@ build passed. A registration partition check generated the new 12/4 shard names
 from CTest's existing registrations and confirmed all 202 registrations map to
 exactly one matrix member (186 integration registrations). Hosted wall-time
 and full evidence merge remain pending the first PR run.
+
+### First hosted timing trial — 2026-11-10
+
+Run 42829944444 passed: 3,190 Catch2 cases across 4 shards and 359 Qt functions
+across 12 shards; every registration and the exact-coverage aggregate passed.
+It did not meet the six-minute objective. Workflow elapsed time was 9m23s; the
+slowest Windows shard took 8m53s. Representative Ninja traces were 286–319s,
+with 85.8–91.0% cache hits. Individual Qt shards took 76–93s; the integration
+worker's CTest registrations took 119s. The main avoidable cost is rebuilding
+all 553 Ninja commands on every test worker, with parallel sccache writers
+reporting 47–75 cache-write errors.
+
+Follow-up: run one blocking full-target build in parallel with the test matrix.
+Each test worker builds only the target(s) its selected registrations execute:
+`GoSurveyQtTests`, `GoSurveyTests`, or `GoSurveyQtTests` plus
+`gosurvey_headless`. All 202 CTest registrations remain in the matrix exactly
+once; the separate full-target job is also required by the aggregate gate.
+`full / build and test` waits for both that full build and every test worker,
+then runs the same coverage audit. Actionlint, YAML/action input validation,
+diff checks, and the 202-registration partition check pass for this second
+iteration. Hosted timing and cache evidence for this split remain pending.

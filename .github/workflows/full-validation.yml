@@ -104,39 +104,56 @@ jobs:
         include:
           - name: qt-00
             regex: '^qt[.]editor[.]shard-0$'
+            targets: GoSurveyQtTests
           - name: qt-01
             regex: '^qt[.]editor[.]shard-1$'
+            targets: GoSurveyQtTests
           - name: qt-02
             regex: '^qt[.]editor[.]shard-2$'
+            targets: GoSurveyQtTests
           - name: qt-03
             regex: '^qt[.]editor[.]shard-3$'
+            targets: GoSurveyQtTests
           - name: qt-04
             regex: '^qt[.]editor[.]shard-4$'
+            targets: GoSurveyQtTests
           - name: qt-05
             regex: '^qt[.]editor[.]shard-5$'
+            targets: GoSurveyQtTests
           - name: qt-06
             regex: '^qt[.]editor[.]shard-6$'
+            targets: GoSurveyQtTests
           - name: qt-07
             regex: '^qt[.]editor[.]shard-7$'
+            targets: GoSurveyQtTests
           - name: qt-08
             regex: '^qt[.]editor[.]shard-8$'
+            targets: GoSurveyQtTests
           - name: qt-09
             regex: '^qt[.]editor[.]shard-9$'
+            targets: GoSurveyQtTests
           - name: qt-10
             regex: '^qt[.]editor[.]shard-10$'
+            targets: GoSurveyQtTests
           - name: qt-11
             regex: '^qt[.]editor[.]shard-11$'
+            targets: GoSurveyQtTests
           - name: catch-00
             regex: '^unit[.]catch[.]shard-0$'
+            targets: GoSurveyTests
           - name: catch-01
             regex: '^unit[.]catch[.]shard-1$'
+            targets: GoSurveyTests
           - name: catch-02
             regex: '^unit[.]catch[.]shard-2$'
+            targets: GoSurveyTests
           - name: catch-03
             regex: '^unit[.]catch[.]shard-3$'
+            targets: GoSurveyTests
           - name: integration
             regex: ''
             exclude: '^(qt[.]editor[.]shard-|unit[.]catch[.]shard-)'
+            targets: GoSurveyQtTests,gosurvey_headless
     env:
       SCCACHE_GHA_ENABLED: "true"
     steps:
@@ -162,6 +179,8 @@ jobs:
           catch-test-shards: '4'
           ctest-regex: ${{ matrix.regex }}
           ctest-exclude: ${{ matrix.exclude || '' }}
+          build-targets: ${{ matrix.targets }}
+          prepare-qt-tests: ${{ !startsWith(matrix.name, 'catch-') }}
 
       - name: Summarize CI performance
         if: always()
@@ -197,10 +216,58 @@ jobs:
             build/artifacts/catch/
             build/artifacts/qt-editor/
 
+  # Keep the complete target build blocking, but perform it once in parallel with the test workers.
+  build-all-targets:
+    defaults:
+      run:
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+    name: full / build all targets
+    needs: classify-docs-only
+    if: >-
+      always() &&
+      (needs.classify-docs-only.result != 'success' ||
+       needs.classify-docs-only.outputs.docs_only != 'true')
+    runs-on: ${{ vars.GOSURVEY_FULL_VALIDATION_RUNNER || 'windows-latest' }}
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build every Release target
+        uses: ./.github/actions/release-validation
+        with:
+          version-suffix: ''
+          version-build: '0'
+          beta-version: ''
+          test-parallel: '1'
+          qt-test-shards: '12'
+          catch-test-shards: '4'
+          build-targets: all
+          run-tests: 'false'
+
+      - name: Summarize CI performance
+        if: always()
+        run: python .github/scripts/report_ci_performance.py --build-dir build/.cmake/release --output-dir build/artifacts/ci --sccache
+
+      - name: Upload build performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence-build-all-${{ github.run_attempt }}
+          retention-days: 7
+          include-hidden-files: true
+          path: |
+            build/artifacts/ci/
+            build/.cmake/release/.ninja_log
+
   # Retain the branch-protection context while making every individual test/build failure blocking.
   build-and-test:
     name: full / build and test
-    needs: [classify-docs-only, test-shards]
+    needs: [classify-docs-only, test-shards, build-all-targets]
     if: >-
       always() &&
       (needs.classify-docs-only.result != 'success' ||
@@ -216,9 +283,10 @@ jobs:
       - name: Confirm every build and test shard passed
         env:
           SHARD_RESULT: ${{ needs.test-shards.result }}
+          BUILD_RESULT: ${{ needs.build-all-targets.result }}
         run: |
-          if [ "$SHARD_RESULT" != "success" ]; then
-            echo "Build/test matrix result: $SHARD_RESULT" >&2
+          if [ "$SHARD_RESULT" != "success" ] || [ "$BUILD_RESULT" != "success" ]; then
+            echo "Build result: $BUILD_RESULT; test matrix result: $SHARD_RESULT" >&2
             exit 1
           fi
 
