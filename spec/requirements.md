@@ -17557,7 +17557,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   1. **Criteria are user-supplied.** A check set holds the REQ-502 values `SUPERELEVATION` (maximum superelevation rate)
      and `SIGHT` (minimum sight distance), and two new values: `FRICTION` (side friction factor, default 0) and
      `CLEARANCE` (lateral sight clearance, default 0). All four are entered with `ALIGNMENTCHECKSET SET`. A negative
-     value is refused with the usage text and leaves the set unchanged. GoSurvey ships no superelevation, friction or
+     value is refused with the same "takes one value, zero or more" message as the other SET values and leaves the set unchanged. GoSurvey ships no superelevation, friction or
      sight value as a default and no regional table (REQ-502). Units: superelevation rate and friction factor are
      dimensionless (0.06 = 6 %); design speed is in miles per hour; distances are in drawing linear units (feet).
   2. **Circular curves only.** Both checks apply to each circular curve (an Arc entity). Tangents, spirals and compound
@@ -17583,7 +17583,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   6. **Criteria column.** The layout table's criteria column shows, for a curve, `e ≤ <e_max>` when the superelevation
      check is on and the curve has a design speed, and `S ≥ <S_min>` when the sight check is on.
   7. **Report.** The two REQ-502 stub lines are replaced by one line per check. When on, the line gives the limit and
-     the assumption used (`Superelevation: maximum 0.0600, side friction 0.1000, circular curves only.` and
+     the assumption used (`Superelevation: maximum 0.0600, side friction 0.1000, circular curves only; a curve with no design speed is not checked.` and
      `Sight distance: minimum 500.00', clearance 25.00', circular curves only, sight beyond the curve not counted.`).
      When off, it says why: `Superelevation: not checked (no maximum rate).`, `Sight distance: not checked (no minimum
      sight distance or no clearance).`

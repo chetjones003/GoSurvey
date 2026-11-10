@@ -200,7 +200,7 @@ TEST_CASE("ALIGNMENTLIST warns about design failures and the report shows the ch
 
   log.clear();
   Submit(st, "ALIGNMENTREPORT CR1", log);
-  CHECK(LogHas(log, "Superelevation: maximum 0.0600, side friction 0.0000, circular curves only."));
+  CHECK(LogHas(log, "Superelevation: maximum 0.0600, side friction 0.0000, circular curves only; a curve with no design speed is not checked."));
   CHECK(LogHas(log, "Sight distance: not checked (no minimum sight distance or no clearance)."));
 
   REQUIRE(st.alignmentCheckSets.size() == 1);
@@ -323,6 +323,76 @@ TEST_CASE("Superelevation is required e = V^2/(gR) - f and fails above the maxim
   log.clear();
   Submit(st, "ALIGNMENTCHECK CR1", log);
   CHECK_FALSE(LogHas(log, "Required superelevation"));
+
+  // A required rate of 0.140707 displays as 0.1407, so a maximum of 0.1407 passes (display rounding, REQ-522 AC1).
+  CHECK(std::fabs(alignment::RequiredSuperelevation(60.0, 999.9, 0.10) - 0.140707) < 1e-5);
+  AppCommandState rounded = Drawing();
+  std::vector<std::string> roundedLog;
+  MakeCurveOf(rounded, "999.9", "30", roundedLog);
+  Submit(rounded, "ALIGNMENTCHECKSET NEW, Rural", roundedLog);
+  Submit(rounded, "ALIGNMENTCHECKSET SET, Rural, SUPERELEVATION, 0.1407", roundedLog);
+  Submit(rounded, "ALIGNMENTCHECKSET SET, Rural, FRICTION, 0.10", roundedLog);
+  Submit(rounded, "ALIGNMENTSPEED CR1, 0+00, 60", roundedLog);
+  Submit(rounded, "ALIGNMENTCRITERIA CR1, Rural", roundedLog);
+  roundedLog.clear();
+  Submit(rounded, "ALIGNMENTCHECK CR1", roundedLog);
+  CHECK_FALSE(LogHas(roundedLog, "Required superelevation"));
+}
+
+TEST_CASE("Tangents and spirals are never checked for superelevation or sight distance (REQ-522 AC5)", "[req522][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  MakeCurveOf(st, "500", "90", log);
+  Submit(st, "ALIGNMENTCHECKSET NEW, Rural", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, SUPERELEVATION, 0.01", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, SIGHT, 5000", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, CLEARANCE, 25", log);
+  Submit(st, "ALIGNMENTSPEED CR1, 0+00, 80", log);
+  Submit(st, "ALIGNMENTCRITERIA CR1, Rural", log);
+  log.clear();
+  Submit(st, "ALIGNMENTCHECK CR1", log);
+  // The tangent (entity 1) breaks neither limit; only the curve (entity 2) is reported.
+  CHECK(LogHas(log, "Entity 2: Required superelevation"));
+  CHECK(LogHas(log, "Entity 2: Sight distance"));
+  CHECK_FALSE(LogHas(log, "Entity 1:"));
+}
+
+TEST_CASE("The REQ-522 findings reach LIST and the report, and a reloaded drawing gives the same findings (REQ-522 AC7, AC8)",
+          "[req522][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  MakeCurveOf(st, "1000", "30", log);
+  Submit(st, "ALIGNMENTCHECKSET NEW, Rural", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, SUPERELEVATION, 0.06", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, FRICTION, 0.10", log);
+  Submit(st, "ALIGNMENTSPEED CR1, 0+00, 60", log);
+  Submit(st, "ALIGNMENTCRITERIA CR1, Rural", log);
+  log.clear();
+  Submit(st, "ALIGNMENTLIST CR1", log);
+  CHECK(LogHas(log, "Required superelevation 0.1407 exceeds the maximum of 0.0600"));
+  log.clear();
+  Submit(st, "ALIGNMENTREPORT CR1", log);
+  CHECK(LogHas(log, "Required superelevation 0.1407 exceeds the maximum of 0.0600"));
+
+  const std::string json = SerializeGoSurveyJson(st);
+  AppCommandState back = Drawing();
+  std::vector<std::string> loadLog;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, json, loadLog));
+  std::vector<std::string> backLog;
+  Submit(back, "ALIGNMENTCHECK CR1", backLog);
+  CHECK(LogHas(backLog, "Required superelevation 0.1407 exceeds the maximum of 0.0600"));
+
+  // A drawing that never set the new values saves without their keys, as a file from before REQ-522 does: the checks load off.
+  AppCommandState legacy = Drawing();
+  std::vector<std::string> legacyLog;
+  Submit(legacy, "ALIGNMENTCHECKSET NEW, Plain", legacyLog);
+  const std::string legacyJson = SerializeGoSurveyJson(legacy);
+  AppCommandState legacyBack = Drawing();
+  std::vector<std::string> legacyLoadLog;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(legacyBack, legacyJson, legacyLoadLog));
+  REQUIRE(legacyBack.alignmentCheckSets.size() == 1);
+  CHECK(legacyBack.alignmentCheckSets[0].sideFriction == 0.0);
+  CHECK(legacyBack.alignmentCheckSets[0].sightClearance == 0.0);
 }
 
 TEST_CASE("Superelevation uses the highest design speed across the curve and is off with no maximum (REQ-522 AC4)",

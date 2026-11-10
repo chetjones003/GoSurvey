@@ -82,6 +82,14 @@ bool CriteriaAllowed(AlignmentType type, CheckSetKind kind, std::string* whyNot)
   return true;
 }
 
+namespace {
+/// Rounds to `decimals` places, so a comparison agrees with the number the finding prints (REQ-522 item 5).
+double RoundTo(double v, int decimals) {
+  const double scale = std::pow(10.0, decimals);
+  return std::round(v * scale) / scale;
+}
+}  // namespace
+
 double RequiredSuperelevation(double speedMph, double radius, double sideFriction) {
   if (radius <= 0.0) return 0.0;
   const double v = speedMph * kFtPerSecondPerMph;
@@ -111,21 +119,23 @@ std::vector<DesignFinding> CheckDesign(const Alignment& a, const AlignmentCheckS
       // REQ-522: superelevation at the curve's highest design speed in its span. Off when the maximum rate is zero.
       const double speed = DesignSpeedOverEntity(a, i);
       if (set.maxSuperelevation > 0.0 && speed > 0.0 && e.radius > 0.0) {
-        const double required = RequiredSuperelevation(speed, e.radius, set.sideFriction);
-        if (required > set.maxSuperelevation + 1e-9) {
+        const double required = RoundTo(RequiredSuperelevation(speed, e.radius, set.sideFriction), 4);
+        const double maximum = RoundTo(set.maxSuperelevation, 4);
+        if (required > maximum + 1e-9) {
           std::array<char, 160> text{};
           std::snprintf(text.data(), text.size(),
                         "Required superelevation %.4f exceeds the maximum of %.4f at design speed %g mph with side friction %.4f.",
-                        required, set.maxSuperelevation, speed, set.sideFriction);
+                        required, maximum, speed, set.sideFriction);
           out.push_back({number, text.data()});
         }
       }
       // REQ-522: sight distance on the curve. Off unless both the minimum and the clearance are above zero.
       if (set.minSightDistance > 0.0 && set.sightClearance > 0.0) {
-        const double seen = AvailableSightDistance(e.radius, e.length, set.sightClearance);
-        if (seen < set.minSightDistance - 1e-9) {
+        const double seen = RoundTo(AvailableSightDistance(e.radius, e.length, set.sightClearance), linearPrecision);
+        const double minimum = RoundTo(set.minSightDistance, linearPrecision);
+        if (seen < minimum - 1e-9) {
           out.push_back({number, "Sight distance " + Lin(linearPrecision, seen) + " is below the minimum of " +
-                                     Lin(linearPrecision, set.minSightDistance) + " with a sight clearance of " +
+                                     Lin(linearPrecision, minimum) + " with a sight clearance of " +
                                      Lin(linearPrecision, set.sightClearance) + "."});
         }
       }

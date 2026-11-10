@@ -202,7 +202,8 @@ void BuildAlignmentReportLines(const Alignment& a, const AlignmentReportFormat& 
     lines->push_back("Superelevation: not checked (no maximum rate).");
   } else {
     lines->push_back("Superelevation: maximum " + FormatFixed4(format.checkSet->maxSuperelevation) + ", side friction " +
-                     FormatFixed4(format.checkSet->sideFriction) + ", circular curves only.");
+                     FormatFixed4(format.checkSet->sideFriction) +
+                     ", circular curves only; a curve with no design speed is not checked.");
   }
   if (format.checkSet == nullptr || format.checkSet->minSightDistance <= 0.0 || format.checkSet->sightClearance <= 0.0) {
     lines->push_back("Sight distance: not checked (no minimum sight distance or no clearance).");
