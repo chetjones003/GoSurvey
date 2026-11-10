@@ -261,3 +261,14 @@ audit remain the guard that every Qt function runs once. The current personal
 repository cannot select a larger GitHub-hosted runner, so the code will keep
 the standard runner as its default and cannot claim the full timing target
 without organization-side runner access.
+
+### Follow-up: CTest concurrency experiment
+
+The `556f16b8` baseline ran on a four-logical-processor, 16-GiB GitHub runner
+with six Qt shards and CTest parallelism 8. The full build-and-test job took
+13m54s; CTest's JUnit suite time was 625s. Qt shards took 558–625s each and
+Catch2 shards took 161–209s. To test whether the eight workers oversubscribe
+the runner, the next run changes only CTest concurrency to 4. Qt shard count,
+coverage audit, tests, and blocking checks remain unchanged. Compare total CTest
+wall time and each shard's JUnit duration; do not infer a speedup from a
+different runner or a changed test set.

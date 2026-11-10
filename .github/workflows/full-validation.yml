@@ -117,7 +117,8 @@ jobs:
           version-suffix: ''
           version-build: '0'
           beta-version: ''
-          test-parallel: 'auto'
+          # Controlled runner-contention experiment: compare 4 with the 8-worker baseline.
+          test-parallel: '4'
 
       - name: Verify CTest shard coverage
         run: |
