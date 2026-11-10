@@ -18,9 +18,9 @@ inputs:
     required: false
     default: 'dev'
   test-parallel:
-    description: Number of CTest processes to run concurrently.
+    description: Number of CTest processes; auto uses runner capacity.
     required: false
-    default: '8'
+    default: 'auto'
 runs:
   using: composite
   steps:
@@ -86,11 +86,21 @@ runs:
         BETA_VERSION: ${{ inputs.beta-version }}
         BUILD_CHANNEL: ${{ inputs.build-channel }}
       run: |
+        $logicalProcessors = [Environment]::ProcessorCount
+        $qtShards = [Math]::Min(16, [Math]::Max(6, [int][Math]::Ceiling($logicalProcessors * 1.5)))
+        $testParallel = [Math]::Min(16, [Math]::Max(8, $logicalProcessors))
+        $requestedTestParallel = '${{ inputs.test-parallel }}'
+        if ($requestedTestParallel -ne 'auto') {
+          if ($requestedTestParallel -notmatch '^[1-9][0-9]*$') { throw 'test-parallel must be auto or a positive integer.' }
+          $testParallel = [Math]::Min(16, [int]$requestedTestParallel)
+        }
+        "GOSURVEY_CTEST_PARALLEL=$testParallel" | Add-Content $env:GITHUB_ENV
+        Write-Host "Runner processors: $logicalProcessors; Qt shards: $qtShards; CTest workers: $testParallel"
         cmake --preset ninja-release `
           -DCMAKE_C_COMPILER_LAUNCHER=sccache `
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
           -DGOSURVEY_USE_PCH=OFF `
-          -DGOSURVEY_QT_TEST_SHARDS=6 `
+          "-DGOSURVEY_QT_TEST_SHARDS=$qtShards" `
           "-DGOSURVEY_BUILD_CHANNEL=$env:BUILD_CHANNEL" `
           "-DGOSURVEY_BETA_VERSION=$env:BETA_VERSION" `
           "-DGOSURVEY_VERSION_SUFFIX=$env:VERSION_SUFFIX" `
@@ -100,8 +110,8 @@ runs:
     - name: Build Release targets
       shell: pwsh
       run: |
-        # Hosted Windows runners expose four logical processors; match that worker count.
-        cmake --build --preset ninja-release --parallel 4
+        $workers = [Math]::Min(16, [Environment]::ProcessorCount)
+        cmake --build --preset ninja-release --parallel $workers
         if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
 
     - name: Stage Mesa runtime dependencies for tests
@@ -135,10 +145,12 @@ runs:
       run: |
         $env:GOSURVEY_TEST_RUN_ID = "ci-${{ github.run_id }}-${{ github.run_attempt }}"
         "GOSURVEY_TEST_RUN_ID=$env:GOSURVEY_TEST_RUN_ID" | Add-Content $env:GITHUB_ENV
+        $testParallel = [Math]::Min(16, [Math]::Max(8, [Environment]::ProcessorCount))
+        if ($env:GOSURVEY_CTEST_PARALLEL -match '^[1-9][0-9]*$') { $testParallel = [int]$env:GOSURVEY_CTEST_PARALLEL }
         $ciArtifacts = Join-Path $env:GITHUB_WORKSPACE 'build/artifacts/ci'
         New-Item -ItemType Directory -Force -Path $ciArtifacts | Out-Null
         $junitPath = Join-Path $ciArtifacts 'ctest.xml'
-        ctest --preset ninja-release --parallel ${{ inputs.test-parallel }} --output-on-failure --output-junit $junitPath
+        ctest --preset ninja-release --parallel $testParallel --output-on-failure --output-junit $junitPath
         if ($LASTEXITCODE -ne 0) { throw 'CTest failed.' }
 
     - name: Restore Qt OpenGL runtime files

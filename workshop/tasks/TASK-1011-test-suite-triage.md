@@ -218,3 +218,46 @@ CMake defaults `GOSURVEY_ENABLE_ANALYZE` to OFF; the analysis job turns it ON
 explicitly. It changes no compiler inputs for the standalone analysis check, no
 test targets or assertions, and no product artifacts. A hosted run is required
 to measure the impact; local timings cannot establish the CI budget.
+
+## Follow-up: preserve full blocking coverage under six minutes
+
+### Evidence
+
+- On `17690f7`, the warm compile stage took **97.05 s** with 534/534 compiler
+  cache hits. The full build-and-test job took **10m57s**. All 6 required checks,
+  including full CTest and MSVC analysis, passed.
+- Qt still dominates: six shards each run 60 of the 360 discovered functions
+  (JUnit also counts each process's init/cleanup cases);
+  shard registrations took 426–481 s. Their testcase timing sums were 414–470 s
+  each, so static redistribution among six shards has little headroom. All tests
+  remain required under REQ-437; moving tests out of the PR gate is excluded.
+- GitHub reports this repository is public and owned by the personal account
+  `chetjones003`. The three registered self-hosted Windows runners are offline.
+- GitHub larger Windows runners are available only to Team/Enterprise
+  organizations; the 16-core x64 size is listed at $0.082/min, and public-repo
+  usage is billable. The standard hosted workflow must remain a safe fallback
+  until an organization runner is configured.
+
+### Plan
+
+- Keep all existing CTest cases and required check statuses blocking.
+- Add an optional GitHub-hosted Windows runner label, read from a repository
+  variable and defaulting to `windows-latest`.
+- Size Ninja workers, Qt shards (bounded by the existing 16-shard limit), and
+  CTest parallelism from the selected runner's logical CPU count. The current
+  standard runner must retain the current four build workers, six Qt shards,
+  and eight CTest workers. Larger runners can use more CPU without another
+  workflow edit.
+- Validate the standard-runner fallback through required CI and the existing
+  full-suite coverage audit. The sub-six-minute acceptance remains pending until
+  an organization provides a configured GitHub larger runner and a full run
+  records under six minutes with all required checks green.
+
+### Plan verification
+
+**APPROVE.** The proposed change alters scheduling capacity only; it removes no
+test, assertion, or blocking status. Existing shard isolation and the coverage
+audit remain the guard that every Qt function runs once. The current personal
+repository cannot select a larger GitHub-hosted runner, so the code will keep
+the standard runner as its default and cannot claim the full timing target
+without organization-side runner access.

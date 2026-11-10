@@ -96,7 +96,9 @@ jobs:
       always() &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
-    runs-on: windows-latest
+    # Configure this repository variable to the label of an organization-owned
+    # GitHub-hosted larger runner. The default keeps personal/fork workflows usable.
+    runs-on: ${{ vars.GOSURVEY_FULL_VALIDATION_RUNNER || 'windows-latest' }}
     env:
       SCCACHE_GHA_ENABLED: "true"
     steps:
@@ -115,7 +117,7 @@ jobs:
           version-suffix: ''
           version-build: '0'
           beta-version: ''
-          test-parallel: '8'
+          test-parallel: 'auto'
 
       - name: Verify CTest shard coverage
         run: |
