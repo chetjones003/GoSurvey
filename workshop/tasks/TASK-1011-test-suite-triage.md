@@ -174,3 +174,47 @@ measure this change; no improvement is claimed before that result.
   `https://github.com/chetjones003/GoSurvey/wiki`; cloned and searched the
   current wiki. It documents product usage, not CI/build configuration, so no
   update is needed.
+
+## Follow-up: investigate duplicate MSVC analysis in the build
+
+### Authority and evidence
+
+- REQ-205 sets the warm-cache CI build budget at six minutes. REQ-324 analysis
+  remains a separate blocking check, scoped to changed translation units with a
+  fail-closed full-project fallback (D-2026-10-21-c).
+- The shared `.github/actions/release-validation/action.yml` configures
+  `GOSURVEY_ENABLE_ANALYZE=ON` for the entire Release build. The PR workflow also
+  has its own `lint / msvc-analyze` job, which explicitly configures analysis
+  and runs the selected compile commands. The shared action is used by PR and
+  release workflows, although D-2026-10-20-a says release builds leave analysis
+  off and findings do not fail release builds.
+- Latest hosted PR evidence: 552 Ninja commands, 733.97 s (12m14s) with a peak
+  of four concurrent commands; sccache reports 301 hits, zero misses and 233
+  uncacheable requests. The full build currently exceeds REQ-205.
+- Prior laptop production evidence is not interchangeable with the hosted
+  benchmark: it passed CTest in 3m44s and built in 55s with 428/428 compiler
+  cache hits, but the laptop workers were later pinned off due reliability.
+
+### Plan
+
+- Hypothesis: the shared build's report-only `/analyze` pass adds avoidable work
+  that overlaps the independently blocking analysis job. Prediction: configure
+  the shared build without `GOSURVEY_ENABLE_ANALYZE=ON`; the required analysis
+  job and all CTest coverage still pass, while Ninja build time decreases.
+- Change only the shared action's build configuration. Keep the separate
+  `lint / msvc-analyze` workflow, required statuses, full build targets, test
+  registration, and test parallelism unchanged.
+- Verify YAML and action syntax, inspect the diff and CMake defaults, then use
+  one hosted run as the A/B measurement. Record Ninja wall time, cache counters,
+  full CTest status and analysis-job result. Do not claim REQ-205 is met unless
+  a comparable warm-cache hosted build is at or below six minutes.
+- No application/product documentation changes are expected.
+
+### Plan verification
+
+**APPROVE.** This removes redundant report-only analysis from a shared full
+build while retaining the independently required, blocking `/analyze` job.
+CMake defaults `GOSURVEY_ENABLE_ANALYZE` to OFF; the analysis job turns it ON
+explicitly. It changes no compiler inputs for the standalone analysis check, no
+test targets or assertions, and no product artifacts. A hosted run is required
+to measure the impact; local timings cannot establish the CI budget.
