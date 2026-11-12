@@ -30665,6 +30665,7 @@ void ClearCadGeometry(AppCommandState& st) {
   st.blockTestStash = DrawingGeometrySnapshot{};
   st.blockTestUndoStash.clear();
   st.blockTestRedoStash.clear();
+  st.blockTestPendingZoomExtents = false;
   st.importedDxfAttrDefs.clear();
   ClearPendingOneShotObjectSnap(st);
   ClearCadSelection(st);

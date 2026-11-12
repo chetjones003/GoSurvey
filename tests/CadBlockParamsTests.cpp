@@ -843,15 +843,18 @@ TEST_CASE("BTESTBLOCK restores projection and FOV when the test closes", "[block
   AppCommandState st = EditingDoor(log);
   st.viewportProjection = Camera::Projection::Orthographic;
   st.viewportFovDeg = 37.f;
+  st.pendingZoomExtents = false;
 
   Submit(st, "BTESTBLOCK", log);
   REQUIRE(st.blockTestActive);
+  CHECK(st.pendingZoomExtents);
   st.viewportProjection = Camera::Projection::Perspective;
   st.viewportFovDeg = 90.f;
 
   Submit(st, "BCLOSE", log);
   CHECK(st.viewportProjection == Camera::Projection::Orthographic);
   CHECK(st.viewportFovDeg == Approx(37.f));
+  CHECK_FALSE(st.pendingZoomExtents);
 }
 
 TEST_CASE("BTESTBLOCK keeps visibility with surviving geometry after deletion", "[block][req523][issue808]") {

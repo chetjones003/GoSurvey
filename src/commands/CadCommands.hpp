@@ -3896,6 +3896,8 @@ struct AppCommandState {
   bool blockTestSessionWasDirty = false;     ///< The editor had unsaved changes when the test started.
   /// The view and authoring windows to restore when the test ends (REQ-523 item 7).
   CadBlockEditorCameraState blockTestCamera;
+  /// Preserve a queued view zoom request alongside the test camera (REQ-523 item 5).
+  bool blockTestPendingZoomExtents = false;
   CadBlockTestWindows blockTestWindows;
   std::vector<std::string> blockRecent;
   std::vector<std::string> blockFavorites;

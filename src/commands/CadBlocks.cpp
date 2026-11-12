@@ -3178,6 +3178,7 @@ void StashBlockEditorForTest(AppCommandState& st) {
   st.blockTestSessionWasDirty = st.cadGpuRevision != st.blockEditCleanRevision;
   st.blockTestStash = CadCaptureGeometrySnapshot(st, "blocktest-stash");
   st.blockTestCamera = CaptureBlockEditorCamera(st);
+  st.blockTestPendingZoomExtents = st.pendingZoomExtents;
   st.blockTestWindows = CaptureBlockTestWindows(st);
   CadSwapActiveUndoStacks(st, st.blockTestUndoStash, st.blockTestRedoStash);
   st.blockAuthoringPaletteOpen = false;
@@ -3212,6 +3213,7 @@ void BlockTestClose(AppCommandState& st, std::vector<std::string>& log) {
   st.blockTestUndoStash.clear();
   st.blockTestRedoStash.clear();
   RestoreBlockEditorCamera(st, st.blockTestCamera);
+  st.pendingZoomExtents = st.blockTestPendingZoomExtents;
   RestoreBlockTestWindows(st, st.blockTestWindows);
   st.blockTestActive = false;
   ClearCadSelection(st);
