@@ -18,9 +18,18 @@ on:
   pull_request:
     branches: [master, beta]
     types: [opened, synchronize, reopened, ready_for_review, edited]
+  # Benchmark runs: `gh workflow run full-validation.yml --ref <branch> -f cache=cold|warm`.
+  # cold uses a per-run cache namespace, so no archive can be restored.
+  workflow_dispatch:
+    inputs:
+      cache:
+        description: cold = no sccache archive restored; warm = restore the branch or base archive
+        type: choice
+        options: [warm, cold]
+        default: warm
 
 concurrency:
-  group: full-validation-${{ github.event.pull_request.number }}
+  group: full-validation-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -180,6 +189,7 @@ jobs:
           ctest-regex: ${{ matrix.regex }}
           ctest-exclude: ${{ matrix.exclude || '' }}
           build-targets: ${{ matrix.targets }}
+          cache-namespace: ${{ github.event_name == 'workflow_dispatch' && inputs.cache == 'cold' && format('cold-{0}', github.run_id) || 'sccache-msvc-release' }}
           prepare-qt-tests: ${{ !startsWith(matrix.name, 'catch-') }}
 
       - name: Summarize CI performance
@@ -247,6 +257,7 @@ jobs:
           qt-test-shards: '12'
           catch-test-shards: '4'
           build-targets: all
+          cache-namespace: ${{ github.event_name == 'workflow_dispatch' && inputs.cache == 'cold' && format('cold-{0}', github.run_id) || 'sccache-msvc-release' }}
           run-tests: 'false'
 
       - name: Summarize CI performance

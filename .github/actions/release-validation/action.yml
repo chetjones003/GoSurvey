@@ -49,6 +49,10 @@ inputs:
     description: Whether to stage Mesa and prepare the hidden Qt display.
     required: false
     default: 'true'
+  cache-namespace:
+    description: Prefix for the sccache archive key. Use a unique value to force a cold build.
+    required: false
+    default: 'sccache-msvc-release'
 runs:
   using: composite
   steps:
@@ -121,9 +125,9 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: ${{ runner.temp }}/sccache
-        key: sccache-msvc-release-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: ${{ inputs.cache-namespace }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          sccache-msvc-release-${{ runner.os }}-
+          ${{ inputs.cache-namespace }}-${{ runner.os }}-
 
     - name: Register MSVC /analyze problem matcher
       shell: pwsh
@@ -190,7 +194,7 @@ runs:
       uses: actions/cache/save@v4
       with:
         path: ${{ runner.temp }}/sccache
-        key: sccache-msvc-release-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: ${{ inputs.cache-namespace }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
     - name: Stage Mesa runtime dependencies for tests
       if: inputs.run-tests == 'true' && inputs.prepare-qt-tests == 'true'
