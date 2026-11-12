@@ -1910,6 +1910,8 @@ struct UnsavedProject {
 struct CadBlockEditorCameraState {
   double panX = 0.0, panY = 0.0, panZ = 0.0;
   float zoom = 1.f, azimuthDeg = 0.f, elevationDeg = 90.f, rollDeg = 0.f;
+  Camera::Projection projection = Camera::Projection::Orthographic;
+  float fovDeg = kDefaultFovDeg;
 };
 
 /// Authoring windows hidden during Test Block and reopened when the user returns to the editor.

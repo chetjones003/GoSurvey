@@ -668,6 +668,22 @@ TEST_CASE("a refused BTABLE change alters nothing and adds no undo step", "[bloc
   }
 }
 
+TEST_CASE("BTABLE refuses an ambiguous removal name", "[block][req525][issue808]") {
+  std::vector<std::string> log;
+  AppCommandState st = EditingDoor(log);
+  Submit(st, "BTABLE ADDCOLUMN, Width", log);
+  st.blockDefs[static_cast<size_t>(CadBlockFindDef(st.blockDefs, "DOOR"))].parameters.push_back(
+      Param("Width", CadBlockParamKind::Linear, 1.f));
+  const CadBlockDefinition before = Door(st);
+  const std::size_t depth = UndoDepth(st);
+
+  Submit(st, "BTABLE REMOVECOLUMN, Width", log);
+
+  CHECK(Last(log).find("use the list number") != std::string::npos);
+  CHECK(CadBlockAuthoringEqual(Door(st), before));
+  CHECK(UndoDepth(st) == depth);
+}
+
 TEST_CASE("BSETROW sets selected references from a table row in one undo step", "[block][req525][issue808]") {
   AppCommandState st;
   st.documents.resize(2);
@@ -750,6 +766,7 @@ TEST_CASE("BTESTBLOCK shows the unsaved block as one reference and BCLOSE restor
   Submit(st, "MKLINE 0,1, 2,1", log);  // an unsaved edit
   REQUIRE(st.userLinesFlat.size() == 12);
   const std::vector<double> editorLines = st.userLinesFlat;
+  st.blockDefs[static_cast<size_t>(CadBlockFindDef(st.blockDefs, "DOOR"))].content.lineVis[0] = "Closed";
   const CadBlockDefinition before = Door(st);
   const std::size_t depth = UndoDepth(st);
   st.viewportZoom = 3.25f;
@@ -767,6 +784,7 @@ TEST_CASE("BTESTBLOCK shows the unsaved block as one reference and BCLOSE restor
   CHECK(st.cadBlockRefs[0].xf.sx == Approx(1.f));
   CHECK(st.cadBlockRefs[0].xf.rotZ == Approx(0.f));
   CHECK(st.cadBlockRefs[0].paramState.empty());
+  CHECK(Door(st).content.lineVis[0] == "Closed");  // Test Block keeps state-specific geometry visibility.
   CHECK(Door(st).content.lines.size() == 12);  // the reference draws the unsaved line too
   CHECK(st.selection.empty());
   CHECK_FALSE(st.blockAuthoringPaletteOpen);    // item 7: authoring windows are hidden
@@ -818,6 +836,45 @@ TEST_CASE("BTESTBLOCK shows the unsaved block as one reference and BCLOSE restor
   // And the editor's own undo history still works: undo the unsaved line.
   REQUIRE(DoUndo(st, log));
   CHECK(st.userLinesFlat.size() == 6);
+}
+
+TEST_CASE("BTESTBLOCK restores projection and FOV when the test closes", "[block][req523][issue808]") {
+  std::vector<std::string> log;
+  AppCommandState st = EditingDoor(log);
+  st.viewportProjection = Camera::Projection::Orthographic;
+  st.viewportFovDeg = 37.f;
+
+  Submit(st, "BTESTBLOCK", log);
+  REQUIRE(st.blockTestActive);
+  st.viewportProjection = Camera::Projection::Perspective;
+  st.viewportFovDeg = 90.f;
+
+  Submit(st, "BCLOSE", log);
+  CHECK(st.viewportProjection == Camera::Projection::Orthographic);
+  CHECK(st.viewportFovDeg == Approx(37.f));
+}
+
+TEST_CASE("BTESTBLOCK keeps visibility with surviving geometry after deletion", "[block][req523][issue808]") {
+  std::vector<std::string> log;
+  AppCommandState st = EditingDoor(log);
+  const int definitionIndex = CadBlockFindDef(st.blockDefs, "DOOR");
+  REQUIRE(definitionIndex >= 0);
+  CadBlockDefinition& definition = st.blockDefs[static_cast<size_t>(definitionIndex)];
+  definition.content.lines.insert(definition.content.lines.end(), {4., 0., 0., 6., 0., 0.});
+  EntityAttributes secondLine;
+  secondLine.id = st.nextEntityId++;
+  definition.content.lineAttrs.push_back(secondLine);
+  definition.content.lineVis = {"Open", "Closed"};
+  st.userLinesFlat.insert(st.userLinesFlat.end(), {4., 0., 0., 6., 0., 0.});
+  st.userLineAttrs.push_back(secondLine);
+
+  st.userLinesFlat.erase(st.userLinesFlat.begin(), st.userLinesFlat.begin() + 6);
+  st.userLineAttrs.erase(st.userLineAttrs.begin());
+  Submit(st, "BTESTBLOCK", log);
+
+  REQUIRE(st.blockTestActive);
+  REQUIRE(definition.content.lineVis.size() == 1);
+  CHECK(definition.content.lineVis[0] == "Closed");
 }
 
 TEST_CASE("a test of a clean session leaves it clean, and redo history survives", "[block][req523][issue808]") {

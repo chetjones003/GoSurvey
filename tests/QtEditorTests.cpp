@@ -16003,6 +16003,16 @@ private Q_SLOTS:
     QVERIFY(removeEmptyColumn && removeEmptyRow);
     QVERIFY(!removeEmptyColumn->isEnabled());
     QVERIFY(!removeEmptyRow->isEnabled());
+    auto* tableGrid = blockTableDialog->findChild<QTableWidget*>("blockPropertiesTableGrid");
+    QVERIFY(tableGrid);
+    QHeaderView* header = tableGrid->horizontalHeader();
+    QTest::mouseClick(header->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      QPoint(header->sectionViewportPosition(0) + header->sectionSize(0) / 2,
+                             header->height() / 2));
+    QVERIFY(removeEmptyColumn->isEnabled());
+    removeEmptyColumn->click();
+    QCOMPARE(window.State().blockDefs[blockIndex].propertyTable.columns.size(), std::size_t(0));
+    window.Submit("BTABLE ADDCOLUMN, 1");
     QTimer::singleShot(0, &window, [] {
       auto* choice = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
       QVERIFY(choice);
@@ -16020,7 +16030,7 @@ private Q_SLOTS:
     QCOMPARE(window.State().blockDefs[blockIndex].propertyTable.rows.size(), std::size_t(1));
     QVERIFY(blockTableDialog->findChild<QLabel*>("blockPropertiesTableStatus")
                 ->text().contains("row 1 already holds those values"));
-    auto* tableGrid = blockTableDialog->findChild<QTableWidget*>("blockPropertiesTableGrid");
+    tableGrid = blockTableDialog->findChild<QTableWidget*>("blockPropertiesTableGrid");
     QVERIFY(tableGrid);
     QCOMPARE(tableGrid->rowCount(), 1);
     tableGrid->selectRow(0);

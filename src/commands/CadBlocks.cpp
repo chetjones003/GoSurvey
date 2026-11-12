@@ -25,12 +25,13 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <unordered_map>
 
 namespace {
 
 CadBlockEditorCameraState CaptureBlockEditorCamera(const AppCommandState& st) {
   return {st.viewportPanX, st.viewportPanY, st.viewportPanZ, st.viewportZoom, st.viewportAzimuthDeg,
-          st.viewportElevationDeg, st.viewportRollDeg};
+          st.viewportElevationDeg, st.viewportRollDeg, st.viewportProjection, st.viewportFovDeg};
 }
 
 void RestoreBlockEditorCamera(AppCommandState& st, const CadBlockEditorCameraState& camera) {
@@ -41,6 +42,8 @@ void RestoreBlockEditorCamera(AppCommandState& st, const CadBlockEditorCameraSta
   st.viewportAzimuthDeg = camera.azimuthDeg;
   st.viewportElevationDeg = camera.elevationDeg;
   st.viewportRollDeg = camera.rollDeg;
+  st.viewportProjection = camera.projection;
+  st.viewportFovDeg = camera.fovDeg;
 }
 
 CadBlockTestWindows CaptureBlockTestWindows(const AppCommandState& st) {
@@ -53,6 +56,23 @@ void RestoreBlockTestWindows(AppCommandState& st, const CadBlockTestWindows& win
   st.showConnectionModesWindow = windows.connectionModes;
   st.showBlockParametersWindow = windows.parameters;
   st.showBlockTableWindow = windows.propertiesTable;
+}
+
+std::vector<std::string> PreserveVisibilityByEntityId(const std::vector<EntityAttributes>& currentAttrs,
+                                                       const std::vector<EntityAttributes>& oldAttrs,
+                                                       const std::vector<std::string>& oldVisibility) {
+  std::unordered_map<std::uint64_t, std::string> visibilityById;
+  for (size_t old = 0; old < oldAttrs.size() && old < oldVisibility.size(); ++old) {
+    if (oldAttrs[old].id != 0)
+      visibilityById.emplace(oldAttrs[old].id, oldVisibility[old]);
+  }
+  std::vector<std::string> visibility(currentAttrs.size());
+  for (size_t current = 0; current < currentAttrs.size(); ++current) {
+    const auto old = visibilityById.find(currentAttrs[current].id);
+    if (currentAttrs[current].id != 0 && old != visibilityById.end())
+      visibility[current] = old->second;
+  }
+  return visibility;
 }
 
 /// INSERT rotation is entered in the app's angle convention — 0° = north, **clockwise positive**
@@ -330,16 +350,20 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
 /// ADR-043: harvest the model arrays back into a definition's primitive geometry on Save. Leaves
 /// \c nested and the dynamic-block authoring model (parameters/actions/attrDefs) untouched — those
 /// are edited through their own commands, not this surface.
-void HarvestDrawingPrimitivesIntoContent(const AppCommandState& st, CadBlockContent* c) {
+void HarvestDrawingPrimitivesIntoContent(AppCommandState& st, CadBlockContent* c) {
   assert(c != nullptr);
+  EnsureEntityIds(st);
+  const std::vector<std::string> lineVis = PreserveVisibilityByEntityId(st.userLineAttrs, c->lineAttrs, c->lineVis);
+  const std::vector<std::string> circleVis =
+      PreserveVisibilityByEntityId(st.userCircleAttrs, c->circleAttrs, c->circleVis);
   c->lines = st.userLinesFlat;
   c->lineAttrs = st.userLineAttrs;
   c->lineAttrs.resize(st.userLinesFlat.size() / 6);
-  c->lineVis.assign(st.userLinesFlat.size() / 6, "");
+  c->lineVis = lineVis;
   c->circles = st.userCirclesCxCyZR;
   c->circleAttrs = st.userCircleAttrs;
   c->circleAttrs.resize(st.userCirclesCxCyZR.size() / 4);
-  c->circleVis.assign(st.userCirclesCxCyZR.size() / 4, "");
+  c->circleVis = circleVis;
   c->circleNormals = st.userCircleNormals;
   EnsureCircleNormals(c->circleNormals, st.userCirclesCxCyZR.size() / 4);
   c->arcs = st.userArcs;
@@ -3073,14 +3097,19 @@ void CadBlocksEnterNamedEditor(AppCommandState& st, std::string_view nameRaw, st
   st.blockEditCamera = CaptureBlockEditorCamera(st);  // #153
   ClearCadSelection(st);
   st.blockEditorName = st.blockDefs[static_cast<size_t>(di)].name;
-  st.blockEditorSnapshot = st.blockDefs[static_cast<size_t>(di)];
   LoadBlockPrimitivesIntoDrawing(st, st.blockDefs[static_cast<size_t>(di)].content);
+  BumpCadGpuCache(st);
+  EnsureEntityIds(st);
+  // Keep stable ids in the definition so later edits can carry each line/circle's visibility
+  // assignment with it when geometry is removed or reordered.
+  st.blockDefs[static_cast<size_t>(di)].content.lineAttrs = st.userLineAttrs;
+  st.blockDefs[static_cast<size_t>(di)].content.circleAttrs = st.userCircleAttrs;
+  st.blockEditorSnapshot = st.blockDefs[static_cast<size_t>(di)];
   st.blockEditActive = true;
   st.blockEditorDirty = false;
   st.blockAuthoringPaletteOpen = true;
   st.blockEditPickerOpen = false;
   st.pendingZoomExtents = true;
-  BumpCadGpuCache(st);
   st.blockEditCleanRevision = st.cadGpuRevision;
   log.push_back("BEDIT — editing \"" + st.blockEditorName + "\" in local coordinates. BSAVE / BCLOSE.");
 }
@@ -3375,12 +3404,10 @@ void RunBlockTableCommand(AppCommandState& st, const std::vector<std::string>& f
     }
   } else if (verb == "removecolumn" && f.size() == 2) {
     // A column is named by its parameter; a list number is accepted as everywhere else.
-    std::string name = f[1];
-    if (CadBlockParseListNumber(f[1], nullptr)) {
-      if (resolve(f[1], &name, &reason) < 0) {
-        log.push_back("BTABLE — " + reason);
-        return;
-      }
+    std::string name;
+    if (resolve(f[1], &name, &reason) < 0) {
+      log.push_back("BTABLE — " + reason);
+      return;
     }
     reason = CadBlocksApplyDefinitionEdit(st, "Block table column", [&name](CadBlockDefinition& d) {
       return CadBlockTableRemoveColumn(d, name);

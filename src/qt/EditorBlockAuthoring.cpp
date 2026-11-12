@@ -49,6 +49,7 @@ public:
   std::function<void()> refresh;
   std::function<bool()> isEditing;
   std::uint32_t lastRevision = 0;
+  int selectedColumn = -1;
 };
 
 enum class ParameterColumn : int { Name, Value, Type, Minimum, Maximum, Actions, Count };
@@ -564,7 +565,9 @@ void EditorWindow::RenderBlockPropertiesTable(QDialog* dialog) {
   const QSignalBlocker blocker(table);
   const int definitionIndex = EditingDefinition(m_State);
   const int selectedRow = table->currentRow();
-  const int selectedColumn = table->currentColumn();
+  const int selectedCellColumn = table->currentColumn();
+  if (selectedCellColumn >= 0)
+    viewState->selectedColumn = selectedCellColumn;
   table->clear();
   viewState->lastRevision = m_State.cadGpuRevision;
   if (definitionIndex < 0) {
@@ -589,6 +592,8 @@ void EditorWindow::RenderBlockPropertiesTable(QDialog* dialog) {
   for (const std::string& name : data.columns)
     headers.push_back(QString::fromUtf8(name.c_str()));
   table->setHorizontalHeaderLabels(headers);
+  if (viewState->selectedColumn >= static_cast<int>(data.columns.size()))
+    viewState->selectedColumn = static_cast<int>(data.columns.size()) - 1;
   table->setRowCount(static_cast<int>(data.rows.size()));
   for (size_t row = 0; row < data.rows.size(); ++row) {
     for (size_t column = 0; column < data.columns.size() && column < data.rows[row].size(); ++column) {
@@ -597,9 +602,9 @@ void EditorWindow::RenderBlockPropertiesTable(QDialog* dialog) {
     }
   }
   table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-  RestoreTableSelection(table, selectedRow, selectedColumn);
+  RestoreTableSelection(table, selectedRow, viewState->selectedColumn);
   if (auto* removeColumn = dialog->findChild<QPushButton*>("blockTableRemoveColumn"))
-    removeColumn->setEnabled(table->currentColumn() >= 0);
+    removeColumn->setEnabled(table->currentColumn() >= 0 || viewState->selectedColumn >= 0);
   if (auto* removeRow = dialog->findChild<QPushButton*>("blockTableRemoveRow"))
     removeRow->setEnabled(table->currentRow() >= 0);
 }
@@ -612,16 +617,23 @@ void EditorWindow::ConnectBlockPropertiesTable(QDialog* dialog) {
   auto* removeColumn = dialog->findChild<QPushButton*>("blockTableRemoveColumn");
   auto* addRow = dialog->findChild<QPushButton*>("blockTableAddRow");
   auto* removeRow = dialog->findChild<QPushButton*>("blockTableRemoveRow");
+  auto* viewState = static_cast<BlockAuthoringViewState*>(dialog->findChild<QObject*>("blockPropertiesTableViewState"));
   auto* clear = dialog->findChild<QPushButton*>("blockTableClear");
-  if (!table || !status || !buttons || !addColumn || !removeColumn || !addRow || !removeRow || !clear)
+  if (!table || !status || !buttons || !addColumn || !removeColumn || !addRow || !removeRow || !clear || !viewState)
     return;
 
   table->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
-  const auto updateSelectionButtons = [table, removeColumn, removeRow] {
-    removeColumn->setEnabled(table->currentColumn() >= 0);
+  const auto updateSelectionButtons = [table, removeColumn, removeRow, viewState] {
+    if (table->currentColumn() >= 0)
+      viewState->selectedColumn = table->currentColumn();
+    removeColumn->setEnabled(table->currentColumn() >= 0 || viewState->selectedColumn >= 0);
     removeRow->setEnabled(table->currentRow() >= 0);
   };
   connect(table, &QTableWidget::itemSelectionChanged, dialog, updateSelectionButtons);
+  connect(table->horizontalHeader(), &QHeaderView::sectionClicked, dialog, [viewState, updateSelectionButtons](int column) {
+    viewState->selectedColumn = column;
+    updateSelectionButtons();
+  });
   updateSelectionButtons();
   connect(table, &QTableWidget::itemChanged, this, [this, dialog, table, status](QTableWidgetItem* item) {
     if (!item)
@@ -690,8 +702,8 @@ void EditorWindow::ConnectBlockPropertiesTable(QDialog* dialog) {
       status->setText(QString::fromStdString(reason));
   });
 
-  connect(removeColumn, &QPushButton::clicked, this, [this, dialog, table, status] {
-    const int column = table->currentColumn();
+  connect(removeColumn, &QPushButton::clicked, this, [this, dialog, table, status, viewState] {
+    const int column = table->currentColumn() >= 0 ? table->currentColumn() : viewState->selectedColumn;
     if (column < 0)
       return;
     const QTableWidgetItem* header = table->horizontalHeaderItem(column);
