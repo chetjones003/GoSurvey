@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdio>
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <vector>
@@ -14,6 +15,7 @@
 
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
+#include "DwgIo.hpp"
 #include "GsIoTestSupport.hpp"
 #include "util/cadblockparams.hpp"
 
@@ -855,6 +857,32 @@ TEST_CASE("BTESTBLOCK restores projection and FOV when the test closes", "[block
   CHECK(st.viewportProjection == Camera::Projection::Orthographic);
   CHECK(st.viewportFovDeg == Approx(37.f));
   CHECK_FALSE(st.pendingZoomExtents);
+}
+
+TEST_CASE("drawing saves are refused while a block editor model is active", "[block][req523][issue808]") {
+  std::vector<std::string> log;
+  AppCommandState st = EditingDoor(log);
+  const std::filesystem::path path = std::filesystem::temp_directory_path() / "gosurvey-block-editor-save-guard.dwg";
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+
+  CHECK(DrawingSaveRefusalReason(st) == kBeditDrawingSaveRefusal);
+  CHECK_FALSE(SaveDrawingDocument(st, path.string().c_str(), log));
+  CHECK(Last(log) == DrawingSaveRefusalReason(st));
+  CHECK_FALSE(std::filesystem::exists(path));
+
+  Submit(st, "BTESTBLOCK", log);
+  REQUIRE(st.blockTestActive);
+  CHECK(DrawingSaveRefusalReason(st) ==
+        "Save drawing — close the test block with BCLOSE, then close BEDIT before saving the drawing.");
+  CHECK_FALSE(SaveDrawingDocument(st, path.string().c_str(), log));
+  CHECK(Last(log) == DrawingSaveRefusalReason(st));
+  CHECK_FALSE(std::filesystem::exists(path));
+
+  Submit(st, "BCLOSE", log);
+  Submit(st, "BCLOSE", log);
+  CHECK(DrawingSaveRefusalReason(st).empty());
+  std::filesystem::remove(path, ec);
 }
 
 TEST_CASE("BTESTBLOCK keeps visibility with surviving geometry after deletion", "[block][req523][issue808]") {

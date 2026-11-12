@@ -2403,12 +2403,14 @@ void EditorWindow::OpenDrawing(const QString& path) {
 }
 
 bool EditorWindow::SaveDrawing(bool saveAs) {
-  if (m_State.activeDrawingIdx == 0) return true;
-  if (m_State.blockEditActive) {
-    m_Log.push_back(kBeditDrawingSaveRefusal);
-    QMessageBox::warning(this, "Save drawing", QString::fromUtf8(kBeditDrawingSaveRefusal));
+  const std::string saveRefusal = DrawingSaveRefusalReason(m_State);
+  if (!saveRefusal.empty()) {
+    m_Log.push_back(saveRefusal);
+    QMessageBox::warning(this, "Save drawing", QString::fromUtf8(saveRefusal.c_str()));
+    Refresh();
     return false;
   }
+  if (m_State.activeDrawingIdx == 0) return true;
   RefreshProjects();
   const auto projectUid = m_State.drawingTabs[m_State.activeDrawingIdx].projectUid;
   for (const auto& session : m_State.openProjects) {

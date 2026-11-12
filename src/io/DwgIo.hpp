@@ -71,6 +71,9 @@ bool AppendGoSurveyPayloadToDwgFile(const char* pathUtf8, const AppCommandState&
 bool OpenDrawingDocument(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 inline constexpr char kBeditDrawingSaveRefusal[] =
     "BEDIT is active: the temporary editor model replaced the drawing model. Run BCLOSE to return to the drawing before saving.";
+/// Empty when the current model can be saved; otherwise explains how to leave a temporary block
+/// editing model before saving the drawing.
+std::string DrawingSaveRefusalReason(const AppCommandState& st);
 bool SaveDrawingDocument(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 
 /// REQ-378 (#696 P5): copies the DWG at \p srcUtf8 to \p dstUtf8 byte for byte, except that its

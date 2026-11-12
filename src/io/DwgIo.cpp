@@ -235,9 +235,20 @@ bool OpenDrawingDocument(AppCommandState& st, const char* pathUtf8, std::vector<
   return ImportDwgFile(st, pathUtf8, log);
 }
 
-bool SaveDrawingDocument(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+std::string DrawingSaveRefusalReason(const AppCommandState& st) {
+  if (st.blockTestActive) {
+    return "Save drawing — close the test block with BCLOSE, then close BEDIT before saving the drawing.";
+  }
   if (st.blockEditActive) {
-    log.push_back(kBeditDrawingSaveRefusal);
+    return kBeditDrawingSaveRefusal;
+  }
+  return {};
+}
+
+bool SaveDrawingDocument(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+  const std::string refusal = DrawingSaveRefusalReason(st);
+  if (!refusal.empty()) {
+    log.push_back(refusal);
     return false;
   }
   if (pathUtf8 == nullptr || pathUtf8[0] == '\0') {
