@@ -2262,6 +2262,27 @@ TEST_CASE("DWG export loss summary names dynamic-block gaps at R2004 (issue #618
   CHECK(DwgLossCountForLabel(conflictSt, "conflicting dynamic parameter") == 2);
 }
 
+TEST_CASE("DWG export loss summary counts block properties tables at every version (REQ-525, issue #808)",
+          "[dwg][libredwg][req525][issue808][issue614]") {
+  for (const DwgSaveVersion version : {DwgSaveVersion::R2000, DwgSaveVersion::R2004}) {
+    AppCommandState st;
+    st.dwgExportVersion = version;
+    CadBlockDefinition plain;
+    plain.name = "PLAIN";
+    st.blockDefs.push_back(plain);
+    CHECK(DwgLossCountForLabel(st, "block properties table") == 0);
+    for (const char* name : {"SIZED_A", "SIZED_B"}) {
+      CadBlockDefinition def;
+      Issue618StretchDoorDef(def, 2.f);
+      def.name = name;
+      def.propertyTable.columns = {def.parameters[0].name};
+      def.propertyTable.rows = {{"2"}, {"3"}};
+      st.blockDefs.push_back(std::move(def));
+    }
+    CHECK(DwgLossCountForLabel(st, "block properties table") == 2);
+  }
+}
+
 TEST_CASE("Foreign dynamic insert draws evaluated *U geometry not default size (issue #618 inc2)",
           "[dwg][libredwg][issue618][inc2]") {
   ScratchDir dir("dwg-dynamic-golden-display");

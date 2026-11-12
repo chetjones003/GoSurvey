@@ -13,6 +13,7 @@
 #include "util/meshgeom.hpp"
 #include "util/geom2d.hpp"
 #include "util/pointcloudcache.hpp"
+#include "util/cadblockparams.hpp"
 #include "BrepJson.hpp"
 
 #include <algorithm>
@@ -709,9 +710,20 @@ json CadBlockDefToJson(const CadBlockDefinition& d) {
     pj["name"] = p.name;
     pj["kind"] = static_cast<int>(p.kind);
     pj["value"] = p.value;
+    // REQ-524 item 7: limits are written only when changed, so an untouched block saves as before.
+    if (p.minValue != CadBlockParameter{}.minValue)
+      pj["minValue"] = p.minValue;
+    if (p.maxValue != CadBlockParameter{}.maxValue)
+      pj["maxValue"] = p.maxValue;
     pars.push_back(std::move(pj));
   }
   o["parameters"] = std::move(pars);
+  if (!d.propertyTable.columns.empty()) {  // REQ-525 item 8
+    json table;
+    table["columns"] = d.propertyTable.columns;
+    table["rows"] = d.propertyTable.rows;
+    o["propertyTable"] = std::move(table);
+  }
   json acts = json::array();
   for (const CadBlockAction& a : d.actions) {
     json aj;
@@ -768,7 +780,82 @@ json CadBlockDefToJson(const CadBlockDefinition& d) {
   return o;
 }
 
-CadBlockDefinition CadBlockDefFromJson(const json& o) {
+/// REQ-525 item 8. A file is untrusted: a column that is not text, or a row that is not one text
+/// cell per column, is dropped, so a loaded table always has the shape the edit functions keep.
+static CadBlockPropertyTable CadBlockPropertyTableFromJson(const json& o, const CadBlockDefinition& def,
+                                                           std::vector<std::string>* log) {
+  const auto warn = [&](const std::string& message) {
+    if (log)
+      log->push_back("Block \"" + def.name + "\" properties table — " + message);
+  };
+  const auto reject = [&](const std::string& message) {
+    warn(message);
+    return CadBlockPropertyTable{};
+  };
+  CadBlockPropertyTable t;
+  if (!o.contains("columns") || !o["columns"].is_array())
+    return reject("missing or malformed columns; the table was discarded.");
+  for (const auto& c : o["columns"]) {
+    if (!c.is_string())
+      return reject("a column name is not text; the table was discarded.");
+    const std::string name = c.get<std::string>();
+    if (std::any_of(t.columns.begin(), t.columns.end(), [&](const std::string& existing) {
+          return CadBlockEqCi(existing, name);
+        }))
+      return reject("duplicate column \"" + name + "\"; the table was discarded.");
+    if (CadBlockFindParameter(def, name) < 0)
+      return reject("column \"" + name + "\" does not name a parameter; the table was discarded.");
+    t.columns.push_back(name);
+  }
+  if (t.columns.empty()) {
+    if (o.contains("rows") && o["rows"].is_array() && !o["rows"].empty())
+      warn("rows without columns were discarded.");
+    return t;
+  }
+  if (!o.contains("rows") || !o["rows"].is_array())
+    return reject("missing or malformed rows; the table was discarded.");
+  for (size_t rowIndex = 0; rowIndex < o["rows"].size(); ++rowIndex) {
+    const auto& rj = o["rows"][rowIndex];
+    if (!rj.is_array() || rj.size() != t.columns.size()) {
+      warn("row " + std::to_string(rowIndex + 1) + " has the wrong number of cells and was discarded.");
+      continue;
+    }
+    std::vector<std::string> row;
+    bool textCells = true;
+    for (const auto& cell : rj) {
+      if (cell.is_string())
+        row.push_back(cell.get<std::string>());
+      else
+        textCells = false;
+    }
+    if (!textCells) {
+      warn("row " + std::to_string(rowIndex + 1) + " contains a non-text cell and was discarded.");
+      continue;
+    }
+    std::vector<std::string> canonicalRow;
+    canonicalRow.reserve(t.columns.size());
+    std::string reason;
+    for (size_t column = 0; column < t.columns.size(); ++column) {
+      const int pi = CadBlockFindParameter(def, t.columns[column]);
+      reason = CadBlockTableCanonCell(def, def.parameters[static_cast<size_t>(pi)], row[column],
+                                      &canonicalRow.emplace_back());
+      if (!reason.empty())
+        break;
+    }
+    if (!reason.empty()) {
+      warn("row " + std::to_string(rowIndex + 1) + " was discarded: " + reason);
+      continue;
+    }
+    if (CadBlockTableFindRow(t, canonicalRow, -1) > 0) {
+      warn("duplicate row " + std::to_string(rowIndex + 1) + " was discarded.");
+      continue;
+    }
+    t.rows.push_back(std::move(canonicalRow));
+  }
+  return t;
+}
+
+CadBlockDefinition CadBlockDefFromJson(const json& o, std::vector<std::string>* log) {
   CadBlockDefinition d;
   d.id = o.value("id", d.id);
   d.name = o.value("name", d.name);
@@ -784,6 +871,8 @@ CadBlockDefinition CadBlockDefFromJson(const json& o) {
   d.partNumber = o.value("partNumber", d.partNumber);
   if (o.contains("content"))
     d.content = CadBlockContentFromJson(o["content"]);
+  if (o.contains("visibilityStates") && o["visibilityStates"].is_array())
+    d.visibilityStates = o["visibilityStates"].get<std::vector<std::string>>();
   if (o.contains("attrDefs") && o["attrDefs"].is_array()) {
     for (const auto& aj : o["attrDefs"]) {
       CadBlockAttrDef a;
@@ -804,8 +893,30 @@ CadBlockDefinition CadBlockDefFromJson(const json& o) {
       p.name = pj.value("name", "");
       p.kind = static_cast<CadBlockParamKind>(pj.value("kind", 0));
       p.value = pj.value("value", 0.f);
+      const bool hasMinimum = pj.contains("minValue");
+      const bool hasMaximum = pj.contains("maxValue");
+      p.minValue = pj.value("minValue", p.minValue);
+      p.maxValue = pj.value("maxValue", p.maxValue);
+      const bool invalidLimits = !std::isfinite(p.minValue) || !std::isfinite(p.maxValue) || p.minValue > p.maxValue;
+      const bool violatesSavedLimit = (hasMinimum && p.value < p.minValue) || (hasMaximum && p.value > p.maxValue);
+      if (p.kind != CadBlockParamKind::Visibility &&
+          (!std::isfinite(p.value) || invalidLimits || violatesSavedLimit)) {
+        if (log)
+          log->push_back("Block \"" + d.name + "\" parameter \"" + p.name +
+                         "\" has invalid limits or value; default limits and value were restored.");
+        const CadBlockParameter defaults;
+        p.value = defaults.value;
+        p.minValue = defaults.minValue;
+        p.maxValue = defaults.maxValue;
+      }
       d.parameters.push_back(std::move(p));
     }
+  }
+  if (o.contains("propertyTable")) {
+    if (o["propertyTable"].is_object())
+      d.propertyTable = CadBlockPropertyTableFromJson(o["propertyTable"], d, log);
+    else if (log)
+      log->push_back("Block \"" + d.name + "\" has a malformed properties table; it was discarded.");
   }
   if (o.contains("actions") && o["actions"].is_array()) {
     for (const auto& aj : o["actions"]) {
@@ -822,8 +933,6 @@ CadBlockDefinition CadBlockDefFromJson(const json& o) {
       d.actions.push_back(std::move(a));
     }
   }
-  if (o.contains("visibilityStates") && o["visibilityStates"].is_array())
-    d.visibilityStates = o["visibilityStates"].get<std::vector<std::string>>();
   d.dynamicAnonymous = o.value("dynamicAnonymous", false);
   if (o.contains("connections") && o["connections"].is_array()) {
     for (const auto& cj : o["connections"]) {
@@ -4496,7 +4605,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.cadBlockRefAttrs.clear();
   if (doc.contains("blockDefs") && doc["blockDefs"].is_array()) {
     for (const auto& o : doc["blockDefs"])
-      st.blockDefs.push_back(CadBlockDefFromJson(o));
+      st.blockDefs.push_back(CadBlockDefFromJson(o, &log));
   }
   if (doc.contains("blockRefs") && doc["blockRefs"].is_array()) {
     for (const auto& o : doc["blockRefs"])

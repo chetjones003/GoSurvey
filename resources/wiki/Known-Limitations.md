@@ -58,8 +58,12 @@ available (issue #1019). `POINT` is a CAD marker, not a survey point — use `CR
 
 ### Blocks
 
-`BLOCK` · `INSERT` · `WBLOCK` · `ATTDEF` · block attributes · dynamic blocks · block libraries.
-**There is no block support at all.** DWG export writes geometry exploded for this reason.
+`BLOCK`, `INSERT`, `WBLOCK`, attributes, and in-place block editing are available. Dynamic-block
+authoring and evaluation are partial: block parameters, actions and visibility states are stored, and
+the Block Properties Table is saved in GoSurvey files, but it is not exported as a native AutoCAD
+table. See [[Commands/btable]] and the export loss summary. GoSurvey block library commands are
+available, but parametric constraint solving is not. The five constraint controls in the Block Editor
+remain planned for a later increment of issue #808.
 
 ### Inquiry
 
@@ -89,7 +93,7 @@ presets
 | **Snap-to-grid** | The grid is a visual reference only |
 | **Object snap tracking, temporary tracking points** | Not present |
 | **Polar coordinate entry** (`@100<45`) | Use bearing lock: `A 45` then the distance |
-| **Parametric constraints** | Not present |
+| **Parametric constraints** | Geometric and dimensional constraint solving is not present yet; planned as stage 2 of issue #808. |
 | **Annotative scaling of existing text** | Changing the plot scale does not resize existing text; it does reposition survey point labels. In model space the annotation scale resizes annotative objects only |
 | **Coordinate system / projection library** | Coordinates are unprojected numbers. Use `ALIGN` to fit to control |
 | **Unit conversion** | The `UNITS` insertion setting is a **relabel only** — coordinates are never scaled |

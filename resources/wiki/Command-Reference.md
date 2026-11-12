@@ -283,6 +283,9 @@ for a compact list inside the program.
 | `BLOCKSTATS` | — | Definition statistics | [[Commands/blockstats]] |
 | `BSAVE` | — | Save the block being edited | [[Commands/bsave]] |
 | `BSAVEAS` | — | Save the edited block under a new name | [[Commands/bsaveas]] |
+| `BSETROW` | — | Apply a block-table row to selected inserts: BSETROW <row> | [[Commands/bsetrow]] |
+| `BTABLE` | — | View and edit a block's parameter-value table in BEDIT | [[Commands/btable]] |
+| `BTESTBLOCK` | — | Test the current block definition without saving test edits | [[Commands/btestblock]] |
 | `COPYCLIP` | — | Copy the selection to the CAD clipboard | [[Commands/copyclip]] |
 | `COPYSEL` | — | Copy selected inserts: COPYSEL dx, dy | [[Commands/copysel]] |
 | `INSERT` | `I` | Insert a block (dialog); or INSERT <name>, <x>, <y>[, sx, sy, rotDeg[, sz, z]] | [[Commands/insert]] |
@@ -290,6 +293,7 @@ for a compact list inside the program.
 | `MIRRORSEL` | — | Mirror selected inserts: MIRRORSEL x0, y0, x1, y1 | [[Commands/mirrorsel]] |
 | `MKLINE` | — | Add a line: MKLINE x0, y0, x1, y1 | [[Commands/mkline]] |
 | `MOVESEL` | — | Move selected inserts: MOVESEL dx, dy | [[Commands/movesel]] |
+| `PARAMETERS` | — | List and edit the current block's parameters in BEDIT | [[Commands/parameters]] |
 | `PASTEBLOCK` | — | Paste clipboard block references: PASTEBLOCK dx, dy | [[Commands/pasteblock]] |
 | `PURGE` | `-PURGE` | Purge unused block definitions | [[Commands/purge]] |
 | `ROTATESEL` | — | Rotate selected inserts: ROTATESEL x, y, deg | [[Commands/rotatesel]] |
@@ -392,6 +396,9 @@ for a compact list inside the program.
 | `BREAK` | `BR` | [[Commands/break]] |
 | `BSAVE` | — | [[Commands/bsave]] |
 | `BSAVEAS` | — | [[Commands/bsaveas]] |
+| `BSETROW` | — | [[Commands/bsetrow]] |
+| `BTABLE` | — | [[Commands/btable]] |
+| `BTESTBLOCK` | — | [[Commands/btestblock]] |
 | `CATCHMENT` | `CATCH` | [[Commands/catchment]] |
 | `CHAMFER` | `CHA` | [[Commands/chamfer]] |
 | `CIRCLE` | `C` | [[Commands/circle]] |
@@ -466,6 +473,7 @@ for a compact list inside the program.
 | `ORBIT` | `3DORBIT`, `3DO` | [[Commands/orbit]] |
 | `OVERKILL` | `OK` | [[Commands/overkill]] |
 | `PAN` | `P` | [[Commands/pan]] |
+| `PARAMETERS` | — | [[Commands/parameters]] |
 | `PASTE` | — | [[Commands/paste]] |
 | `PASTEBLOCK` | — | [[Commands/pasteblock]] |
 | `PASTEORIG` | `PO` | [[Commands/pasteorig]] |

@@ -2415,6 +2415,15 @@ void CadTruncateActiveUndoStack(AppCommandState& st, std::size_t n) {
     doc.undoStack.resize(n);
   doc.redoStack.clear();
 }
+void CadSwapActiveUndoStacks(AppCommandState& st, std::vector<DrawingGeometrySnapshot>& undo,
+                             std::vector<DrawingGeometrySnapshot>& redo) {
+  const int idx = st.activeDrawingIdx;
+  if (idx < 0 || static_cast<std::size_t>(idx) >= st.documents.size())
+    return;
+  DrawingDocument& doc = st.documents[static_cast<std::size_t>(idx)];
+  doc.undoStack.swap(undo);
+  doc.redoStack.swap(redo);
+}
 
 namespace {
 
@@ -8965,6 +8974,14 @@ const CmdEntry kRegistry[] = {
     {"bsave", "", "Save the block being edited"},
     {"bclose", "", "Close the block editor"},
     {"bsaveas", "", "Save the edited block under a new name"},
+    {"btestblock", "", "Test the block being edited as a placed reference, without saving (in BEDIT)"},
+    {"parameters", "",
+     "Parameters Manager (in BEDIT): PARAMETERS, or PARAMETERS <parameter>, "
+     "NAME|VALUE|MIN|MAX, <value> | DELETE"},
+    {"btable", "",
+     "Block properties table (in BEDIT): BTABLE, or BTABLE ADDCOLUMN|REMOVECOLUMN, <parameter> | "
+     "ADDROW[, values] | SET, <row>, <parameter>, <value> | REMOVEROW, <row> | CLEAR"},
+    {"bsetrow", "", "Set selected block references to a block-table row: BSETROW <row>"},
     {"attdef", "", "Attribute definition (in BEDIT)"},
     {"attedit", "", "Edit attribute values on selected inserts"},
     {"attsync", "", "Synchronize attributes from definitions"},
@@ -30644,6 +30661,10 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadBlockRefs.clear();
   st.cadBlockRefAttrs.clear();
   st.blockEditorName.clear();
+  st.blockTestActive = false;  // REQ-523: a test cannot outlive the editor it belongs to
+  st.blockTestStash = DrawingGeometrySnapshot{};
+  st.blockTestUndoStash.clear();
+  st.blockTestRedoStash.clear();
   st.importedDxfAttrDefs.clear();
   ClearPendingOneShotObjectSnap(st);
   ClearCadSelection(st);

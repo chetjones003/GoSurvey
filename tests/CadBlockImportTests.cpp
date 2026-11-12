@@ -43,6 +43,29 @@ TEST_CASE("DXF model-space drawing imports as a named block definition", "[issue
   CHECK(st.cadBlockRefs.empty());
 }
 
+TEST_CASE("BLOCKIMPORT wraps a DXF containing only attribute definitions", "[issue124][blockimport]") {
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::temp_directory_path() / "gosurvey-blockimport-attdef-only";
+  fs::create_directories(dir);
+  const fs::path dxf = dir / "ATTRIBUTES.dxf";
+  {
+    std::ofstream file(dxf, std::ios::binary);
+    file << "0\nSECTION\n2\nHEADER\n0\nENDSEC\n"
+            "0\nSECTION\n2\nBLOCKS\n0\nENDSEC\n"
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nATTDEF\n8\n0\n10\n0\n20\n0\n30\n0\n40\n0.25\n1\nDefault\n2\nTAG\n3\nPrompt\n"
+            "0\nENDSEC\n0\nEOF\n";
+  }
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportCadBlocksFromPath(state, dxf.u8string().c_str(), log));
+  const int index = CadBlockFindDef(state.blockDefs, "ATTRIBUTES");
+  REQUIRE(index >= 0);
+  CHECK(state.blockDefs[static_cast<size_t>(index)].content.lines.empty());
+  REQUIRE(state.blockDefs[static_cast<size_t>(index)].attrDefs.size() == 1);
+  CHECK(state.blockDefs[static_cast<size_t>(index)].attrDefs[0].tag == "TAG");
+}
+
 TEST_CASE("WBLOCK writes a definition to .dwg and BLOCKIMPORT reads it back", "[issue284][wblock][blockimport]") {
   namespace fs = std::filesystem;
   const fs::path dir = fs::temp_directory_path() / "gosurvey-wblock";

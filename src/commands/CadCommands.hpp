@@ -1906,6 +1906,20 @@ struct UnsavedProject {
   std::vector<std::string> drawings;
 };
 
+/// Camera restored when a block editing or test session leaves its isolated model view.
+struct CadBlockEditorCameraState {
+  double panX = 0.0, panY = 0.0, panZ = 0.0;
+  float zoom = 1.f, azimuthDeg = 0.f, elevationDeg = 90.f, rollDeg = 0.f;
+};
+
+/// Authoring windows hidden during Test Block and reopened when the user returns to the editor.
+struct CadBlockTestWindows {
+  bool palette = false;
+  bool connectionModes = false;
+  bool parameters = false;
+  bool propertiesTable = false;
+};
+
 struct AppCommandState {
   enum class Kind : std::uint8_t {
     None,
@@ -3500,6 +3514,10 @@ struct AppCommandState {
   /// Connection Modes window (issue #496 follow-up): a graphical alternative to the BCONNECTMODE
   /// text wizard, for the same "which mode applies to which snap target" authoring.
   bool showConnectionModesWindow = false;
+  /// GitHub issue #808: the Parameters Manager (REQ-524) and the Block Properties Table (REQ-525).
+  /// Set by PARAMETERS / BTABLE and the ribbon; the UI shows the window while true.
+  bool showBlockParametersWindow = false;
+  bool showBlockTableWindow = false;
   int blockAuthoringPaletteTab = 0;  ///< 0 Parameters, 1 Actions, 2 Parameter Sets, 3 Constraints
   /// REQ-350 — the Pipe Fittings palette. Session state beside `blockAuthoringPaletteOpen` and for
   /// the same reasons: the window's POSITION persists in its settings, and which
@@ -3861,8 +3879,22 @@ struct AppCommandState {
   std::size_t blockEditUndoMark = 0;
   bool blockEditCloseAsked = false;   ///< UI shows the close modal while true.
   /// Camera to restore when the session closes (the view BEDIT was invoked from).
-  double blockEditCamPanX = 0.0, blockEditCamPanY = 0.0, blockEditCamPanZ = 0.0;
-  float  blockEditCamZoom = 1.f, blockEditCamAz = 0.f, blockEditCamEl = 90.f, blockEditCamRoll = 0.f;
+  CadBlockEditorCameraState blockEditCamera;
+  /// Test Block (REQ-523, GitHub issue #808). A second store swap inside a block-edit session: while
+  /// active the model arrays hold one reference to the block being edited and \c blockTestStash holds
+  /// the editor (its geometry and the block definitions). Session-only, never serialized. Closing
+  /// restores the stash, so nothing done in a test is kept.
+  bool blockTestActive = false;
+  DrawingGeometrySnapshot blockTestStash;
+  /// The editor's undo and redo history, moved out for the length of the test and put back on close.
+  /// A test therefore starts with nothing to undo (REQ-523 item 8) and can never undo or redo into
+  /// an editor frame, whatever the history limit drops meanwhile.
+  std::vector<DrawingGeometrySnapshot> blockTestUndoStash;
+  std::vector<DrawingGeometrySnapshot> blockTestRedoStash;
+  bool blockTestSessionWasDirty = false;     ///< The editor had unsaved changes when the test started.
+  /// The view and authoring windows to restore when the test ends (REQ-523 item 7).
+  CadBlockEditorCameraState blockTestCamera;
+  CadBlockTestWindows blockTestWindows;
   std::vector<std::string> blockRecent;
   std::vector<std::string> blockFavorites;
   std::string blockLibraryFilter;
@@ -7107,6 +7139,8 @@ void PushUndoSnapshot(AppCommandState& st, const std::string& description);
 void CadRestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot& snap);
 [[nodiscard]] std::size_t CadActiveUndoStackSize(const AppCommandState& st);
 void CadTruncateActiveUndoStack(AppCommandState& st, std::size_t n);
+void CadSwapActiveUndoStacks(AppCommandState& st, std::vector<DrawingGeometrySnapshot>& undo,
+                             std::vector<DrawingGeometrySnapshot>& redo);
 /// Undo: restore previous geometry snapshot; push current to redo stack. Returns true if an undo was performed.
 bool DoUndo(AppCommandState& st, std::vector<std::string>& log);
 /// Redo: restore next geometry snapshot; push current to undo stack. Returns true if a redo was performed.

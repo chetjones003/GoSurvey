@@ -100,6 +100,15 @@ struct CadBlockAction {
   std::string labelGroup;
 };
 
+/// Block properties table (REQ-525, GitHub issue #808): named sets of parameter values. Each column
+/// is a parameter of the definition, by name; each row holds one cell per column. A numeric cell is
+/// stored as the text `CadBlockFormatNumber` writes; a visibility cell is a visibility-state name.
+/// Edited only through `cadblockparams.hpp`, which keeps every row as long as `columns`.
+struct CadBlockPropertyTable {
+  std::vector<std::string> columns;
+  std::vector<std::vector<std::string>> rows;
+};
+
 struct CadBlockNested {
   std::string defName;
   CadBlockXform xf;
@@ -378,6 +387,7 @@ struct CadBlockDefinition {
   std::vector<CadBlockParameter> parameters;
   std::vector<CadBlockAction> actions;
   std::vector<std::string> visibilityStates;
+  CadBlockPropertyTable propertyTable;  ///< REQ-525; empty = the block has no table.
   std::vector<CadBlockConnection> connections;
   std::string metadata;
   /// Piping fitting metadata (issue #486 increment A1). `partType == None` means this block is

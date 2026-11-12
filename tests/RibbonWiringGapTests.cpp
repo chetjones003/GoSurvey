@@ -102,3 +102,21 @@ TEST_CASE("Issue #1001 Sample Lines and Create Section Sheets are wired to their
   CHECK(std::string(sections->command) == "CREATESECTIONSHEETS");
   CHECK_FALSE(sections->placeholder);
 }
+
+TEST_CASE("Issue #808 Block Editor actions are wired", "[ribbon][issue808][req523][req524][req525]") {
+  for (const auto& [id, command] : {std::pair{"##BeTest", "BTESTBLOCK"},
+                                    std::pair{"##BeBTable", "BTABLE"},
+                                    std::pair{"##BePMan", "PARAMETERS"}}) {
+    const auto* button = FindButton(id);
+    REQUIRE(button != nullptr);
+    CHECK(std::string(button->tab) == "BlockEditor");
+    CHECK(std::string(button->command) == command);
+    CHECK_FALSE(button->placeholder);
+  }
+
+  const auto* closeTestTab = FindButton("##BtClose");
+  REQUIRE(closeTestTab != nullptr);
+  CHECK(std::string(closeTestTab->tab) == "BlockTest");
+  CHECK(std::string(closeTestTab->command) == "BCLOSE");
+  CHECK_FALSE(closeTestTab->placeholder);
+}

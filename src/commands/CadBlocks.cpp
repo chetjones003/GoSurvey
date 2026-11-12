@@ -3,6 +3,7 @@
 #include "CadRubberPreview.hpp"
 #include "ProjectWarnings.hpp"  // REQ-383: CheckClipboardPaste, the paste guard PASTEBLOCK shares with PASTE
 #include "StringUtil.hpp"
+#include "util/cadblockparams.hpp"  // REQ-524 / REQ-525: parameter and block-table edits (issue #808)
 #include "util/cadsolid.hpp"
 #include "util/cadpiperun.hpp"  // CadPipeRunEndPorts (issue #486, "pipe end" connection port)
 #include "util/solidpick.hpp"
@@ -26,6 +27,33 @@
 #include <sstream>
 
 namespace {
+
+CadBlockEditorCameraState CaptureBlockEditorCamera(const AppCommandState& st) {
+  return {st.viewportPanX, st.viewportPanY, st.viewportPanZ, st.viewportZoom, st.viewportAzimuthDeg,
+          st.viewportElevationDeg, st.viewportRollDeg};
+}
+
+void RestoreBlockEditorCamera(AppCommandState& st, const CadBlockEditorCameraState& camera) {
+  st.viewportPanX = camera.panX;
+  st.viewportPanY = camera.panY;
+  st.viewportPanZ = camera.panZ;
+  st.viewportZoom = camera.zoom;
+  st.viewportAzimuthDeg = camera.azimuthDeg;
+  st.viewportElevationDeg = camera.elevationDeg;
+  st.viewportRollDeg = camera.rollDeg;
+}
+
+CadBlockTestWindows CaptureBlockTestWindows(const AppCommandState& st) {
+  return {st.blockAuthoringPaletteOpen, st.showConnectionModesWindow, st.showBlockParametersWindow,
+          st.showBlockTableWindow};
+}
+
+void RestoreBlockTestWindows(AppCommandState& st, const CadBlockTestWindows& windows) {
+  st.blockAuthoringPaletteOpen = windows.palette;
+  st.showConnectionModesWindow = windows.connectionModes;
+  st.showBlockParametersWindow = windows.parameters;
+  st.showBlockTableWindow = windows.propertiesTable;
+}
 
 /// INSERT rotation is entered in the app's angle convention — 0° = north, **clockwise positive**
 /// (CadCommands.hpp; same as ROTATE, which negates for the same reason). The block frame is the
@@ -339,7 +367,7 @@ void HarvestDrawingPrimitivesIntoContent(const AppCommandState& st, CadBlockCont
 bool DrawingHasCaptureableGeometry(const AppCommandState& st) {
   return !st.userLinesFlat.empty() || !st.userCirclesCxCyZR.empty() || !st.userArcs.empty() ||
          !st.userEllipses.empty() || st.userPolylineOffsets.size() >= 2 || !st.cadAnnotations.empty() ||
-         !st.cadMeshes.empty() || !st.cadSolids.empty() || !st.importedDxfAttrDefs.empty();
+         !st.cadMeshes.empty() || !st.cadSolids.empty();
 }
 
 std::string FileStemUtf8(const char* pathUtf8) {
@@ -475,7 +503,7 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
   int n = 0;
   for (CadBlockDefinition& d : scratch.blockDefs)
     n += MergeBlockDef(dest, std::move(d), log);
-  if (DrawingHasCaptureableGeometry(scratch) && !skipWrapDuringBedit) {
+  if ((DrawingHasCaptureableGeometry(scratch) || !scratch.importedDxfAttrDefs.empty()) && !skipWrapDuringBedit) {
     CadBlockDefinition wrap;
     wrap.name = FileStemUtf8(pathUtf8);
     // A standalone `.sat` is re-based into the current drawing's model units (feet for a feet
@@ -3042,13 +3070,7 @@ void CadBlocksEnterNamedEditor(AppCommandState& st, std::string_view nameRaw, st
   PushUndoSnapshot(st, "Bedit");
   st.blockEditUndoMark = CadActiveUndoStackSize(st);
   st.blockEditModelStash = CadCaptureGeometrySnapshot(st, "blockedit-stash");
-  st.blockEditCamPanX = st.viewportPanX;
-  st.blockEditCamPanY = st.viewportPanY;
-  st.blockEditCamPanZ = st.viewportPanZ;
-  st.blockEditCamZoom = st.viewportZoom;
-  st.blockEditCamAz = st.viewportAzimuthDeg;
-  st.blockEditCamEl = st.viewportElevationDeg;
-  st.blockEditCamRoll = st.viewportRollDeg;  // #153
+  st.blockEditCamera = CaptureBlockEditorCamera(st);  // #153
   ClearCadSelection(st);
   st.blockEditorName = st.blockDefs[static_cast<size_t>(di)].name;
   st.blockEditorSnapshot = st.blockDefs[static_cast<size_t>(di)];
@@ -3085,9 +3107,395 @@ int PickCadBlockRefAt(float wx, float wy, const AppCommandState& st, float ortho
   return best;
 }
 
+std::string CadBlocksApplyDefinitionEdit(AppCommandState& st, const char* undoLabel,
+                                         const std::function<std::string(CadBlockDefinition&)>& edit) {
+  if (st.blockEditorName.empty())
+    return "open a block with BEDIT first.";
+  if (st.blockTestActive)
+    return "close the test block first (BCLOSE).";
+  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+  if (di < 0)
+    return "the block being edited no longer exists.";
+  // Edit a copy: a refused edit must leave the definition, the undo history and the unsaved state
+  // exactly as they were (REQ-524 item 6), and the undo frame must be taken before the change.
+  CadBlockDefinition edited = st.blockDefs[static_cast<size_t>(di)];
+  std::string reason = edit(edited);
+  if (!reason.empty())
+    return reason;
+  if (CadBlockAuthoringEqual(edited, st.blockDefs[static_cast<size_t>(di)]))
+    return {};
+  PushUndoSnapshot(st, undoLabel);
+  st.blockDefs[static_cast<size_t>(di)] = std::move(edited);
+  st.blockEditorDirty = true;
+  BumpCadGpuCache(st);
+  return {};
+}
+
+namespace {
+
+/// REQ-523 item 7: the verbs that change or save the block being edited, refused during a test.
+bool IsBlockAuthoringVerb(const std::string& tok) {
+  static const char* const kVerbs[] = {"bedit",    "bsave",        "bsaveas",      "bparam",       "baction",
+                                       "bvisibility", "attdef",    "beditadd",     "bconnect",     "bconnectedit",
+                                       "bconnectmode", "blockfitting", "parameters", "btable"};
+  for (const char* verb : kVerbs) {
+    if (tok == verb)
+      return true;
+  }
+  return false;
+}
+
+void StashBlockEditorForTest(AppCommandState& st) {
+  st.blockTestSessionWasDirty = st.cadGpuRevision != st.blockEditCleanRevision;
+  st.blockTestStash = CadCaptureGeometrySnapshot(st, "blocktest-stash");
+  st.blockTestCamera = CaptureBlockEditorCamera(st);
+  st.blockTestWindows = CaptureBlockTestWindows(st);
+  CadSwapActiveUndoStacks(st, st.blockTestUndoStash, st.blockTestRedoStash);
+  st.blockAuthoringPaletteOpen = false;
+  st.showConnectionModesWindow = false;
+  st.showBlockParametersWindow = false;
+  st.showBlockTableWindow = false;
+}
+
+void LoadBlockTestReference(AppCommandState& st, CadBlockDefinition& def) {
+  // Fold unsaved editor geometry into the definition for the preview. The stashed snapshot still
+  // holds the exact editor state and restores it when the test closes.
+  HarvestDrawingPrimitivesIntoContent(st, &def.content);
+  LoadBlockPrimitivesIntoDrawing(st, CadBlockContent{});
+  ClearCadSelection(st);
+  CadBlockRef ref;
+  ref.defName = def.name;
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(NewBlockAttr(st));
+  EnsureEntityIds(st);
+  st.blockTestActive = true;
+  st.pendingZoomExtents = true;
+  BumpCadGpuCache(st);
+}
+
+/// REQ-523 items 5 and 6: put the block editor back exactly as the test found it.
+void BlockTestClose(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::None)
+    CancelActiveCommand(st, log);
+  CadRestoreGeometrySnapshot(st, st.blockTestStash);
+  st.blockTestStash = DrawingGeometrySnapshot{};
+  CadSwapActiveUndoStacks(st, st.blockTestUndoStash, st.blockTestRedoStash);
+  st.blockTestUndoStash.clear();
+  st.blockTestRedoStash.clear();
+  RestoreBlockEditorCamera(st, st.blockTestCamera);
+  RestoreBlockTestWindows(st, st.blockTestWindows);
+  st.blockTestActive = false;
+  ClearCadSelection(st);
+  BumpCadGpuCache(st);
+  // The bump above must not turn a clean session into one that prompts on BCLOSE. A session that
+  // was already unsaved keeps its older clean revision, which the bump cannot equal.
+  if (!st.blockTestSessionWasDirty)
+    st.blockEditCleanRevision = st.cadGpuRevision;
+}
+
+/// REQ-523 items 1-3: swap the editor view for one reference to the block as it is being edited.
+void BlockTestStart(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.blockEditorName.empty() || !st.blockEditActive) {
+    log.push_back("BTESTBLOCK — open a block with BEDIT first.");
+    return;
+  }
+  if (st.blockTestActive)  // item 6: a second BTESTBLOCK starts a fresh test
+    BlockTestClose(st, log);
+  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+  if (di < 0) {
+    log.push_back("BTESTBLOCK — the block being edited no longer exists.");
+    return;
+  }
+  const bool hasGeometry = DrawingHasCaptureableGeometry(st);
+  if (!hasGeometry && st.blockDefs[static_cast<size_t>(di)].content.nested.empty()) {
+    log.push_back("BTESTBLOCK — the block has no objects to test.");
+    return;
+  }
+  if (st.active != AppCommandState::Kind::None)
+    CancelActiveCommand(st, log);
+  CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  StashBlockEditorForTest(st);
+  LoadBlockTestReference(st, def);
+  log.push_back("BTESTBLOCK — testing \"" + st.blockEditorName +
+                "\". Nothing done here is saved. BCLOSE returns to the block editor.");
+}
+
+/// REQ-524 item 1: the block's parameters, then its attribute definitions.
+void ListBlockParameters(const AppCommandState& st, const CadBlockDefinition& def, std::vector<std::string>& log) {
+  if (def.parameters.empty() && def.attrDefs.empty()) {
+    log.push_back("PARAMETERS — \"" + st.blockEditorName + "\" has no parameters.");
+    return;
+  }
+  for (size_t i = 0; i < def.parameters.size(); ++i) {
+    const CadBlockParameter& p = def.parameters[i];
+    log.push_back("PARAMETERS — " + std::to_string(i + 1) + ". " + p.name + " (" +
+                  std::string(CadBlockParamKindLabel(p.kind)) + ") value " + CadBlockFormatNumber(p.value) +
+                  ", minimum " + CadBlockFormatNumber(p.minValue) + ", maximum " +
+                  CadBlockFormatNumber(p.maxValue) + ", actions " +
+                  std::to_string(CadBlockActionsBoundTo(def, p.name)) + ".");
+  }
+  for (const CadBlockAttrDef& a : def.attrDefs)
+    log.push_back("PARAMETERS — attribute " + a.tag + " = " + a.defaultValue + ".");
+}
+
+/// REQ-524 items 1-5: `PARAMETERS`, `PARAMETERS <parameter>, NAME|VALUE|MIN|MAX, <value>`,
+/// `PARAMETERS <parameter>, DELETE`.
+void RunParametersCommand(AppCommandState& st, const std::vector<std::string>& f, std::vector<std::string>& log) {
+  if (st.blockEditorName.empty()) {
+    log.push_back("PARAMETERS — open a block with BEDIT first.");
+    return;
+  }
+  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+  if (di < 0) {
+    log.push_back("PARAMETERS — the block being edited no longer exists.");
+    return;
+  }
+  if (f.empty()) {
+    ListBlockParameters(st, st.blockDefs[static_cast<size_t>(di)], log);
+    st.showBlockParametersWindow = true;
+    return;
+  }
+  const char* const usage =
+      "PARAMETERS — usage: PARAMETERS <parameter>, NAME|VALUE|MIN|MAX, <value> or PARAMETERS <parameter>, DELETE.";
+  if (f.size() < 2) {
+    log.push_back(usage);
+    return;
+  }
+  std::string reason;
+  const int pi = CadBlockResolveParameter(st.blockDefs[static_cast<size_t>(di)], f[0], &reason);
+  if (pi < 0) {
+    log.push_back("PARAMETERS — " + reason);
+    return;
+  }
+  const std::string name = st.blockDefs[static_cast<size_t>(di)].parameters[static_cast<size_t>(pi)].name;
+  const std::string verb = StringUtil::toLowerAsciiCopy(f[1]);
+  if (verb == "delete") {
+    if (f.size() != 2) {
+      log.push_back(usage);
+      return;
+    }
+    int actionsRemoved = 0;
+    reason = CadBlocksApplyDefinitionEdit(st, "Delete block parameter", [pi, &actionsRemoved](CadBlockDefinition& d) {
+      return CadBlockParamDelete(d, pi, &actionsRemoved);
+    });
+    if (!reason.empty()) {
+      log.push_back("PARAMETERS — " + reason);
+      return;
+    }
+    log.push_back("PARAMETERS — deleted " + name + " and " + std::to_string(actionsRemoved) + " action(s) bound to it.");
+    return;
+  }
+  if (f.size() != 3) {
+    log.push_back(usage);
+    return;
+  }
+  if (verb == "name") {
+    reason = CadBlocksApplyDefinitionEdit(st, "Rename block parameter", [pi, &f](CadBlockDefinition& d) {
+      return CadBlockParamRename(d, pi, f[2]);
+    });
+    log.push_back(reason.empty() ? "PARAMETERS — " + name + " renamed " + StringUtil::trimCopy(f[2]) + "."
+                                 : "PARAMETERS — " + reason);
+    return;
+  }
+  CadBlockParamField field = CadBlockParamField::Value;
+  if (!CadBlockParamFieldFromCommand(verb, &field)) {
+    log.push_back(usage);
+    return;
+  }
+  reason = CadBlocksApplyDefinitionEdit(st, "Edit block parameter", [pi, field, &f](CadBlockDefinition& d) {
+    return CadBlockParamSetNumber(d, pi, field, f[2]);
+  });
+  if (!reason.empty()) {
+    log.push_back("PARAMETERS — " + reason);
+    return;
+  }
+  const CadBlockParameter& p = st.blockDefs[static_cast<size_t>(di)].parameters[static_cast<size_t>(pi)];
+  const float now = CadBlockParamFieldValue(p, field);
+  log.push_back("PARAMETERS — " + name + " " + std::string(CadBlockParamFieldLabel(field)) + " " +
+                CadBlockFormatNumber(now) + ".");
+}
+
+/// REQ-525 item 2: the table as text, one line per row.
+void ListBlockTable(const AppCommandState& st, const CadBlockDefinition& def, std::vector<std::string>& log) {
+  const CadBlockPropertyTable& t = def.propertyTable;
+  if (t.columns.empty()) {
+    log.push_back("BTABLE — \"" + st.blockEditorName + "\" has no block table.");
+    return;
+  }
+  std::string header;
+  for (const std::string& column : t.columns)
+    header += (header.empty() ? "" : ", ") + column;
+  log.push_back("BTABLE — columns: " + header + "; " + std::to_string(t.rows.size()) + " row(s).");
+  for (size_t r = 0; r < t.rows.size(); ++r) {
+    std::string cells;
+    for (const std::string& cell : t.rows[r])
+      cells += (cells.empty() ? "" : ", ") + cell;
+    log.push_back("BTABLE — " + std::to_string(r + 1) + ". " + cells);
+  }
+}
+
+/// REQ-525 items 2-5.
+void RunBlockTableCommand(AppCommandState& st, const std::vector<std::string>& f, std::vector<std::string>& log) {
+  if (st.blockEditorName.empty()) {
+    log.push_back("BTABLE — open a block with BEDIT first.");
+    return;
+  }
+  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+  if (di < 0) {
+    log.push_back("BTABLE — the block being edited no longer exists.");
+    return;
+  }
+  if (f.empty()) {
+    ListBlockTable(st, st.blockDefs[static_cast<size_t>(di)], log);
+    st.showBlockTableWindow = true;
+    return;
+  }
+  const char* const usage =
+      "BTABLE — usage: BTABLE ADDCOLUMN|REMOVECOLUMN, <parameter> | ADDROW[, <value>, ...] | "
+      "SET, <row>, <parameter>, <value> | REMOVEROW, <row> | CLEAR.";
+  const std::string verb = StringUtil::toLowerAsciiCopy(f[0]);
+  std::string reason;
+  std::string done;
+  // A `<parameter>` resolves against the definition as it is now, before the edit runs on its copy.
+  const auto resolve = [&st, di](const std::string& token, std::string* name, std::string* error) {
+    const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+    const int pi = CadBlockResolveParameter(def, token, error);
+    if (pi >= 0)
+      *name = def.parameters[static_cast<size_t>(pi)].name;
+    return pi;
+  };
+  if (verb == "addcolumn" && f.size() == 2) {
+    std::string name;
+    const int pi = resolve(f[1], &name, &reason);
+    if (pi >= 0) {
+      reason = CadBlocksApplyDefinitionEdit(st, "Block table column", [pi](CadBlockDefinition& d) {
+        return CadBlockTableAddColumn(d, pi);
+      });
+      done = "added column " + name + ".";
+    }
+  } else if (verb == "removecolumn" && f.size() == 2) {
+    // A column is named by its parameter; a list number is accepted as everywhere else.
+    std::string name = f[1];
+    if (CadBlockParseListNumber(f[1], nullptr)) {
+      if (resolve(f[1], &name, &reason) < 0) {
+        log.push_back("BTABLE — " + reason);
+        return;
+      }
+    }
+    reason = CadBlocksApplyDefinitionEdit(st, "Block table column", [&name](CadBlockDefinition& d) {
+      return CadBlockTableRemoveColumn(d, name);
+    });
+    done = "removed column " + name + ".";
+  } else if (verb == "addrow") {
+    const std::vector<std::string> values(f.begin() + 1, f.end());
+    reason = CadBlocksApplyDefinitionEdit(st, "Block table row", [&values](CadBlockDefinition& d) {
+      return CadBlockTableAddRow(d, values);
+    });
+    done = "added row " + std::to_string(st.blockDefs[static_cast<size_t>(di)].propertyTable.rows.size()) + ".";
+  } else if (verb == "set" && f.size() == 4) {
+    int row = 0;
+    std::string name;
+    if (!CadBlockParseListNumber(f[1], &row)) {
+      reason = "the row must be a whole number, 1 or more.";
+    } else if (resolve(f[2], &name, &reason) >= 0) {
+      reason = CadBlocksApplyDefinitionEdit(st, "Block table value", [row, &name, &f](CadBlockDefinition& d) {
+        return CadBlockTableSetCell(d, row, name, f[3]);
+      });
+      done = "row " + std::to_string(row) + " " + name + " set.";
+    }
+  } else if (verb == "removerow" && f.size() == 2) {
+    int row = 0;
+    if (!CadBlockParseListNumber(f[1], &row)) {
+      reason = "the row must be a whole number, 1 or more.";
+    } else {
+      reason = CadBlocksApplyDefinitionEdit(st, "Block table row", [row](CadBlockDefinition& d) {
+        return CadBlockTableRemoveRow(d, row);
+      });
+      done = "removed row " + std::to_string(row) + ".";
+    }
+  } else if (verb == "clear" && f.size() == 1) {
+    reason = CadBlocksApplyDefinitionEdit(st, "Block table", [](CadBlockDefinition& d) { return CadBlockTableClear(d); });
+    done = "table removed.";
+  } else {
+    log.push_back(usage);
+    return;
+  }
+  log.push_back("BTABLE — " + (reason.empty() ? done : reason));
+}
+
+/// REQ-525 item 6: `BSETROW <row>` on the selected block references.
+void RunSetRowCommand(AppCommandState& st, const std::vector<std::string>& f, std::vector<std::string>& log) {
+  int row = 0;
+  if (f.size() != 1 || !CadBlockParseListNumber(f[0], &row)) {
+    log.push_back("BSETROW — usage: BSETROW <row> (with block references selected).");
+    return;
+  }
+  std::vector<int> targets;
+  int skipped = 0;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type != SelectedEntity::Type::BlockRef || e.index < 0 ||
+        static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+      continue;
+    const int di = CadBlockFindDef(st.blockDefs, st.cadBlockRefs[static_cast<size_t>(e.index)].defName);
+    if (di >= 0 && static_cast<size_t>(row) <= st.blockDefs[static_cast<size_t>(di)].propertyTable.rows.size())
+      targets.push_back(e.index);
+    else
+      ++skipped;
+  }
+  if (targets.empty() && skipped == 0) {
+    log.push_back("BSETROW — select a block reference first.");
+    return;
+  }
+  if (targets.empty()) {
+    log.push_back("BSETROW — none of the " + std::to_string(skipped) +
+                  " selected reference(s) has a block table with row " + std::to_string(row) + ".");
+    return;
+  }
+  PushUndoSnapshot(st, "Block table row");
+  for (const int index : targets) {
+    CadBlockRef& ref = st.cadBlockRefs[static_cast<size_t>(index)];
+    const int di = CadBlockFindDef(st.blockDefs, ref.defName);
+    CadBlockTableApplyRow(st.blockDefs[static_cast<size_t>(di)], row, &ref);
+  }
+  BumpCadGpuCache(st);
+  log.push_back("BSETROW — row " + std::to_string(row) + " set on " + std::to_string(targets.size()) +
+                " reference(s)" + (skipped > 0 ? ", " + std::to_string(skipped) + " skipped (no such row)." : "."));
+}
+
+} // namespace
+
 bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, std::istream& args,
                              std::vector<std::string>& log) {
   const std::string tok = StringUtil::toLowerAsciiCopy(plotTok);
+
+  // Test Block (REQ-523, GitHub issue #808).
+  if (tok == "btestblock") {
+    BlockTestStart(st, log);
+    return true;
+  }
+  if (st.blockTestActive) {
+    if (tok == "bclose") {  // item 6: closes the test only; SAVE / DISCARD are ignored
+      BlockTestClose(st, log);
+      log.push_back("BCLOSE — test block closed; back in the block editor for \"" + st.blockEditorName + "\".");
+      return true;
+    }
+    if (IsBlockAuthoringVerb(tok)) {  // item 7
+      log.push_back(StringUtil::toUpperAsciiCopy(tok) + " — close the test block first (BCLOSE).");
+      return true;
+    }
+  }
+  if (tok == "parameters") {
+    RunParametersCommand(st, SplitCommaRest(args), log);
+    return true;
+  }
+  if (tok == "btable") {
+    RunBlockTableCommand(st, SplitCommaRest(args), log);
+    return true;
+  }
+  if (tok == "bsetrow") {
+    RunSetRowCommand(st, SplitCommaRest(args), log);
+    return true;
+  }
 
   if (tok == "block" || tok == "-block") {
     const std::vector<std::string> f = SplitCommaRest(args);
@@ -3296,13 +3704,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       CadRestoreGeometrySnapshot(st, st.blockEditModelStash);
       st.blockDefs = std::move(editedDefs);
       st.blockEditModelStash = DrawingGeometrySnapshot{};
-      st.viewportPanX = st.blockEditCamPanX;
-      st.viewportPanY = st.blockEditCamPanY;
-      st.viewportPanZ = st.blockEditCamPanZ;
-      st.viewportZoom = st.blockEditCamZoom;
-      st.viewportAzimuthDeg = st.blockEditCamAz;
-      st.viewportElevationDeg = st.blockEditCamEl;
-      st.viewportRollDeg = st.blockEditCamRoll;  // #153
+      RestoreBlockEditorCamera(st, st.blockEditCamera);  // #153
       CadTruncateActiveUndoStack(st, st.blockEditUndoMark);  // drop session block-geometry snapshots
       st.blockEditActive = false;
     }
@@ -3656,7 +4058,21 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     if (di < 0)
       return true;
     PushUndoSnapshot(st, "Block visibility state");
-    st.blockDefs[static_cast<size_t>(di)].visibilityStates.push_back(f[0]);
+    CadBlockDefinition& definition = st.blockDefs[static_cast<size_t>(di)];
+    const bool firstState = definition.visibilityStates.empty();
+    definition.visibilityStates.push_back(f[0]);
+    if (firstState) {
+      for (size_t column = 0; column < definition.propertyTable.columns.size(); ++column) {
+        const int parameterIndex = CadBlockFindParameter(definition, definition.propertyTable.columns[column]);
+        if (parameterIndex < 0 ||
+            definition.parameters[static_cast<size_t>(parameterIndex)].kind != CadBlockParamKind::Visibility)
+          continue;
+        for (std::vector<std::string>& row : definition.propertyTable.rows) {
+          if (column < row.size() && row[column].empty())
+            row[column] = f[0];
+        }
+      }
+    }
     st.blockEditorDirty = true;
     BumpCadGpuCache(st);
     log.push_back("BVISIBILITY — state " + f[0] + ".");

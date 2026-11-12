@@ -190,6 +190,12 @@ private:
   void RefreshPipeFittingPalette(QDialog* dialog);
   void ShowBlockEditorPicker();
   void ShowConnectionModes();
+  void ShowBlockParametersManager();
+  void RenderBlockParametersManager(QDialog* dialog);
+  void ConnectBlockParametersManager(QDialog* dialog);
+  void ShowBlockPropertiesTable();
+  void RenderBlockPropertiesTable(QDialog* dialog);
+  void ConnectBlockPropertiesTable(QDialog* dialog);
   void ShowBlockEditorClosePrompt();
   void ServiceTelemetry();
   void InitUpdates();

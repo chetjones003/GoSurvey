@@ -1008,7 +1008,7 @@ void EditorWindow::BuildRibbonPages() {
   ribbon->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed); ribbon->setMinimumWidth(0);
   ribbon->setFixedHeight(kRibbonHeight);
   const QStringList names = {"Home", "Insert", "Annotate", "View", "Manage", "Output", "Survey", "Modeling",
-      "Layout", "SurfaceCtx", "SurveyPointCtx", "PointCloudCtx", "BlockEditor", "GeolocationCtx", "PdfCtx", "HatchCtx",
+      "Layout", "SurfaceCtx", "SurveyPointCtx", "PointCloudCtx", "BlockEditor", "BlockTest", "GeolocationCtx", "PdfCtx", "HatchCtx",
       "AlignmentCtx"};
   for (const auto& name : names) {
     auto* page = new RibbonPage(ribbon); page->setObjectName("ribbonPage_" + name); page->setProperty("ribbonTab", name);
@@ -1470,7 +1470,10 @@ void EditorWindow::RefreshRibbon() {
     if (item.type == SelectedEntity::Type::FilledRegion && item.index >= 0 && item.index < static_cast<int>(m_State.cadFilledRegions.size())) hatch = item.index;
   }
   const bool hatchActive = hatch >= 0 || m_State.active == AppCommandState::Kind::Hatch;
-  const QString desired = !m_State.blockEditorName.empty() ? "BlockEditor" : surface >= 0 ? "SurfaceCtx" : point >= 0 ? "SurveyPointCtx" : cloud >= 0 ? "PointCloudCtx" : hatchActive ? "HatchCtx" : alignment >= 0 ? "AlignmentCtx" : QString{};
+  // REQ-523 item 9: a Test Block replaces the Block Editor tab with its own Close tab.
+  const bool blockTest = m_State.blockTestActive && !m_State.blockEditorName.empty();
+  const bool blockEditor = !m_State.blockEditorName.empty() && !blockTest;
+  const QString desired = blockTest ? "BlockTest" : blockEditor ? "BlockEditor" : surface >= 0 ? "SurfaceCtx" : point >= 0 ? "SurveyPointCtx" : cloud >= 0 ? "PointCloudCtx" : hatchActive ? "HatchCtx" : alignment >= 0 ? "AlignmentCtx" : QString{};
   const QString previous = ribbon->property("selectedContext").toString();
   const QString active = ribbon->currentWidget() ? ribbon->currentWidget()->property("ribbonTab").toString() : "Home";
   if (desired != previous && !desired.isEmpty() && previous.isEmpty()) ribbon->setProperty("beforeContext", active);
@@ -1478,7 +1481,7 @@ void EditorWindow::RefreshRibbon() {
   for (int i = 0; i < ribbon->count(); ++i) {
     auto* page = ribbon->widget(i); const QString name = page->property("ribbonTab").toString();
     const bool visible = name == "Layout" ? paper : name == "SurfaceCtx" ? surface >= 0 : name == "SurveyPointCtx" ? point >= 0 :
-        name == "PointCloudCtx" ? cloud >= 0 : name == "BlockEditor" ? !m_State.blockEditorName.empty() :
+        name == "PointCloudCtx" ? cloud >= 0 : name == "BlockEditor" ? blockEditor : name == "BlockTest" ? blockTest :
         name == "GeolocationCtx" ? GeolocationRibbonTabVisible(m_State) : name == "PdfCtx" ? pdf >= 0 : name == "HatchCtx" ? hatchActive :
         name == "AlignmentCtx" ? alignment >= 0 : true;
     ribbon->setTabVisible(i, visible); page->setEnabled(drawing);
@@ -1488,6 +1491,7 @@ void EditorWindow::RefreshRibbon() {
     else if (name == "SurveyPointCtx") label = point >= 0 ? QString("Survey Point: %1").arg(m_State.surveyPoints[point].id) : "Survey Point";
     else if (name == "PointCloudCtx") label = "Point Cloud";
     else if (name == "BlockEditor") label = "Block Editor";
+    else if (name == "BlockTest") label = "Test Block";
     else if (name == "GeolocationCtx") label = "Geolocation";
     else if (name == "PdfCtx") label = "PDF Underlay";
     else if (name == "HatchCtx") label = "Hatch";

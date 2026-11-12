@@ -1569,6 +1569,9 @@ if(GOSURVEY_BUILD_TESTS)
     tests/GizmoSubObjectMoveTests.cpp
     tests/LibreDwgCadTests.cpp
     tests/CadBlockImportTests.cpp
+    # GitHub issue #808 stage 1 (REQ-523/524/525): Test Block, PARAMETERS, BTABLE, BSETROW. Rides with
+    # gosurvey_domain like CadBlockImportTests: the commands live in CadBlocks.cpp.
+    tests/CadBlockParamsTests.cpp
     tests/SurveyLabelMeasureTests.cpp
     # REQ-375 (#696 P2): project settings resolve against AppCommandState (EnforceProjectSettings), so
     # this rides with gosurvey_domain like CadBlockImportTests.

@@ -5,6 +5,7 @@
 #include "util/solidpick.hpp"
 
 #include <filesystem>
+#include <functional>
 #include <istream>
 #include <string>
 #include <string_view>
@@ -15,6 +16,15 @@ struct EntityAttributes;
 
 bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, std::istream& args,
                              std::vector<std::string>& log);
+
+/// REQ-524 / REQ-525 (GitHub issue #808): applies one edit to the block open in the block editor.
+/// \p edit is given a copy of the definition and returns an empty string or the refusal reason (the
+/// functions of `util/cadblockparams.hpp`). A refusal, or an edit that changed nothing, alters nothing
+/// and adds no undo step; otherwise the change is one undo step and marks the session unsaved.
+/// Returns the refusal reason, or an empty string. The one path PARAMETERS, BTABLE and the Qt
+/// Parameters Manager and Block Properties Table all write through.
+std::string CadBlocksApplyDefinitionEdit(AppCommandState& st, const char* undoLabel,
+                                         const std::function<std::string(CadBlockDefinition&)>& edit);
 
 int PickCadBlockRefAt(float wx, float wy, const AppCommandState& st, float orthoHalfHeightWorld);
 

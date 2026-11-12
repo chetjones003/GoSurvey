@@ -145,7 +145,12 @@ grades off a surface. `ELEV` sets the elevation new geometry is drawn at, shown 
 
 ### Does GoSurvey have blocks?
 
-No. There is no BLOCK, INSERT, or attribute support. DWG export writes geometry exploded.
+Yes. GoSurvey supports block definitions and inserts, attributes, and an in-place Block Editor.
+In the Block Editor, `BTESTBLOCK` previews the current unsaved definition; `PARAMETERS` manages
+its existing parameters, and `BTABLE` stores named parameter combinations. The properties table
+is currently GoSurvey drawing data and is not written as a native AutoCAD block table in DWG.
+Geometric and dimensional constraint solving is not available yet. See [[Known Limitations]] and
+[[Commands/btable]].
 
 ### Does GoSurvey have MIRROR?
 

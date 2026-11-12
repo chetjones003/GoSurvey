@@ -2,6 +2,7 @@
 
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
+#include "util/cadblockparams.hpp"
 
 #include <QAbstractButton>
 #include <QButtonGroup>
@@ -15,6 +16,7 @@
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QInputDialog>
 #include <QMessageBox>
@@ -30,21 +32,73 @@
 #include <QPointer>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <functional>
 #include <limits>
 #include <string>
+#include <utility>
 
 namespace {
 
-class ConnectionModeViewState final : public QObject {
+class BlockAuthoringViewState final : public QObject {
 public:
   using QObject::QObject;
   std::function<void()> renderModes;
   std::function<void()> refresh;
+  std::function<bool()> isEditing;
   std::uint32_t lastRevision = 0;
 };
+
+enum class ParameterColumn : int { Name, Value, Type, Minimum, Maximum, Actions, Count };
+
+constexpr int ColumnIndex(ParameterColumn column) {
+  return static_cast<int>(column);
+}
+
+bool HasActiveCellEditor(const QTableWidget* table) {
+  const auto* editor = table ? table->findChild<QLineEdit*>() : nullptr;
+  return editor && editor->isVisible();
+}
+
+void TrackTableEditing(BlockAuthoringViewState* view, QTableWidget* table) {
+  view->isEditing = [table] { return HasActiveCellEditor(table); };
+}
+
+void RestoreTableSelection(QTableWidget* table, int row, int column) {
+  if (row < 0 || row >= table->rowCount() || table->columnCount() == 0)
+    return;
+  const int restoredColumn = std::clamp(column, 0, table->columnCount() - 1);
+  table->selectRow(row);
+  table->setCurrentCell(row, restoredColumn);
+}
+
+bool ParameterFieldFromColumn(ParameterColumn column, CadBlockParamField* field) {
+  if (!field)
+    return false;
+  switch (column) {
+    case ParameterColumn::Value:
+      *field = CadBlockParamField::Value;
+      return true;
+    case ParameterColumn::Minimum:
+      *field = CadBlockParamField::Min;
+      return true;
+    case ParameterColumn::Maximum:
+      *field = CadBlockParamField::Max;
+      return true;
+    default:
+      return false;
+  }
+}
+
+void RefreshBlockAuthoringViewIfNeeded(QDialog* dialog, const char* stateObjectName, std::uint32_t revision) {
+  auto* stateObject = dialog->findChild<QObject*>(stateObjectName);
+  auto* view = static_cast<BlockAuthoringViewState*>(stateObject);
+  if (view && view->lastRevision != revision && view->refresh &&
+      (!view->isEditing || !view->isEditing()))
+    view->refresh();
+}
 
 int EditingDefinition(const AppCommandState& state) {
   return CadBlockFindDef(state.blockDefs, state.blockEditorName);
@@ -243,7 +297,11 @@ void EditorWindow::ShowBlockAuthoringPalette() {
                  QString("BACTION %1, DistPos").arg(QString::fromUtf8(entry.kind)));
     }
     layout->addLayout(grid);
-    AddUnavailableRow(layout, "Block Properties Table", "This tool was not implemented in 0.7.4.");
+    auto* tableButton = new QPushButton("Block Properties Table", unusedPage);
+    tableButton->setObjectName("blockPropertiesTableFromPalette");
+    tableButton->setMinimumHeight(42);
+    layout->addWidget(tableButton);
+    connect(tableButton, &QPushButton::clicked, this, [this] { Submit("BTABLE"); });
     layout->addStretch();
   }
   {
@@ -311,6 +369,432 @@ void EditorWindow::ShowBlockAuthoringPalette() {
   dialog->show();
 }
 
+void EditorWindow::RenderBlockParametersManager(QDialog* dialog) {
+  auto* table = dialog->findChild<QTableWidget*>("blockParametersTable");
+  auto* attrs = dialog->findChild<QLabel*>("blockParametersAttributes");
+  auto* status = dialog->findChild<QLabel*>("blockParametersStatus");
+  auto* viewState = static_cast<BlockAuthoringViewState*>(dialog->findChild<QObject*>("blockParametersViewState"));
+  if (!table || !attrs || !status || !viewState)
+    return;
+
+  const QSignalBlocker blocker(table);
+  const int definitionIndex = EditingDefinition(m_State);
+  const int selectedRow = table->currentRow();
+  const int selectedColumn = table->currentColumn();
+  table->setRowCount(0);
+  viewState->lastRevision = m_State.cadGpuRevision;
+  if (definitionIndex < 0) {
+    attrs->setText("The block being edited no longer exists.");
+    return;
+  }
+
+  const CadBlockDefinition& definition = m_State.blockDefs[static_cast<size_t>(definitionIndex)];
+  status->setText(definition.parameters.empty()
+                      ? "This block has no parameters. Add them from Action Parameters."
+                      : QString());
+  table->setRowCount(static_cast<int>(definition.parameters.size()));
+  for (size_t row = 0; row < definition.parameters.size(); ++row) {
+    const CadBlockParameter& parameter = definition.parameters[row];
+    const std::string_view kindLabel = CadBlockParamKindLabel(parameter.kind);
+    const QStringList values{
+        QString::fromUtf8(parameter.name.c_str()),
+        QString::fromStdString(CadBlockFormatNumber(parameter.value)),
+        QString::fromUtf8(kindLabel.data(), static_cast<int>(kindLabel.size())),
+        QString::fromStdString(CadBlockFormatNumber(parameter.minValue)),
+        QString::fromStdString(CadBlockFormatNumber(parameter.maxValue)),
+        QString::number(CadBlockActionsBoundTo(definition, parameter.name))};
+    for (int column = 0; column < values.size(); ++column) {
+      auto* item = new QTableWidgetItem(values[column]);
+      if (column == ColumnIndex(ParameterColumn::Type) || column == ColumnIndex(ParameterColumn::Actions))
+        item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+      table->setItem(static_cast<int>(row), column, item);
+    }
+  }
+
+  QStringList definitions;
+  for (const CadBlockAttrDef& attribute : definition.attrDefs) {
+    definitions.push_back(
+        QString("%1 = %2").arg(QString::fromUtf8(attribute.tag.c_str()), QString::fromUtf8(attribute.defaultValue.c_str())));
+  }
+  attrs->setText(definitions.isEmpty() ? "No attribute definitions." : definitions.join("\n"));
+  RestoreTableSelection(table, selectedRow, selectedColumn);
+}
+
+void EditorWindow::ConnectBlockParametersManager(QDialog* dialog) {
+  auto* table = dialog->findChild<QTableWidget*>("blockParametersTable");
+  auto* status = dialog->findChild<QLabel*>("blockParametersStatus");
+  auto* buttons = dialog->findChild<QDialogButtonBox*>();
+  auto* remove = dialog->findChild<QPushButton*>("blockParameterDelete");
+  if (!table || !status || !buttons || !remove)
+    return;
+
+  table->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
+  connect(table, &QTableWidget::itemChanged, this, [this, dialog, table, status](QTableWidgetItem* item) {
+    if (!item)
+      return;
+    const ParameterColumn column = static_cast<ParameterColumn>(item->column());
+    const bool renaming = column == ParameterColumn::Name;
+    CadBlockParamField parameterField = CadBlockParamField::Value;
+    if (!renaming && !ParameterFieldFromColumn(column, &parameterField))
+      return;
+
+    const int row = item->row();
+    const std::string value = item->text().toUtf8().toStdString();
+    const std::string reason = CadBlocksApplyDefinitionEdit(
+        m_State, renaming ? "Rename block parameter" : "Edit block parameter",
+        [row, renaming, parameterField, value](CadBlockDefinition& definition) {
+          if (renaming)
+            return CadBlockParamRename(definition, row, value);
+          return CadBlockParamSetNumber(definition, row, parameterField, value);
+        });
+    Refresh();
+    RenderBlockParametersManager(dialog);
+    if (!reason.empty())
+      status->setText(QString::fromStdString(reason));
+  });
+  connect(remove, &QPushButton::clicked, this, [this, dialog, table, status] {
+    const int row = table->currentRow();
+    if (row < 0)
+      return;
+    const auto answer = QMessageBox::question(
+        this, "Delete Block Parameter", "Delete this parameter and its bound actions?");
+    if (answer != QMessageBox::Yes)
+      return;
+    const std::string reason = CadBlocksApplyDefinitionEdit(
+        m_State, "Delete block parameter", [row](CadBlockDefinition& definition) {
+          int actionsRemoved = 0;
+          return CadBlockParamDelete(definition, row, &actionsRemoved);
+        });
+    Refresh();
+    RenderBlockParametersManager(dialog);
+    if (!reason.empty())
+      status->setText(QString::fromStdString(reason));
+    else
+      status->clear();
+  });
+  connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
+  connect(dialog, &QDialog::finished, this, [this] {
+    m_State.showBlockParametersWindow = false;
+    Refresh();
+  });
+}
+
+void EditorWindow::ShowBlockParametersManager() {
+  if (m_State.blockEditorName.empty()) {
+    m_State.showBlockParametersWindow = false;
+    if (auto* existing = findChild<QDialog*>("blockParametersManager"))
+      existing->close();
+    return;
+  }
+  if (auto* existing = findChild<QDialog*>("blockParametersManager")) {
+    RefreshBlockAuthoringViewIfNeeded(existing, "blockParametersViewState", m_State.cadGpuRevision);
+    if (!existing->isVisible())
+      existing->show();
+    return;
+  }
+
+  auto* dialog = new QDialog(this);
+  dialog->setObjectName("blockParametersManager");
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->setWindowTitle("Parameters Manager");
+  dialog->resize(860, 460);
+
+  auto* layout = new QVBoxLayout(dialog);
+  auto* heading = new QLabel(
+      QString("Parameters — %1").arg(QString::fromUtf8(m_State.blockEditorName.c_str())), dialog);
+  heading->setObjectName("blockParametersHeading");
+  layout->addWidget(heading);
+
+  auto* actionGroup = new QGroupBox("Action Parameters", dialog);
+  auto* actionLayout = new QVBoxLayout(actionGroup);
+  auto* table = new QTableWidget(actionGroup);
+  table->setObjectName("blockParametersTable");
+  table->setColumnCount(ColumnIndex(ParameterColumn::Count));
+  const std::array<std::pair<ParameterColumn, QString>, ColumnIndex(ParameterColumn::Count)> headers{{
+      {ParameterColumn::Name, "Name"}, {ParameterColumn::Value, "Value"}, {ParameterColumn::Type, "Type"},
+      {ParameterColumn::Minimum, "Minimum"}, {ParameterColumn::Maximum, "Maximum"},
+      {ParameterColumn::Actions, "Actions"}}};
+  for (const auto& [column, label] : headers)
+    table->setHorizontalHeaderItem(ColumnIndex(column), new QTableWidgetItem(label));
+  table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+  table->horizontalHeader()->setStretchLastSection(true);
+  table->setSelectionBehavior(QAbstractItemView::SelectRows);
+  table->setSelectionMode(QAbstractItemView::SingleSelection);
+  actionLayout->addWidget(table);
+  layout->addWidget(actionGroup, 1);
+
+  auto* attributeGroup = new QGroupBox("Attributes", dialog);
+  auto* attributeLayout = new QVBoxLayout(attributeGroup);
+  auto* attrs = new QLabel(attributeGroup);
+  attrs->setObjectName("blockParametersAttributes");
+  attrs->setWordWrap(true);
+  attributeLayout->addWidget(attrs);
+  layout->addWidget(attributeGroup);
+
+  auto* status = new QLabel(dialog);
+  status->setObjectName("blockParametersStatus");
+  layout->addWidget(status);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+  auto* remove = buttons->addButton("Delete Parameter", QDialogButtonBox::ActionRole);
+  remove->setObjectName("blockParameterDelete");
+  layout->addWidget(buttons);
+
+  auto* viewState = new BlockAuthoringViewState(dialog);
+  viewState->setObjectName("blockParametersViewState");
+  viewState->lastRevision = m_State.cadGpuRevision;
+  TrackTableEditing(viewState, table);
+  viewState->refresh = [this, dialog] { RenderBlockParametersManager(dialog); };
+  ConnectBlockParametersManager(dialog);
+  RenderBlockParametersManager(dialog);
+  dialog->show();
+}
+
+void EditorWindow::RenderBlockPropertiesTable(QDialog* dialog) {
+  auto* table = dialog->findChild<QTableWidget*>("blockPropertiesTableGrid");
+  auto* status = dialog->findChild<QLabel*>("blockPropertiesTableStatus");
+  auto* viewState = static_cast<BlockAuthoringViewState*>(dialog->findChild<QObject*>("blockPropertiesTableViewState"));
+  if (!table || !status || !viewState)
+    return;
+
+  const QSignalBlocker blocker(table);
+  const int definitionIndex = EditingDefinition(m_State);
+  const int selectedRow = table->currentRow();
+  const int selectedColumn = table->currentColumn();
+  table->clear();
+  viewState->lastRevision = m_State.cadGpuRevision;
+  if (definitionIndex < 0) {
+    table->setRowCount(0);
+    table->setColumnCount(0);
+    return;
+  }
+
+  const CadBlockDefinition& definition = m_State.blockDefs[static_cast<size_t>(definitionIndex)];
+  const CadBlockPropertyTable& data = definition.propertyTable;
+  if (definition.parameters.empty())
+    status->setText("This block has no parameters to add.");
+  else if (data.columns.empty())
+    status->setText("This block has no properties table. Add Properties to start one.");
+  else if (data.rows.empty())
+    status->setText("The properties table has no rows. Add Row to define a combination.");
+  else
+    status->clear();
+
+  table->setColumnCount(static_cast<int>(data.columns.size()));
+  QStringList headers;
+  for (const std::string& name : data.columns)
+    headers.push_back(QString::fromUtf8(name.c_str()));
+  table->setHorizontalHeaderLabels(headers);
+  table->setRowCount(static_cast<int>(data.rows.size()));
+  for (size_t row = 0; row < data.rows.size(); ++row) {
+    for (size_t column = 0; column < data.columns.size() && column < data.rows[row].size(); ++column) {
+      table->setItem(static_cast<int>(row), static_cast<int>(column),
+                     new QTableWidgetItem(QString::fromUtf8(data.rows[row][column].c_str())));
+    }
+  }
+  table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+  RestoreTableSelection(table, selectedRow, selectedColumn);
+}
+
+void EditorWindow::ConnectBlockPropertiesTable(QDialog* dialog) {
+  auto* table = dialog->findChild<QTableWidget*>("blockPropertiesTableGrid");
+  auto* status = dialog->findChild<QLabel*>("blockPropertiesTableStatus");
+  auto* buttons = dialog->findChild<QDialogButtonBox*>();
+  auto* addColumn = dialog->findChild<QPushButton*>("blockTableAddColumn");
+  auto* removeColumn = dialog->findChild<QPushButton*>("blockTableRemoveColumn");
+  auto* addRow = dialog->findChild<QPushButton*>("blockTableAddRow");
+  auto* removeRow = dialog->findChild<QPushButton*>("blockTableRemoveRow");
+  auto* clear = dialog->findChild<QPushButton*>("blockTableClear");
+  if (!table || !status || !buttons || !addColumn || !removeColumn || !addRow || !removeRow || !clear)
+    return;
+
+  table->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
+  connect(table, &QTableWidget::itemChanged, this, [this, dialog, table, status](QTableWidgetItem* item) {
+    if (!item)
+      return;
+    const int definitionIndex = EditingDefinition(m_State);
+    if (definitionIndex < 0 || item->row() < 0 || item->column() < 0)
+      return;
+    const CadBlockPropertyTable& current = m_State.blockDefs[static_cast<size_t>(definitionIndex)].propertyTable;
+    if (static_cast<size_t>(item->row()) >= current.rows.size() ||
+        static_cast<size_t>(item->column()) >= current.columns.size())
+      return;
+
+    const int row = item->row() + 1;
+    const int column = item->column();
+    const std::string value = item->text().toUtf8().toStdString();
+    const std::string reason = CadBlocksApplyDefinitionEdit(
+        m_State, "Block table value", [row, column, value](CadBlockDefinition& definition) {
+          if (static_cast<size_t>(column) >= definition.propertyTable.columns.size())
+            return std::string("that table column no longer exists.");
+          const std::string& name = definition.propertyTable.columns[static_cast<size_t>(column)];
+          return CadBlockTableSetCell(definition, row, name, value);
+        });
+    Refresh();
+    RenderBlockPropertiesTable(dialog);
+    if (!reason.empty())
+      status->setText(QString::fromStdString(reason));
+  });
+
+  connect(addColumn, &QPushButton::clicked, this, [this, dialog, status] {
+    const int definitionIndex = EditingDefinition(m_State);
+    if (definitionIndex < 0)
+      return;
+    QStringList options;
+    std::vector<int> parameterIndices;
+    const auto& parameters = m_State.blockDefs[static_cast<size_t>(definitionIndex)].parameters;
+    for (size_t index = 0; index < parameters.size(); ++index) {
+      if (CadBlockTableColumnIndex(m_State.blockDefs[static_cast<size_t>(definitionIndex)],
+                                   parameters[index].name) >= 0)
+        continue;
+      options.push_back(QString("%1 — %2").arg(index + 1).arg(QString::fromUtf8(parameters[index].name.c_str())));
+      parameterIndices.push_back(static_cast<int>(index));
+    }
+    if (options.isEmpty()) {
+      status->setText(parameters.empty() ? "This block has no parameters to add."
+                                         : "Every parameter is already in the table.");
+      return;
+    }
+
+    bool accepted = false;
+    const QString selected = QInputDialog::getItem(
+        this, "Add Block Table Column", "Parameter:", options, 0, false, &accepted);
+    if (!accepted)
+      return;
+    const int optionIndex = options.indexOf(selected);
+    if (optionIndex < 0 || static_cast<size_t>(optionIndex) >= parameterIndices.size())
+      return;
+    const int parameterIndex = parameterIndices[static_cast<size_t>(optionIndex)];
+
+    const std::string reason = CadBlocksApplyDefinitionEdit(
+        m_State, "Block table column", [parameterIndex](CadBlockDefinition& definition) {
+          return CadBlockTableAddColumn(definition, parameterIndex);
+        });
+    Refresh();
+    RenderBlockPropertiesTable(dialog);
+    if (!reason.empty())
+      status->setText(QString::fromStdString(reason));
+  });
+
+  connect(removeColumn, &QPushButton::clicked, this, [this, dialog, table, status] {
+    const int column = table->currentColumn();
+    if (column < 0)
+      return;
+    const QTableWidgetItem* header = table->horizontalHeaderItem(column);
+    if (!header)
+      return;
+    const std::string name = header->text().toUtf8().toStdString();
+    const std::string reason = CadBlocksApplyDefinitionEdit(
+        m_State, "Block table column", [name](CadBlockDefinition& definition) {
+          return CadBlockTableRemoveColumn(definition, name);
+        });
+    Refresh();
+    RenderBlockPropertiesTable(dialog);
+    if (!reason.empty())
+      status->setText(QString::fromStdString(reason));
+  });
+
+  connect(addRow, &QPushButton::clicked, this, [this, dialog, status] {
+    const std::string reason = CadBlocksApplyDefinitionEdit(
+        m_State, "Block table row", [](CadBlockDefinition& definition) {
+          return CadBlockTableAddRow(definition, {});
+        });
+    Refresh();
+    RenderBlockPropertiesTable(dialog);
+    if (!reason.empty())
+      status->setText(QString::fromStdString(reason));
+    else
+      status->clear();
+  });
+  connect(removeRow, &QPushButton::clicked, this, [this, dialog, table, status] {
+    const int row = table->currentRow();
+    if (row < 0)
+      return;
+    const std::string reason = CadBlocksApplyDefinitionEdit(
+        m_State, "Block table row", [row](CadBlockDefinition& definition) {
+          return CadBlockTableRemoveRow(definition, row + 1);
+        });
+    Refresh();
+    RenderBlockPropertiesTable(dialog);
+    if (!reason.empty())
+      status->setText(QString::fromStdString(reason));
+    else
+      status->clear();
+  });
+  connect(clear, &QPushButton::clicked, this, [this, dialog, status] {
+    const auto answer = QMessageBox::question(this, "Clear Block Table", "Remove every column and row?");
+    if (answer != QMessageBox::Yes)
+      return;
+    const std::string reason = CadBlocksApplyDefinitionEdit(
+        m_State, "Block table", [](CadBlockDefinition& definition) { return CadBlockTableClear(definition); });
+    Refresh();
+    RenderBlockPropertiesTable(dialog);
+    if (!reason.empty())
+      status->setText(QString::fromStdString(reason));
+    else
+      status->clear();
+  });
+  connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
+  connect(dialog, &QDialog::finished, this, [this] {
+    m_State.showBlockTableWindow = false;
+    Refresh();
+  });
+}
+
+void EditorWindow::ShowBlockPropertiesTable() {
+  if (m_State.blockEditorName.empty()) {
+    m_State.showBlockTableWindow = false;
+    if (auto* existing = findChild<QDialog*>("blockPropertiesTable"))
+      existing->close();
+    return;
+  }
+  if (auto* existing = findChild<QDialog*>("blockPropertiesTable")) {
+    RefreshBlockAuthoringViewIfNeeded(existing, "blockPropertiesTableViewState", m_State.cadGpuRevision);
+    if (!existing->isVisible())
+      existing->show();
+    return;
+  }
+
+  auto* dialog = new QDialog(this);
+  dialog->setObjectName("blockPropertiesTable");
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->setWindowTitle("Block Properties Table");
+  dialog->resize(820, 460);
+
+  auto* layout = new QVBoxLayout(dialog);
+  auto* heading = new QLabel(
+      QString("Block Properties Table — %1").arg(QString::fromUtf8(m_State.blockEditorName.c_str())), dialog);
+  heading->setObjectName("blockPropertiesTableHeading");
+  layout->addWidget(heading);
+
+  auto* table = new QTableWidget(dialog);
+  table->setObjectName("blockPropertiesTableGrid");
+  table->setSelectionBehavior(QAbstractItemView::SelectRows);
+  table->setSelectionMode(QAbstractItemView::SingleSelection);
+  layout->addWidget(table, 1);
+
+  auto* status = new QLabel(dialog);
+  status->setObjectName("blockPropertiesTableStatus");
+  layout->addWidget(status);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+  const std::array<std::pair<const char*, const char*>, 5> buttonDefinitions{{
+      {"Add Properties", "blockTableAddColumn"}, {"Remove Column", "blockTableRemoveColumn"},
+      {"Add Row", "blockTableAddRow"}, {"Remove Row", "blockTableRemoveRow"}, {"Clear Table", "blockTableClear"}}};
+  for (const auto& [label, objectName] : buttonDefinitions) {
+    auto* button = buttons->addButton(label, QDialogButtonBox::ActionRole);
+    button->setObjectName(objectName);
+  }
+  layout->addWidget(buttons);
+
+  auto* viewState = new BlockAuthoringViewState(dialog);
+  viewState->setObjectName("blockPropertiesTableViewState");
+  viewState->lastRevision = m_State.cadGpuRevision;
+  TrackTableEditing(viewState, table);
+  viewState->refresh = [this, dialog] { RenderBlockPropertiesTable(dialog); };
+  ConnectBlockPropertiesTable(dialog);
+  RenderBlockPropertiesTable(dialog);
+  dialog->show();
+}
+
 void EditorWindow::ShowConnectionModes() {
   if (m_State.blockEditorName.empty()) {
     m_State.showConnectionModesWindow = false;
@@ -318,10 +802,7 @@ void EditorWindow::ShowConnectionModes() {
     return;
   }
   if (auto* existing = findChild<QDialog*>("connectionModes")) {
-    auto* stateObject = existing->findChild<QObject*>("connectionModesViewState");
-    auto* viewState = static_cast<ConnectionModeViewState*>(stateObject);
-    if (viewState && viewState->lastRevision != m_State.cadGpuRevision && viewState->refresh)
-      viewState->refresh();
+    RefreshBlockAuthoringViewIfNeeded(existing, "connectionModesViewState", m_State.cadGpuRevision);
     if (!existing->isVisible()) existing->show();
     return;
   }
@@ -366,7 +847,7 @@ void EditorWindow::ShowConnectionModes() {
   root->addWidget(done);
   connect(done, &QDialogButtonBox::rejected, dialog, &QDialog::close);
 
-  auto* viewState = new ConnectionModeViewState(dialog);
+  auto* viewState = new BlockAuthoringViewState(dialog);
   viewState->setObjectName("connectionModesViewState");
   viewState->lastRevision = m_State.cadGpuRevision;
   viewState->renderModes = [this, dialog, points, editorLayout, status, viewState] {

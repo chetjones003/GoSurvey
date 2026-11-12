@@ -6373,6 +6373,15 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
         dyn.stretchWithoutEntityLinks);
   }
 
+  // REQ-525 item 8: the table lives in GoSurvey's drawing data; no AutoCAD BLOCKPROPERTIESTABLE
+  // object is written at any version, so AutoCAD opens the block without it.
+  size_t nBlockTables = 0;
+  for (const CadBlockDefinition& d : st.blockDefs) {
+    if (!d.propertyTable.columns.empty())
+      ++nBlockTables;
+  }
+  add("block properties table(s) (kept for GoSurvey; not written as AutoCAD block-table objects)", nBlockTables);
+
   // REQ-057, issue #603: a varying-Z polyline now writes as POLYLINE_3D (real per-vertex Z), but
   // POLYLINE_3D has no bulge — a run that is BOTH 3D and curved still degrades to straight
   // segments between its vertices.

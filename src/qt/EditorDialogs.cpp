@@ -1483,6 +1483,11 @@ void EditorWindow::ServiceUiRequests() {
   else if (auto* palette = findChild<QDialog*>("pipeFittingPalette"); palette && palette->isVisible()) palette->close();
   if (m_State.showConnectionModesWindow) ShowConnectionModes();
   else if (auto* modes = findChild<QDialog*>("connectionModes")) modes->close();
+  // GitHub issue #808: the Parameters Manager (REQ-524) and the Block Properties Table (REQ-525).
+  if (m_State.showBlockParametersWindow) ShowBlockParametersManager();
+  else if (auto* manager = findChild<QDialog*>("blockParametersManager")) manager->close();
+  if (m_State.showBlockTableWindow) ShowBlockPropertiesTable();
+  else if (auto* table = findChild<QDialog*>("blockPropertiesTable")) table->close();
   if (m_State.addDrawingToProjectUid != 0) {
     const auto uid = m_State.addDrawingToProjectUid;
     m_State.addDrawingToProjectUid = 0;
