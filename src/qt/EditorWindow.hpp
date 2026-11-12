@@ -54,6 +54,9 @@ public:
   /// application entry point only, so test windows never send one.
   void EnableTelemetry();
   void InitializeStartup();
+  /// #1202: starts the one-second wait before a startup update offer may appear. Called once, by
+  /// the entry point, immediately after the main window is first shown.
+  void ScheduleInitialUpdateOffer();
   void OpenDrawing(const QString& path);
   AppCommandState& State() { return m_State; }
   bool CommitPdfCoordinate(const pdfview::CoordCandidate& candidate);
@@ -257,6 +260,7 @@ private:
   bool m_TextDialogOpen = false;
   bool m_StartupInitialized = false;
   bool m_WhatsNewAutoOpened = false;
+  bool m_InitialUpdateOfferDue = false;   ///< #1202: the one-second wait after the window appeared has elapsed
   bool m_RecentListView = false;
   bool m_RecentShowAll = false;
   bool m_ShowAllProjects = false;

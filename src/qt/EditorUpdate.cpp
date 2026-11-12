@@ -90,9 +90,21 @@ void EditorWindow::ServiceUpdate() {
   const Phase phase = m_Update->phase;
   const bool dialogPhase = phase == Phase::UpdateReady || phase == Phase::Downloading ||
                            phase == Phase::ReadyToLaunch || phase == Phase::Failed;
+  // #1202: only the initial offer waits for the window; download, error and later phases are immediate.
+  const bool initialOfferWaiting = phase == Phase::UpdateReady && !m_InitialUpdateOfferDue;
   auto* dialog = findChild<QDialog*>("softwareUpdate");
-  if (dialogPhase && !dialog) ShowUpdateDialog();
+  if (dialogPhase && !dialog && !initialOfferWaiting) ShowUpdateDialog();
   else if (!dialogPhase && dialog) dialog->accept();
+}
+
+void EditorWindow::ScheduleInitialUpdateOffer() {
+  // #1202: the initial offer appears one second after the main window first appears. A check that
+  // resolves later is still held until this timer has fired, and then shows at once.
+  constexpr int kInitialUpdateOfferDelayMs = 1000;
+  QTimer::singleShot(kInitialUpdateOfferDelayMs, this, [this] {
+    m_InitialUpdateOfferDue = true;
+    ServiceUpdate();
+  });
 }
 
 void EditorWindow::ShowUpdateDialog() {

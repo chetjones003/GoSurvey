@@ -35,16 +35,28 @@ QPixmap ScaleBackdropSource(const QPixmap& source, int physW, int physH) {
 }
 }  // namespace
 
+namespace {
+constexpr int kPhaseCount = 7;
+// The last phase is the update check; its start is where the bar holds while that check is pending.
+constexpr double kCheckingPhaseStart = static_cast<double>(kPhaseCount - 1) / kPhaseCount;
+}  // namespace
+
 double ProgressAt(qint64 elapsedMs) {
   return std::clamp(static_cast<double>(elapsedMs) / kMinimumDisplayMs, 0.0, 1.0);
+}
+
+double ProgressAt(qint64 elapsedMs, bool updateCheckPending) {
+  const double progress = ProgressAt(elapsedMs);
+  return updateCheckPending ? std::min(progress, kCheckingPhaseStart) : progress;
 }
 
 QString PhaseLabelAt(qint64 elapsedMs) {
   static const QString kPhases[] = {
       QStringLiteral("Starting GoSurvey…"),         QStringLiteral("Gathering resources…"),
       QStringLiteral("Preparing workspace…"),       QStringLiteral("Setting up drawing tools…"),
-      QStringLiteral("Loading your settings…"),   QStringLiteral("Almost ready…")};
-  constexpr int kPhaseCount = static_cast<int>(std::size(kPhases));
+      QStringLiteral("Loading your settings…"),     QStringLiteral("Almost ready…"),
+      QStringLiteral("Checking for updates…")};
+  static_assert(std::size(kPhases) == kPhaseCount);
   const int phase = std::min(static_cast<int>(ProgressAt(elapsedMs) * kPhaseCount), kPhaseCount - 1);
   return kPhases[phase];
 }

@@ -195,9 +195,9 @@ int main(int argc, char** argv) {
   QSplashScreen splash(qtsplash::MakeFrame(splashBackdrop, 0.0, qtsplash::PhaseLabelAt(0), splashDpr));
   // REQ-093: the bar and phase label follow wall-clock time on splashClock (restarted once the window is built).
   QElapsedTimer splashClock;
-  const auto advanceSplash = [&] {
+  const auto advanceSplash = [&](bool updateCheckPending) {
     const qint64 elapsed = splashClock.elapsed();
-    splash.setPixmap(qtsplash::MakeFrame(splashBackdrop, qtsplash::ProgressAt(elapsed),
+    splash.setPixmap(qtsplash::MakeFrame(splashBackdrop, qtsplash::ProgressAt(elapsed, updateCheckPending),
                                          qtsplash::PhaseLabelAt(elapsed), splashDpr));
     app.processEvents(QEventLoop::AllEvents, 50);
   };
@@ -212,22 +212,26 @@ int main(int argc, char** argv) {
     LoadUserStartupPrefs(window.State());
     // REQ-093: the minimum display time counts from here, so the bar animates for its whole span
     // instead of sitting still while the window above is being built.
-    if (!smoke) { splashClock.restart(); advanceSplash(); }
+    if (!smoke) { splashClock.restart(); advanceSplash(false); }
     crashReporter::SetReportChannel(GOSURVEY_BUILD_CHANNEL);
     if (!smoke) {
       // REQ-080: launch the anonymous ping on its own worker immediately; no network result
       // participates in splash timing, update handling, or opening the editor.
       window.EnableTelemetry();
-      // The update offer, when there is one, is shown before the editor (REQ-077).
+      // REQ-077: the startup update check runs during the splash. Its offer, when there is one, is
+      // shown a second after the main window appears (#1202), never over the splash.
       window.StartUpdateCheck();
       // REQ-077: the check gates the session. The splash stays up until it has an answer
       // (bounded by the check's own short timeout), so no drawing can begin on a build that is
       // about to offer to replace itself. REQ-093: and for at least the minimum display time.
-      while (window.UpdateCheckRunning() || splashClock.elapsed() < qtsplash::kMinimumDisplayMs) {
-        advanceSplash();
+      // #1201: while the check is pending, the bar holds at the "Checking for updates…" phase.
+      for (;;) {
+        const bool updateCheckPending = window.UpdateCheckRunning();
+        if (!updateCheckPending && splashClock.elapsed() >= qtsplash::kMinimumDisplayMs) break;
+        advanceSplash(updateCheckPending);
         QThread::msleep(15);
       }
-      advanceSplash();
+      advanceSplash(false);
     }
     window.showMaximized();
     splash.finish(&window);
@@ -241,6 +245,9 @@ int main(int argc, char** argv) {
         app.exit(ok ? 0 : 2);
       });
     } else {
+      // #1202: start the one-second wait as the window appears, before any command-line drawing
+      // loads, so a slow open does not push the offer back.
+      window.ScheduleInitialUpdateOffer();
       for (const auto& argument : app.arguments().mid(1))
         if (argument != "--default-style" && argument != "--light-style") { window.OpenDrawing(argument); break; }
       // Load a command-line drawing before deciding whether the Start screen should auto-open
