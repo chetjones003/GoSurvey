@@ -1683,6 +1683,16 @@ if(GOSURVEY_BUILD_TESTS)
   add_dependencies(GoSurveyTests gosurvey_stage_resources)
   gosurvey_target_warnings(GoSurveyTests TEST)
   gosurvey_enable_pch(GoSurveyTests)
+  # Unity build: test .cpp files are compiled in batches, so each batch parses the shared headers
+  # (Catch2, nlohmann, the domain headers) once instead of once per file.
+  set_target_properties(GoSurveyTests PROPERTIES UNITY_BUILD ON UNITY_BUILD_BATCH_SIZE 8)
+  # Test files whose file-local helpers collide with another file's in the same batch compile alone.
+  file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/tests/unity-excluded.txt" _unity_excluded)
+  foreach(_f IN LISTS _unity_excluded)
+    if(NOT _f STREQUAL "")
+      set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/${_f}" PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+    endif()
+  endforeach()
   # Domain implementations are linked once via gosurvey_domain, not compiled again.
   get_target_property(_test_sources GoSurveyTests SOURCES)
   list(REMOVE_ITEM _test_sources ${GOSURVEY_DOMAIN_SOURCES})
