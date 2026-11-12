@@ -1183,8 +1183,13 @@ TEST_CASE("drawing save refuses to persist the temporary BEDIT model", "[dwgio][
   fs::remove(path, ec);
   AppCommandState st;
   std::vector<std::string> log;
+  Type(st, "MKLINE 1,2, 3,4", log);
+  const auto originalDrawingLines = st.userLinesFlat;
+  REQUIRE_FALSE(originalDrawingLines.empty());
+
   Type(st, "BEDIT Issue1195Block", log);
   REQUIRE(st.blockEditActive);
+  CHECK(st.userLinesFlat.empty());
 
   REQUIRE_FALSE(SaveDrawingDocument(st, path.string().c_str(), log));
   CHECK_FALSE(fs::exists(path));
@@ -1211,6 +1216,11 @@ TEST_CASE("drawing save refuses to persist the temporary BEDIT model", "[dwgio][
 
   Type(st, "BCLOSE", log);
   CHECK_FALSE(st.blockEditActive);
+  CHECK(st.userLinesFlat == originalDrawingLines);
   REQUIRE(SaveDrawingDocument(st, path.string().c_str(), log));
+
+  AppCommandState reopened;
+  REQUIRE(OpenDrawingDocument(reopened, path.string().c_str(), log));
+  CHECK(reopened.userLinesFlat == originalDrawingLines);
   fs::remove(path, ec);
 }
