@@ -15935,7 +15935,11 @@ private Q_SLOTS:
     auto* parameterGrid = parameters->findChild<QTableWidget*>("blockParametersTable");
     QVERIFY(parameterGrid);
     QCOMPARE(parameterGrid->rowCount(), static_cast<int>(window.State().blockDefs[blockIndex].parameters.size()));
+    auto* deleteParameter = parameters->findChild<QPushButton*>("blockParameterDelete");
+    QVERIFY(deleteParameter);
+    QVERIFY(!deleteParameter->isEnabled());
     parameterGrid->selectRow(0);
+    QVERIFY(deleteParameter->isEnabled());
     QTest::qWait(120);
     QCOMPARE(parameterGrid->currentRow(), 0);
     parameterGrid->editItem(parameterGrid->item(0, 1));
@@ -15994,6 +15998,11 @@ private Q_SLOTS:
     QVERIFY(blockTableDialog);
     auto* addProperties = blockTableDialog->findChild<QPushButton*>("blockTableAddColumn");
     QVERIFY(addProperties);
+    auto* removeEmptyColumn = blockTableDialog->findChild<QPushButton*>("blockTableRemoveColumn");
+    auto* removeEmptyRow = blockTableDialog->findChild<QPushButton*>("blockTableRemoveRow");
+    QVERIFY(removeEmptyColumn && removeEmptyRow);
+    QVERIFY(!removeEmptyColumn->isEnabled());
+    QVERIFY(!removeEmptyRow->isEnabled());
     QTimer::singleShot(0, &window, [] {
       auto* choice = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
       QVERIFY(choice);
@@ -16015,6 +16024,8 @@ private Q_SLOTS:
     QVERIFY(tableGrid);
     QCOMPARE(tableGrid->rowCount(), 1);
     tableGrid->selectRow(0);
+    QVERIFY(removeEmptyColumn->isEnabled());
+    QVERIFY(removeEmptyRow->isEnabled());
     QTest::qWait(120);
     QCOMPARE(tableGrid->currentRow(), 0);
     tableGrid->editItem(tableGrid->item(0, 0));
@@ -16058,6 +16069,10 @@ private Q_SLOTS:
     blockTableDialog->close();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 
+    window.Submit("PARAMETERS");
+    auto* parametersDuringTest = window.findChild<QDialog*>("blockParametersManager");
+    QVERIFY(parametersDuringTest);
+    QVERIFY(parametersDuringTest->isVisible());
     window.Submit("MKLINE 0,0,1,0");
     window.Submit("BTESTBLOCK");
     QVERIFY(window.State().blockTestActive);
@@ -16069,7 +16084,15 @@ private Q_SLOTS:
     QVERIFY(testBlockTab >= 0);
     QVERIFY(ribbon->isTabVisible(testBlockTab));
     QCOMPARE(ribbon->tabText(testBlockTab), QString("Test Block"));
+    auto* blockEditorPage = window.findChild<QWidget*>("ribbonPage_BlockEditor");
+    QVERIFY(blockEditorPage);
+    const int blockEditorTab = ribbon->indexOf(blockEditorPage);
+    QVERIFY(blockEditorTab >= 0);
+    QVERIFY(!ribbon->isTabVisible(blockEditorTab));
+    QVERIFY(!parametersDuringTest->isVisible());
     window.Submit("BCLOSE");
+    QTRY_VERIFY(ribbon->isTabVisible(blockEditorTab));
+    QTRY_VERIFY(parametersDuringTest->isVisible());
   }
 
   void connectionModesDialogEditsUndoAndDirtyCloseChoicesWork() {

@@ -163,6 +163,20 @@
   return CadBlockFormatNumber(param.value);
 }
 
+/// The first visibility state makes existing empty visibility cells valid (REQ-525 item 5).
+inline void CadBlockTableFillEmptyVisibilityCells(CadBlockDefinition& def, std::string_view state) {
+  for (size_t column = 0; column < def.propertyTable.columns.size(); ++column) {
+    const int parameterIndex = CadBlockFindParameter(def, def.propertyTable.columns[column]);
+    if (parameterIndex < 0 ||
+        def.parameters[static_cast<size_t>(parameterIndex)].kind != CadBlockParamKind::Visibility)
+      continue;
+    for (std::vector<std::string>& row : def.propertyTable.rows) {
+      if (column < row.size() && row[column].empty())
+        row[column] = state;
+    }
+  }
+}
+
 /// Checks \p raw against the rules of \p param's column and writes the text to store. REQ-525 item 5.
 [[nodiscard]] inline std::string CadBlockTableCanonCell(const CadBlockDefinition& def,
                                                         const CadBlockParameter& param, std::string_view raw,

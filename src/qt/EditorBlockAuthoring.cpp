@@ -418,6 +418,8 @@ void EditorWindow::RenderBlockParametersManager(QDialog* dialog) {
   }
   attrs->setText(definitions.isEmpty() ? "No attribute definitions." : definitions.join("\n"));
   RestoreTableSelection(table, selectedRow, selectedColumn);
+  if (auto* remove = dialog->findChild<QPushButton*>("blockParameterDelete"))
+    remove->setEnabled(table->currentRow() >= 0);
 }
 
 void EditorWindow::ConnectBlockParametersManager(QDialog* dialog) {
@@ -429,6 +431,9 @@ void EditorWindow::ConnectBlockParametersManager(QDialog* dialog) {
     return;
 
   table->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
+  connect(table, &QTableWidget::itemSelectionChanged, dialog,
+          [table, remove] { remove->setEnabled(table->currentRow() >= 0); });
+  remove->setEnabled(table->currentRow() >= 0);
   connect(table, &QTableWidget::itemChanged, this, [this, dialog, table, status](QTableWidgetItem* item) {
     if (!item)
       return;
@@ -593,6 +598,10 @@ void EditorWindow::RenderBlockPropertiesTable(QDialog* dialog) {
   }
   table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
   RestoreTableSelection(table, selectedRow, selectedColumn);
+  if (auto* removeColumn = dialog->findChild<QPushButton*>("blockTableRemoveColumn"))
+    removeColumn->setEnabled(table->currentColumn() >= 0);
+  if (auto* removeRow = dialog->findChild<QPushButton*>("blockTableRemoveRow"))
+    removeRow->setEnabled(table->currentRow() >= 0);
 }
 
 void EditorWindow::ConnectBlockPropertiesTable(QDialog* dialog) {
@@ -608,6 +617,12 @@ void EditorWindow::ConnectBlockPropertiesTable(QDialog* dialog) {
     return;
 
   table->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
+  const auto updateSelectionButtons = [table, removeColumn, removeRow] {
+    removeColumn->setEnabled(table->currentColumn() >= 0);
+    removeRow->setEnabled(table->currentRow() >= 0);
+  };
+  connect(table, &QTableWidget::itemSelectionChanged, dialog, updateSelectionButtons);
+  updateSelectionButtons();
   connect(table, &QTableWidget::itemChanged, this, [this, dialog, table, status](QTableWidgetItem* item) {
     if (!item)
       return;

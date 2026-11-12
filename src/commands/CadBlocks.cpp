@@ -4061,18 +4061,8 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     CadBlockDefinition& definition = st.blockDefs[static_cast<size_t>(di)];
     const bool firstState = definition.visibilityStates.empty();
     definition.visibilityStates.push_back(f[0]);
-    if (firstState) {
-      for (size_t column = 0; column < definition.propertyTable.columns.size(); ++column) {
-        const int parameterIndex = CadBlockFindParameter(definition, definition.propertyTable.columns[column]);
-        if (parameterIndex < 0 ||
-            definition.parameters[static_cast<size_t>(parameterIndex)].kind != CadBlockParamKind::Visibility)
-          continue;
-        for (std::vector<std::string>& row : definition.propertyTable.rows) {
-          if (column < row.size() && row[column].empty())
-            row[column] = f[0];
-        }
-      }
-    }
+    if (firstState)
+      CadBlockTableFillEmptyVisibilityCells(definition, f[0]);
     st.blockEditorDirty = true;
     BumpCadGpuCache(st);
     log.push_back("BVISIBILITY — state " + f[0] + ".");
