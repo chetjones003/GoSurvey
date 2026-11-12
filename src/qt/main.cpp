@@ -245,11 +245,13 @@ int main(int argc, char** argv) {
         app.exit(ok ? 0 : 2);
       });
     } else {
+      // #1202: start the one-second wait as the window appears, before any command-line drawing
+      // loads, so a slow open does not push the offer back.
+      window.ScheduleInitialUpdateOffer();
       for (const auto& argument : app.arguments().mid(1))
         if (argument != "--default-style" && argument != "--light-style") { window.OpenDrawing(argument); break; }
       // Load a command-line drawing before deciding whether the Start screen should auto-open
-      // What's New. The window is visible now, so startup dialogs have a valid owner. This also
-      // starts the one-second wait before an available update offer is shown (#1202).
+      // What's New. The window is visible now, so startup dialogs have a valid owner.
       window.InitializeStartup();
     }
     result = app.exec();

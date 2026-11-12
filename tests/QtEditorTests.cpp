@@ -183,6 +183,7 @@
 #include <QTextDocument>
 #include <QFileDialog>
 #include <QElapsedTimer>
+#include <QThread>
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
@@ -5596,6 +5597,7 @@ private Q_SLOTS:
     window.m_Update->phase = update::Phase::UpdateReady;
     QElapsedTimer sinceStart;
     sinceStart.start();
+    window.ScheduleInitialUpdateOffer();   // what the entry point does as the window appears
     window.InitializeStartup();
     window.ServiceUpdate();
     QVERIFY(!window.findChild<QDialog*>("softwareUpdate"));
@@ -5608,12 +5610,30 @@ private Q_SLOTS:
     QTRY_VERIFY(!window.findChild<QDialog*>("softwareUpdate"));
   }
 
+  void issue1202SlowCommandLineOpenDoesNotDelayTheOfferAFurtherSecond() {
+    EditorWindow window;
+    window.show();
+    window.State().whatsNewDismissedVersion.clear();
+    window.m_Update->runningVersion = "0.7.4";
+    window.m_Update->available = OfferedManifest();
+    window.m_Update->phase = update::Phase::UpdateReady;
+    window.ScheduleInitialUpdateOffer();   // the window has just appeared
+    // Stands in for loading a slow command-line drawing before startup initialization runs.
+    QThread::msleep(1200);
+    window.InitializeStartup();
+    // The one-second wait already elapsed while the drawing loaded, so the offer is due at once.
+    QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QDialog*>("softwareUpdate"), 500);
+    UpdateButton(window.findChild<QDialog*>("softwareUpdate"), "updateRemindButton")->click();
+    QTRY_VERIFY(!window.findChild<QDialog*>("softwareUpdate"));
+  }
+
   void issue1202LateUpdateCheckResultShowsOfferOnceTheDelayHasPassed() {
     EditorWindow window;
     window.show();
     window.m_Update->runningVersion = "0.7.4";
     window.m_Update->phase = update::Phase::Checking;
     window.m_Update->task = std::make_unique<update::UpdateTask>();
+    window.ScheduleInitialUpdateOffer();
     window.InitializeStartup();
     // The window's wait elapses while the check is still pending: no offer yet.
     QTRY_VERIFY_WITH_TIMEOUT(window.m_InitialUpdateOfferDue, 3000);
