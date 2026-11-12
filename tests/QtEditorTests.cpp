@@ -7761,6 +7761,33 @@ private Q_SLOTS:
     QVERIFY(state.userLinesFlat.empty());
   }
 
+  void issue1195BeditBlocksQtSaveAndSaveAsBeforeChoosingAPath() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show();
+    auto& state = window.State();
+    const auto originalPath = state.activeDocFilePath;
+    state.blockEditActive = true;
+    auto* save = window.findChild<QAction*>("command_SAVE"); QVERIFY(save);
+    auto* saveAs = window.findChild<QAction*>("command_SAVEAS"); QVERIFY(saveAs);
+
+    auto expectBeditWarning = [&] {
+      QTimer::singleShot(0, &window, [&] {
+        auto* warning = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+        QVERIFY(warning);
+        QVERIFY(warning->text().contains("BEDIT"));
+        QVERIFY(warning->text().contains("temporary editor model replaced the drawing model"));
+        QVERIFY(warning->text().contains("BCLOSE"));
+        warning->accept();
+      });
+    };
+
+    expectBeditWarning();
+    save->trigger();
+    QCOMPARE(state.activeDocFilePath, originalPath);
+    expectBeditWarning();
+    saveAs->trigger();
+    QCOMPARE(state.activeDocFilePath, originalPath);
+  }
+
   void issue903PolarSettingsAndOneShotSnap() {
     IsolatedUserData userData;
     EditorWindow window; window.CreateDrawingFromTemplate(); window.show();

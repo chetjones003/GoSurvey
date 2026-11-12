@@ -236,6 +236,10 @@ bool OpenDrawingDocument(AppCommandState& st, const char* pathUtf8, std::vector<
 }
 
 bool SaveDrawingDocument(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+  if (st.blockEditActive) {
+    log.push_back(kBeditDrawingSaveRefusal);
+    return false;
+  }
   if (pathUtf8 == nullptr || pathUtf8[0] == '\0') {
     log.push_back("Save drawing — no path.");
     return false;

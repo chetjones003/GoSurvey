@@ -69,6 +69,8 @@ bool AppendGoSurveyPayloadToDwgFile(const char* pathUtf8, const AppCommandState&
 /// `.gs` paths are rejected because issue #264 retired that file format. The payload JSON remains
 /// internal to the DWG trailer and template serializer.
 bool OpenDrawingDocument(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
+inline constexpr char kBeditDrawingSaveRefusal[] =
+    "BEDIT is active: the temporary editor model replaced the drawing model. Run BCLOSE to return to the drawing before saving.";
 bool SaveDrawingDocument(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 
 /// REQ-378 (#696 P5): copies the DWG at \p srcUtf8 to \p dstUtf8 byte for byte, except that its

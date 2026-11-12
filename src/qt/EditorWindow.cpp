@@ -2404,6 +2404,11 @@ void EditorWindow::OpenDrawing(const QString& path) {
 
 bool EditorWindow::SaveDrawing(bool saveAs) {
   if (m_State.activeDrawingIdx == 0) return true;
+  if (m_State.blockEditActive) {
+    m_Log.push_back(kBeditDrawingSaveRefusal);
+    QMessageBox::warning(this, "Save drawing", QString::fromUtf8(kBeditDrawingSaveRefusal));
+    return false;
+  }
   RefreshProjects();
   const auto projectUid = m_State.drawingTabs[m_State.activeDrawingIdx].projectUid;
   for (const auto& session : m_State.openProjects) {
