@@ -1,0 +1,49 @@
+# Seeds the sccache archive on the protected branches.
+#
+# actions/cache scopes a saved archive to the ref that created it, and a pull request can restore
+# only from its own refs/pull/N/merge ref or from its base branch. full-validation runs only on
+# pull_request, so no archive ever lands on beta or master, and every new PR starts cold (about 30
+# minutes of compiling). This push-only job builds every Release target on each push to beta or
+# master and saves the archive there. PR runs targeting those branches restore it.
+#
+# It runs no tests and publishes nothing; it exists only for its cache save.
+
+name: cache-seed
+
+on:
+  push:
+    branches: [master, beta]
+  workflow_dispatch:
+
+concurrency:
+  group: cache-seed-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  seed-sccache:
+    name: seed sccache archive
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build every Release target and save the archive
+        uses: ./.github/actions/release-validation
+        with:
+          version-suffix: ''
+          version-build: '0'
+          beta-version: ''
+          test-parallel: '1'
+          qt-test-shards: '12'
+          catch-test-shards: '4'
+          build-targets: all
+          run-tests: 'false'
