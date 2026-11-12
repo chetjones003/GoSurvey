@@ -182,6 +182,7 @@
 #include <QFontMetricsF>
 #include <QTextDocument>
 #include <QFileDialog>
+#include <QElapsedTimer>
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
@@ -4724,6 +4725,8 @@ private Q_SLOTS:
     window.m_Update->requiresPerUserMigration = requiresPerUserMigration;
     window.m_Update->available = manifest;
     window.m_Update->phase = update::Phase::UpdateReady;
+    // #1202's one-second wait is exercised by its own test; here the offer is already due.
+    window.m_InitialUpdateOfferDue = true;
     window.ServiceUpdate();
     return window.findChild<QDialog*>("softwareUpdate");
   }
@@ -5010,7 +5013,9 @@ private Q_SLOTS:
       QVERIFY(!window.findChild<QDialog*>("softwareUpdate"));
       QVERIFY(!window.UpdateBlocksLaunch());
     }
-    // A newer build found by the check becomes the offer dialog.
+    // A newer build found by the check becomes the offer dialog. The one-second wait after the
+    // window appears is covered by issue1202InitialOfferWaitsOneSecondAfterTheWindowAppears.
+    window.m_InitialUpdateOfferDue = true;
     window.m_Update->phase = update::Phase::Checking;
     window.m_Update->task = std::make_unique<update::UpdateTask>();
     window.m_Update->task->ok = true;
@@ -5579,6 +5584,47 @@ private Q_SLOTS:
     UpdateButton(dialog, "updateRemindButton")->click();
     window.ServiceUpdate();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));   // still not later in the same launch
+  }
+
+  // ---- Issue #1202: the initial update offer appears one second after the main window ----
+  void issue1202InitialOfferWaitsOneSecondAfterTheWindowAppears() {
+    EditorWindow window;
+    window.show();
+    window.State().whatsNewDismissedVersion.clear();
+    window.m_Update->runningVersion = "0.7.4";
+    window.m_Update->available = OfferedManifest();
+    window.m_Update->phase = update::Phase::UpdateReady;
+    QElapsedTimer sinceStart;
+    sinceStart.start();
+    window.InitializeStartup();
+    window.ServiceUpdate();
+    QVERIFY(!window.findChild<QDialog*>("softwareUpdate"));
+    QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
+    QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QDialog*>("softwareUpdate"), 3000);
+    QVERIFY(sinceStart.elapsed() >= 980);   // one second, with a little timer slack
+    // The offer suppresses automatic What's New for this launch.
+    QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
+    UpdateButton(window.findChild<QDialog*>("softwareUpdate"), "updateRemindButton")->click();
+    QTRY_VERIFY(!window.findChild<QDialog*>("softwareUpdate"));
+  }
+
+  void issue1202LateUpdateCheckResultShowsOfferOnceTheDelayHasPassed() {
+    EditorWindow window;
+    window.show();
+    window.m_Update->runningVersion = "0.7.4";
+    window.m_Update->phase = update::Phase::Checking;
+    window.m_Update->task = std::make_unique<update::UpdateTask>();
+    window.InitializeStartup();
+    // The window's wait elapses while the check is still pending: no offer yet.
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_InitialUpdateOfferDue, 3000);
+    QVERIFY(!window.findChild<QDialog*>("softwareUpdate"));
+    // The answer arrives afterwards: the offer shows at once, because both conditions now hold.
+    window.m_Update->task->ok = true;
+    window.m_Update->task->manifest = OfferedManifest();
+    window.m_Update->task->done.store(true, std::memory_order_release);
+    QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QDialog*>("softwareUpdate"), 3000);
+    UpdateButton(window.findChild<QDialog*>("softwareUpdate"), "updateRemindButton")->click();
+    QTRY_VERIFY(!window.findChild<QDialog*>("softwareUpdate"));
   }
 
   void completedUpdateCheckDoesNotSuppressWhatsNewStartup() {
@@ -13256,9 +13302,11 @@ private Q_SLOTS:
     QCOMPARE(ProgressAt(kMinimumDisplayMs), 1.0);
     QCOMPARE(ProgressAt(qint64{kMinimumDisplayMs} * 4), 1.0);
     QCOMPARE(ProgressAt(-250), 0.0);
-    // Six neutral phases share the display time evenly, in order, and the last one holds.
+    // Seven phases share the display time evenly, in order, and the last one holds. The last is
+    // the update check (#1201), so its label is the final splash label.
     const QStringList phases{"Starting GoSurvey…", "Gathering resources…", "Preparing workspace…",
-                             "Setting up drawing tools…", "Loading your settings…", "Almost ready…"};
+                             "Setting up drawing tools…", "Loading your settings…", "Almost ready…",
+                             "Checking for updates…"};
     for (int phase = 0; phase < phases.size(); ++phase)
       QCOMPARE(PhaseLabelAt(qint64{kMinimumDisplayMs} * phase / phases.size() + 10), phases[phase]);
     QCOMPARE(PhaseLabelAt(kMinimumDisplayMs), phases.last());
@@ -13304,6 +13352,26 @@ private Q_SLOTS:
       QVERIFY(frames[phase].save(dir + QString("/qt-1028-splash-phase%1.png").arg(phase + 1)));
     QVERIFY(end.save(dir + "/qt-1028-splash-end.png"));
 #endif
+  }
+
+  // ---- Issue #1201: the update check is the final splash phase and holds the bar while pending ----
+  void issue1201SplashHoldsProgressAtTheCheckingPhaseWhileTheCheckIsPending() {
+    using namespace qtsplash;
+    const double checkingStart = 6.0 / 7.0;   // the seventh of seven equal phases
+    QCOMPARE(PhaseLabelAt(kMinimumDisplayMs), QString("Checking for updates…"));
+    QCOMPARE(PhaseLabelAt(static_cast<qint64>(kMinimumDisplayMs * checkingStart) + 10),
+             QString("Checking for updates…"));
+    QCOMPARE(PhaseLabelAt(static_cast<qint64>(kMinimumDisplayMs * 5 / 7.0) + 10),
+             QString("Almost ready…"));
+    // Before the checking phase the bar is unaffected by a pending check.
+    QCOMPARE(ProgressAt(kMinimumDisplayMs / 2, true), 0.5);
+    QCOMPARE(ProgressAt(kMinimumDisplayMs / 2, false), 0.5);
+    // From the checking phase on, a pending check pins the bar at that phase's start.
+    QVERIFY(qFuzzyCompare(ProgressAt(static_cast<qint64>(kMinimumDisplayMs * checkingStart) + 10, true), checkingStart));
+    QVERIFY(qFuzzyCompare(ProgressAt(kMinimumDisplayMs, true), checkingStart));
+    QVERIFY(qFuzzyCompare(ProgressAt(qint64{kMinimumDisplayMs} * 4, true), checkingStart));
+    // Once the check has answered, the bar completes normally.
+    QCOMPARE(ProgressAt(kMinimumDisplayMs, false), 1.0);
   }
 
   // ---- Issue #1037 / REQ-455: PDF command tabs and continuous zoom/pan navigation ----

@@ -12,6 +12,10 @@ constexpr int kMinimumDisplayMs = 8000;
 // Fraction 0..1 of the minimum display time that has passed.
 double ProgressAt(qint64 elapsedMs);
 
+// Issue #1201: the final phase is "Checking for updates…". While the startup update check is still
+// pending, the bar holds at the point where that phase begins instead of filling to 100%.
+double ProgressAt(qint64 elapsedMs, bool updateCheckPending);
+
 // Neutral phase label for the elapsed time; the display time is split evenly across the phases.
 QString PhaseLabelAt(qint64 elapsedMs);
 

@@ -195,6 +195,9 @@ private:
   void InitUpdates();
   void ServiceUpdate();
   void ShowUpdateDialog();
+  /// #1202: starts the one-second wait before a startup update offer may appear. Called once, from
+  /// InitializeStartup, after the main window is shown.
+  void ScheduleInitialUpdateOffer();
   bool UpdateBlocksLaunch() const;
   QString m_DevelopmentBranchLabel;
   std::uint64_t m_DocumentGeneration = 0;
@@ -257,6 +260,7 @@ private:
   bool m_TextDialogOpen = false;
   bool m_StartupInitialized = false;
   bool m_WhatsNewAutoOpened = false;
+  bool m_InitialUpdateOfferDue = false;   ///< #1202: the one-second wait after the window appeared has elapsed
   bool m_RecentListView = false;
   bool m_RecentShowAll = false;
   bool m_ShowAllProjects = false;

@@ -40,9 +40,11 @@ GoSurvey needs **OpenGL 3.3** from your graphics driver (normal on current Windo
 
 ### Updates
 
-GoSurvey checks for a newer version **each time it opens**. A short *"Checking for updates"*
-dialog appears while it does; with no internet connection the check is skipped, and if it is slow
-you can press **Continue without checking**.
+GoSurvey checks for a newer version **each time it opens**. The check runs while the splash screen
+is up; its last phase reads *"Checking for updates…"*, and the splash waits for the answer. With no
+internet connection the check is skipped. If an update exists, its offer appears about one second
+after the main window opens, and *"What's New"* does not open automatically on that launch (you can
+still open it from the **Help** menu).
 
 Nothing downloads or installs on its own. When an update exists you choose **Update Now**,
 **Remind Me Later**, or **Skip This Version**. Choosing to update downloads the installer, verifies

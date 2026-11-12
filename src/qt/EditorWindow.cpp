@@ -1023,6 +1023,7 @@ void EditorWindow::InitializeStartup() {
   // thread has consumed that result. Resolve it here so only a confirmed offer takes priority;
   // a completed no-update check must return to Idle before REQ-336 evaluates startup eligibility.
   ServiceUpdate();
+  ScheduleInitialUpdateOffer();
   // REQ-078 before REQ-336: when the startup check found an update, What's New does not
   // auto-open on this launch. The check has already answered by now (the splash waits for it).
   if (UpdateBlocksLaunch()) m_WhatsNewAutoOpened = true;
