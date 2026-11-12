@@ -10,6 +10,8 @@
 
 #include <memory>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <chrono>
 #include <thread>
 #include <string>
@@ -1171,4 +1173,44 @@ TEST_CASE("DRAPELINKS answers what moves when a surface is rebuilt",
     CHECK(LogHas(log, "stay where they are"));
     CHECK_FALSE(LogHas(log, "follows \""));
   }
+}
+
+TEST_CASE("drawing save refuses to persist the temporary BEDIT model", "[dwgio][issue1195]") {
+  namespace fs = std::filesystem;
+  const auto suffix = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+  const fs::path path = fs::temp_directory_path() / ("gosurvey-issue1195-bedit-save-" + suffix + ".dwg");
+  std::error_code ec;
+  fs::remove(path, ec);
+  AppCommandState st;
+  std::vector<std::string> log;
+  Type(st, "BEDIT Issue1195Block", log);
+  REQUIRE(st.blockEditActive);
+
+  REQUIRE_FALSE(SaveDrawingDocument(st, path.string().c_str(), log));
+  CHECK_FALSE(fs::exists(path));
+  CHECK(LogHas(log, "BEDIT"));
+  CHECK(LogHas(log, "temporary editor model replaced the drawing model"));
+  CHECK(LogHas(log, "BCLOSE"));
+
+  Type(st, "BSAVE", log);
+  CHECK(LogHas(log, "BSAVE — saved"));
+  Type(st, "BSAVEAS Issue1195BlockCopy", log);
+  CHECK(LogHas(log, "BSAVEAS — copied"));
+  CHECK(CadBlockFindDef(st.blockDefs, "Issue1195BlockCopy") >= 0);
+
+  // A Save As refusal must also leave an existing destination intact.
+  {
+    std::ofstream existing(path, std::ios::binary);
+    existing << "original drawing bytes";
+  }
+  log.clear();
+  REQUIRE_FALSE(SaveDrawingDocument(st, path.string().c_str(), log));
+  std::ifstream existing(path, std::ios::binary);
+  const std::string contents((std::istreambuf_iterator<char>(existing)), {});
+  CHECK(contents == "original drawing bytes");
+
+  Type(st, "BCLOSE", log);
+  CHECK_FALSE(st.blockEditActive);
+  REQUIRE(SaveDrawingDocument(st, path.string().c_str(), log));
+  fs::remove(path, ec);
 }
