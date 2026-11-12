@@ -38,7 +38,7 @@ class ClassifyDocsOnlyTests(unittest.TestCase):
     def test_documentation_files_are_eligible(self):
         files = [
             {"filename": "AGENTS.md"},
-            {"filename": "spec/requirements.md"},
+            {"filename": "docs/install.md"},
         ]
 
         self.assertTrue(self.classify(2, files))

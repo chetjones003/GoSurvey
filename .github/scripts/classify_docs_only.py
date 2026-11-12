@@ -12,7 +12,7 @@ API_HEADERS = {
     "X-GitHub-Api-Version": "2022-11-28",
 }
 ALLOWED_SUFFIXES = {".md", ".mdx", ".rst", ".adoc", ".text"}
-PLAIN_TEXT_ROOTS = ("docs/", "spec/", "workshop/", "verification/")
+PLAIN_TEXT_ROOTS = ("docs/",)
 
 
 def is_documentation_path(path):
