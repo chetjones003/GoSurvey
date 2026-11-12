@@ -54,17 +54,7 @@ GoSurvey is built with CMake, MSVC, and Ninja on Windows. See [`dev/README.md`](
 
 ### Project workflow
 
-This repo follows a three-layer governance model — **SPEC → VERIFICATION → WORKSHOP** — defined in full in [`CLAUDE.md`](CLAUDE.md):
-
-1. **Understand** — identify the applicable requirement (`REQ-NNN`), constraints (`CON-NN`), and Acceptance Criteria in `spec/`.
-2. **Plan** — write or update a task in `workshop/tasks/` before writing code.
-3. **Verify the plan** — check it against the spec, architecture, and risks.
-4. **Resolve uncertainty** — ambiguous or missing requirements are raised as a **SPEC GAP** and resolved before implementation, never guessed at.
-5. **Implement** — the smallest correct change, following `spec/architecture.md` and `spec/coding-standards.md`.
-6. **Verify** — build, architecture review, code review, dependency audit, performance review, and tests.
-7. **Complete** — a task is only done once its tests, verification result, and documentation updates are recorded.
-
-`spec/` is the single source of truth; implementation never redefines a requirement to make itself pass.
+Work is tracked as [GitHub issues](https://github.com/chetjones003/GoSurvey/issues). The issue says what to build or fix and how to tell it is done; see [`CLAUDE.md`](CLAUDE.md) for the full workflow. Significant design decisions are recorded as short ADRs in `docs/adr/`, and project terms in `GLOSSARY.md`.
 
 ### Branch rules
 
@@ -79,9 +69,9 @@ This repo follows a three-layer governance model — **SPEC → VERIFICATION →
 
 AI-assisted changes (including Claude Code) in this repository follow the same governance as any other contribution:
 
-- All work is scoped to an approved `REQ-NNN` and Acceptance Criteria in `spec/` — no invented requirements, and no editing the spec just to make an implementation pass.
-- Ambiguous, contradictory, or architecturally significant decisions are raised as a **SPEC GAP** for a human to resolve, never guessed.
-- Changes follow the same Understand → Plan → Verify → Implement → Verify → Complete workflow and branch/PR rules as human contributions.
+- Work is scoped to a GitHub issue and its acceptance criteria.
+- Unclear behavior is settled from evidence (code, docs, Civil 3D/AutoCAD behavior) or by asking the maintainer, never guessed.
+- Changes follow the same branch/PR rules as human contributions.
 - Commits and PRs produced with AI assistance carry `Co-Authored-By` attribution identifying the model used.
 
 **[Report an issue](https://github.com/chetjones003/GoSurvey/issues)** · **[All releases](https://github.com/chetjones003/GoSurvey/releases)**
