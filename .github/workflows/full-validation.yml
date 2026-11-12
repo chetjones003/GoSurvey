@@ -101,9 +101,12 @@ jobs:
       run:
         shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
     name: full / test shards (${{ matrix.name }})
-    needs: classify-docs-only
+    # Build once: shards start after the build job has saved the sccache archive, so each shard
+    # restores the just-built objects instead of recompiling them. Graph: build, then tests.
+    needs: [classify-docs-only, build-all-targets]
     if: >-
       always() &&
+      needs.build-all-targets.result == 'success' &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
     runs-on: ${{ vars.GOSURVEY_FULL_VALIDATION_RUNNER || 'windows-latest' }}
