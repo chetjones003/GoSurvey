@@ -109,3 +109,17 @@ the source include graph and its cycles, Qt includes outside `src/qt`, and OpenG
 outside `src/render`. Use `--root` to scan another checkout and `--output-dir` to choose a
 different report directory. Fixture coverage is in
 `python3 -m unittest tools.test_architecture_inventory`.
+
+## File-size gate
+
+The `PR gate / file size` job in `.github/workflows/pr-checks.yml` runs
+`.github/scripts/check_file_size.py` on every PR, including docs-only ones. Tracked C/C++ sources (excluding `third_party/`) over 3,000 lines fail unless
+they are grandfathered in `.github/file-size-baseline.json`. A grandfathered file may not grow, and
+it must lower its entry when it shrinks or remove the entry once it is at or under 3,000 lines. The
+PR's baseline is checked against the base branch's baseline, so a PR cannot add or raise entries.
+Renaming or moving a grandfathered file always fails the gate: the old entry is then missing, and
+the new path is an over-limit file that cannot be added to the baseline. The only ways through are
+to shrink the file to 3,000 lines or fewer, or to change the gate itself. To regenerate the
+baseline from a checkout of `beta`, run
+`python .github/scripts/check_file_size.py --write-baseline .github/file-size-baseline.json`.
+Fixture coverage is in `python -m unittest discover -s .github/scripts -p "test_*.py"`.
