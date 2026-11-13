@@ -22,7 +22,7 @@ jobs:
     if: >-
       github.event.sender.type != 'Bot' &&
       ((github.event_name == 'pull_request' &&
-        !contains(toJSON(github.event.pull_request.labels.*.name), 'refactor: move-only') &&
+        !contains(github.event.pull_request.labels.*.name, 'refactor: move-only') &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         ((github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
          (github.event.action == 'unlabeled' && github.event.label.name == 'refactor: move-only'))) ||

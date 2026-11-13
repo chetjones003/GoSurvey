@@ -87,13 +87,13 @@ jobs:
           python -m unittest discover -s .github/scripts -p "test_*.py"
 
       - name: Prove move-only changes
-        if: "${{ contains(toJSON(github.event.pull_request.labels.*.name), 'refactor: move-only') }}"
+        if: "${{ contains(github.event.pull_request.labels.*.name, 'refactor: move-only') }}"
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: python .github/scripts/check_move_only.py --base-ref "$BASE_SHA"
 
       - name: Check out base dependency reference
-        if: "${{ contains(toJSON(github.event.pull_request.labels.*.name), 'refactor: move-only') }}"
+        if: "${{ contains(github.event.pull_request.labels.*.name, 'refactor: move-only') }}"
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -101,7 +101,7 @@ jobs:
           persist-credentials: false
 
       - name: Check move-only dependency baseline
-        if: "${{ contains(toJSON(github.event.pull_request.labels.*.name), 'refactor: move-only') }}"
+        if: "${{ contains(github.event.pull_request.labels.*.name, 'refactor: move-only') }}"
         run: python tools/architecture_dependencies.py --reference-root build/dependency-reference
 
   # File-size gate (#1213). Runs on every PR, including docs-only ones, so no docs-only skip here.
