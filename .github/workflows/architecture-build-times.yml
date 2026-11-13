@@ -5,15 +5,44 @@ on:
     branches: [beta]
 
 permissions:
+  actions: write
   contents: write
 
-# This is intentionally independent of architecture-metrics and required beta checks. If the
-# dedicated runner is offline, this workflow queues separately and cannot hold up a beta push.
-concurrency:
-  group: architecture-build-times
-  cancel-in-progress: false
+# This workflow is independent of architecture-metrics and required beta checks. Each push gets
+# its own queue guard so a busy runner cannot hold a later sample behind a workflow-level lock.
 
 jobs:
+  queue-guard:
+    name: skip if benchmark runner is busy
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    continue-on-error: true
+    steps:
+      - name: Cancel the optional run if the self-hosted job stays queued
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Give a free runner two minutes to accept the job. A busy or offline runner
+            // leaves it queued; cancel this optional workflow so a later push can be sampled.
+            await new Promise((resolve) => setTimeout(resolve, 120000));
+            const { data } = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+              per_page: 100,
+            });
+            const queued = data.jobs.some((job) =>
+              job.name === 'beta build-time sample' && job.status === 'queued'
+            );
+            if (queued) {
+              core.warning('Self-hosted benchmark runner is busy or offline; skipping this sample.');
+              await github.rest.actions.cancelWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: context.runId,
+              });
+            }
+
   measure:
     name: beta build-time sample
     runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
