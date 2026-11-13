@@ -155,16 +155,17 @@ def main(argv=None):
         print(f"Wrote {len(grandfathered)} grandfathered file(s) to {args.write_baseline}")
         return 0
 
+    if not args.base_ref:
+        parser.error("--base-ref is required when checking (omit it only with --write-baseline)")
+
     current = collect_line_counts(args.root)
     baseline = read_baseline(args.root)
-    base_baseline = None
-    if args.base_ref:
-        base_baseline = read_base_baseline(args.root, args.base_ref)
-        if base_baseline is None:
-            candidates = {path for path, lines in current.items() if lines > LIMIT} | set(baseline)
-            base_baseline = base_oversized_caps(args.root, args.base_ref, sorted(candidates))
-            print(f"Note: base {args.base_ref} has no {BASELINE_PATH}; bootstrap caps derived from "
-                  f"{len(base_baseline)} oversized file(s) at the base commit.")
+    base_baseline = read_base_baseline(args.root, args.base_ref)
+    if base_baseline is None:
+        candidates = {path for path, lines in current.items() if lines > LIMIT} | set(baseline)
+        base_baseline = base_oversized_caps(args.root, args.base_ref, sorted(candidates))
+        print(f"Note: base {args.base_ref} has no {BASELINE_PATH}; bootstrap caps derived from "
+              f"{len(base_baseline)} oversized file(s) at the base commit.")
 
     problems = find_violations(current, baseline, base_baseline)
     for problem in problems:

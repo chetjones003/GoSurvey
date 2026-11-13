@@ -231,6 +231,10 @@ class FixtureTreeTests(unittest.TestCase):
         self._commit("pr")
         self.assertEqual(self._gate(), 1)
 
+    def test_check_mode_requires_base_ref(self):
+        with self.assertRaises(SystemExit):
+            gate.main(["--root", str(self.root)])
+
     def test_unknown_base_ref_fails_closed(self):
         with self.assertRaises(SystemExit):
             gate.main(["--root", str(self.root), "--base-ref", "0" * 40])

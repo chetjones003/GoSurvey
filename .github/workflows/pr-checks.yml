@@ -64,10 +64,22 @@ jobs:
           python -m compileall -q .github/scripts
           python -m unittest discover -s .github/scripts -p "test_*.py"
 
-      - name: Enforce C/C++ source file-size limit (#1213)
+  # File-size gate (#1213). Runs on every PR, including docs-only ones, so no docs-only skip here.
+  file-size-gate:
+    name: PR gate / file size
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR changes
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Enforce C/C++ source file-size limit
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python .github/scripts/check_file_size.py --base-ref "$BASE_SHA"
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python .github/scripts/check_file_size.py --base-ref "$BASE_SHA"
 
   # These inexpensive security scans remain required on every non-docs PR.
   security-gitleaks:
