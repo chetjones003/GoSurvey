@@ -90,6 +90,13 @@ class ArchitectureSnapshotTests(unittest.TestCase):
             snapshot_tool.append_snapshot(self.history, changed)
         self.assertEqual(target.read_bytes(), before)
 
+    def test_append_leaves_no_temporary_file_behind(self):
+        snap = snapshot_tool.build_snapshot(self.root, COMMIT)
+        snapshot_tool.append_snapshot(self.history, snap)
+        snapshot_tool.append_snapshot(self.history, snap)
+        names = [path.name for path in (self.history / "snapshots").iterdir()]
+        self.assertEqual(names, [f"{COMMIT}.json"])
+
     def test_append_keeps_one_file_per_commit(self):
         snapshot_tool.append_snapshot(self.history, snapshot_tool.build_snapshot(self.root, COMMIT))
         snapshot_tool.append_snapshot(self.history, snapshot_tool.build_snapshot(self.root, OTHER_COMMIT))

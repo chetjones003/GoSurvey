@@ -10,6 +10,7 @@ timestamp, so a rerun of the same commit produces the same bytes.
 import argparse
 import importlib.util
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -91,14 +92,19 @@ def append_snapshot(history_dir, snapshot):
     directory.mkdir(parents=True, exist_ok=True)
     target = directory / f"{commit}.json"
     text = _serialize(snapshot)
+    # Write a complete temp file, then hard-link it into place. The link fails if the target exists,
+    # so a crash never leaves a truncated snapshot behind.
+    temporary = directory / f".{commit}.{os.getpid()}.tmp"
+    temporary.write_text(text, encoding="utf-8", newline="\n")
     try:
-        with target.open("x", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
+        os.link(temporary, target)
         return "created"
     except FileExistsError:
         if target.read_text(encoding="utf-8") == text:
             return "unchanged"
         raise SnapshotConflict(f"{target} already holds a different snapshot; snapshots are append-only")
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def main(argv=None):
