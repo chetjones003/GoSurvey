@@ -15,7 +15,7 @@ from pathlib import Path
 
 LIMIT = 3000
 BASELINE_PATH = ".github/file-size-baseline.json"
-SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx")
+SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".ipp", ".tpp", ".inl")
 EXCLUDED_PREFIXES = ("third_party/",)
 
 
@@ -56,7 +56,8 @@ def find_violations(current, baseline, base_baseline):
 
 
 def count_lines(text):
-    """Count newline-delimited lines, like `wc -l` plus an unterminated last line."""
+    """Count lines with CRLF and bare CR as breaks, plus an unterminated last line."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     return text.count("\n") + (1 if text and not text.endswith("\n") else 0)
 
 
@@ -101,12 +102,16 @@ def read_base_baseline(root, base_ref):
     )
     if commit.returncode != 0:
         raise SystemExit(f"File-size gate: base commit {base_ref} is not available; fetch it first.")
-    result = subprocess.run(
-        ["git", "-C", str(root), "show", f"{base_ref}:{BASELINE_PATH}"],
+    blob = subprocess.run(
+        ["git", "-C", str(root), "cat-file", "-e", f"{base_ref}:{BASELINE_PATH}"],
         capture_output=True,
     )
-    if result.returncode != 0:
+    if blob.returncode != 0:
         return None
+    result = subprocess.run(
+        ["git", "-C", str(root), "show", f"{base_ref}:{BASELINE_PATH}"],
+        capture_output=True, check=True,
+    )
     return load_baseline_text(result.stdout.decode("utf-8"))
 
 

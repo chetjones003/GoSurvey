@@ -22,6 +22,12 @@ class CountLinesTests(unittest.TestCase):
     def test_form_feed_is_not_a_line_break(self):
         self.assertEqual(gate.count_lines("a\x0cb\n"), 1)
 
+    def test_crlf_counts_one_line_per_break(self):
+        self.assertEqual(gate.count_lines("a\r\nb\r\n"), 2)
+
+    def test_cr_only_line_endings_count_each_break(self):
+        self.assertEqual(gate.count_lines("a\rb\rc"), 3)
+
 
 class FindViolationsTests(unittest.TestCase):
     def violations(self, current, baseline, base_baseline):
@@ -194,6 +200,11 @@ class FixtureTreeTests(unittest.TestCase):
 
     def test_grandfathered_file_shrunk_under_limit_with_entry_kept_fails(self):
         _write(self.root, "src/big.cpp", 2900)
+        self._commit("pr")
+        self.assertEqual(self._gate(), 1)
+
+    def test_new_ipp_implementation_file_over_limit_fails(self):
+        _write(self.root, "src/new.ipp", 3001)
         self._commit("pr")
         self.assertEqual(self._gate(), 1)
 
