@@ -227,14 +227,15 @@ def _comment_urls(api_url, repository, pr_number, token):
 
 def publish_comment(repository, pr_number, body, token, api_url):
     base = f"{api_url.rstrip('/')}/repos/{repository}/issues/{pr_number}/comments"
+    comment_endpoint = f"{api_url.rstrip('/')}/repos/{repository}/issues/comments"
     matches = [comment for comment in _comment_urls(api_url, repository, pr_number, token)
                if comment.get("user", {}).get("login") == "github-actions[bot]"
                and MARKER in comment.get("body", "")]
     if matches:
-        _github_request("PATCH", f"{base}/{matches[0]['id']}", token, {"body": body})
+        _github_request("PATCH", f"{comment_endpoint}/{matches[0]['id']}", token, {"body": body})
         # Keep exactly one bot comment even if a previous interrupted run created duplicates.
         for duplicate in matches[1:]:
-            _github_request("DELETE", f"{base}/{duplicate['id']}", token)
+            _github_request("DELETE", f"{comment_endpoint}/{duplicate['id']}", token)
     else:
         _github_request("POST", base, token, {"body": body})
 
