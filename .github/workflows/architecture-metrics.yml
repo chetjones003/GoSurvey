@@ -62,6 +62,8 @@ jobs:
           # Commits already recorded on the metrics branch (empty if the branch does not exist yet).
           git fetch --quiet origin '+refs/heads/metrics:refs/remotes/origin/metrics' 2>/dev/null || true
           RECORDED=$(git ls-tree -r --name-only refs/remotes/origin/metrics -- snapshots 2>/dev/null || true)
+          # Commits whose build failed on an earlier run. A manual backfill by SHA retries them.
+          SKIPPED=$(git ls-tree -r --name-only refs/remotes/origin/metrics -- skipped 2>/dev/null || true)
 
           if [ -n "$BACKFILL" ]; then
             COMMITS=$(git rev-parse --verify --quiet "$BACKFILL^{commit}") || {
@@ -84,6 +86,9 @@ jobs:
             fi
             # Snapshots are never rewritten, so a recorded commit is not measured again.
             if [ -z "$BACKFILL" ] && grep -Fqx "snapshots/$commit.json" <<< "$RECORDED"; then
+              continue
+            fi
+            if [ -z "$BACKFILL" ] && grep -Fqx "skipped/$commit.txt" <<< "$SKIPPED"; then
               continue
             fi
             if ! git checkout --quiet --detach "$commit"; then
@@ -126,9 +131,9 @@ jobs:
             exit "$status"
           }
 
-          if [ -z "$(ls -A "$SNAPSHOTS")" ]; then
+          if [ -z "$(ls -A "$SNAPSHOTS")" ] && [ ! -s "$FAILURES" ]; then
             echo "No new snapshots to publish."
-            finish
+            exit 0
           fi
 
           # actions/checkout's credentials live in the workspace repo only, so pass the token per command.
@@ -148,10 +153,20 @@ jobs:
             fi
             conflicts=0
             for snapshot in "$SNAPSHOTS"/*.json; do
+              # With no snapshot files the glob stays literal; that is not a conflict.
+              [ -e "$snapshot" ] || continue
               python3 "$TOOLS/architecture_snapshot.py" append --snapshot "$snapshot" --history-dir . ||
                 conflicts=$((conflicts + 1))
             done
-            git add -- 'snapshots/*.json'
+            # A failed commit is recorded once, so later runs skip it. noclobber keeps the first record.
+            mkdir -p skipped
+            while read -r failed; do
+              [ -n "$failed" ] || continue
+              (set -C; printf 'build failed in run %s; a manual backfill by SHA retries it\n' "$GH_RUN_ID" \
+                > "skipped/$failed.txt") 2>/dev/null || true
+            done < "$FAILURES"
+            mkdir -p snapshots
+            git add -A -- snapshots skipped
             if git diff --cached --quiet; then
               echo "No new snapshots to publish."
               finish
