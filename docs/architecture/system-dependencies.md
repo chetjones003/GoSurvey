@@ -1342,13 +1342,13 @@ flowchart LR
 
 ## Gaps the table leaves open
 
-These follow from the system-map table as of this diagram and may be unintended. Resolve them in
-`system-map.md`, then update this list.
+These follow from the system-map table and may be unintended. Resolve them in `system-map.md`;
+the generator drops a gap from this list once the table no longer has it.
 
-- **Debug has no consumers.** No system lists Debug as an allowed dependency, so nothing may call
-  the profiler, tracer or invariant checks.
-- **Commands may not include Geometry or Math.** Interaction, Renderer and IO may; Commands may
-  not, even though command families build geometry.
+- **Debug has no consumers.** No system lists Debug as an allowed dependency, so nothing may
+  call the profiler, tracer or invariant checks.
+- **Commands may not include Geometry or Math.** Interaction, Renderer and IO may; Commands
+  may not, even though command families build geometry.
 - **Interaction may not include Pdf**, though it may include every other Domain system.
-- **GoSurveyEditor may not include Headless, Events, UI or Core directly**; it reaches them only
-  through the systems it lists.
+- **GoSurveyEditor may not include Headless, Events, UI or Core directly**; it reaches them
+  only through the systems it lists.

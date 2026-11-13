@@ -13,6 +13,7 @@ Usage, from the repository root:
     python tools/system_dependency_diagrams.py --check   # fail if the doc is out of date
 """
 import argparse
+import collections
 import importlib.util
 import pathlib
 import sys
@@ -161,20 +162,62 @@ FEATURE_EDGES = [
     ("phead.dev", "renderer.dev"), ("phead.dlg", "ui.dlg"), ("phead.input", "events.input"),
 ]
 
-# Forbidden examples shown in red on the system view: (source, target, why).
+
+def members(*tiers):
+    return [system for system in ORDER if TIER_OF[system] in tiers]
+
+
+def pairs(sources, targets):
+    return tuple((source, target) for source in sources for target in targets if source != target)
+
+
+DOMAIN = members("T2")
+SERVICES = members("T3")
+ENGINE = members("T4", "T3", "T2", "T1", "T0")
+PLATFORM = members("PLATFORM")
+
+# Forbidden examples shown in red on the system view. `why` is printed in the doc, so every claim
+# it makes is listed in `forbids` (edges the table must not allow) and `requires` (edges it must
+# allow); the generator fails if the table contradicts the printed reason.
+Forbidden = collections.namedtuple("Forbidden", "source target why forbids requires")
 FORBIDDEN = [
-    ("editor", "document", "reaches Domain only through Commands / Interaction"),
-    ("editor", "phead", "Headless is for tests and batch runs"),
-    ("commands", "interaction", "one-way: Interaction may use Commands"),
-    ("interaction", "io", "Interaction also may not use Network or Pdf"),
-    ("network", "survey", "Network may not use any Domain system"),
-    ("renderer", "io", "no edges between Services"),
-    ("document", "survey", "no reverse peer edge"),
-    ("survey", "terrain", "no reverse peer edge"),
-    ("pointcloud", "document", "PointCloud has no Domain peers"),
-    ("geometry", "document", "Kernel never reaches up into Domain"),
-    ("document", "pqt", "engine code never includes a backend"),
-    ("renderer", "pgl", "engine code never includes a backend"),
+    Forbidden("editor", "document", "reaches Domain only through Commands / Interaction",
+              pairs(["editor"], DOMAIN), (("editor", "commands"), ("editor", "interaction"))),
+    Forbidden("editor", "phead", "Headless is for tests and batch runs", (), ()),
+    Forbidden("commands", "interaction", "one-way: Interaction may use Commands",
+              (), (("interaction", "commands"),)),
+    Forbidden("interaction", "io", "Interaction also may not use Network or Pdf",
+              (("interaction", "network"), ("interaction", "pdf")), ()),
+    Forbidden("network", "survey", "Network may not use any Domain system",
+              pairs(["network"], DOMAIN), ()),
+    Forbidden("renderer", "io", "no edges between Services", pairs(SERVICES, SERVICES), ()),
+    Forbidden("document", "survey", "no reverse peer edge", (), (("survey", "document"),)),
+    Forbidden("survey", "terrain", "no reverse peer edge", (), (("terrain", "survey"),)),
+    Forbidden("pointcloud", "document", "PointCloud has no Domain peers",
+              pairs(["pointcloud"], DOMAIN), ()),
+    Forbidden("geometry", "document", "Kernel never reaches up into Domain",
+              pairs(["geometry"], DOMAIN), ()),
+    Forbidden("document", "pqt", "engine code never includes a backend",
+              pairs(ENGINE, PLATFORM), ()),
+    Forbidden("renderer", "pgl", "engine code never includes a backend",
+              pairs(ENGINE, PLATFORM), ()),
+]
+
+# Possibly unintended rules in the table. Each gap is printed only while its test holds.
+GAPS = [
+    (lambda allowed: all("debug" not in targets for targets in allowed.values()),
+     "**Debug has no consumers.** No system lists Debug as an allowed dependency, so nothing may\n"
+     "  call the profiler, tracer or invariant checks."),
+    (lambda allowed: not {"geometry", "math"} & allowed["commands"]
+     and all({"geometry", "math"} <= allowed[s] for s in ("interaction", "renderer", "io")),
+     "**Commands may not include Geometry or Math.** Interaction, Renderer and IO may; Commands\n"
+     "  may not, even though command families build geometry."),
+    (lambda allowed: "pdf" not in allowed["interaction"]
+     and all(d in allowed["interaction"] for d in DOMAIN if d != "pdf"),
+     "**Interaction may not include Pdf**, though it may include every other Domain system."),
+    (lambda allowed: not {"phead", "events", "ui", "core"} & allowed["editor"],
+     "**GoSurveyEditor may not include Headless, Events, UI or Core directly**; it reaches them\n"
+     "  only through the systems it lists."),
 ]
 
 # Arrows leaving a system use that system's colour; box fill shows the tier.
@@ -234,9 +277,21 @@ def validate(allowed, feature_edges=None, forbidden=None):
             raise DiagramError(f"feature edge must start at a feature, not {source!r}")
         if system_of(source) != system_of(target) and system_of(target) not in allowed[system_of(source)]:
             raise DiagramError(f"feature edge {source} -> {target} is not allowed by the system map")
-    for source, target, _ in forbidden:
-        if target in allowed[source]:
-            raise DiagramError(f"forbidden example {source} -> {target} is allowed by the system map")
+    for example in forbidden:
+        for source, target in ((example.source, example.target),) + tuple(example.forbids):
+            if target in allowed[source]:
+                raise DiagramError(f"forbidden example {example.source} -> {example.target} says "
+                                   f"{example.why!r}, but the system map allows {source} -> {target}")
+        for source, target in example.requires:
+            if target not in allowed[source]:
+                raise DiagramError(f"forbidden example {example.source} -> {example.target} says "
+                                   f"{example.why!r}, but the system map has no {source} -> {target}")
+    # The doc and the system view rely on Core being open to everyone but the editor.
+    for system in SYSTEMS:
+        expected = system not in ("editor", "core")
+        if ("core" in allowed[system]) != expected:
+            raise DiagramError(f"the doc says every system except GoSurveyEditor may include Core, "
+                               f"but the system map {'omits' if expected else 'allows'} {system} -> core")
     for source, target in SYSTEM_IMPLEMENTS | {(system_of(a), system_of(b)) for a, b in FEATURE_IMPLEMENTS}:
         if target not in allowed[source]:
             raise DiagramError(f"implements edge {source} -> {target} is not allowed by the system map")
@@ -269,7 +324,8 @@ def system_card(system, allowed):
         arrow = "-.->" if (system, target) in SYSTEM_IMPLEMENTS else "-->"
         edges.append(f"  {prefix}src {arrow} {prefix}{target}")
         colors.append(COLOR[system])
-    for source, target, _ in FORBIDDEN:
+    for example in FORBIDDEN:
+        source, target = example.source, example.target
         if source != system:
             continue
         line, style = node(f"{prefix}x_{target}", "✗ " + SYSTEMS[target][0], TIER_OF[target],
@@ -328,8 +384,9 @@ LEGEND = """- **Arrow** `A --> B`: A may include B (system view) or uses B (feat
 
 
 def render_markdown(allowed):
-    rows = NEWLINE.join(f"| {SYSTEMS[a][0]} | {SYSTEMS[b][0]} | {why[0].upper() + why[1:]}. |"
-                        for a, b, why in FORBIDDEN)
+    rows = NEWLINE.join(f"| {SYSTEMS[e.source][0]} | {SYSTEMS[e.target][0]} | "
+                        f"{e.why[0].upper() + e.why[1:]}. |" for e in FORBIDDEN)
+    gaps = [f"- {text}" for holds, text in GAPS if holds(allowed)] or ["- None at present."]
     parts = [f"""# GoSurvey system dependencies (detailed)
 
 Two views of the **target architecture**. The [system map](system-map.md) table stays
@@ -367,16 +424,10 @@ section 1, and the generator checks this.
 
 ## Gaps the table leaves open
 
-These follow from the system-map table as of this diagram and may be unintended. Resolve them in
-`system-map.md`, then update this list.
+These follow from the system-map table and may be unintended. Resolve them in `system-map.md`;
+the generator drops a gap from this list once the table no longer has it.
 
-- **Debug has no consumers.** No system lists Debug as an allowed dependency, so nothing may call
-  the profiler, tracer or invariant checks.
-- **Commands may not include Geometry or Math.** Interaction, Renderer and IO may; Commands may
-  not, even though command families build geometry.
-- **Interaction may not include Pdf**, though it may include every other Domain system.
-- **GoSurveyEditor may not include Headless, Events, UI or Core directly**; it reaches them only
-  through the systems it lists.
+{NEWLINE.join(gaps)}
 """)
     return NEWLINE.join(parts)
 
