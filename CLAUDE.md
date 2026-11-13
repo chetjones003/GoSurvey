@@ -5,6 +5,13 @@ Rules for every agent in this repo. `AGENTS.md` points here.
 **GitHub issues are the unit of work.** The issue and its comments define what to build and when
 it is done.
 
+## Architecture
+
+- Put code in the system that owns the concept, as defined by the [system map](docs/architecture/system-map.md).
+- Consult the system map before changing code and follow its allowed dependencies.
+- Never add an include that the system map forbids.
+- Put new code for a carved-out area in that area's new home.
+
 ## Git
 
 - `master` = latest release, always release-ready. `beta` = development.
