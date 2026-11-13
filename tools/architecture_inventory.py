@@ -83,6 +83,7 @@ def collect_metrics(root):
         "source_file_count": len(files),
         "largest_files": largest,
         "folder_line_counts": dict(sorted(folder_counts.items())),
+        "include_graph": {node: sorted(neighbors) for node, neighbors in sorted(graph.items())},
         "cad_commands_header_fan_in": include_counts[cad_header],
         "dependency_cycles": _cycles(graph),
         "qt_includes_outside_qt": {"count": len(qt_outside), "files": qt_outside},
@@ -99,6 +100,10 @@ def render_report(metrics):
     lines.extend(f"  {folder}: {count}" for folder, count in metrics["folder_line_counts"].items())
     lines.extend(["", f"Dependency cycles: {len(metrics['dependency_cycles'])}"])
     lines.extend(f"  {', '.join(cycle)}" for cycle in metrics["dependency_cycles"])
+    edge_count = sum(len(neighbors) for neighbors in metrics["include_graph"].values())
+    lines.extend(["", f"Include graph: {len(metrics['include_graph'])} files, {edge_count} edges"])
+    lines.extend(f"  {source} -> {', '.join(targets)}"
+                 for source, targets in metrics["include_graph"].items() if targets)
     for key, label in (("qt_includes_outside_qt", "Files including Qt outside src/qt"),
                        ("opengl_outside_rendering", "Files using OpenGL outside src/render")):
         finding = metrics[key]

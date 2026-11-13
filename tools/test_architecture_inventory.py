@@ -30,6 +30,7 @@ class ArchitectureInventoryTests(unittest.TestCase):
         self.assertEqual(result["largest_files"][0]["path"], "src/commands/CadCommands.hpp")
         self.assertEqual(result["folder_line_counts"]["src/commands"], 12)
         self.assertEqual(result["cad_commands_header_fan_in"], 1)
+        self.assertEqual(result["include_graph"]["src/commands/CadCommands.hpp"], ["src/commands/Peer.hpp"])
         self.assertEqual(result["dependency_cycles"], [["src/commands/CadCommands.hpp", "src/commands/Peer.hpp"]])
         self.assertEqual(result["qt_includes_outside_qt"]["files"], ["src/commands/CadCommands.hpp", "src/ui.cpp"])
         self.assertEqual(result["opengl_outside_rendering"]["files"], ["src/commands/Peer.hpp"])
