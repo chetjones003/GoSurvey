@@ -85,3 +85,16 @@ Solid arrows indicate permitted dependencies by tier; dotted arrows indicate imp
 ## Mapping format
 
 `system-map.json` is the machine-readable draft. It maps each current `src` folder to a target system, except mixed `src/util`, which is enumerated file by file. Every enumerated file is marked `ambiguous` and has no guessed target until the audit determines ownership. New source paths must be added as folders or files before this draft can be used as an enforcement baseline.
+
+## Architecture inventory
+
+Run `python3 tools/architecture_inventory.py` from the repository root to write a readable
+report and JSON metrics to `build/artifacts/architecture-inventory/`. The scanner does not
+compile the project. It scans C/C++ files under `src/` only; folder line counts include files
+directly in each folder. Include lookup uses the including file's folder, `src/`, each direct
+subfolder of `src/` (matching the project's flat include paths), and the repository root. It
+reports the largest source files, per-folder line counts, include fan-in for `CadCommands.hpp`,
+the source include graph and its cycles, Qt includes outside `src/qt`, and OpenGL code or headers
+outside `src/render`. Use `--root` to scan another checkout and `--output-dir` to choose a
+different report directory. Fixture coverage is in
+`python3 -m unittest tools.test_architecture_inventory`.
