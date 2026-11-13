@@ -50,6 +50,13 @@ class ClassifyDocsOnlyTests(unittest.TestCase):
 
         get.assert_not_called()
 
+    def test_move_only_label_forces_full_validation(self):
+        with patch.dict(os.environ, {"PR_LABELS": '["docs-only", "refactor: move-only"]'}):
+            with patch.object(classifier, "github_get") as get:
+                self.assertFalse(classifier.classify_docs_only())
+
+        get.assert_not_called()
+
     def test_code_file_is_not_documentation(self):
         self.assertFalse(self.classify(1, [{"filename": "src/main.cpp"}]))
 
