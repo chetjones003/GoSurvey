@@ -1,6 +1,6 @@
 #include "alignment/AlignmentTables.hpp"
 
-#include "util/NumFormat.hpp"
+#include <GoSurvey/Core/NumFormat.hpp>
 
 #include <algorithm>
 #include <cassert>

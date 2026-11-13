@@ -44,14 +44,14 @@
 #include "DwgMeshConvert.hpp"
 #include "DwgIo.hpp"
 #include "WinFileDialogs.hpp"
-#include "NumFormat.hpp"
+#include <GoSurvey/Core/NumFormat.hpp>
 #include "util/PlotScales.hpp"  // VPSCALE (REQ-027): PlotScaleLabel / metric-ratio helpers
 #include "MtextRichFormat.hpp"
 #include "AppPaths.hpp"
 
 #include <chrono>
 
-#include "StringUtil.hpp"
+#include <GoSurvey/Core/StringUtil.hpp>
 #include "AppPaths.hpp"
 
 #include "CadSnap.hpp"

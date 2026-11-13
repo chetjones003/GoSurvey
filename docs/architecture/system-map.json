@@ -3,6 +3,14 @@
   "status": "draft",
   "mappedFolders": [
     {
+      "path": "src/core/include/",
+      "system": "Core"
+    },
+    {
+      "path": "src/core/src/",
+      "system": "Core"
+    },
+    {
       "path": "src/alignment/",
       "system": "Survey"
     },
@@ -80,11 +88,6 @@
     },
     {
       "path": "src/util/AcisSatWriter.cpp",
-      "system": null,
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/AngleFormat.hpp",
       "system": null,
       "status": "ambiguous"
     },
@@ -254,11 +257,6 @@
       "status": "ambiguous"
     },
     {
-      "path": "src/util/NumFormat.hpp",
-      "system": null,
-      "status": "ambiguous"
-    },
-    {
       "path": "src/util/nurbs.cpp",
       "system": null,
       "status": "ambiguous"
@@ -345,11 +343,6 @@
     },
     {
       "path": "src/util/stlimport.hpp",
-      "system": null,
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/StringUtil.hpp",
       "system": null,
       "status": "ambiguous"
     },

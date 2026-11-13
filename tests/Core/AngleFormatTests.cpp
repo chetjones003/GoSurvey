@@ -5,7 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "util/AngleFormat.hpp"
+#include <GoSurvey/Core/AngleFormat.hpp>
 
 namespace {
 const char* DEG = "\xc2\xb0";  // UTF-8 degree sign, as the app emits it

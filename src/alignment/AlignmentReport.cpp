@@ -3,7 +3,7 @@
 #include "Alignment.hpp"
 #include "AlignmentDesign.hpp"  // REQ-502
 
-#include "util/NumFormat.hpp"
+#include <GoSurvey/Core/NumFormat.hpp>
 
 #include <array>
 #include <cassert>

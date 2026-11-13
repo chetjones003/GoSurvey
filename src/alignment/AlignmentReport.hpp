@@ -1,7 +1,7 @@
 #pragma once
 
 #include "alignment/Alignment.hpp"  // StationFormat
-#include "util/AngleFormat.hpp"
+#include <GoSurvey/Core/AngleFormat.hpp>
 #include "util/SheetGrid.hpp"
 
 #include <string>

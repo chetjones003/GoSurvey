@@ -4,7 +4,7 @@
 #include "EditorWindow.hpp"
 #include "alignment/AlignmentDesign.hpp"
 #include "AlignmentStyle.hpp"
-#include "util/NumFormat.hpp"
+#include <GoSurvey/Core/NumFormat.hpp>
 
 #include <QColor>
 #include <QComboBox>

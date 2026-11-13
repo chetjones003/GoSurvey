@@ -6,7 +6,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "util/NumFormat.hpp"
+#include <GoSurvey/Core/NumFormat.hpp>
 
 TEST_CASE("FloatFmt builds a printf token for the requested precision", "[numformat]") {
     REQUIRE(DisplayFloatFmt(0) == "%.0f");

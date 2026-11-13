@@ -13,7 +13,7 @@
 #include "GsIo.hpp"
 #include "alignment/Alignment.hpp"
 #include "alignment/AlignmentDesign.hpp"
-#include "util/NumFormat.hpp"
+#include <GoSurvey/Core/NumFormat.hpp>
 
 using alignment::Alignment;
 using alignment::Entity;

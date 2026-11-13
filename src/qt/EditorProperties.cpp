@@ -18,10 +18,10 @@
 #include "CadLinetype.hpp"
 #include "CadPropertyEdit.hpp"
 #include "CadUiStyleWidgets.hpp"
-#include "util/AngleFormat.hpp"
+#include <GoSurvey/Core/AngleFormat.hpp>
 #include "util/brep.hpp"
 #include "util/geom2d.hpp"
-#include "util/NumFormat.hpp"
+#include <GoSurvey/Core/NumFormat.hpp>
 
 #include <QColorDialog>
 #include <QTimer>
