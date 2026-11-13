@@ -1,0 +1,453 @@
+{
+  "schemaVersion": 1,
+  "status": "draft",
+  "mappedFolders": [
+    {
+      "path": "src/alignment/",
+      "system": "Survey"
+    },
+    {
+      "path": "src/app/",
+      "system": "GoSurveyEditor"
+    },
+    {
+      "path": "src/commands/",
+      "system": "Commands"
+    },
+    {
+      "path": "src/font/",
+      "system": "Core"
+    },
+    {
+      "path": "src/geo/",
+      "system": "Geometry"
+    },
+    {
+      "path": "src/io/",
+      "system": "IO"
+    },
+    {
+      "path": "src/pdf/",
+      "system": "Pdf"
+    },
+    {
+      "path": "src/platform/",
+      "system": "Windows"
+    },
+    {
+      "path": "src/qt/",
+      "system": "Qt"
+    },
+    {
+      "path": "src/render/",
+      "system": "Renderer"
+    },
+    {
+      "path": "src/survey/",
+      "system": "Survey"
+    },
+    {
+      "path": "src/telemetry/",
+      "system": "Network"
+    },
+    {
+      "path": "src/traverse/",
+      "system": "Survey"
+    },
+    {
+      "path": "src/ui/",
+      "system": "Qt"
+    },
+    {
+      "path": "src/update/",
+      "system": "Network"
+    },
+    {
+      "path": "src/viewport/",
+      "system": "Interaction"
+    }
+  ],
+  "fileMappings": [
+    {
+      "path": "src/util/AcisSatParser.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/AcisSatParser.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/AcisSatWriter.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/AngleFormat.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/benchscene.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/benchscene.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/brep.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/brep.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/cadblock.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/cadpiperun.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/cadsolid.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/cadtable.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/cadtablestyle.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/contourgen.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/contourgen.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/curveintersect.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/curveintersect.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/cylinderfit.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/cylinderfit.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/DataExtract.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/daylight.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/daylight.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/docinvariants.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/docinvariants.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/framewatch.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/geom2d.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/geom2d.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/gizmooverlay.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/gltfimport.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/gltfimport.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/gridsurface.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/gridsurface.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/hoverdwell.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/hoverpickgate.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/meshgeom.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/meshgeom.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/modelimport.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/NumFormat.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/nurbs.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/nurbs.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/PlotScales.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/pointcloudcache.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/pointcloudcache.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/pointcloudoctree.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/pointcloudoctree.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/PointFileExt.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/ray3d.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/SaveTrace.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/SaveTrace.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/SheetGrid.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/solidpick.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/solidpick.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/spline.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/spline.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/stlimport.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/stlimport.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/StringUtil.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/styleproperty.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/surfaceanalysis.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/surfaceanalysis.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/surfacequery.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/surfacequery.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/surfacestats.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/surfacestats.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/surfacevolume.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/surfacevolume.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/tinbuild.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/tinbuild.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/tinvolume.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/tinvolume.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/ucs.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/watershed.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/watershed.hpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/WhatsNewLogic.cpp",
+      "system": null,
+      "status": "ambiguous"
+    },
+    {
+      "path": "src/util/WhatsNewLogic.hpp",
+      "system": null,
+      "status": "ambiguous"
+    }
+  ],
+  "unmappedPaths": [],
+  "notes": [
+    "Folder-level mappings are provisional and based on current folder names.",
+    "src/util is mixed-purpose; each current direct file is explicitly listed as ambiguous pending audit.",
+    "Nested or newly added source files require mapping before enforcement."
+  ]
+}
