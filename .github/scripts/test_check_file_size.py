@@ -9,9 +9,23 @@ from pathlib import Path
 import check_file_size as gate
 
 
+class CountLinesTests(unittest.TestCase):
+    def test_counts_newline_terminated_lines(self):
+        self.assertEqual(gate.count_lines("a\nb\n"), 2)
+
+    def test_counts_unterminated_last_line(self):
+        self.assertEqual(gate.count_lines("a\nb"), 2)
+
+    def test_empty_text_has_no_lines(self):
+        self.assertEqual(gate.count_lines(""), 0)
+
+    def test_form_feed_is_not_a_line_break(self):
+        self.assertEqual(gate.count_lines("a\x0cb\n"), 1)
+
+
 class FindViolationsTests(unittest.TestCase):
     def violations(self, current, baseline, base_baseline):
-        return gate.find_violations(current, baseline, base_baseline, limit=3000)
+        return gate.find_violations(current, baseline, base_baseline)
 
     def test_under_limit_file_not_grandfathered_passes(self):
         self.assertEqual(self.violations({"src/a.cpp": 2999}, {}, {}), [])
@@ -166,6 +180,26 @@ class FixtureTreeTests(unittest.TestCase):
         self._write_baseline({"src/big.cpp": 3500})
         self._commit("pr adds baseline")
         self.assertEqual(self._gate(), 0)
+
+    def test_new_file_under_limit_passes(self):
+        _write(self.root, "src/new.cpp", 2999)
+        self._commit("pr")
+        self.assertEqual(self._gate(), 0)
+
+    def test_grandfathered_file_shrunk_under_limit_with_entry_removed_passes(self):
+        _write(self.root, "src/big.cpp", 2900)
+        self._write_baseline({})
+        self._commit("pr")
+        self.assertEqual(self._gate(), 0)
+
+    def test_grandfathered_file_shrunk_under_limit_with_entry_kept_fails(self):
+        _write(self.root, "src/big.cpp", 2900)
+        self._commit("pr")
+        self.assertEqual(self._gate(), 1)
+
+    def test_unknown_base_ref_fails_closed(self):
+        with self.assertRaises(SystemExit):
+            gate.main(["--root", str(self.root), "--base-ref", "0" * 40])
 
     def test_write_baseline_lists_only_files_over_limit(self):
         _write(self.root, "src/at_limit.cpp", 3000)

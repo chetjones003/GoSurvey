@@ -19,7 +19,7 @@ SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx")
 EXCLUDED_PREFIXES = ("third_party/",)
 
 
-def find_violations(current, baseline, base_baseline, limit=LIMIT):
+def find_violations(current, baseline, base_baseline):
     """Return human-readable violations.
 
     current: {path: line_count} for every in-scope source file.
@@ -38,17 +38,17 @@ def find_violations(current, baseline, base_baseline, limit=LIMIT):
                     "the baseline may only shrink")
 
     for path, lines in sorted(current.items()):
-        if lines > limit and path not in baseline:
-            problems.append(f"{path}: {lines} lines exceeds {limit} and is not grandfathered")
-        elif lines > limit and lines > baseline[path]:
-            problems.append(f"{path}: grew from {baseline[path]} to {lines} lines (limit {limit})")
+        if lines > LIMIT and path not in baseline:
+            problems.append(f"{path}: {lines} lines exceeds {LIMIT} and is not grandfathered")
+        elif lines > LIMIT and lines > baseline[path]:
+            problems.append(f"{path}: grew from {baseline[path]} to {lines} lines (limit {LIMIT})")
 
     for path, value in sorted(baseline.items()):
         lines = current.get(path)
         if lines is None:
             problems.append(f"{path}: baseline entry for a file that no longer exists; remove it")
-        elif lines <= limit:
-            problems.append(f"{path}: now {lines} lines, under {limit}; remove its baseline entry")
+        elif lines <= LIMIT:
+            problems.append(f"{path}: now {lines} lines, under {LIMIT}; remove its baseline entry")
         elif lines < value:
             problems.append(f"{path}: shrank from {value} to {lines}; lower its baseline entry to {lines}")
 
@@ -56,7 +56,8 @@ def find_violations(current, baseline, base_baseline, limit=LIMIT):
 
 
 def count_lines(text):
-    return len(text.splitlines())
+    """Count newline-delimited lines, like `wc -l` plus an unterminated last line."""
+    return text.count("\n") + (1 if text and not text.endswith("\n") else 0)
 
 
 def tracked_source_files(root):
@@ -89,7 +90,17 @@ def read_baseline(root):
 
 
 def read_base_baseline(root, base_ref):
-    """Return the base branch baseline, or None when the base ref has no baseline file."""
+    """Return the base branch baseline, or None when the base commit exists but has no baseline file.
+
+    Fails closed: an unknown base commit is an error, not a missing baseline, so the cap cannot be
+    silently dropped.
+    """
+    commit = subprocess.run(
+        ["git", "-C", str(root), "cat-file", "-e", f"{base_ref}^{{commit}}"],
+        capture_output=True,
+    )
+    if commit.returncode != 0:
+        raise SystemExit(f"File-size gate: base commit {base_ref} is not available; fetch it first.")
     result = subprocess.run(
         ["git", "-C", str(root), "show", f"{base_ref}:{BASELINE_PATH}"],
         capture_output=True,
