@@ -135,7 +135,9 @@ of the latest `metrics` history. Build one snapshot locally with
 `python3 tools/architecture_snapshot.py build --root . --commit <full-sha> --output <file>`.
 Backfill a commit by running the workflow manually with its full SHA; manual runs work only once
 the workflow file is on `master`, because GitHub reads `workflow_dispatch` from the default branch.
-The push run after a merge already covers the beta head. Commits before
+The push run after a merge already covers the beta head. A commit whose build fails makes that run
+fail once and records `skipped/<commit>.txt` on `metrics`, so later runs skip it and go green; a
+manual backfill by SHA retries it. Commits before
 `docs/architecture/system-map.json` existed are skipped. Fixture coverage is in
 `python3 -m unittest tools.test_architecture_snapshot`.
 
