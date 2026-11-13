@@ -1,0 +1,43 @@
+{
+  "baselines": {
+    "file_size": {
+      "src/commands/CadBlocks.cpp": 4307,
+      "src/commands/CadCommands.cpp": 52819,
+      "src/commands/CadCommands.hpp": 9089,
+      "src/commands/CadCommands_Alignment.cpp": 5801,
+      "src/io/DxfIo.cpp": 6688,
+      "src/io/GsIo.cpp": 6000,
+      "src/io/LibreDwgCad.cpp": 9338,
+      "src/qt/EditorWindow.cpp": 3694,
+      "src/qt/PdfWindow.cpp": 3296,
+      "src/render/ViewportRenderer.cpp": 4256,
+      "src/util/AcisSatParser.cpp": 3189,
+      "src/util/brep.cpp": 19848,
+      "tests/BrepTests.cpp": 9427,
+      "tests/LibreDwgCadTests.cpp": 9310,
+      "tests/QtEditorTests.cpp": 17518,
+      "tests/TraverseTests.cpp": 3120,
+      "tests/headless/HeadlessDriver.cpp": 3235
+    },
+    "violation_count": 0,
+    "violations": []
+  },
+  "commit": "f635065bafcc1dc2e9b073aa5568c764cc00ce14",
+  "metrics": {
+    "dependency_cycle_count": 0,
+    "domain_tests_without_qt": {
+      "built_without_qt_count": 0,
+      "domain_test_count": 0,
+      "share": 0.0
+    },
+    "god_header_fan_in": {
+      "fan_in": 65,
+      "path": "src/commands/CadCommands.hpp"
+    },
+    "largest_file": {
+      "lines": 52819,
+      "path": "src/commands/CadCommands.cpp"
+    },
+    "violation_count": 371
+  }
+}

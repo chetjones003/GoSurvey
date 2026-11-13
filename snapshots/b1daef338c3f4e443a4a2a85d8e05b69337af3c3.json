@@ -1,0 +1,25 @@
+{
+  "baselines": {
+    "file_size": {},
+    "violation_count": 0,
+    "violations": []
+  },
+  "commit": "b1daef338c3f4e443a4a2a85d8e05b69337af3c3",
+  "metrics": {
+    "dependency_cycle_count": 0,
+    "domain_tests_without_qt": {
+      "built_without_qt_count": 0,
+      "domain_test_count": 0,
+      "share": 0.0
+    },
+    "god_header_fan_in": {
+      "fan_in": 65,
+      "path": "src/commands/CadCommands.hpp"
+    },
+    "largest_file": {
+      "lines": 52819,
+      "path": "src/commands/CadCommands.cpp"
+    },
+    "violation_count": 371
+  }
+}
