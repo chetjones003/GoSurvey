@@ -19,6 +19,12 @@ double NormalizeAngle360(double degrees) {
   return degrees;
 }
 
+std::string BuildFloatFormat(int decimalPlaces) {
+  char format[8];
+  std::snprintf(format, sizeof(format), "%%.%df", decimalPlaces);
+  return format;
+}
+
 }  // namespace GoSurvey::Core::detail
 
 int DisplayPrecisionClamp(int precision) {
@@ -26,9 +32,7 @@ int DisplayPrecisionClamp(int precision) {
 }
 
 std::string DisplayFloatFmt(int precision) {
-  char format[8];
-  std::snprintf(format, sizeof(format), "%%.%df", DisplayPrecisionClamp(precision));
-  return format;
+  return GoSurvey::Core::detail::BuildFloatFormat(DisplayPrecisionClamp(precision));
 }
 
 std::string FormatLinear(double value, int precision) {
@@ -72,10 +76,9 @@ std::string FormatDms(double degrees, int secDecimals, bool wrap360) {
 
 std::string FormatDecimalDeg(double degrees, int decimals) {
   decimals = std::clamp(decimals, 0, 8);
-  char format[8];
-  std::snprintf(format, sizeof(format), "%%.%df", decimals);
+  const std::string format = GoSurvey::Core::detail::BuildFloatFormat(decimals);
   char buffer[48];
-  std::snprintf(buffer, sizeof(buffer), format, degrees);
+  std::snprintf(buffer, sizeof(buffer), format.c_str(), degrees);
   return std::string(buffer) + "\xc2\xb0";
 }
 

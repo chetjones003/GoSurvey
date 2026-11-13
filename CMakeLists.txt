@@ -489,7 +489,7 @@ add_library(gosurvey_core STATIC src/core/src/Core.cpp)
 add_library(GoSurvey::Core ALIAS gosurvey_core)
 target_include_directories(gosurvey_core
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core/include>"
-  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/core/src")
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/internal/core")
 target_compile_features(gosurvey_core PUBLIC cxx_std_17)
 target_compile_definitions(gosurvey_core PRIVATE GOSURVEY_CORE_IMPLEMENTATION=1)
 gosurvey_target_warnings(gosurvey_core)
@@ -1083,17 +1083,17 @@ if(GOSURVEY_BUILD_TESTS)
   list(APPEND CMAKE_MODULE_PATH "${GOSURVEY_CATCH2_DIR}")
 
   enable_testing()
-  # Engine consumers must not compile Core private headers, even through the legacy src include root.
+  # Engine consumers must not be able to include Core's private implementation header.
   include(CheckCXXSourceCompiles)
-  get_target_property(_gosurvey_domain_public_includes gosurvey_domain INTERFACE_INCLUDE_DIRECTORIES)
-  set(CMAKE_REQUIRED_INCLUDES
-    ${_gosurvey_domain_public_includes}
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/core/include")
+  set(CMAKE_REQUIRED_LIBRARIES gosurvey_engine)
+  # Check both the private include name and its former path under src. Bypass the header's guard
+  # so this tests Engine's transitive include paths, not the guard behavior.
+  set(CMAKE_REQUIRED_DEFINITIONS -DGOSURVEY_CORE_IMPLEMENTATION=1)
   unset(GOSURVEY_CORE_PRIVATE_HEADER_IS_CONSUMABLE CACHE)
-  check_cxx_source_compiles("#include <core/src/CorePrivate.hpp>\nint main() { return 0; }"
+  check_cxx_source_compiles("#if __has_include(<CorePrivate.hpp>)\n#include <CorePrivate.hpp>\n#elif __has_include(<core/src/CorePrivate.hpp>)\n#include <core/src/CorePrivate.hpp>\n#else\n#error Core private header is not visible to Engine consumers\n#endif\nint main() { return 0; }"
     GOSURVEY_CORE_PRIVATE_HEADER_IS_CONSUMABLE)
-  unset(CMAKE_REQUIRED_INCLUDES)
-  unset(_gosurvey_domain_public_includes)
+  unset(CMAKE_REQUIRED_LIBRARIES)
+  unset(CMAKE_REQUIRED_DEFINITIONS)
   if(GOSURVEY_CORE_PRIVATE_HEADER_IS_CONSUMABLE)
     message(FATAL_ERROR "Core private headers are consumable by Engine clients")
   endif()
