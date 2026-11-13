@@ -4,7 +4,7 @@ Status: draft target architecture and file mapping. This is the architecture ref
 
 ## Dependency rules
 
-Systems are listed from lowest to highest tier. Dependencies point only downward. Same-tier Domain systems may depend on one another only through public headers, and the allowed peer edges must be declared here; no Domain dependency cycle is allowed. No Domain peer edges are approved in this draft. Platform backends implement lower-tier interfaces and are selected by GoSurveyEditor composition/startup; engine systems do not depend on platform implementations. `GoSurveyEditor` may use Qt and OpenGL backends.
+Dependencies point only downward through the tier order shown in the diagram, with two explicit ordering rules. Within Foundation (T0), the dependency order is Core → Math → Events → UI, where each item may depend on items to its left; Debug may depend on Core only. Within Domain (T2), peer dependencies are allowed only through public headers and must be acyclic. The only Domain peer edges allowed by this draft are Survey → Document, Terrain → Document, Terrain → Survey, and Pdf → Document; all other Domain dependencies must point downward to Kernel or Foundation. No other same-tier dependency is allowed. Platform backends implement lower-tier interfaces and are selected by GoSurveyEditor composition/startup; engine systems do not depend on platform implementations. `GoSurveyEditor` may use Qt and OpenGL backends.
 
 ## Systems
 
@@ -80,7 +80,7 @@ flowchart TB
   T0 -. implemented by .-> PLATFORM
 ```
 
-Solid arrows indicate permitted downward dependencies; dotted arrows indicate implementation of interfaces by platform backends. The diagram shows tiers; the table is authoritative for exact allowed edges.
+Solid arrows indicate permitted dependencies by tier; dotted arrows indicate implementation of interfaces by platform backends. Foundation uses the explicit internal order above; Domain uses only the four named public-header peer edges. The table is authoritative for exact allowed edges.
 
 ## Mapping format
 
