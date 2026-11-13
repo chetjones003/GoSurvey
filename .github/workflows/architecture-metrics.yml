@@ -37,8 +37,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # A push measures its own head; a manual run without a commit measures beta.
-          ref: ${{ inputs.commit || (github.event_name == 'push' && github.sha) || 'beta' }}
+          # This checkout supplies the tools; it stays on the workflow's own commit. Each measured commit,
+          # including a backfill, is checked out separately in the build step.
+          ref: ${{ (github.event_name == 'push' && github.sha) || 'beta' }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
