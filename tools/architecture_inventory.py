@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Collect lightweight source-tree architecture metrics without compiling."""
 
 import argparse
@@ -9,8 +10,33 @@ from pathlib import Path
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
 INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]', re.MULTILINE)
 QT_INCLUDE = re.compile(r'^\s*#\s*include\s*[<"](?:Q[A-Z][A-Za-z0-9_]*|Qt[A-Za-z0-9_/]*)', re.MULTILINE)
-OPENGL = re.compile(r'\b(?:gl[A-Z]\w*|GL_[A-Z0-9_]+|OpenGL)')
-OPENGL_INCLUDE = re.compile(r'^\s*#\s*include\s*[<"](?:GL/|OpenGL/)', re.MULTILINE)
+OPENGL = re.compile(r'\b(?:gl[A-Z]\w*\s*\(|GL_[A-Z0-9_]+|OpenGL|QOpenGL\w*)')
+OPENGL_INCLUDE = re.compile(
+    r'^\s*#\s*include\s*[<"](?:GL/|OpenGL/|QOpenGL\w*|glew[^>"/]*\.h|glad/[^>"]+\.h)',
+    re.MULTILINE | re.IGNORECASE,
+)
+CPP_COMMENTS_AND_LITERALS = re.compile(
+    r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|(?<![0-9A-Fa-f])\'(?:\\.|[^\'\\\n])*\'',
+    re.DOTALL,
+)
+CPP_COMMENTS_AND_STRINGS = re.compile(
+    r'"(?:\\.|[^"\\])*"|(?<![0-9A-Fa-f])\'(?:\\.|[^\'\\\n])*\'|//[^\n]*|/\*.*?\*/',
+    re.DOTALL,
+)
+
+
+def _strip_cpp_comments_and_literals(text):
+    return CPP_COMMENTS_AND_LITERALS.sub(lambda match: "\n" * match.group(0).count("\n"), text)
+
+
+def _strip_cpp_comments(text):
+    def preserve_literals_remove_comments(match):
+        value = match.group(0)
+        if value.startswith(("//", "/*")):
+            return "\n" * value.count("\n")
+        return value
+
+    return CPP_COMMENTS_AND_STRINGS.sub(preserve_literals_remove_comments, text)
 
 
 def _cycles(graph):
@@ -56,16 +82,19 @@ def collect_metrics(root):
                    if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES)
     texts = {path: path.read_text(encoding="utf-8", errors="replace") for path in files}
     relative = {path: path.relative_to(root).as_posix() for path in files}
+    src_root = root / "src"
+    include_dirs = [src_root] + sorted(path for path in src_root.iterdir() if path.is_dir())
     line_counts = {path: len(text.splitlines()) for path, text in texts.items()}
     folder_counts = defaultdict(int)
     graph = {relative[path]: set() for path in files}
     include_counts = defaultdict(int)
 
     for path, text in texts.items():
+        uncommented = _strip_cpp_comments(text)
         source_rel = relative[path]
         folder_counts[Path(source_rel).parent.as_posix()] += line_counts[path]
-        for included in INCLUDE.findall(text):
-            candidates = (path.parent / included, root / "src" / included, root / included)
+        for included in INCLUDE.findall(uncommented):
+            candidates = (path.parent / included, *(directory / included for directory in include_dirs), root / included)
             target = next((candidate.resolve() for candidate in candidates if candidate.is_file()), None)
             if target in relative:
                 graph[source_rel].add(relative[target])
@@ -75,10 +104,11 @@ def collect_metrics(root):
     largest = sorted(({"path": relative[p], "bytes": p.stat().st_size, "lines": line_counts[p]}
                       for p in files), key=lambda item: (-item["bytes"], item["path"]))[:20]
     qt_outside = sorted(relative[p] for p, text in texts.items()
-                        if "/qt/" not in relative[p] and QT_INCLUDE.search(text))
+                        if "/qt/" not in relative[p] and QT_INCLUDE.search(_strip_cpp_comments(text)))
     gl_outside = sorted(relative[p] for p, text in texts.items()
                         if "/render/" not in relative[p]
-                        and (OPENGL.search(text) or OPENGL_INCLUDE.search(text)))
+                        and (OPENGL.search(_strip_cpp_comments_and_literals(text))
+                             or OPENGL_INCLUDE.search(_strip_cpp_comments(text))))
     return {
         "source_file_count": len(files),
         "largest_files": largest,

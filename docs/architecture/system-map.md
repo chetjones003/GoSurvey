@@ -88,10 +88,13 @@ Solid arrows indicate permitted dependencies by tier; dotted arrows indicate imp
 
 ## Architecture inventory
 
-Run `python tools/architecture_inventory.py` from the repository root to write a readable
+Run `python3 tools/architecture_inventory.py` from the repository root to write a readable
 report and JSON metrics to `build/artifacts/architecture-inventory/`. The scanner does not
-compile the project. It reports the largest source files, per-folder line counts, include
-fan-in for `CadCommands.hpp`, the source include graph and its cycles, Qt includes outside
-`src/qt`, and OpenGL usage outside `src/render`. Use `--root` to scan another checkout and
-`--output-dir` to choose a different report directory. Fixture coverage is in
-`python -m unittest tools.test_architecture_inventory`.
+compile the project. It scans C/C++ files under `src/` only; folder line counts include files
+directly in each folder. Include lookup uses the including file's folder, `src/`, each direct
+subfolder of `src/` (matching the project's flat include paths), and the repository root. It
+reports the largest source files, per-folder line counts, include fan-in for `CadCommands.hpp`,
+the source include graph and its cycles, Qt includes outside `src/qt`, and OpenGL code or headers
+outside `src/render`. Use `--root` to scan another checkout and `--output-dir` to choose a
+different report directory. Fixture coverage is in
+`python3 -m unittest tools.test_architecture_inventory`.

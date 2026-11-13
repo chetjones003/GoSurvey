@@ -82,6 +82,7 @@ imgui.ini
 .DS_Store
 Thumbs.db
 desktop.ini
+__pycache__/
 
 # --- Wrangler (Cloudflare Workers CLI local cache) ---
 .wrangler/
