@@ -55,6 +55,21 @@ class ArchitectureHealthCommentTests(unittest.TestCase):
         self.assertIn("| Largest source file | `src/a.cpp` (100 lines) | `src/b.cpp` (100 lines) | 0 lines (same) |", body)
         self.assertIn("| `CadCommands.hpp` include fan-in | 5 | 4 | -1 (better) |", body)
 
+    def test_beta_build_times_are_trends_only_and_pr_is_not_included(self):
+        beta = snapshot("c" * 40, 1, "src/a.cpp", 10, 2)
+        beta["build_times"] = {"clean_release_seconds": 120, "domain_header_rebuild_seconds": 8}
+        current = snapshot("b" * 40, 0, "src/a.cpp", 10, 2)
+        current["build_times"] = {"clean_release_seconds": 999, "domain_header_rebuild_seconds": 999}
+
+        body = health_comment.render_comment(None, current, [beta], 1217)
+
+        self.assertIn("### Beta build-time trend (seconds)", body)
+        self.assertIn('x-axis ["cccccc"]', body)
+        self.assertIn("line [120]", body)
+        self.assertIn("line [8]", body)
+        self.assertNotIn("999", body)
+        self.assertNotIn("better", body.split("### Beta build-time trend", 1)[1])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,124 @@
+name: architecture-build-times
+
+on:
+  push:
+    branches: [beta]
+
+permissions:
+  actions: write
+  contents: write
+
+# This workflow is independent of architecture-metrics and required beta checks. Each push gets
+# its own queue guard so a busy runner cannot hold a later sample behind a workflow-level lock.
+
+jobs:
+  queue-guard:
+    name: skip if benchmark runner is busy
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    continue-on-error: true
+    steps:
+      - name: Cancel the optional run if the self-hosted job stays queued
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Give a free runner two minutes to accept the job. A busy or offline runner
+            // leaves it queued; cancel this optional workflow so a later push can be sampled.
+            await new Promise((resolve) => setTimeout(resolve, 120000));
+            const { data } = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+              per_page: 100,
+            });
+            const queued = data.jobs.some((job) =>
+              job.name === 'beta build-time sample' && job.status === 'queued'
+            );
+            if (queued) {
+              core.warning('Self-hosted benchmark runner is busy or offline; skipping this sample.');
+              await github.rest.actions.cancelWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: context.runId,
+              });
+            }
+
+  measure:
+    name: beta build-time sample
+    runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
+    timeout-minutes: 120
+    continue-on-error: true
+    defaults:
+      run:
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"
+    steps:
+      - name: Check out beta commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Measure clean Release build and domain-header rebuild
+        id: measure
+        run: |
+          $clean = [Diagnostics.Stopwatch]::StartNew()
+          ./build.bat release --clean-first
+          if ($LASTEXITCODE -ne 0) { throw "Clean Release build failed ($LASTEXITCODE)." }
+          $clean.Stop()
+
+          $header = Resolve-Path 'src/survey/SurveyPoints.hpp'
+          (Get-Item -LiteralPath $header).LastWriteTimeUtc = [DateTime]::UtcNow.AddSeconds(2)
+          $incremental = [Diagnostics.Stopwatch]::StartNew()
+          ./build.bat release
+          if ($LASTEXITCODE -ne 0) { throw "Domain-header rebuild failed ($LASTEXITCODE)." }
+          $incremental.Stop()
+
+          $record = @{
+            commit = $env:GITHUB_SHA
+            clean_release_seconds = [Math]::Round($clean.Elapsed.TotalSeconds, 2)
+            domain_header_rebuild_seconds = [Math]::Round($incremental.Elapsed.TotalSeconds, 2)
+          } | ConvertTo-Json
+          New-Item -ItemType Directory -Force -Path build/artifacts | Out-Null
+          Set-Content -LiteralPath build/artifacts/build-times.json -Value $record -Encoding utf8
+
+      - name: Publish sample to metrics history
+        if: steps.measure.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          $auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$env:GH_TOKEN"))
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          $remote = "https://github.com/$env:REPOSITORY.git"
+          $published = $false
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            $history = Join-Path $env:RUNNER_TEMP "architecture-build-times-$attempt"
+            if (Test-Path $history) { Remove-Item -LiteralPath $history -Recurse -Force }
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" `
+              clone --quiet --branch metrics $remote $history
+            if ($LASTEXITCODE -ne 0) {
+              if (Test-Path $history) { Remove-Item -LiteralPath $history -Recurse -Force }
+              git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" `
+                clone --quiet --no-checkout $remote $history
+              if ($LASTEXITCODE -ne 0) { throw 'Could not fetch metrics history.' }
+              git -C $history checkout --quiet --orphan metrics
+              if ($LASTEXITCODE -ne 0) { throw 'Could not create metrics history.' }
+              # checkout --orphan keeps HEAD's paths staged as new files; start with an empty
+              # index so this first metrics commit contains only the sample we add below.
+              git -C $history read-tree --empty
+              if ($LASTEXITCODE -ne 0) { throw 'Could not clear the initial metrics index.' }
+            }
+            $dir = Join-Path $history 'build-times'
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            $target = Join-Path $dir "$env:GITHUB_SHA.json"
+            if (Test-Path $target) { throw "Build-time sample already exists for $env:GITHUB_SHA." }
+            Copy-Item -LiteralPath build/artifacts/build-times.json -Destination $target
+            git -C $history add -- build-times
+            git -C $history commit --quiet -m "metrics: beta build times ($env:GITHUB_SHA)"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not commit build-time sample.' }
+            git -C $history -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" `
+              push --quiet origin HEAD:refs/heads/metrics
+            if ($LASTEXITCODE -eq 0) { $published = $true; break }
+          }
+          if (-not $published) { throw 'Could not publish build-time sample after five attempts.' }

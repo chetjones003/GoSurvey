@@ -16,6 +16,7 @@ MARKER = "<!-- architecture-health -->"
 METRICS_REF = "refs/remotes/origin/metrics"
 BETA_REF = "refs/remotes/origin/beta"
 SNAPSHOT_PREFIX = "snapshots/"
+BUILD_TIME_PREFIX = "build-times/"
 SNAPSHOT_LIMIT = 20
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
 ANALYSIS_FILES = {
@@ -121,7 +122,37 @@ def render_comment(baseline, current, trend, pr_number):
         "",
         _chart("CadCommands.hpp include fan-in", "Headers", [(label, v["fan_in"]) for label, v in chart_values]),
     ))
+    build_time_values = [
+        (snapshot["commit"][:6], snapshot["build_times"])
+        for snapshot in trend[-SNAPSHOT_LIMIT:] if snapshot.get("build_times")
+    ]
+    if build_time_values:
+        lines.extend((
+            "",
+            "### Beta build-time trend (seconds)",
+            "Clean Release build and rebuild after touching a domain header. PR timings are not measured.",
+            "",
+            _chart("Clean Release build", "Seconds", [(label, v["clean_release_seconds"]) for label, v in build_time_values]),
+            "",
+            _chart("Domain-header rebuild", "Seconds", [(label, v["domain_header_rebuild_seconds"]) for label, v in build_time_values]),
+        ))
     return "\n".join(lines) + "\n"
+
+
+def _read_build_times(revision, commit):
+    result = _git(["show", f"{revision}:{BUILD_TIME_PREFIX}{commit}.json"], check=False)
+    if result.returncode:
+        return None
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    required = ("clean_release_seconds", "domain_header_rebuild_seconds")
+    if value.get("commit") != commit or any(
+        not isinstance(value.get(key), (int, float)) or value[key] < 0 for key in required
+    ):
+        return None
+    return {key: value[key] for key in required}
 
 
 def _git(args, *, check=True, text=True):
@@ -267,6 +298,9 @@ def run():
         for commit in (sha for sha in reversed(beta_commits) if sha in recorded_commits):
             snapshot = _read_snapshot(METRICS_REF, commit)
             if snapshot is not None:
+                build_times = _read_build_times(METRICS_REF, commit)
+                if build_times:
+                    snapshot["build_times"] = build_times
                 trend.append(snapshot)
         trend = trend[-SNAPSHOT_LIMIT:]
 

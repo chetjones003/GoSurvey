@@ -149,6 +149,13 @@ source files as data, uses the workflow and scanner code from the PR base, and d
 If the merge-base snapshot is unavailable, the comment explains that baseline comparisons cannot be
 shown and still reports the PR metrics and available beta trend.
 
+The separate `architecture-build-times` workflow (`.github/workflows/architecture-build-times.yml`)
+measures clean Release and domain-header rebuild times on the Windows self-hosted runner for beta
+pushes. It writes an immutable `build-times/<commit>.json` companion on the `metrics` branch. The PR
+comment plots available beta samples as trend lines only; PR builds are never timed or compared.
+Because measurement runs in its own non-required workflow, an unavailable runner does not block beta
+validation or snapshot publication.
+
 ## File-size gate
 
 The `PR gate / file size` job in `.github/workflows/pr-checks.yml` runs
