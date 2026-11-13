@@ -1,24 +1,39 @@
-"""Generate the system-level and feature-level dependency diagrams for the target architecture.
+"""Generate the per-system and feature dependency diagrams for the target architecture.
 
-Source of truth for system edges: the "Allowed dependencies" column of
-docs/architecture/system-map.md (copied into SYSTEM_DEPS below). Feature edges are a proposal;
-every feature edge is checked to lie on an allowed system edge.
+System edges come from the "Allowed dependencies" column of docs/architecture/system-map.md,
+which stays authoritative. Feature edges below are a proposal; each one must lie on an allowed
+system edge, and the run fails if one does not.
 
-Rewrites docs/architecture/system-dependencies.md (one Mermaid diagram per system, for both
-levels) and writes a three-page US Letter print layout to
-build/artifacts/diagrams/system-dependencies.html. Print it to PDF from a browser.
+Writes docs/architecture/system-dependencies.md (one Mermaid diagram per system, for both
+levels) and a three-page US Letter print layout at
+build/artifacts/diagrams/system-dependencies.html; print that page to PDF from a browser.
 
-Usage, from the repository root: python tools/system_dependency_diagrams.py
+Usage, from the repository root:
+    python tools/system_dependency_diagrams.py           # regenerate
+    python tools/system_dependency_diagrams.py --check   # fail if the doc is out of date
 """
+import argparse
+import importlib.util
 import pathlib
+import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MD = ROOT / "docs/architecture/system-dependencies.md"
-MAP = ROOT / "docs/architecture/system-map.md"
-HTML = ROOT / "build/artifacts/diagrams/system-dependencies.html"
+DOC = "docs/architecture/system-dependencies.md"
+PRINT_PAGE = "build/artifacts/diagrams/system-dependencies.html"
+MERMAID_URL = "https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.esm.min.mjs"
 
-# ---------------------------------------------------------------- systems -------------------
-# id: (display name, tier, features [(feature id, label)])
+_spec = importlib.util.spec_from_file_location(
+    "architecture_dependencies", pathlib.Path(__file__).with_name("architecture_dependencies.py"))
+_architecture = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_architecture)
+
+
+class DiagramError(Exception):
+    """The diagram data disagrees with the system map."""
+
+
+# ---------------------------------------------------------------- systems and features ------
+# id: (system-map name, tier, [(feature id, label)])
 SYSTEMS = {
     "editor": ("GoSurveyEditor", "APP", [("start", "startup · composition"), ("win", "windows"),
                ("dlg", "dialogs"), ("ribbon", "ribbon"), ("panels", "panels"), ("keys", "hotkeys")]),
@@ -59,57 +74,24 @@ SYSTEMS = {
     "phead": ("Headless", "PLATFORM", [("dev", "null device"), ("dlg", "scripted dialogs"),
               ("input", "scripted input")]),
 }
-# Allowed dependencies, verbatim from the system-map table.
-SYSTEM_DEPS = {
-    "core": "", "math": "core", "events": "core math", "ui": "core events", "debug": "core",
-    "geometry": "math core",
-    "document": "geometry math core events",
-    "survey": "geometry math core document",
-    "terrain": "geometry math core document survey",
-    "pointcloud": "math core",
-    "pdf": "geometry math core document",
-    "renderer": "geometry math core document survey terrain pointcloud pdf",
-    "io": "geometry math core document survey terrain pointcloud pdf",
-    "network": "core events",
-    "commands": "renderer io network document survey terrain pointcloud pdf ui events core",
-    "interaction": "commands renderer document survey terrain pointcloud geometry math events ui core",
-    "pqt": "core events ui", "pgl": "core math renderer", "pwin": "core ui network",
-    "phead": "core events ui renderer",
-    "editor": "commands interaction renderer io network pqt pgl pwin",
-}
-PLATFORM = ["pqt", "pgl", "pwin", "phead"]
-IMPLEMENTS = {("pqt", "ui"), ("pqt", "events"), ("pgl", "renderer"), ("pwin", "ui"),
-              ("pwin", "network"), ("pwin", "core"), ("phead", "events"), ("phead", "ui"),
-              ("phead", "renderer")}
-FORBIDDEN = [  # (src, dst, why); drawn on the system diagram
-    ("editor", "document", "reaches Domain only through Commands / Interaction"),
-    ("editor", "phead", "Headless is for tests and batch runs"),
-    ("commands", "interaction", "one-way: Interaction may use Commands"),
-    ("interaction", "io", "Interaction also may not use Network or Pdf"),
-    ("network", "survey", "Network may not use any Domain system"),
-    ("renderer", "io", "no edges between Services"),
-    ("document", "survey", "no reverse peer edge"),
-    ("survey", "terrain", "no reverse peer edge"),
-    ("pointcloud", "document", "PointCloud has no Domain peers"),
-    ("geometry", "document", "Kernel never reaches up into Domain"),
-    ("document", "pqt", "engine code never includes a backend"),
-    ("renderer", "pgl", "engine code never includes a backend"),
-]
-# Colour per source system: arrows leaving a system use the colour of its box border.
-COLOR = {
-    "editor": "#f8fafc", "interaction": "#e879f9", "commands": "#60a5fa", "renderer": "#22d3ee",
-    "io": "#38bdf8", "network": "#2dd4bf", "document": "#86efac", "survey": "#facc15",
-    "terrain": "#4ade80", "pointcloud": "#a3e635", "pdf": "#34d399", "geometry": "#fbbf24",
-    "core": "#c4b5fd", "math": "#a78bfa", "events": "#c084fc", "ui": "#d8b4fe",
-    "debug": "#ddd6fe", "pqt": "#f472b6", "pgl": "#fb923c", "pwin": "#94a3b8",
-    "phead": "#d1d5db",
-}
-FILL = {"APP": "#1f2937", "T4": "#312e81", "T3": "#164e63", "T2": "#14532d", "T1": "#713f12",
-        "T0": "#4c1d95", "PLATFORM": "#3f3f46"}
+TIER_OF = {system: entry[1] for system, entry in SYSTEMS.items()}
+ORDER = ["editor", "interaction", "commands", "renderer", "io", "network", "document", "survey",
+         "terrain", "pointcloud", "pdf", "geometry", "math", "events", "ui", "debug", "core",
+         "pqt", "pgl", "pwin", "phead"]
+FEATURE_PAGE_SPLIT = ORDER.index("document")
 
-# ---------------------------------------------------------------- feature edges -------------
-# (source feature, target feature or whole system). Platform -> interface edges are dotted.
-F = [
+# Platform -> engine edges where the backend implements the interface (drawn dotted).
+SYSTEM_IMPLEMENTS = {("pqt", "ui"), ("pqt", "events"), ("pgl", "renderer"), ("pwin", "ui"),
+                     ("pwin", "network"), ("phead", "events"), ("phead", "ui"),
+                     ("phead", "renderer")}
+FEATURE_IMPLEMENTS = {("pqt.ui", "ui"), ("pqt.input", "events.input"),
+                      ("pgl.dev", "renderer.dev"), ("pwin.paths", "core.paths"),
+                      ("pwin.http", "network.xport"), ("pwin.dlg", "ui.dlg"),
+                      ("phead.dev", "renderer.dev"), ("phead.dlg", "ui.dlg"),
+                      ("phead.input", "events.input")}
+
+# (source feature, target feature or whole system). A proposal; see the module docstring.
+FEATURE_EDGES = [
     # GoSurveyEditor: composes the engine; reaches the Domain only through Commands/Interaction.
     ("editor.start", "commands.reg"), ("editor.start", "pgl.dev"), ("editor.start", "pqt.ui"),
     ("editor.start", "pwin.crash"), ("editor.start", "network.upd"),
@@ -171,7 +153,7 @@ F = [
     ("events.input", "math.vec"), ("ui.win", "events.input"), ("ui.timer", "events.input"),
     ("debug.trace", "core.log"), ("debug.inv", "core.log"), ("debug.prof", "core.log"),
     ("core.fmt", "core.units"), ("core.set", "core.paths"),
-    # Platform adapters
+    # Platform adapters (dotted where listed in FEATURE_IMPLEMENTS)
     ("pqt.ui", "ui"), ("pqt.input", "events.input"), ("pgl.dev", "renderer.dev"),
     ("pgl.dev", "math.mat"),
     ("pwin.paths", "core.paths"), ("pwin.http", "network.xport"), ("pwin.crash", "core.log"),
@@ -179,126 +161,176 @@ F = [
     ("phead.dev", "renderer.dev"), ("phead.dlg", "ui.dlg"), ("phead.input", "events.input"),
 ]
 
+# Forbidden examples shown in red on the system view: (source, target, why).
+FORBIDDEN = [
+    ("editor", "document", "reaches Domain only through Commands / Interaction"),
+    ("editor", "phead", "Headless is for tests and batch runs"),
+    ("commands", "interaction", "one-way: Interaction may use Commands"),
+    ("interaction", "io", "Interaction also may not use Network or Pdf"),
+    ("network", "survey", "Network may not use any Domain system"),
+    ("renderer", "io", "no edges between Services"),
+    ("document", "survey", "no reverse peer edge"),
+    ("survey", "terrain", "no reverse peer edge"),
+    ("pointcloud", "document", "PointCloud has no Domain peers"),
+    ("geometry", "document", "Kernel never reaches up into Domain"),
+    ("document", "pqt", "engine code never includes a backend"),
+    ("renderer", "pgl", "engine code never includes a backend"),
+]
 
-def sys_of(ref):
+# Arrows leaving a system use that system's colour; box fill shows the tier.
+COLOR = {
+    "editor": "#f8fafc", "interaction": "#e879f9", "commands": "#60a5fa", "renderer": "#22d3ee",
+    "io": "#38bdf8", "network": "#2dd4bf", "document": "#86efac", "survey": "#facc15",
+    "terrain": "#4ade80", "pointcloud": "#a3e635", "pdf": "#34d399", "geometry": "#fbbf24",
+    "core": "#c4b5fd", "math": "#a78bfa", "events": "#c084fc", "ui": "#d8b4fe",
+    "debug": "#ddd6fe", "pqt": "#f472b6", "pgl": "#fb923c", "pwin": "#94a3b8",
+    "phead": "#d1d5db",
+}
+TIER_FILL = {"APP": "#1f2937", "T4": "#312e81", "T3": "#164e63", "T2": "#14532d",
+             "T1": "#713f12", "T0": "#4c1d95", "PLATFORM": "#3f3f46"}
+FORBIDDEN_COLOR = "#ef4444"
+NEWLINE = "\n"
+
+
+def system_of(ref):
     return ref.split(".")[0]
 
 
-def fid(ref):
-    return ref.replace(".", "_")
+def label_of(ref):
+    system = system_of(ref)
+    if "." not in ref:
+        return f"{SYSTEMS[system][0]} · all"
+    return f"{SYSTEMS[system][0]} · {dict(SYSTEMS[system][2])[ref.split('.')[1]]}"
 
 
-# The copy above must match the system-map table exactly.
-_BY_NAME = {v[0]: k for k, v in SYSTEMS.items()}
-_table = {}
-for row in MAP.read_text(encoding="utf-8").splitlines():
-    cells = [c.strip() for c in row.strip().strip("|").split("|")]
-    if len(cells) == 5 and cells[0] in _BY_NAME:
-        deps = [] if cells[4] == "None" else [_BY_NAME[d.strip()] for d in cells[4].split(",")]
-        _table[_BY_NAME[cells[0]]] = set(deps)
-assert _table.keys() == SYSTEM_DEPS.keys(), "system list differs from system-map.md"
-for _s, _deps in _table.items():
-    assert _deps == set(SYSTEM_DEPS[_s].split()), f"{_s}: dependencies differ from system-map.md"
-
-# Every feature edge must follow an allowed system edge (or stay inside one system).
-for a, b in F:
-    sa, sb = sys_of(a), sys_of(b)
-    if sa != sb:
-        assert sb in SYSTEM_DEPS[sa].split(), f"feature edge {a} -> {b} breaks the system map"
-    for ref in (a, b):
-        if "." in ref:
-            s, f = ref.split(".")
-            assert f in [x for x, _ in SYSTEMS[s][2]], f"unknown feature {ref}"
-for s, d, _ in FORBIDDEN:
-    assert d not in SYSTEM_DEPS[s].split(), f"forbidden edge {s} -> {d} is actually allowed"
+# ---------------------------------------------------------------- validation ----------------
+def read_allowed(root=ROOT):
+    """Return {system id: set of allowed system ids} from the system-map table."""
+    by_name = {entry[0]: system for system, entry in SYSTEMS.items()}
+    allowed = {}
+    for name, row in _architecture._read_systems(root).items():
+        if name not in by_name:
+            raise DiagramError(f"system-map.md lists {name!r}, which the diagrams do not know")
+        unknown = row["dependencies"] - by_name.keys()
+        if unknown:
+            raise DiagramError(f"{name} depends on unknown systems {sorted(unknown)}")
+        allowed[by_name[name]] = {by_name[dependency] for dependency in row["dependencies"]}
+    missing = SYSTEMS.keys() - allowed.keys()
+    if missing:
+        raise DiagramError(f"system-map.md has no row for {sorted(SYSTEMS[s][0] for s in missing)}")
+    return allowed
 
 
-def is_dotted(sa, sb):
-    return sa in PLATFORM and (sa, sb) in IMPLEMENTS
+def validate(allowed, feature_edges=None, forbidden=None):
+    """Raise DiagramError unless every drawn edge agrees with the system map."""
+    feature_edges = FEATURE_EDGES if feature_edges is None else feature_edges
+    forbidden = FORBIDDEN if forbidden is None else forbidden
+    for ref in {ref for edge in feature_edges for ref in edge}:
+        system = system_of(ref)
+        if system not in SYSTEMS or ("." in ref and ref.split(".")[1] not in dict(SYSTEMS[system][2])):
+            raise DiagramError(f"unknown feature {ref!r}")
+    for source, target in feature_edges:
+        if "." not in source:
+            raise DiagramError(f"feature edge must start at a feature, not {source!r}")
+        if system_of(source) != system_of(target) and system_of(target) not in allowed[system_of(source)]:
+            raise DiagramError(f"feature edge {source} -> {target} is not allowed by the system map")
+    for source, target, _ in forbidden:
+        if target in allowed[source]:
+            raise DiagramError(f"forbidden example {source} -> {target} is allowed by the system map")
+    for source, target in SYSTEM_IMPLEMENTS | {(system_of(a), system_of(b)) for a, b in FEATURE_IMPLEMENTS}:
+        if target not in allowed[source]:
+            raise DiagramError(f"implements edge {source} -> {target} is not allowed by the system map")
 
 
-# ---------------------------------------------------------------- per-system cards ----------
-# One small diagram per system: every arrow starts at one named box and ends at one named box.
-ORDER = ["editor", "interaction", "commands", "renderer", "io", "network", "document", "survey",
-         "terrain", "pointcloud", "pdf", "geometry", "math", "events", "ui", "debug", "core",
-         "pqt", "pgl", "pwin", "phead"]
-RED = "#ef4444"
-NL = "\n"
-
-
-def box(nid, label, tier, stroke, bold=False, fill=None):
+# ---------------------------------------------------------------- per-system diagrams -------
+def node(node_id, label, tier, stroke, bold=False, fill=None):
     text = f"<b>{label}</b>" if bold else label
-    return (f'  {nid}["{text}"]',
-            f"  style {nid} fill:{fill or FILL[tier]},stroke:{stroke},"
+    return (f'  {node_id}["{text}"]',
+            f"  style {node_id} fill:{fill or TIER_FILL[tier]},stroke:{stroke},"
             f"stroke-width:{3 if bold else 2}px,color:#f8fafc")
 
 
 def link_styles(colors):
-    return [f"  linkStyle {i} stroke:{c},stroke-width:2.5px" + (",stroke-dasharray:8 5" if c == RED else "")
-            for i, c in enumerate(colors)]
+    return [f"  linkStyle {index} stroke:{color},stroke-width:2.5px"
+            + (",stroke-dasharray:8 5" if color == FORBIDDEN_COLOR else "")
+            for index, color in enumerate(colors)]
 
 
-def system_card(s):
-    name, tier, _ = SYSTEMS[s]
-    p = s + "__"  # unique node ids: many diagrams share one HTML page
+def system_card(system, allowed):
+    name, tier, _ = SYSTEMS[system]
+    prefix = system + "__"  # unique ids: every card shares one HTML page
     nodes, styles, edges, colors = [], [], [], []
-    n, st = box(p + "src", name, tier, COLOR[s], bold=True)
-    nodes.append(n); styles.append(st)
-    deps = [d for d in SYSTEM_DEPS[s].split() if d != "core"]
-    for d in deps:
-        n, st = box(p + d, SYSTEMS[d][0], TIER_OF[d], COLOR[d])
-        nodes.append(n); styles.append(st)
-        edges.append(f"  {p}src {'-.->' if is_dotted(s, d) else '-->'} {p}{d}")
-        colors.append(COLOR[s])
-    for a, d, _ in FORBIDDEN:
-        if a != s:
+    line, style = node(prefix + "src", name, tier, COLOR[system], bold=True)
+    nodes.append(line); styles.append(style)
+    targets = [s for s in ORDER if s in allowed[system] and s != "core"]
+    for target in targets:
+        line, style = node(prefix + target, SYSTEMS[target][0], TIER_OF[target], COLOR[target])
+        nodes.append(line); styles.append(style)
+        arrow = "-.->" if (system, target) in SYSTEM_IMPLEMENTS else "-->"
+        edges.append(f"  {prefix}src {arrow} {prefix}{target}")
+        colors.append(COLOR[system])
+    for source, target, _ in FORBIDDEN:
+        if source != system:
             continue
-        n, st = box(f"{p}x_{d}", "✗ " + SYSTEMS[d][0], TIER_OF[d], RED, fill="#3f1d1d")
-        nodes.append(n); styles.append(st)
-        edges.append(f"  {p}src -.-x {p}x_{d}")
-        colors.append(RED)
-    if not edges:
-        n, st = box(p + "none", "nothing" if s == "core" else "Core only", "T0", COLOR["core"])
-        nodes.append(n); styles.append(st)
-        edges.append(f"  {p}src --> {p}none")
-        colors.append(COLOR[s])
-    return "flowchart LR" + NL + NL.join(nodes + edges + styles + link_styles(colors)) + NL
+        line, style = node(f"{prefix}x_{target}", "✗ " + SYSTEMS[target][0], TIER_OF[target],
+                           FORBIDDEN_COLOR, fill="#3f1d1d")
+        nodes.append(line); styles.append(style)
+        edges.append(f"  {prefix}src -.-x {prefix}x_{target}")
+        colors.append(FORBIDDEN_COLOR)
+    if not targets:  # a note, not a dependency box
+        note = "depends on nothing" if not allowed[system] else "may include only Core"
+        nodes.append(f'  {prefix}note["<i>{note}</i>"]')
+        styles.append(f"  style {prefix}note fill:none,stroke:none,color:#a1a1aa")
+        edges.insert(0, f"  {prefix}src ~~~ {prefix}note")
+        colors.insert(0, "transparent")
+    return "flowchart LR" + NEWLINE + NEWLINE.join(nodes + edges + styles + link_styles(colors)) + NEWLINE
 
 
-def feature_card(s):
-    name, tier, feats = SYSTEMS[s]
-    p = s + "__"
-    lines = [f'  subgraph {p}SRC["{name}"]', "    direction TB"]
-    styles = [f"  style {p}SRC fill:#27272a,stroke:{COLOR[s]},stroke-width:3px,color:#f8fafc"]
-    for f, label in feats:
-        lines.append(f'    {p}{f}["{label}"]')
-        styles.append(f"  style {p}{f} fill:{FILL[tier]},stroke:{COLOR[s]},stroke-width:2px,color:#f8fafc")
+def feature_card(system):
+    name, tier, features = SYSTEMS[system]
+    prefix = system + "__"
+    lines = [f'  subgraph {prefix}SRC["{name}"]', "    direction TB"]
+    styles = [f"  style {prefix}SRC fill:#27272a,stroke:{COLOR[system]},stroke-width:3px,color:#f8fafc"]
+    for feature, label in features:
+        lines.append(f'    {prefix}{feature}["{label}"]')
+        styles.append(f"  style {prefix}{feature} fill:{TIER_FILL[tier]},stroke:{COLOR[system]},"
+                      "stroke-width:2px,color:#f8fafc")
     lines.append("  end")
     nodes, edges, colors, seen = [], [], [], set()
-    for a, b in F:
-        if sys_of(a) != s:
+    for source, target in FEATURE_EDGES:
+        if system_of(source) != system:
             continue
-        sb = sys_of(b)
-        if sb == s:
-            tid = p + b.split(".")[1]
+        if system_of(target) == system:
+            target_id = prefix + target.split(".")[1]
         else:
-            tid = p + "t_" + fid(b)
-            if tid not in seen:
-                seen.add(tid)
-                feat = dict(SYSTEMS[sb][2])[b.split(".")[1]] if "." in b else "all"
-                n, st = box(tid, f"{SYSTEMS[sb][0]} · {feat}", TIER_OF[sb], COLOR[sb])
-                nodes.append(n); styles.append(st)
-        edges.append(f"  {p}{a.split('.')[1]} {'-.->' if is_dotted(s, sb) else '-->'} {tid}")
-        colors.append(COLOR[s])
-    return "flowchart LR" + NL + NL.join(lines + nodes + edges + styles + link_styles(colors)) + NL
+            target_id = prefix + "t_" + target.replace(".", "_")
+            if target_id not in seen:
+                seen.add(target_id)
+                line, style = node(target_id, label_of(target), TIER_OF[system_of(target)],
+                                   COLOR[system_of(target)])
+                nodes.append(line); styles.append(style)
+        arrow = "-.->" if (source, target) in FEATURE_IMPLEMENTS else "-->"
+        edges.append(f"  {prefix}{source.split('.')[1]} {arrow} {target_id}")
+        colors.append(COLOR[system])
+    return "flowchart LR" + NEWLINE + NEWLINE.join(lines + nodes + edges + styles + link_styles(colors)) + NEWLINE
 
 
-TIER_OF = {s: v[1] for s, v in SYSTEMS.items()}
-SYS_CARDS = {s: system_card(s) for s in ORDER}
-FEAT_CARDS = {s: feature_card(s) for s in ORDER}
+# ---------------------------------------------------------------- outputs -------------------
+LEGEND = """- **Arrow** `A --> B`: A may include B (system view) or uses B (feature view).
+- **Arrow colour** is the colour of the system the arrow starts from.
+- **Box colour** is the tier of the box: Application, Services, Domain, Kernel, Foundation or
+  Platform.
+- **Dotted arrow**: a platform backend implements that interface.
+- **Red ✗ box**: a forbidden dependency. These are examples. Apart from Core, anything not drawn
+  is forbidden too.
+- **Core** is open to every system except GoSurveyEditor, so the system view does not draw it.
+"""
 
-# ---------------------------------------------------------------- markdown ------------------
-INTRO = """# GoSurvey system dependencies (detailed)
+
+def render_markdown(allowed):
+    rows = NEWLINE.join(f"| {SYSTEMS[a][0]} | {SYSTEMS[b][0]} | {why[0].upper() + why[1:]}. |"
+                        for a, b, why in FORBIDDEN)
+    parts = [f"""# GoSurvey system dependencies (detailed)
 
 Two views of the **target architecture**. The [system map](system-map.md) table stays
 authoritative; if a diagram here disagrees with it, fix the diagram.
@@ -306,29 +338,28 @@ authoritative; if a diagram here disagrees with it, fix the diagram.
 Each system has its own small diagram, so every arrow starts at one named box and ends at one
 named box. Nothing has to be traced across the page.
 
-- **Arrow** `A --> B`: A may include B (system view) or uses B (feature view).
-- **Arrow colour** is the colour of the system the arrow starts from.
-- **Box colour** is the tier of the box: Application, Services, Domain, Kernel, Foundation or
-  Platform.
-- **Dotted arrow**: a platform backend implements that interface.
-- **Red ✗ box**: a forbidden dependency. These are examples; anything not drawn is forbidden too.
-- **Core** is open to every system except GoSurveyEditor, so it is not drawn on each system.
-
+{LEGEND}
 `python tools/system_dependency_diagrams.py` generates this file and a three-page US Letter print
-layout in `build/artifacts/diagrams/`. Edit the generator, not this file.
+layout in `build/artifacts/diagrams/`. Edit the generator, not this file; `--check` fails when
+this file is out of date.
 
 ## 1. System dependencies
 
 Every arrow is one entry in the "Allowed dependencies" column of the system map.
-"""
-FEAT_INTRO = """## 2. Feature dependencies (proposed)
+"""]
+    parts += [f"### {SYSTEMS[s][0]}{NEWLINE}{NEWLINE}```mermaid{NEWLINE}{system_card(s, allowed)}```{NEWLINE}"
+              for s in ORDER]
+    parts.append("""## 2. Feature dependencies (proposed)
 
 Each arrow runs from a feature to the feature it uses; "System · all" means the whole system.
 This level is a **proposal** derived from the target architecture: the system map and ADRs define
-only system-level edges. Every feature arrow lies on an allowed system edge from section 1, and
-the generator checks this.
-"""
-OUTRO = """## Forbidden examples (red ✗)
+only system-level edges, and some features here (such as Network's transport interface or Core's
+paths interface) are proposed names. Every feature arrow lies on an allowed system edge from
+section 1, and the generator checks this.
+""")
+    parts += [f"### {SYSTEMS[s][0]} features{NEWLINE}{NEWLINE}```mermaid{NEWLINE}{feature_card(s)}```{NEWLINE}"
+              for s in ORDER]
+    parts.append(f"""## Forbidden examples (red ✗)
 
 | From | ✗ To | Why |
 |---|---|---|
@@ -336,7 +367,8 @@ OUTRO = """## Forbidden examples (red ✗)
 
 ## Gaps the table leaves open
 
-These follow from the current table and may be unintended. Resolve them in `system-map.md`, not here.
+These follow from the system-map table as of this diagram and may be unintended. Resolve them in
+`system-map.md`, then update this list.
 
 - **Debug has no consumers.** No system lists Debug as an allowed dependency, so nothing may call
   the profiler, tracer or invariant checks.
@@ -345,39 +377,28 @@ These follow from the current table and may be unintended. Resolve them in `syst
 - **Interaction may not include Pdf**, though it may include every other Domain system.
 - **GoSurveyEditor may not include Headless, Events, UI or Core directly**; it reaches them only
   through the systems it lists.
-"""
-md = [INTRO]
-md += [f"### {SYSTEMS[s][0]}{NL}{NL}```mermaid{NL}{SYS_CARDS[s]}```{NL}" for s in ORDER]
-md.append(FEAT_INTRO)
-md += [f"### {SYSTEMS[s][0]} features{NL}{NL}```mermaid{NL}{FEAT_CARDS[s]}```{NL}" for s in ORDER]
-md.append(OUTRO.format(rows=NL.join(
-    f"| {SYSTEMS[a][0]} | {SYSTEMS[b][0]} | {why[0].upper() + why[1:]}. |" for a, b, why in FORBIDDEN)))
-MD.write_text(NL.join(md), encoding="utf-8")
-
-# ---------------------------------------------------------------- print HTML ----------------
+""")
+    return NEWLINE.join(parts)
 
 
-def cards_html(cards):
-    return "".join(f'<div class="card"><pre class="mermaid">{NL}{c}</pre></div>' for c in cards.values())
+def render_print_page(allowed):
+    def cards(diagrams):
+        return "".join(f'<div class="card"><pre class="mermaid">{NEWLINE}{d}</pre></div>' for d in diagrams)
 
-
-page_sys = f"""<section class="sheet">
+    system_sheet = f"""<section class="sheet">
 <h1>GoSurvey · system dependencies</h1>
 <div class="sub">Target architecture · one diagram per system · each arrow is one allowed entry in docs/architecture/system-map.md.
 Box colour = tier · arrow colour = source system · dotted = implements · <span class="red">✗</span> = forbidden example ·
 Core is open to every system except GoSurveyEditor.</div>
-<div class="grid sys">{cards_html(SYS_CARDS)}</div></section>"""
-FEAT_SPLIT = ORDER.index("document")
-page_feat = "".join(f"""<section class="sheet">
-<h1>GoSurvey · feature dependencies (proposed) · {part}</h1>
+<div class="grid">{cards(system_card(s, allowed) for s in ORDER)}</div></section>"""
+    feature_sheets = "".join(f"""<section class="sheet">
+<h1>GoSurvey · feature dependencies (proposed) · {title}</h1>
 <div class="sub">Target architecture · each arrow runs from a feature to the feature it uses · "System · all" = the whole system ·
 box colour = tier · arrow colour = source system · dotted = implements · every arrow lies on an allowed system edge from page 1.</div>
-<div class="grid feat">{cards_html({k: FEAT_CARDS[k] for k in keys})}</div></section>""" for part, keys in [
-    ("Application and Services", ORDER[:FEAT_SPLIT]), ("Domain, Kernel, Foundation and Platform", ORDER[FEAT_SPLIT:])])
-pages = [page_sys, page_feat]
-
-HTML.parent.mkdir(parents=True, exist_ok=True)
-HTML.write_text(f"""<!doctype html><html><head><meta charset="utf-8"><title>GoSurvey dependencies</title>
+<div class="grid">{cards(feature_card(s) for s in systems)}</div></section>""" for title, systems in [
+        ("Application and Services", ORDER[:FEATURE_PAGE_SPLIT]),
+        ("Domain, Kernel, Foundation and Platform", ORDER[FEATURE_PAGE_SPLIT:])])
+    return f"""<!doctype html><html><head><meta charset="utf-8"><title>GoSurvey dependencies</title>
 <style>
 @page {{ size: letter portrait; margin: 0.3in; }}
 * {{ box-sizing: border-box; }}
@@ -389,22 +410,22 @@ html, body {{ margin: 0; background: #18181b; color: #e4e4e7; font-family: "Treb
 h1 {{ font-size: 13pt; margin: 0 0 2pt; }}
 .sub {{ font-size: 7.3pt; color: #a1a1aa; margin-bottom: 5pt; line-height: 1.3; }}
 .red {{ color: #f87171; font-weight: bold; }}
-.grid {{ flex: 1 1 auto; min-height: 0; column-gap: 5pt; column-fill: balance; }}
-.grid {{ columns: 3; }}
+.grid {{ flex: 1 1 auto; min-height: 0; columns: 3; column-gap: 5pt; column-fill: balance; }}
 .card {{ break-inside: avoid; margin: 0 0 5pt; border: 1px solid #3f3f46; border-radius: 4pt; padding: 3pt; }}
 pre.mermaid {{ margin: 0; display: flex; justify-content: center; }}
 pre.mermaid svg {{ max-width: none !important; height: auto; flex: none; }}
 </style></head><body>
-{''.join(pages)}
+{system_sheet}{feature_sheets}
 <script type="module">
-import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+import mermaid from "{MERMAID_URL}";
 mermaid.initialize({{ startOnLoad: false, theme: "dark", flowchart: {{ nodeSpacing: 12, rankSpacing: 40, padding: 6 }} }});
+// Render one at a time: batch rendering mixes diagrams up when many share a page.
 const pres = [...document.querySelectorAll("pre.mermaid")];
 for (let i = 0; i < pres.length; i++) {{
   const {{ svg }} = await mermaid.render("card" + i, pres[i].textContent);
   pres[i].innerHTML = svg;
 }}
-// Fit each sheet: one common scale for every card, trying 2-5 columns, keep the largest scale.
+// Fit each sheet: one common scale for every card, 2-5 columns, keep the largest scale.
 for (const grid of document.querySelectorAll(".grid")) {{
   const svgs = [...grid.querySelectorAll("svg")];
   const natural = svgs.map(s => s.viewBox.baseVal.width);
@@ -418,9 +439,38 @@ for (const grid of document.querySelectorAll(".grid")) {{
     if (!best || lo > best.k) best = {{ cols, k: lo }};
   }}
   apply(best.cols, best.k);
-  grid.dataset.fit = best.cols + " cols @ " + best.k.toFixed(2);
 }}
-document.title = [...document.querySelectorAll(".grid")].map(g => g.dataset.fit + " " + g.scrollHeight + "/" + g.clientHeight + "/" + g.scrollWidth + "/" + g.clientWidth).join(" | ");
 </script></body></html>
-""", encoding="utf-8")
-print("feature edges", len(F))
+"""
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--root", type=pathlib.Path, default=ROOT, help="repository root")
+    parser.add_argument("--check", action="store_true", help="fail if the doc is out of date")
+    args = parser.parse_args(argv)
+    try:
+        allowed = read_allowed(args.root)
+        validate(allowed)
+    except DiagramError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    markdown = render_markdown(allowed)
+    doc = args.root / DOC
+    if args.check:
+        current = doc.read_text(encoding="utf-8").replace("\r\n", "\n") if doc.exists() else ""
+        if current != markdown:
+            print(f"error: {DOC} is out of date; run python tools/system_dependency_diagrams.py",
+                  file=sys.stderr)
+            return 1
+        return 0
+    doc.write_text(markdown, encoding="utf-8", newline="\n")
+    page = args.root / PRINT_PAGE
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(render_print_page(allowed), encoding="utf-8")
+    print(f"wrote {DOC} and {PRINT_PAGE}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -38,6 +38,9 @@ jobs:
       - name: Test dependency checker
         run: python3 -m unittest tools.test_architecture_dependencies
 
+      - name: Check system dependency diagrams are current
+        run: python3 -m unittest tools.test_system_dependency_diagrams
+
   classify-docs-only:
     name: policy / docs-only classification
     runs-on: ubuntu-latest

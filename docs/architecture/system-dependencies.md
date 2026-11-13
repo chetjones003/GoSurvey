@@ -11,11 +11,13 @@ named box. Nothing has to be traced across the page.
 - **Box colour** is the tier of the box: Application, Services, Domain, Kernel, Foundation or
   Platform.
 - **Dotted arrow**: a platform backend implements that interface.
-- **Red ✗ box**: a forbidden dependency. These are examples; anything not drawn is forbidden too.
-- **Core** is open to every system except GoSurveyEditor, so it is not drawn on each system.
+- **Red ✗ box**: a forbidden dependency. These are examples. Apart from Core, anything not drawn
+  is forbidden too.
+- **Core** is open to every system except GoSurveyEditor, so the system view does not draw it.
 
 `python tools/system_dependency_diagrams.py` generates this file and a three-page US Letter print
-layout in `build/artifacts/diagrams/`. Edit the generator, not this file.
+layout in `build/artifacts/diagrams/`. Edit the generator, not this file; `--check` fails when
+this file is out of date.
 
 ## 1. System dependencies
 
@@ -26,8 +28,8 @@ Every arrow is one entry in the "Allowed dependencies" column of the system map.
 ```mermaid
 flowchart LR
   editor__src["<b>GoSurveyEditor</b>"]
-  editor__commands["Commands"]
   editor__interaction["Interaction"]
+  editor__commands["Commands"]
   editor__renderer["Renderer"]
   editor__io["IO"]
   editor__network["Network"]
@@ -36,8 +38,8 @@ flowchart LR
   editor__pwin["Windows"]
   editor__x_document["✗ Document"]
   editor__x_phead["✗ Headless"]
-  editor__src --> editor__commands
   editor__src --> editor__interaction
+  editor__src --> editor__commands
   editor__src --> editor__renderer
   editor__src --> editor__io
   editor__src --> editor__network
@@ -47,8 +49,8 @@ flowchart LR
   editor__src -.-x editor__x_document
   editor__src -.-x editor__x_phead
   style editor__src fill:#1f2937,stroke:#f8fafc,stroke-width:3px,color:#f8fafc
-  style editor__commands fill:#312e81,stroke:#60a5fa,stroke-width:2px,color:#f8fafc
   style editor__interaction fill:#312e81,stroke:#e879f9,stroke-width:2px,color:#f8fafc
+  style editor__commands fill:#312e81,stroke:#60a5fa,stroke-width:2px,color:#f8fafc
   style editor__renderer fill:#164e63,stroke:#22d3ee,stroke-width:2px,color:#f8fafc
   style editor__io fill:#164e63,stroke:#38bdf8,stroke-width:2px,color:#f8fafc
   style editor__network fill:#164e63,stroke:#2dd4bf,stroke-width:2px,color:#f8fafc
@@ -134,8 +136,8 @@ flowchart LR
   commands__terrain["Terrain"]
   commands__pointcloud["PointCloud"]
   commands__pdf["Pdf"]
-  commands__ui["UI"]
   commands__events["Events"]
+  commands__ui["UI"]
   commands__x_interaction["✗ Interaction"]
   commands__src --> commands__renderer
   commands__src --> commands__io
@@ -145,8 +147,8 @@ flowchart LR
   commands__src --> commands__terrain
   commands__src --> commands__pointcloud
   commands__src --> commands__pdf
-  commands__src --> commands__ui
   commands__src --> commands__events
+  commands__src --> commands__ui
   commands__src -.-x commands__x_interaction
   style commands__src fill:#312e81,stroke:#60a5fa,stroke-width:3px,color:#f8fafc
   style commands__renderer fill:#164e63,stroke:#22d3ee,stroke-width:2px,color:#f8fafc
@@ -157,8 +159,8 @@ flowchart LR
   style commands__terrain fill:#14532d,stroke:#4ade80,stroke-width:2px,color:#f8fafc
   style commands__pointcloud fill:#14532d,stroke:#a3e635,stroke-width:2px,color:#f8fafc
   style commands__pdf fill:#14532d,stroke:#34d399,stroke-width:2px,color:#f8fafc
-  style commands__ui fill:#4c1d95,stroke:#d8b4fe,stroke-width:2px,color:#f8fafc
   style commands__events fill:#4c1d95,stroke:#c084fc,stroke-width:2px,color:#f8fafc
+  style commands__ui fill:#4c1d95,stroke:#d8b4fe,stroke-width:2px,color:#f8fafc
   style commands__x_interaction fill:#3f1d1d,stroke:#ef4444,stroke-width:2px,color:#f8fafc
   linkStyle 0 stroke:#60a5fa,stroke-width:2.5px
   linkStyle 1 stroke:#60a5fa,stroke-width:2.5px
@@ -178,32 +180,32 @@ flowchart LR
 ```mermaid
 flowchart LR
   renderer__src["<b>Renderer</b>"]
-  renderer__geometry["Geometry"]
-  renderer__math["Math"]
   renderer__document["Document"]
   renderer__survey["Survey"]
   renderer__terrain["Terrain"]
   renderer__pointcloud["PointCloud"]
   renderer__pdf["Pdf"]
+  renderer__geometry["Geometry"]
+  renderer__math["Math"]
   renderer__x_io["✗ IO"]
   renderer__x_pgl["✗ OpenGL"]
-  renderer__src --> renderer__geometry
-  renderer__src --> renderer__math
   renderer__src --> renderer__document
   renderer__src --> renderer__survey
   renderer__src --> renderer__terrain
   renderer__src --> renderer__pointcloud
   renderer__src --> renderer__pdf
+  renderer__src --> renderer__geometry
+  renderer__src --> renderer__math
   renderer__src -.-x renderer__x_io
   renderer__src -.-x renderer__x_pgl
   style renderer__src fill:#164e63,stroke:#22d3ee,stroke-width:3px,color:#f8fafc
-  style renderer__geometry fill:#713f12,stroke:#fbbf24,stroke-width:2px,color:#f8fafc
-  style renderer__math fill:#4c1d95,stroke:#a78bfa,stroke-width:2px,color:#f8fafc
   style renderer__document fill:#14532d,stroke:#86efac,stroke-width:2px,color:#f8fafc
   style renderer__survey fill:#14532d,stroke:#facc15,stroke-width:2px,color:#f8fafc
   style renderer__terrain fill:#14532d,stroke:#4ade80,stroke-width:2px,color:#f8fafc
   style renderer__pointcloud fill:#14532d,stroke:#a3e635,stroke-width:2px,color:#f8fafc
   style renderer__pdf fill:#14532d,stroke:#34d399,stroke-width:2px,color:#f8fafc
+  style renderer__geometry fill:#713f12,stroke:#fbbf24,stroke-width:2px,color:#f8fafc
+  style renderer__math fill:#4c1d95,stroke:#a78bfa,stroke-width:2px,color:#f8fafc
   style renderer__x_io fill:#3f1d1d,stroke:#ef4444,stroke-width:2px,color:#f8fafc
   style renderer__x_pgl fill:#3f1d1d,stroke:#ef4444,stroke-width:2px,color:#f8fafc
   linkStyle 0 stroke:#22d3ee,stroke-width:2.5px
@@ -222,28 +224,28 @@ flowchart LR
 ```mermaid
 flowchart LR
   io__src["<b>IO</b>"]
-  io__geometry["Geometry"]
-  io__math["Math"]
   io__document["Document"]
   io__survey["Survey"]
   io__terrain["Terrain"]
   io__pointcloud["PointCloud"]
   io__pdf["Pdf"]
-  io__src --> io__geometry
-  io__src --> io__math
+  io__geometry["Geometry"]
+  io__math["Math"]
   io__src --> io__document
   io__src --> io__survey
   io__src --> io__terrain
   io__src --> io__pointcloud
   io__src --> io__pdf
+  io__src --> io__geometry
+  io__src --> io__math
   style io__src fill:#164e63,stroke:#38bdf8,stroke-width:3px,color:#f8fafc
-  style io__geometry fill:#713f12,stroke:#fbbf24,stroke-width:2px,color:#f8fafc
-  style io__math fill:#4c1d95,stroke:#a78bfa,stroke-width:2px,color:#f8fafc
   style io__document fill:#14532d,stroke:#86efac,stroke-width:2px,color:#f8fafc
   style io__survey fill:#14532d,stroke:#facc15,stroke-width:2px,color:#f8fafc
   style io__terrain fill:#14532d,stroke:#4ade80,stroke-width:2px,color:#f8fafc
   style io__pointcloud fill:#14532d,stroke:#a3e635,stroke-width:2px,color:#f8fafc
   style io__pdf fill:#14532d,stroke:#34d399,stroke-width:2px,color:#f8fafc
+  style io__geometry fill:#713f12,stroke:#fbbf24,stroke-width:2px,color:#f8fafc
+  style io__math fill:#4c1d95,stroke:#a78bfa,stroke-width:2px,color:#f8fafc
   linkStyle 0 stroke:#38bdf8,stroke-width:2.5px
   linkStyle 1 stroke:#38bdf8,stroke-width:2.5px
   linkStyle 2 stroke:#38bdf8,stroke-width:2.5px
@@ -302,18 +304,18 @@ flowchart LR
 ```mermaid
 flowchart LR
   survey__src["<b>Survey</b>"]
+  survey__document["Document"]
   survey__geometry["Geometry"]
   survey__math["Math"]
-  survey__document["Document"]
   survey__x_terrain["✗ Terrain"]
+  survey__src --> survey__document
   survey__src --> survey__geometry
   survey__src --> survey__math
-  survey__src --> survey__document
   survey__src -.-x survey__x_terrain
   style survey__src fill:#14532d,stroke:#facc15,stroke-width:3px,color:#f8fafc
+  style survey__document fill:#14532d,stroke:#86efac,stroke-width:2px,color:#f8fafc
   style survey__geometry fill:#713f12,stroke:#fbbf24,stroke-width:2px,color:#f8fafc
   style survey__math fill:#4c1d95,stroke:#a78bfa,stroke-width:2px,color:#f8fafc
-  style survey__document fill:#14532d,stroke:#86efac,stroke-width:2px,color:#f8fafc
   style survey__x_terrain fill:#3f1d1d,stroke:#ef4444,stroke-width:2px,color:#f8fafc
   linkStyle 0 stroke:#facc15,stroke-width:2.5px
   linkStyle 1 stroke:#facc15,stroke-width:2.5px
@@ -326,19 +328,19 @@ flowchart LR
 ```mermaid
 flowchart LR
   terrain__src["<b>Terrain</b>"]
-  terrain__geometry["Geometry"]
-  terrain__math["Math"]
   terrain__document["Document"]
   terrain__survey["Survey"]
-  terrain__src --> terrain__geometry
-  terrain__src --> terrain__math
+  terrain__geometry["Geometry"]
+  terrain__math["Math"]
   terrain__src --> terrain__document
   terrain__src --> terrain__survey
+  terrain__src --> terrain__geometry
+  terrain__src --> terrain__math
   style terrain__src fill:#14532d,stroke:#4ade80,stroke-width:3px,color:#f8fafc
-  style terrain__geometry fill:#713f12,stroke:#fbbf24,stroke-width:2px,color:#f8fafc
-  style terrain__math fill:#4c1d95,stroke:#a78bfa,stroke-width:2px,color:#f8fafc
   style terrain__document fill:#14532d,stroke:#86efac,stroke-width:2px,color:#f8fafc
   style terrain__survey fill:#14532d,stroke:#facc15,stroke-width:2px,color:#f8fafc
+  style terrain__geometry fill:#713f12,stroke:#fbbf24,stroke-width:2px,color:#f8fafc
+  style terrain__math fill:#4c1d95,stroke:#a78bfa,stroke-width:2px,color:#f8fafc
   linkStyle 0 stroke:#4ade80,stroke-width:2.5px
   linkStyle 1 stroke:#4ade80,stroke-width:2.5px
   linkStyle 2 stroke:#4ade80,stroke-width:2.5px
@@ -366,16 +368,16 @@ flowchart LR
 ```mermaid
 flowchart LR
   pdf__src["<b>Pdf</b>"]
+  pdf__document["Document"]
   pdf__geometry["Geometry"]
   pdf__math["Math"]
-  pdf__document["Document"]
+  pdf__src --> pdf__document
   pdf__src --> pdf__geometry
   pdf__src --> pdf__math
-  pdf__src --> pdf__document
   style pdf__src fill:#14532d,stroke:#34d399,stroke-width:3px,color:#f8fafc
+  style pdf__document fill:#14532d,stroke:#86efac,stroke-width:2px,color:#f8fafc
   style pdf__geometry fill:#713f12,stroke:#fbbf24,stroke-width:2px,color:#f8fafc
   style pdf__math fill:#4c1d95,stroke:#a78bfa,stroke-width:2px,color:#f8fafc
-  style pdf__document fill:#14532d,stroke:#86efac,stroke-width:2px,color:#f8fafc
   linkStyle 0 stroke:#34d399,stroke-width:2.5px
   linkStyle 1 stroke:#34d399,stroke-width:2.5px
   linkStyle 2 stroke:#34d399,stroke-width:2.5px
@@ -402,11 +404,11 @@ flowchart LR
 ```mermaid
 flowchart LR
   math__src["<b>Math</b>"]
-  math__none["Core only"]
-  math__src --> math__none
+  math__note["<i>may include only Core</i>"]
+  math__src ~~~ math__note
   style math__src fill:#4c1d95,stroke:#a78bfa,stroke-width:3px,color:#f8fafc
-  style math__none fill:#4c1d95,stroke:#c4b5fd,stroke-width:2px,color:#f8fafc
-  linkStyle 0 stroke:#a78bfa,stroke-width:2.5px
+  style math__note fill:none,stroke:none,color:#a1a1aa
+  linkStyle 0 stroke:transparent,stroke-width:2.5px
 ```
 
 ### Events
@@ -438,11 +440,11 @@ flowchart LR
 ```mermaid
 flowchart LR
   debug__src["<b>Debug</b>"]
-  debug__none["Core only"]
-  debug__src --> debug__none
+  debug__note["<i>may include only Core</i>"]
+  debug__src ~~~ debug__note
   style debug__src fill:#4c1d95,stroke:#ddd6fe,stroke-width:3px,color:#f8fafc
-  style debug__none fill:#4c1d95,stroke:#c4b5fd,stroke-width:2px,color:#f8fafc
-  linkStyle 0 stroke:#ddd6fe,stroke-width:2.5px
+  style debug__note fill:none,stroke:none,color:#a1a1aa
+  linkStyle 0 stroke:transparent,stroke-width:2.5px
 ```
 
 ### Core
@@ -450,11 +452,11 @@ flowchart LR
 ```mermaid
 flowchart LR
   core__src["<b>Core</b>"]
-  core__none["nothing"]
-  core__src --> core__none
+  core__note["<i>depends on nothing</i>"]
+  core__src ~~~ core__note
   style core__src fill:#4c1d95,stroke:#c4b5fd,stroke-width:3px,color:#f8fafc
-  style core__none fill:#4c1d95,stroke:#c4b5fd,stroke-width:2px,color:#f8fafc
-  linkStyle 0 stroke:#c4b5fd,stroke-width:2.5px
+  style core__note fill:none,stroke:none,color:#a1a1aa
+  linkStyle 0 stroke:transparent,stroke-width:2.5px
 ```
 
 ### Qt
@@ -478,13 +480,13 @@ flowchart LR
 ```mermaid
 flowchart LR
   pgl__src["<b>OpenGL</b>"]
-  pgl__math["Math"]
   pgl__renderer["Renderer"]
-  pgl__src --> pgl__math
+  pgl__math["Math"]
   pgl__src -.-> pgl__renderer
+  pgl__src --> pgl__math
   style pgl__src fill:#3f3f46,stroke:#fb923c,stroke-width:3px,color:#f8fafc
-  style pgl__math fill:#4c1d95,stroke:#a78bfa,stroke-width:2px,color:#f8fafc
   style pgl__renderer fill:#164e63,stroke:#22d3ee,stroke-width:2px,color:#f8fafc
+  style pgl__math fill:#4c1d95,stroke:#a78bfa,stroke-width:2px,color:#f8fafc
   linkStyle 0 stroke:#fb923c,stroke-width:2.5px
   linkStyle 1 stroke:#fb923c,stroke-width:2.5px
 ```
@@ -494,13 +496,13 @@ flowchart LR
 ```mermaid
 flowchart LR
   pwin__src["<b>Windows</b>"]
-  pwin__ui["UI"]
   pwin__network["Network"]
-  pwin__src -.-> pwin__ui
+  pwin__ui["UI"]
   pwin__src -.-> pwin__network
+  pwin__src -.-> pwin__ui
   style pwin__src fill:#3f3f46,stroke:#94a3b8,stroke-width:3px,color:#f8fafc
-  style pwin__ui fill:#4c1d95,stroke:#d8b4fe,stroke-width:2px,color:#f8fafc
   style pwin__network fill:#164e63,stroke:#2dd4bf,stroke-width:2px,color:#f8fafc
+  style pwin__ui fill:#4c1d95,stroke:#d8b4fe,stroke-width:2px,color:#f8fafc
   linkStyle 0 stroke:#94a3b8,stroke-width:2.5px
   linkStyle 1 stroke:#94a3b8,stroke-width:2.5px
 ```
@@ -510,16 +512,16 @@ flowchart LR
 ```mermaid
 flowchart LR
   phead__src["<b>Headless</b>"]
+  phead__renderer["Renderer"]
   phead__events["Events"]
   phead__ui["UI"]
-  phead__renderer["Renderer"]
+  phead__src -.-> phead__renderer
   phead__src -.-> phead__events
   phead__src -.-> phead__ui
-  phead__src -.-> phead__renderer
   style phead__src fill:#3f3f46,stroke:#d1d5db,stroke-width:3px,color:#f8fafc
+  style phead__renderer fill:#164e63,stroke:#22d3ee,stroke-width:2px,color:#f8fafc
   style phead__events fill:#4c1d95,stroke:#c084fc,stroke-width:2px,color:#f8fafc
   style phead__ui fill:#4c1d95,stroke:#d8b4fe,stroke-width:2px,color:#f8fafc
-  style phead__renderer fill:#164e63,stroke:#22d3ee,stroke-width:2px,color:#f8fafc
   linkStyle 0 stroke:#d1d5db,stroke-width:2.5px
   linkStyle 1 stroke:#d1d5db,stroke-width:2.5px
   linkStyle 2 stroke:#d1d5db,stroke-width:2.5px
@@ -529,8 +531,9 @@ flowchart LR
 
 Each arrow runs from a feature to the feature it uses; "System · all" means the whole system.
 This level is a **proposal** derived from the target architecture: the system map and ADRs define
-only system-level edges. Every feature arrow lies on an allowed system edge from section 1, and
-the generator checks this.
+only system-level edges, and some features here (such as Network's transport interface or Core's
+paths interface) are proposed names. Every feature arrow lies on an allowed system edge from
+section 1, and the generator checks this.
 
 ### GoSurveyEditor features
 
@@ -1275,7 +1278,7 @@ flowchart LR
   pwin__t_ui_dlg["UI · dialogs"]
   pwin__paths -.-> pwin__t_core_paths
   pwin__http -.-> pwin__t_network_xport
-  pwin__crash -.-> pwin__t_core_log
+  pwin__crash --> pwin__t_core_log
   pwin__dlg -.-> pwin__t_ui_dlg
   style pwin__SRC fill:#27272a,stroke:#94a3b8,stroke-width:3px,color:#f8fafc
   style pwin__paths fill:#3f3f46,stroke:#94a3b8,stroke-width:2px,color:#f8fafc
@@ -1339,7 +1342,8 @@ flowchart LR
 
 ## Gaps the table leaves open
 
-These follow from the current table and may be unintended. Resolve them in `system-map.md`, not here.
+These follow from the system-map table as of this diagram and may be unintended. Resolve them in
+`system-map.md`, then update this list.
 
 - **Debug has no consumers.** No system lists Debug as an allowed dependency, so nothing may call
   the profiler, tracer or invariant checks.
