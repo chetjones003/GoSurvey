@@ -31,6 +31,8 @@ def github_get(url):
 
 def classify_docs_only_result():
     labels = json.loads(os.environ["PR_LABELS"])
+    if "refactor: move-only" in labels:
+        return False, "move-only proof requires the regular build, tests, and dependency ratchet"
     if "docs-only" not in labels:
         return False, "the docs-only label is absent"
 
