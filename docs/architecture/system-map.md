@@ -117,8 +117,9 @@ on every non-docs PR. Tracked C/C++ sources (excluding `third_party/`) over 3,00
 they are grandfathered in `.github/file-size-baseline.json`. A grandfathered file may not grow, and
 it must lower its entry when it shrinks or remove the entry once it is at or under 3,000 lines. The
 PR's baseline is checked against the base branch's baseline, so a PR cannot add or raise entries.
-Renaming or moving a grandfathered file counts as removing its old entry and adding a new
-over-limit file, so the PR fails until the baseline is restructured by hand. To regenerate the
+Renaming or moving a grandfathered file always fails the gate: the old entry is then missing, and
+the new path is an over-limit file that cannot be added to the baseline. The only ways through are
+to shrink the file to 3,000 lines or fewer, or to change the gate itself. To regenerate the
 baseline from a checkout of `beta`, run
 `python .github/scripts/check_file_size.py --write-baseline .github/file-size-baseline.json`.
 Fixture coverage is in `python -m unittest discover -s .github/scripts -p "test_*.py"`.
