@@ -91,7 +91,7 @@ flowchart TB
   T0 -. implemented by .-> PLATFORM
 ```
 
-Solid arrows indicate permitted dependencies by tier; dotted arrows indicate implementation of interfaces by platform backends. Foundation uses the explicit internal order above; Domain uses only the four named public-header peer edges. The table is authoritative for exact allowed edges.
+Solid arrows indicate permitted dependencies by tier; dotted arrows indicate implementation of interfaces by platform backends. Foundation uses the explicit internal order above; Domain uses only the four named public-header peer edges. The table is authoritative for exact allowed edges. [System dependencies](system-dependencies.md) draws every allowed edge as one diagram per system, plus a proposed feature-level view.
 
 ## Mapping format
 
