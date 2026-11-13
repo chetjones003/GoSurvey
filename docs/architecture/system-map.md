@@ -122,6 +122,20 @@ Generate an updated baseline deliberately with
 `python3 -m unittest tools.test_architecture_dependencies`. The PR workflow runs this check on
 every pull request, including docs-only changes.
 
+## Architecture metrics history
+
+The `architecture-metrics` workflow (`.github/workflows/architecture-metrics.yml`) runs on every push
+to `beta`. It records one snapshot per pushed commit at `snapshots/<commit>.json` on the `metrics`
+branch: largest source file, violation count, `CadCommands.hpp` include fan-in, dependency cycles,
+the share of domain tests that build without Qt (zero until systems own tests), and the violation
+and file-size baselines. Snapshots carry no timestamp and are never rewritten; a second run for the
+same commit is a no-op, and a conflicting snapshot fails the run. Concurrent publishers retry on top
+of the latest `metrics` history. Build one snapshot locally with
+`python3 tools/architecture_snapshot.py build --root . --commit <full-sha> --output <file>`.
+Backfill a commit by running the workflow manually with its full SHA. Commits before
+`docs/architecture/system-map.json` existed are skipped. Fixture coverage is in
+`python3 -m unittest tools.test_architecture_snapshot`.
+
 ## File-size gate
 
 The `PR gate / file size` job in `.github/workflows/pr-checks.yml` runs

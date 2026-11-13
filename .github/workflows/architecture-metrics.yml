@@ -1,0 +1,118 @@
+# Architecture-health snapshots (issue #1215). Every push to beta records one append-only snapshot
+# per pushed commit on the `metrics` branch, at snapshots/<commit>.json. A manual run with a full
+# commit SHA backfills one commit.
+#
+# Snapshots are never rewritten. Publishing re-reads the metrics branch on each attempt, so a
+# rejected push retries on top of whatever another run already recorded.
+
+name: architecture-metrics
+
+on:
+  push:
+    branches: [beta]
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full 40-character commit SHA to backfill (empty = beta head)
+        required: false
+        default: ''
+
+# Runs queue rather than cancel, so an in-flight publish always finishes.
+concurrency:
+  group: architecture-metrics
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    name: architecture snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out beta history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.commit || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build snapshots for pushed commits
+        env:
+          BEFORE: ${{ github.event.before }}
+          BACKFILL: ${{ inputs.commit }}
+          ZERO_SHA: '0000000000000000000000000000000000000000'
+        run: |
+          set -euo pipefail
+          # Use the tool from this run's checkout, so older commits are measured with the same logic.
+          TOOLS="$RUNNER_TEMP/architecture-tools"
+          mkdir -p "$TOOLS" "$RUNNER_TEMP/snapshots"
+          cp tools/architecture_snapshot.py tools/architecture_inventory.py tools/architecture_dependencies.py "$TOOLS/"
+          HEAD_SHA=$(git rev-parse HEAD)
+          if [ -n "$BACKFILL" ] || [ -z "$BEFORE" ] || [ "$BEFORE" = "$ZERO_SHA" ]; then
+            COMMITS="$HEAD_SHA"
+          else
+            COMMITS=$(git rev-list --reverse "$BEFORE..$HEAD_SHA")
+          fi
+          for commit in $COMMITS; do
+            # Commits before the architecture system map exist have nothing to measure.
+            git checkout --quiet --detach "$commit"
+            if [ ! -f docs/architecture/system-map.json ]; then
+              echo "skip $commit: no system map at this commit"
+              continue
+            fi
+            python3 "$TOOLS/architecture_snapshot.py" build --root . --commit "$commit" \
+              --output "$RUNNER_TEMP/snapshots/$commit.json"
+          done
+          ls "$RUNNER_TEMP/snapshots"
+
+      - name: Publish snapshots to the metrics branch
+        env:
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          TOOLS="$RUNNER_TEMP/architecture-tools"
+          SNAPSHOTS="$RUNNER_TEMP/snapshots"
+          if [ -z "$(ls -A "$SNAPSHOTS")" ]; then
+            echo "No snapshots to publish."
+            exit 0
+          fi
+          # actions/checkout's credentials live in the workspace repo only, so pass the token per command.
+          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
+          git_remote() { git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" "$@"; }
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git init --quiet "$RUNNER_TEMP/metrics"
+          cd "$RUNNER_TEMP/metrics"
+          git remote add origin "$REPO_URL"
+          for attempt in 1 2 3 4 5; do
+            if git_remote fetch --quiet origin metrics 2>/dev/null; then
+              git checkout --quiet -B metrics FETCH_HEAD
+            else
+              git checkout --quiet --orphan metrics
+            fi
+            for snapshot in "$SNAPSHOTS"/*.json; do
+              python3 "$TOOLS/architecture_snapshot.py" append --snapshot "$snapshot" --history-dir .
+            done
+            git add snapshots
+            if git diff --cached --quiet; then
+              echo "All snapshots already recorded."
+              exit 0
+            fi
+            git commit --quiet -m "metrics: architecture snapshots (run $GH_RUN_ID)"
+            if git_remote push --quiet origin HEAD:refs/heads/metrics; then
+              echo "Published on attempt $attempt."
+              exit 0
+            fi
+            echo "Push rejected on attempt $attempt; re-reading the metrics branch."
+            git reset --quiet --hard
+          done
+          echo "Could not publish snapshots after 5 attempts." >&2
+          exit 1
