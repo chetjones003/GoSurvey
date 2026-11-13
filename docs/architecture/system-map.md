@@ -141,6 +141,14 @@ manual backfill by SHA retries it. Commits before
 `docs/architecture/system-map.json` existed are skipped. Fixture coverage is in
 `python3 -m unittest tools.test_architecture_snapshot`.
 
+The `architecture-health-comment` workflow (`.github/workflows/architecture-health-comment.yml`) runs
+for pull requests targeting `master` or `beta`. It measures the PR head with the same snapshot builder,
+compares it with the snapshot at the PR head's merge base with `beta`, and updates one marked bot
+comment with the three metrics above and trends from the latest 20 beta snapshots. It inspects PR
+source files as data, uses the workflow and scanner code from the PR base, and does not build the app.
+If the merge-base snapshot is unavailable, the comment explains that baseline comparisons cannot be
+shown and still reports the PR metrics and available beta trend.
+
 ## File-size gate
 
 The `PR gate / file size` job in `.github/workflows/pr-checks.yml` runs
