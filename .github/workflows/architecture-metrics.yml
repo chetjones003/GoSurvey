@@ -86,7 +86,12 @@ jobs:
             if [ -z "$BACKFILL" ] && grep -Fqx "snapshots/$commit.json" <<< "$RECORDED"; then
               continue
             fi
-            git checkout --quiet --detach "$commit"
+            if ! git checkout --quiet --detach "$commit"; then
+              # Measuring whatever tree is still checked out would record the wrong files under this SHA.
+              echo "$commit" >> "$FAILURES"
+              echo "::error::could not check out $commit" >&2
+              continue
+            fi
             if ! python3 "$TOOLS/architecture_snapshot.py" build --root . --commit "$commit" \
                 --output "$SNAPSHOTS/$commit.json"; then
               echo "$commit" >> "$FAILURES"
