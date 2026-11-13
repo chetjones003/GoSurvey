@@ -482,6 +482,18 @@ endif()
 #   src/pdf/PdfAttach.cpp             -> headless: src/platform/HeadlessPdfAttach.cpp
 # PdfAttach.cpp is where <GL/glew.h> reaches the Commands layer, which is precisely why it is a seam.
 # ---------------------------------------------------------------------------
+# GoSurvey::Core — first system library in the system layout (issue #1219).
+# Its public headers are the only Core include path exported to consumers; implementation
+# details under src/core/src stay private to this target.
+add_library(gosurvey_core STATIC src/core/src/Core.cpp)
+add_library(GoSurvey::Core ALIAS gosurvey_core)
+target_include_directories(gosurvey_core
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core/include>"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/core/src")
+target_compile_features(gosurvey_core PUBLIC cxx_std_17)
+target_compile_definitions(gosurvey_core PRIVATE GOSURVEY_CORE_IMPLEMENTATION=1)
+gosurvey_target_warnings(gosurvey_core)
+
 # --- OpenXLSX (vendored, third_party/OpenXLSX, approved D-2026-10-30-a): .xlsx read/write for
 # Extract Data and Link Data (REQ-467 / REQ-468). Compiled into gosurvey_domain with the pugixml
 # copy above; zip support comes from the vendored miniz.
@@ -781,6 +793,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
+target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
@@ -788,6 +801,11 @@ if(WIN32)
 endif()
 gosurvey_target_warnings(gosurvey_domain)
 gosurvey_enable_pch(gosurvey_domain)
+
+# Stable umbrella for application consumers; individual systems remain linkable in isolation.
+add_library(gosurvey_engine INTERFACE)
+add_library(GoSurvey::Engine ALIAS gosurvey_engine)
+target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
@@ -1065,13 +1083,26 @@ if(GOSURVEY_BUILD_TESTS)
   list(APPEND CMAKE_MODULE_PATH "${GOSURVEY_CATCH2_DIR}")
 
   enable_testing()
+  # Engine consumers must not compile Core private headers, even through the legacy src include root.
+  include(CheckCXXSourceCompiles)
+  get_target_property(_gosurvey_domain_public_includes gosurvey_domain INTERFACE_INCLUDE_DIRECTORIES)
+  set(CMAKE_REQUIRED_INCLUDES
+    ${_gosurvey_domain_public_includes}
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/core/include")
+  unset(GOSURVEY_CORE_PRIVATE_HEADER_IS_CONSUMABLE CACHE)
+  check_cxx_source_compiles("#include <core/src/CorePrivate.hpp>\nint main() { return 0; }"
+    GOSURVEY_CORE_PRIVATE_HEADER_IS_CONSUMABLE)
+  unset(CMAKE_REQUIRED_INCLUDES)
+  unset(_gosurvey_domain_public_includes)
+  if(GOSURVEY_CORE_PRIVATE_HEADER_IS_CONSUMABLE)
+    message(FATAL_ERROR "Core private headers are consumable by Engine clients")
+  endif()
+
   add_executable(GoSurveyTests
     tests/TestSoundGuard.cpp
     tests/TestSoundGuardTests.cpp
     tests/TraverseTests.cpp
     tests/EcefTransformTests.cpp
-    tests/NumFormatTests.cpp
-    tests/AngleFormatTests.cpp
     tests/PaperSpaceTests.cpp
     tests/PaperLeaderTests.cpp
     tests/PaperTableTests.cpp
@@ -1513,6 +1544,15 @@ if(GOSURVEY_BUILD_TESTS)
   endif()
 
   include(Catch)
+  add_executable(GoSurveyCoreTests
+    tests/Core/CoreTests.cpp
+    tests/Core/NumFormatTests.cpp
+    tests/Core/AngleFormatTests.cpp)
+  set_target_properties(GoSurveyCoreTests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyCoreTests PRIVATE GoSurvey::Core Catch2::Catch2WithMain)
+  catch_discover_tests(GoSurveyCoreTests PROPERTIES LABELS Core)
+  gosurvey_target_warnings(GoSurveyCoreTests TEST)
 
   # ---------------------------------------------------------------------------
   # Command-layer cases share the Catch2 executable and existing domain library.

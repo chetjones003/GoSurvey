@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Alignment.hpp"
-#include "util/AngleFormat.hpp"
+#include <GoSurvey/Core/AngleFormat.hpp>
 
 #include <string>
 #include <vector>

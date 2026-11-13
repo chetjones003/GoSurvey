@@ -10,7 +10,7 @@
 
 #include "CadCommands.hpp"
 #include "alignment/Alignment.hpp"
-#include "util/NumFormat.hpp"
+#include <GoSurvey/Core/NumFormat.hpp>
 
 using Catch::Approx;
 

@@ -3,8 +3,8 @@
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
 
-#include "util/NumFormat.hpp"
-#include "util/StringUtil.hpp"
+#include <GoSurvey/Core/NumFormat.hpp>
+#include <GoSurvey/Core/StringUtil.hpp>
 #include "util/DataExtract.hpp"
 #include "util/cadtablestyle.hpp"
 #include "SpreadsheetIo.hpp"

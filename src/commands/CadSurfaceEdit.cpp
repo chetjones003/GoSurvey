@@ -1,6 +1,6 @@
 #include "CadSurfaceEdit.hpp"
 
-#include "StringUtil.hpp"
+#include <GoSurvey/Core/StringUtil.hpp>
 #include "SurfaceStyle.hpp"
 
 #include <algorithm>

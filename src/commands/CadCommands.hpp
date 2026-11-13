@@ -40,7 +40,7 @@
 #include "ProjectPack.hpp"  // gspack::PackPlan, for AppCommandState::projectPackPrompt (REQ-380)
 #include "PaperSpace.hpp"
 #include "SurveyPoints.hpp"
-#include "AngleFormat.hpp"
+#include <GoSurvey/Core/AngleFormat.hpp>
 #include "traverse/TraverseCalc.hpp"
 #include "traverse/TraverseLeastSquares.hpp"
 #include "update/UpdateCheck.hpp"  // update::UpdatePrefs only — pure, no network, no <thread>

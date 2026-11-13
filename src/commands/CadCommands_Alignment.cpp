@@ -30,8 +30,8 @@
 #include "util/cadtablestyle.hpp"
 #include "SpreadsheetIo.hpp"
 #include "WinFileDialogs.hpp"
-#include "StringUtil.hpp"
-#include "util/NumFormat.hpp"
+#include <GoSurvey/Core/StringUtil.hpp>
+#include <GoSurvey/Core/NumFormat.hpp>
 
 #include <algorithm>
 #include <array>

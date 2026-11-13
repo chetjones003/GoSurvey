@@ -1,8 +1,8 @@
 #include "SurveyPoints.hpp"
 
 #include "CadCommands.hpp"
-#include "NumFormat.hpp"
-#include "StringUtil.hpp"
+#include <GoSurvey/Core/NumFormat.hpp>
+#include <GoSurvey/Core/StringUtil.hpp>
 
 #include <algorithm>
 #include <cmath>

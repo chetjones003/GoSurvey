@@ -4,7 +4,7 @@
 
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
-#include "StringUtil.hpp"
+#include <GoSurvey/Core/StringUtil.hpp>
 
 #include <algorithm>
 #include <cctype>
