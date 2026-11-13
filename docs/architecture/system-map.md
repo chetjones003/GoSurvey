@@ -109,3 +109,15 @@ the source include graph and its cycles, Qt includes outside `src/qt`, and OpenG
 outside `src/render`. Use `--root` to scan another checkout and `--output-dir` to choose a
 different report directory. Fixture coverage is in
 `python3 -m unittest tools.test_architecture_inventory`.
+
+## Dependency ratchet
+
+Run `python3 tools/architecture_dependencies.py` to classify source includes against the system
+map and compare current violations with `dependency-baseline.json`. The PR check also scans the
+base branch and rejects baseline entries that are not present there, so the baseline can only
+shrink. New violations fail the check; removed violations also fail until their entries are
+removed from the baseline. Unmapped source files and includes are reported for mapping work.
+Generate an updated baseline deliberately with
+`python3 tools/architecture_dependencies.py --write-baseline`. Fixture coverage is in
+`python3 -m unittest tools.test_architecture_dependencies`. The PR workflow runs this check on
+every pull request, including docs-only changes.
