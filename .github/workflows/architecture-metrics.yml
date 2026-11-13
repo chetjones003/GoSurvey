@@ -1,0 +1,183 @@
+# Architecture-health snapshots (issue #1215). Each run measures every beta commit that has a system
+# map and no snapshot on the `metrics` branch yet, then appends those snapshots at
+# snapshots/<commit>.json. The metrics branch is the source of truth, not the push range, so a run
+# that is replaced or cancelled is recovered by the next run. A manual run with a full commit SHA
+# backfills that one commit.
+#
+# Snapshots are never rewritten. Publishing re-reads the metrics branch on each attempt, so a
+# rejected push retries on top of whatever another run already recorded.
+
+name: architecture-metrics
+
+on:
+  push:
+    branches: [beta]
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full 40-character commit SHA to backfill (empty = every missing beta commit)
+        required: false
+        default: ''
+
+# Runs queue rather than cancel, so an in-flight publish always finishes.
+concurrency:
+  group: architecture-metrics
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    name: architecture snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out beta history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # This checkout supplies the tools; it stays on the workflow's own commit. Each measured commit,
+          # including a backfill, is checked out separately in the build step.
+          ref: ${{ (github.event_name == 'push' && github.sha) || 'beta' }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build missing snapshots
+        env:
+          BACKFILL: ${{ inputs.commit }}
+        run: |
+          set -uo pipefail
+          TOOLS="$RUNNER_TEMP/architecture-tools"
+          SNAPSHOTS="$RUNNER_TEMP/snapshots"
+          FAILURES="$RUNNER_TEMP/build-failures"
+          mkdir -p "$TOOLS" "$SNAPSHOTS"
+          : > "$FAILURES"
+          # Use the tool from this run's checkout, so older commits are measured with the same logic.
+          cp tools/architecture_snapshot.py tools/architecture_inventory.py tools/architecture_dependencies.py "$TOOLS/"
+
+          # Commits already recorded on the metrics branch (empty if the branch does not exist yet).
+          git fetch --quiet origin '+refs/heads/metrics:refs/remotes/origin/metrics' 2>/dev/null || true
+          RECORDED=$(git ls-tree -r --name-only refs/remotes/origin/metrics -- snapshots 2>/dev/null || true)
+          # Commits whose build failed on an earlier run. A manual backfill by SHA retries them.
+          SKIPPED=$(git ls-tree -r --name-only refs/remotes/origin/metrics -- skipped 2>/dev/null || true)
+
+          if [ -n "$BACKFILL" ]; then
+            COMMITS=$(git rev-parse --verify --quiet "$BACKFILL^{commit}") || {
+              echo "::error::backfill commit $BACKFILL is not in this checkout" >&2
+              exit 1
+            }
+          else
+            COMMITS=$(git rev-list --reverse HEAD)
+          fi
+
+          for commit in $COMMITS; do
+            # Commits before the architecture system map have nothing to measure; a backfill names one
+            # explicitly, so a commit without a map is an error there.
+            if ! git cat-file -e "$commit:docs/architecture/system-map.json" 2>/dev/null; then
+              if [ -n "$BACKFILL" ]; then
+                echo "$commit" >> "$FAILURES"
+                echo "::error::backfill commit $commit has no system map" >&2
+              fi
+              continue
+            fi
+            # Snapshots are never rewritten, so a recorded commit is not measured again.
+            if [ -z "$BACKFILL" ] && grep -Fqx "snapshots/$commit.json" <<< "$RECORDED"; then
+              continue
+            fi
+            if [ -z "$BACKFILL" ] && grep -Fqx "skipped/$commit.txt" <<< "$SKIPPED"; then
+              continue
+            fi
+            if ! git checkout --quiet --detach "$commit"; then
+              # Measuring whatever tree is still checked out would record the wrong files under this SHA.
+              echo "$commit" >> "$FAILURES"
+              echo "::error::could not check out $commit" >&2
+              continue
+            fi
+            if ! python3 "$TOOLS/architecture_snapshot.py" build --root . --commit "$commit" \
+                --output "$SNAPSHOTS/$commit.json"; then
+              echo "$commit" >> "$FAILURES"
+              echo "::error::could not build a snapshot for $commit" >&2
+            fi
+          done
+          echo "Built: $(ls "$SNAPSHOTS" | wc -l) snapshot file(s); failed: $(wc -l < "$FAILURES")"
+
+      - name: Publish snapshots to the metrics branch
+        env:
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          TOOLS="$RUNNER_TEMP/architecture-tools"
+          SNAPSHOTS="$RUNNER_TEMP/snapshots"
+          FAILURES="$RUNNER_TEMP/build-failures"
+          conflicts=0
+
+          # Any failed build or conflicting snapshot fails the run, after the others are published.
+          finish() {
+            local status=0
+            if [ -s "$FAILURES" ]; then
+              echo "::error::snapshot build failed for: $(tr '\n' ' ' < "$FAILURES")" >&2
+              status=1
+            fi
+            if [ "$conflicts" -gt 0 ]; then
+              echo "::error::$conflicts snapshot(s) could not be appended; see the messages above." >&2
+              status=1
+            fi
+            exit "$status"
+          }
+
+          if [ -z "$(ls -A "$SNAPSHOTS")" ] && [ ! -s "$FAILURES" ]; then
+            echo "No new snapshots to publish."
+            exit 0
+          fi
+
+          # actions/checkout's credentials live in the workspace repo only, so pass the token per command.
+          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
+          git_remote() { git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" "$@"; }
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git init --quiet "$RUNNER_TEMP/metrics"
+          cd "$RUNNER_TEMP/metrics"
+          git remote add origin "$REPO_URL"
+          for attempt in 1 2 3 4 5; do
+            if git_remote fetch --quiet origin metrics 2>/dev/null; then
+              git checkout --quiet -B metrics FETCH_HEAD
+            else
+              # Unique name: a retry must not collide with a branch left by an earlier attempt.
+              git checkout --quiet --orphan "metrics-attempt-$attempt"
+            fi
+            conflicts=0
+            for snapshot in "$SNAPSHOTS"/*.json; do
+              # With no snapshot files the glob stays literal; that is not a conflict.
+              [ -e "$snapshot" ] || continue
+              python3 "$TOOLS/architecture_snapshot.py" append --snapshot "$snapshot" --history-dir . ||
+                conflicts=$((conflicts + 1))
+            done
+            # A failed commit is recorded once, so later runs skip it. noclobber keeps the first record.
+            mkdir -p skipped
+            while read -r failed; do
+              [ -n "$failed" ] || continue
+              (set -C; printf 'build failed in run %s; a manual backfill by SHA retries it\n' "$GH_RUN_ID" \
+                > "skipped/$failed.txt") 2>/dev/null || true
+            done < "$FAILURES"
+            mkdir -p snapshots
+            git add -A -- snapshots skipped
+            if git diff --cached --quiet; then
+              echo "No new snapshots to publish."
+              finish
+            fi
+            git commit --quiet -m "metrics: architecture snapshots (run $GH_RUN_ID)"
+            if git_remote push --quiet origin HEAD:refs/heads/metrics; then
+              echo "Published on attempt $attempt."
+              finish
+            fi
+            echo "Push rejected on attempt $attempt; re-reading the metrics branch."
+            git reset --quiet --hard
+          done
+          echo "::error::could not publish snapshots after 5 attempts." >&2
+          exit 1
