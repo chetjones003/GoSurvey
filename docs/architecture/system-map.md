@@ -6,6 +6,17 @@ Status: draft target architecture and file mapping. This is the architecture ref
 
 Dependencies point only downward through the tier order shown in the diagram, with two explicit ordering rules. Within Foundation (T0), the dependency order is Core → Math → Events → UI, where each item may depend on items to its left; Debug may depend on Core only. Within Domain (T2), peer dependencies are allowed only through public headers and must be acyclic. The only Domain peer edges allowed by this draft are Survey → Document, Terrain → Document, Terrain → Survey, and Pdf → Document; all other Domain dependencies must point downward to Kernel or Foundation. No other same-tier dependency is allowed. Platform backends implement lower-tier interfaces and are selected by GoSurveyEditor composition/startup; engine systems do not depend on platform implementations. `GoSurveyEditor` may use Qt and OpenGL backends.
 
+## Decision records
+
+The rationale behind the architecture boundaries is recorded in these ADRs:
+
+- [System layout and tiers](../adr/0001-system-layout-and-tiers.md)
+- [Toolkit-neutral UI interfaces](../adr/0002-toolkit-neutral-ui-interfaces.md)
+- [Renderer frontend and device boundary](../adr/0003-renderer-frontend-and-device-boundary.md)
+- [Public includes and private system sources](../adr/0004-public-includes-and-private-sources.md)
+- [Dependency ratchet and file-size gate](../adr/0005-dependency-ratchet-and-file-size-gate.md)
+- [System-qualified C++ namespaces](../adr/0006-system-qualified-cpp-namespaces.md)
+
 ## Systems
 
 | System | Tier | Responsibility | Does not own | Allowed dependencies |
