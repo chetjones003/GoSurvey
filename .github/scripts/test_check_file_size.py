@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import check_file_size as gate
 
@@ -87,10 +88,6 @@ class FindViolationsTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertIn("raised", result[0])
 
-    def test_missing_base_baseline_skips_raise_check_for_bootstrap(self):
-        current = {"src/big.cpp": 3500}
-        self.assertEqual(self.violations(current, {"src/big.cpp": 3500}, None), [])
-
 
 def _write(root, relative, lines):
     path = root / relative
@@ -100,6 +97,14 @@ def _write(root, relative, lines):
 
 def _git(root, *args):
     subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+
+
+class BaseReadTests(unittest.TestCase):
+    def test_ls_tree_error_is_not_treated_as_absent(self):
+        failed = subprocess.CompletedProcess(args=[], returncode=128, stdout=b"", stderr=b"fatal")
+        with mock.patch.object(gate.subprocess, "run", return_value=failed):
+            with self.assertRaises(SystemExit):
+                gate.read_base_text(Path("."), "abc123", gate.BASELINE_PATH)
 
 
 class FixtureTreeTests(unittest.TestCase):
@@ -178,14 +183,32 @@ class FixtureTreeTests(unittest.TestCase):
         self._commit("pr")
         self.assertEqual(self._gate(), 1)
 
-    def test_bootstrap_base_without_baseline_file_passes(self):
+    def _bootstrap_base(self):
+        """Make the base commit have no baseline file, as beta does before this gate merges."""
         _git(self.root, "rm", "-q", "--cached", gate.BASELINE_PATH)
         (self.root / gate.BASELINE_PATH).unlink()
         self._commit("remove baseline on base")
         self.base = self._head()
+
+    def test_bootstrap_base_without_baseline_file_passes(self):
+        self._bootstrap_base()
         self._write_baseline({"src/big.cpp": 3500})
         self._commit("pr adds baseline")
         self.assertEqual(self._gate(), 0)
+
+    def test_bootstrap_grandfathered_file_growth_fails(self):
+        self._bootstrap_base()
+        _write(self.root, "src/big.cpp", 3501)
+        self._write_baseline({"src/big.cpp": 3501})
+        self._commit("pr grows big file")
+        self.assertEqual(self._gate(), 1)
+
+    def test_bootstrap_new_oversized_file_fails(self):
+        self._bootstrap_base()
+        _write(self.root, "src/new.cpp", 3001)
+        self._write_baseline({"src/big.cpp": 3500, "src/new.cpp": 3001})
+        self._commit("pr adds new big file")
+        self.assertEqual(self._gate(), 1)
 
     def test_new_file_under_limit_passes(self):
         _write(self.root, "src/new.cpp", 2999)

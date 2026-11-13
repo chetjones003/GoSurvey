@@ -24,18 +24,18 @@ def find_violations(current, baseline, base_baseline):
 
     current: {path: line_count} for every in-scope source file.
     baseline: the PR's grandfather map {path: line_count}.
-    base_baseline: the base branch's map, or None when the base has no baseline yet (bootstrap).
+    base_baseline: the base branch's cap map {path: line_count}. Before the baseline file exists on
+    the base, this is derived from the base commit's oversized files (see base_oversized_caps).
     """
     problems = []
 
-    if base_baseline is not None:
-        for path, value in sorted(baseline.items()):
-            if path not in base_baseline:
-                problems.append(f"{path}: baseline entry added; the baseline may only shrink")
-            elif value > base_baseline[path]:
-                problems.append(
-                    f"{path}: baseline raised from {base_baseline[path]} to {value}; "
-                    "the baseline may only shrink")
+    for path, value in sorted(baseline.items()):
+        if path not in base_baseline:
+            problems.append(f"{path}: baseline entry added; the baseline may only shrink")
+        elif value > base_baseline[path]:
+            problems.append(
+                f"{path}: baseline raised from {base_baseline[path]} to {value}; "
+                "the baseline may only shrink")
 
     for path, lines in sorted(current.items()):
         if lines > LIMIT and path not in baseline:
@@ -90,29 +90,49 @@ def read_baseline(root):
     return load_baseline_text(path.read_text(encoding="utf-8"))
 
 
-def read_base_baseline(root, base_ref):
-    """Return the base branch baseline, or None when the base commit exists but has no baseline file.
+def read_base_text(root, base_ref, path):
+    """Return the base commit's text for path, or None when the path is absent from that commit.
 
-    Fails closed: an unknown base commit is an error, not a missing baseline, so the cap cannot be
-    silently dropped.
+    `ls-tree` separates absent (empty output) from a failed lookup (non-zero exit), which must not be
+    mistaken for absence.
     """
+    listing = subprocess.run(
+        ["git", "-C", str(root), "ls-tree", "-z", base_ref, "--", path],
+        capture_output=True,
+    )
+    if listing.returncode != 0:
+        raise SystemExit(f"File-size gate: could not read {path} at {base_ref}: "
+                         f"{listing.stderr.decode('utf-8', errors='replace').strip()}")
+    if not listing.stdout:
+        return None
+    blob = subprocess.run(
+        ["git", "-C", str(root), "show", f"{base_ref}:{path}"],
+        capture_output=True, check=True,
+    )
+    return blob.stdout.decode("utf-8", errors="replace")
+
+
+def read_base_baseline(root, base_ref):
+    """Return the base branch baseline, or None when the base commit has no baseline file."""
     commit = subprocess.run(
         ["git", "-C", str(root), "cat-file", "-e", f"{base_ref}^{{commit}}"],
         capture_output=True,
     )
     if commit.returncode != 0:
         raise SystemExit(f"File-size gate: base commit {base_ref} is not available; fetch it first.")
-    blob = subprocess.run(
-        ["git", "-C", str(root), "cat-file", "-e", f"{base_ref}:{BASELINE_PATH}"],
-        capture_output=True,
-    )
-    if blob.returncode != 0:
-        return None
-    result = subprocess.run(
-        ["git", "-C", str(root), "show", f"{base_ref}:{BASELINE_PATH}"],
-        capture_output=True, check=True,
-    )
-    return load_baseline_text(result.stdout.decode("utf-8"))
+    text = read_base_text(root, base_ref, BASELINE_PATH)
+    return None if text is None else load_baseline_text(text)
+
+
+def base_oversized_caps(root, base_ref, paths):
+    """Bootstrap cap: line counts at base_ref for those of paths already over LIMIT there."""
+    caps = {}
+    for path in paths:
+        text = read_base_text(root, base_ref, path)
+        lines = 0 if text is None else count_lines(text)
+        if lines > LIMIT:
+            caps[path] = lines
+    return caps
 
 
 def write_baseline(root, output):
@@ -137,9 +157,14 @@ def main(argv=None):
 
     current = collect_line_counts(args.root)
     baseline = read_baseline(args.root)
-    base_baseline = read_base_baseline(args.root, args.base_ref) if args.base_ref else None
-    if args.base_ref and base_baseline is None:
-        print(f"Note: base {args.base_ref} has no {BASELINE_PATH}; bootstrap run, base cap not applied.")
+    base_baseline = None
+    if args.base_ref:
+        base_baseline = read_base_baseline(args.root, args.base_ref)
+        if base_baseline is None:
+            candidates = {path for path, lines in current.items() if lines > LIMIT} | set(baseline)
+            base_baseline = base_oversized_caps(args.root, args.base_ref, sorted(candidates))
+            print(f"Note: base {args.base_ref} has no {BASELINE_PATH}; bootstrap caps derived from "
+                  f"{len(base_baseline)} oversized file(s) at the base commit.")
 
     problems = find_violations(current, baseline, base_baseline)
     for problem in problems:
