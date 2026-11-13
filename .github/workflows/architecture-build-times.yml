@@ -103,6 +103,11 @@ jobs:
                 clone --quiet --no-checkout $remote $history
               if ($LASTEXITCODE -ne 0) { throw 'Could not fetch metrics history.' }
               git -C $history checkout --quiet --orphan metrics
+              if ($LASTEXITCODE -ne 0) { throw 'Could not create metrics history.' }
+              # checkout --orphan keeps HEAD's paths staged as new files; start with an empty
+              # index so this first metrics commit contains only the sample we add below.
+              git -C $history read-tree --empty
+              if ($LASTEXITCODE -ne 0) { throw 'Could not clear the initial metrics index.' }
             }
             $dir = Join-Path $history 'build-times'
             New-Item -ItemType Directory -Force -Path $dir | Out-Null
