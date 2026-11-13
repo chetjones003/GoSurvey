@@ -22,15 +22,19 @@ class ArchitectureInventoryTests(unittest.TestCase):
             (root / "src/util").mkdir()
             (root / "src/base").mkdir()
             (root / "src/ui").mkdir()
+            (root / "src/util/qt").mkdir()
+            (root / "src/util/render").mkdir()
             fixtures = {
                 "src/commands/CadCommands.hpp": '#include "Peer.hpp"\n#include <QWidget>\n' + ("// header padding\n" * 8),
                 "src/commands/Peer.hpp": '#include "CadCommands.hpp"\n#include <GL/gl.h>\n',
-                "src/ui.cpp": '#include "CadCommands.hpp"\n#include <QWidget>\n#include <QOpenGLWidget>\nglBindTexture(GL_TEXTURE_2D, 0);\n',
+                "src/ui.cpp": '#include "CadCommands.hpp"\n#if defined(ALT)\n#include "CadCommands.hpp"\n#endif\n#include <QWidget>\n#include <QOpenGLWidget>\nglBindTexture(GL_TEXTURE_2D, 0);\n',
                 "src/qt/Widget.cpp": '#include <QWidget>\n',
                 "src/render/Renderer.cpp": '#include <GL/gl.h>\n',
-                "src/util/Formats.cpp": '/*\n#include "CadCommands.hpp"\n#include <QWidget>\n#include <GL/gl.h>\n*/\nconst char* format = "glTF OpenGL GL_LINES"; // GL_POINTS\n',
+                "src/util/Formats.cpp": '/*\n#include "CadCommands.hpp"\n#include <QWidget>\n#include <GL/gl.h>\n*/\nconst char* raw = R"tag(\n#include "CadCommands.hpp"\n#include <QWidget>\n#include <GL/gl.h>\n)tag";\nconst char* format = "glTF OpenGL GL_LINES"; // GL_POINTS\n',
                 "src/base/Base.hpp": "struct Base {};\n",
                 "src/ui/GlOnly.cpp": "int count = 1'000;\nglClear(0);\n",
+                "src/util/qt/Helper.cpp": "#include <QWidget>\n",
+                "src/util/render/Helper.cpp": "glClear(0);\n",
             }
             fixtures["src/qt/Widget.cpp"] = '#include <QWidget>\n#include "Base.hpp"\n'
             for relative_path, content in fixtures.items():
@@ -45,8 +49,8 @@ class ArchitectureInventoryTests(unittest.TestCase):
              for path in ordered_paths],
         )
         self.assertEqual(result["folder_line_counts"], {
-            "src": 4, "src/base": 1, "src/commands": 12, "src/qt": 2, "src/render": 1,
-            "src/ui": 2, "src/util": 6,
+            "src": 7, "src/base": 1, "src/commands": 12, "src/qt": 2, "src/render": 1,
+            "src/ui": 2, "src/util": 11, "src/util/qt": 1, "src/util/render": 1,
         })
         self.assertEqual(result["cad_commands_header_fan_in"], 2)
         self.assertEqual(result["include_graph"], {
@@ -58,12 +62,32 @@ class ArchitectureInventoryTests(unittest.TestCase):
             "src/ui.cpp": ["src/commands/CadCommands.hpp"],
             "src/ui/GlOnly.cpp": [],
             "src/util/Formats.cpp": [],
+            "src/util/qt/Helper.cpp": [],
+            "src/util/render/Helper.cpp": [],
         })
         self.assertEqual(result["dependency_cycles"], [["src/commands/CadCommands.hpp", "src/commands/Peer.hpp"]])
-        self.assertEqual(result["qt_includes_outside_qt"]["files"], ["src/commands/CadCommands.hpp", "src/ui.cpp"])
-        self.assertEqual(result["opengl_outside_rendering"]["files"], [
-            "src/commands/Peer.hpp", "src/ui.cpp", "src/ui/GlOnly.cpp",
+        self.assertEqual(result["qt_includes_outside_qt"]["files"], [
+            "src/commands/CadCommands.hpp", "src/ui.cpp", "src/util/qt/Helper.cpp",
         ])
+        self.assertEqual(result["opengl_outside_rendering"]["files"], [
+            "src/commands/Peer.hpp", "src/ui.cpp", "src/ui/GlOnly.cpp", "src/util/render/Helper.cpp",
+        ])
+
+    def test_long_acyclic_include_chain_does_not_recurse(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            chain = root / "src/chain"
+            chain.mkdir(parents=True)
+            node_count = 1200
+            for index in range(node_count):
+                include = f'#include "Node{index + 1:04}.hpp"\n' if index + 1 < node_count else ""
+                (chain / f"Node{index:04}.hpp").write_text(include, encoding="utf-8")
+
+            result = inventory.collect_metrics(root)
+
+        self.assertEqual(result["source_file_count"], node_count)
+        self.assertEqual(sum(map(len, result["include_graph"].values())), node_count - 1)
+        self.assertEqual(result["dependency_cycles"], [])
 
     def test_cli_writes_report_and_json(self):
         with tempfile.TemporaryDirectory() as temporary:

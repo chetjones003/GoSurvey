@@ -15,64 +15,124 @@ OPENGL_INCLUDE = re.compile(
     r'^\s*#\s*include\s*[<"](?:GL/|OpenGL/|QOpenGL\w*|glew[^>"/]*\.h|glad/[^>"]+\.h)',
     re.MULTILINE | re.IGNORECASE,
 )
-CPP_COMMENTS_AND_LITERALS = re.compile(
-    r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|(?<![0-9A-Fa-f])\'(?:\\.|[^\'\\\n])*\'',
-    re.DOTALL,
-)
-CPP_COMMENTS_AND_STRINGS = re.compile(
-    r'"(?:\\.|[^"\\])*"|(?<![0-9A-Fa-f])\'(?:\\.|[^\'\\\n])*\'|//[^\n]*|/\*.*?\*/',
-    re.DOTALL,
-)
+RAW_STRING_START = re.compile(r'(?:u8|u|U|L)?R"(?P<delimiter>[^ ()\\\t\r\n]{0,16})\(')
+INCLUDE_PREFIX = re.compile(r'^\s*#\s*include\b')
+
+
+def _strip_cpp(text, preserve_include_strings):
+    output = []
+    line_prefix = []
+    index = 0
+
+    def append(value, masked=False):
+        for character in value:
+            if character == "\n":
+                output.append("\n")
+                line_prefix.clear()
+            else:
+                output.append(" " if masked else character)
+                line_prefix.append(" " if masked else character)
+
+    while index < len(text):
+        if text.startswith("//", index):
+            end = text.find("\n", index)
+            if end == -1:
+                append(text[index:], masked=True)
+                break
+            append(text[index:end], masked=True)
+            index = end
+            continue
+
+        if text.startswith("/*", index):
+            close = text.find("*/", index + 2)
+            end = len(text) if close == -1 else close + 2
+            append(text[index:end], masked=True)
+            index = end
+            continue
+
+        raw_start = RAW_STRING_START.match(text, index)
+        if raw_start and (index == 0 or not (text[index - 1].isalnum() or text[index - 1] == "_")):
+            terminator = ")" + raw_start.group("delimiter") + '"'
+            close = text.find(terminator, raw_start.end())
+            end = len(text) if close == -1 else close + len(terminator)
+            append(text[index:end], masked=True)
+            index = end
+            continue
+
+        character = text[index]
+        is_digit_separator = character == "'" and index > 0 and text[index - 1] in "0123456789abcdefABCDEF"
+        if character in "\"'" and not is_digit_separator:
+            end = index + 1
+            while end < len(text):
+                if text[end] == "\\":
+                    end += 2
+                elif text[end] == character:
+                    end += 1
+                    break
+                elif text[end] == "\n":
+                    break
+                else:
+                    end += 1
+            literal = text[index:end]
+            preserve = preserve_include_strings and character == '"' and INCLUDE_PREFIX.match("".join(line_prefix))
+            append(literal, masked=not preserve)
+            index = end
+            continue
+
+        append(character)
+        index += 1
+
+    return "".join(output)
 
 
 def _strip_cpp_comments_and_literals(text):
-    return CPP_COMMENTS_AND_LITERALS.sub(lambda match: "\n" * match.group(0).count("\n"), text)
+    return _strip_cpp(text, preserve_include_strings=False)
 
 
 def _strip_cpp_comments(text):
-    def preserve_literals_remove_comments(match):
-        value = match.group(0)
-        if value.startswith(("//", "/*")):
-            return "\n" * value.count("\n")
-        return value
-
-    return CPP_COMMENTS_AND_STRINGS.sub(preserve_literals_remove_comments, text)
+    return _strip_cpp(text, preserve_include_strings=True)
 
 
 def _cycles(graph):
-    index = 0
-    stack = []
-    on_stack = set()
-    indexes = {}
-    low = {}
+    visited = set()
+    finish_order = []
+    for start in sorted(graph):
+        if start in visited:
+            continue
+        visited.add(start)
+        traversal = [(start, iter(sorted(graph[start])))]
+        while traversal:
+            node, neighbors = traversal[-1]
+            neighbor = next(neighbors, None)
+            if neighbor is None:
+                finish_order.append(node)
+                traversal.pop()
+            elif neighbor not in visited:
+                visited.add(neighbor)
+                traversal.append((neighbor, iter(sorted(graph[neighbor]))))
+
+    reverse_graph = {node: set() for node in graph}
+    for node, neighbors in graph.items():
+        for neighbor in neighbors:
+            reverse_graph[neighbor].add(node)
+
+    assigned = set()
     found = []
-
-    def visit(node):
-        nonlocal index
-        indexes[node] = low[node] = index
-        index += 1
-        stack.append(node)
-        on_stack.add(node)
-        for neighbor in graph[node]:
-            if neighbor not in indexes:
-                visit(neighbor)
-                low[node] = min(low[node], low[neighbor])
-            elif neighbor in on_stack:
-                low[node] = min(low[node], indexes[neighbor])
-        if low[node] == indexes[node]:
-            component = []
-            while True:
-                member = stack.pop()
-                on_stack.remove(member)
-                component.append(member)
-                if member == node:
-                    break
-            if len(component) > 1 or node in graph[node]:
-                found.append(sorted(component))
-
-    for node in graph:
-        if node not in indexes:
-            visit(node)
+    for start in reversed(finish_order):
+        if start in assigned:
+            continue
+        component = []
+        pending = [start]
+        assigned.add(start)
+        while pending:
+            node = pending.pop()
+            component.append(node)
+            for neighbor in sorted(reverse_graph[node], reverse=True):
+                if neighbor not in assigned:
+                    assigned.add(neighbor)
+                    pending.append(neighbor)
+        if len(component) > 1 or start in graph[start]:
+            found.append(sorted(component))
     return sorted(found)
 
 
@@ -87,8 +147,6 @@ def collect_metrics(root):
     line_counts = {path: len(text.splitlines()) for path, text in texts.items()}
     folder_counts = defaultdict(int)
     graph = {relative[path]: set() for path in files}
-    include_counts = defaultdict(int)
-
     for path, text in texts.items():
         uncommented = _strip_cpp_comments(text)
         source_rel = relative[path]
@@ -98,23 +156,24 @@ def collect_metrics(root):
             target = next((candidate.resolve() for candidate in candidates if candidate.is_file()), None)
             if target in relative:
                 graph[source_rel].add(relative[target])
-                include_counts[relative[target]] += 1
 
     cad_header = "src/commands/CadCommands.hpp"
     largest = sorted(({"path": relative[p], "bytes": p.stat().st_size, "lines": line_counts[p]}
                       for p in files), key=lambda item: (-item["bytes"], item["path"]))[:20]
     qt_outside = sorted(relative[p] for p, text in texts.items()
-                        if "/qt/" not in relative[p] and QT_INCLUDE.search(_strip_cpp_comments(text)))
+                        if not relative[p].startswith("src/qt/")
+                        and QT_INCLUDE.search(_strip_cpp_comments(text)))
     gl_outside = sorted(relative[p] for p, text in texts.items()
-                        if "/render/" not in relative[p]
+                        if not relative[p].startswith("src/render/")
                         and (OPENGL.search(_strip_cpp_comments_and_literals(text))
                              or OPENGL_INCLUDE.search(_strip_cpp_comments(text))))
+    cad_header_fan_in = sum(cad_header in neighbors for neighbors in graph.values())
     return {
         "source_file_count": len(files),
         "largest_files": largest,
         "folder_line_counts": dict(sorted(folder_counts.items())),
         "include_graph": {node: sorted(neighbors) for node, neighbors in sorted(graph.items())},
-        "cad_commands_header_fan_in": include_counts[cad_header],
+        "cad_commands_header_fan_in": cad_header_fan_in,
         "dependency_cycles": _cycles(graph),
         "qt_includes_outside_qt": {"count": len(qt_outside), "files": qt_outside},
         "opengl_outside_rendering": {"count": len(gl_outside), "files": gl_outside},
