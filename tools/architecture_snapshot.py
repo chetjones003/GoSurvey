@@ -80,6 +80,7 @@ def build_snapshot(root, commit):
         },
         "baselines": {
             "violation_count": len(violation_baseline.get("violations", [])),
+            "violations": violation_baseline.get("violations", []),
             "file_size": _read_json(root / SIZE_BASELINE, {}),
         },
     }

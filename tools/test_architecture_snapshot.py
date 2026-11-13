@@ -53,7 +53,9 @@ class ArchitectureSnapshotTests(unittest.TestCase):
         self.assertEqual(snap["metrics"]["largest_file"], {"path": "src/a/Big.cpp", "lines": 5})
         self.assertEqual(snap["metrics"]["god_header_fan_in"], {"path": "src/commands/CadCommands.hpp", "fan_in": 0})
         self.assertEqual(snap["metrics"]["domain_tests_without_qt"]["share"], 0.0)
-        self.assertEqual(snap["baselines"], {"violation_count": 1, "file_size": {"src/a/A.cpp": 4000}})
+        self.assertEqual(snap["baselines"]["violation_count"], 1)
+        self.assertEqual(snap["baselines"]["violations"][0]["include"], "b/Private.hpp")
+        self.assertEqual(snap["baselines"]["file_size"], {"src/a/A.cpp": 4000})
 
     def test_largest_file_tie_breaks_by_path(self):
         (self.root / "src/a/A.cpp").write_text("x\n" * 3, encoding="utf-8")
@@ -66,7 +68,7 @@ class ArchitectureSnapshotTests(unittest.TestCase):
         (self.root / ".github/file-size-baseline.json").unlink()
         (self.root / "docs/architecture/dependency-baseline.json").unlink()
         snap = snapshot_tool.build_snapshot(self.root, COMMIT)
-        self.assertEqual(snap["baselines"], {"violation_count": 0, "file_size": {}})
+        self.assertEqual(snap["baselines"], {"violation_count": 0, "violations": [], "file_size": {}})
 
     def test_rejects_refs_and_paths_that_are_not_full_shas(self):
         for bad in ("HEAD", "beta", "abc123", "../../escape", "A" * 40):
