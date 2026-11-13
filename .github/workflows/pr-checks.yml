@@ -19,6 +19,25 @@ permissions:
   security-events: write
 
 jobs:
+  architecture-dependencies:
+    name: architecture / dependency ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Check out PR base for the ratchet reference
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: build/dependency-reference
+
+      - name: Check dependency baseline
+        run: python3 tools/architecture_dependencies.py --reference-root build/dependency-reference
+
+      - name: Test dependency checker
+        run: python3 -m unittest tools.test_architecture_dependencies
+
   classify-docs-only:
     name: policy / docs-only classification
     runs-on: ubuntu-latest
