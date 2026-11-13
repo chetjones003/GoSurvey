@@ -36,7 +36,7 @@ jobs:
         run: python3 tools/architecture_dependencies.py --reference-root build/dependency-reference
 
       - name: Test dependency checker
-        run: python3 -m unittest tools.test_architecture_dependencies
+        run: python3 -m unittest tools.test_architecture_dependencies tools.test_architecture_snapshot
 
   classify-docs-only:
     name: policy / docs-only classification

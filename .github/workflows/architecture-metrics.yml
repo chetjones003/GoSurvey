@@ -54,10 +54,10 @@ jobs:
           mkdir -p "$TOOLS" "$RUNNER_TEMP/snapshots"
           cp tools/architecture_snapshot.py tools/architecture_inventory.py tools/architecture_dependencies.py "$TOOLS/"
           HEAD_SHA=$(git rev-parse HEAD)
-          if [ -n "$BACKFILL" ] || [ -z "$BEFORE" ] || [ "$BEFORE" = "$ZERO_SHA" ]; then
+          # A force push leaves BEFORE unreachable; then only the new head is measured.
+          if [ -n "$BACKFILL" ] || [ -z "$BEFORE" ] || [ "$BEFORE" = "$ZERO_SHA" ] ||
+             ! COMMITS=$(git rev-list --reverse "$BEFORE..$HEAD_SHA" 2>/dev/null); then
             COMMITS="$HEAD_SHA"
-          else
-            COMMITS=$(git rev-list --reverse "$BEFORE..$HEAD_SHA")
           fi
           for commit in $COMMITS; do
             # Commits before the architecture system map exist have nothing to measure.
@@ -92,27 +92,36 @@ jobs:
           git init --quiet "$RUNNER_TEMP/metrics"
           cd "$RUNNER_TEMP/metrics"
           git remote add origin "$REPO_URL"
+          # A conflicting snapshot is reported but does not stop the others from publishing.
+          conflicts=0
           for attempt in 1 2 3 4 5; do
             if git_remote fetch --quiet origin metrics 2>/dev/null; then
               git checkout --quiet -B metrics FETCH_HEAD
             else
               git checkout --quiet --orphan metrics
             fi
+            conflicts=0
             for snapshot in "$SNAPSHOTS"/*.json; do
-              python3 "$TOOLS/architecture_snapshot.py" append --snapshot "$snapshot" --history-dir .
+              python3 "$TOOLS/architecture_snapshot.py" append --snapshot "$snapshot" --history-dir . ||
+                conflicts=$((conflicts + 1))
             done
             git add snapshots
             if git diff --cached --quiet; then
-              echo "All snapshots already recorded."
-              exit 0
-            fi
-            git commit --quiet -m "metrics: architecture snapshots (run $GH_RUN_ID)"
-            if git_remote push --quiet origin HEAD:refs/heads/metrics; then
+              echo "No new snapshots to publish."
+            else
+              git commit --quiet -m "metrics: architecture snapshots (run $GH_RUN_ID)"
+              if ! git_remote push --quiet origin HEAD:refs/heads/metrics; then
+                echo "Push rejected on attempt $attempt; re-reading the metrics branch."
+                git reset --quiet --hard
+                continue
+              fi
               echo "Published on attempt $attempt."
-              exit 0
             fi
-            echo "Push rejected on attempt $attempt; re-reading the metrics branch."
-            git reset --quiet --hard
+            if [ "$conflicts" -gt 0 ]; then
+              echo "::error::$conflicts snapshot(s) conflict with the metrics branch; see the messages above." >&2
+              exit 1
+            fi
+            exit 0
           done
           echo "Could not publish snapshots after 5 attempts." >&2
           exit 1
