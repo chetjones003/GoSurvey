@@ -2912,7 +2912,7 @@
       "path": "src/platform/FailureReportUi.cpp",
       "lines": [
         344,
-        405
+        403
       ],
       "system": "Windows",
       "concern": "report dialog implementation",
@@ -2920,19 +2920,6 @@
         "ShowReportDialog"
       ],
       "note": "Native Win32 report window. Its declaration in FailureReportUi.hpp is the dialog-service shape the UI report dialog would take; the two pure text helpers beside it are homeless (see auditFindings.homelessConcepts)."
-    },
-    {
-      "path": "src/ui/CommandBar.hpp",
-      "lines": [
-        64,
-        72
-      ],
-      "system": "Core",
-      "concern": "strings",
-      "symbols": [
-        "TrimAscii"
-      ],
-      "note": "Assigned to Core by the Core audit (#1220). The rest of CommandBar.hpp is UI."
     }
   ],
   "auditedEntries": {
@@ -3204,7 +3191,7 @@
         "codeMoved": false,
         "commit": "797df4f3"
       },
-      "responsibility": "Defines toolkit-neutral file, message, and report dialog, progress, clipboard, and timer interfaces so engine code can request UI services without a toolkit, and holds the pure presentation rules (floating command-bar history and prompt segments, MTEXT panel placement, rich-text caret and wrap layout) that need no toolkit.",
+      "responsibility": "Defines toolkit-neutral file, message, and report dialog, progress, clipboard, and timer interfaces so engine code can request UI services without a toolkit, and holds the pure presentation rules (floating command-bar history and prompt segments, MTEXT panel placement) that need no toolkit. Rich-text caret and wrap layout is pending the dependency decision in pendingAssignment.",
       "doesNotOwn": [
         "concrete widgets, toolkit dialogs, and toolkit timers or clipboards (Qt, Windows, Headless backends)",
         "windows, panels, ribbon, dialog content, hotkeys, and the decision to open a dialog (GoSurveyEditor, per ADR-0002)",
@@ -3223,7 +3210,6 @@
       "currentFiles": [
         "src/ui/CommandBar.hpp (all except TrimAscii, which is Core; see sections)",
         "src/ui/MtextToolbar.hpp",
-        "src/ui/RichTextLayout.hpp (pending the MtextRichSpans dependency decision above)",
         "src/platform/WinFileDialogs.hpp (declarations only; the implementation stays Windows; see sections)"
       ],
       "pendingAssignment": [
@@ -3232,12 +3218,12 @@
             "src/ui/RichTextLayout.hpp",
             "src/ui/MtextRichSpans.hpp"
           ],
-          "reason": "RichTextLayout is UI caret and wrap layout, but it reads the Document wire-span type. Assigning it to UI now adds a UI-to-Document edge the map forbids. The final-map ticket decides between moving the span parser to Document with layout staying UI, or moving the layout to Document."
+          "reason": "RichTextLayout is UI caret and wrap layout, but it reads the Document wire-span type. Assigning it to UI now adds a UI-to-Document edge the map forbids. The final-map ticket decides between moving the span parser to Document with layout staying UI, or moving the layout to Document. Until then, RichTextLayout is not in currentFiles."
         }
       ],
       "currentSections": [
         "src/platform/WinFileDialogs.hpp: all Browse* declarations, the file-dialog interface",
-        "src/platform/FailureReportUi.hpp: ShowReportDialog declaration, the report-dialog service shape",
+        "src/platform/FailureReportUi.hpp: ShowReportDialog declaration (lines 344-403 are the Windows implementation), the report-dialog service shape",
         "src/ui/CommandBar.hpp: lines 64-72 TrimAscii are Core (Core audit); the rest is UI"
       ],
       "draftPublicInterface": {
@@ -3251,7 +3237,7 @@
         ],
         "report and message dialogs": [
           "void ShowReport(std::string title, std::string reportUtf8) (blocks until closed; Qt and Windows adapters)",
-          "design note: no engine-side message-box caller was found; add MessageDialog only when a second caller needs it."
+          "design note: no engine-side message-box caller was found; add MessageDialog only when a second caller needs it (CLAUDE.md two-use rule)."
         ],
         "progress": [
           "progress sink: void Report(double fraction) plus a cancel query bool Cancelled() const",
@@ -3262,8 +3248,7 @@
           "design note: the CAD clipboard is domain state and is not part of this interface."
         ],
         "timers": [
-          "Timer: TimerHandle After(std::chrono::milliseconds, std::function<void()>) (cancels on handle destruction)",
-          "design note: no engine caller uses a timer today; the only timers are Qt QTimer uses in src/qt. Add the abstraction only when a second engine use exists (ADR rule)."
+          "design note: no engine caller uses a timer today; the only timers are Qt QTimer uses in src/qt. No Timer interface is drafted. Add it only when a second engine use exists (CLAUDE.md: add an abstraction only when it has two concrete uses today)."
         ],
         "pure presentation helpers": [
           "cmdbar::HistoryAlpha, LogTailStart, PromptSegment, VariantShortcut, ParsePromptSegments (REQ-040, REQ-119)",
@@ -3276,15 +3261,17 @@
         "tests/MtextToolbarTests.cpp: mtexttoolbar helpers (25 references)",
         "tests/RichTextLayoutTests.cpp: richtext layout and caret math (37 references; the pendingAssignment dependency applies)",
         "tests/headless/HeadlessDriver.cpp: queues headless file-dialog answers from DIALOG transcript lines",
-        "tests/CadBlockImportTests.cpp and tests/PointCloudExportTests.cpp: queue headless file-dialog answers through the seam",
-        "tests/QtEditorTests.cpp: failure-report dialog, its outcome message, and GitHub issue URL (Qt implementation of the report dialog)",
-        "tests/QtEditorTests.cpp: QtSplash and the broader Qt viewport integration (Qt implementation; not UI-owned)"
+        "tests/CadBlockImportTests.cpp and tests/PointCloudExportTests.cpp: queue headless file-dialog answers through the seam"
       ],
       "testGaps": [
         "No toolkit-neutral UI interface, dispatcher, or test double exists yet for file dialogs, progress, clipboard, or timers. Only the headless free-function queue exists.",
         "No test covers WinFileDialogs.cpp filter-to-FileKind mapping or the Windows Browse* functions; the Windows implementation is only reachable on a real desktop.",
         "No focused test covers the GitHubIssueUrlForReport URL cut or the report clipboard outcome; coverage is inside QtEditorTests.cpp, which mixes Qt and report logic.",
         "The dependency between RichTextLayout and MtextRichSpans is not tested as an edge; the ratchet cannot see it until the files are assigned."
+      ],
+      "testsCoveringUiNotOwned": [
+        "tests/QtEditorTests.cpp: failure-report dialog, its outcome message, and GitHub issue URL (Qt implementation of the report dialog)",
+        "tests/QtEditorTests.cpp: QtSplash and the broader Qt viewport integration (Qt implementation; not UI-owned)"
       ]
     }
   },
@@ -3344,8 +3331,8 @@
       "EditorWindow::CloseDrawing (EditorWindow.cpp:2501-2527) and closeEvent (EditorWindow.cpp:2529-2560) orchestrate Qt window/tab closure with GoSurveyEditor SwitchDrawing/save flow, Qt ConfirmSave, Document dirty state/documents and drawing-tab erasure, Renderer viewport geometry invalidation, Commands ProjectsWithUnsavedPoints/CancelActiveCommand/RestoreDocumentFromSnapshot/FlushProjectPointDb, IO gsproj::Release, Qt settings persistence, and the Network installer path. The code lives in src/qt, so this is app-level workflow inside the Qt adapter layer, not a toolkit-neutral Events publisher.",
       "Commands calls Browse* from platform/WinFileDialogs.hpp directly: CadBlocks.cpp, CadCommands.cpp, CadCommands_Alignment.cpp, and CadCommands_DrawInquiry.cpp (11 call sites). These are baseline violations (\"Commands may not depend on Windows\"). Fix: Commands asks the UI file-dialog interface for a FileKind.",
       "IO (io/DxfIo.cpp, io/LibreDwgCad.cpp, io/PdfPlot.cpp) and Commands (CadCommands.cpp) include MtextRichFormat.hpp from src/ui. The baseline labels these \"may not depend on Qt\", but the header is Document text code with no Qt dependency. Relocating it to Document clears them.",
-      "Progress callback shapes differ across systems (see auditedEntries.UI.draftPublicInterface.progress). Network (HttpFetch), Pdf (PdfDiff, PdfSplit), and Commands/PointCloud (pointcloudcache progressLog) each define their own. Reconcile before the progress interface is added.",
-      "QTimer or QClipboard appears in 22 src/qt files, with no engine-side timer or clipboard interface to route them through. This is not a violation today; it is missing interface coverage.",
+      "Progress callback shapes differ across systems (see auditedEntries.UI.draftPublicInterface.progress). Network (HttpFetch, called from update/UpdateService.cpp:187 with a progress lambda), Pdf (PdfDiff, PdfSplit), and Commands/PointCloud (pointcloudcache progressLog) each define their own. Reconcile before the progress interface is added.",
+      "QTimer or QClipboard appears in 23 src/qt files, with no engine-side timer or clipboard interface to route them through. This is not a violation today; it is missing interface coverage.",
       "src/qt/FailureReport.cpp includes platform/FailureReportUi.hpp and platform/StartupFailure.hpp (baseline: \"Qt may not depend on Windows\") and render/ViewportRenderer.hpp (baseline: \"Qt may not depend on Renderer\"). The ProbeStartupGraphics check is the Qt side of a launch-time service; the report window's dependency on the Windows report helpers is the coupling to remove.",
       "src/ui/CadUiStyleWidgets.hpp includes CadEntities.hpp (baseline: \"Qt may not depend on Commands\"). Moving the appearance vocabulary out of src/ui clears this violation."
     ],
