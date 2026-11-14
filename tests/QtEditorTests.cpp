@@ -3589,7 +3589,7 @@ private Q_SLOTS:
     window.Refresh();
     window.resize(1280, 820);
     window.show();
-    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QTRY_VERIFY_WITH_TIMEOUT(window.isVisible(), 5000);
     auto* viewport = dynamic_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport")); QVERIFY(viewport);
     QTRY_VERIFY(viewport->IsRendererReady());
     auto* spaces = window.findChild<QTabBar*>("paperSpaceTabs"); QVERIFY(spaces);
