@@ -97,7 +97,7 @@ Solid arrows indicate permitted dependencies by tier; dotted arrows indicate imp
 
 `system-map.json` is the machine-readable draft. It maps each current `src` folder to a target system, except mixed `src/util`, which is enumerated file by file. Every enumerated file is marked `ambiguous` and has no guessed target until the audit determines ownership. New source paths must be added as folders or files before this draft can be used as an enforcement baseline.
 
-Two audit keys sit beside the mapping; the ratchet ignores them, so their section assignments are advisory until the code moves. `sections` records parts of mixed or god files (by line range at the audited commit and by symbol) that belong to a system. `auditedEntries` holds each audited system's responsibility, non-ownership, draft public interface, files, and tests. `auditFindings` lists homeless concepts, cross-system couplings, mis-mapped folders, and namespace gaps for the final-map ticket. The Core audit (issue #1220) is the first entry.
+Three audit keys sit beside the mapping; the ratchet ignores them, so their section assignments are advisory until the code moves. `sections` records parts of mixed or god files (by line range at the audited commit and by symbol) that belong to a system. `auditedEntries` holds each audited system's responsibility, non-ownership, draft public interface, files, and tests. `auditFindings` lists homeless concepts, cross-system couplings, mis-mapped folders, and namespace gaps for the final-map ticket. The Core audit (issue #1220) is the first entry.
 
 ## Architecture inventory
 
