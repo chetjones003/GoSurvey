@@ -2831,6 +2831,108 @@
         "EditorViewport::m_MapTimer"
       ],
       "note": "Qt schedules local map-capture progress polling."
+    },
+    {
+      "path": "src/platform/WinFileDialogs.hpp",
+      "lines": [
+        1,
+        108
+      ],
+      "system": "UI",
+      "concern": "file dialog interface",
+      "symbols": [
+        "BrowseOpenFileCsvUtf8",
+        "BrowseSaveFileCsvUtf8",
+        "BrowseSaveFileSpreadsheetUtf8",
+        "BrowseOpenFileDxfUtf8",
+        "BrowseSaveFileDxfUtf8",
+        "BrowseOpenFileDwgUtf8",
+        "BrowseSaveFileDwgUtf8",
+        "BrowseOpenFileGstUtf8",
+        "BrowseOpenFileGsprojUtf8",
+        "BrowseOpenFileGspackUtf8",
+        "BrowseSaveFileGspackUtf8",
+        "BrowseFolderUtf8",
+        "BrowseOpenFilePdfUtf8",
+        "BrowseSaveFilePdfUtf8",
+        "BrowseSaveFileTxtUtf8",
+        "BrowseSaveFileRtfUtf8",
+        "BrowseOpenFileFbkUtf8",
+        "BrowseOpenFileStarNetUtf8",
+        "BrowseOpenFileRw5Utf8",
+        "BrowseOpenFileJobXmlUtf8",
+        "BrowseOpenFilesFbkUtf8",
+        "BrowseOpenFilesStarNetUtf8",
+        "BrowseOpenFilesRw5Utf8",
+        "BrowseOpenFilesJobXmlUtf8",
+        "BrowseOpenFileGstravUtf8",
+        "BrowseSaveFileGstravUtf8",
+        "BrowseOpenFileGsdatUtf8",
+        "BrowseSaveFileGsdatUtf8",
+        "BrowseOpenFileGltfUtf8",
+        "BrowseOpenFileBlockUtf8",
+        "BrowseOpenFilePointCloudUtf8",
+        "BrowseSaveFilePtsUtf8",
+        "BrowseSaveFilePtxUtf8",
+        "BrowseSaveFileLasUtf8",
+        "BrowseSaveFileLazUtf8"
+      ],
+      "note": "Declarations only. The header is the file-dialog seam that Commands already calls directly (four files, eleven call sites; see auditFindings.couplings). The Windows implementation in WinFileDialogs.cpp stays Windows. Filter tables inside WinFileDialogs.cpp are the per-format file-kind list the UI interface needs; they are not moved by this audit."
+    },
+    {
+      "path": "src/platform/HeadlessFileDialogs.cpp",
+      "lines": [
+        1,
+        149
+      ],
+      "system": "Headless",
+      "concern": "test file-dialog implementation",
+      "symbols": [
+        "QueueDialogAnswer",
+        "QueueDialogCancel",
+        "ClearDialogAnswers",
+        "PendingDialogAnswers"
+      ],
+      "note": "The queue and every Browse* implementation are the Headless backend of the UI file-dialog interface. Not UI-owned: the UI system defines the interface, not its scripted answers."
+    },
+    {
+      "path": "src/platform/FailureReportUi.cpp",
+      "lines": [
+        95,
+        124
+      ],
+      "system": "Windows",
+      "concern": "OS clipboard text copy",
+      "symbols": [
+        "CopyUtf8TextToClipboard"
+      ],
+      "note": "Windows implementation of the UI clipboard interface. A generic text-clipboard call would sit in UI once a second engine caller exists; today only the failure report uses it."
+    },
+    {
+      "path": "src/platform/FailureReportUi.cpp",
+      "lines": [
+        344,
+        405
+      ],
+      "system": "Windows",
+      "concern": "report dialog implementation",
+      "symbols": [
+        "ShowReportDialog"
+      ],
+      "note": "Native Win32 report window. Its declaration in FailureReportUi.hpp is the dialog-service shape the UI report dialog would take; the two pure text helpers beside it are homeless (see auditFindings.homelessConcepts)."
+    },
+    {
+      "path": "src/ui/CommandBar.hpp",
+      "lines": [
+        64,
+        72
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "TrimAscii"
+      ],
+      "note": "Assigned to Core by the Core audit (#1220). The rest of CommandBar.hpp is UI."
     }
   ],
   "auditedEntries": {
@@ -3093,6 +3195,97 @@
         "tests/QtEditorTests.cpp::issue1037CtrlWheelZoomKeepsThePointerAnchored exercises PdfWindow/PDF canvas input; not viewport Events coverage.",
         "tests/QtEditorTests.cpp::issue1037MiddleDragPansWithoutTouchingTools exercises PdfWindow/PDF canvas input; not viewport Events coverage."
       ]
+    },
+    "UI": {
+      "tier": "T0 Foundation",
+      "audit": {
+        "issue": 1223,
+        "parent": 1207,
+        "codeMoved": false,
+        "commit": "797df4f3"
+      },
+      "responsibility": "Defines toolkit-neutral file, message, and report dialog, progress, clipboard, and timer interfaces so engine code can request UI services without a toolkit, and holds the pure presentation rules (floating command-bar history and prompt segments, MTEXT panel placement, rich-text caret and wrap layout) that need no toolkit.",
+      "doesNotOwn": [
+        "concrete widgets, toolkit dialogs, and toolkit timers or clipboards (Qt, Windows, Headless backends)",
+        "windows, panels, ribbon, dialog content, hotkeys, and the decision to open a dialog (GoSurveyEditor, per ADR-0002)",
+        "command meanings and the choice of which dialog a command shows (Commands)",
+        "hover dwell and hover-pick throttling policy (Interaction; util/hoverdwell.hpp, util/hoverpickgate.hpp)",
+        "MTEXT wire format, rich-text spans, and text operations (Document; ui/MtextRichSpans.hpp, ui/MtextRichFormat.*, ui/MtextTextOps.hpp)",
+        "the ribbon button table (GoSurveyEditor; ui/ModelingRibbon.hpp)",
+        "the CAD clipboard in Commands/Document state (CopySelectionToClipboard and paste paths), not the OS clipboard",
+        "file-format filters and extensions (IO), and the report text policy (Debug; see homelessConcepts)"
+      ],
+      "allowedDependencies": [
+        "Core",
+        "Events"
+      ],
+      "dependencyNote": "The current UI candidates include only the standard library and Core (CommandBar.hpp includes nothing else). RichTextLayout.hpp includes MtextRichSpans.hpp, which is Document-owned, so it breaks the UI allowed-dependency list. The final-map ticket must move the span type or the layout, or add an explicit edge. The ratchet baseline does not yet record this edge because fileMappings does not assign src/ui files to UI.",
+      "currentFiles": [
+        "src/ui/CommandBar.hpp (all except TrimAscii, which is Core; see sections)",
+        "src/ui/MtextToolbar.hpp",
+        "src/ui/RichTextLayout.hpp (pending the MtextRichSpans dependency decision above)",
+        "src/platform/WinFileDialogs.hpp (declarations only; the implementation stays Windows; see sections)"
+      ],
+      "pendingAssignment": [
+        {
+          "files": [
+            "src/ui/RichTextLayout.hpp",
+            "src/ui/MtextRichSpans.hpp"
+          ],
+          "reason": "RichTextLayout is UI caret and wrap layout, but it reads the Document wire-span type. Assigning it to UI now adds a UI-to-Document edge the map forbids. The final-map ticket decides between moving the span parser to Document with layout staying UI, or moving the layout to Document."
+        }
+      ],
+      "currentSections": [
+        "src/platform/WinFileDialogs.hpp: all Browse* declarations, the file-dialog interface",
+        "src/platform/FailureReportUi.hpp: ShowReportDialog declaration, the report-dialog service shape",
+        "src/ui/CommandBar.hpp: lines 64-72 TrimAscii are Core (Core audit); the rest is UI"
+      ],
+      "draftPublicInterface": {
+        "file dialogs": [
+          "enum class FileKind: one value per filter that WinFileDialogs.hpp offers (point file CSV/TXT, spreadsheet, DXF, DWG, PDF, GST, GSPROJ, GSPACK, GSTRAV, GSDAT, FBK, STAR*NET, RW5, JobXML, glTF, block DXF/DWG, point cloud, PTS/PTX/LAS/LAZ, folder)",
+          "std::optional<std::string> OpenFile(FileKind kind) (UTF-8 path; nullopt when cancelled or unavailable)",
+          "std::optional<std::string> SaveFile(FileKind kind, std::string suggestedName) (UTF-8 path)",
+          "std::vector<std::string> OpenFiles(FileKind kind) (multi-select for raw-data imports; empty when cancelled)",
+          "std::optional<std::string> PickFolder()",
+          "design note: the caller passes a kind and a suggested name only; each adapter owns its filter strings and extension rules. The headless adapter keeps the queue semantics in HeadlessFileDialogs.hpp (a queue, not a mode)."
+        ],
+        "report and message dialogs": [
+          "void ShowReport(std::string title, std::string reportUtf8) (blocks until closed; Qt and Windows adapters)",
+          "design note: no engine-side message-box caller was found; add MessageDialog only when a second caller needs it."
+        ],
+        "progress": [
+          "progress sink: void Report(double fraction) plus a cancel query bool Cancelled() const",
+          "design note: existing shapes differ and must be reconciled before the move: HttpFetch onProgress(long long, long long)->bool; PdfDiff progress(float) plus cancel(); PdfSplit std::atomic<int>*; pointcloudcache progressLog vector<string>."
+        ],
+        "clipboard": [
+          "TextClipboard: bool SetText(std::string utf8) (OS text clipboard; today CopyUtf8TextToClipboard in FailureReportUi.cpp)",
+          "design note: the CAD clipboard is domain state and is not part of this interface."
+        ],
+        "timers": [
+          "Timer: TimerHandle After(std::chrono::milliseconds, std::function<void()>) (cancels on handle destruction)",
+          "design note: no engine caller uses a timer today; the only timers are Qt QTimer uses in src/qt. Add the abstraction only when a second engine use exists (ADR rule)."
+        ],
+        "pure presentation helpers": [
+          "cmdbar::HistoryAlpha, LogTailStart, PromptSegment, VariantShortcut, ParsePromptSegments (REQ-040, REQ-119)",
+          "mtexttoolbar panel clamp, run-tag composition, ruler tick spacing (REQ-051)",
+          "richtext layout, visible-index to byte-offset mapping, and caret hit testing (ADR-023; blocked on the pendingAssignment decision)"
+        ]
+      },
+      "existingTests": [
+        "tests/CommandLineTests.cpp: cmdbar helpers (34 references)",
+        "tests/MtextToolbarTests.cpp: mtexttoolbar helpers (25 references)",
+        "tests/RichTextLayoutTests.cpp: richtext layout and caret math (37 references; the pendingAssignment dependency applies)",
+        "tests/headless/HeadlessDriver.cpp: queues headless file-dialog answers from DIALOG transcript lines",
+        "tests/CadBlockImportTests.cpp and tests/PointCloudExportTests.cpp: queue headless file-dialog answers through the seam",
+        "tests/QtEditorTests.cpp: failure-report dialog, its outcome message, and GitHub issue URL (Qt implementation of the report dialog)",
+        "tests/QtEditorTests.cpp: QtSplash and the broader Qt viewport integration (Qt implementation; not UI-owned)"
+      ],
+      "testGaps": [
+        "No toolkit-neutral UI interface, dispatcher, or test double exists yet for file dialogs, progress, clipboard, or timers. Only the headless free-function queue exists.",
+        "No test covers WinFileDialogs.cpp filter-to-FileKind mapping or the Windows Browse* functions; the Windows implementation is only reachable on a real desktop.",
+        "No focused test covers the GitHubIssueUrlForReport URL cut or the report clipboard outcome; coverage is inside QtEditorTests.cpp, which mixes Qt and report logic.",
+        "The dependency between RichTextLayout and MtextRichSpans is not tested as an edge; the ratchet cannot see it until the files are assigned."
+      ]
     }
   },
   "auditFindings": {
@@ -3110,7 +3303,11 @@
       "Camera and projection matrix construction is pure math but Renderer owns it. ucs::PlanViewAngles also encodes the camera convention in Math. The final map decides which side owns that convention.",
       "Degree wrapping: ucs::PlanViewAngles, AzimuthAboutWorldZDeg and SnapToPolarRay (wrap180) each carry their own wrap loop. A shared helper is a candidate once Math is moved.",
       "PlotSheetTransform Transform, PdfAlign Transform and Pt, and the Math-owned Xf2/Affine2D/Xf sections together form a set of 2D affine and point types. Math should own one of each, and the owners keep their domain meaning.",
-      "Input event vocabulary and document/command-state change notifications: no toolkit-neutral Events files or dispatcher exist. Qt viewport handlers and callbacks currently carry the behavior (auditedEntries.Events and sections); the final map/move tickets must decide event payloads, subscription lifetime, and the source of document-change notifications."
+      "Input event vocabulary and document/command-state change notifications: no toolkit-neutral Events files or dispatcher exist. Qt viewport handlers and callbacks currently carry the behavior (auditedEntries.Events and sections); the final map/move tickets must decide event payloads, subscription lifetime, and the source of document-change notifications.",
+      "Appearance vocabulary: src/ui/CadUiStyleWidgets.hpp holds the named colour palette, linetype names, and lineweight ladder. It is not UI-neutral: it includes CadEntities.hpp (Commands/Document). The final map must assign it to Document (entity appearance) or GoSurveyEditor.",
+      "Report text policy: GitHubIssueUrlForReport and SendOutcomeMessage (platform/FailureReportUi.cpp, declared in FailureReportUi.hpp) are pure text helpers beside a Windows dialog. Owner is Debug (crash reporting) or UI; the final map decides.",
+      "OS text clipboard: CopyUtf8TextToClipboard (platform/FailureReportUi.cpp) is the only engine-side OS clipboard call. Qt-side clipboard and timer use is in src/qt. The generic part belongs behind the UI clipboard interface; the Win32 calls stay Windows.",
+      "ETA text: FormatEtaRemaining is used only by progress UI; it is either Core formatting or UI presentation (see the entry above, now with its UI caller identified)."
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
@@ -3144,16 +3341,25 @@
       "The viewport changed callback is invoked from mouse/key handlers and also from grip-menu actions, map-capture status polling, selection-box cancellation, and the timed right-click callback (all emission sites are recorded in sections). One no-argument callback currently conflates command/interaction state changes and refresh-only updates.",
       "The app-wide Qt input route is split between EditorWindow::eventFilter and EditorWindow::DraftingInputEvent in EditorInput.cpp; they intercept keys, shortcut overrides, mouse presses, text entry, undo/cancel, and command submission. Events can own neutral input transport, while Qt focus routing and Commands own policy.",
       "The Events input boundary in this audit means app-level input routed into command/interaction state. Widget-local event callbacks remain with Qt or the domain widget (for example PdfCanvas to PdfWindow); those callbacks use Qt types and implement local presentation or PDF gesture policy rather than a shared event contract.",
-      "EditorWindow::CloseDrawing (EditorWindow.cpp:2501-2527) and closeEvent (EditorWindow.cpp:2529-2560) orchestrate Qt window/tab closure with GoSurveyEditor SwitchDrawing/save flow, Qt ConfirmSave, Document dirty state/documents and drawing-tab erasure, Renderer viewport geometry invalidation, Commands ProjectsWithUnsavedPoints/CancelActiveCommand/RestoreDocumentFromSnapshot/FlushProjectPointDb, IO gsproj::Release, Qt settings persistence, and the Network installer path. The code lives in src/qt, so this is app-level workflow inside the Qt adapter layer, not a toolkit-neutral Events publisher."
+      "EditorWindow::CloseDrawing (EditorWindow.cpp:2501-2527) and closeEvent (EditorWindow.cpp:2529-2560) orchestrate Qt window/tab closure with GoSurveyEditor SwitchDrawing/save flow, Qt ConfirmSave, Document dirty state/documents and drawing-tab erasure, Renderer viewport geometry invalidation, Commands ProjectsWithUnsavedPoints/CancelActiveCommand/RestoreDocumentFromSnapshot/FlushProjectPointDb, IO gsproj::Release, Qt settings persistence, and the Network installer path. The code lives in src/qt, so this is app-level workflow inside the Qt adapter layer, not a toolkit-neutral Events publisher.",
+      "Commands calls Browse* from platform/WinFileDialogs.hpp directly: CadBlocks.cpp, CadCommands.cpp, CadCommands_Alignment.cpp, and CadCommands_DrawInquiry.cpp (11 call sites). These are baseline violations (\"Commands may not depend on Windows\"). Fix: Commands asks the UI file-dialog interface for a FileKind.",
+      "IO (io/DxfIo.cpp, io/LibreDwgCad.cpp, io/PdfPlot.cpp) and Commands (CadCommands.cpp) include MtextRichFormat.hpp from src/ui. The baseline labels these \"may not depend on Qt\", but the header is Document text code with no Qt dependency. Relocating it to Document clears them.",
+      "Progress callback shapes differ across systems (see auditedEntries.UI.draftPublicInterface.progress). Network (HttpFetch), Pdf (PdfDiff, PdfSplit), and Commands/PointCloud (pointcloudcache progressLog) each define their own. Reconcile before the progress interface is added.",
+      "QTimer or QClipboard appears in 22 src/qt files, with no engine-side timer or clipboard interface to route them through. This is not a violation today; it is missing interface coverage.",
+      "src/qt/FailureReport.cpp includes platform/FailureReportUi.hpp and platform/StartupFailure.hpp (baseline: \"Qt may not depend on Windows\") and render/ViewportRenderer.hpp (baseline: \"Qt may not depend on Renderer\"). The ProbeStartupGraphics check is the Qt side of a launch-time service; the report window's dependency on the Windows report helpers is the coupling to remove.",
+      "src/ui/CadUiStyleWidgets.hpp includes CadEntities.hpp (baseline: \"Qt may not depend on Commands\"). Moving the appearance vocabulary out of src/ui clears this violation."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
       "src/util/ray3d.hpp and src/util/ucs.hpp sit in the mixed util folder, which is ambiguous in fileMappings. Math owns both (see auditedEntries.Math.currentFiles).",
-      "src/commands/OrthoConstrain.hpp sits in the Commands folder. The file is assigned to Math here; the move ticket relocates it."
+      "src/commands/OrthoConstrain.hpp sits in the Commands folder. The file is assigned to Math here; the move ticket relocates it.",
+      "src/ui/ is mapped to Qt, but it holds toolkit-neutral code: CommandBar.hpp, MtextToolbar.hpp, and RichTextLayout.hpp are UI; ModelingRibbon.hpp is GoSurveyEditor (ribbon tables); MtextRichSpans.hpp, MtextRichFormat.*, and MtextTextOps.hpp are Document (wire format and text operations); CadUiStyleWidgets.hpp is homeless. fileMappings are unchanged here, so the ratchet baseline does not move; the final-map ticket reassigns them.",
+      "src/platform/ is mapped wholesale to Windows, but WinFileDialogs.hpp is the UI file-dialog interface and HeadlessFileDialogs.* is the Headless backend. Assign per file in the final map."
     ],
     "namespaceGaps": [
       "ADR-0006 requires GoSurvey::<System> namespaces. NumFormat and AngleFormat use the global namespace (anglefmt_detail is global). StringUtil is namespace StringUtil. Core.cpp's detail is GoSurvey::Core::detail. Namespace work follows the move, not this audit.",
-      "ray3d uses namespace ray3d and ucs uses namespace ucs. ADR-0006 requires GoSurvey::<System>, which would be GoSurvey::Math. OrthoConstrain.hpp uses global functions. Namespace work follows the move, not this audit."
+      "ray3d uses namespace ray3d and ucs uses namespace ucs. ADR-0006 requires GoSurvey::<System>, which would be GoSurvey::Math. OrthoConstrain.hpp uses global functions. Namespace work follows the move, not this audit.",
+      "UI headers use namespaces cmdbar, mtexttoolbar, richtext, modelingribbon, headless, and failureReportUi, and WinFileDialogs.hpp uses global functions. ADR-0006 requires GoSurvey::UI for UI-owned code. Namespace work follows the move, not this audit."
     ],
     "notCoreDespiteName": [
       "src/util/framewatch.hpp and src/util/docinvariants.*: Debug (diagnostics), not logging.",
@@ -3196,6 +3402,15 @@
       "Swept and not assigned to Events: AlignmentLayoutTools::closeEvent (src/qt/EditorAlignmentCreate.cpp:582-586). It clears local alignment-tool state during widget close; this remains Qt/Interaction UI lifecycle.",
       "EditorViewport.cpp timer sweep only (not Events scheduling): m_MapTimer polls map-capture progress (stop 305/330, starts 315/752; its changed emission is listed separately at 312); m_ViewAnimTimer is connected at 298, started at 2708, and stopped at 331, 2712, and 2714; m_GripMenuTimer drives the local 500 ms grip-menu hover dwell (setup/callback 241-296, hover start/stop 2330-2337); GripMenuDismissFilter::m_Timer dismisses its local menu after 1 second (137-155). Qt owns scheduling; local menu/animation policy remains with Qt/Interaction/Renderer/Commands. Other src/qt QTimer scheduling follows the general Qt ownership rule below.",
       "Qt QTimer event-loop scheduling in src/qt is Qt-owned; it remains outside Events even when the timeout callback routes widget-local behavior. Events-facing changed notifications emitted by a timer callback are listed at their exact emission lines."
+    ],
+    "notUiDecisions": [
+      "Swept and not assigned to UI: util/gizmooverlay.hpp is a plain data carrier for the renderer's gizmo channel, so it is Renderer.",
+      "Swept and not assigned to UI: util/hoverdwell.hpp and util/hoverpickgate.hpp are pure dwell and throttle policy stored on AppCommandState, so they are Interaction. They are timing rules, not a UI timer interface.",
+      "Swept and not assigned to UI: util/framewatch.hpp is a frame-time detector, so it is Debug (see notCoreDespiteName).",
+      "Swept and not assigned to UI: ui/MtextRichSpans.hpp, ui/MtextRichFormat.*, and ui/MtextTextOps.hpp are the MTEXT wire format and text operations used by IO and Commands, so they are Document.",
+      "Swept and not assigned to UI: ui/ModelingRibbon.hpp is the ribbon button table, which ADR-0002 keeps in GoSurveyEditor.",
+      "Swept and not assigned to UI: platform/HeadlessFileDialogs.* is the Headless backend's answer queue, which is an implementation, not the interface.",
+      "Swept and not assigned to UI: src/qt/* (EditorDialogs.cpp, EditorChrome.cpp, EditorRibbon.cpp, QtSplash.cpp, FailureReport.cpp, and others) are Qt implementation or GoSurveyEditor composition, not interface. Their folder mapping is provisional."
     ]
   }
 }
