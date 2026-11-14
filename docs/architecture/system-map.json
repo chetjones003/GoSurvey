@@ -93,12 +93,12 @@
     },
     {
       "path": "src/util/benchscene.cpp",
-      "system": null,
+      "system": "Debug",
       "status": "ambiguous"
     },
     {
       "path": "src/util/benchscene.hpp",
-      "system": null,
+      "system": "Debug",
       "status": "ambiguous"
     },
     {
@@ -183,18 +183,18 @@
     },
     {
       "path": "src/util/docinvariants.cpp",
-      "system": null,
+      "system": "Debug",
       "status": "ambiguous"
     },
     {
       "path": "src/util/docinvariants.hpp",
-      "system": null,
+      "system": "Debug",
       "status": "ambiguous"
     },
     {
       "path": "src/util/framewatch.hpp",
-      "system": null,
-      "status": "ambiguous"
+      "system": "Debug",
+      "status": "audited"
     },
     {
       "path": "src/util/geom2d.cpp",
@@ -303,12 +303,12 @@
     },
     {
       "path": "src/util/SaveTrace.cpp",
-      "system": null,
+      "system": "Debug",
       "status": "ambiguous"
     },
     {
       "path": "src/util/SaveTrace.hpp",
-      "system": null,
+      "system": "Debug",
       "status": "ambiguous"
     },
     {
@@ -445,7 +445,9 @@
     "Core audit (issue #1220): Core file and section ownership is in `sections` and `auditedEntries`. Ownership of other mixed util files stays ambiguous until their own audits.",
     "Math audit (issue #1221): Math file and section ownership is in auditedEntries.Math and sections. The ratchet and fileMappings are unchanged, so the baseline does not move; the Commands edge that will appear once Math is mapped is recorded in auditFindings.",
     "Sweep (issue #1221): the tree was swept for Math-shaped helpers (rotation, reflection, mirror, dot and cross, normalise and wrap, matrix and inverse, 2D affine). Assigned sections are in `sections`; candidates that were checked and kept out of Math, with reasons, are in auditFindings.notMathDecisions.",
-    "Events audit (issue #1222): event-related ownership is recorded in auditedEntries.Events and sections. No code moved and fileMappings are unchanged; Qt is still the concrete input adapter, and document-change notification has no toolkit-neutral publisher yet."
+    "Events audit (issue #1222): event-related ownership is recorded in auditedEntries.Events and sections. No code moved and fileMappings are unchanged; Qt is still the concrete input adapter, and document-change notification has no toolkit-neutral publisher yet.",
+    "Debug audit (issue #1224): benchmark scene/statistics, document-invariant diagnostics, and frame-stall watch are assigned in auditedEntries.Debug and sections. framewatch is mapped to Debug; benchmark and invariant files retain advisory Debug ownership in fileMappings until their forbidden cross-system dependencies are resolved. SaveTrace sections formerly marked Core are reassigned to Debug per this ticket, with IO/Win32 boundaries pending; crash-report trigger spans were already assigned to Debug. No code moved.",
+    "Debug audit sweep (issue #1224): performance counters and PIPEPERF/PERFHUD surfaces are recorded as mixed Debug/Commands sections. BENCH command orchestration stays Commands and consumes Debug benchmark helpers. SaveTrace belongs to Debug; mapping waits on IO/Win32 seams."
   ],
   "sections": [
     {
@@ -741,13 +743,13 @@
         1,
         6
       ],
-      "system": "Core",
+      "system": "Debug",
       "concern": "logging",
       "symbols": [
         "ClearSaveTrace",
         "AppendSaveTrace"
       ],
-      "note": "Advisory Core ownership. Enforcement waits on a GoSurvey/Core public header, because io includes this file privately (see auditedEntries.Core.pendingAssignment)."
+      "note": "Diagnostic save trace belongs to Debug. The IO call sites include this private header, and the implementation calls Win32 temp-path, file-delete, and OutputDebugString APIs; resolve these boundaries before mapping/enforcement."
     },
     {
       "path": "src/util/SaveTrace.cpp",
@@ -755,13 +757,13 @@
         1,
         45
       ],
-      "system": "Core",
+      "system": "Debug",
       "concern": "logging",
       "symbols": [
         "ClearSaveTrace",
         "AppendSaveTrace"
       ],
-      "note": "Advisory Core ownership. Uses Win32 GetTempPathW and DeleteFileW directly, which the move ticket must route through the Windows system or inject."
+      "note": "Diagnostic save trace belongs to Debug. The IO call sites include this private header, and the implementation calls Win32 temp-path, file-delete, and OutputDebugString APIs; resolve these boundaries before mapping/enforcement."
     },
     {
       "path": "src/commands/CadColor.cpp",
@@ -3070,6 +3072,113 @@
       "symbols": [],
       "uiRole": "headless stand-in for the PDF-attach file dialog",
       "note": "Headless implementation of the PDF-attach file dialog, the UI file-dialog interface's Headless backend. Line range is the file header; no symbol-level range audited."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        5241,
+        5292
+      ],
+      "system": "Debug",
+      "concern": "live profiling state and measurements",
+      "symbols": [
+        "AppCommandState::PipeRunPerfStat",
+        "AppCommandState::PipeRunPerf",
+        "AppCommandState::pipeRunPerf",
+        "AppCommandState::perfHudVisible",
+        "AppCommandState::perfFrameMs",
+        "AppCommandState::perfRenderMs",
+        "AppCommandState::perfHoverPickMs",
+        "AppCommandState::perfHoverPickRan",
+        "AppCommandState::perfSnapMs",
+        "AppCommandState::perfViewportUiMs"
+      ],
+      "note": "Diagnostic measurements and counters are Debug concepts; they are stored in Commands-owned AppCommandState today. Product state, command orchestration, and overlay visibility policy remain Commands/GoSurveyEditor. The runtime perf fields currently have no source reads/writes beyond their declarations.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands",
+        "GoSurveyEditor"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37439,
+        37452
+      ],
+      "system": "Debug",
+      "concern": "pipe-run rebuild timing collection",
+      "symbols": [
+        "pipeRunPerf.sweep",
+        "pipeRunPerf.runsSwept",
+        "pipeRunPerf.runsReused",
+        "pipeRunPerf.lastRunVerts",
+        "pipeRunPerf.rebuild"
+      ],
+      "note": "Collects elapsed measurements and counts for the PIPEPERF diagnostic during Commands-owned geometry rebuild workflow.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37573,
+        37593
+      ],
+      "system": "Debug",
+      "concern": "pipe-run tessellation timing collection",
+      "symbols": [
+        "pipeRunPerf.tessFaces",
+        "pipeRunPerf.tessEdges",
+        "pipeRunPerf.tessIso",
+        "pipeRunPerf.tessellate",
+        "pipeRunPerf.tessTriangles"
+      ],
+      "note": "Collects elapsed measurements and triangle counts for the PIPEPERF diagnostic during Commands-owned display tessellation.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands",
+        "Renderer"
+      ]
+    },
+    {
+      "path": "src/viewport/CadRubberPreview.cpp",
+      "lines": [
+        905,
+        907
+      ],
+      "system": "Debug",
+      "concern": "pipe-run ghost timing collection",
+      "symbols": [
+        "pipeRunPerf.ghost"
+      ],
+      "note": "Records per-frame ghost-preview timing for PIPEPERF; preview behavior remains with Commands/Interaction.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands",
+        "Interaction"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        49107,
+        49174
+      ],
+      "system": "Debug",
+      "concern": "profiling report and HUD command surface",
+      "symbols": [
+        "PIPEPERF report and reset",
+        "PERFHUD toggle"
+      ],
+      "note": "Diagnostic reporting and HUD toggle are Debug-facing, but parsing and dispatch are implemented inside the Commands god file and mutate Commands-owned state. Keep this as a mixed section until a public Debug seam exists.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands",
+        "GoSurveyEditor"
+      ]
     }
   ],
   "auditedEntries": {
@@ -3096,15 +3205,7 @@
         "src/core/include/GoSurvey/Core/StringUtil.hpp",
         "src/core/src/Core.cpp"
       ],
-      "pendingAssignment": [
-        {
-          "files": [
-            "src/util/SaveTrace.hpp",
-            "src/util/SaveTrace.cpp"
-          ],
-          "reason": "Core logging sink, but io/DwgIo.cpp and io/LibreDwgCad.cpp include util/SaveTrace.hpp as a private header. Assigning it to Core now would add two private-header violations. The move ticket must add GoSurvey/Core/SaveTrace.hpp, switch the two includes, then map the files to Core. The file is temporary diagnostics for issue #167, so deleting it is also an option."
-        }
-      ],
+      "pendingAssignment": [],
       "outsideScan": [
         "internal/core/CorePrivate.hpp: private header for Core.cpp. It is outside src/, so the ratchet does not scan it. Move it with Core."
       ],
@@ -3152,7 +3253,6 @@
         "tests/LibreDwgCadTests.cpp (AUNITS through DWG header output, line 5142)"
       ],
       "testGaps": [
-        "SaveTrace has no test",
         "no decision yet on whether users accept Core zero-padded DMS output in place of the legacy unpadded form before the legacy formatters are retired"
       ]
     },
@@ -3433,11 +3533,122 @@
           "resolution": "final-map ticket: move the span parser to Document, or move the layout to Document, or add an explicit edge in the map"
         }
       ]
+    },
+    "Debug": {
+      "tier": "T0 Foundation",
+      "audit": {
+        "issue": 1224,
+        "parent": 1207,
+        "commit": "70120847",
+        "codeMoved": false
+      },
+      "responsibility": "Provides developer diagnostics: profiling and frame-stall measurements, diagnostic save traces, reproducible benchmark scenes and statistics, document-invariant checks, and crash-report triggers.",
+      "doesNotOwn": [
+        "product workflows or command orchestration (Commands)",
+        "persistent document state or document mutation (Document/Commands)",
+        "widgets and presentation (UI/Qt)",
+        "platform APIs and OS services (Windows)",
+        "general application logging facade and product logging sinks (Core; diagnostic SaveTrace belongs to Debug)"
+      ],
+      "allowedDependencies": [
+        "Core"
+      ],
+      "currentFiles": [
+        "src/util/benchscene.cpp",
+        "src/util/benchscene.hpp",
+        "src/util/docinvariants.cpp",
+        "src/util/docinvariants.hpp",
+        "src/util/framewatch.hpp",
+        "src/platform/CrashReporter.cpp::ShowReportDialog trigger (section only)",
+        "src/platform/CrashReporter.hpp::TakeCrashReportFromCommandLine (section only)",
+        "src/platform/StartupFailure.cpp::ShowReportDialog trigger (section only)",
+        "src/util/SaveTrace.cpp",
+        "src/util/SaveTrace.hpp"
+      ],
+      "currentSections": [
+        "src/commands/CadCommands.hpp: PipeRunPerfStat, PipeRunPerf and performance HUD measurement fields (diagnostic values only; storage is mixed with Commands-owned AppCommandState)",
+        "src/commands/CadCommands.cpp: PIPEPERF measurement/report and PERFHUD toggle dispatch (mixed with Commands command handling)",
+        "src/commands/CadCommands.cpp: PIPERUN timing collection and counter updates (mixed with Commands workflow)",
+        "src/viewport/CadRubberPreview.cpp: ghost-preview timing collection (mixed with Commands/Interaction viewport workflow)",
+        "src/platform/CrashReporter.cpp::ShowReportDialog",
+        "src/platform/CrashReporter.hpp::TakeCrashReportFromCommandLine",
+        "src/platform/StartupFailure.cpp::ShowReportDialog",
+        "src/util/SaveTrace.cpp/.hpp: ClearSaveTrace and AppendSaveTrace (diagnostic save tracing; IO callers and Win32 temp-file/output APIs remain coupled)"
+      ],
+      "draftPublicInterface": {
+        "benchmark": [
+          "benchscene::BuildContourScene",
+          "benchscene::BuildSurfacePointScene",
+          "benchscene::BuildMeshScene",
+          "benchscene::Percentile",
+          "benchscene::Summarize",
+          "benchscene::FrameStats"
+        ],
+        "document diagnostics": [
+          "InvariantViolation",
+          "CheckDocumentInvariants",
+          "FormatInvariantViolations",
+          "docinv stable invariant identifiers"
+        ],
+        "profiling": [
+          "FrameWatch",
+          "Event",
+          "Tick",
+          "kDefaultThresholdMs",
+          "FrameWatchTick"
+        ],
+        "crash reporting": [
+          "crash-report trigger and command-line entry declarations currently in platform files; split out of Windows/UI during the move"
+        ],
+        "internal, not public": [
+          "Commands command parsing and output, UI overlay rendering, state storage, and platform crash/report implementations"
+        ],
+        "tracing": [
+          "ClearSaveTrace",
+          "AppendSaveTrace"
+        ]
+      },
+      "existingTests": [
+        "tests/BenchSceneTests.cpp",
+        "tests/DocInvariantsTests.cpp",
+        "tests/FrameWatchTests.cpp",
+        "tests/headless/HeadlessDriver.cpp::CheckDocumentInvariants invocation after each transcript step"
+      ],
+      "testGaps": [
+        "FrameWatch is currently exercised by unit tests but has no production call site in src/.",
+        "The invariant checker directly includes and reads AppCommandState from Commands-owned CadCommands.hpp, contrary to Debug allowedDependencies; resolve with a Document-owned public diagnostic view or a revised ownership boundary before moving it.",
+        "PipeRunPerf state and HUD measurements are embedded in AppCommandState; no reusable profiling interface exists.",
+        "No dedicated tests cover crash-report trigger policy.",
+        "SaveTrace has no direct test."
+      ],
+      "pendingAssignment": [
+        {
+          "files": [
+            "src/util/benchscene.cpp",
+            "src/util/benchscene.hpp"
+          ],
+          "reason": "Debug owns deterministic benchmark scenes and statistics, but Commands currently includes benchscene.hpp in CadCommands.cpp and CadCommands_Bench.cpp. The dependency table does not allow Commands → Debug, so keep the ownership advisory until the final-map/move ticket chooses a legal benchmark interface or reassigns the command-facing concept."
+        },
+        {
+          "files": [
+            "src/util/docinvariants.cpp",
+            "src/util/docinvariants.hpp"
+          ],
+          "reason": "Debug owns invariant diagnostics, but docinvariants.cpp includes Commands-owned CadCommands.hpp to inspect AppCommandState. Debug may depend only on Core; keep the ownership advisory until the final-map/move ticket adds a Document-owned public diagnostic view or revises the boundary."
+        },
+        {
+          "files": [
+            "src/util/SaveTrace.cpp",
+            "src/util/SaveTrace.hpp"
+          ],
+          "reason": "Debug owns diagnostic save tracing per issue #1224. IO (DwgIo.cpp and LibreDwgCad.cpp) includes SaveTrace.hpp directly, but IO does not currently allow a Debug dependency; SaveTrace.cpp also calls Win32 GetTempPathW, DeleteFileW and OutputDebugStringA despite Debug allowing only Core. Keep the Debug ownership advisory until the final-map/move ticket supplies legal IO and Windows seams."
+        }
+      ]
     }
   },
   "auditFindings": {
     "homelessConcepts": [
-      "Logging facade: none. Sinks are scattered: EditorWindow::m_Log (command line, Qt), SaveTrace (Core), UpdateService LogSilently (Network), StartupFailure startup-failure.log (Windows), and Qt qWarning/qDebug calls in src/qt. The final map must decide whether Core owns one facade or only the file sink.",
+      "Logging facade: none. Sinks are scattered: EditorWindow::m_Log (command line, Qt), SaveTrace (Debug diagnostic sink), UpdateService LogSilently (Network), StartupFailure startup-failure.log (Windows), and Qt qWarning/qDebug calls in src/qt. The final map must decide whether Core owns one facade or only the file sink.",
       "Settings store: AppCommandState holds nearly all settings in one god struct. There is no Settings system. Core owns the value vocabulary; the holder and its consumers belong to the final map.",
       "Duration and ETA text: FormatEtaRemaining is pure formatting used only by a progress UI. Core or UI?",
       "Lat/long DMS label: FormatLatLongLabel and CadCommands_Geo FormatDms. Geo or Core formatting?",
@@ -3461,7 +3672,10 @@
       "Map-capture status text: CadOnlineMap.cpp:348 formats \"Capturing map... N of M\" into mapCapture.prompt. Commands should emit values (gathered, total); the string belongs to UI presentation.",
       "Point-edit prompt raising: RaisePointEditPrompt (commands/ProjectPoints.cpp:118-269) and the pointEditPrompt state. Commands owns the question; the dialog is UI.",
       "Dynamic-input prompt presentation: CadDynInputPromptFor (commands/CadDynInput.cpp:434) builds the CadDynInputPrompt shown by the dynamic-input bar. The prompt text is UI presentation; the command's input state is Commands.",
-      "Attach flow with a dialog: commands/ProjectAddFlow.hpp:5 describes a three-step add flow built around a dialog. The flow is Commands; the dialog is UI. Mixed ownership to resolve in the final map."
+      "Attach flow with a dialog: commands/ProjectAddFlow.hpp:5 describes a three-step add flow built around a dialog. The flow is Commands; the dialog is UI. Mixed ownership to resolve in the final map.",
+      "Document invariant diagnostics: CheckDocumentInvariants and stable violation formatting are Debug tools over Commands-owned AppCommandState; resolve the ownership/dependency boundary before relocating code.",
+      "Profiling interface: measurements are stored in AppCommandState and exposed through Commands PIPEPERF/PERFHUD surfaces; the final map must decide whether Debug owns a reusable collector or only diagnostic algorithms.",
+      "FrameWatch has no production call site yet; it is a tested diagnostic utility whose integration owner and lifecycle remain to be decided."
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
@@ -3470,8 +3684,8 @@
       "AppCommandState stores angle display as raw ints (angleDisplayType). CadAngleDisplaySettings (Commands) converts them to the typed Core AngleDisplaySettings on every call.",
       "DrawingSettings (Document, per-drawing) embeds the AngularUnits and FootDefinition enums that Core units should own.",
       "io/UserPrefs.cpp reads and writes AppCommandState settings fields directly, so the IO system depends on Commands state.",
-      "SaveTrace (Core) calls Win32 GetTempPathW and DeleteFileW directly. Core must not own platform APIs, so the path lookup belongs to the Windows system or should be injected.",
-      "SaveTrace is called from io/DwgIo.cpp and io/LibreDwgCad.cpp. It is temporary diagnostics for issue #167 and can be deleted when that issue closes.",
+      "SaveTrace (Debug) calls Win32 GetTempPathW, DeleteFileW and OutputDebugStringA directly. Debug may depend only on Core, so path, deletion and debugger output must use a Windows seam or be injected.",
+      "SaveTrace is called from io/DwgIo.cpp and io/LibreDwgCad.cpp. IO does not currently allow a Debug dependency, and SaveTrace is temporary diagnostics for issue #167; add a legal seam or remove the trace when that issue closes.",
       "Commands includes ray3d.hpp (2 files), ucs.hpp (3 files) and OrthoConstrain.hpp (1 file) directly, but the draft map does not list Math among Commands' allowed dependencies. Once these files are mapped to Math, each include counts as a violation. The final map must add Math to Commands or move the includes.",
       "RotateFrameInPlace is duplicated with identical bodies in brep.cpp:2433 and AcisSatParser.cpp:541.",
       "The 2D rotation-about-base helper is copied at least 6 times: RotateAroundBase (CadCommands.cpp:10623), RotatePtForAnnotationPreview (:24425), RotateSurveyCoords (SurveyPoints.cpp:361), RotatePdfInsertAroundBase (EditorViewport.cpp:101), Xf2::apply and Xf::P (IO and ConvertDrawing), and Affine2D. Replace callers with one Math helper; do not move code in this audit.",
@@ -3504,7 +3718,10 @@
       "src/ui/CadUiStyleWidgets.hpp includes CadEntities.hpp (baseline: \"Qt may not depend on Commands\"). Moving the appearance vocabulary out of src/ui clears this violation.",
       "CadCommands.hpp PointCloudImportProgress (lines 7045-7053) and UpdatePointCloudImportProgress: the progress struct is UI presentation data carried in Commands state. Moving it behind the UI progress interface needs the progress shapes reconciled first (see the progress coupling above).",
       "UpdateService.cpp:181-187 passes a download progress lambda to HttpDownloadFile; this is a fourth progress-callback shape alongside HttpFetch, PdfDiff, PdfSplit and pointcloudcache (see the progress coupling above).",
-      "RichTextLayout.hpp (UI caret and wrap layout) includes MtextRichSpans.hpp (Document). Recorded in auditedEntries.UI.forbiddenDependencies; resolve in the final map."
+      "RichTextLayout.hpp (UI caret and wrap layout) includes MtextRichSpans.hpp (Document). Recorded in auditedEntries.UI.forbiddenDependencies; resolve in the final map.",
+      "Debug document-invariant checks read Commands-owned AppCommandState directly (src/util/docinvariants.cpp and tests/headless/HeadlessDriver.cpp). Debug is allowed to depend on Core only; the final map/move ticket must introduce a Document-owned public diagnostic view or choose a different ownership boundary.",
+      "Profiling state and collection are split across AppCommandState (Commands), CadCommands.cpp, and viewport/CadRubberPreview.cpp, while the Debug-owned FrameWatch is currently only referenced by tests. Define a reusable profiling seam and decide whether the live HUD remains Commands-owned presentation.",
+      "Debug benchmark generation/statistics live in src/util/benchscene.*, while BENCH command parsing, document setup, rendering and output live in src/commands/CadCommands_Bench.cpp and remain Commands workflow."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
