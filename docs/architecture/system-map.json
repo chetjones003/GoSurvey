@@ -953,7 +953,7 @@
       "symbols": [
         "TrimAscii"
       ],
-      "note": "Trims only space, tab, CR and LF, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
+      "note": "Trims only space, tab and CR, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
     },
     {
       "path": "src/io/PlotFont.hpp",
