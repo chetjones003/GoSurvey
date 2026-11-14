@@ -33,7 +33,11 @@ try {
   & $exePath --order lex --rng-seed 1 --shard-count $ShardCount --shard-index $ShardIndex `
     --durations yes --reporter "xml::out=$xml" --reporter "console::out=$log"
   $code = $LASTEXITCODE
-  Get-Content -LiteralPath $log -Tail 5 | Out-Host
+  if ($code -eq 0) {
+    Get-Content -LiteralPath $log -Tail 5 | Out-Host
+  } else {
+    Get-Content -LiteralPath $log -Raw | Out-Host
+  }
   Write-Host "Catch2 shard $ShardIndex/$ShardCount finished with exit $code; reports: $root"
   exit $code
 } finally { Pop-Location }

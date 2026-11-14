@@ -362,8 +362,31 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          if ($env:SCCACHE_PATH) { & $env:SCCACHE_PATH --show-stats }
-          else { sccache --show-stats }
+          $sccache = $null
+          if ($env:SCCACHE_PATH -and (Test-Path -LiteralPath $env:SCCACHE_PATH)) {
+            $sccache = $env:SCCACHE_PATH
+          } else {
+            $command = Get-Command sccache.exe -ErrorAction SilentlyContinue
+            if ($command) { $sccache = $command.Source }
+          }
+          if ($sccache) {
+            & $sccache --show-stats
+            if ($LASTEXITCODE -ne 0) { Write-Warning "sccache stats exited with $LASTEXITCODE" }
+          } else {
+            Write-Warning 'sccache was unavailable during cleanup; skipping stats.'
+          }
+
+      - name: Upload test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-test-diagnostics
+          path: |
+            build/artifacts/ci/
+            build/artifacts/catch/
+            build/artifacts/qt-editor/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload binaries for packaging
         uses: actions/upload-artifact@v4
