@@ -113,7 +113,7 @@
     },
     {
       "path": "src/util/cadblock.hpp",
-      "system": null,
+      "system": "Document",
       "status": "ambiguous"
     },
     {
@@ -128,7 +128,7 @@
     },
     {
       "path": "src/util/cadtable.hpp",
-      "system": null,
+      "system": "Document",
       "status": "ambiguous"
     },
     {
@@ -268,7 +268,7 @@
     },
     {
       "path": "src/util/PlotScales.hpp",
-      "system": null,
+      "system": "Document",
       "status": "ambiguous"
     },
     {
@@ -447,7 +447,8 @@
     "Sweep (issue #1221): the tree was swept for Math-shaped helpers (rotation, reflection, mirror, dot and cross, normalise and wrap, matrix and inverse, 2D affine). Assigned sections are in `sections`; candidates that were checked and kept out of Math, with reasons, are in auditFindings.notMathDecisions.",
     "Events audit (issue #1222): event-related ownership is recorded in auditedEntries.Events and sections. No code moved and fileMappings are unchanged; Qt is still the concrete input adapter, and document-change notification has no toolkit-neutral publisher yet.",
     "Debug audit (issue #1224): benchmark scene/statistics, document-invariant diagnostics, and frame-stall watch are assigned in auditedEntries.Debug and sections. framewatch is mapped to Debug; benchmark and invariant files retain advisory Debug ownership in fileMappings until their forbidden cross-system dependencies are resolved. SaveTrace sections formerly marked Core are reassigned to Debug per this ticket, with IO/Win32 boundaries pending; crash-report trigger spans were already assigned to Debug. No code moved.",
-    "Debug audit sweep (issue #1224): performance counters and PIPEPERF/PERFHUD surfaces are recorded as mixed Debug/Commands sections. BENCH command orchestration stays Commands and consumes Debug benchmark helpers. SaveTrace belongs to Debug; mapping waits on IO/Win32 seams."
+    "Debug audit sweep (issue #1224): performance counters and PIPEPERF/PERFHUD surfaces are recorded as mixed Debug/Commands sections. BENCH command orchestration stays Commands and consumes Debug benchmark helpers. SaveTrace belongs to Debug; mapping waits on IO/Win32 seams.",
+    "Document audit (issue #1226): Document file and section ownership is in auditedEntries.Document and sections. fileMappings gains Document as the advisory owner for cadblock.hpp, cadtable.hpp and PlotScales.hpp, all still ambiguous, so the ratchet and baseline do not move. Folder-mapped files get section entries only, because folder precedence would otherwise override them. The DrawingDocument god struct and CadEntities.hpp's PointCloud include are recorded in auditFindings."
   ],
   "sections": [
     {
@@ -3281,6 +3282,1086 @@
         "ChamferRayIntersect"
       ],
       "note": "Pure curve-offset, intersection, tangent, and corner-point calculations used by FILLET/CHAMFER. The command workflows remain Commands; this section is advisory because the header is under src/commands/ and has not been split."
+    },
+    {
+      "path": "src/commands/CadEntities.hpp",
+      "lines": [
+        32,
+        36
+      ],
+      "system": "Document",
+      "concern": "point entity",
+      "symbols": [
+        "CadPoint"
+      ],
+      "note": "REQ-456 drawing point entity. Survey points are a separate Survey record."
+    },
+    {
+      "path": "src/commands/CadEntities.hpp",
+      "lines": [
+        163,
+        197
+      ],
+      "system": "Document",
+      "concern": "per-entity attributes",
+      "symbols": [
+        "EntityAttributes"
+      ],
+      "note": "Layer name, colour and linetype by string; the layer name is the identity used by rename."
+    },
+    {
+      "path": "src/commands/CadEntities.hpp",
+      "lines": [
+        212,
+        222
+      ],
+      "system": "Document",
+      "concern": "text style record",
+      "symbols": [
+        "TextStyle"
+      ]
+    },
+    {
+      "path": "src/commands/CadEntities.hpp",
+      "lines": [
+        536,
+        661
+      ],
+      "system": "Document",
+      "concern": "annotation, multileader and leader entities",
+      "symbols": [
+        "CadAnnotation",
+        "CadMultileader",
+        "CadLeaderArrowHead"
+      ]
+    },
+    {
+      "path": "src/commands/CadEntities.hpp",
+      "lines": [
+        700,
+        713
+      ],
+      "system": "Document",
+      "concern": "position marker entity",
+      "symbols": [
+        "CadPositionMarker"
+      ],
+      "note": "REQ-359 marker record stored as drawing data."
+    },
+    {
+      "path": "src/commands/CadEntities.hpp",
+      "lines": [
+        768,
+        799
+      ],
+      "system": "Document",
+      "concern": "text entity bounds",
+      "symbols": [
+        "CadTextAnnotationBounds"
+      ]
+    },
+    {
+      "path": "src/commands/CadEntities.hpp",
+      "lines": [
+        804,
+        827
+      ],
+      "system": "Document",
+      "concern": "arc entity",
+      "symbols": [
+        "CadArc"
+      ]
+    },
+    {
+      "path": "src/commands/CadEntities.hpp",
+      "lines": [
+        1141,
+        1174
+      ],
+      "system": "Document",
+      "concern": "ellipse entity",
+      "symbols": [
+        "CadEllipse"
+      ]
+    },
+    {
+      "path": "src/commands/CadEntities.hpp",
+      "lines": [
+        1628,
+        1632
+      ],
+      "system": "Document",
+      "concern": "annotation scale record",
+      "symbols": [
+        "CadAnnotationScale"
+      ]
+    },
+    {
+      "path": "src/commands/CadEntities.hpp",
+      "lines": [
+        1695,
+        1721
+      ],
+      "system": "Document",
+      "concern": "filled region entity",
+      "symbols": [
+        "CadFilledRegion"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        88,
+        168
+      ],
+      "system": "Document",
+      "concern": "selection list record",
+      "symbols": [
+        "SelectedEntity"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        196,
+        211
+      ],
+      "system": "Document",
+      "concern": "sub-object selection record",
+      "symbols": [
+        "SelectedSubObject"
+      ],
+      "note": "Refers to solidpick::Kind, an Interaction policy type. Coupling recorded in auditFindings."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        256,
+        269
+      ],
+      "system": "Document",
+      "concern": "layer table row",
+      "symbols": [
+        "CadLayerRow"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1117,
+        1139
+      ],
+      "system": "Document",
+      "concern": "object layer rows",
+      "symbols": [
+        "ObjectLayerKind",
+        "ObjectLayerRow"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1172,
+        1291
+      ],
+      "system": "Document",
+      "concern": "drawing settings",
+      "symbols": [
+        "DrawingSettings"
+      ],
+      "note": "Holds the drawing unit fields; the Core unit vocabulary is separate."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1340,
+        1463
+      ],
+      "system": "Document",
+      "concern": "undo snapshot",
+      "symbols": [
+        "DrawingGeometrySnapshot"
+      ],
+      "note": "Snapshot copies Survey, Terrain and Pdf members as well as Document data."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1471,
+        1474
+      ],
+      "system": "Document",
+      "concern": "named UCS record",
+      "symbols": [
+        "NamedUcs"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1536,
+        1538
+      ],
+      "system": "Document",
+      "concern": "active and named UCS state",
+      "symbols": [
+        "activeUcs",
+        "ucsPrevious",
+        "ucsNamed"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1546,
+        1546
+      ],
+      "system": "Document",
+      "concern": "entity identity counter",
+      "symbols": [
+        "nextEntityId"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1548,
+        1565
+      ],
+      "system": "Document",
+      "concern": "basic entity storage",
+      "symbols": [
+        "userLinesFlat",
+        "userCirclesCxCyZR",
+        "userArcs",
+        "userEllipses",
+        "userPolylineVerts"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1578,
+        1599
+      ],
+      "system": "Document",
+      "concern": "annotation, region, table, marker, multileader, spline and point storage",
+      "symbols": [
+        "cadAnnotations",
+        "cadFilledRegions",
+        "cadTableAttrs",
+        "cadPositionMarkers",
+        "cadMultileaders",
+        "cadSplines",
+        "cadPoints"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1618,
+        1619
+      ],
+      "system": "Document",
+      "concern": "block definitions and references",
+      "symbols": [
+        "blockDefs",
+        "cadBlockRefs"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1626,
+        1626
+      ],
+      "system": "Document",
+      "concern": "layer table",
+      "symbols": [
+        "drawingLayerTable"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1629,
+        1631
+      ],
+      "system": "Document",
+      "concern": "drawing units and plot scale",
+      "symbols": [
+        "drawingInsUnits",
+        "modelUnitsPerPlottedInch",
+        "drawingSettings"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1633,
+        1643
+      ],
+      "system": "Document",
+      "concern": "text and dimension styles",
+      "symbols": [
+        "textStyles",
+        "dimensionStyles",
+        "activeTextStyleName"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1645,
+        1650
+      ],
+      "system": "Document",
+      "concern": "selection and hidden entities",
+      "symbols": [
+        "selection",
+        "hiddenEntityIds"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1651,
+        1654
+      ],
+      "system": "Document",
+      "concern": "paper layouts and page setups",
+      "symbols": [
+        "paperLayouts",
+        "savedPageSetups",
+        "activeSpaceIndex"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1655,
+        1659
+      ],
+      "system": "Document",
+      "concern": "revision, file path and undo history",
+      "symbols": [
+        "cadGpuRevision",
+        "savedRevision",
+        "filePath",
+        "undoStack",
+        "redoStack"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1513,
+        1660
+      ],
+      "system": "Document",
+      "concern": "drawing store composition (mixed)",
+      "symbols": [
+        "DrawingDocument"
+      ],
+      "note": "Mixed. Viewport camera, pan, zoom, projection and section clip (1516-1531) belong to Renderer and Interaction. Survey, Terrain, PointCloud and Pdf members are not Document. The Document ranges above are the owned fields."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        6240,
+        6280
+      ],
+      "system": "Document",
+      "concern": "entity kind and reference",
+      "symbols": [
+        "EntityKind",
+        "EntityRef"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        7098,
+        7117
+      ],
+      "system": "Document",
+      "concern": "undo, redo and entity lookup declarations",
+      "symbols": [
+        "FindEntityById",
+        "PushUndoSnapshot",
+        "DoUndo",
+        "DoRedo",
+        "CanUndo",
+        "CanRedo"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        88,
+        367
+      ],
+      "system": "Document",
+      "concern": "drawing tab swap (mixed)",
+      "symbols": [
+        "SaveDocumentToSnapshot",
+        "RestoreDocumentFromSnapshot"
+      ],
+      "note": "Copies whole live state to and from a DrawingDocument, including Renderer view state."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        2138,
+        2248
+      ],
+      "system": "Document",
+      "concern": "undo snapshot capture",
+      "symbols": [
+        "CaptureGeometrySnapshot"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        2250,
+        2387
+      ],
+      "system": "Document",
+      "concern": "undo snapshot restore",
+      "symbols": [
+        "RestoreGeometrySnapshot"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        2393,
+        2417
+      ],
+      "system": "Document",
+      "concern": "undo depth wrappers",
+      "symbols": [
+        "CadCaptureGeometrySnapshot",
+        "CadRestoreGeometrySnapshot",
+        "CadActiveUndoStackSize",
+        "CadTruncateActiveUndoStack"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        2419,
+        2470
+      ],
+      "system": "Document",
+      "concern": "entity id sweep",
+      "symbols": [
+        "AttrsForKind"
+      ],
+      "note": "Anonymous namespace. Sweep order is load-bearing for legacy drawings (REQ-076)."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        7590,
+        7598
+      ],
+      "system": "Document",
+      "concern": "entity lookup",
+      "symbols": [
+        "FindEntityById"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        7601,
+        7677
+      ],
+      "system": "Document",
+      "concern": "undo and redo",
+      "symbols": [
+        "PushUndoSnapshot",
+        "CanUndo",
+        "CanRedo",
+        "DoUndo",
+        "DoRedo"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        28968,
+        29001
+      ],
+      "system": "Document",
+      "concern": "layer table sync with geometry",
+      "symbols": [
+        "SyncDrawingLayerTableWithGeometry"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        29003,
+        29032
+      ],
+      "system": "Document",
+      "concern": "active text style",
+      "symbols": [
+        "ActiveTextStyle",
+        "SetActiveTextStyle",
+        "StampActiveTextStyleOnNewText"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        29034,
+        29123
+      ],
+      "system": "Document",
+      "concern": "layer creation and object layers",
+      "symbols": [
+        "ValidNewLayerNameChars",
+        "LayerNameExistsCi",
+        "CadAddDrawingLayer",
+        "ResolveObjectLayer",
+        "EnsureObjectLayer",
+        "EnsureDrawingLayer",
+        "ValidateObjectLayers"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        30098,
+        30150
+      ],
+      "system": "Document",
+      "concern": "layer rename",
+      "symbols": [
+        "CadRenameDrawingLayer"
+      ],
+      "note": "Rewrites entity layer strings through every attribute vector."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        30152,
+        30190
+      ],
+      "system": "Document",
+      "concern": "layer delete",
+      "symbols": [
+        "CadDeleteDrawingLayer"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52263,
+        52269
+      ],
+      "system": "Document",
+      "concern": "layer lookup",
+      "symbols": [
+        "FindDrawingLayerRowCi"
+      ]
+    },
+    {
+      "path": "src/commands/CadBlocks.cpp",
+      "lines": [
+        105,
+        196
+      ],
+      "system": "Document",
+      "concern": "block capture from selection",
+      "symbols": [
+        "CaptureSelectionInto"
+      ]
+    },
+    {
+      "path": "src/commands/CadBlocks.cpp",
+      "lines": [
+        198,
+        229
+      ],
+      "system": "Document",
+      "concern": "block capture from drawing",
+      "symbols": [
+        "CadBlockCaptureDrawing"
+      ]
+    },
+    {
+      "path": "src/commands/CadBlocks.cpp",
+      "lines": [
+        236,
+        300
+      ],
+      "system": "Document",
+      "concern": "block primitives into drawing",
+      "symbols": [
+        "LoadBlockPrimitivesIntoDrawing"
+      ]
+    },
+    {
+      "path": "src/commands/CadBlocks.cpp",
+      "lines": [
+        305,
+        337
+      ],
+      "system": "Document",
+      "concern": "harvest drawing primitives",
+      "symbols": [
+        "HarvestDrawingPrimitivesIntoContent"
+      ]
+    },
+    {
+      "path": "src/commands/CadBlocks.cpp",
+      "lines": [
+        359,
+        379
+      ],
+      "system": "Document",
+      "concern": "block definition merge",
+      "symbols": [
+        "MergeBlockDef"
+      ]
+    },
+    {
+      "path": "src/commands/CadBlocks.cpp",
+      "lines": [
+        574,
+        674
+      ],
+      "system": "Document",
+      "concern": "source entity erase after block creation",
+      "symbols": [
+        "EraseSelectedSources"
+      ]
+    },
+    {
+      "path": "src/commands/CadBlocks.cpp",
+      "lines": [
+        676,
+        708
+      ],
+      "system": "Document",
+      "concern": "block explode into entities",
+      "symbols": [
+        "ExplodeRef"
+      ]
+    },
+    {
+      "path": "src/commands/CadBlocks.cpp",
+      "lines": [
+        710,
+        767
+      ],
+      "system": "Document",
+      "concern": "block placement",
+      "symbols": [
+        "PlaceInsertImpl"
+      ]
+    },
+    {
+      "path": "src/commands/CadBlocks.cpp",
+      "lines": [
+        814,
+        823
+      ],
+      "system": "Document",
+      "concern": "block insert unit scale",
+      "symbols": [
+        "CadBlockInsertUnitsScale"
+      ]
+    },
+    {
+      "path": "src/commands/CadBlocks.cpp",
+      "lines": [
+        1173,
+        1188
+      ],
+      "system": "Document",
+      "concern": "block placement with and without undo",
+      "symbols": [
+        "CadBlockPlaceInsert",
+        "CadBlockPlaceInsertNoUndo"
+      ]
+    },
+    {
+      "path": "src/commands/PaperSpace.hpp",
+      "lines": [
+        19,
+        26
+      ],
+      "system": "Document",
+      "concern": "paper entity reference",
+      "symbols": [
+        "PaperEntityRef"
+      ]
+    },
+    {
+      "path": "src/commands/PaperSpace.hpp",
+      "lines": [
+        40,
+        53
+      ],
+      "system": "Document",
+      "concern": "paper size presets",
+      "symbols": [
+        "PaperSizePreset",
+        "kPaperSizePresets"
+      ]
+    },
+    {
+      "path": "src/commands/PaperSpace.hpp",
+      "lines": [
+        58,
+        118
+      ],
+      "system": "Document",
+      "concern": "paper viewport record",
+      "symbols": [
+        "Viewport"
+      ]
+    },
+    {
+      "path": "src/commands/PaperSpace.hpp",
+      "lines": [
+        138,
+        144
+      ],
+      "system": "Document",
+      "concern": "model-to-paper transform for a viewport",
+      "symbols": [
+        "ModelToPaperIn"
+      ]
+    },
+    {
+      "path": "src/commands/PaperSpace.hpp",
+      "lines": [
+        354,
+        416
+      ],
+      "system": "Document",
+      "concern": "viewport layer freeze and colour overrides",
+      "symbols": [
+        "ToggleFrozenLayerInViewport",
+        "IsLayerFrozenInViewport",
+        "FreezeLayerInViewport",
+        "ThawLayerInViewport",
+        "SetViewportLayerColor",
+        "ClearViewportLayerColor",
+        "ViewportLayerColorOverride"
+      ]
+    },
+    {
+      "path": "src/commands/PaperSpace.hpp",
+      "lines": [
+        420,
+        434
+      ],
+      "system": "Document",
+      "concern": "page setup",
+      "symbols": [
+        "PageSetup"
+      ]
+    },
+    {
+      "path": "src/commands/PaperSpace.hpp",
+      "lines": [
+        439,
+        448
+      ],
+      "system": "Document",
+      "concern": "paper raster image",
+      "symbols": [
+        "CadRasterImage"
+      ]
+    },
+    {
+      "path": "src/commands/PaperSpace.hpp",
+      "lines": [
+        450,
+        515
+      ],
+      "system": "Document",
+      "concern": "paper layout",
+      "symbols": [
+        "PaperLayout"
+      ]
+    },
+    {
+      "path": "src/commands/TextStyle.hpp",
+      "lines": [
+        1,
+        92
+      ],
+      "system": "Document",
+      "concern": "text style library",
+      "symbols": [
+        "TextStyles"
+      ]
+    },
+    {
+      "path": "src/commands/DimensionStyle.hpp",
+      "lines": [
+        1,
+        221
+      ],
+      "system": "Document",
+      "concern": "dimension style library",
+      "symbols": [
+        "DimensionStyle",
+        "DimensionStyles"
+      ],
+      "note": "Dimension text formatting uses Core number formatting."
+    },
+    {
+      "path": "src/commands/MultileaderStyle.hpp",
+      "lines": [
+        1,
+        55
+      ],
+      "system": "Document",
+      "concern": "multileader style library",
+      "symbols": [
+        "MultileaderStyle"
+      ]
+    },
+    {
+      "path": "src/commands/EntityId.hpp",
+      "lines": [
+        1,
+        44
+      ],
+      "system": "Document",
+      "concern": "entity identity lookup",
+      "symbols": [
+        "kEntityIdSweepNever",
+        "ClearEntityIdsFrom"
+      ]
+    },
+    {
+      "path": "src/commands/EntityId.cpp",
+      "lines": [
+        1,
+        38
+      ],
+      "system": "Document",
+      "concern": "entity identity lookup",
+      "symbols": [
+        "FindEntityIndexById",
+        "ClearEntityIdsFrom"
+      ]
+    },
+    {
+      "path": "src/commands/CadLinetype.hpp",
+      "lines": [
+        1,
+        36
+      ],
+      "system": "Document",
+      "concern": "linetype names",
+      "symbols": [
+        "CadLinetypeNameEqCi",
+        "CadCanonicalLinetypeNameForDxf",
+        "CadLinetypeIsSolidCi"
+      ]
+    },
+    {
+      "path": "src/commands/CadLinetype.cpp",
+      "lines": [
+        1,
+        265
+      ],
+      "system": "Document",
+      "concern": "linetype name table",
+      "symbols": [
+        "Pattern",
+        "FindPatternCi"
+      ]
+    },
+    {
+      "path": "src/commands/CadColor.hpp",
+      "lines": [
+        1,
+        39
+      ],
+      "system": "Document",
+      "concern": "entity colour storage",
+      "symbols": [
+        "CadColorStorageFromAci",
+        "CadColorEffectiveStorage",
+        "CadColorResolveRgb"
+      ]
+    },
+    {
+      "path": "src/util/cadblock.hpp",
+      "lines": [
+        20,
+        1605
+      ],
+      "system": "Document",
+      "concern": "block definitions, references and transforms",
+      "symbols": [
+        "CadBlockXform",
+        "CadBlockAttrDef",
+        "CadBlockContent",
+        "CadBlockDefinition",
+        "CadBlockRef",
+        "CadBlockLibraryEntry"
+      ],
+      "note": "Excludes the Core units block at 1606-1635. Pipe part and connection types (131-297) are homeless; see homelessConcepts."
+    },
+    {
+      "path": "src/util/cadblock.hpp",
+      "lines": [
+        1725,
+        1967
+      ],
+      "system": "Document",
+      "concern": "dynamic block authoring and grips",
+      "symbols": [
+        "CadBlockAuthorMatchlineDynamics",
+        "CadBlockDynGripWorld",
+        "CadBlockApplyDynGripDrag",
+        "CadBlockToggleMatchlineFlip"
+      ]
+    },
+    {
+      "path": "src/util/cadtable.hpp",
+      "lines": [
+        1,
+        421
+      ],
+      "system": "Document",
+      "concern": "table geometry and layout",
+      "symbols": [
+        "CadTable",
+        "CadTableLocalToWorld",
+        "CadTableLayoutCells",
+        "CadTableFitToContent"
+      ]
+    },
+    {
+      "path": "src/util/cadtablestyle.hpp",
+      "lines": [
+        30,
+        96
+      ],
+      "system": "Document",
+      "concern": "table style",
+      "symbols": [
+        "CadTableStyle",
+        "CadTableBuiltinStyles",
+        "CadTableFindStyle"
+      ]
+    },
+    {
+      "path": "src/util/cadtablestyle.hpp",
+      "lines": [
+        146,
+        177
+      ],
+      "system": "Document",
+      "concern": "table style sizing and cell lookup",
+      "symbols": [
+        "CadTableApplyStyleSize",
+        "CadTableCellAtWorld"
+      ]
+    },
+    {
+      "path": "src/util/cadsolid.hpp",
+      "lines": [
+        34,
+        34
+      ],
+      "system": "Document",
+      "concern": "solid entity storage pointer",
+      "symbols": [
+        "CadSolidPtr"
+      ],
+      "note": "Only the alias is Document. Tessellation and display types are Renderer caches; the sub-object overlay is Interaction."
+    },
+    {
+      "path": "src/util/PlotScales.hpp",
+      "lines": [
+        1,
+        65
+      ],
+      "system": "Document",
+      "concern": "drawing plot-scale list",
+      "symbols": [
+        "PlotScaleChoice",
+        "PlotScaleChoicesFor"
+      ]
+    },
+    {
+      "path": "src/font/CadFontName.hpp",
+      "lines": [
+        1,
+        35
+      ],
+      "system": "Document",
+      "concern": "font name classification for text styles",
+      "symbols": [
+        "cadfont::IsShxFontName",
+        "cadfont::PreferShxStrokes"
+      ],
+      "note": "Folder is mapped to Core; this is the Document text-style font policy. ShxFont.* file loading is IO."
+    },
+    {
+      "path": "src/ui/MtextRichFormat.hpp",
+      "lines": [
+        1,
+        19
+      ],
+      "system": "Document",
+      "concern": "MTEXT rich span type",
+      "symbols": [
+        "MtextRichSpan",
+        "MtextRichBuildSpans"
+      ]
+    },
+    {
+      "path": "src/ui/MtextRichFormat.cpp",
+      "lines": [
+        1,
+        102
+      ],
+      "system": "Document",
+      "concern": "MTEXT rich format build",
+      "symbols": [
+        "MtextRichBuildSpans"
+      ]
+    },
+    {
+      "path": "src/ui/MtextRichSpans.hpp",
+      "lines": [
+        1,
+        165
+      ],
+      "system": "Document",
+      "concern": "MTEXT wire format",
+      "symbols": [
+        "MtextRichSpans"
+      ]
+    },
+    {
+      "path": "src/ui/MtextTextOps.hpp",
+      "lines": [
+        1,
+        155
+      ],
+      "system": "Document",
+      "concern": "MTEXT text operations",
+      "symbols": [
+        "MtextTextOps"
+      ]
     }
   ],
   "auditedEntries": {
@@ -3933,6 +5014,231 @@
         "No standalone public Geometry include tree exists yet; current tests include legacy util headers directly.",
         "No ratchet-enforced ownership test exists for Geometry while its util file mappings remain advisory."
       ]
+    },
+    "Document": {
+      "tier": "T2 Domain",
+      "audit": {
+        "issue": 1226,
+        "parent": 1207,
+        "commit": "e4def327",
+        "codeMoved": false
+      },
+      "responsibility": "Owns a drawing's persistent content and editing history: entities and their attributes, layers, blocks and block definitions, tables and table styles, text, dimension and multileader styles, font choice as text-style policy, paper layouts and their sheet geometry, undo and redo history, entity identity, and the selection list.",
+      "doesNotOwn": [
+        "GPU-shaped display caches and tessellation batches (Renderer)",
+        "camera, pan, zoom, projection, named view and section-clip state (Renderer, with Interaction for snapping)",
+        "DXF, DWG, SAT, glTF, STL and font file parsing and writing, including ShxFont (IO)",
+        "survey points, traverses, alignments, view frames and profiles (Survey)",
+        "TIN surfaces, grading, volumes and feature lines (Terrain)",
+        "point-cloud storage and octree indexing (PointCloud)",
+        "PDF underlay attachments and PDF annotation (Pdf)",
+        "command prompts, dialogs and workflows that create or edit content (Commands)",
+        "solid selection and sub-object picking policy (Interaction)",
+        "widgets, ribbon, layer manager and MTEXT editor interaction (Qt and GoSurveyEditor)",
+        "geometry kernel algorithms such as B-rep, NURBS, splines and planar predicates (Geometry)",
+        "unit vocabulary and number formatting (Core)"
+      ],
+      "allowedDependencies": [
+        "Geometry",
+        "Math",
+        "Core",
+        "Events"
+      ],
+      "dependencyNote": "Matches the Document row in system-map.md. Document may use Geometry for solid and spline payloads, and Math for UCS and transforms. Events is allowed, but Document has no publisher yet: document change notification uses raw callbacks and revision polling (see auditedEntries.Events).",
+      "currentFiles": [
+        "src/util/cadblock.hpp (system Document, ambiguous; units block at 1606-1635 is Core)",
+        "src/util/cadtable.hpp (system Document, ambiguous)",
+        "src/util/PlotScales.hpp (system Document, ambiguous)",
+        "src/util/cadtablestyle.hpp (section only; point-table rows and cells are Survey)",
+        "src/util/cadsolid.hpp (section only: CadSolidPtr)",
+        "src/commands/EntityId.hpp, src/commands/EntityId.cpp (section only; folder is Commands)",
+        "src/commands/TextStyle.hpp, src/commands/DimensionStyle.hpp, src/commands/MultileaderStyle.hpp (section only; folder is Commands)",
+        "src/commands/CadLinetype.hpp, src/commands/CadLinetype.cpp, src/commands/CadColor.hpp (section only; folder is Commands)",
+        "src/commands/CadEntities.hpp, src/commands/PaperSpace.hpp (section only; folder is Commands)",
+        "src/commands/CadCommands.hpp (section only; DrawingDocument and undo types)",
+        "src/commands/CadCommands.cpp (section only; undo, layers, entity lookup, tab swap)",
+        "src/commands/CadBlocks.cpp (section only; block capture and placement)",
+        "src/font/CadFontName.hpp (section only; folder is Core)",
+        "src/ui/MtextRichSpans.hpp, src/ui/MtextRichFormat.hpp, src/ui/MtextRichFormat.cpp, src/ui/MtextTextOps.hpp (section only; folder is Qt)"
+      ],
+      "pendingAssignment": [
+        {
+          "files": [
+            "src/commands/CadCommands.hpp (DrawingDocument, lines 1513-1660)"
+          ],
+          "reason": "DrawingDocument is a composition of every system's storage. Document owns the fields listed in sections, but the struct cannot move until Survey, Terrain, PointCloud, Pdf and Renderer members move behind interfaces or into their own stores. The final-map ticket decides the split."
+        },
+        {
+          "files": [
+            "src/util/cadtablestyle.hpp"
+          ],
+          "reason": "Mixed file. Table style and sizing are Document. Point-table row and cell builders are Survey policy. The file mapping stays null until the Survey section moves out."
+        },
+        {
+          "files": [
+            "src/util/cadsolid.hpp"
+          ],
+          "reason": "Mixed file. CadSolidPtr is Document. Tessellation and display batch types are Renderer caches and must not be read as Document state. The file mapping stays null."
+        },
+        {
+          "files": [
+            "src/util/cadpiperun.hpp",
+            "src/commands/CadEntities.hpp (CadPipeRun and CadPipingSystem, lines 836-881)"
+          ],
+          "reason": "Piping entities have no owning system, so they are not assigned to Document in this audit. See homelessConcepts."
+        },
+        {
+          "files": [
+            "src/util/styleproperty.hpp"
+          ],
+          "reason": "Generic string-map property helpers used by DimensionStyle and style files. It is either a Core utility or Document style parsing; the final map decides. Not assigned here."
+        }
+      ],
+      "draftPublicInterface": {
+        "entities": [
+          "CadPoint",
+          "CadArc",
+          "CadEllipse",
+          "CadAnnotation",
+          "CadMultileader",
+          "CadLeaderArrowHead",
+          "CadPositionMarker",
+          "CadFilledRegion",
+          "EntityAttributes",
+          "EntityKind",
+          "EntityRef",
+          "FindEntityById",
+          "FindEntityIndexById",
+          "ClearEntityIdsFrom"
+        ],
+        "layers": [
+          "CadLayerRow",
+          "ObjectLayerKind",
+          "ObjectLayerRow",
+          "CadAddDrawingLayer",
+          "CadRenameDrawingLayer",
+          "CadDeleteDrawingLayer",
+          "EnsureDrawingLayer",
+          "ResolveObjectLayer",
+          "EnsureObjectLayer",
+          "ValidateObjectLayers"
+        ],
+        "blocks": [
+          "CadBlockXform",
+          "CadBlockDefinition",
+          "CadBlockRef",
+          "CadBlockContent",
+          "CadBlockLibraryEntry",
+          "CadBlockPlaceInsert",
+          "CadBlockPlaceInsertNoUndo",
+          "CadBlockInsertUnitsScale"
+        ],
+        "tables": [
+          "CadTable",
+          "CadTableCellRect",
+          "CadTableLocalToWorld",
+          "CadTableWorldToLocal",
+          "CadTableLayoutCells",
+          "CadTableStyle",
+          "CadTableFindStyle",
+          "CadTableBuiltinStyles"
+        ],
+        "text, styles and fonts": [
+          "TextStyle",
+          "TextStyles::Find",
+          "TextStyles::EnsureStandard",
+          "TextStyles::EffectiveFontFamily",
+          "DimensionStyle",
+          "DimensionStyles::Find",
+          "MultileaderStyle",
+          "cadfont::IsShxFontName",
+          "cadfont::PreferShxStrokes",
+          "CadLinetypeNameEqCi",
+          "CadLinetypeIsSolidCi",
+          "CadCanonicalLinetypeNameForDxf",
+          "CadColorStorageFromAci",
+          "CadColorEffectiveStorage"
+        ],
+        "paper layouts": [
+          "PaperLayout",
+          "PaperEntityRef",
+          "Viewport",
+          "PageSetup",
+          "PaperSizePreset",
+          "CadRasterImage",
+          "ModelToPaperIn",
+          "ToggleFrozenLayerInViewport",
+          "SetViewportLayerColor",
+          "ViewportLayerColorOverride",
+          "PlotScaleChoicesFor"
+        ],
+        "undo, redo and selection": [
+          "DrawingGeometrySnapshot",
+          "CaptureGeometrySnapshot",
+          "RestoreGeometrySnapshot",
+          "PushUndoSnapshot",
+          "CanUndo",
+          "CanRedo",
+          "DoUndo",
+          "DoRedo",
+          "CadTruncateActiveUndoStack",
+          "SelectedEntity"
+        ],
+        "internal, not public": [
+          "DrawingDocument as a whole (mixed storage; use the owned fields only)",
+          "AppCommandState live copies of drawing data",
+          "Block capture, import and connector workflows (Commands)",
+          "Block dynamics and grip drag helpers, until a public seam is chosen",
+          "undo history log writer (Debug and Core)",
+          "SelectedSubObject (Interaction policy coupling)"
+        ]
+      },
+      "existingTests": [
+        "tests/CadBlockTests.cpp",
+        "tests/CadTableTests.cpp",
+        "tests/TableStyleTests.cpp",
+        "tests/TextStyleTests.cpp",
+        "tests/EntityIdTests.cpp",
+        "tests/ObjectLayersTests.cpp",
+        "tests/PaperSpaceTests.cpp",
+        "tests/PaperTableTests.cpp",
+        "tests/PaperTypedPointsTests.cpp",
+        "tests/PaperLeaderTests.cpp",
+        "tests/CadFontNameTests.cpp",
+        "tests/MtextTextOpsTests.cpp",
+        "tests/DrawingSettingsTests.cpp",
+        "tests/SolidLayerColorTests.cpp",
+        "tests/ViewportZoomScaleTests.cpp",
+        "tests/headless/transcripts/undo-redo-identity.txt",
+        "tests/headless/transcripts/regression-56-text-entity-id.txt",
+        "tests/headless/transcripts/regression-58-offset-entity-id.txt",
+        "tests/headless/transcripts/regression-62-delete-circle-stride.txt"
+      ],
+      "testsCoveringDocumentNotOwned": [
+        "tests/CadBlockImportTests.cpp (block import is IO parsing reached from Commands)",
+        "tests/CadPipeRunCommandTests.cpp (uses DoUndo; piping is homeless)",
+        "tests/CadPropertyEditTests.cpp and tests/PropertyCommandTests.cpp (Commands property edits)",
+        "tests/SubObjectSelectionTests.cpp and tests/BoxSelectionPreviewTests.cpp (Interaction selection policy)",
+        "tests/LinetypeTessellationTests.cpp (Renderer tessellation of linetypes)",
+        "tests/ViewportCameraTests.cpp (Renderer camera)",
+        "tests/UcsTests.cpp (Math)",
+        "tests/DxfEntityEmitTests.cpp and tests/PlotFontTests.cpp (IO)",
+        "tests/ColorContrastTests.cpp, tests/RichTextLayoutTests.cpp and tests/MtextToolbarTests.cpp (UI)"
+      ],
+      "forbiddenDependencies": [
+        {
+          "from": "src/commands/CadEntities.hpp",
+          "to": "util/pointcloudoctree.hpp",
+          "system": "PointCloud",
+          "note": "Document may not depend on PointCloud. Harmless while CadEntities.hpp is folder-mapped to Commands, but it becomes a violation once the entity header is mapped to Document. The fix is to keep point-cloud pointers out of the entity header."
+        }
+      ],
+      "testGaps": [
+        "No test asserts that Document headers (CadEntities.hpp, PaperSpace.hpp, TextStyle.hpp, DimensionStyle.hpp) include only allowed systems. The ratchet covers this only after these files are mapped.",
+        "The undo snapshot covers Survey, Terrain and Pdf members, but no test in this audit checks that scope.",
+        "Selection-list storage (selection, hiddenEntityIds) was not checked for isolated unit coverage in this audit.",
+        "Layer rename reassigns entity layer strings across every attribute vector; coverage of that path was not verified in this audit."
+      ]
     }
   },
   "auditFindings": {
@@ -3966,7 +5272,13 @@
       "Profiling interface: measurements are stored in AppCommandState and exposed through Commands PIPEPERF/PERFHUD surfaces; the final map must decide whether Debug owns a reusable collector or only diagnostic algorithms.",
       "FrameWatch has no production call site yet; it is a tested diagnostic utility whose integration owner and lifecycle remain to be decided.",
       "The 2D vector vocabulary is split between curveisect::Vec2, Alignment Point2, geo::Pt, and TraverseCalc Point. Geometry owns its intersection vector today; the final map should decide whether Math supplies one shared 2D primitive.",
-      "Geodetic transformations and coordinate-system definitions are mixed under src/geo/ and currently mapped to Geometry. Survey owns coordinate-system policy; DrawingConversion.cpp has a separate Core-owned unit conversion section. The final map must assign the geodetic algorithms and coordinate-system data by concept."
+      "Geodetic transformations and coordinate-system definitions are mixed under src/geo/ and currently mapped to Geometry. Survey owns coordinate-system policy; DrawingConversion.cpp has a separate Core-owned unit conversion section. The final map must assign the geodetic algorithms and coordinate-system data by concept.",
+      "Piping: CadPipeRun, CadPipingSystem, CadPipePartType, CadBlockConnection and cadpiperun.hpp (NPS table and fillet rules) belong to no system. They are stored as Document data, so Document either owns a piping module or a separate Piping system is needed before the final map.",
+      "Imported lighting: CadDwgImportedLight, CadDwgImportedSun and CadDwgImportedLightList (CadEntities.hpp 1636-1672) are drawing-stored records with no owner. Document storage with a Renderer consumer is the likely answer.",
+      "Named views: NamedView (CadCommands.hpp 1488-1503) pairs camera state with a drawing name. It is stored in DrawingDocument but is view state, so the final map must decide where saved views live.",
+      "Drawing settings and units: DrawingSettings and drawingInsUnits are Document, while kDrawingUnitNames and kDrawingUnitCodes (cadblock.hpp 1669-1672) and the units block (1606-1635) are Core. The split is not decided; Core may own the unit vocabulary and Document the per-drawing value.",
+      "Style property parsing: src/util/styleproperty.hpp (StyleProperty, StyleNumber, StyleFlag) is used by DimensionStyle and style files, but no system claims it.",
+      "Solid display caches: CadSolidTessellation, CadSolidDisplayBatch and CadSolidDisplayGeometry (src/util/cadsolid.hpp 43-130) are Renderer caches stored next to Document solid pointers."
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
@@ -4018,7 +5330,17 @@
       "SAT parser/writer, STL and glTF import code are format adapters (IO) that consume Geometry APIs; cylinderfit is a point-cloud neighborhood algorithm (PointCloud), and solidpick is selection policy (Interaction), despite all living under src/util/.",
       "geom2d.hpp/.cpp mixes reusable planar predicates and bulge-arc math with view-anchor narrowing, framebuffer-dependent arc tessellation, and GL_LINES buffer construction. Geometry owns the analytic curve/predicate helpers; view/pixel policy and GPU-facing vertex generation belong to Renderer.",
       "HatchGeom.hpp and CadDimGeom.hpp operate on Document-owned CadFilledRegion and CadAnnotation data, so their domain-specific containment and dimension-frame calculations stay with Document. HatchBoundary.hpp is independent of those entity types and its planar subdivision algorithm is the Geometry section recorded above.",
-      "FILLET/CHAMFER geometric solving (CadCommands.hpp:437-846: offset candidates, exact line/conic intersections, tangency and chamfer-point construction) is embedded in the Commands header. Geometry owns these calculations; command selection, option policy, and entity mutation stay Commands. Extract the solver during the final-map/move ticket."
+      "FILLET/CHAMFER geometric solving (CadCommands.hpp:437-846: offset candidates, exact line/conic intersections, tangency and chamfer-point construction) is embedded in the Commands header. Geometry owns these calculations; command selection, option policy, and entity mutation stay Commands. Extract the solver during the final-map/move ticket.",
+      "DrawingDocument (CadCommands.hpp 1513-1660) is a composition of every system's storage: Survey (surveyPoints, alignments, viewFrameGroups, sampleLines, profiles, surfaceProfiles), Terrain (cadSurfaces), PointCloud (cadPointClouds), Pdf (pdfAttachments), and Renderer and Interaction (viewport camera, section clip and projection at 1516-1531). Document cannot own the type without depending on Survey, Terrain, PointCloud and Pdf. The final map must split the struct or move those members behind interfaces.",
+      "CadEntities.hpp includes util/pointcloudoctree.hpp. That is a PointCloud dependency in an entity header that Document will own, and Document is not allowed to depend on PointCloud. CadEntities.hpp also includes util/spline.hpp (Geometry, allowed) and util/ucs.hpp (Math, allowed).",
+      "Per-drawing data exists twice: AppCommandState holds live copies of tableStyles (3690), blockDefs (3762), textStyles (5030), dimensionStyles (5048) and paperLayouts (5700), and DrawingDocument holds the stored copy (1592, 1618, 1633, 1640, 1651). SaveDocumentToSnapshot and RestoreDocumentFromSnapshot (CadCommands.cpp 88-367) copy between them. The owner of the live copy is unresolved.",
+      "Undo snapshot scope: CaptureGeometrySnapshot (CadCommands.cpp 2138-2248) copies Survey, Terrain, Alignment and Pdf members as well as Document data, so undo spans systems. WriteUndoHistoryLogLine (2116-2135) is Debug and Core diagnostics that writes to the user data directory.",
+      "Block import is inside Commands: ImportSatFileToScratch and ReadFittingSidecar (CadBlocks.cpp 383-439) parse IO formats in Commands, so this is an IO-to-Commands seam.",
+      "Selection is coupled to Interaction: SelectedSubObject (CadCommands.hpp 196-211) stores a solidpick::Kind, an Interaction policy type, inside Document selection state.",
+      "Layer identity is the layer name string on each entity's EntityAttributes. CadRenameDrawingLayer rewrites every entity's layer string (CadCommands.cpp 30098-30150), so layer identity has no stable id.",
+      "Units are split between Core (cadblock.hpp 1606-1635 and 1669-1672) and Document (DrawingSettings, drawingInsUnits), with no single owner.",
+      "Font selection: CadFontName (src/font, folder Core) is Document text-style policy, while ShxFont (IO) loads the files. The renderer consumes both. The Core folder mapping is wrong for CadFontName.",
+      "Document change notification is polled through revisions (cadGpuRevision, savedRevision) and raw callbacks, not through Events publishers (see auditedEntries.Events)."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
@@ -4026,12 +5348,15 @@
       "src/commands/OrthoConstrain.hpp sits in the Commands folder. The file is assigned to Math here; the move ticket relocates it.",
       "src/ui/ is mapped to Qt, but it holds toolkit-neutral code: CommandBar.hpp, MtextToolbar.hpp, and RichTextLayout.hpp are UI; ModelingRibbon.hpp is GoSurveyEditor (ribbon tables); MtextRichSpans.hpp, MtextRichFormat.*, and MtextTextOps.hpp are Document (wire format and text operations); CadUiStyleWidgets.hpp is homeless. fileMappings are unchanged here, so the ratchet baseline does not move; the final-map ticket reassigns them.",
       "src/platform/ is mapped wholesale to Windows, but WinFileDialogs.hpp is the UI file-dialog interface and HeadlessFileDialogs.* is the Headless backend. Assign per file in the final map.",
-      "src/geo/ is currently mapped wholesale to Geometry, but the files implement geodetic coordinate-system selection, local survey grids, and ECEF/Web Mercator transforms, which belong with Survey coordinate systems. DrawingConversion.cpp also contains a Core-owned unit-conversion section. Reassign by file in the final map."
+      "src/geo/ is currently mapped wholesale to Geometry, but the files implement geodetic coordinate-system selection, local survey grids, and ECEF/Web Mercator transforms, which belong with Survey coordinate systems. DrawingConversion.cpp also contains a Core-owned unit-conversion section. Reassign by file in the final map.",
+      "src/commands/ is mapped to Commands but holds Document data: CadEntities.hpp, PaperSpace.hpp, TextStyle.hpp, DimensionStyle.hpp, MultileaderStyle.hpp, EntityId.*, CadLinetype.*, CadColor.hpp, and the DrawingDocument and undo code in CadCommands.hpp and CadCommands.cpp. _system_for gives folder mappings precedence over fileMappings, so file-level Document mappings cannot take effect inside this folder until the move.",
+      "src/ui/MtextRichSpans.hpp, MtextRichFormat.* and MtextTextOps.hpp are Document under the Qt folder mapping, as the UI audit already noted."
     ],
     "namespaceGaps": [
       "ADR-0006 requires GoSurvey::<System> namespaces. NumFormat and AngleFormat use the global namespace (anglefmt_detail is global). StringUtil is namespace StringUtil. Core.cpp's detail is GoSurvey::Core::detail. Namespace work follows the move, not this audit.",
       "ray3d uses namespace ray3d and ucs uses namespace ucs. ADR-0006 requires GoSurvey::<System>, which would be GoSurvey::Math. OrthoConstrain.hpp uses global functions. Namespace work follows the move, not this audit.",
-      "UI headers use namespaces cmdbar, mtexttoolbar, richtext, modelingribbon, headless, and failureReportUi, and WinFileDialogs.hpp uses global functions. ADR-0006 requires GoSurvey::UI for UI-owned code. Namespace work follows the move, not this audit."
+      "UI headers use namespaces cmdbar, mtexttoolbar, richtext, modelingribbon, headless, and failureReportUi, and WinFileDialogs.hpp uses global functions. ADR-0006 requires GoSurvey::UI for UI-owned code. Namespace work follows the move, not this audit.",
+      "Document types are in the global namespace: the CadEntities.hpp structs (CadArc, CadAnnotation, CadTable, PaperLayout, CadBlockDefinition and others) and DrawingDocument. ADR-0006 requires GoSurvey::Document. TextStyles, DimensionStyles, cadfont and CadTable* namespaces exist but are partial."
     ],
     "notCoreDespiteName": [
       "src/util/framewatch.hpp and src/util/docinvariants.*: Debug (diagnostics), not logging.",
@@ -4084,6 +5409,17 @@
       "Swept and not assigned to UI: platform/HeadlessFileDialogs.* is the Headless backend's answer queue, which is an implementation, not the interface.",
       "Swept and not assigned to UI: src/qt/* (EditorDialogs.cpp, EditorChrome.cpp, EditorRibbon.cpp, QtSplash.cpp, FailureReport.cpp, and others) are Qt implementation or GoSurveyEditor composition, not interface. Their folder mapping is provisional.",
       "Swept and not assigned to UI: util/WhatsNewLogic.hpp and .cpp are pure version-gating rules for the What's New billboard (no UI, no filesystem, REQ-336). The billboard window is GoSurveyEditor's; the rules have no toolkit dependency. The final map picks Core or GoSurveyEditor. Tested by tests/WhatsNewLogicTests.cpp."
+    ],
+    "notDocumentDecisions": [
+      "Swept and not assigned to Document: CadClipboard (CadCommands.hpp 1031-1085) and clipboard copy/paste are Commands workflow; they copy Document records but do not own drawing state.",
+      "Swept and not assigned to Document: PaperSpace.hpp ViewportTextOverlayPlan (337-341) is an overlay drawing plan (Renderer). SnapPaperInchPoint, PaperChainHitsBox and SamplePaperArc (520-700) are paper-space hit and sampling policy (Interaction and Renderer).",
+      "Swept and not assigned to Document: NamedView (CadCommands.hpp 1488-1503) stores pan, zoom, projection and UCS for a saved view. It is view state (Renderer), though it is stored in the drawing; see homelessConcepts.",
+      "Swept and not assigned to Document: CadPipeRun and CadPipingSystem (CadEntities.hpp 836-881) and the pipe part types in cadblock.hpp (131-297) are piping, which has no owner; see homelessConcepts.",
+      "Swept and not assigned to Document: CadDwgImportedLight, CadDwgImportedSun and their list (CadEntities.hpp 1636-1672) are imported lighting records with unresolved ownership; see homelessConcepts.",
+      "Swept and not assigned to Document: the BConnect, BlockFitting, InsertAdvance and insert-dialog functions in CadBlocks.cpp are Commands orchestration, even though they edit Document block connections.",
+      "Swept and not assigned to Document: CadMesh, CadPointCloud, CadTin, CadSurface and feature-line types (CadEntities.hpp 1248-1624) are Geometry, PointCloud or Terrain data. DrawingDocument stores them, but Document does not own them.",
+      "Swept and not assigned to Document: CadColorResolveRgb (CadColor.hpp) is consumed by Renderer. The storage and ACI parsing are Document, and the section is recorded.",
+      "Swept and not assigned to Document: SheetGrid.hpp and DataExtract.hpp are export grids for tabular output (IO)."
     ]
   }
 }
