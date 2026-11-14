@@ -1971,15 +1971,20 @@
       "path": "src/qt/EditorViewport.cpp",
       "lines": [
         1612,
-        1630
+        1625
       ],
       "system": "Events",
-      "concern": "Qt pointer enter/leave wrapper only",
+      "concern": "Qt pointer enter/leave input boundary",
       "symbols": [
         "EditorViewport::enterEvent",
         "EditorViewport::leaveEvent"
       ],
-      "note": "Events owns receipt/routing of pointer lifecycle input only; cursor presentation and widget lifecycle remain Qt."
+      "note": "Enter/leave input receipt only; native cursor state and widget lifecycle remain Qt-owned. Range ends before WorldPoint.",
+      "ownershipKind": "mixed",
+      "eventsScope": "Qt pointer lifecycle input receipt only",
+      "otherOwners": [
+        "Qt"
+      ]
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -1987,12 +1992,20 @@
         1640,
         1692
       ],
-      "system": "Events",
-      "concern": "deferred click event commit",
+      "system": "Interaction",
+      "concern": "deferred idle-click selection mutation",
       "symbols": [
         "EditorViewport::CommitPendingIdleSelectionClick"
       ],
-      "note": "Converts a delayed click into selection changes; event timing is Events-facing, selection policy and mutation remain Interaction/Document."
+      "note": "Selection mutation belongs to Interaction/Document/Survey; line 1690 emits the Events-facing raw changed callback. The refresh is performed by the EditorWindow subscriber at EditorWindow.cpp:845.",
+      "ownershipKind": "mixed",
+      "eventsScope": "shared changed callback emission at line 1690 only",
+      "otherOwners": [
+        "Events",
+        "Document",
+        "Survey",
+        "Qt"
+      ]
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2001,11 +2014,11 @@
         2112
       ],
       "system": "Events",
-      "concern": "Qt mouse press wrapper only",
+      "concern": "Qt mouse press input boundary (mixed method)",
       "symbols": [
         "EditorViewport::mousePressEvent"
       ],
-      "note": "Range locates the Qt event adapter method; Events owns receipt and input-event routing only. Selection, snapping, hover, grip, command, and ViewCube policies embedded in the method remain Interaction/Commands/Renderer. This is a mixed-method locator, not ownership of every statement in the line range; `otherOwners` retain the embedded policy and state changes.",
+      "note": "Events owns Qt event receipt and input routing only; pending idle-click state is armed at lines 2095-2100. Selection, snapping, hover, grip, command, and ViewCube policies remain with the systems named in otherOwners.",
       "ownershipKind": "mixed",
       "eventsScope": "Qt event receipt, normalization, phase, and routing glue only",
       "otherOwners": [
@@ -2014,8 +2027,7 @@
         "Commands",
         "Renderer",
         "Document",
-        "Survey",
-        "Pdf"
+        "Survey"
       ]
     },
     {
@@ -2025,7 +2037,7 @@
         2222
       ],
       "system": "Events",
-      "concern": "Qt double-click wrapper only",
+      "concern": "Qt double-click input boundary (mixed method)",
       "symbols": [
         "EditorViewport::mouseDoubleClickEvent"
       ],
@@ -2046,11 +2058,11 @@
         2466
       ],
       "system": "Events",
-      "concern": "Qt mouse move wrapper only",
+      "concern": "Qt mouse move input boundary (mixed method)",
       "symbols": [
         "EditorViewport::mouseMoveEvent"
       ],
-      "note": "Range locates the Qt event adapter method; Events owns receipt and input-event routing only. Cursor presentation and snap/hover/selection interaction embedded in the method remain Qt/Interaction. This is a mixed-method locator, not ownership of every statement in the line range; `otherOwners` retain the embedded policy and state changes.",
+      "note": "Events owns Qt event receipt and input routing only; camera motion, cursor display, snapping, hover, and selection interaction remain with Qt/Renderer/Interaction.",
       "ownershipKind": "mixed",
       "eventsScope": "Qt event receipt, normalization, phase, and routing glue only",
       "otherOwners": [
@@ -2069,11 +2081,11 @@
         2562
       ],
       "system": "Events",
-      "concern": "Qt mouse release wrapper only",
+      "concern": "Qt mouse release input boundary (mixed method)",
       "symbols": [
         "EditorViewport::mouseReleaseEvent"
       ],
-      "note": "Range locates the Qt event adapter method; Events owns input phase and release routing only. Grip, selection, and command state transitions embedded in the method remain Interaction/Commands. This is a mixed-method locator, not ownership of every statement in the line range; `otherOwners` retain the embedded policy and state changes.",
+      "note": "Events owns input phase and release routing only; pending idle-click state resolves at lines 2502-2509, and a held right-click cancels the Qt timer at line 2553. Grip, selection, and command state transitions remain with Interaction/Commands/Document/Survey.",
       "ownershipKind": "mixed",
       "eventsScope": "Qt event receipt, normalization, phase, and routing glue only",
       "otherOwners": [
@@ -2091,13 +2103,19 @@
         2593
       ],
       "system": "Events",
-      "concern": "right-click result dispatch wrapper only",
+      "concern": "right-click outcome routing (mixed methods)",
       "symbols": [
         "EditorViewport::RightPress",
         "EditorViewport::RightClickAsEnter",
         "EditorViewport::PerformRightClick"
       ],
-      "note": "Events owns routing the resolved input outcome to its recipient; the timed-click verdict remains Commands policy, command submission remains Commands, and menu construction remains Qt."
+      "note": "Events owns routing an interpreted input outcome; Commands owns the timed-click verdict and command submission, while Qt owns timer scheduling and menu presentation.",
+      "ownershipKind": "mixed",
+      "eventsScope": "route the interpreted pointer outcome only",
+      "otherOwners": [
+        "Commands",
+        "Qt"
+      ]
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2106,7 +2124,7 @@
         2612
       ],
       "system": "Events",
-      "concern": "Qt wheel wrapper only",
+      "concern": "Qt wheel input boundary (mixed method)",
       "symbols": [
         "EditorViewport::wheelEvent"
       ],
@@ -2126,7 +2144,7 @@
         2653
       ],
       "system": "Events",
-      "concern": "Qt key press wrapper only",
+      "concern": "Qt key press input boundary (mixed method)",
       "symbols": [
         "EditorViewport::keyPressEvent"
       ],
@@ -2136,26 +2154,27 @@
       "otherOwners": [
         "Qt",
         "Commands",
-        "GoSurveyEditor"
+        "Interaction",
+        "Document"
       ]
     },
     {
       "path": "src/qt/EditorViewport.cpp",
       "lines": [
         2654,
-        2673
+        2662
       ],
       "system": "Events",
-      "concern": "Qt key release wrapper only",
+      "concern": "Qt key release input boundary (mixed method)",
       "symbols": [
         "EditorViewport::keyReleaseEvent"
       ],
-      "note": "Events owns the input phase and routing only; keyboard behavior stays with Qt/Commands. This is a mixed-method locator, not ownership of every statement in the line range; `otherOwners` retain the embedded policy and state changes.",
+      "note": "Events owns key-release receipt/routing; subobject-hover state is Interaction-owned. Range ends before SetOrientation, which is Qt/Renderer.",
       "ownershipKind": "mixed",
       "eventsScope": "Qt event receipt, normalization, phase, and routing glue only",
       "otherOwners": [
         "Qt",
-        "Commands"
+        "Interaction"
       ]
     },
     {
@@ -2188,14 +2207,20 @@
       "path": "src/qt/EditorViewport.cpp",
       "lines": [
         317,
-        325
+        323
       ],
-      "system": "Events",
-      "concern": "timed right-click input notification",
+      "system": "Qt",
+      "concern": "timed right-click input notification boundary",
       "symbols": [
         "m_RightTimer timeout callback"
       ],
-      "note": "Qt timer delivery resolves a held right-click and emits the viewport change callback. Hold threshold and verdict are Commands policy; context-menu construction is Qt."
+      "note": "Qt delivers the timeout; line 320 routes the held-menu outcome through PerformRightClick and line 321 emits the changed callback. Commands owns the hold threshold/verdict; Qt owns timer scheduling and local refresh.",
+      "ownershipKind": "mixed",
+      "eventsScope": "Events owns routing the interpreted held-menu result at line 320 and the changed notification at line 321; Qt owns timer scheduling and update refresh.",
+      "otherOwners": [
+        "Qt",
+        "Commands"
+      ]
     },
     {
       "path": "src/qt/EditorViewport.hpp",
@@ -2236,7 +2261,7 @@
         2130
       ],
       "system": "Events",
-      "concern": "Qt app-wide input filter wrapper only",
+      "concern": "Qt app-wide input boundary (mixed method)",
       "symbols": [
         "EditorWindow::eventFilter"
       ],
@@ -2246,7 +2271,8 @@
       "otherOwners": [
         "Qt",
         "Commands",
-        "GoSurveyEditor"
+        "GoSurveyEditor",
+        "Document"
       ]
     },
     {
@@ -2256,7 +2282,7 @@
         450
       ],
       "system": "Events",
-      "concern": "Qt drafting input adapter wrapper only",
+      "concern": "Qt drafting input boundary (mixed method)",
       "symbols": [
         "EditorWindow::DraftingInputEvent"
       ],
@@ -2266,7 +2292,8 @@
       "otherOwners": [
         "Qt",
         "Commands",
-        "GoSurveyEditor"
+        "GoSurveyEditor",
+        "Document"
       ]
     },
     {
@@ -2293,7 +2320,7 @@
       "symbols": [
         "AdjustmentWindow::CommitToDrawing (drawingChanged)"
       ],
-      "note": "Emits drawingChanged after committing adjustment results into the active drawing; document mutation remains outside Events."
+      "note": "After the method guards, emits drawingChanged regardless of count; it may signal a no-op commit attempt when count is zero. It is a Qt callback; document mutation remains outside Events."
     },
     {
       "path": "src/qt/EditorWindow.cpp",
@@ -2593,6 +2620,217 @@
         "EditorViewport::changed callback"
       ],
       "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        321,
+        321
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact emission from the timed right-click callback; same broad no-argument refresh notification described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2095,
+        2100
+      ],
+      "system": "Events",
+      "concern": "deferred idle-click pending-state arm",
+      "symbols": [
+        "EditorViewport::mousePressEvent"
+      ],
+      "note": "Stores the pending idle-click state and selection snapshot; the actual selection decision remains Interaction/Document/Survey.",
+      "ownershipKind": "mixed",
+      "eventsScope": "pending-click state capture only",
+      "otherOwners": [
+        "Qt",
+        "Interaction",
+        "Document"
+      ]
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2502,
+        2509
+      ],
+      "system": "Events",
+      "concern": "deferred idle-click pending-state resolution",
+      "symbols": [
+        "EditorViewport::mouseReleaseEvent"
+      ],
+      "note": "Resolves and clears pending click state on release; selection policy and mutation remain Interaction/Document/Survey.",
+      "ownershipKind": "mixed",
+      "eventsScope": "pending-click state resolution on release only",
+      "otherOwners": [
+        "Qt",
+        "Interaction",
+        "Document",
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        240,
+        240
+      ],
+      "system": "Qt",
+      "concern": "Qt single-shot right-click timer setup",
+      "symbols": [
+        "EditorViewport::EditorViewport (m_RightTimer)"
+      ],
+      "note": "Configures the Qt timer as single-shot; the Commands-owned hold threshold is supplied when RightPress starts it at line 2571."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2571,
+        2571
+      ],
+      "system": "Qt",
+      "concern": "Qt timer arm for held right-click",
+      "symbols": [
+        "EditorViewport::RightPress"
+      ],
+      "note": "Starts the Qt timer using the Commands-owned rightClickLongerClickMs threshold; timer scheduling is Qt-owned.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2553,
+        2553
+      ],
+      "system": "Qt",
+      "concern": "cancel held right-click timer on release",
+      "symbols": [
+        "EditorViewport::mouseReleaseEvent"
+      ],
+      "note": "Stops the Qt timer when the held right button is released."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        241,
+        296
+      ],
+      "system": "Qt",
+      "concern": "local grip-menu hover dwell timer setup",
+      "symbols": [
+        "m_GripMenuTimer timeout callback"
+      ],
+      "note": "500 ms widget-local hover dwell before showing a grip menu; Qt schedules it and the callback applies local grip-menu behavior using Interaction/Commands state.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Interaction",
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        137,
+        155
+      ],
+      "system": "Qt",
+      "concern": "local grip-menu dismissal timer",
+      "symbols": [
+        "GripMenuDismissFilter::m_Timer"
+      ],
+      "note": "One-second QMenu-local dismissal timer; Qt owns this local menu lifecycle."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        297,
+        298
+      ],
+      "system": "Qt",
+      "concern": "viewport animation timer setup",
+      "symbols": [
+        "EditorViewport::m_ViewAnimTimer"
+      ],
+      "note": "Qt timer setup for local viewport camera animation; animation policy is Renderer-owned."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2711,
+        2716
+      ],
+      "system": "Qt",
+      "concern": "viewport animation step invoked by timer",
+      "symbols": [
+        "EditorViewport::StepViewAnimation"
+      ],
+      "note": "The Qt timeout lambda invokes StepViewAnimation; it advances the animation through Commands-owned CadTickViewAnimation. Camera state/policy remains Renderer-owned.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Renderer",
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        305,
+        305
+      ],
+      "system": "Qt",
+      "concern": "stop map-capture progress timer",
+      "symbols": [
+        "EditorViewport::m_MapTimer"
+      ],
+      "note": "Qt stops local map-capture polling; the changed callback emission at line 312 is listed separately as Events-facing."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        315,
+        315
+      ],
+      "system": "Qt",
+      "concern": "start map-capture progress timer",
+      "symbols": [
+        "EditorViewport::m_MapTimer"
+      ],
+      "note": "Qt schedules local map-capture progress polling."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        330,
+        330
+      ],
+      "system": "Qt",
+      "concern": "stop map-capture progress timer",
+      "symbols": [
+        "EditorViewport::m_MapTimer"
+      ],
+      "note": "Qt stops local map-capture polling when capture progress completes."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        752,
+        752
+      ],
+      "system": "Qt",
+      "concern": "start map-capture progress timer",
+      "symbols": [
+        "EditorViewport::m_MapTimer"
+      ],
+      "note": "Qt schedules local map-capture progress polling."
     }
   ],
   "auditedEntries": {
@@ -2796,7 +3034,7 @@
       "currentFiles": [],
       "currentSections": [
         "src/qt/EditorViewport.hpp: viewport change callback, Qt input override declarations, and app-level input callback declarations",
-        "src/qt/EditorViewport.cpp: event-adapter boundaries inside Qt input handlers and event-result dispatch (mixed method bodies retain Interaction/Commands/Qt behavior)",
+        "src/qt/EditorViewport.cpp: event-adapter boundaries inside Qt input handlers and event-result dispatch (mixed method bodies retain Interaction/Commands/Qt behavior); Qt timer scheduling remains Qt-owned, with only result routing/notification at the timer callback boundary noted as Events-facing",
         "src/qt/EditorWindow.cpp and src/qt/EditorInput.cpp: app-wide Qt event filters and drafting-input event adapter boundaries",
         "src/qt/AdjustmentWindow.hpp/.cpp and src/qt/EditorWindow.cpp: drawingChanged notification declaration, emission, and subscription"
       ],
@@ -2826,8 +3064,22 @@
         "tests/QtEditorTests.cpp::issue903SnapOverrideAppliesToViewportPick",
         "tests/QtEditorTests.cpp::qtViewportGripDragCommitsAndEscapeRestores",
         "tests/QtEditorTests.cpp::issue1034ViewCubeClicksNeverReachTheViewportBehindIt",
-        "tests/QtEditorTests.cpp::issue1037CtrlWheelZoomKeepsThePointerAnchored",
-        "tests/QtEditorTests.cpp::timeSensitiveRightClickIsEnterWhenQuickAndTheMenuWhenHeld (Qt integration path; verdict policy is Commands-owned)"
+        "tests/QtEditorTests.cpp::timeSensitiveRightClickIsEnterWhenQuickAndTheMenuWhenHeld (Qt integration path; verdict policy is Commands-owned)",
+        "tests/QtEditorTests.cpp::tabsAppearInitiallyAndTypingRoutesFromEditorChrome",
+        "tests/QtEditorTests.cpp::issue1100QtZoomWindowClicksBothCorners",
+        "tests/QtEditorTests.cpp::issue1024QtMiddleDoubleClickZoomsExtentsMidCommand",
+        "tests/QtEditorTests.cpp::issue1034ViewportHidesNativeCursorAndClicksDoNotRebuildTheToolspace",
+        "tests/QtEditorTests.cpp::task078IdleAndCommandDragBoxesAccumulateWithoutSwallowingClicks",
+        "tests/QtEditorTests.cpp::issue1040QtCommandFinderFuzzyKeyboardAndMouseSelection",
+        "tests/QtEditorTests.cpp::issue1081QtExactOpenWinsOverOpenPackSuggestion",
+        "tests/QtEditorTests.cpp::issue805TypedCutWinsOverHighlightedSuggestion",
+        "tests/QtEditorTests.cpp::qtCrossingSelectionDragAndEscapeCancellation",
+        "tests/QtEditorTests.cpp::orbitCommandLeftDragTumblesView",
+        "tests/QtEditorTests.cpp::panCommandLeftDragMovesView",
+        "tests/QtEditorTests.cpp::frontViewPanMovesInCameraPlane",
+        "tests/QtEditorTests.cpp::qtViewportGizmoDragCommitsOneUndoableTransform",
+        "tests/QtEditorTests.cpp::qtViewportSectionPlaneGripDragEndsOnReleaseAndUndoes",
+        "tests/QtEditorTests.cpp::rightClickModesFollowThePreferencesForEveryContext (viewport no-selection branches only; Commands policy)"
       ],
       "testGaps": [
         "No toolkit-neutral Events types, dispatcher, or focused event-system tests exist yet; no focused test covers AdjustmentWindow::drawingChanged through EditorWindow refresh, and no test directly names EditorWindow::eventFilter/EditorWindow::DraftingInputEvent (current coverage is via broader Qt integration cases).",
@@ -2836,7 +3088,10 @@
         "No typed command-state changed publisher exists today; the viewport changed callback is an untyped refresh callback, not dedicated command-state event coverage."
       ],
       "testsCoveringNotOwned": [
-        "tests/RightClickTests.cpp and tests/CadPropertyEditTests.cpp: CadClassifyRightClick/CadRightClickHoldIsMenu command-policy tests; not Events-owned."
+        "tests/RightClickTests.cpp and tests/CadPropertyEditTests.cpp: CadClassifyRightClick/CadRightClickHoldIsMenu command-policy tests; not Events-owned.",
+        "tests/QtEditorTests.cpp::windowsOpenDrawingMessageUsesExistingEditorWindow exercises EditorWindow::nativeEvent; that Qt/Windows IPC path is not Events-owned.",
+        "tests/QtEditorTests.cpp::issue1037CtrlWheelZoomKeepsThePointerAnchored exercises PdfWindow/PDF canvas input; not viewport Events coverage.",
+        "tests/QtEditorTests.cpp::issue1037MiddleDragPansWithoutTouchingTools exercises PdfWindow/PDF canvas input; not viewport Events coverage."
       ]
     }
   },
@@ -2885,10 +3140,11 @@
       "Viewport change notification is a raw std::function<void()> (EditorViewport::changed), wired in EditorWindow to ResetDraftingInput() and Refresh(). The callback conflates command-state changes, repaint/refresh, and input reset; a future Events interface must distinguish those causes without taking ownership of UI refresh policy.",
       "Document dirty tracking is revision polling, not a change event: EditorWindow compares m_State.cadGpuRevision with m_State.activeDocSavedRevision for the active drawing, and documents[i].cadGpuRevision with documents[i].savedRevision for other tabs; BCLOSE compares cadGpuRevision with blockEditCleanRevision. These counters are Commands/Document-owned and no DocumentChangedEvent publisher contract exists yet.",
       "Qt event handlers invoke command and interaction policy directly, including CadClassifyRightClick/CadRightClickHoldIsMenu, snapping, selection, command submission, and viewport navigation. The Events boundary should transport intent only; these policies stay with Commands/Interaction/Renderer.",
-      "AdjustmentWindow::drawingChanged is the current explicit document-change notification: CommitToDrawing emits it after mutation and EditorWindow subscribes only to refresh. It is a Qt callback, not a toolkit-neutral publisher; the final map must connect it to a Document-owned change source or an Events adapter.",
+      "AdjustmentWindow::drawingChanged is the current explicit adjustment commit-attempt notification: after its guards, CommitToDrawing emits before the count==0 check, including no-op attempts, and EditorWindow subscribes only to refresh. It is a Qt callback, not a toolkit-neutral publisher; the final map must connect it to a Document-owned change source or an Events adapter.",
       "The viewport changed callback is invoked from mouse/key handlers and also from grip-menu actions, map-capture status polling, selection-box cancellation, and the timed right-click callback (all emission sites are recorded in sections). One no-argument callback currently conflates command/interaction state changes and refresh-only updates.",
       "The app-wide Qt input route is split between EditorWindow::eventFilter and EditorWindow::DraftingInputEvent in EditorInput.cpp; they intercept keys, shortcut overrides, mouse presses, text entry, undo/cancel, and command submission. Events can own neutral input transport, while Qt focus routing and Commands own policy.",
-      "The Events input boundary in this audit means app-level input routed into command/interaction state. Widget-local event callbacks remain with Qt or the domain widget (for example PdfCanvas to PdfWindow); those callbacks use Qt types and implement local presentation or PDF gesture policy rather than a shared event contract."
+      "The Events input boundary in this audit means app-level input routed into command/interaction state. Widget-local event callbacks remain with Qt or the domain widget (for example PdfCanvas to PdfWindow); those callbacks use Qt types and implement local presentation or PDF gesture policy rather than a shared event contract.",
+      "EditorWindow::CloseDrawing (EditorWindow.cpp:2501-2527) and closeEvent (EditorWindow.cpp:2529-2560) orchestrate Qt window/tab closure with GoSurveyEditor SwitchDrawing/save flow, Qt ConfirmSave, Document dirty state/documents and drawing-tab erasure, Renderer viewport geometry invalidation, Commands ProjectsWithUnsavedPoints/CancelActiveCommand/RestoreDocumentFromSnapshot/FlushProjectPointDb, IO gsproj::Release, Qt settings persistence, and the Network installer path. The code lives in src/qt, so this is app-level workflow inside the Qt adapter layer, not a toolkit-neutral Events publisher."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
@@ -2918,7 +3174,7 @@
       "Swept and not assigned to Events: CadClassifyRightClick and CadRightClickHoldIsMenu in src/commands/CadCommands.hpp, plus tests/RightClickTests.cpp. They classify a timed click using command mode and last-command state, so the policy belongs to Commands; Qt only supplies press duration and dispatches the result.",
       "Swept and not assigned to Events: mouse selection, snap/hover, grip, ViewCube, and camera navigation behavior in EditorViewport.cpp. The Qt override transports the input, while behavior belongs to Interaction, Commands, Renderer, or Qt as recorded in the section notes.",
       "Swept and not assigned to Events: cadGpuRevision and savedRevision fields/comparisons. They implement Document/Commands dirty tracking and currently have no event publisher contract.",
-      "Swept and not assigned to Events: widget-local Qt event overrides in src/qt/AdjustmentEditor.*, src/qt/AdjustmentWindow.cpp/.hpp (except drawingChanged), src/qt/EditorChrome.*, src/qt/DrawingDocumentTabBar.*, src/qt/EditorProperties.cpp, src/qt/NonDismissableDialog.hpp, src/qt/PdfCanvas.hpp, src/qt/PdfWindow.*, src/qt/EditorRibbon.cpp, src/qt/EditorLayerManager.cpp, src/qt/PdfScaleUi.cpp, src/qt/PdfRibbon.hpp, src/qt/EditorProjectAttach.cpp, and src/qt/EditorAlignmentCreate.hpp/.cpp. In src/qt/EditorWindow.cpp, closeEvent/changeEvent/showEvent/resizeEvent are Qt-owned; its app-wide eventFilter is separately listed in Events sections. These are widget presentation, local gestures, or domain-specific PDF input; app-wide command/interaction input adapters are listed in Events sections.",
+      "Swept and not assigned to Events: widget-local Qt event overrides in src/qt/AdjustmentEditor.*, src/qt/AdjustmentWindow.cpp/.hpp (except drawingChanged), src/qt/EditorChrome.* widget-local handlers (excluding EditorWindow::nativeEvent, classified separately), src/qt/DrawingDocumentTabBar.*, src/qt/EditorProperties.cpp, src/qt/NonDismissableDialog.hpp, src/qt/PdfCanvas.hpp, src/qt/PdfWindow.*, src/qt/EditorRibbon.cpp, src/qt/EditorLayerManager.cpp, src/qt/PdfScaleUi.cpp, src/qt/PdfRibbon.hpp, src/qt/EditorProjectAttach.cpp, and src/qt/EditorAlignmentCreate.hpp/.cpp. In src/qt/EditorWindow.cpp, changeEvent/showEvent/resizeEvent are Qt-owned; closeEvent workflow is recorded separately; its app-wide eventFilter is separately listed in Events sections. These are widget presentation, local gestures, or domain-specific PDF input; app-wide command/interaction input adapters are listed in Events sections.",
       "Swept and not assigned to Events: thumbnailReady, partThumbnailsChanged, and PartThumbnails in src/qt/EditorViewport.hpp. These callbacks and rendered thumbnail data refresh the Qt palette and remain with Qt/Renderer.",
       "Swept and not assigned to Events: GripMenuDismissFilter::eventFilter in src/qt/EditorViewport.cpp. It starts/stops a Qt timer on QMenu enter/leave solely to dismiss that local menu.",
       "Swept and not assigned to Events: FloatingCommandBar::refreshViewportCursor, a std::function callback in src/qt/EditorChrome.hpp, and FloatingCommandBar::enterEvent/leaveEvent/mouseMoveEvent in EditorChrome.cpp. Those three handlers refresh local cursor presentation; keyPressEvent only accepts the key. Cursor policy and display remain Qt-owned.",
@@ -2927,9 +3183,19 @@
       "Swept and not assigned to Events: src/util/framewatch.hpp::Event. It is a Debug frame-stall enum (also noted by notCoreDespiteName), not an input or document-change event.",
       "Swept and not assigned to Events: CadClassifyRightClick tests in tests/CadPropertyEditTests.cpp; they test Commands policy, not event transport.",
       "Swept and not assigned to Events: EditorViewport::RefreshCommandCursor and FloatingCommandBar::refreshViewportCursor in src/qt/EditorViewport.cpp/src/qt/EditorChrome.*. They update native cursor presentation in response to local pointer position; the callback is Qt-owned.",
-      "The Qt event exclusions include local window lifecycle handlers in src/qt/AdjustmentWindow.cpp/.hpp; only its drawingChanged notification is Events-facing. The local closeEvent/changeEvent remain Qt-owned.",
+      "The Qt event exclusions include local window lifecycle handlers in src/qt/AdjustmentWindow.cpp/.hpp; Qt delivers closeEvent/changeEvent, while AdjustmentWindow handles local lifecycle and ConfirmDiscard is an adjustment/document workflow. Only drawingChanged is Events-facing.",
       "Swept and not assigned to Events: FloatingCommandBar::eventFilter in src/qt/EditorChrome.cpp. It handles local grip dragging and persists the bar width/anchor through Qt settings; it does not publish app input or change events.",
-      "Exclusion rule for remaining Qt event overrides: resizeEvent, showEvent, changeEvent, and closeEvent that manage only local widget/window lifecycle stay in Qt. Only application-wide input routing or cross-system state-change notifications are assigned to Events."
+      "Exclusion rule for remaining Qt event overrides: widget-local resizeEvent/showEvent/changeEvent and closeEvent delivery stays with Qt; any application workflow inside a closeEvent is recorded separately under its owning application/domain systems. Only application-wide input routing or cross-system state-change notifications are assigned to Events.",
+      "Swept and not assigned to Events: EditorWindow::closeEvent (src/qt/EditorWindow.cpp:2529-2560). Qt delivers the request. The handler ignores close if a child refuses (2531), ConfirmSave is canceled (2535), or ProjectsWithUnsavedPoints refuses (2537-2542). The installer path is gated by m_UpdateExitPending (2550), not by m_LaunchInstaller being set. If LaunchInstallerAndExit returns false, the handler clears the pending flag, normalizes the phase only when it is still UpdateReady, restores drawing presentation, and ignores the close (2550-2558); an update launch failure can leave the phase Failed. It accepts the close when no update exit is pending or the launch succeeds. GoSurveyEditor coordinates child/tab/save workflow; Commands owns ProjectsWithUnsavedPoints; QSettings geometry/state persistence is Qt. LaunchInstallerAndExit starts the Network/update installer path but does not itself exit the process.",
+      "Swept and not assigned to Events: AdjustmentWindow::closeEvent in src/qt/AdjustmentWindow.cpp. Qt delivers the close request; the method applies a busy guard and runs ConfirmDiscard for the adjustment document workflow.",
+      "Swept and not assigned to Events: EditorWindow::nativeEvent (src/qt/EditorChrome.cpp:128-225). Qt invokes this GoSurveyEditor window adapter for Windows messages. On WM_COPYDATA, invalid payloads set *result=FALSE and return true (152-153); valid payloads queue a lambda that shows/raises/activates the window and calls OpenDrawing(path), set *result=TRUE, and return true (148-150). Native hit-test/minmax and WM_NCCALCSIZE use Win32 message handling. WM_ENTERSIZEMOVE/WM_EXITSIZEMOVE call EditorWindow::BeginInteractiveResize/EndInteractiveResize, which invoke EditorViewport resize-preview operations rather than Win32 APIs. Windows supplies the OS/IPC contract; this app-level external-open ingress is OS-specific and not a toolkit-neutral Events publisher.",
+      "Swept and not assigned to Events: EditorViewport::SetOrientation in src/qt/EditorViewport.cpp. It sets camera orientation programmatically for ViewCube/navigation and belongs to Qt/Renderer, not input-event transport.",
+      "Swept and not assigned to Events: m_GripMenuTimer in src/qt/EditorViewport.cpp (setup 241-243; hover-driven start/stop 2330-2337). Its 500 ms dwell opens a local grip menu; it is Qt/Interaction widget behavior, not app-wide event-loop scheduling owned by Events.",
+      "Swept and not assigned to Events: EditorWindow::CloseDrawing (src/qt/EditorWindow.cpp:2501-2527). The tab-close workflow uses the Qt ConfirmSave prompt, SwitchDrawing/GoSurveyEditor orchestration, Document ownership of m_State.documents and drawing-tab erasure, Renderer ownership of m_Viewport->InvalidateGeometry(), Commands ProjectsWithUnsavedPoints/CancelActiveCommand/RestoreDocumentFromSnapshot/FlushProjectPointDb, and IO gsproj::Release before closing the drawing. This app workflow is not a shared event publisher.",
+      "Swept and not assigned to Events: PdfWindow::closeEvent (src/qt/PdfWindow.cpp:2383-2390). It vetoes closing while PDF open/save work is pending, runs ConfirmDiscard, and updates local cancel flags; this is PDF/Qt window lifecycle.",
+      "Swept and not assigned to Events: AlignmentLayoutTools::closeEvent (src/qt/EditorAlignmentCreate.cpp:582-586). It clears local alignment-tool state during widget close; this remains Qt/Interaction UI lifecycle.",
+      "EditorViewport.cpp timer sweep only (not Events scheduling): m_MapTimer polls map-capture progress (stop 305/330, starts 315/752; its changed emission is listed separately at 312); m_ViewAnimTimer is connected at 298, started at 2708, and stopped at 331, 2712, and 2714; m_GripMenuTimer drives the local 500 ms grip-menu hover dwell (setup/callback 241-296, hover start/stop 2330-2337); GripMenuDismissFilter::m_Timer dismisses its local menu after 1 second (137-155). Qt owns scheduling; local menu/animation policy remains with Qt/Interaction/Renderer/Commands. Other src/qt QTimer scheduling follows the general Qt ownership rule below.",
+      "Qt QTimer event-loop scheduling in src/qt is Qt-owned; it remains outside Events even when the timeout callback routes widget-local behavior. Events-facing changed notifications emitted by a timer callback are listed at their exact emission lines."
     ]
   }
 }
