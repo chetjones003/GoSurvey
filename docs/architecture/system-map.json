@@ -1450,9 +1450,9 @@
       "system": "Math",
       "concern": "glTF node TRS to matrix",
       "symbols": [
-        "MatrixFromTrs (quaternion-to-matrix composition)"
+        "MatrixFromTrs"
       ],
-      "note": "Numeric T*R*S composition only. Lines 63-82 of MatrixFromTrs read glTF JSON with contains and is_array checks, so they are an IO adapter; the move ticket must split the reader from the composer."
+      "note": "Numeric T*R*S composition only (body of MatrixFromTrs, lines 83-91). Lines 63-82 of MatrixFromTrs read glTF JSON with contains and is_array checks, so they are an IO adapter; the move ticket must split the reader from the composer."
     },
     {
       "path": "src/util/brep.cpp",
