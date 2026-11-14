@@ -442,7 +442,6 @@
     "Folder-level mappings are provisional and based on current folder names.",
     "src/util is mixed-purpose; each current direct file is explicitly listed as ambiguous pending audit.",
     "Nested or newly added source files require mapping before enforcement.",
-    "Core audit (issue #1220): Core file and section ownership is in `sections` and `auditedEntries`. Ownership of other mixed util files stays ambiguous until their own audits.",
     "Core audit (issue #1220): Core file and section ownership is in `sections` and `auditedEntries`. Ownership of other mixed util files stays ambiguous until their own audits."
   ],
   "sections": [
@@ -658,20 +657,6 @@
     {
       "path": "src/commands/CadCommands_Alignment.cpp",
       "lines": [
-        61,
-        71
-      ],
-      "system": "Core",
-      "concern": "strings",
-      "symbols": [
-        "Lower",
-        "Trim"
-      ],
-      "note": "Duplicates of StringUtil::toLowerAsciiCopy and trimCopy."
-    },
-    {
-      "path": "src/commands/CadCommands_Alignment.cpp",
-      "lines": [
         5377,
         5383
       ],
@@ -758,7 +743,7 @@
       "symbols": [
         "StartsWith"
       ],
-      "note": "Local string helper with no Core equivalent yet (upper-case helpers). Core should gain it, or the callers keep a local copy."
+      "note": "Local string helper with no Core equivalent yet (upper-case, prefix and suffix helpers). Core should gain it, or the callers keep a local copy."
     },
     {
       "path": "src/commands/CadCommands_Alignment.cpp",
@@ -849,7 +834,7 @@
       "symbols": [
         "UpperCopy"
       ],
-      "note": "Local string helper with no Core equivalent yet (upper-case helpers). Core should gain it, or the callers keep a local copy."
+      "note": "Local string helper with no Core equivalent yet (upper-case, prefix and suffix helpers). Core should gain it, or the callers keep a local copy."
     },
     {
       "path": "src/font/CadFontName.hpp",
@@ -1005,7 +990,7 @@
       "symbols": [
         "EndsWith"
       ],
-      "note": "Local string helper with no Core equivalent yet (upper-case helpers). Core should gain it, or the callers keep a local copy."
+      "note": "Local string helper with no Core equivalent yet (upper-case, prefix and suffix helpers). Core should gain it, or the callers keep a local copy."
     },
     {
       "path": "src/io/ProjectTurnover.cpp",
@@ -1083,7 +1068,7 @@
       "symbols": [
         "Upper"
       ],
-      "note": "Local string helper with no Core equivalent yet (upper-case helpers). Core should gain it, or the callers keep a local copy."
+      "note": "Local string helper with no Core equivalent yet (upper-case, prefix and suffix helpers). Core should gain it, or the callers keep a local copy."
     },
     {
       "path": "src/pdf/PdfScaleCheck.cpp",
@@ -1148,7 +1133,7 @@
       "symbols": [
         "ToUpper"
       ],
-      "note": "Local string helper with no Core equivalent yet (upper-case helpers). Core should gain it, or the callers keep a local copy."
+      "note": "Local string helper with no Core equivalent yet (upper-case, prefix and suffix helpers). Core should gain it, or the callers keep a local copy."
     },
     {
       "path": "src/traverse/TraverseCommandLang.cpp",
@@ -1161,7 +1146,7 @@
       "symbols": [
         "ToUpper"
       ],
-      "note": "Local string helper with no Core equivalent yet (upper-case helpers). Core should gain it, or the callers keep a local copy."
+      "note": "Local string helper with no Core equivalent yet (upper-case, prefix and suffix helpers). Core should gain it, or the callers keep a local copy."
     },
     {
       "path": "src/ui/CommandBar.hpp",
@@ -1201,6 +1186,45 @@
         "Trim"
       ],
       "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/util/DataExtract.hpp",
+      "lines": [
+        36,
+        40
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "ExtractUpper"
+      ],
+      "note": "Local upper-case helper with no Core equivalent yet. Core should gain it, or the callers keep a local copy. Replace with Core string helpers; do not move the code."
+    },
+    {
+      "path": "src/commands/CadBlocks.cpp",
+      "lines": [
+        350,
+        357
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "LowerExt"
+      ],
+      "note": "Local extension lower-casing helper for path strings. Core has no path helper; keep it local or add one. Replace with Core string helpers; do not move the code."
+    },
+    {
+      "path": "src/commands/ProjectWarnings.cpp",
+      "lines": [
+        27,
+        31
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "LowerExt"
+      ],
+      "note": "Local extension lower-casing helper for path strings, a second copy of CadBlocks LowerExt. Core has no path helper. Replace with Core string helpers; do not move the code."
     },
     {
       "path": "src/geo/DrawingConversion.cpp",
@@ -1318,19 +1342,6 @@
         "linearToFeet"
       ],
       "note": "linearToFeet = 1 / 0.3048 for StarNet import. Replace with Core unit definitions; do not move the code."
-    },
-    {
-      "path": "src/io/DxfIo.cpp",
-      "lines": [
-        5033,
-        5033
-      ],
-      "system": "Core",
-      "concern": "units",
-      "symbols": [
-        "DXF header inches-per-meter literal"
-      ],
-      "note": "hardcoded inches-per-meter 0.03937007874016 written to the DXF header. Replace with Core unit definitions; do not move the code."
     }
   ],
   "auditedEntries": {
@@ -1429,7 +1440,7 @@
       "Station text: FormatStation (Alignment) belongs to Alignment, not Core."
     ],
     "couplings": [
-      "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. io/DxfIo.cpp:5033 hardcodes 0.03937007874016 inches per meter. Core units should own them.",
+      "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
       "Local trim/lower/upper/StartsWith helpers outside src/core: 35 definitions or declarations, each now a sections entry with concern strings (for example io/DxfIo.cpp Trim, io/WikiHelp.cpp ToLowerAscii, traverse/StarNetImport.cpp TrimCopy, ui/CommandBar.hpp TrimAscii). StringUtil exists but only 9 files include it.",
       "CadFormatBearingCwNorthDegMinSec and CadFormatAngleDegMinSecFromRad in CadCommands.cpp are divergent from Core FormatBearing and FormatSweptAngle: unpadded minutes, and a 359-degree cap in the swept-angle form. AngleFormat.hpp says FormatBearing reproduces the bearing formatter at default settings; that comment is false and stale.",
       "AppCommandState stores angle display as raw ints (angleDisplayType). CadAngleDisplaySettings (Commands) converts them to the typed Core AngleDisplaySettings on every call.",
