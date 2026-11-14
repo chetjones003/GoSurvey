@@ -441,6 +441,1103 @@
   "notes": [
     "Folder-level mappings are provisional and based on current folder names.",
     "src/util is mixed-purpose; each current direct file is explicitly listed as ambiguous pending audit.",
-    "Nested or newly added source files require mapping before enforcement."
-  ]
+    "Nested or newly added source files require mapping before enforcement.",
+    "Core audit (issue #1220): Core file and section ownership is in `sections` and `auditedEntries`. Ownership of other mixed util files stays ambiguous until their own audits."
+  ],
+  "sections": [
+    {
+      "path": "src/util/cadblock.hpp",
+      "lines": [
+        1606,
+        1635
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "kInchesPerMeterInternational",
+        "CadBlockUnitsScale"
+      ],
+      "note": "Imperial-to-metric conversion and INSUNITS scale. The rest of cadblock.hpp is Document block data."
+    },
+    {
+      "path": "src/util/cadblock.hpp",
+      "lines": [
+        1637,
+        1686
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "CadDrawingInsUnitsName",
+        "CadDrawingInsUnitsCode",
+        "CadDrawingInsUnitsOffered",
+        "CadDrawingInsUnitsAbbrev",
+        "kDrawingUnitCount",
+        "kDrawingUnitNames",
+        "kDrawingUnitCodes"
+      ],
+      "note": "INSUNITS code table: names, codes, abbreviations, and the offered drawing-unit list shared by the UNITS and Drawing Settings windows."
+    },
+    {
+      "path": "src/util/cadblock.hpp",
+      "lines": [
+        459,
+        471
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "CadBlockEqCi"
+      ],
+      "note": "ASCII case-insensitive compare. A generic string helper, currently block-private."
+    },
+    {
+      "path": "src/util/PlotScales.hpp",
+      "lines": [
+        16,
+        20
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "PlotScaleUnitsAreMetric",
+        "MetricPlotScaleUnitsPerInch"
+      ],
+      "note": "Unit predicates only. PlotScaleChoicesFor and PlotScaleLabel are plot-scale domain (Document) and stay."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1182,
+        1183
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "DrawingSettings::AngularUnits",
+        "DrawingSettings::FootDefinition"
+      ],
+      "note": "Unit enums nested in the per-drawing DrawingSettings struct. The enums move to Core; the struct stays in Document."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1326,
+        1337
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "DrawingInchesPerMeter",
+        "DrawingAunitsCode"
+      ],
+      "note": "Foot-definition conversion and AUNITS code."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        2366,
+        2368
+      ],
+      "system": "Core",
+      "concern": "settings",
+      "symbols": [
+        "AppCommandState::surveyPointDisplayPrecision"
+      ],
+      "note": "Survey-point readout precision setting value."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        5200,
+        5200
+      ],
+      "system": "Core",
+      "concern": "settings",
+      "symbols": [
+        "AppCommandState::displayLinearPrecision"
+      ],
+      "note": "Display-precision setting value. showUnitsWindow (5203, UI visibility) is excluded."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        5205,
+        5211
+      ],
+      "system": "Core",
+      "concern": "settings",
+      "symbols": [
+        "AppCommandState::angleDisplayType",
+        "AppCommandState::angleDisplayPrecision",
+        "AppCommandState::angleDisplayClockwise",
+        "AppCommandState::angleDisplayBaseDeg"
+      ],
+      "note": "Angle-display setting values, stored as raw ints. Core's typed AngleDisplaySettings should replace them."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        335,
+        338
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "CadFormatAngleDegMinSecFromRad",
+        "CadFormatBearingCwNorthDegMinSec"
+      ],
+      "note": "Declarations of the divergent angle formatters below."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        7926,
+        7955
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "CadFormatAngleDegMinSecFromRad"
+      ],
+      "note": "Divergent from Core FormatSweptAngle, not a duplicate: input is radians (Core takes degrees), minutes are unpadded, and degrees cap at 359. Retiring it changes output, so record the decision first."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        7957,
+        7984
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "CadFormatBearingCwNorthDegMinSec"
+      ],
+      "note": "Divergent from Core FormatBearing, not a duplicate: prints 0°0'0.0\" where Core prints 0°00'00.0\" (asserted in tests/Core/AngleFormatTests.cpp). AngleFormat.hpp claims parity; that claim is false."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36303,
+        36311
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "FormatEtaRemaining"
+      ],
+      "note": "Duration text. Pure formatting, but used only by the point-cloud progress UI; confirm placement in the final map."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        41328,
+        41332
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "TrimNumber"
+      ],
+      "note": "%.6g number echo. Pure formatting in the anonymous namespace."
+    },
+    {
+      "path": "src/commands/CadCommands_Geo.cpp",
+      "lines": [
+        26,
+        37
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "FormatDms"
+      ],
+      "note": "Lat/long DMS with hemisphere letter at 5 decimals. Overlaps Core FormatDms; decide to merge or keep as a Core option."
+    },
+    {
+      "path": "src/commands/CadCommands_Alignment.cpp",
+      "lines": [
+        5377,
+        5383
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "FormatWorldNumber"
+      ],
+      "note": "%.10f world-number echo."
+    },
+    {
+      "path": "src/commands/CadDynInput.cpp",
+      "lines": [
+        65,
+        69
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "Fmt"
+      ],
+      "note": "%.6f. Same output as Core FormatLinear at precision 6."
+    },
+    {
+      "path": "src/alignment/AlignmentProfile.cpp",
+      "lines": [
+        36,
+        41
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "Fmt"
+      ],
+      "note": "printf-format wrapper. Generic, so Core; Alignment keeps its call sites."
+    },
+    {
+      "path": "src/alignment/AlignmentProfile.cpp",
+      "lines": [
+        52,
+        57
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "Fmt2"
+      ],
+      "note": "two-value printf-format wrapper. Generic, so Core; Alignment keeps its call sites."
+    },
+    {
+      "path": "src/alignment/AlignmentReport.cpp",
+      "lines": [
+        18,
+        22
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "FormatFixed4"
+      ],
+      "note": "%.4f. Same output as Core FormatLinear at precision 4."
+    },
+    {
+      "path": "src/pdf/PdfMeasure.cpp",
+      "lines": [
+        113,
+        117
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "Trimmed"
+      ],
+      "note": "%.6g. Duplicate of TrimNumber."
+    },
+    {
+      "path": "src/util/SaveTrace.hpp",
+      "lines": [
+        1,
+        6
+      ],
+      "system": "Core",
+      "concern": "logging",
+      "symbols": [
+        "ClearSaveTrace",
+        "AppendSaveTrace"
+      ],
+      "note": "Advisory Core ownership. Enforcement waits on a GoSurvey/Core public header, because io includes this file privately (see auditedEntries.Core.pendingAssignment)."
+    },
+    {
+      "path": "src/util/SaveTrace.cpp",
+      "lines": [
+        1,
+        45
+      ],
+      "system": "Core",
+      "concern": "logging",
+      "symbols": [
+        "ClearSaveTrace",
+        "AppendSaveTrace"
+      ],
+      "note": "Advisory Core ownership. Uses Win32 GetTempPathW and DeleteFileW directly, which the move ticket must route through the Windows system or inject."
+    },
+    {
+      "path": "src/commands/CadColor.cpp",
+      "lines": [
+        12,
+        14
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "StartsWith"
+      ],
+      "note": "Prefix or suffix test with no Core equivalent yet. Core should gain one, or the callers keep a local copy."
+    },
+    {
+      "path": "src/commands/CadCommands_Alignment.cpp",
+      "lines": [
+        61,
+        64
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Lower"
+      ],
+      "note": "Same lower-casing as Core StringUtil::toLowerAsciiCopy (std::tolower). Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/commands/CadCommands_Alignment.cpp",
+      "lines": [
+        66,
+        71
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Trim"
+      ],
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/commands/CadLinetype.cpp",
+      "lines": [
+        18,
+        26
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "TrimAscii"
+      ],
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/commands/CadSurfaceEdit.cpp",
+      "lines": [
+        421,
+        426
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "TrimStyleName"
+      ],
+      "note": "Trims only space and tab, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
+    },
+    {
+      "path": "src/commands/CadSurfaceEdit.hpp",
+      "lines": [
+        130,
+        130
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "TrimStyleName"
+      ],
+      "note": "Trims only space and tab, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
+    },
+    {
+      "path": "src/commands/HatchPat.hpp",
+      "lines": [
+        36,
+        41
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Trim"
+      ],
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/commands/HatchPat.hpp",
+      "lines": [
+        43,
+        46
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "UpperCopy"
+      ],
+      "note": "Upper-case helper with no Core equivalent yet. Core should gain one, or the callers keep a local copy."
+    },
+    {
+      "path": "src/font/CadFontName.hpp",
+      "lines": [
+        9,
+        14
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "LowerAscii"
+      ],
+      "note": "Lower-cases ASCII A-Z only, a manual loop. Core uses std::tolower, which matches in the C locale. Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/io/CadPointCloudPts.cpp",
+      "lines": [
+        17,
+        22
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "TrimCopy"
+      ],
+      "note": "Trims only space, tab, CR and LF, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
+    },
+    {
+      "path": "src/io/CadPointCloudPtx.cpp",
+      "lines": [
+        17,
+        22
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "TrimCopy"
+      ],
+      "note": "Trims only space, tab, CR and LF, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
+    },
+    {
+      "path": "src/io/DwgProbe.cpp",
+      "lines": [
+        20,
+        25
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "ToLowerAscii"
+      ],
+      "note": "Same lower-casing as Core StringUtil::toLowerAsciiCopy (std::tolower). Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/io/DxfIo.cpp",
+      "lines": [
+        247,
+        255
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Trim"
+      ],
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/io/LibreDwgCad.cpp",
+      "lines": [
+        248,
+        252
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "LowerAscii"
+      ],
+      "note": "Same lower-casing as Core StringUtil::toLowerAsciiCopy (std::tolower). Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/io/LibreDwgCad.cpp",
+      "lines": [
+        8540,
+        8548
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "TrimAscii"
+      ],
+      "note": "Trims only space, tab and CR, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
+    },
+    {
+      "path": "src/io/PlotFont.hpp",
+      "lines": [
+        12,
+        17
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "LowerAscii"
+      ],
+      "note": "Lower-cases ASCII A-Z only, a manual loop. Core uses std::tolower, which matches in the C locale. Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/io/PlotStyleTable.cpp",
+      "lines": [
+        18,
+        24
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Trim"
+      ],
+      "note": "Differs from Core StringUtil::trimCopy: it also strips trailing NUL bytes, and trims only space, tab, CR and LF, where Core trims every isspace character. Compare before replacing; do not move the code."
+    },
+    {
+      "path": "src/io/ProjectFiles.cpp",
+      "lines": [
+        22,
+        25
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Lower"
+      ],
+      "note": "Same lower-casing as Core StringUtil::toLowerAsciiCopy (std::tolower). Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/io/ProjectPack.cpp",
+      "lines": [
+        54,
+        58
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Lower"
+      ],
+      "note": "Same lower-casing as Core StringUtil::toLowerAsciiCopy (std::tolower). Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/io/ProjectPack.cpp",
+      "lines": [
+        60,
+        62
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "EndsWith"
+      ],
+      "note": "Prefix or suffix test with no Core equivalent yet. Core should gain one, or the callers keep a local copy."
+    },
+    {
+      "path": "src/io/ProjectTurnover.cpp",
+      "lines": [
+        25,
+        32
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Trim"
+      ],
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/io/SurveyCsv.cpp",
+      "lines": [
+        30,
+        36
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Trim"
+      ],
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/io/WikiContent.cpp",
+      "lines": [
+        26,
+        31
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Trim"
+      ],
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/io/WikiHelp.cpp",
+      "lines": [
+        16,
+        20
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "ToLowerAscii"
+      ],
+      "note": "Same lower-casing as Core StringUtil::toLowerAsciiCopy (std::tolower). Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/pdf/PdfCoordExtract.cpp",
+      "lines": [
+        18,
+        24
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Trim"
+      ],
+      "note": "Trims only space, tab, CR and LF, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
+    },
+    {
+      "path": "src/pdf/PdfCoordExtract.cpp",
+      "lines": [
+        26,
+        31
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Upper"
+      ],
+      "note": "Upper-case helper with no Core equivalent yet. Core should gain one, or the callers keep a local copy."
+    },
+    {
+      "path": "src/pdf/PdfScaleCheck.cpp",
+      "lines": [
+        18,
+        25
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Trim"
+      ],
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/pdf/PdfSplit.cpp",
+      "lines": [
+        23,
+        30
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Trim"
+      ],
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/survey/PointGroupRule.cpp",
+      "lines": [
+        38,
+        45
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Trim"
+      ],
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
+    },
+    {
+      "path": "src/traverse/StarNetImport.cpp",
+      "lines": [
+        24,
+        30
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "TrimCopy"
+      ],
+      "note": "Trims only space and tab, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
+    },
+    {
+      "path": "src/traverse/StarNetImport.cpp",
+      "lines": [
+        75,
+        78
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "ToUpper"
+      ],
+      "note": "Upper-case helper with no Core equivalent yet. Core should gain one, or the callers keep a local copy."
+    },
+    {
+      "path": "src/traverse/TraverseCommandLang.cpp",
+      "lines": [
+        21,
+        24
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "ToUpper"
+      ],
+      "note": "Upper-case helper with no Core equivalent yet. Core should gain one, or the callers keep a local copy."
+    },
+    {
+      "path": "src/ui/CommandBar.hpp",
+      "lines": [
+        64,
+        72
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "TrimAscii"
+      ],
+      "note": "Trims only space and tab, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
+    },
+    {
+      "path": "src/util/AcisSatParser.cpp",
+      "lines": [
+        80,
+        86
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Trim"
+      ],
+      "note": "Trims only space, tab, CR and LF, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
+    },
+    {
+      "path": "src/util/AcisSatWriter.cpp",
+      "lines": [
+        36,
+        42
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Trim"
+      ],
+      "note": "Trims only space, tab, CR and LF, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
+    },
+    {
+      "path": "src/util/DataExtract.hpp",
+      "lines": [
+        36,
+        40
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "ExtractUpper"
+      ],
+      "note": "Local upper-case helper with no Core equivalent yet. Core should gain one, or the callers keep a local copy."
+    },
+    {
+      "path": "src/commands/CadBlocks.cpp",
+      "lines": [
+        350,
+        357
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "LowerExt"
+      ],
+      "note": "Local extension lower-casing helper for path strings. Core has no path helper; keep it local or add one."
+    },
+    {
+      "path": "src/commands/ProjectWarnings.cpp",
+      "lines": [
+        27,
+        31
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "LowerExt"
+      ],
+      "note": "Local extension lower-casing helper for path strings, a second copy of CadBlocks LowerExt. Core has no path helper."
+    },
+    {
+      "path": "src/commands/CadLinetype.cpp",
+      "lines": [
+        9,
+        16
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "EqCiAscii"
+      ],
+      "note": "Local ASCII case-insensitive compare, similar to CadBlockEqCi in util/cadblock.hpp (block-private today; a Core candidate). Compare before replacing; do not move the code."
+    },
+    {
+      "path": "src/io/DxfIo.cpp",
+      "lines": [
+        257,
+        269
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "EqCiNorm"
+      ],
+      "note": "Local case-insensitive compare that normalises the raw value, not just an ASCII compare. Compare before replacing; do not move the code."
+    },
+    {
+      "path": "src/io/DxfIo.cpp",
+      "lines": [
+        271,
+        279
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "EqCiStr"
+      ],
+      "note": "Local case-insensitive compare of two strings, similar to CadBlockEqCi in util/cadblock.hpp (block-private today; a Core candidate). Compare before replacing; do not move the code."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52253,
+        52261
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "LayerNamesEqCi"
+      ],
+      "note": "Local layer-name case-insensitive compare, similar to CadBlockEqCi in util/cadblock.hpp (block-private today; a Core candidate). Compare before replacing; do not move the code."
+    },
+    {
+      "path": "src/geo/DrawingConversion.cpp",
+      "lines": [
+        13,
+        14
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "foot-length constants"
+      ],
+      "note": "foot-length constants (US survey and international foot in meters). Candidate for Core unit definitions once Core owns units; do not move the code now."
+    },
+    {
+      "path": "src/geo/DrawingConversion.cpp",
+      "lines": [
+        23,
+        31
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "MetersPerInsUnit"
+      ],
+      "note": "MetersPerInsUnit: INSUNITS to meters, with the foot-definition switch. Candidate for Core unit definitions once Core owns units; do not move the code now."
+    },
+    {
+      "path": "src/io/LandXmlIo.cpp",
+      "lines": [
+        356,
+        363
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "MetersPerLandXmlUnit"
+      ],
+      "note": "MetersPerLandXmlUnit: LandXML unit names to meters. Candidate for Core unit definitions once Core owns units; do not move the code now."
+    },
+    {
+      "path": "src/io/LandXmlIo.cpp",
+      "lines": [
+        366,
+        375
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "MetersPerDrawingUnit"
+      ],
+      "note": "MetersPerDrawingUnit: drawing unit to meters through the foot definition. Candidate for Core unit definitions once Core owns units; do not move the code now."
+    },
+    {
+      "path": "src/pdf/PdfMeasure.cpp",
+      "lines": [
+        62,
+        74
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "UnitInMetres"
+      ],
+      "note": "UnitInMetres: PDF measurement units to meters. Candidate for Core unit definitions once Core owns units; do not move the code now."
+    },
+    {
+      "path": "src/traverse/JobXmlImport.cpp",
+      "lines": [
+        20,
+        20
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "kMetersToFeet"
+      ],
+      "note": "kMetersToFeet (exact international foot). Candidate for Core unit definitions once Core owns units; do not move the code now."
+    },
+    {
+      "path": "src/traverse/TraverseCalc.cpp",
+      "lines": [
+        573,
+        573
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "kMetersToFeet"
+      ],
+      "note": "kMetersToFeet (exact international foot). Candidate for Core unit definitions once Core owns units; do not move the code now."
+    },
+    {
+      "path": "src/traverse/TraverseLeastSquares.cpp",
+      "lines": [
+        16,
+        16
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "kMetersToFeet"
+      ],
+      "note": "kMetersToFeet (exact international foot). Candidate for Core unit definitions once Core owns units; do not move the code now."
+    },
+    {
+      "path": "src/traverse/StarNetImport.cpp",
+      "lines": [
+        442,
+        442
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "linearToFeet"
+      ],
+      "note": "linearToFeet = 1 / 0.3048 for StarNet import. Candidate for Core unit definitions once Core owns units; do not move the code now."
+    }
+  ],
+  "auditedEntries": {
+    "Core": {
+      "tier": "T0 Foundation",
+      "audit": {
+        "issue": 1220,
+        "parent": 1207,
+        "commit": "a31a9d63",
+        "codeMoved": false
+      },
+      "responsibility": "Provides shared application services: logging, settings values, unit definitions and conversions, number, angle and duration formatting, and string helpers.",
+      "doesNotOwn": [
+        "geometry algorithms",
+        "domain entities and per-drawing storage (the DrawingSettings struct stays in Document)",
+        "UI widgets and visibility flags",
+        "platform APIs (Win32 %TEMP% paths, file dialogs)",
+        "file formats and font files (src/font is a mis-mapping, see auditFindings)"
+      ],
+      "allowedDependencies": [],
+      "currentFiles": [
+        "src/core/include/GoSurvey/Core/AngleFormat.hpp",
+        "src/core/include/GoSurvey/Core/NumFormat.hpp",
+        "src/core/include/GoSurvey/Core/StringUtil.hpp",
+        "src/core/src/Core.cpp"
+      ],
+      "pendingAssignment": [
+        {
+          "files": [
+            "src/util/SaveTrace.hpp",
+            "src/util/SaveTrace.cpp"
+          ],
+          "reason": "Core logging sink, but io/DwgIo.cpp and io/LibreDwgCad.cpp include util/SaveTrace.hpp as a private header. Assigning it to Core now would add two private-header violations. The move ticket must add GoSurvey/Core/SaveTrace.hpp, switch the two includes, then map the files to Core. The file is temporary diagnostics for issue #167, so deleting it is also an option."
+        }
+      ],
+      "outsideScan": [
+        "internal/core/CorePrivate.hpp: private header for Core.cpp. It is outside src/, so the ratchet does not scan it. Move it with Core."
+      ],
+      "draftPublicInterface": {
+        "angle": [
+          "AngleDisplayType",
+          "AngleDisplaySettings",
+          "FormatBearing(canonicalCwNorthDeg, settings)",
+          "FormatSweptAngle(angleDeg, settings)"
+        ],
+        "number": [
+          "DisplayPrecisionClamp(precision)",
+          "DisplayFloatFmt(precision)",
+          "FormatLinear(value, precision)",
+          "FormatVolumeYd3(volumeFt3, precision)",
+          "kCubicFeetPerCubicYard"
+        ],
+        "strings": [
+          "StringUtil::trimCopy",
+          "StringUtil::toLowerAsciiCopy"
+        ],
+        "units (to add from sections)": [
+          "foot definition / inches-per-meter",
+          "INSUNITS name/code/abbrev and CadBlockUnitsScale",
+          "AngularUnits enum (today DrawingSettings::AngularUnits)"
+        ],
+        "settings (to add)": [
+          "typed display-precision and angle-display values, replacing raw ints on AppCommandState"
+        ],
+        "logging (to add)": [
+          "none yet; a logging facade is a homeless concept (see auditFindings)"
+        ],
+        "internal, not public": [
+          "anglefmt_detail::Normalize360, FormatDms, FormatDecimalDeg (exposed in AngleFormat.hpp today)"
+        ]
+      },
+      "existingTests": [
+        "tests/Core/AngleFormatTests.cpp",
+        "tests/Core/NumFormatTests.cpp",
+        "tests/Core/CoreTests.cpp (StringUtil)"
+      ],
+      "testsCoveringCoreCodeNotOwned": [
+        "tests/CadBlockTests.cpp and tests/CadBlockImportTests.cpp (CadBlockUnitsScale, INSUNITS names)",
+        "tests/DrawingSettingsTests.cpp (AUNITS through DXF header output, lines 211-236; DrawingInchesPerMeter through INSERT at line 115; plot-unit helpers)",
+        "tests/LibreDwgCadTests.cpp (AUNITS through DWG header output, line 5142)"
+      ],
+      "testGaps": [
+        "SaveTrace has no test",
+        "no decision yet on whether users accept Core zero-padded DMS output in place of the legacy unpadded form before the legacy formatters are retired"
+      ]
+    }
+  },
+  "auditFindings": {
+    "homelessConcepts": [
+      "Logging facade: none. Sinks are scattered: EditorWindow::m_Log (command line, Qt), SaveTrace (Core), UpdateService LogSilently (Network), StartupFailure startup-failure.log (Windows), and Qt qWarning/qDebug calls in src/qt. The final map must decide whether Core owns one facade or only the file sink.",
+      "Settings store: AppCommandState holds nearly all settings in one god struct. There is no Settings system. Core owns the value vocabulary; the holder and its consumers belong to the final map.",
+      "Duration and ETA text: FormatEtaRemaining is pure formatting used only by a progress UI. Core or UI?",
+      "Lat/long DMS label: FormatLatLongLabel and CadCommands_Geo FormatDms. Geo or Core formatting?",
+      "Plot-scale labels: PlotScaleChoicesFor and PlotScaleLabel (util/PlotScales.hpp) are Document or Plot, not Core.",
+      "Slope text: FormatSlope (CadCommands.cpp) is grading/Terrain.",
+      "Station text: FormatStation (Alignment) belongs to Alignment, not Core."
+    ],
+    "couplings": [
+      "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
+      "Local trim/lower/upper/prefix/compare helpers outside src/core: 42 definitions or declarations, not counting CadBlockEqCi (already recorded above), each a sections entry with concern strings (for example io/DxfIo.cpp Trim, io/WikiHelp.cpp ToLowerAscii, traverse/StarNetImport.cpp TrimCopy, ui/CommandBar.hpp TrimAscii). StringUtil exists but only 9 files include it.",
+      "CadFormatBearingCwNorthDegMinSec and CadFormatAngleDegMinSecFromRad in CadCommands.cpp are divergent from Core FormatBearing and FormatSweptAngle: unpadded minutes, and a 359-degree cap in the swept-angle form. AngleFormat.hpp says FormatBearing reproduces the bearing formatter at default settings; that comment is false and stale.",
+      "AppCommandState stores angle display as raw ints (angleDisplayType). CadAngleDisplaySettings (Commands) converts them to the typed Core AngleDisplaySettings on every call.",
+      "DrawingSettings (Document, per-drawing) embeds the AngularUnits and FootDefinition enums that Core units should own.",
+      "io/UserPrefs.cpp reads and writes AppCommandState settings fields directly, so the IO system depends on Commands state.",
+      "SaveTrace (Core) calls Win32 GetTempPathW and DeleteFileW directly. Core must not own platform APIs, so the path lookup belongs to the Windows system or should be injected.",
+      "SaveTrace is called from io/DwgIo.cpp and io/LibreDwgCad.cpp. It is temporary diagnostics for issue #167 and can be deleted when that issue closes."
+    ],
+    "misMappedFolders": [
+      "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile."
+    ],
+    "namespaceGaps": [
+      "ADR-0006 requires GoSurvey::<System> namespaces. NumFormat and AngleFormat use the global namespace (anglefmt_detail is global). StringUtil is namespace StringUtil. Core.cpp's detail is GoSurvey::Core::detail. Namespace work follows the move, not this audit."
+    ],
+    "notCoreDespiteName": [
+      "src/util/framewatch.hpp and src/util/docinvariants.*: Debug (diagnostics), not logging.",
+      "src/platform/AppPaths.*: Windows (OS paths)."
+    ]
+  }
 }
