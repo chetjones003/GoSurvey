@@ -443,7 +443,8 @@
     "src/util is mixed-purpose; each current direct file is explicitly listed as ambiguous pending audit.",
     "Nested or newly added source files require mapping before enforcement.",
     "Core audit (issue #1220): Core file and section ownership is in `sections` and `auditedEntries`. Ownership of other mixed util files stays ambiguous until their own audits.",
-    "Math audit (issue #1221): Math file and section ownership is in auditedEntries.Math and sections. The ratchet and fileMappings are unchanged, so the baseline does not move; the Commands edge that will appear once Math is mapped is recorded in auditFindings."
+    "Math audit (issue #1221): Math file and section ownership is in auditedEntries.Math and sections. The ratchet and fileMappings are unchanged, so the baseline does not move; the Commands edge that will appear once Math is mapped is recorded in auditFindings.",
+    "Sweep (issue #1221): the tree was swept for Math-shaped helpers (rotation, reflection, mirror, dot and cross, normalise and wrap, matrix and inverse, 2D affine). Assigned sections are in `sections`; candidates that were checked and kept out of Math, with reasons, are in auditFindings.notMathDecisions."
   ],
   "sections": [
     {
@@ -1689,6 +1690,208 @@
         "ReflectSurveyCoords"
       ],
       "note": "Anonymous-namespace copy of ReflectPtAcrossLine in double. Duplicate in Survey."
+    },
+    {
+      "path": "src/traverse/TraverseLeastSquares.cpp",
+      "lines": [
+        33,
+        39
+      ],
+      "system": "Math",
+      "concern": "angle difference wrap",
+      "symbols": [
+        "WrapPi"
+      ],
+      "note": "Wraps an angle difference into (-pi, pi]. Duplicates the wrap helpers listed in couplings."
+    },
+    {
+      "path": "src/traverse/TraverseLeastSquares.cpp",
+      "lines": [
+        79,
+        97
+      ],
+      "system": "Math",
+      "concern": "3x3 matrix inverse",
+      "symbols": [
+        "Invert3x3"
+      ],
+      "note": "Closed-form inverse of a 3x3 matrix with a singularity test. Pure math in the traverse adjustment."
+    },
+    {
+      "path": "src/util/brep.cpp",
+      "lines": [
+        6425,
+        6430
+      ],
+      "system": "Math",
+      "concern": "Rodrigues rotation of a vector",
+      "symbols": [
+        "RotateAbout"
+      ],
+      "note": "Same formula as ray3d::RotateVectorAboutAxis, in brep's anonymous namespace. Duplicate."
+    },
+    {
+      "path": "src/util/brep.cpp",
+      "lines": [
+        16300,
+        16322
+      ],
+      "system": "Math",
+      "concern": "2D vector helpers",
+      "symbols": [
+        "Mul2",
+        "Dot2",
+        "Cross2v",
+        "Len2"
+      ],
+      "note": "P2 scalar multiply, dot, cross and length for the profile sweep. Duplicate of the 2D cross in curveintersect.cpp."
+    },
+    {
+      "path": "src/util/brep.cpp",
+      "lines": [
+        16338,
+        16340
+      ],
+      "system": "Math",
+      "concern": "angle of a point about a centre",
+      "symbols": [
+        "AngleAt"
+      ],
+      "note": "atan2 of a point about a centre, in [-pi, pi]. Pure angle math."
+    },
+    {
+      "path": "src/util/brep.cpp",
+      "lines": [
+        2551,
+        2556
+      ],
+      "system": "Math",
+      "concern": "UCS frame mirror in place",
+      "symbols": [
+        "MirrorFrameInPlace"
+      ],
+      "note": "Reflects a frame across a plane, negating its Y axis. Sibling of RotateFrameInPlace; both belong with the frame math."
+    },
+    {
+      "path": "src/util/curveintersect.cpp",
+      "lines": [
+        16,
+        21
+      ],
+      "system": "Math",
+      "concern": "angle wrap to [0, 2pi)",
+      "symbols": [
+        "Wrap2Pi"
+      ],
+      "note": "Wraps an angle to [0, 2pi). Duplicates the wrap helpers listed in couplings."
+    },
+    {
+      "path": "src/util/curveintersect.cpp",
+      "lines": [
+        308,
+        310
+      ],
+      "system": "Math",
+      "concern": "orthographic projection of a point",
+      "symbols": [
+        "ProjectPoint"
+      ],
+      "note": "Projects a 3D point onto a 2D basis (right, up). Pure math; used by conic projection."
+    },
+    {
+      "path": "src/viewport/CadSnap.cpp",
+      "lines": [
+        112,
+        120
+      ],
+      "system": "Math",
+      "concern": "angle within an arc sweep",
+      "symbols": [
+        "AngleWithinSweep"
+      ],
+      "note": "Tests whether an angle lies in a sweep, with wrap-around. Pure angle predicate; lives in an Interaction file."
+    },
+    {
+      "path": "src/commands/HatchBoundary.hpp",
+      "lines": [
+        33,
+        38
+      ],
+      "system": "Math",
+      "concern": "angle wrap to (0, 2pi]",
+      "symbols": [
+        "NormalizeTwoPi"
+      ],
+      "note": "Wraps an angle into (0, 2pi]. Duplicates the wrap helpers listed in couplings."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        1569,
+        1580
+      ],
+      "system": "Math",
+      "concern": "2D reflection across a line, inline",
+      "symbols": [
+        "refl (lambda)",
+        "mphi",
+        "reflAngle (lambda)"
+      ],
+      "note": "Inline copy of ReflectPtAcrossLine and ReflectAngleAcrossLine for MIRROR of paper entities. Duplicate."
+    },
+    {
+      "path": "src/pdf/PdfAlign.hpp",
+      "lines": [
+        15,
+        18
+      ],
+      "system": "Math",
+      "concern": "2D point",
+      "symbols": [
+        "Pt"
+      ],
+      "note": "Plain 2D point for the PDF alignment transform. Third 2D point type (see homelessConcepts)."
+    },
+    {
+      "path": "src/pdf/PdfAlign.hpp",
+      "lines": [
+        21,
+        28
+      ],
+      "system": "Math",
+      "concern": "similarity transform (scale, rotation, shift)",
+      "symbols": [
+        "Transform"
+      ],
+      "note": "x' = a x - b y + tx, y' = b x + a y + ty. Pure similarity transform. The solvers FromOnePoint and FromTwoPoints stay in Pdf: they carry REQ-392 clause wording and reasons."
+    },
+    {
+      "path": "src/pdf/PdfAlign.cpp",
+      "lines": [
+        14,
+        25
+      ],
+      "system": "Math",
+      "concern": "similarity transform operations",
+      "symbols": [
+        "Transform::Scale",
+        "Transform::RotationDeg",
+        "Transform::Inverse"
+      ],
+      "note": "Scale and rotation read from (a, b); Inverse undoes the transform."
+    },
+    {
+      "path": "src/io/PlotSheetTransform.hpp",
+      "lines": [
+        45,
+        52
+      ],
+      "system": "Math",
+      "concern": "uniform scale and shift",
+      "symbols": [
+        "Transform"
+      ],
+      "note": "Scale-and-shift per axis for plotting. Generic math. Compute() (plot placement policy) stays in IO."
     }
   ],
   "auditedEntries": {
@@ -1878,7 +2081,8 @@
       "2D affine transforms: Xf2 (LibreDwgCad.cpp), Affine2D (DxfIo.cpp), Xf (ConvertDrawing.cpp), PlotSheetTransform Transform, PdfAlign Transform and CadCommands Transform (grid rotation). Math could own one affine type, but each owner keeps its domain meaning (for example grid rotation is Survey).",
       "Matrix representations: double row-major Mat4 (gltfimport.cpp) and float column-major out16 arrays (Camera::OrthoProjection, ViewportRenderer::Ortho). The final map must choose one representation or document why two exist.",
       "Camera and projection matrix construction is pure math but Renderer owns it. ucs::PlanViewAngles also encodes the camera convention in Math. The final map decides which side owns that convention.",
-      "Degree wrapping: ucs::PlanViewAngles, AzimuthAboutWorldZDeg and SnapToPolarRay (wrap180) each carry their own wrap loop. A shared helper is a candidate once Math is moved."
+      "Degree wrapping: ucs::PlanViewAngles, AzimuthAboutWorldZDeg and SnapToPolarRay (wrap180) each carry their own wrap loop. A shared helper is a candidate once Math is moved.",
+      "PlotSheetTransform Transform, PdfAlign Transform and Pt, and the Math-owned Xf2/Affine2D/Xf sections together form a set of 2D affine and point types. Math should own one of each, and the owners keep their domain meaning."
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
@@ -1897,7 +2101,13 @@
       "ucs::SnapToPolarRay is generic angle quantisation. Whether POLAR applies is Interaction policy, and its gating lives in Commands.",
       "ray3d::RayTriangleIntersect is pure Math, but its documented contract (project onto the analytic surface) is a Geometry concern. Its comment cites brep faces.",
       "OrthoConstrain.hpp implements ORTHO (REQ-047). The mode and when it applies are Interaction. Only the lock math is Math.",
-      "The 2D reflection helpers are also duplicated: ReflectPtAcrossLine and ReflectAngleAcrossLine (CadCommands.cpp:10638, :10655), and ReflectSurveyCoords (SurveyPoints.cpp:373), repeat the reflect math written inline at CadCommands.cpp:1566. Replace callers with one Math helper; do not move code in this audit."
+      "The 2D reflection helpers are also duplicated: ReflectPtAcrossLine and ReflectAngleAcrossLine (CadCommands.cpp:10638, :10655), and ReflectSurveyCoords (SurveyPoints.cpp:373), repeat the reflect math written inline at CadCommands.cpp:1566. Replace callers with one Math helper; do not move code in this audit.",
+      "Duplicate rotation: brep.cpp RotateAbout (6425) is the same Rodrigues formula as ray3d::RotateVectorAboutAxis. Replace with the Math function.",
+      "Angle-wrap helpers are repeated in six places with three different ranges: WrapPi in (-pi, pi] (TraverseLeastSquares.cpp:33), Wrap2Pi in [0, 2pi) (curveintersect.cpp:16), NormalizeTwoPi in (0, 2pi] (HatchBoundary.hpp:33), NormalizeAngleRadMinusPiToPi (CadCommands.cpp:10718), SweepBetween (brep.cpp:16343), and Core NormalizeAngle360 (Core.cpp:16). Math should own one helper per range, and the callers should pick by range.",
+      "The 2D cross product is repeated: curveisect Cross (curveintersect.cpp:12) and brep Cross2v (brep.cpp:16302). brep also has Dot2, Mul2 and Len2 (16300-16303), which duplicate the same primitives.",
+      "The 2D rotate-and-scale affine is repeated in geo LocalGridTransform (LocalToGrid, GridToLocal) and in the Math-owned Xf2, Affine2D and Xf sections. One Math 2D affine would serve all of them.",
+      "TraverseCalc.cpp repeats the polar-to-rectangular step (slopeDist * sin / cos of an angle) at lines 113-120, 470-471 and 552-553. A generic polar-to-rectangular helper is a candidate for Math.",
+      "MirrorFrameInPlace (brep.cpp:2551) mirrors the same frame fields that RotateFrameInPlace (brep.cpp:2433, AcisSatParser.cpp:541) rotates. The frame transforms should live together in Math."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
@@ -1911,6 +2121,17 @@
     "notCoreDespiteName": [
       "src/util/framewatch.hpp and src/util/docinvariants.*: Debug (diagnostics), not logging.",
       "src/platform/AppPaths.*: Windows (OS paths)."
+    ],
+    "notMathDecisions": [
+      "Swept and not assigned to Math, with reasons: TraverseCalc.cpp trig (polar-to-grid, slope and zenith reduction) is traverse domain code in Survey, though the polar-to-rectangular step is a generic helper (see couplings).",
+      "Swept and not assigned to Math: LocalGridTransform.cpp (LocalToGrid, GridToLocal, SeaLevelScaleFactor, RotationFromPoints, azimuth helpers) is coordinate-system policy owned by Survey per the map. Its rotate-and-scale core is a 2D affine duplicate (see couplings).",
+      "Swept and not assigned to Math: render/Camera.hpp OrthoProjection and the view-rotation builder are Renderer camera code. They are listed in homelessConcepts, and the matrix decision is still open.",
+      "Swept and not assigned to Math: ViewCube.hpp ring and face projection is UI (Qt/viewport) code that consumes ucs frames.",
+      "Swept and not assigned to Math: CadDimStroke.hpp and CadCommands_DrawInquiry.cpp arrow and angle geometry is Commands/annotation policy.",
+      "Swept and not assigned to Math: surfacestats.cpp LerpAtZ0 is zero-crossing interpolation for Terrain daylight, not a generic lerp.",
+      "Swept and not assigned to Math: CadCoordinateFrame.cpp is document-origin rebase policy (Document), using the Math rotation helpers only indirectly.",
+      "Swept and not assigned to Math: PdfAnnotate.cpp AngleDegrees (angle at the middle of three points) is Pdf measurement policy; a generic angle-at-vertex helper is a candidate if a second caller appears.",
+      "Swept and not assigned to Math: nurbs.cpp Rotate and Mirror and the brep Rotate, Mirror and Scale transforms are Geometry body transforms. They call Math helpers."
     ]
   }
 }
