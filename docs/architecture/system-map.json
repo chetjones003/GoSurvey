@@ -1974,12 +1974,12 @@
         1630
       ],
       "system": "Events",
-      "concern": "pointer enter and leave",
+      "concern": "Qt pointer enter/leave wrapper only",
       "symbols": [
         "EditorViewport::enterEvent",
         "EditorViewport::leaveEvent"
       ],
-      "note": "Qt pointer lifecycle delivery and forwarding; cursor presentation stays Qt."
+      "note": "Events owns receipt/routing of pointer lifecycle input only; cursor presentation and widget lifecycle remain Qt."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2001,11 +2001,11 @@
         2112
       ],
       "system": "Events",
-      "concern": "mouse press dispatch",
+      "concern": "Qt mouse press wrapper only",
       "symbols": [
         "EditorViewport::mousePressEvent"
       ],
-      "note": "Receives and dispatches Qt mouse presses. Command, selection, snapping, and ViewCube decisions are delegated to their owning systems."
+      "note": "Range locates the Qt event adapter method; Events owns receipt and input-event routing only. Selection, snapping, hover, grip, command, and ViewCube policies embedded in the method remain Interaction/Commands/Renderer."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2014,11 +2014,11 @@
         2222
       ],
       "system": "Events",
-      "concern": "mouse double-click dispatch",
+      "concern": "Qt double-click wrapper only",
       "symbols": [
         "EditorViewport::mouseDoubleClickEvent"
       ],
-      "note": "Qt mouse double-click delivery and forwarding."
+      "note": "Events owns receipt and routing of the Qt double-click input; click-to-command semantics stay with Qt/Commands/Interaction."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2027,11 +2027,11 @@
         2466
       ],
       "system": "Events",
-      "concern": "mouse move dispatch",
+      "concern": "Qt mouse move wrapper only",
       "symbols": [
         "EditorViewport::mouseMoveEvent"
       ],
-      "note": "Receives pointer movement and publishes cursor changes; snap, hover, and transient interaction policy stay with Interaction."
+      "note": "Range locates the Qt event adapter method; Events owns receipt and input-event routing only. Cursor presentation and snap/hover/selection interaction embedded in the method remain Qt/Interaction."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2040,11 +2040,11 @@
         2562
       ],
       "system": "Events",
-      "concern": "mouse release and right-press timing",
+      "concern": "Qt mouse release wrapper only",
       "symbols": [
         "EditorViewport::mouseReleaseEvent"
       ],
-      "note": "Qt release delivery and right-button hold timing. The right-click verdict is Commands policy (CadClassifyRightClick/CadRightClickHoldIsMenu)."
+      "note": "Range locates the Qt event adapter method; Events owns input phase and release routing only. Grip, selection, and command state transitions embedded in the method remain Interaction/Commands."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2053,13 +2053,13 @@
         2593
       ],
       "system": "Events",
-      "concern": "right-click event result dispatch",
+      "concern": "right-click result dispatch wrapper only",
       "symbols": [
         "EditorViewport::RightPress",
         "EditorViewport::RightClickAsEnter",
         "EditorViewport::PerformRightClick"
       ],
-      "note": "Routes the resolved input to command submission or a context-menu request; command and menu behavior stay in Commands/Qt."
+      "note": "Events owns routing the resolved input outcome to its recipient; the timed-click verdict remains Commands policy, command submission remains Commands, and menu construction remains Qt."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2068,11 +2068,11 @@
         2612
       ],
       "system": "Events",
-      "concern": "wheel event dispatch",
+      "concern": "Qt wheel wrapper only",
       "symbols": [
         "EditorViewport::wheelEvent"
       ],
-      "note": "Qt wheel delivery and forwarding to view navigation."
+      "note": "Events owns receipt and routing of wheel input; zoom and viewport navigation policy stays with Renderer/Interaction."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2081,11 +2081,11 @@
         2653
       ],
       "system": "Events",
-      "concern": "key press dispatch",
+      "concern": "Qt key press wrapper only",
       "symbols": [
         "EditorViewport::keyPressEvent"
       ],
-      "note": "Qt key delivery and forwarding; command meanings and shortcuts stay in Commands/Qt."
+      "note": "Events owns receipt and routing of key input; shortcut and command meanings stay with Qt/Commands."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2094,11 +2094,11 @@
         2673
       ],
       "system": "Events",
-      "concern": "key release dispatch",
+      "concern": "Qt key release wrapper only",
       "symbols": [
         "EditorViewport::keyReleaseEvent"
       ],
-      "note": "Qt key release delivery and forwarding."
+      "note": "Events owns the input phase and routing only; keyboard behavior stays with Qt/Commands."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2178,11 +2178,11 @@
         2130
       ],
       "system": "Events",
-      "concern": "app-wide Qt input event filter",
+      "concern": "Qt app-wide input filter wrapper only",
       "symbols": [
         "EditorWindow::eventFilter"
       ],
-      "note": "Receives Qt mouse/key events across the editor and routes them into drafting input or editor command handling. Qt focus/popup mechanics and command semantics remain in Qt/Commands."
+      "note": "Range locates the app-wide Qt input filter. Events owns the input receipt and route boundary only; Qt focus/popup behavior and command semantics remain Qt/Commands."
     },
     {
       "path": "src/qt/EditorInput.cpp",
@@ -2191,11 +2191,11 @@
         450
       ],
       "system": "Events",
-      "concern": "drafting input key event translation",
+      "concern": "Qt drafting input adapter wrapper only",
       "symbols": [
         "EditorWindow::DraftingInputEvent"
       ],
-      "note": "Translates Qt key and shortcut-override events into draft submission, cancellation, and command actions. Qt delivery and command behavior remain with their owning systems."
+      "note": "Range locates the Qt key-event adapter. Events owns input decoding/routing only; command submission, cancellation, and drafting policy remain Commands/Qt."
     },
     {
       "path": "src/qt/AdjustmentWindow.hpp",
@@ -2476,11 +2476,10 @@
       ],
       "currentFiles": [],
       "currentSections": [
-        "src/qt/EditorViewport.hpp: viewport change callback, Qt input overrides, and app-level input callback declarations",
-        "src/qt/EditorViewport.cpp: Qt viewport input overrides, transient input lifecycle, and event-result dispatch",
-        "src/qt/EditorWindow.cpp: viewport change-notification subscription and app-wide Qt event filter",
-        "src/qt/EditorInput.cpp: command/dynamic-input key event translation",
-        "src/qt/AdjustmentWindow.hpp, src/qt/AdjustmentWindow.cpp, and src/qt/EditorWindow.cpp: drawingChanged notification declaration, emission, and subscription"
+        "src/qt/EditorViewport.hpp: viewport change callback, Qt input override declarations, and app-level input callback declarations",
+        "src/qt/EditorViewport.cpp: event-adapter boundaries inside Qt input handlers and event-result dispatch (mixed method bodies retain Interaction/Commands/Qt behavior)",
+        "src/qt/EditorWindow.cpp and src/qt/EditorInput.cpp: app-wide Qt event filters and drafting-input event adapter boundaries",
+        "src/qt/AdjustmentWindow.hpp/.cpp and src/qt/EditorWindow.cpp: drawingChanged notification declaration, emission, and subscription"
       ],
       "draftPublicInterface": {
         "input events": [
@@ -2512,13 +2511,12 @@
         "tests/QtEditorTests.cpp::timeSensitiveRightClickIsEnterWhenQuickAndTheMenuWhenHeld (Qt integration path; verdict policy is Commands-owned)"
       ],
       "testGaps": [
-        "No toolkit-neutral Events types, dispatcher, or focused event-system tests exist yet.",
+        "No toolkit-neutral Events types, dispatcher, or focused event-system tests exist yet; no focused test covers AdjustmentWindow::drawingChanged through EditorWindow refresh, and no test directly names EditorWindow::eventFilter/EditorWindow::DraftingInputEvent (current coverage is via broader Qt integration cases).",
         "Document dirty tracking compares cadGpuRevision with activeDocSavedRevision for the active drawing and documents[i].cadGpuRevision with documents[i].savedRevision for other tabs; there is no DocumentChangedEvent publisher/subscriber contract.",
         "Viewport input tests are embedded in the large QtEditorTests suite and mix event transport with command, selection, and UI behavior."
       ],
       "testsCoveringNotOwned": [
-        "tests/RightClickTests.cpp and tests/CadPropertyEditTests.cpp: CadClassifyRightClick/CadRightClickHoldIsMenu command-policy tests; not Events-owned.",
-        "No dedicated toolkit-neutral Events dispatcher or payload tests exist yet; the listed QtEditorTests are integration coverage of the current Qt adapter paths."
+        "tests/RightClickTests.cpp and tests/CadPropertyEditTests.cpp: CadClassifyRightClick/CadRightClickHoldIsMenu command-policy tests; not Events-owned."
       ]
     }
   },
@@ -2600,10 +2598,10 @@
       "Swept and not assigned to Events: CadClassifyRightClick and CadRightClickHoldIsMenu in src/commands/CadCommands.hpp, plus tests/RightClickTests.cpp. They classify a timed click using command mode and last-command state, so the policy belongs to Commands; Qt only supplies press duration and dispatches the result.",
       "Swept and not assigned to Events: mouse selection, snap/hover, grip, ViewCube, and camera navigation behavior in EditorViewport.cpp. The Qt override transports the input, while behavior belongs to Interaction, Commands, Renderer, or Qt as recorded in the section notes.",
       "Swept and not assigned to Events: cadGpuRevision and savedRevision fields/comparisons. They implement Document/Commands dirty tracking and currently have no event publisher contract.",
-      "Swept and not assigned to Events: specialized Qt widget event overrides in src/qt/AdjustmentEditor.*, src/qt/EditorChrome.*, src/qt/DrawingDocumentTabBar.*, src/qt/EditorProperties.cpp, src/qt/NonDismissableDialog.hpp, src/qt/PdfCanvas.hpp, and src/qt/PdfWindow.*. They are concrete widget behavior, painting, or local gesture handling; they remain in the Qt backend unless a future audit identifies a toolkit-neutral event contract.",
+      "Swept and not assigned to Events: widget-local Qt event overrides in src/qt/AdjustmentEditor.*, src/qt/AdjustmentWindow.cpp/.hpp (except drawingChanged), src/qt/EditorChrome.*, src/qt/DrawingDocumentTabBar.*, src/qt/EditorProperties.cpp, src/qt/NonDismissableDialog.hpp, src/qt/PdfCanvas.hpp, src/qt/PdfWindow.*, src/qt/EditorRibbon.cpp, src/qt/EditorLayerManager.cpp, src/qt/PdfScaleUi.cpp, src/qt/PdfRibbon.hpp, src/qt/EditorProjectAttach.cpp, and src/qt/EditorAlignmentCreate.hpp. Their behavior is local widget presentation/gestures or domain-specific PDF input; the app-wide command/interaction input adapters are listed in sections. This is the exclusion rule for Qt event overrides outside the Events sections.",
       "Swept and not assigned to Events: thumbnailReady, partThumbnailsChanged, and PartThumbnails in src/qt/EditorViewport.hpp. These callbacks and rendered thumbnail data refresh the Qt palette and remain with Qt/Renderer.",
       "Swept and not assigned to Events: GripMenuDismissFilter::eventFilter in src/qt/EditorViewport.cpp. It starts/stops a Qt timer on QMenu enter/leave solely to dismiss that local menu.",
-      "Swept and not assigned to Events: FloatingCommandBar::refreshViewportCursor and its key/enter/leave/move handlers in src/qt/EditorChrome.*. They update local cursor presentation; the viewport cursor refresh callback is listed in sections, while the command bar remains Qt-owned.",
+      "Swept and not assigned to Events: FloatingCommandBar::refreshViewportCursor, a std::function callback in src/qt/EditorChrome.hpp, and FloatingCommandBar::enterEvent/leaveEvent/mouseMoveEvent in EditorChrome.cpp. Those three handlers refresh local cursor presentation; keyPressEvent only accepts the key. Cursor policy and display remain Qt-owned.",
       "Swept and not assigned to Events: changed_ in src/qt/EditorAlignmentLayout.cpp and afterChange in src/qt/EditorDialogs.cpp. They refresh their local editor/dialog workflows after edits; they are not a shared document or command-state event contract.",
       "Swept and not assigned to Events: PdfCanvas pointer callbacks and PdfWindow::DispatchInput in src/qt/PdfCanvas.hpp/src/qt/PdfWindow.cpp. These are Qt-typed, PDF-page-local hit/gesture adapters with Pdf policy, not the app-level command/interaction input stream.",
       "Swept and not assigned to Events: src/util/framewatch.hpp::Event. It is a Debug frame-stall enum (also noted by notCoreDespiteName), not an input or document-change event.",
