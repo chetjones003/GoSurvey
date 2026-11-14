@@ -43,7 +43,7 @@ jobs:
           # /improve duplicates /review findings and doubles the model cost of
           # every run; the owner can still post `/improve` on demand.
           github_action_config.auto_improve: "false"
-          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review"]'
+          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "unlabeled"]'
           pr_reviewer.inline_key_issues: "true"
           # The default cap is 3 findings per review, which drip-feeds problems
           # over many pushes. Report every real finding in the first pass.
