@@ -3341,7 +3341,7 @@
         "codeMoved": false,
         "commit": "797df4f3"
       },
-      "responsibility": "Defines toolkit-neutral file, message, and report dialog, progress, and clipboard interfaces (timers are deferred by the two-use rule in CLAUDE.md, per ADR-0002) so engine code can request UI services without a toolkit, and holds the pure presentation rules (floating command-bar history and prompt segments, MTEXT panel placement) that need no toolkit.",
+      "responsibility": "Defines toolkit-neutral file, message, and report dialog, progress, and clipboard interfaces (timers are deferred by the two-use rule in CLAUDE.md, per ADR-0002) so engine code can request UI services without a toolkit, and holds the pure presentation rules (floating command-bar history and prompt segments, MTEXT panel placement, rich-text caret and wrap layout) that need no toolkit.",
       "doesNotOwn": [
         "concrete widgets, toolkit dialogs, and toolkit timers or clipboards (Qt, Windows, Headless backends)",
         "windows, panels, ribbon, dialog content, hotkeys, and the decision to open a dialog (GoSurveyEditor, per ADR-0002)",
@@ -3357,28 +3357,21 @@
         "Core",
         "Events"
       ],
-      "dependencyNote": "The current UI candidates include only the standard library and Core (CommandBar.hpp includes nothing else). RichTextLayout.hpp includes MtextRichSpans.hpp, which is Document-owned, so it breaks the UI allowed-dependency list. The final-map ticket must move the span type or the layout, or add an explicit edge. The ratchet baseline does not yet record this edge because fileMappings does not assign src/ui files to UI.",
+      "dependencyNote": "The UI candidates include only the standard library and Core, except RichTextLayout.hpp, which includes MtextRichSpans.hpp (Document). That edge is recorded in forbiddenDependencies. Auditing ownership does not change the ratchet: it reads fileMappings, which still leaves src/ui files as Qt.",
       "currentFiles": [
         "src/ui/CommandBar.hpp (all except TrimAscii, which is Core; see sections)",
         "src/ui/MtextToolbar.hpp",
+        "src/ui/RichTextLayout.hpp (caret and wrap layout; its Document include is tracked in forbiddenDependencies)",
         "src/platform/WinFileDialogs.hpp (declarations only; the implementation stays Windows; see sections)"
       ],
-      "pendingAssignment": [
-        {
-          "files": [
-            "src/ui/RichTextLayout.hpp",
-            "src/ui/MtextRichSpans.hpp"
-          ],
-          "reason": "RichTextLayout is UI caret and wrap layout, but it reads the Document wire-span type. Assigning it to UI now adds a UI-to-Document edge the map forbids. The final-map ticket decides between moving the span parser to Document with layout staying UI, or moving the layout to Document. Until then, RichTextLayout is not in currentFiles."
-        }
-      ],
+      "pendingAssignment": [],
       "currentSections": [
         "src/platform/WinFileDialogs.hpp: all Browse* declarations, the file-dialog interface",
         "src/platform/FailureReportUi.hpp: ShowReportDialog declaration (lines 344-403 are the Windows implementation), the report-dialog service shape",
         "src/ui/CommandBar.hpp: lines 64-72 TrimAscii are Core (Core audit); the rest is UI",
         "src/platform/FailureReportUi.cpp:134 and :384: MessageBoxW calls, Windows implementation of the UI message-dialog interface",
         "src/platform/CrashReporter.cpp:723: calls ShowReportDialog; the trigger is Debug, the dialog is UI",
-        "src/commands/CadCommands.hpp:7045-7060: PointCloudImportProgress and UpdatePointCloudImportProgress, progress presentation candidates"
+        "src/commands/CadCommands.hpp:7045-7053: PointCloudImportProgress and UpdatePointCloudImportProgress, progress presentation candidates"
       ],
       "draftPublicInterface": {
         "file dialogs": [
@@ -3407,13 +3400,13 @@
         "pure presentation helpers": [
           "cmdbar::HistoryAlpha, LogTailStart, PromptSegment, VariantShortcut, ParsePromptSegments (REQ-040, REQ-119)",
           "mtexttoolbar panel clamp, run-tag composition, ruler tick spacing (REQ-051)",
-          "richtext layout, visible-index to byte-offset mapping, and caret hit testing (ADR-023; blocked on the pendingAssignment decision)"
+          "richtext layout, visible-index to byte-offset mapping, and caret hit testing (ADR-023; its Document include is in forbiddenDependencies)"
         ]
       },
       "existingTests": [
         "tests/CommandLineTests.cpp: cmdbar helpers (34 references)",
         "tests/MtextToolbarTests.cpp: mtexttoolbar helpers (25 references)",
-        "tests/RichTextLayoutTests.cpp: richtext layout and caret math (37 references; the pendingAssignment dependency applies)",
+        "tests/RichTextLayoutTests.cpp: richtext layout and caret math (37 references; see forbiddenDependencies)",
         "tests/headless/HeadlessDriver.cpp: queues headless file-dialog answers from DIALOG transcript lines",
         "tests/CadBlockImportTests.cpp and tests/PointCloudExportTests.cpp: queue headless file-dialog answers through the seam"
       ],
@@ -3421,13 +3414,24 @@
         "No toolkit-neutral UI interface, dispatcher, or test double exists yet for file dialogs, progress, clipboard, or timers. Only the headless free-function queue exists.",
         "No test covers WinFileDialogs.cpp filter-to-FileKind mapping or the Windows Browse* functions; the Windows implementation is only reachable on a real desktop.",
         "No focused test covers the GitHubIssueUrlForReport URL cut or the report clipboard outcome; coverage is inside QtEditorTests.cpp, which mixes Qt and report logic.",
-        "The dependency between RichTextLayout and MtextRichSpans is not tested as an edge; the ratchet cannot see it until the files are assigned.",
+        "The dependency between RichTextLayout and MtextRichSpans is not tested as an edge; auditedEntries is advisory, so the ratchet does not enforce it.",
         "No test covers the MessageBoxW confirmation or error paths in FailureReportUi.cpp; they run only on a real Windows desktop."
       ],
       "testsCoveringUiNotOwned": [
         "tests/QtEditorTests.cpp: failure-report dialog, its outcome message, and GitHub issue URL (Qt implementation of the report dialog)",
         "tests/QtEditorTests.cpp: QtSplash and the broader Qt viewport integration (Qt implementation; not UI-owned)",
         "tests/WhatsNewLogicTests.cpp: What's New version-gating rules (not UI-owned; see notUiDecisions)"
+      ],
+      "forbiddenDependencies": [
+        {
+          "files": [
+            "src/ui/RichTextLayout.hpp",
+            "src/ui/MtextRichSpans.hpp"
+          ],
+          "edge": "UI -> Document (RichTextLayout.hpp includes MtextRichSpans.hpp)",
+          "status": "assigned to UI; the edge is not in the UI allowed dependencies, so it is recorded here rather than hidden",
+          "resolution": "final-map ticket: move the span parser to Document, or move the layout to Document, or add an explicit edge in the map"
+        }
       ]
     }
   },
@@ -3498,8 +3502,9 @@
       "QTimer or QClipboard appears in 23 src/qt files, with no engine-side timer or clipboard interface to route them through. This is not a violation today; it is missing interface coverage.",
       "src/qt/FailureReport.cpp includes platform/FailureReportUi.hpp and platform/StartupFailure.hpp (baseline: \"Qt may not depend on Windows\") and render/ViewportRenderer.hpp (baseline: \"Qt may not depend on Renderer\"). The ProbeStartupGraphics check is the Qt side of a launch-time service; the report window's dependency on the Windows report helpers is the coupling to remove.",
       "src/ui/CadUiStyleWidgets.hpp includes CadEntities.hpp (baseline: \"Qt may not depend on Commands\"). Moving the appearance vocabulary out of src/ui clears this violation.",
-      "CadCommands.hpp PointCloudImportProgress (lines 7045-7060) and UpdatePointCloudImportProgress: the progress struct is UI presentation data carried in Commands state. Moving it behind the UI progress interface needs the progress shapes reconciled first (see the progress coupling above).",
-      "UpdateService.cpp:181-187 passes a download progress lambda to HttpDownloadFile; this is a fourth progress-callback shape alongside HttpFetch, PdfDiff, PdfSplit and pointcloudcache (see the progress coupling above)."
+      "CadCommands.hpp PointCloudImportProgress (lines 7045-7053) and UpdatePointCloudImportProgress: the progress struct is UI presentation data carried in Commands state. Moving it behind the UI progress interface needs the progress shapes reconciled first (see the progress coupling above).",
+      "UpdateService.cpp:181-187 passes a download progress lambda to HttpDownloadFile; this is a fourth progress-callback shape alongside HttpFetch, PdfDiff, PdfSplit and pointcloudcache (see the progress coupling above).",
+      "RichTextLayout.hpp (UI caret and wrap layout) includes MtextRichSpans.hpp (Document). Recorded in auditedEntries.UI.forbiddenDependencies; resolve in the final map."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
