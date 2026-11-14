@@ -371,7 +371,11 @@ jobs:
           }
           if ($sccache) {
             & $sccache --show-stats
-            if ($LASTEXITCODE -ne 0) { Write-Warning "sccache stats exited with $LASTEXITCODE" }
+            if ($LASTEXITCODE -ne 0) {
+              $statsExitCode = $LASTEXITCODE
+              Write-Warning "sccache stats exited with $statsExitCode; ignoring cleanup failure."
+              exit 0
+            }
           } else {
             Write-Warning 'sccache was unavailable during cleanup; skipping stats.'
           }
