@@ -771,7 +771,7 @@
       "symbols": [
         "StartsWith"
       ],
-      "note": "Local string helper with no Core equivalent yet (upper-case, prefix and suffix helpers). Core should gain one, or the callers keep a local copy."
+      "note": "Prefix or suffix test with no Core equivalent yet. Core should gain one, or the callers keep a local copy."
     },
     {
       "path": "src/commands/CadCommands_Alignment.cpp",
@@ -784,7 +784,7 @@
       "symbols": [
         "Lower"
       ],
-      "note": "Similar to Core StringUtil::toLowerAsciiCopy or a case helper, but the case mapping may differ. Compare before replacing its callers; do not move the code."
+      "note": "Same lower-casing as Core StringUtil::toLowerAsciiCopy (std::tolower). Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/commands/CadCommands_Alignment.cpp",
@@ -797,7 +797,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/commands/CadLinetype.cpp",
@@ -810,7 +810,7 @@
       "symbols": [
         "TrimAscii"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/commands/CadSurfaceEdit.cpp",
@@ -823,7 +823,7 @@
       "symbols": [
         "TrimStyleName"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Trims only space and tab, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
     },
     {
       "path": "src/commands/CadSurfaceEdit.hpp",
@@ -836,7 +836,7 @@
       "symbols": [
         "TrimStyleName"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Trims only space and tab, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
     },
     {
       "path": "src/commands/HatchPat.hpp",
@@ -849,7 +849,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/commands/HatchPat.hpp",
@@ -862,7 +862,7 @@
       "symbols": [
         "UpperCopy"
       ],
-      "note": "Local string helper with no Core equivalent yet (upper-case, prefix and suffix helpers). Core should gain one, or the callers keep a local copy."
+      "note": "Upper-case helper with no Core equivalent yet. Core should gain one, or the callers keep a local copy."
     },
     {
       "path": "src/font/CadFontName.hpp",
@@ -875,7 +875,7 @@
       "symbols": [
         "LowerAscii"
       ],
-      "note": "Similar to Core StringUtil::toLowerAsciiCopy or a case helper, but the case mapping may differ. Compare before replacing its callers; do not move the code."
+      "note": "Lower-cases ASCII A-Z only, a manual loop. Core uses std::tolower, which matches in the C locale. Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/io/CadPointCloudPts.cpp",
@@ -888,7 +888,7 @@
       "symbols": [
         "TrimCopy"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Trims only space, tab, CR and LF, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
     },
     {
       "path": "src/io/CadPointCloudPtx.cpp",
@@ -901,7 +901,7 @@
       "symbols": [
         "TrimCopy"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Trims only space, tab, CR and LF, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
     },
     {
       "path": "src/io/DwgProbe.cpp",
@@ -914,7 +914,7 @@
       "symbols": [
         "ToLowerAscii"
       ],
-      "note": "Similar to Core StringUtil::toLowerAsciiCopy or a case helper, but the case mapping may differ. Compare before replacing its callers; do not move the code."
+      "note": "Same lower-casing as Core StringUtil::toLowerAsciiCopy (std::tolower). Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/io/DxfIo.cpp",
@@ -927,7 +927,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/io/LibreDwgCad.cpp",
@@ -940,7 +940,7 @@
       "symbols": [
         "LowerAscii"
       ],
-      "note": "Similar to Core StringUtil::toLowerAsciiCopy or a case helper, but the case mapping may differ. Compare before replacing its callers; do not move the code."
+      "note": "Same lower-casing as Core StringUtil::toLowerAsciiCopy (std::tolower). Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/io/LibreDwgCad.cpp",
@@ -953,7 +953,7 @@
       "symbols": [
         "TrimAscii"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Trims only space, tab, CR and LF, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
     },
     {
       "path": "src/io/PlotFont.hpp",
@@ -966,7 +966,7 @@
       "symbols": [
         "LowerAscii"
       ],
-      "note": "Similar to Core StringUtil::toLowerAsciiCopy or a case helper, but the case mapping may differ. Compare before replacing its callers; do not move the code."
+      "note": "Lower-cases ASCII A-Z only, a manual loop. Core uses std::tolower, which matches in the C locale. Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/io/PlotStyleTable.cpp",
@@ -979,7 +979,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but not the same: it also strips trailing NUL bytes, and trims only space, tab, CR and LF, where Core trims all ASCII whitespace. Compare before replacing; do not move the code."
+      "note": "Differs from Core StringUtil::trimCopy: it also strips trailing NUL bytes, and trims only space, tab, CR and LF, where Core trims every isspace character. Compare before replacing; do not move the code."
     },
     {
       "path": "src/io/ProjectFiles.cpp",
@@ -992,7 +992,7 @@
       "symbols": [
         "Lower"
       ],
-      "note": "Similar to Core StringUtil::toLowerAsciiCopy or a case helper, but the case mapping may differ. Compare before replacing its callers; do not move the code."
+      "note": "Same lower-casing as Core StringUtil::toLowerAsciiCopy (std::tolower). Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/io/ProjectPack.cpp",
@@ -1005,7 +1005,7 @@
       "symbols": [
         "Lower"
       ],
-      "note": "Similar to Core StringUtil::toLowerAsciiCopy or a case helper, but the case mapping may differ. Compare before replacing its callers; do not move the code."
+      "note": "Same lower-casing as Core StringUtil::toLowerAsciiCopy (std::tolower). Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/io/ProjectPack.cpp",
@@ -1018,7 +1018,7 @@
       "symbols": [
         "EndsWith"
       ],
-      "note": "Local string helper with no Core equivalent yet (upper-case, prefix and suffix helpers). Core should gain one, or the callers keep a local copy."
+      "note": "Prefix or suffix test with no Core equivalent yet. Core should gain one, or the callers keep a local copy."
     },
     {
       "path": "src/io/ProjectTurnover.cpp",
@@ -1031,7 +1031,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/io/SurveyCsv.cpp",
@@ -1044,7 +1044,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/io/WikiContent.cpp",
@@ -1057,7 +1057,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/io/WikiHelp.cpp",
@@ -1070,7 +1070,7 @@
       "symbols": [
         "ToLowerAscii"
       ],
-      "note": "Similar to Core StringUtil::toLowerAsciiCopy or a case helper, but the case mapping may differ. Compare before replacing its callers; do not move the code."
+      "note": "Same lower-casing as Core StringUtil::toLowerAsciiCopy (std::tolower). Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/pdf/PdfCoordExtract.cpp",
@@ -1083,7 +1083,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Trims only space, tab, CR and LF, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
     },
     {
       "path": "src/pdf/PdfCoordExtract.cpp",
@@ -1096,7 +1096,7 @@
       "symbols": [
         "Upper"
       ],
-      "note": "Local string helper with no Core equivalent yet (upper-case, prefix and suffix helpers). Core should gain one, or the callers keep a local copy."
+      "note": "Upper-case helper with no Core equivalent yet. Core should gain one, or the callers keep a local copy."
     },
     {
       "path": "src/pdf/PdfScaleCheck.cpp",
@@ -1109,7 +1109,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/pdf/PdfSplit.cpp",
@@ -1122,7 +1122,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/survey/PointGroupRule.cpp",
@@ -1135,7 +1135,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Same trimming as Core StringUtil::trimCopy (isspace at both ends). Replace its callers with Core; do not move the code."
     },
     {
       "path": "src/traverse/StarNetImport.cpp",
@@ -1148,7 +1148,7 @@
       "symbols": [
         "TrimCopy"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Trims only space and tab, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
     },
     {
       "path": "src/traverse/StarNetImport.cpp",
@@ -1161,7 +1161,7 @@
       "symbols": [
         "ToUpper"
       ],
-      "note": "Local string helper with no Core equivalent yet (upper-case, prefix and suffix helpers). Core should gain one, or the callers keep a local copy."
+      "note": "Upper-case helper with no Core equivalent yet. Core should gain one, or the callers keep a local copy."
     },
     {
       "path": "src/traverse/TraverseCommandLang.cpp",
@@ -1174,7 +1174,7 @@
       "symbols": [
         "ToUpper"
       ],
-      "note": "Local string helper with no Core equivalent yet (upper-case, prefix and suffix helpers). Core should gain one, or the callers keep a local copy."
+      "note": "Upper-case helper with no Core equivalent yet. Core should gain one, or the callers keep a local copy."
     },
     {
       "path": "src/ui/CommandBar.hpp",
@@ -1187,7 +1187,7 @@
       "symbols": [
         "TrimAscii"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Trims only space and tab, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
     },
     {
       "path": "src/util/AcisSatParser.cpp",
@@ -1200,7 +1200,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Trims only space, tab, CR and LF, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
     },
     {
       "path": "src/util/AcisSatWriter.cpp",
@@ -1213,7 +1213,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Similar to Core StringUtil::trimCopy, but the whitespace set may differ. Compare before replacing its callers; do not move the code."
+      "note": "Trims only space, tab, CR and LF, a narrower set than Core trimCopy. Compare before replacing; do not move the code."
     },
     {
       "path": "src/util/DataExtract.hpp",
@@ -1265,7 +1265,7 @@
       "symbols": [
         "EqCiAscii"
       ],
-      "note": "Local ASCII case-insensitive compare, similar to Core CadBlockEqCi. Compare before replacing; do not move the code."
+      "note": "Local ASCII case-insensitive compare, similar to CadBlockEqCi in util/cadblock.hpp (block-private today; a Core candidate). Compare before replacing; do not move the code."
     },
     {
       "path": "src/io/DxfIo.cpp",
@@ -1291,7 +1291,7 @@
       "symbols": [
         "EqCiStr"
       ],
-      "note": "Local case-insensitive compare of two strings, similar to Core CadBlockEqCi. Compare before replacing; do not move the code."
+      "note": "Local case-insensitive compare of two strings, similar to CadBlockEqCi in util/cadblock.hpp (block-private today; a Core candidate). Compare before replacing; do not move the code."
     },
     {
       "path": "src/commands/CadCommands.cpp",
@@ -1304,7 +1304,7 @@
       "symbols": [
         "LayerNamesEqCi"
       ],
-      "note": "Local layer-name case-insensitive compare, similar to Core CadBlockEqCi. Compare before replacing; do not move the code."
+      "note": "Local layer-name case-insensitive compare, similar to CadBlockEqCi in util/cadblock.hpp (block-private today; a Core candidate). Compare before replacing; do not move the code."
     },
     {
       "path": "src/geo/DrawingConversion.cpp",
@@ -1521,7 +1521,7 @@
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
-      "Local trim/lower/upper/prefix/compare helpers outside src/core: 42 definitions or declarations, each a sections entry with concern strings (for example io/DxfIo.cpp Trim, io/WikiHelp.cpp ToLowerAscii, traverse/StarNetImport.cpp TrimCopy, ui/CommandBar.hpp TrimAscii). StringUtil exists but only 9 files include it.",
+      "Local trim/lower/upper/prefix/compare helpers outside src/core: 42 definitions or declarations, not counting CadBlockEqCi (already recorded above), each a sections entry with concern strings (for example io/DxfIo.cpp Trim, io/WikiHelp.cpp ToLowerAscii, traverse/StarNetImport.cpp TrimCopy, ui/CommandBar.hpp TrimAscii). StringUtil exists but only 9 files include it.",
       "CadFormatBearingCwNorthDegMinSec and CadFormatAngleDegMinSecFromRad in CadCommands.cpp are divergent from Core FormatBearing and FormatSweptAngle: unpadded minutes, and a 359-degree cap in the swept-angle form. AngleFormat.hpp says FormatBearing reproduces the bearing formatter at default settings; that comment is false and stale.",
       "AppCommandState stores angle display as raw ints (angleDisplayType). CadAngleDisplaySettings (Commands) converts them to the typed Core AngleDisplaySettings on every call.",
       "DrawingSettings (Document, per-drawing) embeds the AngularUnits and FootDefinition enums that Core units should own.",
