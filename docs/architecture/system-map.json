@@ -2005,7 +2005,18 @@
       "symbols": [
         "EditorViewport::mousePressEvent"
       ],
-      "note": "Range locates the Qt event adapter method; Events owns receipt and input-event routing only. Selection, snapping, hover, grip, command, and ViewCube policies embedded in the method remain Interaction/Commands/Renderer."
+      "note": "Range locates the Qt event adapter method; Events owns receipt and input-event routing only. Selection, snapping, hover, grip, command, and ViewCube policies embedded in the method remain Interaction/Commands/Renderer. This is a mixed-method locator, not ownership of every statement in the line range; `otherOwners` retain the embedded policy and state changes.",
+      "ownershipKind": "mixed",
+      "eventsScope": "Qt event receipt, normalization, phase, and routing glue only",
+      "otherOwners": [
+        "Qt",
+        "Interaction",
+        "Commands",
+        "Renderer",
+        "Document",
+        "Survey",
+        "Pdf"
+      ]
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2018,7 +2029,15 @@
       "symbols": [
         "EditorViewport::mouseDoubleClickEvent"
       ],
-      "note": "Events owns receipt and routing of the Qt double-click input; click-to-command semantics stay with Qt/Commands/Interaction."
+      "note": "Events owns receipt and routing of the Qt double-click input; click-to-command semantics stay with Qt/Commands/Interaction. This is a mixed-method locator, not ownership of every statement in the line range; `otherOwners` retain the embedded policy and state changes.",
+      "ownershipKind": "mixed",
+      "eventsScope": "Qt event receipt, normalization, phase, and routing glue only",
+      "otherOwners": [
+        "Qt",
+        "Document",
+        "Commands",
+        "Renderer"
+      ]
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2031,7 +2050,17 @@
       "symbols": [
         "EditorViewport::mouseMoveEvent"
       ],
-      "note": "Range locates the Qt event adapter method; Events owns receipt and input-event routing only. Cursor presentation and snap/hover/selection interaction embedded in the method remain Qt/Interaction."
+      "note": "Range locates the Qt event adapter method; Events owns receipt and input-event routing only. Cursor presentation and snap/hover/selection interaction embedded in the method remain Qt/Interaction. This is a mixed-method locator, not ownership of every statement in the line range; `otherOwners` retain the embedded policy and state changes.",
+      "ownershipKind": "mixed",
+      "eventsScope": "Qt event receipt, normalization, phase, and routing glue only",
+      "otherOwners": [
+        "Qt",
+        "Interaction",
+        "Commands",
+        "Renderer",
+        "Document",
+        "Survey"
+      ]
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2044,7 +2073,16 @@
       "symbols": [
         "EditorViewport::mouseReleaseEvent"
       ],
-      "note": "Range locates the Qt event adapter method; Events owns input phase and release routing only. Grip, selection, and command state transitions embedded in the method remain Interaction/Commands."
+      "note": "Range locates the Qt event adapter method; Events owns input phase and release routing only. Grip, selection, and command state transitions embedded in the method remain Interaction/Commands. This is a mixed-method locator, not ownership of every statement in the line range; `otherOwners` retain the embedded policy and state changes.",
+      "ownershipKind": "mixed",
+      "eventsScope": "Qt event receipt, normalization, phase, and routing glue only",
+      "otherOwners": [
+        "Qt",
+        "Interaction",
+        "Commands",
+        "Document",
+        "Survey"
+      ]
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2072,7 +2110,14 @@
       "symbols": [
         "EditorViewport::wheelEvent"
       ],
-      "note": "Events owns receipt and routing of wheel input; zoom and viewport navigation policy stays with Renderer/Interaction."
+      "note": "Events owns receipt and routing of wheel input; zoom and viewport navigation policy stays with Renderer/Interaction. This is a mixed-method locator, not ownership of every statement in the line range; `otherOwners` retain the embedded policy and state changes.",
+      "ownershipKind": "mixed",
+      "eventsScope": "Qt event receipt, normalization, phase, and routing glue only",
+      "otherOwners": [
+        "Qt",
+        "Renderer",
+        "Interaction"
+      ]
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2085,7 +2130,14 @@
       "symbols": [
         "EditorViewport::keyPressEvent"
       ],
-      "note": "Events owns receipt and routing of key input; shortcut and command meanings stay with Qt/Commands."
+      "note": "Events owns receipt and routing of key input; shortcut and command meanings stay with Qt/Commands. This is a mixed-method locator, not ownership of every statement in the line range; `otherOwners` retain the embedded policy and state changes.",
+      "ownershipKind": "mixed",
+      "eventsScope": "Qt event receipt, normalization, phase, and routing glue only",
+      "otherOwners": [
+        "Qt",
+        "Commands",
+        "GoSurveyEditor"
+      ]
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2098,7 +2150,13 @@
       "symbols": [
         "EditorViewport::keyReleaseEvent"
       ],
-      "note": "Events owns the input phase and routing only; keyboard behavior stays with Qt/Commands."
+      "note": "Events owns the input phase and routing only; keyboard behavior stays with Qt/Commands. This is a mixed-method locator, not ownership of every statement in the line range; `otherOwners` retain the embedded policy and state changes.",
+      "ownershipKind": "mixed",
+      "eventsScope": "Qt event receipt, normalization, phase, and routing glue only",
+      "otherOwners": [
+        "Qt",
+        "Commands"
+      ]
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -2182,7 +2240,14 @@
       "symbols": [
         "EditorWindow::eventFilter"
       ],
-      "note": "Range locates the app-wide Qt input filter. Events owns the input receipt and route boundary only; Qt focus/popup behavior and command semantics remain Qt/Commands."
+      "note": "Range locates the app-wide Qt input filter. Events owns the input receipt and route boundary only; Qt focus/popup behavior and command semantics remain Qt/Commands. This is a mixed-method locator, not ownership of every statement in the line range; `otherOwners` retain the embedded policy and state changes.",
+      "ownershipKind": "mixed",
+      "eventsScope": "Qt event receipt, normalization, phase, and routing glue only",
+      "otherOwners": [
+        "Qt",
+        "Commands",
+        "GoSurveyEditor"
+      ]
     },
     {
       "path": "src/qt/EditorInput.cpp",
@@ -2195,7 +2260,14 @@
       "symbols": [
         "EditorWindow::DraftingInputEvent"
       ],
-      "note": "Range locates the Qt key-event adapter. Events owns input decoding/routing only; command submission, cancellation, and drafting policy remain Commands/Qt."
+      "note": "Range locates the Qt key-event adapter. Events owns input decoding/routing only; command submission, cancellation, and drafting policy remain Commands/Qt. This is a mixed-method locator, not ownership of every statement in the line range; `otherOwners` retain the embedded policy and state changes.",
+      "ownershipKind": "mixed",
+      "eventsScope": "Qt event receipt, normalization, phase, and routing glue only",
+      "otherOwners": [
+        "Qt",
+        "Commands",
+        "GoSurveyEditor"
+      ]
     },
     {
       "path": "src/qt/AdjustmentWindow.hpp",
@@ -2274,6 +2346,253 @@
         "changed callback after selection-box cancellation"
       ],
       "note": "Emits the shared viewport changed callback after transient selection-box state is cleared."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        1690,
+        1690
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        1724,
+        1724
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        1743,
+        1743
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        1800,
+        1800
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        1811,
+        1811
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        1845,
+        1845
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        1886,
+        1886
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        1910,
+        1910
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        1921,
+        1921
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        1931,
+        1931
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2088,
+        2088
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2109,
+        2109
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2160,
+        2160
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2211,
+        2211
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2259,
+        2259
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2476,
+        2476
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2548,
+        2548
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2556,
+        2556
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2650,
+        2650
+      ],
+      "system": "Events",
+      "concern": "viewport changed notification emission",
+      "symbols": [
+        "EditorViewport::changed callback"
+      ],
+      "note": "Exact callback emission site; cause and current no-argument callback coupling are described in auditFindings.couplings."
     }
   ],
   "auditedEntries": {
@@ -2513,7 +2832,8 @@
       "testGaps": [
         "No toolkit-neutral Events types, dispatcher, or focused event-system tests exist yet; no focused test covers AdjustmentWindow::drawingChanged through EditorWindow refresh, and no test directly names EditorWindow::eventFilter/EditorWindow::DraftingInputEvent (current coverage is via broader Qt integration cases).",
         "Document dirty tracking compares cadGpuRevision with activeDocSavedRevision for the active drawing and documents[i].cadGpuRevision with documents[i].savedRevision for other tabs; there is no DocumentChangedEvent publisher/subscriber contract.",
-        "Viewport input tests are embedded in the large QtEditorTests suite and mix event transport with command, selection, and UI behavior."
+        "Viewport input tests are embedded in the large QtEditorTests suite and mix event transport with command, selection, and UI behavior.",
+        "No typed command-state changed publisher exists today; the viewport changed callback is an untyped refresh callback, not dedicated command-state event coverage."
       ],
       "testsCoveringNotOwned": [
         "tests/RightClickTests.cpp and tests/CadPropertyEditTests.cpp: CadClassifyRightClick/CadRightClickHoldIsMenu command-policy tests; not Events-owned."
@@ -2598,7 +2918,7 @@
       "Swept and not assigned to Events: CadClassifyRightClick and CadRightClickHoldIsMenu in src/commands/CadCommands.hpp, plus tests/RightClickTests.cpp. They classify a timed click using command mode and last-command state, so the policy belongs to Commands; Qt only supplies press duration and dispatches the result.",
       "Swept and not assigned to Events: mouse selection, snap/hover, grip, ViewCube, and camera navigation behavior in EditorViewport.cpp. The Qt override transports the input, while behavior belongs to Interaction, Commands, Renderer, or Qt as recorded in the section notes.",
       "Swept and not assigned to Events: cadGpuRevision and savedRevision fields/comparisons. They implement Document/Commands dirty tracking and currently have no event publisher contract.",
-      "Swept and not assigned to Events: widget-local Qt event overrides in src/qt/AdjustmentEditor.*, src/qt/AdjustmentWindow.cpp/.hpp (except drawingChanged), src/qt/EditorChrome.*, src/qt/DrawingDocumentTabBar.*, src/qt/EditorProperties.cpp, src/qt/NonDismissableDialog.hpp, src/qt/PdfCanvas.hpp, src/qt/PdfWindow.*, src/qt/EditorRibbon.cpp, src/qt/EditorLayerManager.cpp, src/qt/PdfScaleUi.cpp, src/qt/PdfRibbon.hpp, src/qt/EditorProjectAttach.cpp, and src/qt/EditorAlignmentCreate.hpp. Their behavior is local widget presentation/gestures or domain-specific PDF input; the app-wide command/interaction input adapters are listed in sections. This is the exclusion rule for Qt event overrides outside the Events sections.",
+      "Swept and not assigned to Events: widget-local Qt event overrides in src/qt/AdjustmentEditor.*, src/qt/AdjustmentWindow.cpp/.hpp (except drawingChanged), src/qt/EditorChrome.*, src/qt/DrawingDocumentTabBar.*, src/qt/EditorProperties.cpp, src/qt/NonDismissableDialog.hpp, src/qt/PdfCanvas.hpp, src/qt/PdfWindow.*, src/qt/EditorRibbon.cpp, src/qt/EditorLayerManager.cpp, src/qt/PdfScaleUi.cpp, src/qt/PdfRibbon.hpp, src/qt/EditorProjectAttach.cpp, and src/qt/EditorAlignmentCreate.hpp/.cpp. In src/qt/EditorWindow.cpp, closeEvent/changeEvent/showEvent/resizeEvent are Qt-owned; its app-wide eventFilter is separately listed in Events sections. These are widget presentation, local gestures, or domain-specific PDF input; app-wide command/interaction input adapters are listed in Events sections.",
       "Swept and not assigned to Events: thumbnailReady, partThumbnailsChanged, and PartThumbnails in src/qt/EditorViewport.hpp. These callbacks and rendered thumbnail data refresh the Qt palette and remain with Qt/Renderer.",
       "Swept and not assigned to Events: GripMenuDismissFilter::eventFilter in src/qt/EditorViewport.cpp. It starts/stops a Qt timer on QMenu enter/leave solely to dismiss that local menu.",
       "Swept and not assigned to Events: FloatingCommandBar::refreshViewportCursor, a std::function callback in src/qt/EditorChrome.hpp, and FloatingCommandBar::enterEvent/leaveEvent/mouseMoveEvent in EditorChrome.cpp. Those three handlers refresh local cursor presentation; keyPressEvent only accepts the key. Cursor policy and display remain Qt-owned.",
@@ -2607,7 +2927,9 @@
       "Swept and not assigned to Events: src/util/framewatch.hpp::Event. It is a Debug frame-stall enum (also noted by notCoreDespiteName), not an input or document-change event.",
       "Swept and not assigned to Events: CadClassifyRightClick tests in tests/CadPropertyEditTests.cpp; they test Commands policy, not event transport.",
       "Swept and not assigned to Events: EditorViewport::RefreshCommandCursor and FloatingCommandBar::refreshViewportCursor in src/qt/EditorViewport.cpp/src/qt/EditorChrome.*. They update native cursor presentation in response to local pointer position; the callback is Qt-owned.",
-      "The Qt event exclusions include local window lifecycle handlers in src/qt/AdjustmentWindow.cpp/.hpp; only its drawingChanged notification is Events-facing. The local closeEvent/changeEvent remain Qt-owned."
+      "The Qt event exclusions include local window lifecycle handlers in src/qt/AdjustmentWindow.cpp/.hpp; only its drawingChanged notification is Events-facing. The local closeEvent/changeEvent remain Qt-owned.",
+      "Swept and not assigned to Events: FloatingCommandBar::eventFilter in src/qt/EditorChrome.cpp. It handles local grip dragging and persists the bar width/anchor through Qt settings; it does not publish app input or change events.",
+      "Exclusion rule for remaining Qt event overrides: resizeEvent, showEvent, changeEvent, and closeEvent that manage only local widget/window lifecycle stay in Qt. Only application-wide input routing or cross-system state-change notifications are assigned to Events."
     ]
   }
 }
