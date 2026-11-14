@@ -587,7 +587,7 @@
         "CadFormatAngleDegMinSecFromRad",
         "CadFormatBearingCwNorthDegMinSec"
       ],
-      "note": "Declarations of the duplicate angle formatters below."
+      "note": "Declarations of the divergent angle formatters below."
     },
     {
       "path": "src/commands/CadCommands.cpp",
@@ -733,6 +733,34 @@
       "note": "%.6g. Duplicate of TrimNumber."
     },
     {
+      "path": "src/util/SaveTrace.hpp",
+      "lines": [
+        1,
+        6
+      ],
+      "system": "Core",
+      "concern": "logging",
+      "symbols": [
+        "ClearSaveTrace",
+        "AppendSaveTrace"
+      ],
+      "note": "Advisory Core ownership. Enforcement waits on a GoSurvey/Core public header, because io includes this file privately (see auditedEntries.Core.pendingAssignment)."
+    },
+    {
+      "path": "src/util/SaveTrace.cpp",
+      "lines": [
+        1,
+        45
+      ],
+      "system": "Core",
+      "concern": "logging",
+      "symbols": [
+        "ClearSaveTrace",
+        "AppendSaveTrace"
+      ],
+      "note": "Advisory Core ownership. Uses Win32 GetTempPathW and DeleteFileW directly, which the move ticket must route through the Windows system or inject."
+    },
+    {
       "path": "src/commands/CadColor.cpp",
       "lines": [
         12,
@@ -756,7 +784,7 @@
       "symbols": [
         "Lower"
       ],
-      "note": "Local duplicate of Core StringUtil::toLowerAsciiCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::toLowerAsciiCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/commands/CadCommands_Alignment.cpp",
@@ -769,7 +797,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/commands/CadLinetype.cpp",
@@ -782,7 +810,7 @@
       "symbols": [
         "TrimAscii"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/commands/CadSurfaceEdit.cpp",
@@ -795,7 +823,7 @@
       "symbols": [
         "TrimStyleName"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy (trim part only). Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy (trim part only), but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/commands/CadSurfaceEdit.hpp",
@@ -808,7 +836,7 @@
       "symbols": [
         "TrimStyleName"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy (trim part only). Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy (trim part only), but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/commands/HatchPat.hpp",
@@ -821,7 +849,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/commands/HatchPat.hpp",
@@ -847,7 +875,7 @@
       "symbols": [
         "LowerAscii"
       ],
-      "note": "Local duplicate of Core StringUtil::toLowerAsciiCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::toLowerAsciiCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/io/CadPointCloudPts.cpp",
@@ -860,7 +888,7 @@
       "symbols": [
         "TrimCopy"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/io/CadPointCloudPtx.cpp",
@@ -873,7 +901,7 @@
       "symbols": [
         "TrimCopy"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/io/DwgProbe.cpp",
@@ -886,7 +914,7 @@
       "symbols": [
         "ToLowerAscii"
       ],
-      "note": "Local duplicate of Core StringUtil::toLowerAsciiCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::toLowerAsciiCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/io/DxfIo.cpp",
@@ -899,7 +927,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/io/LibreDwgCad.cpp",
@@ -912,7 +940,7 @@
       "symbols": [
         "LowerAscii"
       ],
-      "note": "Local duplicate of Core StringUtil::toLowerAsciiCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::toLowerAsciiCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/io/LibreDwgCad.cpp",
@@ -925,7 +953,7 @@
       "symbols": [
         "TrimAscii"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/io/PlotFont.hpp",
@@ -938,7 +966,7 @@
       "symbols": [
         "LowerAscii"
       ],
-      "note": "Local duplicate of Core StringUtil::toLowerAsciiCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::toLowerAsciiCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/io/PlotStyleTable.cpp",
@@ -951,7 +979,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/io/ProjectFiles.cpp",
@@ -964,7 +992,7 @@
       "symbols": [
         "Lower"
       ],
-      "note": "Local duplicate of Core StringUtil::toLowerAsciiCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::toLowerAsciiCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/io/ProjectPack.cpp",
@@ -977,7 +1005,7 @@
       "symbols": [
         "Lower"
       ],
-      "note": "Local duplicate of Core StringUtil::toLowerAsciiCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::toLowerAsciiCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/io/ProjectPack.cpp",
@@ -1003,7 +1031,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/io/SurveyCsv.cpp",
@@ -1016,7 +1044,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/io/WikiContent.cpp",
@@ -1029,7 +1057,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/io/WikiHelp.cpp",
@@ -1042,7 +1070,7 @@
       "symbols": [
         "ToLowerAscii"
       ],
-      "note": "Local duplicate of Core StringUtil::toLowerAsciiCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::toLowerAsciiCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/pdf/PdfCoordExtract.cpp",
@@ -1055,7 +1083,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/pdf/PdfCoordExtract.cpp",
@@ -1081,7 +1109,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/pdf/PdfSplit.cpp",
@@ -1094,7 +1122,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/survey/PointGroupRule.cpp",
@@ -1107,7 +1135,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/traverse/StarNetImport.cpp",
@@ -1120,7 +1148,7 @@
       "symbols": [
         "TrimCopy"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/traverse/StarNetImport.cpp",
@@ -1159,7 +1187,7 @@
       "symbols": [
         "TrimAscii"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/util/AcisSatParser.cpp",
@@ -1172,7 +1200,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/util/AcisSatWriter.cpp",
@@ -1185,7 +1213,7 @@
       "symbols": [
         "Trim"
       ],
-      "note": "Local duplicate of Core StringUtil::trimCopy. Replace its callers with Core; do not move the code."
+      "note": "Similar to Core StringUtil::trimCopy, but behaviour may differ (whitespace set, NUL bytes); compare before replacing its callers. Do not move the code."
     },
     {
       "path": "src/util/DataExtract.hpp",
