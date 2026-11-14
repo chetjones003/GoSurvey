@@ -1892,6 +1892,32 @@
         "Transform"
       ],
       "note": "Scale-and-shift per axis for plotting. Generic math. Compute() (plot placement policy) stays in IO."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        10718,
+        10726
+      ],
+      "system": "Math",
+      "concern": "angle wrap to [-pi, pi]",
+      "symbols": [
+        "NormalizeAngleRadMinusPiToPi"
+      ],
+      "note": "Wraps a float angle into [-pi, pi]. Duplicates the wrap helpers listed in couplings."
+    },
+    {
+      "path": "src/util/brep.cpp",
+      "lines": [
+        16343,
+        16350
+      ],
+      "system": "Math",
+      "concern": "sweep angle between two angles",
+      "symbols": [
+        "SweepBetween"
+      ],
+      "note": "Advances a to b in the direction of sign, as a value in (0, 2pi) times that sign. Angle wrap in a sweep form; duplicates the wrap helpers listed in couplings."
     }
   ],
   "auditedEntries": {
@@ -2012,6 +2038,12 @@
             "src/commands/OrthoConstrain.hpp"
           ],
           "reason": "Assigned to Math by this audit (currentFiles). fileMappings still mark src/util files ambiguous, and OrthoConstrain.hpp sits in the Commands folder. Mapping them to Math now would add 6 Commands-to-Math violations (ucs.hpp 3, ray3d.hpp 2, OrthoConstrain.hpp 1; see auditFindings) and grow the ratchet baseline. The final-map ticket must first add Math to the allowed dependencies of Commands, or move those includes, and then update fileMappings."
+        },
+        {
+          "files": [
+            "src/core/src/Core.cpp:16 (NormalizeAngle360)"
+          ],
+          "reason": "Disputed ownership. Core owns src/core/src/Core.cpp per the Core audit (#1220), and this function is a degree wrap into [0, 360) that duplicates the Math wrap helpers. It is not assigned to Math here. The final-map ticket decides whether Core keeps it or a Math helper replaces it."
         }
       ],
       "draftPublicInterface": {
@@ -2103,7 +2135,7 @@
       "OrthoConstrain.hpp implements ORTHO (REQ-047). The mode and when it applies are Interaction. Only the lock math is Math.",
       "The 2D reflection helpers are also duplicated: ReflectPtAcrossLine and ReflectAngleAcrossLine (CadCommands.cpp:10638, :10655), and ReflectSurveyCoords (SurveyPoints.cpp:373), repeat the reflect math written inline at CadCommands.cpp:1566. Replace callers with one Math helper; do not move code in this audit.",
       "Duplicate rotation: brep.cpp RotateAbout (6425) is the same Rodrigues formula as ray3d::RotateVectorAboutAxis. Replace with the Math function.",
-      "Angle-wrap helpers are repeated in six places with three different ranges: WrapPi in (-pi, pi] (TraverseLeastSquares.cpp:33), Wrap2Pi in [0, 2pi) (curveintersect.cpp:16), NormalizeTwoPi in (0, 2pi] (HatchBoundary.hpp:33), NormalizeAngleRadMinusPiToPi (CadCommands.cpp:10718), SweepBetween (brep.cpp:16343), and Core NormalizeAngle360 (Core.cpp:16). Math should own one helper per range, and the callers should pick by range.",
+      "Angle-wrap helpers are repeated in six places with three different ranges: WrapPi in (-pi, pi] (TraverseLeastSquares.cpp:33), Wrap2Pi in [0, 2pi) (curveintersect.cpp:16), NormalizeTwoPi in (0, 2pi] (HatchBoundary.hpp:33), NormalizeAngleRadMinusPiToPi (CadCommands.cpp:10718), SweepBetween (brep.cpp:16343), and Core NormalizeAngle360 (Core.cpp:16, Core-owned, see auditedEntries.Math.pendingAssignment). Math should own one helper per range, and the callers should pick by range.",
       "The 2D cross product is repeated: curveisect Cross (curveintersect.cpp:12) and brep Cross2v (brep.cpp:16302). brep also has Dot2, Mul2 and Len2 (16300-16303), which duplicate the same primitives.",
       "The 2D rotate-and-scale affine is repeated in geo LocalGridTransform (LocalToGrid, GridToLocal) and in the Math-owned Xf2, Affine2D and Xf sections. One Math 2D affine would serve all of them.",
       "TraverseCalc.cpp repeats the polar-to-rectangular step (slopeDist * sin / cos of an angle) at lines 113-120, 470-471 and 552-553. A generic polar-to-rectangular helper is a candidate for Math.",
