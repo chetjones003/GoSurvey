@@ -2893,7 +2893,8 @@
         "ClearDialogAnswers",
         "PendingDialogAnswers"
       ],
-      "note": "The queue and every Browse* implementation are the Headless backend of the UI file-dialog interface. Not UI-owned: the UI system defines the interface, not its scripted answers."
+      "note": "The queue and every Browse* implementation are the Headless backend of the UI file-dialog interface. Not UI-owned: the UI system defines the interface, not its scripted answers.",
+      "uiRole": "headless implementation of the UI file-dialog interface"
     },
     {
       "path": "src/platform/FailureReportUi.cpp",
@@ -2906,7 +2907,8 @@
       "symbols": [
         "CopyUtf8TextToClipboard"
       ],
-      "note": "Windows implementation of the UI clipboard interface. A generic text-clipboard call would sit in UI once a second engine caller exists; today only the failure report uses it."
+      "note": "Windows implementation of the UI clipboard interface. A generic text-clipboard call would sit in UI once a second engine caller exists; today only the failure report uses it.",
+      "uiRole": "report window and message boxes are UI-interface implementations"
     },
     {
       "path": "src/platform/FailureReportUi.cpp",
@@ -2919,7 +2921,8 @@
       "symbols": [
         "ShowReportDialog"
       ],
-      "note": "Native Win32 report window. Its declaration in FailureReportUi.hpp is the dialog-service shape the UI report dialog would take; the two pure text helpers beside it are homeless (see auditFindings.homelessConcepts)."
+      "note": "Native Win32 report window. Its declaration in FailureReportUi.hpp is the dialog-service shape the UI report dialog would take; the two pure text helpers beside it are homeless (see auditFindings.homelessConcepts).",
+      "uiRole": "report window and message boxes are UI-interface implementations"
     },
     {
       "path": "src/platform/FailureReportUi.cpp",
@@ -2932,7 +2935,8 @@
       "symbols": [
         "SendReportToGitHub"
       ],
-      "note": "MessageBoxW confirmation after the clipboard copy (MB_OK information). A native message box: Windows implementation of the UI message-dialog interface."
+      "note": "MessageBoxW confirmation after the clipboard copy (MB_OK information). A native message box: Windows implementation of the UI message-dialog interface.",
+      "uiRole": "report window and message boxes are UI-interface implementations"
     },
     {
       "path": "src/platform/FailureReportUi.cpp",
@@ -2945,7 +2949,8 @@
       "symbols": [
         "ShowReportDialog"
       ],
-      "note": "MessageBoxW error message inside the native report window. Windows implementation of the UI message-dialog interface."
+      "note": "MessageBoxW error message inside the native report window. Windows implementation of the UI message-dialog interface.",
+      "uiRole": "report window and message boxes are UI-interface implementations"
     },
     {
       "path": "src/platform/CrashReporter.cpp",
@@ -2958,7 +2963,8 @@
       "symbols": [
         "ShowReportDialog"
       ],
-      "note": "Crash reporting decides to show the report window and calls failureReportUi::ShowReportDialog. The trigger is Debug; the dialog is UI (the report-dialog interface)."
+      "note": "Crash reporting decides to show the report window and calls failureReportUi::ShowReportDialog. The trigger is Debug; the dialog is UI (the report-dialog interface).",
+      "uiRole": "trigger for the UI report dialog"
     },
     {
       "path": "src/platform/ThumbnailCache.hpp",
@@ -2986,6 +2992,72 @@
         "UpdatePointCloudImportProgress"
       ],
       "note": "Phase, fraction and ETA progress struct for point-cloud import. The presentation is UI's progress interface; the job state stays in Commands. The struct is a candidate progress-interface type, not yet moved."
+    },
+    {
+      "path": "src/platform/StartupFailure.cpp",
+      "lines": [
+        140,
+        140
+      ],
+      "system": "Debug",
+      "concern": "startup failure report",
+      "symbols": [
+        "ShowReportDialog"
+      ],
+      "uiRole": "trigger for the UI report dialog at startup failure",
+      "note": "Calls failureReportUi::ShowReportDialog for a failed launch. Trigger is startup or Debug; the dialog is UI."
+    },
+    {
+      "path": "src/platform/CrashReporter.hpp",
+      "lines": [
+        42,
+        46
+      ],
+      "system": "Debug",
+      "concern": "crash-report window mode",
+      "symbols": [
+        "TakeCrashReportFromCommandLine"
+      ],
+      "uiRole": "command-line entry that opens the crash report window",
+      "note": "Command-line entry for the crash-report window mode. The window is UI; this declaration is the Debug trigger."
+    },
+    {
+      "path": "src/platform/AppPaths.hpp",
+      "lines": [
+        27,
+        27
+      ],
+      "system": "Windows",
+      "concern": "splash and window logo path",
+      "symbols": [],
+      "uiRole": "logo asset for splash, title bar and window icon",
+      "note": "Bundled app logo path for splash, title bar and window icon. OS paths are Windows; the asset use is UI presentation."
+    },
+    {
+      "path": "src/commands/ProjectPoints.cpp",
+      "lines": [
+        118,
+        269
+      ],
+      "system": "Commands",
+      "concern": "point-edit prompt",
+      "symbols": [
+        "RaisePointEditPrompt"
+      ],
+      "uiRole": "raises the pending point-edit question that a UI dialog shows",
+      "note": "Commands raises pointEditPrompt state; the dialog is UI and the decision is GoSurveyEditor's (ADR-0002). Listed in homelessConcepts."
+    },
+    {
+      "path": "src/commands/CadOnlineMap.cpp",
+      "lines": [
+        348,
+        348
+      ],
+      "system": "Commands",
+      "concern": "status text",
+      "symbols": [],
+      "uiRole": "status text shown by the map-capture prompt",
+      "note": "Stores a formatted status string in mapCapture.prompt. Commands should emit values; the text belongs to UI presentation."
     }
   ],
   "auditedEntries": {
@@ -3257,7 +3329,7 @@
         "codeMoved": false,
         "commit": "797df4f3"
       },
-      "responsibility": "Defines toolkit-neutral file, message, and report dialog, progress, clipboard, and timer interfaces so engine code can request UI services without a toolkit, and holds the pure presentation rules (floating command-bar history and prompt segments, MTEXT panel placement) that need no toolkit. Rich-text caret and wrap layout is pending the dependency decision in pendingAssignment.",
+      "responsibility": "Defines toolkit-neutral file, message, and report dialog, progress, and clipboard interfaces (timers are deferred by the two-use rule in CLAUDE.md, per ADR-0002) so engine code can request UI services without a toolkit, and holds the pure presentation rules (floating command-bar history and prompt segments, MTEXT panel placement) that need no toolkit. Rich-text caret and wrap layout is pending the dependency decision in pendingAssignment.",
       "doesNotOwn": [
         "concrete widgets, toolkit dialogs, and toolkit timers or clipboards (Qt, Windows, Headless backends)",
         "windows, panels, ribbon, dialog content, hotkeys, and the decision to open a dialog (GoSurveyEditor, per ADR-0002)",
@@ -3368,7 +3440,9 @@
       "ETA text: FormatEtaRemaining is used only by progress UI; it is either Core formatting or UI presentation (see the entry above, now with its UI caller identified).",
       "Dialog-open flags and dialog-wait phases in Commands state (CadCommands.hpp insertBlockDialogOpen 5601, wblockDialogOpen 5659; CadBlocks.cpp WaitDialog phases): the state is Commands-owned; the decision to open a dialog is GoSurveyEditor's. The final map should decide whether the pending-question state moves to a Commands-owned prompt type.",
       "Pending-question prompt state: AppCommandState::PointEditPrompt and projectRefreshPrompt (CadCommands.hpp ~5441) and AnswerPointEdit (commands/ProjectWarnings.hpp:40). The header comment says the dialogs live in ui/CadUi_Projects.cpp, which does not exist in src/ui. Owner of the prompt state is Commands or Projects; the dialog is UI.",
-      "Start-screen thumbnail cache (platform/ThumbnailCache.hpp): disk cache of drawing thumbnails; owner is Document or the start-screen owner, not UI."
+      "Start-screen thumbnail cache (platform/ThumbnailCache.hpp): disk cache of drawing thumbnails; owner is Document or the start-screen owner, not UI.",
+      "Map-capture status text: CadOnlineMap.cpp:348 formats \"Capturing map... N of M\" into mapCapture.prompt. Commands should emit values (gathered, total); the string belongs to UI presentation.",
+      "Point-edit prompt raising: RaisePointEditPrompt (commands/ProjectPoints.cpp:118-269) and the pointEditPrompt state. Commands owns the question; the dialog is UI."
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
@@ -3409,7 +3483,8 @@
       "QTimer or QClipboard appears in 23 src/qt files, with no engine-side timer or clipboard interface to route them through. This is not a violation today; it is missing interface coverage.",
       "src/qt/FailureReport.cpp includes platform/FailureReportUi.hpp and platform/StartupFailure.hpp (baseline: \"Qt may not depend on Windows\") and render/ViewportRenderer.hpp (baseline: \"Qt may not depend on Renderer\"). The ProbeStartupGraphics check is the Qt side of a launch-time service; the report window's dependency on the Windows report helpers is the coupling to remove.",
       "src/ui/CadUiStyleWidgets.hpp includes CadEntities.hpp (baseline: \"Qt may not depend on Commands\"). Moving the appearance vocabulary out of src/ui clears this violation.",
-      "CadCommands.hpp PointCloudImportProgress (lines 7045-7060) and UpdatePointCloudImportProgress: the progress struct is UI presentation data carried in Commands state. Moving it behind the UI progress interface needs the progress shapes reconciled first (see the progress coupling above)."
+      "CadCommands.hpp PointCloudImportProgress (lines 7045-7060) and UpdatePointCloudImportProgress: the progress struct is UI presentation data carried in Commands state. Moving it behind the UI progress interface needs the progress shapes reconciled first (see the progress coupling above).",
+      "UpdateService.cpp:181-187 passes a download progress lambda to HttpDownloadFile; this is a fourth progress-callback shape alongside HttpFetch, PdfDiff, PdfSplit and pointcloudcache (see the progress coupling above)."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
