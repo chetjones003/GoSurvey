@@ -441,6 +441,398 @@
   "notes": [
     "Folder-level mappings are provisional and based on current folder names.",
     "src/util is mixed-purpose; each current direct file is explicitly listed as ambiguous pending audit.",
-    "Nested or newly added source files require mapping before enforcement."
-  ]
+    "Nested or newly added source files require mapping before enforcement.",
+    "Core audit (issue #1220): Core file and section ownership is in `sections` and `auditedEntries`. Ownership of other mixed util files stays ambiguous until their own audits."
+  ],
+  "sections": [
+    {
+      "path": "src/util/cadblock.hpp",
+      "lines": [
+        1606,
+        1635
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "kInchesPerMeterInternational",
+        "CadBlockUnitsScale"
+      ],
+      "note": "Imperial-to-metric conversion and INSUNITS scale. The rest of cadblock.hpp is Document block data."
+    },
+    {
+      "path": "src/util/cadblock.hpp",
+      "lines": [
+        1637,
+        1686
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "CadDrawingInsUnitsName",
+        "CadDrawingInsUnitsCode",
+        "CadDrawingInsUnitsOffered",
+        "CadDrawingInsUnitsAbbrev"
+      ],
+      "note": "INSUNITS code table: names, codes, abbreviations."
+    },
+    {
+      "path": "src/util/cadblock.hpp",
+      "lines": [
+        459,
+        471
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "CadBlockEqCi"
+      ],
+      "note": "ASCII case-insensitive compare. A generic string helper, currently block-private."
+    },
+    {
+      "path": "src/util/PlotScales.hpp",
+      "lines": [
+        16,
+        20
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "PlotScaleUnitsAreMetric",
+        "MetricPlotScaleUnitsPerInch"
+      ],
+      "note": "Unit predicates only. PlotScaleChoicesFor and PlotScaleLabel are plot-scale domain (Document) and stay."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1182,
+        1183
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "DrawingSettings::AngularUnits",
+        "DrawingSettings::FootDefinition"
+      ],
+      "note": "Unit enums nested in the per-drawing DrawingSettings struct. The enums move to Core; the struct stays in Document."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1326,
+        1337
+      ],
+      "system": "Core",
+      "concern": "units",
+      "symbols": [
+        "DrawingInchesPerMeter",
+        "DrawingAunitsCode"
+      ],
+      "note": "Foot-definition conversion and AUNITS code."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        2366,
+        2368
+      ],
+      "system": "Core",
+      "concern": "settings",
+      "symbols": [
+        "AppCommandState::surveyPointDisplayPrecision"
+      ],
+      "note": "Survey-point readout precision setting value."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        5199,
+        5211
+      ],
+      "system": "Core",
+      "concern": "settings",
+      "symbols": [
+        "AppCommandState::displayLinearPrecision",
+        "AppCommandState::angleDisplayType",
+        "AppCommandState::angleDisplayPrecision",
+        "AppCommandState::angleDisplayClockwise",
+        "AppCommandState::angleDisplayBaseDeg"
+      ],
+      "note": "Display-precision and angle-display setting values, stored as raw ints. Core's typed AngleDisplaySettings should replace them. showUnitsWindow (UI visibility) is not Core."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        335,
+        338
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "CadFormatAngleDegMinSecFromRad",
+        "CadFormatBearingCwNorthDegMinSec"
+      ],
+      "note": "Declarations of the duplicate angle formatters below."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        7926,
+        7955
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "CadFormatAngleDegMinSecFromRad"
+      ],
+      "note": "Duplicate of Core FormatSweptAngle (magnitude, folds to 0..180). Retire to Core."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        7957,
+        7984
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "CadFormatBearingCwNorthDegMinSec"
+      ],
+      "note": "Duplicate of Core FormatBearing at default settings; Core.cpp says it reproduces this formatter. Retire to Core."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36303,
+        36311
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "FormatEtaRemaining"
+      ],
+      "note": "Duration text. Pure formatting, but used only by the point-cloud progress UI; confirm placement in the final map."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        41328,
+        41332
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "TrimNumber"
+      ],
+      "note": "%.6g number echo. Pure formatting in the anonymous namespace."
+    },
+    {
+      "path": "src/commands/CadCommands_Geo.cpp",
+      "lines": [
+        26,
+        37
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "FormatDms"
+      ],
+      "note": "Lat/long DMS with hemisphere letter at 5 decimals. Overlaps Core FormatDms; decide to merge or keep as a Core option."
+    },
+    {
+      "path": "src/commands/CadCommands_Alignment.cpp",
+      "lines": [
+        61,
+        71
+      ],
+      "system": "Core",
+      "concern": "strings",
+      "symbols": [
+        "Lower",
+        "Trim"
+      ],
+      "note": "Duplicates of StringUtil::toLowerAsciiCopy and trimCopy."
+    },
+    {
+      "path": "src/commands/CadCommands_Alignment.cpp",
+      "lines": [
+        5377,
+        5383
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "FormatWorldNumber"
+      ],
+      "note": "%.10f world-number echo."
+    },
+    {
+      "path": "src/commands/CadDynInput.cpp",
+      "lines": [
+        65,
+        69
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "Fmt"
+      ],
+      "note": "%.6f. Duplicate of a Core formatter."
+    },
+    {
+      "path": "src/alignment/AlignmentProfile.cpp",
+      "lines": [
+        36,
+        57
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "Fmt",
+        "Fmt2"
+      ],
+      "note": "printf-format wrappers. Generic, so Core; Alignment keeps its call sites."
+    },
+    {
+      "path": "src/alignment/AlignmentReport.cpp",
+      "lines": [
+        18,
+        22
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "FormatFixed4"
+      ],
+      "note": "%.4f. Duplicate of FormatLinear at precision 4."
+    },
+    {
+      "path": "src/pdf/PdfMeasure.cpp",
+      "lines": [
+        113,
+        117
+      ],
+      "system": "Core",
+      "concern": "formatting",
+      "symbols": [
+        "Trimmed"
+      ],
+      "note": "%.6g. Duplicate of TrimNumber."
+    }
+  ],
+  "auditedEntries": {
+    "Core": {
+      "tier": "T0 Foundation",
+      "audit": {
+        "issue": 1220,
+        "parent": 1207,
+        "commit": "a31a9d63",
+        "codeMoved": false
+      },
+      "responsibility": "Provides shared application services: logging, settings values, unit definitions and conversions, number, angle and duration formatting, and string helpers.",
+      "doesNotOwn": [
+        "geometry algorithms",
+        "domain entities and per-drawing storage (the DrawingSettings struct stays in Document)",
+        "UI widgets and visibility flags",
+        "platform APIs (Win32 %TEMP% paths, file dialogs)",
+        "file formats and font files (src/font is a mis-mapping, see auditFindings)"
+      ],
+      "allowedDependencies": [],
+      "currentFiles": [
+        "src/core/include/GoSurvey/Core/AngleFormat.hpp",
+        "src/core/include/GoSurvey/Core/NumFormat.hpp",
+        "src/core/include/GoSurvey/Core/StringUtil.hpp",
+        "src/core/src/Core.cpp"
+      ],
+      "pendingAssignment": [
+        {
+          "files": [
+            "src/util/SaveTrace.hpp",
+            "src/util/SaveTrace.cpp"
+          ],
+          "reason": "Core logging sink, but io/DwgIo.cpp and io/LibreDwgCad.cpp include util/SaveTrace.hpp as a private header. Assigning it to Core now would add two private-header violations. The move ticket must add GoSurvey/Core/SaveTrace.hpp, switch the two includes, then map the files to Core. The file is temporary diagnostics for issue #167, so deleting it is also an option."
+        }
+      ],
+      "outsideScan": [
+        "internal/core/CorePrivate.hpp: private header for Core.cpp. It is outside src/, so the ratchet does not scan it. Move it with Core."
+      ],
+      "draftPublicInterface": {
+        "angle": [
+          "AngleDisplayType",
+          "AngleDisplaySettings",
+          "FormatBearing(canonicalCwNorthDeg, settings)",
+          "FormatSweptAngle(angleDeg, settings)"
+        ],
+        "number": [
+          "DisplayPrecisionClamp(precision)",
+          "DisplayFloatFmt(precision)",
+          "FormatLinear(value, precision)",
+          "FormatVolumeYd3(volumeFt3, precision)",
+          "kCubicFeetPerCubicYard"
+        ],
+        "strings": [
+          "StringUtil::trimCopy",
+          "StringUtil::toLowerAsciiCopy"
+        ],
+        "units (to add from sections)": [
+          "foot definition / inches-per-meter",
+          "INSUNITS name/code/abbrev and CadBlockUnitsScale",
+          "AngularUnits enum (today DrawingSettings::AngularUnits)"
+        ],
+        "settings (to add)": [
+          "typed display-precision and angle-display values, replacing raw ints on AppCommandState"
+        ],
+        "logging (to add)": [
+          "none yet; a logging facade is a homeless concept (see auditFindings)"
+        ],
+        "internal, not public": [
+          "anglefmt_detail::Normalize360, FormatDms, FormatDecimalDeg (exposed in AngleFormat.hpp today)"
+        ]
+      },
+      "existingTests": [
+        "tests/Core/AngleFormatTests.cpp",
+        "tests/Core/NumFormatTests.cpp",
+        "tests/Core/CoreTests.cpp (StringUtil)"
+      ],
+      "testsCoveringCoreCodeNotOwned": [
+        "tests/CadBlockTests.cpp and tests/CadBlockImportTests.cpp (CadBlockUnitsScale, INSUNITS names)",
+        "tests/DrawingSettingsTests.cpp (DrawingAunitsCode only; DrawingInchesPerMeter has no test)"
+      ],
+      "testGaps": [
+        "SaveTrace has no test",
+        "no parity test between CadFormatBearingCwNorthDegMinSec and FormatBearing at default settings"
+      ]
+    }
+  },
+  "auditFindings": {
+    "homelessConcepts": [
+      "Logging facade: none. Sinks are scattered: AppCommandState::log (command line), SaveTrace (Core), UpdateService LogSilently (Network), StartupFailure startup-failure.log (Windows), and Qt qWarning/qDebug calls in src/qt. The final map must decide whether Core owns one facade or only the file sink.",
+      "Settings store: AppCommandState holds nearly all settings in one god struct. There is no Settings system. Core owns the value vocabulary; the holder and its consumers belong to the final map.",
+      "Duration and ETA text: FormatEtaRemaining is pure formatting used only by a progress UI. Core or UI?",
+      "Lat/long DMS label: FormatLatLongLabel and CadCommands_Geo FormatDms. Geo or Core formatting?",
+      "Plot-scale labels: PlotScaleChoicesFor and PlotScaleLabel (util/PlotScales.hpp) are Document or Plot, not Core.",
+      "Slope text: FormatSlope (CadCommands.cpp) is grading/Terrain.",
+      "Station text: FormatStation (Alignment) belongs to Alignment, not Core."
+    ],
+    "couplings": [
+      "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
+      "34 local trim/lower/upper/StartsWith helpers are defined outside src/core (for example io/DxfIo.cpp Trim, io/WikiHelp.cpp ToLowerAscii, traverse/StarNetImport.cpp TrimCopy, ui/CommandBar.hpp TrimAscii). StringUtil exists but only 9 files include it.",
+      "CadFormatBearingCwNorthDegMinSec and CadFormatAngleDegMinSecFromRad in CadCommands.cpp duplicate Core FormatBearing and FormatSweptAngle. Core.cpp says FormatBearing reproduces the first.",
+      "AppCommandState stores angle display as raw ints (angleDisplayType). CadAngleDisplaySettings (Commands) converts them to the typed Core AngleDisplaySettings on every call.",
+      "DrawingSettings (Document, per-drawing) embeds the AngularUnits and FootDefinition enums that Core units should own.",
+      "io/UserPrefs.cpp reads and writes AppCommandState settings fields directly, so the IO system depends on Commands state.",
+      "SaveTrace (Core) calls Win32 GetTempPathW and DeleteFileW directly. Core must not own platform APIs, so the path lookup belongs to the Windows system or should be injected.",
+      "SaveTrace is called from io/DwgIo.cpp and io/LibreDwgCad.cpp. It is temporary diagnostics for issue #167 and can be deleted when that issue closes."
+    ],
+    "misMappedFolders": [
+      "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile."
+    ],
+    "namespaceGaps": [
+      "ADR-0006 requires GoSurvey::<System> namespaces. NumFormat and AngleFormat use the global namespace (anglefmt_detail is global). StringUtil is namespace StringUtil. Core.cpp's detail is GoSurvey::Core::detail. Namespace work follows the move, not this audit."
+    ],
+    "notCoreDespiteName": [
+      "src/util/framewatch.hpp and src/util/docinvariants.*: Debug (diagnostics), not logging.",
+      "src/platform/AppPaths.*: Windows (OS paths)."
+    ]
+  }
 }
