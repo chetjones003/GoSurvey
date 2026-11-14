@@ -2969,8 +2969,8 @@
     {
       "path": "src/platform/ThumbnailCache.hpp",
       "lines": [
-        15,
-        37
+        37,
+        64
       ],
       "system": "Document",
       "concern": "start-screen thumbnail cache",
@@ -2983,7 +2983,7 @@
       "path": "src/commands/CadCommands.hpp",
       "lines": [
         7045,
-        7060
+        7053
       ],
       "system": "UI",
       "concern": "progress presentation",
@@ -3037,7 +3037,7 @@
       "path": "src/commands/ProjectPoints.cpp",
       "lines": [
         118,
-        269
+        134
       ],
       "system": "Commands",
       "concern": "point-edit prompt",
@@ -3058,6 +3058,18 @@
       "symbols": [],
       "uiRole": "status text shown by the map-capture prompt",
       "note": "Stores a formatted status string in mapCapture.prompt. Commands should emit values; the text belongs to UI presentation."
+    },
+    {
+      "path": "src/platform/HeadlessPdfAttach.cpp",
+      "lines": [
+        1,
+        1
+      ],
+      "system": "Headless",
+      "concern": "headless PDF-attach dialog seam",
+      "symbols": [],
+      "uiRole": "headless stand-in for the PDF-attach file dialog",
+      "note": "Headless implementation of the PDF-attach file dialog, the UI file-dialog interface's Headless backend. Line range is the file header; no symbol-level range audited."
     }
   ],
   "auditedEntries": {
@@ -3329,7 +3341,7 @@
         "codeMoved": false,
         "commit": "797df4f3"
       },
-      "responsibility": "Defines toolkit-neutral file, message, and report dialog, progress, and clipboard interfaces (timers are deferred by the two-use rule in CLAUDE.md, per ADR-0002) so engine code can request UI services without a toolkit, and holds the pure presentation rules (floating command-bar history and prompt segments, MTEXT panel placement) that need no toolkit. Rich-text caret and wrap layout is pending the dependency decision in pendingAssignment.",
+      "responsibility": "Defines toolkit-neutral file, message, and report dialog, progress, and clipboard interfaces (timers are deferred by the two-use rule in CLAUDE.md, per ADR-0002) so engine code can request UI services without a toolkit, and holds the pure presentation rules (floating command-bar history and prompt segments, MTEXT panel placement) that need no toolkit.",
       "doesNotOwn": [
         "concrete widgets, toolkit dialogs, and toolkit timers or clipboards (Qt, Windows, Headless backends)",
         "windows, panels, ribbon, dialog content, hotkeys, and the decision to open a dialog (GoSurveyEditor, per ADR-0002)",
@@ -3414,7 +3426,8 @@
       ],
       "testsCoveringUiNotOwned": [
         "tests/QtEditorTests.cpp: failure-report dialog, its outcome message, and GitHub issue URL (Qt implementation of the report dialog)",
-        "tests/QtEditorTests.cpp: QtSplash and the broader Qt viewport integration (Qt implementation; not UI-owned)"
+        "tests/QtEditorTests.cpp: QtSplash and the broader Qt viewport integration (Qt implementation; not UI-owned)",
+        "tests/WhatsNewLogicTests.cpp: What's New version-gating rules (not UI-owned; see notUiDecisions)"
       ]
     }
   },
@@ -3442,7 +3455,9 @@
       "Pending-question prompt state: AppCommandState::PointEditPrompt and projectRefreshPrompt (CadCommands.hpp ~5441) and AnswerPointEdit (commands/ProjectWarnings.hpp:40). The header comment says the dialogs live in ui/CadUi_Projects.cpp, which does not exist in src/ui. Owner of the prompt state is Commands or Projects; the dialog is UI.",
       "Start-screen thumbnail cache (platform/ThumbnailCache.hpp): disk cache of drawing thumbnails; owner is Document or the start-screen owner, not UI.",
       "Map-capture status text: CadOnlineMap.cpp:348 formats \"Capturing map... N of M\" into mapCapture.prompt. Commands should emit values (gathered, total); the string belongs to UI presentation.",
-      "Point-edit prompt raising: RaisePointEditPrompt (commands/ProjectPoints.cpp:118-269) and the pointEditPrompt state. Commands owns the question; the dialog is UI."
+      "Point-edit prompt raising: RaisePointEditPrompt (commands/ProjectPoints.cpp:118-269) and the pointEditPrompt state. Commands owns the question; the dialog is UI.",
+      "Dynamic-input prompt presentation: CadDynInputPromptFor (commands/CadDynInput.cpp:434) builds the CadDynInputPrompt shown by the dynamic-input bar. The prompt text is UI presentation; the command's input state is Commands.",
+      "Attach flow with a dialog: commands/ProjectAddFlow.hpp:5 describes a three-step add flow built around a dialog. The flow is Commands; the dialog is UI. Mixed ownership to resolve in the final map."
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
@@ -3547,7 +3562,8 @@
       "Swept and not assigned to UI: ui/MtextRichSpans.hpp, ui/MtextRichFormat.*, and ui/MtextTextOps.hpp are the MTEXT wire format and text operations used by IO and Commands, so they are Document.",
       "Swept and not assigned to UI: ui/ModelingRibbon.hpp is the ribbon button table, which ADR-0002 keeps in GoSurveyEditor.",
       "Swept and not assigned to UI: platform/HeadlessFileDialogs.* is the Headless backend's answer queue, which is an implementation, not the interface.",
-      "Swept and not assigned to UI: src/qt/* (EditorDialogs.cpp, EditorChrome.cpp, EditorRibbon.cpp, QtSplash.cpp, FailureReport.cpp, and others) are Qt implementation or GoSurveyEditor composition, not interface. Their folder mapping is provisional."
+      "Swept and not assigned to UI: src/qt/* (EditorDialogs.cpp, EditorChrome.cpp, EditorRibbon.cpp, QtSplash.cpp, FailureReport.cpp, and others) are Qt implementation or GoSurveyEditor composition, not interface. Their folder mapping is provisional.",
+      "Swept and not assigned to UI: util/WhatsNewLogic.hpp and .cpp are pure version-gating rules for the What's New billboard (no UI, no filesystem, REQ-336). The billboard window is GoSurveyEditor's; the rules have no toolkit dependency. The final map picks Core or GoSurveyEditor. Tested by tests/WhatsNewLogicTests.cpp."
     ]
   }
 }
