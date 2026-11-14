@@ -444,7 +444,8 @@
     "Nested or newly added source files require mapping before enforcement.",
     "Core audit (issue #1220): Core file and section ownership is in `sections` and `auditedEntries`. Ownership of other mixed util files stays ambiguous until their own audits.",
     "Math audit (issue #1221): Math file and section ownership is in auditedEntries.Math and sections. The ratchet and fileMappings are unchanged, so the baseline does not move; the Commands edge that will appear once Math is mapped is recorded in auditFindings.",
-    "Sweep (issue #1221): the tree was swept for Math-shaped helpers (rotation, reflection, mirror, dot and cross, normalise and wrap, matrix and inverse, 2D affine). Assigned sections are in `sections`; candidates that were checked and kept out of Math, with reasons, are in auditFindings.notMathDecisions."
+    "Sweep (issue #1221): the tree was swept for Math-shaped helpers (rotation, reflection, mirror, dot and cross, normalise and wrap, matrix and inverse, 2D affine). Assigned sections are in `sections`; candidates that were checked and kept out of Math, with reasons, are in auditFindings.notMathDecisions.",
+    "Events audit (issue #1222): event-related ownership is recorded in auditedEntries.Events and sections. No code moved and fileMappings are unchanged; Qt is still the concrete input adapter, and document-change notification has no toolkit-neutral publisher yet."
   ],
   "sections": [
     {
@@ -1918,6 +1919,258 @@
         "SweepBetween"
       ],
       "note": "Advances a to b in the direction of sign, as a value in (0, 2pi) times that sign. Angle wrap in a sweep form; duplicates the wrap helpers listed in couplings."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        32,
+        32
+      ],
+      "system": "Events",
+      "concern": "viewport state-change callback",
+      "symbols": [
+        "changed"
+      ],
+      "note": "Raw notification that viewport/command-facing state changed; currently wired to draft-input reset and window refresh. The callback is Qt-specific and should be replaced by a toolkit-neutral change event during the move."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        63,
+        71
+      ],
+      "system": "Events",
+      "concern": "Qt input event adapter declarations",
+      "symbols": [
+        "mousePressEvent",
+        "mouseDoubleClickEvent",
+        "mouseMoveEvent",
+        "mouseReleaseEvent",
+        "wheelEvent",
+        "keyPressEvent",
+        "keyReleaseEvent",
+        "enterEvent",
+        "leaveEvent"
+      ],
+      "note": "Qt event overrides are the current platform adapter seam. Event interpretation and forwarding belongs to Events; Qt delivery and widget lifecycle remain Qt."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        563,
+        567
+      ],
+      "system": "Events",
+      "concern": "clear transient input on event lifecycle",
+      "symbols": [
+        "EditorViewport::ClearTransientInput"
+      ],
+      "note": "Clears event-derived snap and point-resolution state. The state values themselves are Interaction/Commands-owned."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        1612,
+        1630
+      ],
+      "system": "Events",
+      "concern": "pointer enter and leave",
+      "symbols": [
+        "EditorViewport::enterEvent",
+        "EditorViewport::leaveEvent"
+      ],
+      "note": "Qt pointer lifecycle delivery and forwarding; cursor presentation stays Qt."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        1640,
+        1692
+      ],
+      "system": "Events",
+      "concern": "deferred click event commit",
+      "symbols": [
+        "EditorViewport::CommitPendingIdleSelectionClick"
+      ],
+      "note": "Converts a delayed click into selection changes; event timing is Events-facing, selection policy and mutation remain Interaction/Document."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        1693,
+        2112
+      ],
+      "system": "Events",
+      "concern": "mouse press dispatch",
+      "symbols": [
+        "EditorViewport::mousePressEvent"
+      ],
+      "note": "Receives and dispatches Qt mouse presses. Command, selection, snapping, and ViewCube decisions are delegated to their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2113,
+        2222
+      ],
+      "system": "Events",
+      "concern": "mouse double-click dispatch",
+      "symbols": [
+        "EditorViewport::mouseDoubleClickEvent"
+      ],
+      "note": "Qt mouse double-click delivery and forwarding."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2223,
+        2466
+      ],
+      "system": "Events",
+      "concern": "mouse move dispatch",
+      "symbols": [
+        "EditorViewport::mouseMoveEvent"
+      ],
+      "note": "Receives pointer movement and publishes cursor changes; snap, hover, and transient interaction policy stay with Interaction."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2467,
+        2562
+      ],
+      "system": "Events",
+      "concern": "mouse release and right-press timing",
+      "symbols": [
+        "EditorViewport::mouseReleaseEvent",
+        "EditorViewport::RightPress"
+      ],
+      "note": "Qt release delivery and right-button hold timing. The right-click verdict is Commands policy (CadClassifyRightClick/CadRightClickHoldIsMenu)."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2563,
+        2593
+      ],
+      "system": "Events",
+      "concern": "right-click event result dispatch",
+      "symbols": [
+        "EditorViewport::RightPress",
+        "EditorViewport::RightClickAsEnter",
+        "EditorViewport::PerformRightClick"
+      ],
+      "note": "Routes the resolved input to command submission or a context-menu request; command and menu behavior stay in Commands/Qt."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2594,
+        2612
+      ],
+      "system": "Events",
+      "concern": "wheel event dispatch",
+      "symbols": [
+        "EditorViewport::wheelEvent"
+      ],
+      "note": "Qt wheel delivery and forwarding to view navigation."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2613,
+        2653
+      ],
+      "system": "Events",
+      "concern": "key press dispatch",
+      "symbols": [
+        "EditorViewport::keyPressEvent"
+      ],
+      "note": "Qt key delivery and forwarding; command meanings and shortcuts stay in Commands/Qt."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2654,
+        2673
+      ],
+      "system": "Events",
+      "concern": "key release dispatch",
+      "symbols": [
+        "EditorViewport::keyReleaseEvent"
+      ],
+      "note": "Qt key release delivery and forwarding."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2674,
+        2694
+      ],
+      "system": "Events",
+      "concern": "command cursor refresh notification",
+      "symbols": [
+        "EditorViewport::RefreshCommandCursor"
+      ],
+      "note": "Refreshes native cursor after command state changes; cursor selection and display remain Qt."
+    },
+    {
+      "path": "src/qt/EditorWindow.cpp",
+      "lines": [
+        845,
+        845
+      ],
+      "system": "Events",
+      "concern": "viewport change notification subscription",
+      "symbols": [
+        "EditorWindow::BuildModelPage (m_Viewport->changed)"
+      ],
+      "note": "Connects viewport change notification to draft-input reset and window refresh. UI refresh policy remains GoSurveyEditor/Qt."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        317,
+        325
+      ],
+      "system": "Events",
+      "concern": "timed right-click input notification",
+      "symbols": [
+        "m_RightTimer timeout callback"
+      ],
+      "note": "Qt timer delivery resolves a held right-click and emits the viewport change callback. Hold threshold and verdict are Commands policy; context-menu construction is Qt."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        33,
+        36
+      ],
+      "system": "Qt",
+      "concern": "viewport thumbnail callbacks and data accessor",
+      "symbols": [
+        "thumbnailReady",
+        "partThumbnailsChanged",
+        "PartThumbnails"
+      ],
+      "note": "Qt viewport and palette refresh integration for rendered part thumbnails; thumbnail production/cache ownership stays with Renderer."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        38,
+        43
+      ],
+      "system": "Events",
+      "concern": "input-facing callback surface",
+      "symbols": [
+        "cursorChanged",
+        "textEntered",
+        "contextMenuRequested",
+        "snapMenuRequested",
+        "submitLockedInput"
+      ],
+      "note": "Current Qt adapter callbacks carrying pointer/text intent or delegating input submission. Payloads are Qt-specific; command, menu, and widget behavior remains with its owning system."
     }
   ],
   "auditedEntries": {
@@ -2098,6 +2351,59 @@
         "No test calls the 2D rotation or affine helpers in sections directly (RotateNormalAboutZ, RotateExtrusionByXf, Affine2D, Xf, Xf2, RotateSurveyCoords, RotatePdfInsertAroundBase, RotatePtForAnnotationPreview, RotateDeltaFromReferenceAndNewSegment, ReflectPtAcrossLine, ReflectAngleAcrossLine, ReflectSurveyCoords). tests/Ray3dTests.cpp:324 checks RotatePointAboutAxis against RotateAroundBase's arithmetic (equivalence only, not the helper itself).",
         "No test names Mat4, Multiply, TransformPoint, TransformDirection or MatrixFromTrs. tests/GltfImportTests.cpp covers glTF import (IO), not these helpers directly."
       ]
+    },
+    "Events": {
+      "tier": "T0 Foundation",
+      "audit": {
+        "issue": 1222,
+        "parent": 1207,
+        "codeMoved": false,
+        "commit": "2b874218"
+      },
+      "responsibility": "Defines toolkit-neutral input events and document/command-state change notifications so systems can exchange user input and observe state changes without depending on a toolkit.",
+      "doesNotOwn": [
+        "event-loop scheduling, OS input delivery, or Qt event types (Qt platform backend)",
+        "command meanings, shortcut/right-click policy, or interaction state transitions (Commands/Interaction)",
+        "document state, mutation, revisions, or dirty tracking (Document/Commands)",
+        "widgets, cursor presentation, rendering, and refresh policy (Qt/GoSurveyEditor/Renderer)"
+      ],
+      "allowedDependencies": [
+        "Core",
+        "Math"
+      ],
+      "currentFiles": [],
+      "currentSections": [
+        "src/qt/EditorViewport.hpp: viewport change callback and input-facing callback declarations",
+        "src/qt/EditorViewport.cpp: Qt input override bodies, transient input lifecycle, and event-result dispatch",
+        "src/qt/EditorWindow.cpp: viewport change-notification subscription"
+      ],
+      "draftPublicInterface": {
+        "input events": [
+          "PointerEvent (position, buttons, modifiers, phase)",
+          "WheelEvent (position, delta, modifiers)",
+          "KeyEvent (key, modifiers, phase)",
+          "TextInputEvent (text and composition/commit phase)"
+        ],
+        "change notifications": [
+          "CommandStateChangedEvent (which command-facing state category changed)",
+          "DocumentChangedEvent (document identity, change category, and revision)",
+          "EventBus::Subscribe<Event>(std::function<void(const Event&)>) -> EventSubscription",
+          "EventBus::Publish<Event>(const Event&)",
+          "EventSubscription::Reset() (unsubscribe; destruction also unsubscribes)"
+        ],
+        "design note": [
+          "Payloads are toolkit-neutral; Qt converts QMouseEvent/QWheelEvent/QKeyEvent and text input at the platform boundary. Exact fields and subscription ownership are for the Events move/interface ticket."
+        ]
+      },
+      "existingTests": [
+        "tests/QtEditorTests.cpp (mixed Qt integration suite; viewport mouse, keyboard, wheel, and command refresh paths)",
+        "tests/RightClickTests.cpp (CadRightClickHoldIsMenu boundary behavior is Commands policy; listed as a coupling test, not Events-owned)"
+      ],
+      "testGaps": [
+        "No toolkit-neutral Events types, dispatcher, or focused event-system tests exist yet.",
+        "Document dirty tracking currently compares cadGpuRevision with savedRevision in Qt; there is no DocumentChangedEvent publisher/subscriber contract.",
+        "Viewport input tests are embedded in the large QtEditorTests suite and mix event transport with command, selection, and UI behavior."
+      ]
     }
   },
   "auditFindings": {
@@ -2114,7 +2420,8 @@
       "Matrix representations: double row-major Mat4 (gltfimport.cpp) and float column-major out16 arrays (Camera::OrthoProjection, ViewportRenderer::Ortho). The final map must choose one representation or document why two exist.",
       "Camera and projection matrix construction is pure math but Renderer owns it. ucs::PlanViewAngles also encodes the camera convention in Math. The final map decides which side owns that convention.",
       "Degree wrapping: ucs::PlanViewAngles, AzimuthAboutWorldZDeg and SnapToPolarRay (wrap180) each carry their own wrap loop. A shared helper is a candidate once Math is moved.",
-      "PlotSheetTransform Transform, PdfAlign Transform and Pt, and the Math-owned Xf2/Affine2D/Xf sections together form a set of 2D affine and point types. Math should own one of each, and the owners keep their domain meaning."
+      "PlotSheetTransform Transform, PdfAlign Transform and Pt, and the Math-owned Xf2/Affine2D/Xf sections together form a set of 2D affine and point types. Math should own one of each, and the owners keep their domain meaning.",
+      "Input event vocabulary and document/command-state change notifications: no toolkit-neutral Events files or dispatcher exist. Qt viewport handlers and callbacks currently carry the behavior (auditedEntries.Events and sections); the final map/move tickets must decide event payloads, subscription lifetime, and the source of document-change notifications."
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
@@ -2139,7 +2446,11 @@
       "The 2D cross product is repeated: curveisect Cross (curveintersect.cpp:12) and brep Cross2v (brep.cpp:16302). brep also has Dot2, Mul2 and Len2 (16300-16303), which duplicate the same primitives.",
       "The 2D rotate-and-scale affine is repeated in geo LocalGridTransform (LocalToGrid, GridToLocal) and in the Math-owned Xf2, Affine2D and Xf sections. One Math 2D affine would serve all of them.",
       "TraverseCalc.cpp repeats the polar-to-rectangular step (slopeDist * sin / cos of an angle) at lines 113-120, 470-471 and 552-553. A generic polar-to-rectangular helper is a candidate for Math.",
-      "MirrorFrameInPlace (brep.cpp:2551) mirrors the same frame fields that RotateFrameInPlace (brep.cpp:2433, AcisSatParser.cpp:541) rotates. The frame transforms should live together in Math."
+      "MirrorFrameInPlace (brep.cpp:2551) mirrors the same frame fields that RotateFrameInPlace (brep.cpp:2433, AcisSatParser.cpp:541) rotates. The frame transforms should live together in Math.",
+      "Qt input transport is coupled directly to command and interaction state: EditorViewport receives Qt mouse/key/wheel events, reads and mutates AppCommandState, and calls Commands/Interaction helpers. Events can own neutral event data and dispatch, but the adapter and behavior must be separated during the move.",
+      "Viewport change notification is a raw std::function<void()> (EditorViewport::changed), wired in EditorWindow to ResetDraftingInput() and Refresh(). The callback conflates command-state changes, repaint/refresh, and input reset; a future Events interface must distinguish those causes without taking ownership of UI refresh policy.",
+      "Document dirty tracking is revision polling, not a change event: EditorWindow compares cadGpuRevision with savedRevision and command paths bump cache/revision counters. Document/Commands must publish a stable change contract before Events can replace those checks; revision storage and dirty policy remain outside Events.",
+      "Qt event handlers invoke command and interaction policy directly, including CadClassifyRightClick/CadRightClickHoldIsMenu, snapping, selection, command submission, and viewport navigation. The Events boundary should transport intent only; these policies stay with Commands/Interaction/Renderer."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
@@ -2164,6 +2475,13 @@
       "Swept and not assigned to Math: CadCoordinateFrame.cpp is document-origin rebase policy (Document), using the Math rotation helpers only indirectly.",
       "Swept and not assigned to Math: PdfAnnotate.cpp AngleDegrees (angle at the middle of three points) is Pdf measurement policy; a generic angle-at-vertex helper is a candidate if a second caller appears.",
       "Swept and not assigned to Math: nurbs.cpp Rotate and Mirror and the brep Rotate, Mirror and Scale transforms are Geometry body transforms. They call Math helpers."
+    ],
+    "notEventsDecisions": [
+      "Swept and not assigned to Events: CadClassifyRightClick and CadRightClickHoldIsMenu in src/commands/CadCommands.hpp, plus tests/RightClickTests.cpp. They classify a timed click using command mode and last-command state, so the policy belongs to Commands; Qt only supplies press duration and dispatches the result.",
+      "Swept and not assigned to Events: mouse selection, snap/hover, grip, ViewCube, and camera navigation behavior in EditorViewport.cpp. The Qt override transports the input, while behavior belongs to Interaction, Commands, Renderer, or Qt as recorded in the section notes.",
+      "Swept and not assigned to Events: cadGpuRevision and savedRevision fields/comparisons. They implement Document/Commands dirty tracking and currently have no event publisher contract.",
+      "Swept and not assigned to Events: specialized Qt widget event overrides in src/qt/AdjustmentEditor.*, src/qt/EditorChrome.*, src/qt/DrawingDocumentTabBar.*, src/qt/EditorProperties.cpp, src/qt/NonDismissableDialog.hpp, src/qt/PdfCanvas.hpp, and src/qt/PdfWindow.*. They are concrete widget behavior, painting, or local gesture handling; they remain in the Qt backend unless a future audit identifies a toolkit-neutral event contract.",
+      "Swept and not assigned to Events: thumbnailReady, partThumbnailsChanged, and PartThumbnails in src/qt/EditorViewport.hpp. These callbacks and rendered thumbnail data refresh the Qt palette and remain with Qt/Renderer."
     ]
   }
 }
