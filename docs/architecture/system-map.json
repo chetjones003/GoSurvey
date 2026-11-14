@@ -1428,7 +1428,7 @@
       "path": "src/util/gltfimport.cpp",
       "lines": [
         22,
-        61
+        52
       ],
       "system": "Math",
       "concern": "4x4 affine transform",
@@ -1436,23 +1436,22 @@
         "Mat4",
         "Multiply",
         "TransformPoint",
-        "TransformDirection",
-        "MatrixFromColumnMajor"
+        "TransformDirection"
       ],
-      "note": "Row-major double 4x4 with point and direction transforms. Reading glTF's column-major layout is a Math concern too. The rest of gltfimport.cpp is IO."
+      "note": "Row-major double 4x4 with point and direction transforms. MatrixFromColumnMajor (lines 55-61) reads a glTF JSON array and is an IO adapter; it should move with the reader. The rest of gltfimport.cpp is IO."
     },
     {
       "path": "src/util/gltfimport.cpp",
       "lines": [
-        63,
-        92
+        83,
+        91
       ],
       "system": "Math",
       "concern": "glTF node TRS to matrix",
       "symbols": [
-        "MatrixFromTrs"
+        "MatrixFromTrs (quaternion-to-matrix composition)"
       ],
-      "note": "Composes translation, rotation quaternion and scale into a Mat4. Pure math; the JSON read stays in IO."
+      "note": "Numeric T*R*S composition only. Lines 63-82 of MatrixFromTrs read glTF JSON with contains and is_array checks, so they are an IO adapter; the move ticket must split the reader from the composer."
     },
     {
       "path": "src/util/brep.cpp",
@@ -1677,6 +1676,19 @@
         "ReflectAngleAcrossLine"
       ],
       "note": "Returns 2*phi - angle for a line direction phi. Pure math; a second reflection helper in the same file."
+    },
+    {
+      "path": "src/survey/SurveyPoints.cpp",
+      "lines": [
+        373,
+        384
+      ],
+      "system": "Math",
+      "concern": "2D reflection across a line",
+      "symbols": [
+        "ReflectSurveyCoords"
+      ],
+      "note": "Anonymous-namespace copy of ReflectPtAcrossLine in double. Duplicate in Survey."
     }
   ],
   "auditedEntries": {
@@ -1848,7 +1860,7 @@
         "tests/Trim3DLineLineTests.cpp"
       ],
       "testGaps": [
-        "No test names the 2D rotation or affine helpers in sections (RotateAroundBase, RotateNormalAboutZ, RotateExtrusionByXf, Affine2D, Xf, Xf2, RotateSurveyCoords, RotatePdfInsertAroundBase, RotatePtForAnnotationPreview, RotateDeltaFromReferenceAndNewSegment, ReflectPtAcrossLine, ReflectAngleAcrossLine).",
+        "No test calls the 2D rotation or affine helpers in sections directly (RotateNormalAboutZ, RotateExtrusionByXf, Affine2D, Xf, Xf2, RotateSurveyCoords, RotatePdfInsertAroundBase, RotatePtForAnnotationPreview, RotateDeltaFromReferenceAndNewSegment, ReflectPtAcrossLine, ReflectAngleAcrossLine, ReflectSurveyCoords). tests/Ray3dTests.cpp:324 checks RotatePointAboutAxis against RotateAroundBase's arithmetic (equivalence only, not the helper itself).",
         "No test names Mat4, Multiply, TransformPoint, TransformDirection or MatrixFromTrs. tests/GltfImportTests.cpp covers glTF import (IO), not these helpers directly."
       ]
     }
@@ -1885,7 +1897,7 @@
       "ucs::SnapToPolarRay is generic angle quantisation. Whether POLAR applies is Interaction policy, and its gating lives in Commands.",
       "ray3d::RayTriangleIntersect is pure Math, but its documented contract (project onto the analytic surface) is a Geometry concern. Its comment cites brep faces.",
       "OrthoConstrain.hpp implements ORTHO (REQ-047). The mode and when it applies are Interaction. Only the lock math is Math.",
-      "The 2D reflection helpers are also duplicated: ReflectPtAcrossLine and ReflectAngleAcrossLine (CadCommands.cpp:10638, :10655) repeat the reflect math written inline at CadCommands.cpp:1566. Replace callers with one Math helper; do not move code in this audit."
+      "The 2D reflection helpers are also duplicated: ReflectPtAcrossLine and ReflectAngleAcrossLine (CadCommands.cpp:10638, :10655), and ReflectSurveyCoords (SurveyPoints.cpp:373), repeat the reflect math written inline at CadCommands.cpp:1566. Replace callers with one Math helper; do not move code in this audit."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
