@@ -78,17 +78,17 @@
   "fileMappings": [
     {
       "path": "src/util/AcisSatParser.cpp",
-      "system": null,
+      "system": "IO",
       "status": "ambiguous"
     },
     {
       "path": "src/util/AcisSatParser.hpp",
-      "system": null,
+      "system": "IO",
       "status": "ambiguous"
     },
     {
       "path": "src/util/AcisSatWriter.cpp",
-      "system": null,
+      "system": "IO",
       "status": "ambiguous"
     },
     {
@@ -213,12 +213,12 @@
     },
     {
       "path": "src/util/gltfimport.cpp",
-      "system": null,
+      "system": "IO",
       "status": "ambiguous"
     },
     {
       "path": "src/util/gltfimport.hpp",
-      "system": null,
+      "system": "IO",
       "status": "ambiguous"
     },
     {
@@ -253,7 +253,7 @@
     },
     {
       "path": "src/util/modelimport.hpp",
-      "system": null,
+      "system": "IO",
       "status": "ambiguous"
     },
     {
@@ -293,7 +293,7 @@
     },
     {
       "path": "src/util/PointFileExt.hpp",
-      "system": null,
+      "system": "IO",
       "status": "ambiguous"
     },
     {
@@ -338,12 +338,12 @@
     },
     {
       "path": "src/util/stlimport.cpp",
-      "system": null,
+      "system": "IO",
       "status": "ambiguous"
     },
     {
       "path": "src/util/stlimport.hpp",
-      "system": null,
+      "system": "IO",
       "status": "ambiguous"
     },
     {
@@ -451,7 +451,8 @@
     "Document audit (issue #1226): Document file and section ownership is in auditedEntries.Document and sections. fileMappings gains Document as the advisory owner for cadblock.hpp, cadtable.hpp and PlotScales.hpp, all still ambiguous, so the ratchet and baseline do not move. Folder-mapped files get section entries only, because folder precedence would otherwise override them. The DrawingDocument god struct and CadEntities.hpp's PointCloud include are recorded in auditFindings.",
     "Survey audit (issue #1227): Survey file and section ownership is in auditedEntries.Survey and sections. Folder-mapped src/survey, src/traverse and src/alignment files are Survey through mappedFolders. src/geo files are assigned to Survey by section, following the Geometry audit, while the folder stays Geometry. No fileMappings changed, so the ratchet and baseline do not move. The Survey -> Terrain (alignment ground sampling) and Survey -> Commands (SurveyPoints.cpp) edges are recorded in forbiddenDependencies. No code moved.",
     "Terrain audit (issue #1228): Terrain file and section ownership is recorded in auditedEntries.Terrain and sections. The 20 mixed src/util surface files carry advisory Terrain ownership but remain ambiguous so the dependency ratchet and baseline do not change. Command god-file and Survey-folder sections are assigned by symbol; user-interface, persistence, and command orchestration remain with their systems. No code moved.",
-    "Renderer audit (issue #1231): Renderer file and section ownership is in auditedEntries.Renderer and sections. The src/render folder mapping, fileMappings and the ratchet baseline are unchanged, so the baseline does not move. GL device calls outside src/render (EditorViewport.cpp, FailureReport.cpp) are recorded as OpenGL sections with pending moves. GL-layout display caches in Commands state are recorded as Renderer sections. No code moved."
+    "Renderer audit (issue #1231): Renderer file and section ownership is in auditedEntries.Renderer and sections. The src/render folder mapping, fileMappings and the ratchet baseline are unchanged, so the baseline does not move. GL device calls outside src/render (EditorViewport.cpp, FailureReport.cpp) are recorded as OpenGL sections with pending moves. GL-layout display caches in Commands state are recorded as Renderer sections. No code moved.",
+    "IO audit (issue #1232): IO file and section ownership is recorded in auditedEntries.IO and sections. The nine format/helper files in src/util receive advisory IO ownership in fileMappings and remain ambiguous so the dependency ratchet does not change; src/util/PointFileExt.hpp is called by the Windows backend, and modelimport.hpp is a shared transfer contract. Current cross-system and platform couplings are recorded in forbiddenDependencies and auditFindings. No code moved."
   ],
   "sections": [
     {
@@ -9232,6 +9233,84 @@
         "tests/CameraTests.cpp:50 reproduces the renderer's orthographic matrix in the test, because ViewportRenderer::Ortho is private (ViewportRenderer.hpp:270). No test compares the two matrix builders.",
         "RenderScene is one method of about 2,600 lines (1250-3855). No test covers the order of its passes (surfaces, solids, point clouds, section clip, map tiles, gizmo)."
       ]
+    },
+    "IO": {
+      "tier": "T3 Services",
+      "audit": {
+        "issue": 1232,
+        "parent": 1207,
+        "commit": "dff327b6",
+        "codeMoved": false
+      },
+      "responsibility": "Owns file-format parsing, serialization, and conversion between external drawing, model, project, point, and traverse representations and the systems that consume them.",
+      "doesNotOwn": [
+        "Persistent drawing, survey, terrain, point-cloud, and PDF domain models or their invariants (Document, Survey, Terrain, PointCloud, Pdf).",
+        "User command policy, prompts, import/export dialog state, and progress presentation (Commands and GoSurveyEditor).",
+        "Operating-system file dialogs, paths, process services, and native APIs (Windows backend).",
+        "Reusable geometric algorithms and coordinate primitives (Geometry and Math); IO may call them to convert formats.",
+        "PDF page/annotation domain behavior (Pdf); IO owns vector PDF plot writing and report-file serialization."
+      ],
+      "allowedDependencies": [
+        "Geometry",
+        "Math",
+        "Core",
+        "Document",
+        "Survey",
+        "Terrain",
+        "PointCloud",
+        "Pdf"
+      ],
+      "dependencyNote": "Matches the IO row in system-map.md. The draft allows IO to depend on the listed model systems to translate their types. Current implementation also has upward and private-header couplings recorded under forbiddenDependencies; no code moved and this audit does not change the dependency baseline.",
+      "currentFiles": [
+        "All current files under src/io/ (drawing/project persistence, DXF/DWG and LibreDWG adapters, point-cloud and point-file readers, LandXML/CSV/spreadsheet formats, plot/report output, and related format helpers): src/io/BrepJson.hpp, src/io/CadPointCloudE57.cpp, src/io/CadPointCloudE57.hpp, src/io/CadPointCloudLas.cpp, src/io/CadPointCloudLas.hpp, src/io/CadPointCloudLaz.cpp, src/io/CadPointCloudLaz.hpp, src/io/CadPointCloudPts.cpp, src/io/CadPointCloudPts.hpp, src/io/CadPointCloudPtx.cpp, src/io/CadPointCloudPtx.hpp, src/io/DwgIo.cpp, src/io/DwgIo.hpp, src/io/DwgMeshConvert.cpp, src/io/DwgMeshConvert.hpp, src/io/DwgProbe.cpp, src/io/DxfColors.cpp, src/io/DxfColors.hpp, src/io/DxfEntityEmit.hpp, src/io/DxfIo.cpp, src/io/DxfIo.hpp, src/io/GsAnnotationJson.hpp, src/io/GsIo.cpp, src/io/GsIo.hpp, src/io/GsMigrate.cpp, src/io/GsMigrate.hpp, src/io/LandXmlIo.cpp, src/io/LandXmlIo.hpp, src/io/LibreDwg.cpp, src/io/LibreDwg.hpp, src/io/LibreDwgAnnotContext.cpp, src/io/LibreDwgAnnotContext.hpp, src/io/LibreDwgCad.cpp, src/io/LibreDwgCad.hpp, src/io/LibreDwgCivil.cpp, src/io/LibreDwgCivil.hpp, src/io/LibreDwgDynamicBlock.cpp, src/io/LibreDwgDynamicBlock.hpp, src/io/LibreDwgField.cpp, src/io/LibreDwgField.hpp, src/io/LibreDwgLights.cpp, src/io/LibreDwgLights.hpp, src/io/LibreDwgMaterial.cpp, src/io/LibreDwgMaterial.hpp, src/io/LibreDwgPlant.cpp, src/io/LibreDwgPlant.hpp, src/io/LibreDwgVisualStyle.cpp, src/io/LibreDwgVisualStyle.hpp, src/io/PdfPlot.cpp, src/io/PdfPlot.hpp, src/io/PlotFont.hpp, src/io/PlotSheetTransform.hpp, src/io/PlotStroke.hpp, src/io/PlotStyleTable.cpp, src/io/PlotStyleTable.hpp, src/io/PolylineTiltedArc.hpp, src/io/Project.cpp, src/io/Project.hpp, src/io/ProjectAddDrawing.cpp, src/io/ProjectAddDrawing.hpp, src/io/ProjectFiles.cpp, src/io/ProjectFiles.hpp, src/io/ProjectPack.cpp, src/io/ProjectPack.hpp, src/io/ProjectPointDb.cpp, src/io/ProjectPointDb.hpp, src/io/ProjectPointRules.cpp, src/io/ProjectPointRules.hpp, src/io/ProjectTurnover.cpp, src/io/ProjectTurnover.hpp, src/io/RasterImage.cpp, src/io/RasterImage.hpp, src/io/RecentDrawings.cpp, src/io/RecentDrawings.hpp, src/io/SpreadsheetIo.cpp, src/io/SpreadsheetIo.hpp, src/io/SurveyCsv.cpp, src/io/SurveyCsv.hpp, src/io/SurveyCsvValidate.hpp, src/io/UserPrefs.cpp, src/io/UserPrefs.hpp, src/io/WhatsNewContent.cpp, src/io/WhatsNewContent.hpp, src/io/WikiContent.cpp, src/io/WikiContent.hpp, src/io/WikiHelp.cpp, src/io/WikiHelp.hpp",
+        "src/util/AcisSatParser.cpp, src/util/AcisSatParser.hpp, src/util/AcisSatWriter.cpp (SAT format parsing and writing).",
+        "src/util/gltfimport.cpp, src/util/gltfimport.hpp, src/util/stlimport.cpp, src/util/stlimport.hpp, src/util/modelimport.hpp (3D model importers and shared import result contract).",
+        "src/util/PointFileExt.hpp (pure point-file extension rule used by the platform save dialog; advisory IO ownership, remains ambiguous because Platform cannot depend upward on IO).",
+        "IO-owned sections in SurveyPoints, TraverseReport, CadCommands_Geo, ProjectPoints, LibreDwgCivil, LibreDwgCad, GsIo, and the traverse format/import files are listed in sections."
+      ],
+      "pendingAssignment": [
+        "src/util/PointFileExt.hpp is IO format policy called by the Windows dialog layer; move behind a lower-level neutral seam or make the helper platform-owned before enforcing the advisory assignment.",
+        "The imported model result types in src/util/modelimport.hpp are shared by IO importers and Geometry/DWG conversion; confirm whether this format-neutral transfer contract belongs in IO or a neutral interchange module before moving it.",
+        "IO source currently lives in Commands, Survey, and util folders. Move only after public model interfaces and dependency edges are established."
+      ],
+      "draftPublicInterface": [
+        "Drawing interchange: io::ImportDxf, io::ExportDxf, io::ImportDwg, io::ExportDwg, and the associated DxfIo/DwgIo options and result types.",
+        "Native/legacy persistence: GsIo load/save and migration interfaces; Project, ProjectFiles, ProjectPack, ProjectPointDb, and ProjectTurnover interfaces.",
+        "Survey and point exchange: SurveyCsv import/export, LandXml import/export, traverse file formats, and StarNet/Fbk/JobXML/RW5 import entry points.",
+        "Point-cloud and model formats: CadPointCloudE57/Las/Laz/Pts/Ptx, glTF/STL import, SAT parser/writer, and their result/options structures.",
+        "Plot/report output: PdfPlot and TraverseReport export functions; spreadsheet read/write interfaces.",
+        "These are draft current symbols, not stable public headers; public include paths and format-neutral interfaces remain to be designed."
+      ],
+      "existingTests": [
+        "tests/AcisSatParserTests.cpp",
+        "tests/DwgProbeTests.cpp",
+        "tests/DxfEntityEmitTests.cpp",
+        "tests/GltfImportTests.cpp",
+        "tests/LandXmlExportTests.cpp",
+        "tests/LandXmlImportTests.cpp",
+        "tests/LibreDwgCadTests.cpp",
+        "tests/LibreDwgTests.cpp",
+        "tests/PointFileExtTests.cpp",
+        "tests/SpreadsheetIoTests.cpp",
+        "tests/StlImportTests.cpp",
+        "tests/SurveyCsvValidateTests.cpp",
+        "tests/TraverseTests.cpp"
+      ],
+      "testsCoveringOtherSystems": [
+        "tests/AlignmentDwgTests.cpp (Survey alignment conversion through DWG).",
+        "Project and point-cloud tests also exercise persistence or readers alongside their owning domain behavior."
+      ],
+      "forbiddenDependencies": [
+        "Commands -> IO: IO implementations include Commands-owned CadCommands.hpp and consume AppCommandState (for example DxfIo, DwgIo, SurveyCsv, ProjectFiles, and project-point DB code). Commands -> IO is allowed, but the reverse dependency is forbidden.",
+        "IO -> Windows: src/io/Project.cpp and related project/file code use Win32 process/path APIs; platform operations need a Windows adapter.",
+        "IO -> Debug private header: IO save paths call SaveTrace from src/util/SaveTrace.hpp, assigned to Debug; Debug also currently reaches Win32 APIs. A narrow diagnostic interface or caller-side tracing is needed.",
+        "IO -> Geometry/Math: SAT and model conversion currently use shared geometry/math helpers whose folder assignments are mixed or unresolved; public interfaces and allowed edges must be checked during moves.",
+        "IO -> Pdf private implementation: src/io/PdfPlot.cpp includes PdfDocument.hpp for the PDFium mutex; replace this with a narrow backend interface."
+      ],
+      "testGaps": [
+        "No single format-contract suite asserts consistent error reporting and round-trip preservation across the drawing, project, survey, model, and point-cloud formats.",
+        "Most tests link current implementation files directly and do not verify the intended public-header boundaries."
+      ]
     }
   },
   "auditFindings": {
@@ -9288,7 +9367,10 @@
       "Test fixtures in a production header: PdfViewerCore.hpp declares MakeSyntheticPdf and MakeLineWorkPdf, which BENCH commands use. Move them to tests or to Debug benchmark scenes.",
       "Device seam: ADR-0003 requires backend-neutral device interfaces for buffers, textures, shaders and draw calls, a factory selected at startup, and a headless null device. None exist in src/. The only Headless* files are src/platform/HeadlessFileDialogs and src/platform/HeadlessPdfAttach. The final map must create the interface in Renderer's public headers and place the GL implementation in the OpenGL backend.",
       "Draw-list vertex layouts: GL_LINES (six floats per segment), GL_TRIANGLES (nine floats per triangle) and the seven-float coloured line vertex in CadLinetype are std::vector<float> contracts described only in comments. Producers in Document (CadLinetype.hpp), Terrain (watershed.hpp, surfacevolume.hpp), Geometry (geom2d.hpp, brep.hpp), Survey (SurveyPoints.hpp) and Interaction (TransformPreview.cpp) build them. Renderer should own one draw-list vertex type that the producers use.",
-      "Render tuning inputs: RenderTuning carries background, grid, paper ink, visual style, section clip and map tiles, and is filled from AppCommandState. Core owns the setting values; Renderer owns the tuning struct. The final map should decide where the fill happens."
+      "Render tuning inputs: RenderTuning carries background, grid, paper ink, visual style, section clip and map tiles, and is filled from AppCommandState. Core owns the setting values; Renderer owns the tuning struct. The final map should decide where the fill happens.",
+      "Format-neutral imported model payload (modelimport::Options, Part and Result in src/util/modelimport.hpp) is shared by glTF and STL importers and consumed by drawing conversion. Decide whether IO owns this interchange contract or it belongs in a lower-level neutral module.",
+      "SaveTrace is a Debug diagnostic API used by IO save paths, but its implementation reaches Win32 temp-file and debugger APIs. Define a boundary that lets IO report save outcomes without depending on Debug and Windows implementation details.",
+      "IO has no format-neutral public interface directory. Import/export entry points expose a mixture of AppCommandState, domain storage, and format-specific result structures; the final map/move work must choose stable seams."
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
@@ -9384,7 +9466,11 @@
       "Map tiles: MapTileDraw (RenderTuning::mapTiles) is a Network and Commands type, reached through a forbidden include. The tile fetch and cache belong to Network; the texture belongs to the device.",
       "CadLinetype tessellation: CadTessellateLinetype* (CadLinetype.hpp 17-34) emits seven-float GL_LINES vertices with colour. The file's Document section [1,36] covers these declarations, so they are not sectioned here. Split them at the move ticket.",
       "Survey and Renderer: ViewportRenderer.hpp includes alignment/AlignmentDisplayCache.hpp. The existing Renderer section for that cache makes it a Renderer-owned type, so the include should move to a public Renderer interface.",
-      "brep.hpp (1330-1332, solid edges as GL_LINES) and geom2d.hpp (81-89) are Geometry headers that emit GL_LINES. geom2d's emitters are assigned to Renderer above; brep's edge export follows the same pattern. The final map should decide both together."
+      "brep.hpp (1330-1332, solid edges as GL_LINES) and geom2d.hpp (81-89) are Geometry headers that emit GL_LINES. geom2d's emitters are assigned to Renderer above; brep's edge export follows the same pattern. The final map should decide both together.",
+      "IO implementations in src/io include Commands-owned CadCommands.hpp and read/mutate AppCommandState; this reverses the intended Commands -> IO dependency.",
+      "Project persistence code in src/io calls Win32 process/path APIs directly, coupling IO to the Windows backend.",
+      "IO save paths call the Debug-owned SaveTrace API, whose implementation uses Win32 APIs; diagnostics cross both system and platform boundaries.",
+      "PdfPlot includes PdfDocument.hpp to access the PDFium mutex, coupling IO to Pdf internals and its third-party backend."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
