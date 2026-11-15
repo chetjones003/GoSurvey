@@ -5742,6 +5742,285 @@
       "otherOwners": [
         "Survey"
       ]
+    },
+    {
+      "path": "src/alignment/AlignmentGrips.cpp",
+      "lines": [
+        1,
+        242
+      ],
+      "system": "Interaction",
+      "concern": "grip editing for alignment entities",
+      "symbols": [],
+      "note": "Grip hit and drag belong to Interaction (transient user interaction). Folder-mapped to Survey; section overrides it.",
+      "ownershipKind": "whole",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/alignment/AlignmentDisplayCache.hpp",
+      "lines": [
+        1,
+        44
+      ],
+      "system": "Renderer",
+      "concern": "display sample cache for alignment drawing",
+      "symbols": [],
+      "note": "Chord-sampled display polylines are render caches (Renderer). Survey owns the exact geometry.",
+      "ownershipKind": "whole",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/alignment/AlignmentDisplayCache.cpp",
+      "lines": [
+        1,
+        91
+      ],
+      "system": "Renderer",
+      "concern": "display sample cache for alignment drawing",
+      "symbols": [],
+      "note": "Render cache (Renderer).",
+      "ownershipKind": "whole",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/alignment/Clothoid.hpp",
+      "lines": [
+        1,
+        30
+      ],
+      "system": "Geometry",
+      "concern": "spiral (clothoid) curve math",
+      "symbols": [],
+      "note": "Spiral curve evaluation is curve geometry (Geometry). Survey alignments use it.",
+      "ownershipKind": "whole",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/alignment/Clothoid.cpp",
+      "lines": [
+        1,
+        110
+      ],
+      "system": "Geometry",
+      "concern": "spiral (clothoid) curve math",
+      "symbols": [],
+      "note": "Curve geometry (Geometry).",
+      "ownershipKind": "whole",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/alignment/AlignmentFeatureLine.hpp",
+      "lines": [
+        1,
+        15
+      ],
+      "system": "Terrain",
+      "concern": "feature lines from alignments",
+      "symbols": [],
+      "note": "Feature lines are Terrain in the map. Folder-mapped to Survey; this section overrides it.",
+      "ownershipKind": "whole",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/alignment/AlignmentFeatureLine.cpp",
+      "lines": [
+        1,
+        39
+      ],
+      "system": "Terrain",
+      "concern": "feature lines from alignments",
+      "symbols": [],
+      "note": "Feature lines are Terrain.",
+      "ownershipKind": "whole",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/traverse/TraverseIo.hpp",
+      "lines": [
+        1,
+        29
+      ],
+      "system": "IO",
+      "concern": "traverse file save and load",
+      "symbols": [],
+      "note": "File persistence is IO. Folder-mapped to Survey.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/traverse/TraverseIo.cpp",
+      "lines": [
+        1,
+        432
+      ],
+      "system": "IO",
+      "concern": "traverse file save and load",
+      "symbols": [],
+      "note": "File persistence is IO.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/traverse/TraverseCommandLang.hpp",
+      "lines": [
+        1,
+        148
+      ],
+      "system": "IO",
+      "concern": "traverse command-language text format",
+      "symbols": [],
+      "note": "Serialize and Parse read and write a text file format (IO). Folder-mapped to Survey.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/traverse/TraverseCommandLang.cpp",
+      "lines": [
+        1,
+        1034
+      ],
+      "system": "IO",
+      "concern": "traverse command-language text format",
+      "symbols": [],
+      "note": "Text format parsing and writing is IO.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/traverse/FbkImport.hpp",
+      "lines": [
+        1,
+        13
+      ],
+      "system": "IO",
+      "concern": "FBK traverse importer",
+      "symbols": [],
+      "note": "Importers parse external files (IO). Folder-mapped to Survey.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/traverse/FbkImport.cpp",
+      "lines": [
+        1,
+        324
+      ],
+      "system": "IO",
+      "concern": "FBK traverse importer",
+      "symbols": [],
+      "note": "Importer (IO).",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/traverse/JobXmlImport.hpp",
+      "lines": [
+        1,
+        80
+      ],
+      "system": "IO",
+      "concern": "JobXML traverse importer",
+      "symbols": [],
+      "note": "Importers parse external files (IO). Folder-mapped to Survey.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/traverse/JobXmlImport.cpp",
+      "lines": [
+        1,
+        551
+      ],
+      "system": "IO",
+      "concern": "JobXML traverse importer",
+      "symbols": [],
+      "note": "Importer (IO).",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/traverse/Rw5Import.hpp",
+      "lines": [
+        1,
+        58
+      ],
+      "system": "IO",
+      "concern": "RW5 traverse importer",
+      "symbols": [],
+      "note": "Importers parse external files (IO). Folder-mapped to Survey.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/traverse/Rw5Import.cpp",
+      "lines": [
+        1,
+        351
+      ],
+      "system": "IO",
+      "concern": "RW5 traverse importer",
+      "symbols": [],
+      "note": "Importer (IO).",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/traverse/StarNetImport.hpp",
+      "lines": [
+        1,
+        71
+      ],
+      "system": "IO",
+      "concern": "StarNet traverse importer",
+      "symbols": [],
+      "note": "Importers parse external files (IO). Folder-mapped to Survey.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/traverse/StarNetImport.cpp",
+      "lines": [
+        1,
+        1236
+      ],
+      "system": "IO",
+      "concern": "StarNet traverse importer",
+      "symbols": [],
+      "note": "Importer (IO).",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/commands/AlignmentStyle.hpp",
+      "lines": [
+        1,
+        82
+      ],
+      "system": "Survey",
+      "concern": "alignment style data",
+      "symbols": [],
+      "note": "Survey style data in the Commands folder. Ownership recorded now; the physical move is for the move ticket.",
+      "ownershipKind": "whole",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/AlignmentLabelSet.hpp",
+      "lines": [
+        1,
+        178
+      ],
+      "system": "Survey",
+      "concern": "alignment label-set data",
+      "symbols": [],
+      "note": "Survey label-set data in the Commands folder. Ownership recorded now; the physical move is for the move ticket.",
+      "ownershipKind": "whole",
+      "otherOwners": [
+        "Commands"
+      ]
     }
   ],
   "auditedEntries": {
@@ -6649,12 +6928,12 @@
       "dependencyNote": "Matches the Survey row in system-map.md. Survey -> Document is the one allowed Domain peer edge. Alignment sampling and ground queries need Terrain, which the map forbids (Terrain -> Survey is the allowed direction); this is recorded in forbiddenDependencies and couplings.",
       "currentFiles": [
         "src/survey/ (folder-mapped Survey): PointGroupRule.hpp, PointGroupRule.cpp, SurveyPoints.hpp, SurveyPoints.cpp; SurveyPoints sections carve out Renderer, Document, IO and Commands parts",
-        "src/traverse/ (folder-mapped Survey): TraverseCalc.*, TraverseLeastSquares.*, TraverseCommandLang.*, TraverseIo.*, TraverseReport.*, FbkImport.*, JobXmlImport.*, Rw5Import.*, StarNetImport.*; TraverseReport PDF/TXT/RTF export is IO",
-        "src/alignment/ (folder-mapped Survey): Alignment.*, AlignmentDesign.*, AlignmentDisplayCache.*, AlignmentEdit.cpp, AlignmentFeatureLine.* (Terrain feature-line code, see pendingAssignment), AlignmentGround.*, AlignmentGrips.cpp, AlignmentLabels.*, AlignmentLayout.cpp, AlignmentProfile.*, AlignmentReport.*, AlignmentSampleLines.*, AlignmentTables.*, AlignmentViewFrames.*, Clothoid.*",
+        "src/traverse/ (folder-mapped Survey): TraverseCalc.*, TraverseLeastSquares.*, TraverseCommandLang.*, TraverseIo.*, TraverseReport.*, FbkImport.*, JobXmlImport.*, Rw5Import.*, StarNetImport.*; TraverseReport PDF/TXT/RTF export is IO; the importer, TraverseIo and TraverseCommandLang files are IO by section",
+        "src/alignment/ (folder-mapped Survey): Alignment.*, AlignmentDesign.*, AlignmentDisplayCache.*, AlignmentEdit.cpp, AlignmentFeatureLine.* (Terrain feature-line code, see pendingAssignment), AlignmentGround.*, AlignmentGrips.cpp, AlignmentLabels.*, AlignmentLayout.cpp, AlignmentProfile.*, AlignmentReport.*, AlignmentSampleLines.*, AlignmentTables.*, AlignmentViewFrames.*, Clothoid.*; AlignmentGrips (Interaction), AlignmentDisplayCache (Renderer), Clothoid (Geometry) and AlignmentFeatureLine (Terrain) are overridden by section",
         "src/geo/ (folder-mapped Geometry, assigned to Survey by section): CoordinateSystems.*, LocalGridTransform.*, EcefTransform.*, DrawingConversion.* (units stay Core), WebMercator.*",
-        "src/commands/ (folder-mapped Commands, Survey sections only): CadCommands_Geo.cpp, CadCommands_Alignment.cpp, CadCommands.hpp (DrawingDocument survey fields), TraverseActions.cpp, ProjectPoints.cpp, ProjectWarnings.cpp, CadField.cpp (point properties); AlignmentStyle.hpp and AlignmentLabelSet.hpp are Survey data in a Commands folder",
+        "src/commands/ (folder-mapped Commands, Survey sections only): CadCommands_Geo.cpp, CadCommands_Alignment.cpp, CadCommands.hpp (DrawingDocument survey fields), TraverseActions.cpp, ProjectPoints.cpp, ProjectWarnings.cpp, CadField.cpp (point properties); AlignmentStyle.hpp and AlignmentLabelSet.hpp are Survey data in a Commands folder; AlignmentStyle.hpp and AlignmentLabelSet.hpp are Survey by section",
         "src/util/cadtablestyle.hpp (mixed, ambiguous): point-table column, rows, cells and survey-point sync sections; table sizing is Document",
-        "src/commands/CadCommands.cpp (Survey sections only: point and alignment transforms, point-group import; surface code is Terrain)"
+        "src/commands/CadCommands.cpp (Survey sections only: point and alignment transforms, point-group import; surface code is Terrain); AlignmentStyle.hpp and AlignmentLabelSet.hpp are Survey by section"
       ],
       "pendingAssignment": [
         {
@@ -6754,13 +7033,7 @@
           "TraverseAverageFaceHoriz",
           "TraverseFormatBearing",
           "ComputeStats",
-          "Serialize and Parse (TraverseCommandLang)",
-          "TraverseIo Save and Load",
-          "BuildReportText",
-          "FbkImport",
-          "JobXmlImport",
-          "Rw5Import",
-          "StarNetImport"
+          "BuildReportText"
         ],
         "alignments": [
           "alignment::Alignment",
@@ -6808,7 +7081,8 @@
           "Command starters and Run*/Start* runners (Commands)",
           "Point JSON format and TraverseReport file writers (IO)",
           "Label MTEXT placement (Document)",
-          "Feature lines and surface profiles (Terrain)"
+          "Feature lines and surface profiles (Terrain)",
+          "Traverse file formats and importers: TraverseIo, TraverseCommandLang, FbkImport, JobXmlImport, Rw5Import, StarNetImport (IO)"
         ]
       },
       "existingTests": [
