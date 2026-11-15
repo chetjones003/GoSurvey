@@ -7040,7 +7040,7 @@
     {
       "path": "src/commands/CadCommands.hpp",
       "lines": [
-        4176,
+        4180,
         4182
       ],
       "system": "Renderer",
@@ -7069,7 +7069,7 @@
     {
       "path": "src/commands/CadCommands.hpp",
       "lines": [
-        5294,
+        5296,
         5298
       ],
       "system": "Renderer",
@@ -7176,16 +7176,31 @@
       "path": "src/qt/EditorViewport.hpp",
       "lines": [
         89,
-        100
+        92
       ],
       "system": "OpenGL",
       "concern": "GL object and raster texture handles in the Qt widget",
       "symbols": [
+        "m_ClipMaskBuffer",
         "m_ClipMaskProgram",
         "m_TextureBlitter",
-        "m_RasterTextures"
+        "m_ClipMaskVao"
       ],
-      "note": "Qt-owned GL objects and the raster texture id cache. Pending move to the OpenGL backend (pendingAssignment)."
+      "note": "Qt-owned GL buffer, shader, blitter and VAO objects. Pending move to the OpenGL backend (pendingAssignment)."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        94,
+        100
+      ],
+      "system": "OpenGL",
+      "concern": "raster texture ids and drape cache in the Qt widget",
+      "symbols": [
+        "m_RasterTextures",
+        "m_RasterDrapeCache"
+      ],
+      "note": "Raster texture ids and the drape cache, which hold GL textures. Pending move to the OpenGL backend (pendingAssignment). m_OnlineMap at line 93 is map orchestration and is not assigned here."
     },
     {
       "path": "src/commands/CadCommands.cpp",
@@ -9041,12 +9056,12 @@
             "src/render/ViewportRenderer.cpp (every GL call: 676 lines that call GL or name a GL constant, including Init, EnsureShader, EnsureFramebuffer, EnsureMultisamplePass, RenderScene and the GPU release functions)",
             "src/render/ViewportRenderer.hpp (GLuint, GLenum and shader members in the class)"
           ],
-          "reason": "Renderer must hold draw lists and handles only through a device interface (ADR-0003). The interface, the factory and the OpenGL implementation do not exist yet, so ViewportRenderer is both frontend and device. Split it when the device seam is created. The headless null device in tests/headless is the first candidate implementation."
+          "reason": "Renderer must hold draw lists and handles only through a device interface (ADR-0003). The interface, the factory and the OpenGL implementation do not exist yet, so ViewportRenderer is both frontend and device. Split it when the device seam is created. No null device exists yet. tests/headless/HeadlessDriver.cpp is the nearest analogue for one."
         },
         {
           "files": [
             "src/qt/EditorViewport.cpp lines 354-402 (initializeGL), 403-510 (DrawPaperViewportClipMask, a stencil ear-clip fill), 899-917 (paintGL, FBO copy and clear), 984-1013 (paintGL paper-space branch: FBO copy, stencil state and blit)",
-            "src/qt/EditorViewport.hpp lines 89-100 (QOpenGL buffer, shader, blitter and VAO objects; raster texture ids and the drape cache)"
+            "src/qt/EditorViewport.hpp lines 89-92 and 94-100 (QOpenGL buffer, shader, blitter and VAO objects; raster texture ids and the drape cache). m_OnlineMap at line 93 is map orchestration and is not part of this move."
           ],
           "reason": "About 35 GL call lines sit in the Qt widget. Qt may not depend on the graphics API (system-map.md: OpenGL is a platform backend). They move to the OpenGL backend behind the device interface, and the stencil fill becomes a draw-list primitive."
         },
@@ -9060,7 +9075,7 @@
           "files": [
             "src/commands/CadCommands.hpp: the Renderer sections for the volume dashboard, surface display and watershed state (lines 4011-4200)"
           ],
-          "reason": "These are derived display caches stored in AppCommandState beside the Terrain results they come from. Renderer should own the cache, keyed by result identity, outside Commands state. Moving them changes undo snapshots, so this is a final-map ticket rather than a relocation."
+          "reason": "These are derived display caches stored in AppCommandState beside the Terrain results they come from. Renderer should own the cache, keyed by result identity, outside Commands state. They are live-only caches that no undo snapshot holds (CadCommands.hpp:1430), so the open question is who owns them, which is a final-map decision."
         },
         {
           "files": [
