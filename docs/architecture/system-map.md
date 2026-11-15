@@ -101,6 +101,8 @@ Three audit keys sit beside the mapping; the ratchet ignores them, so their sect
 
 IO audit (issue #1232) is recorded in `system-map.json` under `auditedEntries.IO` and `sections`. It assigns advisory IO ownership to SHX parsing under `src/font/` and SAT, glTF, STL, model-transfer, point-file extension, and export-grid helpers under `src/util/`, while keeping mixed-folder files ambiguous so the dependency ratchet is unchanged. The audit also records IO's reverse dependency on Commands state, direct Win32 use, Debug SaveTrace calls, and access to Pdf internals; Geometry and Math remain allowed IO dependencies. No code moved.
 
+Network audit (issue #1233) is recorded in `system-map.json` under `auditedEntries.Network` and `sections`. It assigns advisory Network ownership to the telemetry and update folders, the map-tile service and online-map controller, the online-map and capture commands, the update and telemetry state held by the Qt window, and the report upload functions in `CrashReporter.cpp` and `StartupFailure.cpp`. The HTTP transport in `src/platform/HttpFetch.hpp` is WinHTTP-specific and sits in the Windows folder; a Network-owned transport interface split from it is the first move. Current code reaches Windows, IO and Commands and Qt reaches Network; those are recorded under `forbiddenDependencies`. Enforced file mappings and `dependency-baseline.json` are unchanged, and no code moved.
+
 ## Architecture inventory
 
 Run `python3 tools/architecture_inventory.py` from the repository root to write a readable

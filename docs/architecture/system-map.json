@@ -7246,6 +7246,221 @@
       ],
       "note": "Reads Autodesk SHX files and decodes their glyph shape bytecode. The font folder remains mapped to Core; this section records the IO format ownership.",
       "ownershipKind": "whole"
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        46,
+        46
+      ],
+      "system": "Network",
+      "concern": "update prefs include",
+      "symbols": [
+        "update::UpdatePrefs"
+      ],
+      "note": "Private-header include for the persisted update settings. See forbiddenDependencies."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1294,
+        1322
+      ],
+      "system": "Network",
+      "concern": "online map provider catalog",
+      "symbols": [
+        "OnlineMapInfo",
+        "kOnlineMaps",
+        "OnlineMapInfoOf",
+        "OnlineMapStorageName",
+        "OnlineMapFromStorageName"
+      ],
+      "note": "Provider labels, storage names, and tile folder names. The DrawingSettings::OnlineMap enum at 1252 stays Document (stored in the drawing)."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        3538,
+        3540
+      ],
+      "system": "Network",
+      "concern": "update-check settings",
+      "symbols": [
+        "AppCommandState::updatePrefs"
+      ],
+      "note": "Persisted through IO UserPrefs. The in-flight UpdateState is held by the application loop."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        4412,
+        4419
+      ],
+      "system": "Network",
+      "concern": "map capture state",
+      "symbols": [
+        "MapCaptureState"
+      ],
+      "note": "Capture job progress. The prompt string is UI presentation (CadCommands_Geo.cpp:1154, CadOnlineMap.cpp:348)."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        5286,
+        5288
+      ],
+      "system": "Network",
+      "concern": "online map attribution flag",
+      "symbols": [
+        "onlineMapDrawing"
+      ],
+      "note": "Set by the map controller each frame, read by the viewport. Runtime only."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        8383,
+        8392
+      ],
+      "system": "Network",
+      "concern": "online map and capture command API",
+      "symbols": [
+        "SetOnlineMap",
+        "StartCaptureMapArea",
+        "CommitMapCapture",
+        "FailMapCapture",
+        "RemoveCapturedMapAreas"
+      ],
+      "note": "Declarations of the online-map and capture commands. Definitions are in CadCommands_Geo.cpp."
+    },
+    {
+      "path": "src/commands/CadCommands_Geo.cpp",
+      "lines": [
+        577,
+        593
+      ],
+      "system": "Network",
+      "concern": "online map selection command",
+      "symbols": [
+        "SetOnlineMap"
+      ],
+      "note": "Map Off rule and the not-geolocated rule. Writes the Document-owned setting."
+    },
+    {
+      "path": "src/commands/CadCommands_Geo.cpp",
+      "lines": [
+        1069,
+        1072
+      ],
+      "system": "Network",
+      "concern": "capture pick rectangle",
+      "symbols": [
+        "st.mapCapture.minX",
+        "st.mapCapture.maxX",
+        "st.mapCapture.minY",
+        "st.mapCapture.maxY"
+      ],
+      "note": "Corners of the picked capture rectangle, stored in the Network capture state."
+    },
+    {
+      "path": "src/qt/EditorWindow.cpp",
+      "lines": [
+        1007,
+        1018
+      ],
+      "system": "Network",
+      "concern": "telemetry start and poll",
+      "symbols": [
+        "EnableTelemetry",
+        "ServiceTelemetry"
+      ],
+      "note": "Starts and polls the telemetry ping. Qt holds the call, not the policy."
+    },
+    {
+      "path": "src/qt/EditorWindow.cpp",
+      "lines": [
+        2550,
+        2554
+      ],
+      "system": "Network",
+      "concern": "installer handoff gate",
+      "symbols": [
+        "m_UpdateExitPending",
+        "m_LaunchInstaller"
+      ],
+      "note": "The handoff call and its retry. The exit itself is GoSurveyEditor."
+    },
+    {
+      "path": "src/qt/EditorWindow.hpp",
+      "lines": [
+        267,
+        271
+      ],
+      "system": "Network",
+      "concern": "update and telemetry state members",
+      "symbols": [
+        "m_Update",
+        "m_LaunchInstaller",
+        "m_TelemetryTask"
+      ],
+      "note": "Network state held by the Qt window."
+    },
+    {
+      "path": "src/platform/CrashReporter.cpp",
+      "lines": [
+        248,
+        266
+      ],
+      "system": "Network",
+      "concern": "silent crash-report upload",
+      "symbols": [
+        "TryPostCrashReportSilent"
+      ],
+      "note": "Endpoint and upload transport. The report text and wire reason are Debug."
+    },
+    {
+      "path": "src/platform/CrashReporter.cpp",
+      "lines": [
+        282,
+        324
+      ],
+      "system": "Network",
+      "concern": "crash-report multipart upload",
+      "symbols": [
+        "TryPostCrashReportSilent"
+      ],
+      "note": "Multipart upload of the dump. Same ownership split as the function above."
+    },
+    {
+      "path": "src/platform/StartupFailure.cpp",
+      "lines": [
+        39,
+        65
+      ],
+      "system": "Network",
+      "concern": "startup-report upload",
+      "symbols": [
+        "TryPostStartupReportSilent"
+      ],
+      "note": "Startup-report transport. The stage and report text are Debug and Windows."
+    },
+    {
+      "path": "src/platform/HttpFetch.hpp",
+      "lines": [
+        1,
+        87
+      ],
+      "system": "Network",
+      "concern": "HTTP transport interface (WinHTTP-backed)",
+      "symbols": [
+        "HasInternetConnectivity",
+        "HttpGetString",
+        "HttpDownloadFile",
+        "ComputeFileSha256",
+        "HttpPostJson",
+        "HttpPostBody"
+      ],
+      "note": "The seam Network needs. Declared in the Windows folder with a WinHTTP implementation. See pendingAssignment."
     }
   ],
   "auditedEntries": {
@@ -9370,6 +9585,87 @@
         "No single format-contract suite asserts consistent error reporting and round-trip preservation across the drawing, project, survey, model, and point-cloud formats.",
         "Most tests link current implementation files directly and do not verify the intended public-header boundaries."
       ]
+    },
+    "Network": {
+      "tier": "T3 Services",
+      "audit": {
+        "issue": 1233,
+        "parent": 1207,
+        "commit": "f5cc7fc8",
+        "codeMoved": false
+      },
+      "responsibility": "Owns the internet-facing services behind replaceable interfaces: the online map tile fetch and disk cache, the update check and installer download, and the anonymous telemetry and crash or startup report uploads.",
+      "doesNotOwn": [
+        "Dialogs, banners, update and crash prompts, and any other user-facing presentation (Qt, UI, and GoSurveyEditor composition).",
+        "The HTTP transport itself: WinHTTP, BCrypt, Network List Manager, ShellExecute and other OS calls (Windows backend). Network declares what it needs; Windows implements it.",
+        "Map tile texture upload and release and the draw path (Renderer and OpenGL).",
+        "Drawing state: the online map setting, captured areas written into the drawing, and tile placement in LOCAL coordinates (Document, Survey, and Commands).",
+        "Persisted preferences and install-ID storage (IO through UserPrefs).",
+        "Crash-report content, wire reasons, and the decision to report a failure (Debug)."
+      ],
+      "allowedDependencies": [
+        "Core",
+        "Events"
+      ],
+      "dependencyNote": "Matches the Network row in system-map.md. Current code does not meet that row: telemetry and update reach Windows through platform/HttpFetch.hpp, telemetry reads UserPrefs (IO), and the online-map controller takes AppCommandState and places tiles through Survey and Document types. Those are listed under forbiddenDependencies. No code moved and the ratchet baseline is unchanged.",
+      "currentFiles": [
+        "src/telemetry/TelemetryPing.cpp, src/telemetry/TelemetryPing.hpp: endpoint constants, payload struct, install-or-active decision, and payload JSON (folder-mapped Network).",
+        "src/telemetry/TelemetryService.cpp, src/telemetry/TelemetryService.hpp: the background telemetry ping worker (folder-mapped Network).",
+        "src/update/UpdateCheck.cpp, src/update/UpdateCheck.hpp: version ordering, manifest parsing, compatibility classification, and the update decision. Pure, with no network (folder-mapped Network).",
+        "src/update/UpdateService.cpp, src/update/UpdateService.hpp: startup check, download and hash worker, and the phase machine (folder-mapped Network). LaunchInstallerAndExit and its UAC bootstrap call ShellExecuteW and are pending a Windows adapter.",
+        "src/platform/MapTileService.cpp, src/platform/MapTileService.hpp: tile fetch worker, disk cache, cache prune, and image decode. Network-owned, but in the Windows-mapped platform folder. The fetch function is injected.",
+        "src/commands/CadOnlineMap.cpp, src/commands/CadOnlineMap.hpp: online-map controller (wanted tiles, retry, message latch, capture job, draw list). Network-owned, but in the Commands folder. PlaceMapTile and LocalRectToMercator are pending separation (see pendingAssignment).",
+        "src/geo/WebMercator.hpp, src/geo/WebMercator.cpp: Web Mercator tile index math. Its only consumers are CadOnlineMap.* and tests/OnlineMapTests.cpp. The Survey section in sections assigns it to Survey, so the final map must decide."
+      ],
+      "platformImplementations": [
+        "src/platform/HttpFetch.cpp: WinHTTP, BCrypt and Network List Manager implementation of the transport (Windows).",
+        "src/platform/MapTilePlatform.cpp: FetchMapTileOverWinHttp, the production tile fetch adapter (Windows)."
+      ],
+      "pendingAssignment": [
+        "src/platform/HttpFetch.hpp: the transport interface Network needs (HasInternetConnectivity, HttpGetString, HttpDownloadFile, ComputeFileSha256, HttpPostJson, HttpPostBody) sits beside its WinHTTP implementation. Split a Network-owned interface from the Windows implementation. Until then telemetry, update and the Qt window include a Windows header.",
+        "src/update/UpdateService.cpp LaunchInstallerAndExit and the Program Files bootstrap: move the ShellExecuteW and install-location calls behind a Windows installer adapter. Keep the phase machine in Network.",
+        "src/telemetry/TelemetryService.cpp reads and writes the install ID through UserPrefs (GetTelemetryIds, io/UserPrefs.cpp). Inject the ID from the caller.",
+        "src/commands/CadOnlineMap.cpp: separate the Network tile controller (planning, cache requests, retry, latch) from the placement and capture-to-drawing code (PlaceMapTile, LocalRectToMercator, and the CaptureJob writes). Placement uses the Survey WGS 84 frame and Document drawing settings.",
+        "src/platform/MapTileService.*: move to a Network folder once one exists. The constructor and MapTileFetch are already injected, so the move should need no interface change.",
+        "src/geo/WebMercator.*: final map decides Network or Survey. Only the online map uses it.",
+        "src/commands/CadCommands.hpp:46 includes update/UpdateCheck.hpp for update::UpdatePrefs. The command state needs the persisted prefs type without a Network private-header include."
+      ],
+      "draftPublicInterface": [
+        "Update (UpdateCheck.hpp): update::ParseVersion, CompareVersions, ParseManifest, ManifestUrlForChannel, ClassifyCompatibility, DecideUpdate, and the UpdatePrefs, Version, Manifest and Channel types.",
+        "Update flow (UpdateService.hpp): update::BeginStartupCheck, PollUpdateTask, BeginDownload, SkipAvailableVersion, UpdateState and Phase. LaunchInstallerAndExit takes a Windows-coupled launch and needs an injected launcher.",
+        "Telemetry (TelemetryService.hpp, TelemetryPing.hpp): telemetry::BeginTelemetryPing, PollTelemetryTask, TelemetryTask, BuildTelemetryJson, GenerateInstallId, DecideEventToSend, TelemetryPayload, and the endpoint constants.",
+        "Map tiles (MapTileService.hpp): MapTileService (SetWanted, TakeResults, Idle, FetchCount, PruneDiskCache, DecodeImage), MapTileFetch, MapTileRequest, MapTileResult, MapTileKey, and MapTileStatus. MapTileCacheDirectory and FetchMapTileOverWinHttp are declared here and implemented in platform/ (Windows).",
+        "Online map (CadOnlineMap.hpp): UsgsTileUrl, PlaceMapTile, OnlineMapController, OnlineMapTextureHooks, OnlineMapMessageLatch. The provider catalog kOnlineMaps is in CadCommands.hpp.",
+        "Online map commands (CadCommands.hpp, declared): SetOnlineMap, StartCaptureMapArea, CommitMapCapture, FailMapCapture, RemoveCapturedMapAreas.",
+        "Tile geometry (WebMercator.hpp): geo::MercatorBox and geo::TileRange.",
+        "Transport seam (not yet created): an injected HTTP interface with get, download, and post operations that return status and body. Today the same operations are the Windows-owned functions in HttpFetch.hpp."
+      ],
+      "existingTests": [
+        "tests/OnlineMapTests.cpp",
+        "tests/TelemetryPingTests.cpp",
+        "tests/UpdateCheckTests.cpp"
+      ],
+      "testsCoveringOtherSystems": [
+        "tests/QtEditorTests.cpp (Qt update dialog and window wiring; includes update/UpdateService.hpp and platform/HttpFetch.hpp; it sets the update phase directly and does not run the installer handoff).",
+        "tests/CrashReporterTests.cpp (Debug and Windows crash-report helpers; no network calls)."
+      ],
+      "forbiddenDependencies": [
+        "Network -> Windows: telemetry/TelemetryService.cpp and update/UpdateService.cpp include platform/HttpFetch.hpp, which is WinHTTP-backed (ratchet: Network may not depend on Windows).",
+        "Network -> IO: telemetry/TelemetryService.cpp includes io/UserPrefs.hpp for the install ID (ratchet: Network may not depend on IO).",
+        "Network -> Commands: the online-map controller takes AppCommandState, and CadOnlineMap.* sits in the Commands folder. The Network entry depends on Commands state through this controller.",
+        "Commands -> Network private header: CadCommands.hpp includes update/UpdateCheck.hpp for update::UpdatePrefs.",
+        "Commands -> Windows and Geometry: CadOnlineMap.hpp includes MapTileService.hpp, and CadOnlineMap.* includes geo/WebMercator.hpp (ratchet violations).",
+        "Qt -> Network: EditorDialogs.cpp, EditorProjects.cpp, EditorUpdate.cpp, and EditorWindow.cpp include update/UpdateService.hpp or telemetry/TelemetryService.hpp (ratchet: Qt may not depend on Network). EditorWindow.cpp also includes platform/HttpFetch.hpp, and EditorViewport.cpp includes MapTileService.hpp.",
+        "Windows -> Network private header and IO: platform/CrashReporter.cpp and platform/StartupFailure.cpp include telemetry/TelemetryPing.hpp (private-header include) and io/UserPrefs.hpp (Windows may not depend on IO).",
+        "Renderer -> Commands: render/ViewportRenderer.hpp includes CadOnlineMap.hpp. Recorded in auditedEntries.Renderer; cross-reference only."
+      ],
+      "testGaps": [
+        "platform/HttpFetch.cpp has no unit tests by design (ADR-029 (g)). Redirect and status handling are checked only by hand.",
+        "LaunchInstallerAndExit and its UAC bootstrap have no test.",
+        "The telemetry worker (BeginTelemetryPing, PollTelemetryTask) has no test. TelemetryPingTests covers the payload and decision functions only.",
+        "The crash and startup report upload bodies (TryPostCrashReportSilent, TryPostStartupReportSilent) have no test. They are assembled in Windows-mapped files.",
+        "The online-map capture path is tested through OnlineMapTests, but the drawing-side placement is not tested against a live document."
+      ]
     }
   },
   "auditFindings": {
@@ -9429,7 +9725,9 @@
       "Render tuning inputs: RenderTuning carries background, grid, paper ink, visual style, section clip and map tiles, and is filled from AppCommandState. Core owns the setting values; Renderer owns the tuning struct. The final map should decide where the fill happens.",
       "Format-neutral imported model payload (modelimport::Options, Part and Result in src/util/modelimport.hpp) is shared by glTF and STL importers and consumed by drawing conversion. Decide whether IO owns this interchange contract or it belongs in a lower-level neutral module.",
       "SaveTrace is a Debug diagnostic API used by IO save paths, but its implementation reaches Win32 temp-file and debugger APIs. Define a boundary that lets IO report save outcomes without depending on Debug and Windows implementation details.",
-      "IO has no format-neutral public interface directory. Import/export entry points expose a mixture of AppCommandState, domain storage, and format-specific result structures; the final map/move work must choose stable seams."
+      "IO has no format-neutral public interface directory. Import/export entry points expose a mixture of AppCommandState, domain storage, and format-specific result structures; the final map/move work must choose stable seams.",
+      "Install ID: GetTelemetryIds (io/UserPrefs.cpp:535) supplies the ID used by telemetry, startup reports and crash reports. Network and Windows use it, IO stores it, and no system owns the identity policy. Final map: Network policy, IO persistence, injected provider.",
+      "Update preferences: update::UpdatePrefs (channel, enabled, skipped version) is persisted through IO UserPrefs and held in AppCommandState. Final map decides whether it is Network data, Commands state, or IO storage."
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
@@ -9529,7 +9827,10 @@
       "IO implementations in src/io include Commands-owned CadCommands.hpp and read/mutate AppCommandState; this reverses the intended Commands -> IO dependency.",
       "Project persistence code in src/io calls Win32 process/path APIs directly, coupling IO to the Windows backend.",
       "IO save paths call the Debug-owned SaveTrace API, whose implementation uses Win32 APIs; diagnostics cross both system and platform boundaries.",
-      "PdfPlot includes PdfDocument.hpp to access the PDFium mutex, coupling IO to Pdf internals and its third-party backend."
+      "PdfPlot includes PdfDocument.hpp to access the PDFium mutex, coupling IO to Pdf internals and its third-party backend.",
+      "Network-to-Windows transport: platform/HttpFetch.hpp is the only HTTP transport and is WinHTTP-specific. Telemetry, update, startup and crash reports, and the online map all depend on it. Network needs an injected transport interface before it can build without Windows.",
+      "Qt reaches Network directly: EditorWindow, EditorUpdate, EditorDialogs, EditorProjects and EditorViewport include update, telemetry or tile headers (ratchet: Qt may not depend on Network). The Qt layer needs a neutral update and telemetry view model.",
+      "Online-map placement: PlaceMapTile and LocalRectToMercator (CadOnlineMap.cpp) convert tile corners to LOCAL coordinates through the Survey WGS 84 frame and Document drawing settings. The controller depends on Survey and Document, which Network may not depend on."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
@@ -9540,7 +9841,9 @@
       "src/geo/ is currently mapped wholesale to Geometry, but the files implement geodetic coordinate-system selection, local survey grids, and ECEF/Web Mercator transforms, which belong with Survey coordinate systems. DrawingConversion.cpp also contains a Core-owned unit-conversion section. Reassign by file in the final map.",
       "src/commands/ is mapped to Commands but holds Document data: CadEntities.hpp, PaperSpace.hpp, TextStyle.hpp, DimensionStyle.hpp, MultileaderStyle.hpp, EntityId.*, CadLinetype.*, CadColor.hpp, and the DrawingDocument and undo code in CadCommands.hpp and CadCommands.cpp. _system_for gives folder mappings precedence over fileMappings, so file-level Document mappings cannot take effect inside this folder until the move.",
       "src/ui/MtextRichSpans.hpp, MtextRichFormat.* and MtextTextOps.hpp are Document under the Qt folder mapping, as the UI audit already noted.",
-      "src/geo/ is mapped to Geometry, but the Geometry audit assigns its coordinate-system files to Survey. The folder mapping stays until the final map; section entries record per-file ownership."
+      "src/geo/ is mapped to Geometry, but the Geometry audit assigns its coordinate-system files to Survey. The folder mapping stays until the final map; section entries record per-file ownership.",
+      "src/platform/ holds Network-owned MapTileService.* and the HttpFetch.hpp transport interface, both mapped to Windows. src/commands/CadOnlineMap.* is a Network controller under the Commands folder mapping. The update and telemetry folders are correctly mapped to Network.",
+      "src/platform/CrashReporter.cpp and StartupFailure.cpp: the upload functions are Network, while the containing files are Windows (folder) and Debug (crash reporting). Split the upload functions out."
     ],
     "namespaceGaps": [
       "ADR-0006 requires GoSurvey::<System> namespaces. NumFormat and AngleFormat use the global namespace (anglefmt_detail is global). StringUtil is namespace StringUtil. Core.cpp's detail is GoSurvey::Core::detail. Namespace work follows the move, not this audit.",
@@ -9548,7 +9851,8 @@
       "UI headers use namespaces cmdbar, mtexttoolbar, richtext, modelingribbon, headless, and failureReportUi, and WinFileDialogs.hpp uses global functions. ADR-0006 requires GoSurvey::UI for UI-owned code. Namespace work follows the move, not this audit.",
       "Document types are in the global namespace: the CadEntities.hpp structs (CadArc, CadAnnotation, CadTable, PaperLayout, CadBlockDefinition and others) and DrawingDocument. ADR-0006 requires GoSurvey::Document. TextStyles, DimensionStyles, cadfont and CadTable* namespaces exist but are partial.",
       "Survey headers have no GoSurvey::Survey namespace (ADR-0006): SurveyPoints.hpp, PointGroupRule.hpp, TraverseCalc.hpp and TraverseLeastSquares.hpp are global; alignment:: and geo:: are used instead. Namespace work follows the move, not this audit.",
-      "PdfAttach.hpp declares PdfAttachment, PdfAttachPixelResult, PdfDraftCache and the PdfAttach_* and PdfDraftCache_* functions in the global namespace, while the rest of Pdf uses pdfview, pdfalign, pdfdiff and pdfview::raw. ADR-0006 requires system-qualified namespaces; the final map must choose one Pdf namespace."
+      "PdfAttach.hpp declares PdfAttachment, PdfAttachPixelResult, PdfDraftCache and the PdfAttach_* and PdfDraftCache_* functions in the global namespace, while the rest of Pdf uses pdfview, pdfalign, pdfdiff and pdfview::raw. ADR-0006 requires system-qualified namespaces; the final map must choose one Pdf namespace.",
+      "ADR-0006 requires GoSurvey::<System> namespaces. The update and telemetry namespaces are unqualified. MapTileService, OnlineMapController, and the HttpFetch functions are in the global namespace."
     ],
     "notCoreDespiteName": [
       "src/util/framewatch.hpp and src/util/docinvariants.*: Debug (diagnostics), not logging.",
@@ -9627,6 +9931,11 @@
       "src/commands/CadColor.hpp and the linetype name table in CadLinetype.hpp: Document. CadColorResolveRgb is consumed by Renderer, and its storage and ACI parsing stay Document (notDocumentDecisions).",
       "src/util/surfacevolume.hpp and tinvolume.hpp: the GL_TRIANGLES output is part of Terrain's volume result. The cut and fill arithmetic stays Terrain; the display buffers that hold the output are Renderer caches in the Commands sections.",
       "src/commands/ZoomFraming.hpp (REQ-122): converts a world rectangle into camera pan and zoom. It is camera maths in Commands framing policy, so it stays with Commands until the final map decides whether Camera framing moves to Renderer."
+    ],
+    "notNetworkDecisions": [
+      "Swept and not assigned to Network: platform/FailureReportUi.cpp SendReportToGitHub, which opens the issue URL through the OS, is Windows. GitHubIssueUrlForReport is the homeless text helper already recorded.",
+      "Swept and not assigned to Network: ViewportRenderer::CreateMapTileTexture and DeleteMapTileTexture are Renderer device work (recorded in auditedEntries.Renderer).",
+      "Swept and not assigned to Network: CadOnlineMap.cpp:348 status text is UI presentation. The count it formats (gathered and total) is Network state."
     ]
   }
 }
