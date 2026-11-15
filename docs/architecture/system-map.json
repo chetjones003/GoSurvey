@@ -7461,6 +7461,2163 @@
         "HttpPostBody"
       ],
       "note": "The seam Network needs. Declared in the Windows folder with a WinHTTP implementation. See pendingAssignment."
+    },
+    {
+      "path": "src/commands/CadCoordinateFrame.cpp",
+      "lines": [
+        1,
+        202
+      ],
+      "system": "Document",
+      "concern": "document origin",
+      "symbols": [
+        "LocalFromWorld",
+        "ShiftAllStorageBy",
+        "RebaseDrawingToLocalOrigin"
+      ],
+      "note": "The local-storage invariant and drawing-origin rebase policy belong to Document; Math supplies the transforms."
+    },
+    {
+      "path": "src/commands/CadCoordinateFrame.hpp",
+      "lines": [
+        1,
+        85
+      ],
+      "system": "Document",
+      "concern": "document origin",
+      "symbols": [
+        "document coordinate-frame declarations"
+      ],
+      "note": "The local-storage invariant and drawing-origin rebase policy belong to Document; Math supplies the transforms."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        32635,
+        33171
+      ],
+      "system": "Interaction",
+      "concern": "entity hit testing",
+      "symbols": [
+        "PickClosestCadEntity"
+      ],
+      "note": "Hit testing, hover, grip, or gizmo interaction policy belongs to Interaction; Commands consumes the result to advance a command."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36796,
+        36942
+      ],
+      "system": "Interaction",
+      "concern": "viewport pick resolution",
+      "symbols": [
+        "ResolveViewportPick"
+      ],
+      "note": "Hit testing, hover, grip, or gizmo interaction policy belongs to Interaction; Commands consumes the result to advance a command."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        1735,
+        1949
+      ],
+      "system": "Interaction",
+      "concern": "grip hit testing and transient interaction state",
+      "symbols": [
+        "TryBeginEntityGripAtLocal"
+      ],
+      "note": "Hit testing, hover, grip, or gizmo interaction policy belongs to Interaction; Commands consumes the result to advance a command."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36776,
+        36794
+      ],
+      "system": "Interaction",
+      "concern": "underlay hit testing",
+      "symbols": [
+        "PickPdfUnderlayAt"
+      ],
+      "note": "Hit testing, hover, grip, or gizmo interaction policy belongs to Interaction; Commands consumes the result to advance a command."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        18150,
+        18247
+      ],
+      "system": "Interaction",
+      "concern": "gizmo hit testing",
+      "symbols": [
+        "PickGizmoAxis"
+      ],
+      "note": "Hit testing, hover, grip, or gizmo interaction policy belongs to Interaction; Commands consumes the result to advance a command."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        18249,
+        18253
+      ],
+      "system": "Interaction",
+      "concern": "gizmo hover state",
+      "symbols": [
+        "UpdateGizmoHover"
+      ],
+      "note": "Hit testing, hover, grip, or gizmo interaction policy belongs to Interaction; Commands consumes the result to advance a command."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        18255,
+        18311
+      ],
+      "system": "Interaction",
+      "concern": "transient gizmo drag state",
+      "symbols": [
+        "UpdateGizmoDrag"
+      ],
+      "note": "Hit testing, hover, grip, or gizmo interaction policy belongs to Interaction; Commands consumes the result to advance a command."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36944,
+        36955
+      ],
+      "system": "Interaction",
+      "concern": "viewport click pick resolution",
+      "symbols": [
+        "ResolveViewportClickPick"
+      ],
+      "note": "Hit testing or transient hover/pick resolution belongs to Interaction; Commands consumes the result to advance a command."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        45553,
+        45581
+      ],
+      "system": "Interaction",
+      "concern": "section-plane grip hit testing",
+      "symbols": [
+        "PickSectionPlaneGrip"
+      ],
+      "note": "Hit testing or transient hover/pick resolution belongs to Interaction; Commands consumes the result to advance a command."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        45745,
+        45750
+      ],
+      "system": "Interaction",
+      "concern": "section-plane grip hover state",
+      "symbols": [
+        "UpdateSectionPlaneGripHover"
+      ],
+      "note": "Hit testing or transient hover/pick resolution belongs to Interaction; Commands consumes the result to advance a command."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        33177,
+        33205
+      ],
+      "system": "Interaction",
+      "concern": "filled-region hit testing",
+      "symbols": [
+        "PickFilledRegionAt"
+      ],
+      "note": "Hit testing or transient hover/pick resolution belongs to Interaction; Commands consumes the result to advance a command."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37469,
+        37474
+      ],
+      "system": "Renderer",
+      "concern": "solid display buffers",
+      "symbols": [
+        "NarrowInto"
+      ],
+      "note": "Converts double-precision geometry into float render buffers for display."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37519,
+        37572
+      ],
+      "system": "Renderer",
+      "concern": "solid display cache",
+      "symbols": [
+        "RefreshSolidDisplayGeometry"
+      ],
+      "note": "Builds cached solid tessellations and display geometry; the Debug profiling block at 37573-37593 remains separately assigned."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37594,
+        37748
+      ],
+      "system": "Renderer",
+      "concern": "solid display cache",
+      "symbols": [
+        "RefreshSolidDisplayGeometry"
+      ],
+      "note": "Continues tessellation, assembly-signature maintenance and render-buffer assembly. Debug profiling block at 37573-37593 is excluded."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36637,
+        36685
+      ],
+      "system": "Interaction",
+      "concern": "solid subobject hit testing",
+      "symbols": [
+        "PickSubObjectAcrossSolids"
+      ],
+      "note": "Hit testing or transient grip interaction belongs to Interaction; Commands consumes the result during its workflow."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36695,
+        36735
+      ],
+      "system": "Interaction",
+      "concern": "pipe-run hit testing",
+      "symbols": [
+        "PickClosestPipeRunEntity"
+      ],
+      "note": "Hit testing or transient grip interaction belongs to Interaction; Commands consumes the result during its workflow."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36737,
+        36774
+      ],
+      "system": "Interaction",
+      "concern": "solid hit testing",
+      "symbols": [
+        "PickClosestSolidEntity"
+      ],
+      "note": "Hit testing or transient grip interaction belongs to Interaction; Commands consumes the result during its workflow."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        973,
+        1112
+      ],
+      "system": "Interaction",
+      "concern": "paper-space entity hit testing",
+      "symbols": [
+        "PickPaperEntityAt"
+      ],
+      "note": "Hit testing or transient grip interaction belongs to Interaction; Commands consumes the result during its workflow."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        8123,
+        8213
+      ],
+      "system": "Interaction",
+      "concern": "annotation hit testing",
+      "symbols": [
+        "PickCadAnnotationAt"
+      ],
+      "note": "Hit testing or transient grip interaction belongs to Interaction; Commands consumes the result during its workflow."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        45647,
+        45743
+      ],
+      "system": "Interaction",
+      "concern": "section-plane transient grip interaction",
+      "symbols": [
+        "UpdateSectionPlaneGripDrag"
+      ],
+      "note": "Hit testing or transient grip interaction belongs to Interaction; Commands consumes the result during its workflow."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37017,
+        37030
+      ],
+      "system": "Renderer",
+      "concern": "solid display visibility",
+      "symbols": [
+        "SolidVisible"
+      ],
+      "note": "Produces or selects cached/display geometry for Renderer; command policy does not own the derived render cache."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37032,
+        37045
+      ],
+      "system": "Renderer",
+      "concern": "point-cloud display visibility",
+      "symbols": [
+        "PointCloudVisible"
+      ],
+      "note": "Produces or selects cached/display geometry for Renderer; command policy does not own the derived render cache."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37292,
+        37304
+      ],
+      "system": "Renderer",
+      "concern": "block-reference display visibility",
+      "symbols": [
+        "BlockRefWorldSolidVisible"
+      ],
+      "note": "Produces or selects cached/display geometry for Renderer; command policy does not own the derived render cache."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37306,
+        37332
+      ],
+      "system": "Renderer",
+      "concern": "block-reference display-cache signature",
+      "symbols": [
+        "BlockRefWorldSolidsSig"
+      ],
+      "note": "Produces or selects cached/display geometry for Renderer; command policy does not own the derived render cache."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37334,
+        37353
+      ],
+      "system": "Renderer",
+      "concern": "block-reference derived display cache",
+      "symbols": [
+        "RebuildBlockRefWorldSolids"
+      ],
+      "note": "Produces or selects cached/display geometry for Renderer; command policy does not own the derived render cache."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37355,
+        37367
+      ],
+      "system": "Renderer",
+      "concern": "pipe-run display visibility",
+      "symbols": [
+        "PipeRunWorldSolidVisible"
+      ],
+      "note": "Produces or selects cached/display geometry for Renderer; command policy does not own the derived render cache."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37371,
+        37389
+      ],
+      "system": "Renderer",
+      "concern": "pipe-run display-cache signature",
+      "symbols": [
+        "SinglePipeRunSig"
+      ],
+      "note": "Produces or selects cached/display geometry for Renderer; command policy does not own the derived render cache."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37391,
+        37401
+      ],
+      "system": "Renderer",
+      "concern": "pipe-run display-cache signature",
+      "symbols": [
+        "PipeRunWorldSolidsSig"
+      ],
+      "note": "Produces or selects cached/display geometry for Renderer; command policy does not own the derived render cache."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37408,
+        37438
+      ],
+      "system": "Renderer",
+      "concern": "pipe-run derived display cache",
+      "symbols": [
+        "RebuildPipeRunWorldSolids"
+      ],
+      "note": "Maintains and rebuilds the derived pipe-run display cache; Debug timing/counter collection at 37439-37452 is separately assigned."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37453,
+        37468
+      ],
+      "system": "Renderer",
+      "concern": "pipe-run derived display cache",
+      "symbols": [
+        "RebuildPipeRunWorldSolids"
+      ],
+      "note": "Continues assembling pipe-run render cache buffers after the Debug timing/counter block."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        45605,
+        45607
+      ],
+      "system": "Interaction",
+      "concern": "section-plane grip cancellation",
+      "symbols": [
+        "CancelSectionPlaneGripDrag"
+      ],
+      "note": "Transient grip lifecycle and handle-axis interaction belong to Interaction."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        45609,
+        45629
+      ],
+      "system": "Interaction",
+      "concern": "section-plane grip restoration",
+      "symbols": [
+        "AbortSectionPlaneGripDrag"
+      ],
+      "note": "Transient grip lifecycle and handle-axis interaction belong to Interaction."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        45632,
+        45645
+      ],
+      "system": "Interaction",
+      "concern": "section-plane grip axis resolution",
+      "symbols": [
+        "SectionPlaneGripAxis"
+      ],
+      "note": "Transient grip lifecycle and handle-axis interaction belong to Interaction."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52305,
+        52312
+      ],
+      "system": "Renderer",
+      "concern": "shaded material display color",
+      "symbols": [
+        "ApplyMaterialDiffuseForShaded"
+      ],
+      "note": "Resolves presentation attributes for viewport rendering; Document owns stored style values."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52294,
+        52303
+      ],
+      "system": "Renderer",
+      "concern": "viewport entity color",
+      "symbols": [
+        "ResolveEntityRgbaForViewport"
+      ],
+      "note": "Resolves presentation attributes for viewport rendering; Document owns stored style values."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52271,
+        52277
+      ],
+      "system": "Renderer",
+      "concern": "viewport entity transparency",
+      "symbols": [
+        "EffectiveEntityTransparency01"
+      ],
+      "note": "Resolves presentation attributes for viewport rendering; Document owns stored style values."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52279,
+        52285
+      ],
+      "system": "Renderer",
+      "concern": "viewport entity lineweight",
+      "symbols": [
+        "EffectiveEntityLineweightMm"
+      ],
+      "note": "Resolves presentation attributes for viewport rendering; Document owns stored style values."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52287,
+        52292
+      ],
+      "system": "Renderer",
+      "concern": "viewport entity linetype",
+      "symbols": [
+        "EffectiveEntityLinetypeNameForViewport"
+      ],
+      "note": "Resolves presentation attributes for viewport rendering; Document owns stored style values."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52326,
+        52339
+      ],
+      "system": "IO",
+      "concern": "DXF lineweight encoding",
+      "symbols": [
+        "CadDxfLineweightEnum370FromMm"
+      ],
+      "note": "Converts DXF group code 370 lineweights at the file-format boundary; it is not command policy."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52341,
+        52349
+      ],
+      "system": "IO",
+      "concern": "DXF lineweight decoding",
+      "symbols": [
+        "CadDxfLineweightMmFromEnum370"
+      ],
+      "note": "Converts DXF group code 370 lineweights at the file-format boundary; it is not command policy."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52319,
+        52325
+      ],
+      "system": "IO",
+      "concern": "DXF lineweight table",
+      "symbols": [
+        "kDxfLwTable"
+      ],
+      "note": "DXF group-code values used by the IO lineweight conversions."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        1,
+        87
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        368,
+        972
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "ActivePaperGeometryTarget",
+        "AddPaperLayout",
+        "AddViewport",
+        "AddViewportRect",
+        "AppendScratchToPaperLayout",
+        "ClearPaperEntitySelection",
+        "ClearViewportSelection",
+        "CreateMviewPreset",
+        "DeletePaperLayout",
+        "DeleteSelectedViewports",
+        "DeleteViewport",
+        "DropPaperLeadersFromSelection",
+        "FinishPaperMirror",
+        "FinishPaperMoveCopy",
+        "FitViewToSheet",
+        "ForEachBulgeChord",
+        "IsViewportSelected",
+        "PaperPointSegDist2",
+        "ProcessPaperDeleteWaitingSelectionEnter",
+        "ProcessPaperMoveWaitingSelectionEnter",
+        "ResetPaperModifyDrafts",
+        "SelectViewport",
+        "SetActiveSpace",
+        "SetPrimarySelectedViewport",
+        "StartPaperMoveCopyViewports",
+        "StartPaperRectViewportCommand",
+        "ToggleModelPaperSpace"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        1113,
+        1568
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "DeleteSelectedPaperEntities",
+        "ErasePaperPolyline",
+        "TogglePaperEntitySelection"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        1581,
+        1734
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        1950,
+        2137
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "ApplyPageSetupToLayout",
+        "EnsureStandardPageSetup",
+        "EnterFloatingModelSpace",
+        "ExitFloatingModelSpace",
+        "PageSetupFromLayout",
+        "WriteUndoHistoryLogLine"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        2249,
+        2249
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        2388,
+        2392
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        2418,
+        2418
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        2471,
+        2471
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        3170,
+        3320
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        4680,
+        5728
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "GridIndexValid",
+        "MakeSurfaceQuery",
+        "RefusesImportedTinPointEdit",
+        "RunCreateSurfaceProfile",
+        "RunQuickProfile",
+        "RunSurfAddPoint",
+        "RunSurfDelLine",
+        "RunSurfDelPoint",
+        "RunSurfMovePoint",
+        "RunSurfSwapEdge",
+        "RunSurfaceAddFile",
+        "RunSurfaceCreate",
+        "RunSurfaceCreateCorr",
+        "RunSurfaceCreateGrid",
+        "RunSurfaceCreateVolGrid",
+        "RunSurfaceDelete",
+        "RunSurfaceImportFile",
+        "RunSurfaceProfileView",
+        "RunSurfaceRebuild",
+        "RunSurfaceRename",
+        "RunVolCsv",
+        "RunVolReport",
+        "RunVolumeSurfaceCreate",
+        "SurfaceIsImportedFixedTin",
+        "SurfaceRefusesPointEdits"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        5740,
+        7589
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "AppendXyzPathAsPolyline",
+        "AppendYellowLineSegs",
+        "DrainKindLabel",
+        "EnsureEntityIds",
+        "ExecuteToolspaceCommand",
+        "ExecuteVolDashCommand",
+        "ExecuteVolumesCommand",
+        "MakeSurfaceQueryForCommands",
+        "MoveSelectedBlockRefsToSurface",
+        "ReportWatershedOne",
+        "RunCatchmentAt",
+        "RunCatchmentCommand",
+        "RunMoveToSurfaceCommand",
+        "RunSurfaceCrossings",
+        "RunSurfaceLabel",
+        "RunSurfaceLegend",
+        "RunSurfaceStats",
+        "RunSurfaceVisibility",
+        "RunUndesignate",
+        "RunWaterDropAt",
+        "RunWaterDropCommand",
+        "RunWatershed",
+        "SetSurfaceDisplayLod",
+        "WaterDropEntityAttrs",
+        "WatershedCacheOf"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        7599,
+        7600
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        7678,
+        7706
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        7713,
+        7925
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "CadDimAlignedApplyInsFromLocalOffset",
+        "CadDimAlignedBuildDraft",
+        "CadDimLinearApplyHVHotkey",
+        "CadDimLinearBuildDraft",
+        "CadDimLinearUpdateDraftOrientation"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        7956,
+        7956
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        7985,
+        8122
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "CadDimAngularBuildDraft",
+        "CadDimAngularSyncTextPlacement",
+        "CadDimRefreshMeasurementText",
+        "RayAtElevation"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        8214,
+        10622
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "CancelTableCellEditor",
+        "ClearPendingViewportZoom",
+        "CommitDimAngularAt",
+        "CommitTableCellEditor",
+        "DispatchByPrimary",
+        "ExecuteCenterMarkFromSelection",
+        "ExecuteCenterlineFromSelection",
+        "FuzzySubsequenceScore",
+        "HandleCircleTextInput",
+        "MakeNewEntityAttrs",
+        "MigrateLegacyAnnotationTables",
+        "OpenTableCellEditor",
+        "ParseOneFloat",
+        "ParseRadiusOrDiameter",
+        "ParseTwoDoubles",
+        "ParseTwoFloats",
+        "RequestZoomExtents",
+        "ResetAllCadDraftTools",
+        "ResetArcDraft",
+        "ResetCircleDraft",
+        "ResetDimAngularDraft",
+        "ResetDimDraft",
+        "ResetDistDraft",
+        "ResetEllipseDraft",
+        "ResetFeatureLineDraft",
+        "ResetModifyRotateDraft",
+        "ResetMtextDraft",
+        "ResetPolylineDraft",
+        "ResetRectDraft",
+        "ResetSurveyInverseDraft",
+        "ResetTextCmdDraft",
+        "SampleEllipseWorld",
+        "SelectedEntityEqual"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        10632,
+        10637
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        10650,
+        10654
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        10659,
+        10717
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "ReflectCadDimLinearAcrossLine",
+        "RotateCadDimLinearAroundBase"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        10727,
+        10727
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        10769,
+        11104
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "AppendFeatureLineCopy",
+        "DuplicateSelectedCadPoints",
+        "DuplicateSelectedSolidsTranslated",
+        "DuplicateSelectedSplines",
+        "DuplicatedEntityAttrs",
+        "EraseSelectedCadPoints",
+        "EraseSelectedSplines",
+        "ForEachSelectedFeatureLine",
+        "MapSelectedCadPoints",
+        "MapSelectedSplines",
+        "TransformSelectedFeatureLinesInPlace",
+        "TransformSelectedPipeRuns"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        11134,
+        13577
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "ActiveProjectPointsReadOnly",
+        "AppendFeatureLineCopy",
+        "ApplyRotationToSelection",
+        "CommitPasteFromClipboard",
+        "CommitPasteIntoModel",
+        "CommitPasteIntoPaper",
+        "ComputeMaxSelectionDistanceFromPoint",
+        "ComputeScaleReferenceDistance",
+        "ComputeSelectionCentroidWorld",
+        "DispatchByPrimaryForTest",
+        "DropArrayUnsupportedFromSelection",
+        "DropMirrorUnsupportedFromSelection",
+        "DuplicateCadSelectionTranslated",
+        "DuplicateSelectedCadPoints",
+        "ForEachSelectedFeatureLine",
+        "MapSelectedCadPoints",
+        "RegisteredCommandPrimariesForTest",
+        "ScaleCadDimLinearAroundBase",
+        "ScalePtAroundBase",
+        "TranslateSelectedAlignments",
+        "TranslateSelectedPipeRuns",
+        "TranslateSelectedSolids"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        13598,
+        15361
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "CommitArrayPolar",
+        "CommitArrayRectangular",
+        "CommitDimAlignedAt",
+        "CommitDimLinearAt",
+        "CommitIdPointAt",
+        "CommitSurveyInverseSecondPoint",
+        "DimStyleEntityColor",
+        "FinishRotateCommand",
+        "FinishScaleCommand",
+        "ForEachSelectedFeatureLine",
+        "HandleArrayText",
+        "HandleModifyText",
+        "HandleRotateText",
+        "HandleScaleText",
+        "HandleStretchText",
+        "MapSelectedCadPoints",
+        "ParseAngleDegreesInternal",
+        "ResetArrayDraft",
+        "ScaleAnnotationAroundBase",
+        "ScaleSelectionZAboutBase",
+        "SetArrayAnchorFromPaperSelection",
+        "SetArrayAnchorFromSelection",
+        "TryRotateCopyToggle"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        15491,
+        18149
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "CadGizmoAnchorWorld",
+        "CadGizmoAxisCountFor",
+        "CadGizmoAxisWorld",
+        "CadGizmoHandleLenWorld",
+        "CadGizmoModeFor",
+        "CadGizmoOrthoHalfHeightWorld",
+        "CadGizmoPlaneHandleCountFor",
+        "CadGizmoSummoned",
+        "CadGizmoVisible",
+        "CommitOffsetArc",
+        "CommitOffsetCircle",
+        "CommitOffsetEllipse",
+        "CommitOffsetLine",
+        "CommitOffsetPolyline",
+        "CommitOffsetSigned",
+        "CommitPaperOffset",
+        "FinishOffsetAndIdle",
+        "GizmoGrowBounds",
+        "HandleOffsetViewportPick",
+        "HandlePaperOffsetViewportPick",
+        "IsGizmoCommandKind",
+        "LoopOffsetBackToSelect",
+        "OffsetPlaneLocal",
+        "ResetOffsetDraft",
+        "ResetOffsetSelectionForNextPick",
+        "SignedSideCircle",
+        "SignedSideLine",
+        "UnitLeftNormal"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        18248,
+        18248
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        18254,
+        18254
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        18312,
+        24424
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "ApplyStretchToPaperSelection",
+        "ArcSweepParam",
+        "BearingCwNorthDegFromMathAngleRad",
+        "CadGizmoCommandPromptText",
+        "CancelGizmoDrag",
+        "ChamferPromptSuffix",
+        "CircleBreakStartSweep",
+        "ClipboardCannotCarryModelName",
+        "ClipboardCannotCarryPaperName",
+        "ClipboardCarriesModelType",
+        "ClipboardCarriesPaperType",
+        "CommitClipboardPasteAt",
+        "CommitGizmoDrag",
+        "CommitGizmoDragImpl",
+        "CopyPaperSelectionToClipboard",
+        "CopySelectionToClipboard",
+        "CutSelectionToClipboard",
+        "EndGizmoCommand",
+        "EnterGizmoHandlesPhase",
+        "FilletLinesAreParallel",
+        "FilletPromptSuffix",
+        "ForEachSelectedFeatureLine",
+        "GizmoOpForCommandKind",
+        "HandleBreakViewportPick",
+        "HandleChamferText",
+        "HandleChamferViewportPick",
+        "HandleExtendViewportPick",
+        "HandleFilletText",
+        "HandleLengthenText",
+        "HandleLengthenViewportPick",
+        "LengthenApplyPendingPick",
+        "LengthenDynamicTargetLength",
+        "LengthenModeName",
+        "LengthenResolveTargetLength",
+        "MathAngleRadFromBearingCwNorthDeg",
+        "NearerToFirstPoint",
+        "PasteWaitsForUser",
+        "PolylineOpenLengthOf",
+        "PolylineVertsOf",
+        "ReadFillet3DCurve",
+        "ReplacePaperPolylineVerts",
+        "ReplacePolylineVerts",
+        "StartBreakCommand",
+        "StartChamferCommand",
+        "StartFilletCommand",
+        "StartLengthenCommand",
+        "StartOffsetCommand",
+        "StartPasteCommand",
+        "StartPasteOrigCommand",
+        "StartStretchCommand",
+        "SurfaceSnapElevation",
+        "TryLengthenModeToggle"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        24433,
+        26426
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "ApproximateOnWorkPlaneFromXy",
+        "CadAnnotationPreviewRotated",
+        "CadAnnotationPreviewScaled",
+        "CadAnnotationPreviewTranslated",
+        "CadRotatePreviewTheta",
+        "CadScalePreviewFactor",
+        "CancelSegmentAnglePick",
+        "CollectEntityBoxes",
+        "CollectEntityBoxes3dExtras",
+        "CommitSegmentAnglePickLock",
+        "ComputeSectionClipIndicatorBounds",
+        "EntityBoxGrowZ",
+        "NormalizeBearingDegreesCwNorth",
+        "OrthoUcsDirectDistancePoint",
+        "OrthoUnitTowardUiCursorFromAnchor",
+        "ParseAngleDegrees",
+        "ParsePointComponents",
+        "ParseSingleFloatToken",
+        "ParseWorldPoint",
+        "PeelOptionalPointZ",
+        "StartCircleCommand",
+        "StartLineCommand",
+        "StartPolylineCommand",
+        "TryParseSegmentAngleLockCommand"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        27111,
+        27621
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "HandleGradingPick",
+        "StartGradingCommand"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        27951,
+        28967
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "CancelMtextRichEditor",
+        "ClearCadSelection",
+        "CollectLayersUsedInDrawing",
+        "CommitDesignateAt",
+        "CommitMtextRichEditor",
+        "EnsureAttrCounts",
+        "EntityIdOfLineOrPolylinePick",
+        "FinishSplineDraft",
+        "OpenMtextRichEditorForAnnotation",
+        "OpenMtextRichEditorForPlacement",
+        "OpenPaperTextEditor",
+        "StartArcCommand",
+        "StartCatchmentCommand",
+        "StartDimAlignedCommand",
+        "StartDimAngularCommand",
+        "StartDimLinearCommand",
+        "StartDimStyleCommand",
+        "StartDistCommand",
+        "StartEllipseCommand",
+        "StartIdPointCommand",
+        "StartMtextCommand",
+        "StartOptionsCommand",
+        "StartQuickProfileCommand",
+        "StartRectCommand",
+        "StartSplineCommand",
+        "StartSurfAddPointCommand",
+        "StartSurfDelLineCommand",
+        "StartSurfDelPointCommand",
+        "StartSurfMovePointCommand",
+        "StartSurfSwapEdgeCommand",
+        "StartSurfaceElevGradeCommand",
+        "StartSurveyInverseCommand",
+        "StartTextCommand",
+        "StartTraverseEditorCommand",
+        "StartWaterDropCommand"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        29002,
+        29002
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        29033,
+        29033
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        29124,
+        30097
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "AppendContoursAsPolylines",
+        "ApplyResolvedDrape",
+        "DrapeTypeName",
+        "DrapedOnSurfaceName",
+        "ExecuteDrapeCommand",
+        "ExecuteDrapeLinksCommand",
+        "ExecuteExtractCommand",
+        "ExecutePadSolidCommand",
+        "GatherDrapeRun",
+        "HandlePadSolidPick",
+        "HandlePadSolidText",
+        "MakeNewObjectAttrs",
+        "PadSolidDefaultSurface",
+        "PadSolidPrompt",
+        "PadSolidSelectedBoundary",
+        "StartPadSolidCommand"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        30151,
+        30151
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        30191,
+        32634
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "ApplyEntityGripPoint",
+        "ApplyLinkedSurveyForAnnotationPick",
+        "ClearCadGeometry",
+        "ClearPendingOneShotObjectSnap",
+        "ClearSelection",
+        "DeleteSelectedSurveyPoints",
+        "DuplicateSelectedCadPoints",
+        "EraseCadAnnotationAtIndex",
+        "EraseCadTableAtIndex",
+        "EraseFeatureLineByIndex",
+        "EraseMirroredSourceNoUndo",
+        "ErasePolylineByIndex",
+        "EraseSelectedSolidsAndPipeRuns",
+        "EraseSelectedSurveyPointsNoUndo",
+        "ExecuteDeleteSelection",
+        "ExplodeSelectedPolylines",
+        "HandleMirrorText",
+        "PickDistSqPointSegmentD",
+        "ResetCadToolStateToIdle",
+        "SelectSimilarAttrsMatch",
+        "SelectSimilarAttrsOf",
+        "SelectSimilarToCurrentSelection",
+        "SelectedEntityMatches",
+        "SyncSurveyPointLinkedMtextSelection"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        33172,
+        33176
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "CadFilledRegionContainsPoint"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        33206,
+        36121
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "AppendArcPreviewStrip",
+        "AppendEllipsePreviewStrip",
+        "ApplyElevValue",
+        "ApplyTrimStateValue",
+        "CadCollectBoundarySegments",
+        "CadHatchCommitLoop",
+        "CadHatchTraceAt",
+        "CadHoverEntityPickTolWorld",
+        "CadOffsetEntityPickTolWorld",
+        "CommitPaperTrimGeometry",
+        "ExecuteJoinSelection",
+        "ExecuteOverkill",
+        "OfsClosestPtSeg",
+        "OfsSignedSideCircle",
+        "OfsSignedSideLine",
+        "OfsUnitLeftNormal",
+        "PaperTrimEntity",
+        "StagePaperTrimGeometry",
+        "StartElevCommand",
+        "StartExtendCommand",
+        "StartHatchCommand",
+        "StartJoinCommand",
+        "StartTrimCommand",
+        "StartTrimStateCommand",
+        "TryOffsetSignedDFromCursor",
+        "find",
+        "tessellate",
+        "unite"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36156,
+        36302
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "RunPointCloudImportWorker",
+        "TickPointCloudImport"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36312,
+        36636
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "ExpireSubObjectSelection",
+        "PlanPointCloudExport",
+        "PointCloudExportCommandName",
+        "ResolvePointCloudsForExport",
+        "ToggleSubObjectSelection",
+        "UpdatePointCloudImportProgress"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36686,
+        36694
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36736,
+        36736
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36775,
+        36775
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36795,
+        36795
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36943,
+        36943
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36956,
+        37016
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37031,
+        37031
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37046,
+        37291
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "GetOrOpenPointCloudCache",
+        "StartExtractCenterlineCommand",
+        "SubmitExtractCenterlineViewportPick",
+        "UpdateExtractCenterlineHover"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37305,
+        37305
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37333,
+        37333
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37354,
+        37354
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37368,
+        37370
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37390,
+        37390
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37402,
+        37407
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37475,
+        37488
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37517,
+        37518
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        37749,
+        41327
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "BooleanVerb",
+        "CadBooleanPromptText",
+        "CadBooleanSelection",
+        "CadBuildExtrudeSolids",
+        "CadBuildLoftSolid",
+        "CadBuildPressPullSolid",
+        "CadBuildRevolveSolids",
+        "CadBuildSweepSolid",
+        "CadChamferReportEdgeSelection",
+        "CadCheckSolids",
+        "CadExtrudePromptText",
+        "CadExtrudeSelection",
+        "CadFaceOutwardNormal",
+        "CadFilletReportEdgeSelection",
+        "CadLoftPromptText",
+        "CadPressPull",
+        "CadPressPullPromptText",
+        "CadReportMassProperties",
+        "CadReportSolids",
+        "CadResolveExtrudePick",
+        "CadResolvePressPullPick",
+        "CadRevolvePromptText",
+        "CadSectionPromptText",
+        "CadSlicePromptText",
+        "CadSolidParamSpecs",
+        "CadSubObjectSelectionIsAllEdges",
+        "CadSweepPromptText",
+        "CancelBooleanCommand",
+        "CancelExtrudeCommand",
+        "CancelLoftCommand",
+        "CancelPressPullCommand",
+        "CancelRevolveCommand",
+        "CancelSectionCommand",
+        "CancelSliceCommand",
+        "CancelSolidCommand",
+        "CancelSweepCommand",
+        "CommitExtrude",
+        "CommitLoft",
+        "CommitPressPull",
+        "CommitRevolve",
+        "CommitSectionByUcs",
+        "CommitSectionFromPoints",
+        "CommitSlice",
+        "CommitSweep",
+        "ExtrudeEnterHeightPhase",
+        "FindSolidVerb",
+        "GatherExtrudeProfiles",
+        "GatherPressPullTarget",
+        "HandleBooleanTextInput",
+        "HandleExtrudeTextInput",
+        "HandleLoftTextInput",
+        "HandleRevolveTextInput",
+        "HandleSectionTextInput",
+        "HandleSliceTextInput",
+        "PressPullEnterDistancePhase",
+        "PyramidCircumradius",
+        "RevolveEnterAxisPhase",
+        "SectionEnterPlanePhase",
+        "SelectedCircleIndices",
+        "SelectedSolidIndices",
+        "SliceEnterPlanePhase",
+        "SolidCreatedMessage",
+        "SolidPlacementFrame",
+        "SolidVerbUpper",
+        "StartBooleanCommand",
+        "StartExtrudeCommand",
+        "StartLoftCommand",
+        "StartPressPullCommand",
+        "StartRevolveCommand",
+        "StartSectionCommand",
+        "StartSliceCommand",
+        "StartSweepCommand",
+        "SubmitExtrudeViewportPick",
+        "SubmitPressPullViewportPick",
+        "SubmitRevolveViewportPick",
+        "SubmitSectionViewportPick",
+        "SubmitSliceViewportPick",
+        "SweepOptionsFrom",
+        "TryDecomposeCoaxialCylinderStack",
+        "TryGetCylinderInfo"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        41333,
+        45552
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "AddPipeRunPoint",
+        "AddPolysolidPoint",
+        "AddRevcloudCorner",
+        "ApplyCrosshair3dValue",
+        "ApplyFovValue",
+        "ApplyProjectionValue",
+        "ApplySectionClipValue",
+        "ApplyVisualStyleValue",
+        "CadEffectiveSectionClipFrame",
+        "CadPipeRunFinishForHandoff",
+        "CadPipeRunPromptText",
+        "CadPipeRunUnderPick",
+        "CadPolysolidPromptText",
+        "CadResolveSolidPick",
+        "CadRevcloudPromptText",
+        "CadSectionClipIndicator",
+        "CadSectionClipPlane",
+        "CadSectionPlaneGrips",
+        "CadSectionPlanePreviewIndicator",
+        "CadSectionPlanePromptText",
+        "CadSolidCurrentPickParam",
+        "CadSolidPromptText",
+        "CancelPipeRunCommand",
+        "CancelPolysolidCommand",
+        "CancelRevcloudCommand",
+        "CancelSectionPlaneCommand",
+        "ChoosePipeRunNominalSize",
+        "CommitPipeRunDraft",
+        "CommitPolysolid",
+        "CommitPromptedSolid",
+        "ConvertRevcloudObjectAt",
+        "ElbowPartTypeForSnappedAngleDeg",
+        "EraseOnePipeRunReindexed",
+        "FindPipingSystemByName",
+        "FinishRevcloudPath",
+        "HandleLayoutCommand",
+        "HandlePipeFitTextInput",
+        "HandlePipeJoinCommand",
+        "HandlePipePropCommand",
+        "HandlePipeRunTextInput",
+        "HandlePipeSplitTextInput",
+        "HandlePipingSystemCommand",
+        "HandleRevcloudTextInput",
+        "HandleSolidTextInput",
+        "HandleVpMatchScaleCommand",
+        "HandleVpscaleCommand",
+        "MakeNewPipeRunAttrs",
+        "ParseTypedVpScale",
+        "ProjectionFromName",
+        "ProjectionName",
+        "RemoveLivePipeRun",
+        "SectionClipReport",
+        "SectionPlaneSurfaceWord",
+        "SectionPlaneUnitRay",
+        "SelectedPipeRunIndices",
+        "SetRevcloudArcLength",
+        "SetSolidParam",
+        "StartPageSetupCommand",
+        "StartPipeFitCommand",
+        "StartPipeRunAtCurrentSize",
+        "StartPipeRunCommand",
+        "StartPipeSplitCommand",
+        "StartPolysolidCommand",
+        "StartRevcloudCommand",
+        "StartSectionClipCommand",
+        "StartSectionPlaneCommand",
+        "SubmitPipeFitViewportPick",
+        "SubmitPipeRunViewportPick",
+        "SubmitPipeSplitViewportPick",
+        "SubmitRevcloudViewportPick",
+        "SubmitSectionPlanePointPick",
+        "SubmitSolidViewportPick",
+        "SyncLivePipeRun",
+        "TrySplitPipeRun"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        45582,
+        45604
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "ToggleSectionClipFlip"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        45608,
+        45608
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        45630,
+        45631
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        45646,
+        45646
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        45744,
+        45744
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        45751,
+        49106
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "ApplyCopySurveyDuplicateModalResult",
+        "AttrsOfSelected",
+        "BeginPropCommand",
+        "CadApplyColorToSelection",
+        "CadApplyLayerToSelection",
+        "CadApplyLinetypeToSelection",
+        "CadApplyLineweightToSelection",
+        "CadApplyTransparencyToSelection",
+        "CadEditableAttrsForSelected",
+        "CadEntityAttrsForSelected",
+        "CadLineStyleApplies",
+        "CadPolylineDraftBulgeForNextPoint",
+        "CadPropCommandPromptText",
+        "CadPropCommandSelectionChanged",
+        "CadRibbonPickColor",
+        "CadRibbonPickLayer",
+        "CadSelectedEntityHidden",
+        "CadSelectionColor",
+        "CadSelectionLayer",
+        "CancelActiveCommand",
+        "ChPropApplyValue",
+        "ChPropParseProperty",
+        "CollectIsolatableIds",
+        "CollectSelectedIsolatableIds",
+        "CommitPolylineDraft",
+        "CurrentViewport",
+        "DropHiddenFromSelection",
+        "EndObjectIsolation",
+        "EndPropCommand",
+        "FinishEllipseFromRatio",
+        "HandlePaperModifyPick",
+        "HandlePaperPhaseText",
+        "HandlePropCommandTextInput",
+        "HasPaperModifyPhase",
+        "HideSelectedObjects",
+        "IsPropCommandKind",
+        "IsolateSelectedObjects",
+        "LayMCurFromSelection",
+        "MatchPropApplyToSelection",
+        "MatchPropTakeSource",
+        "ProcessCommandLineSubmit",
+        "PropCommandModelSpaceOnly",
+        "ReportSkippedPicks",
+        "SetCurrentAnnotationScaleIndex",
+        "SetDrawingPlotScale",
+        "SortUniqueIds",
+        "StartArrayCommand",
+        "StartChPropCommand",
+        "StartCopyCommand",
+        "StartDeleteCommand",
+        "StartLayMCurCommand",
+        "StartMatchPropCommand",
+        "StartMirrorCommand",
+        "StartMoveCommand",
+        "StartOrbitCommand",
+        "StartPanCommand",
+        "StartRotateCommand",
+        "StartScaleCommand",
+        "StartVpFreezeThaw",
+        "StartZoomExtentsCommand",
+        "StartZoomWindowCommand",
+        "SubmitLineVertex",
+        "SubmitPolylineVertex",
+        "SyncCurrentAnnotationScaleIndex",
+        "ToggleAccumulateSelectedEntity"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        49175,
+        52252
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "CircleCommandFooterHint",
+        "DeleteCommandFooterHint",
+        "DrawingExtrasFooterHint",
+        "FuzzyCommandMatches",
+        "FuzzyCommandSuggestions",
+        "JoinCommandFooterHint",
+        "LineCommandFooterHint",
+        "ModifyCommandFooterHint",
+        "OffsetCommandFooterHint",
+        "ResolveCommandLineSubmission",
+        "RotateCommandFooterHint",
+        "ScaleCommandFooterHint",
+        "TrimCommandFooterHint",
+        "ZoomCommandFooterHint"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52262,
+        52262
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52270,
+        52270
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52278,
+        52278
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52286,
+        52286
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52293,
+        52293
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52304,
+        52304
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52313,
+        52318
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52340,
+        52340
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "command registry, command-family operations and local helpers"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        52350,
+        52819
+      ],
+      "system": "Commands",
+      "concern": "command registry and command workflows",
+      "symbols": [
+        "CancelPdfAttachCommand",
+        "ExecuteQuickSelect",
+        "RepeatLastCommand",
+        "StartPdfAttachBuild",
+        "StartPdfAttachCommand",
+        "StartQuickSelectCommand",
+        "SubmitPdfAttachInsertPoint",
+        "VectorizePdfAttachmentLines"
+      ],
+      "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
     }
   ],
   "auditedEntries": {
@@ -9665,6 +11822,266 @@
         "The telemetry worker (BeginTelemetryPing, PollTelemetryTask) has no test. TelemetryPingTests covers the payload and decision functions only.",
         "The crash and startup report upload bodies (TryPostCrashReportSilent, TryPostStartupReportSilent) have no test. They are assembled in Windows-mapped files.",
         "The online-map capture path is tested through OnlineMapTests, but the drawing-side placement is not tested against a live document."
+      ]
+    },
+    "Commands": {
+      "tier": "T4 Application",
+      "audit": {
+        "issue": 1234,
+        "parent": 1207,
+        "codeMoved": false
+      },
+      "responsibility": "Owns the command registry and command families: it resolves command names, advances prompt and selection workflows, and coordinates user-requested operations across domain and IO services.",
+      "doesNotOwn": [
+        "persistent drawing data and undo storage (Document)",
+        "survey, alignment, traverse, coordinate-system and point-group policy (Survey)",
+        "surface, grading, feature-line and volume algorithms (Terrain)",
+        "solid, curve-kernel, hatch-loop, vector and coordinate-frame algorithms (Geometry and Math)",
+        "viewport picking, snapping, hover, grips and transient interaction policy (Interaction)",
+        "render caches, display tessellation, camera state and view projection (Renderer)",
+        "file formats, persistence and file-dialog implementation (IO and Windows)",
+        "widgets, dialog presentation, progress display and user-facing prompt wording (Qt, UI and GoSurveyEditor)",
+        "online-map tile transport, cache and network capture orchestration (Network)",
+        "document coordinate-frame storage invariants and drawing-origin rebase policy (Document; Math provides transforms)"
+      ],
+      "allowedDependencies": [
+        "Renderer",
+        "IO",
+        "Network",
+        "Document",
+        "Survey",
+        "Terrain",
+        "PointCloud",
+        "Pdf",
+        "UI",
+        "Events",
+        "Core"
+      ],
+      "dependencyNote": "Matches the Commands row in system-map.md. Commands may not depend on Interaction, Geometry or Math. Existing forbidden edges remain in dependency-baseline.json; this audit does not change enforced mappings or the baseline.",
+      "currentFiles": [
+        "src/commands/AlignmentLabelSet.hpp",
+        "src/commands/AlignmentStyle.hpp",
+        "src/commands/CadBlocks.cpp",
+        "src/commands/CadBlocks.hpp",
+        "src/commands/CadColor.cpp",
+        "src/commands/CadColor.hpp",
+        "src/commands/CadCommands.cpp",
+        "src/commands/CadCommands.hpp",
+        "src/commands/CadCommandsInternal.hpp",
+        "src/commands/CadCommands_Align.cpp",
+        "src/commands/CadCommands_Alignment.cpp",
+        "src/commands/CadCommands_Bench.cpp",
+        "src/commands/CadCommands_DrawInquiry.cpp",
+        "src/commands/CadCommands_Geo.cpp",
+        "src/commands/CadCommands_Mleader.cpp",
+        "src/commands/CadCommands_Ucs.cpp",
+        "src/commands/CadCoordinateFrame.cpp",
+        "src/commands/CadCoordinateFrame.hpp",
+        "src/commands/CadDimGeom.hpp",
+        "src/commands/CadDimStroke.hpp",
+        "src/commands/CadDynInput.cpp",
+        "src/commands/CadDynInput.hpp",
+        "src/commands/CadEntities.hpp",
+        "src/commands/CadField.cpp",
+        "src/commands/CadField.hpp",
+        "src/commands/CadLinetype.cpp",
+        "src/commands/CadLinetype.hpp",
+        "src/commands/CadOnlineMap.cpp",
+        "src/commands/CadOnlineMap.hpp",
+        "src/commands/CadPropertyEdit.cpp",
+        "src/commands/CadPropertyEdit.hpp",
+        "src/commands/CadSurfaceEdit.cpp",
+        "src/commands/CadSurfaceEdit.hpp",
+        "src/commands/ColorContrast.hpp",
+        "src/commands/ConvertDrawing.cpp",
+        "src/commands/ConvertDrawing.hpp",
+        "src/commands/DimensionStyle.hpp",
+        "src/commands/EntityId.cpp",
+        "src/commands/EntityId.hpp",
+        "src/commands/HatchBoundary.hpp",
+        "src/commands/HatchGeom.hpp",
+        "src/commands/HatchPat.hpp",
+        "src/commands/HatchPattern.hpp",
+        "src/commands/MultileaderStyle.hpp",
+        "src/commands/OrthoConstrain.hpp",
+        "src/commands/PaperSpace.hpp",
+        "src/commands/ProjectAddFlow.cpp",
+        "src/commands/ProjectAddFlow.hpp",
+        "src/commands/ProjectFiles.cpp",
+        "src/commands/ProjectFiles.hpp",
+        "src/commands/ProjectPoints.cpp",
+        "src/commands/ProjectPoints.hpp",
+        "src/commands/ProjectSettings.cpp",
+        "src/commands/ProjectSettings.hpp",
+        "src/commands/ProjectWarnings.cpp",
+        "src/commands/ProjectWarnings.hpp",
+        "src/commands/SurfaceStyle.hpp",
+        "src/commands/TextStyle.hpp",
+        "src/commands/ToolspaceCatalog.hpp",
+        "src/commands/TraverseActions.cpp",
+        "src/commands/TraverseActions.hpp",
+        "src/commands/ViewportZoomScale.cpp",
+        "src/commands/ViewportZoomScale.hpp",
+        "src/commands/ZoomFraming.hpp"
+      ],
+      "currentSections": [
+        "src/commands/CadCommands.cpp: kRegistry and DispatchByPrimary; command start, text/pick/box submission, cancellation, selection, prompt state, command families and cross-domain orchestration. The uncarved remainder belongs to Commands; every other-system range is in sections.",
+        "src/commands/CadCommands.hpp: AppCommandState command/prompt state, command entry points and runners, selection/pick policy and shared command data. sections carves out Core, Math, UI, Geometry and Document types/fields; DrawingDocument is Document and mixed.",
+        "src/commands/CadCommandsInternal.hpp: internal seam shared by command translation units (draft resets and new-entity helpers); not a public cross-system header.",
+        "src/commands/CadCommands_*.cpp: command-family translation units for alignment transforms, geographic commands, alignment workflows, benchmarks, drawing inquiry, UCS and multileader workflows. Survey/Math/Geometry sections and Network-owned online map code remain carved out.",
+        "src/commands/CadBlocks.*: block command workflows and orchestration. Block definitions/mutation are Document, block units are Core, import/export is IO; Windows file dialogs remain an unresolved boundary.",
+        "src/commands/CadPropertyEdit.*, CadSurfaceEdit.*, CadField.*, CadColor.*, CadLinetype.*, CadDynInput.*, ConvertDrawing.*, TraverseActions.*, ProjectAddFlow.*, ProjectFiles.*, ProjectPoints.*, ProjectSettings.*, ProjectWarnings.*, ToolspaceCatalog.*, ViewportZoomScale.*: command adapters, prompt workflows, state transitions and command-facing catalogs.",
+        "All other src/commands files in currentFiles contain command-owned models, command policy, drafting helpers, style/paper-space workflows or value types used by command families; section overrides are recorded in sections.",
+        "Cross-tree sweep: Qt command bars/dialogs and editor dispatch stay Qt/GoSurveyEditor; src/viewport input policy is Interaction; src/io and src/platform persistence, serializers and dialog implementations stay IO/Windows. These systems call Commands through CadCommands.hpp and are not Commands files.",
+        "CadCommands.cpp carve-outs recorded in sections: Core formatting/string/unit helpers; Math transforms; Debug PIPEPERF collection/reporting; Document snapshots, undo, layers and styles; Terrain surface and feature-line algorithms; Survey point/alignment policy; Renderer display caches/tessellation; PointCloud cache-to-preview transformation.",
+        "src/commands/CadCoordinateFrame.*: Document-owned local-storage invariant and drawing-origin rebase policy; Math supplies the coordinate transforms (see sections and pendingAssignment).",
+        "src/commands/CadCommands.cpp: `CmdEntry` / `kRegistry` (8596-8998), `DispatchByPrimary` (9299-9864), and registry test seams (`RegisteredCommandPrimariesForTest` / `DispatchByPrimaryForTest`, 13125-13137) are Commands sections listed in `sections`.",
+        "src/commands/CadCommands.cpp: PickClosestCadEntity and ResolveViewportPick are Interaction-owned picking policy; exact function ranges are in sections.",
+        "src/commands/CadCommands.cpp: entity/paper-underlay/gizmo picking, hover, grip and drag policy is Interaction-owned; RefreshSolidDisplayGeometry lines 37519-37572 are Renderer-owned, with Debug timing/counter lines 37573-37593. Exact ranges are in sections.",
+        "src/commands/CadCommands.cpp: viewport click, filled-region and section-plane grip picking/hover belong to Interaction; solid display-buffer conversion and RefreshSolidDisplayGeometry belong to Renderer apart from the Debug profiling block. Exact ranges are in sections.",
+        "src/commands/CadCommands.cpp: solid/pipe-run subobject hit testing, paper/annotation picking and section-plane grip dragging belong to Interaction; derived block-reference/pipe-run caches and visibility helpers belong to Renderer. Exact ranges are in sections.",
+        "src/commands/CadCommands.cpp: section-plane grip cancellation/axis helpers are Interaction; viewport material and entity presentation helpers are Renderer; DXF group-code lineweight conversions are IO. Exact ranges are in sections."
+      ],
+      "pendingAssignment": [
+        {
+          "files": [
+            "src/platform/WinFileDialogs.hpp",
+            "src/platform/WinFileDialogs.cpp"
+          ],
+          "reason": "Commands calls the file-dialog interface directly, but implementation and folder are Windows-owned. Add a neutral service boundary or inject the choice in the application layer before moving command flows."
+        },
+        {
+          "files": [
+            "src/commands/CadCommands.hpp: AppCommandState and DrawingDocument"
+          ],
+          "reason": "These types combine command workflow with Document, Survey, Terrain, PointCloud, Pdf, Renderer and Core data. Split after each owner has an interface and the final map is decided."
+        },
+        {
+          "files": [
+            "src/commands/CadCommands.cpp: remaining large command families and local helpers"
+          ],
+          "reason": "The main translation unit remains a god file. Future moves need explicit seams and must preserve registration and prompt behavior."
+        },
+        {
+          "files": [
+            "src/commands/CadOnlineMap.cpp",
+            "src/commands/CadOnlineMap.hpp"
+          ],
+          "reason": "Network owns tile planning/cache/retry/capture orchestration; drawing placement and capture writes cross into Survey and Document. Network audit #1233 records the split and forbidden edges."
+        },
+        {
+          "files": [
+            "src/commands/CadEntities.hpp",
+            "src/commands/PaperSpace.hpp",
+            "src/commands/AlignmentStyle.hpp",
+            "src/commands/AlignmentLabelSet.hpp"
+          ],
+          "reason": "These command-folder headers contain Document or Survey records; owners and move prerequisites are in sections and the Document/Survey audits."
+        },
+        {
+          "files": [
+            "src/commands/CadCoordinateFrame.cpp",
+            "src/commands/CadCoordinateFrame.hpp"
+          ],
+          "reason": "Document-owned local-storage invariant and origin rebasing live in the Commands folder; move them with the Document storage boundary."
+        }
+      ],
+      "draftPublicInterface": {
+        "registry and dispatch (CadCommands.cpp/CadCommands.hpp)": [
+          "kRegistry / CmdEntry (private registry implementation today)",
+          "RegisteredCommandPrimariesForTest (test seam)",
+          "DispatchByPrimaryForTest (test seam)",
+          "ProcessCommandLineSubmit, SubmitViewportPick, CancelActiveCommand, StartLineCommand, StartPolylineCommand, StartMoveCommand, StartCopyCommand, StartRotateCommand, StartScaleCommand, StartMirrorCommand, CadApplyLayerToSelection, CadApplyColorToSelection, and CadApplyLinetypeToSelection (declared in CadCommands.hpp; command-family APIs are grouped below)"
+        ],
+        "command state and document boundary (CadCommands.hpp)": [
+          "AppCommandState (shared live command and active-drawing state; too broad for a final interface)",
+          "DrawingDocument (co-located but Document-owned persistent drawing data)",
+          "SelectedEntity, SelectedSubObject and command phase/state types used by viewport/editor adapters"
+        ],
+        "command family seams": [
+          "CadBlocks.hpp: block command starters and authoring workflow",
+          "CadPropertyEdit.hpp and CadSurfaceEdit.hpp: property and surface-edit operations",
+          "ProjectAddFlow.hpp, ProjectFiles.hpp, ProjectPoints.hpp, ProjectSettings.hpp, ProjectWarnings.hpp: project workflows",
+          "TraverseActions.hpp: traverse command actions",
+          "CadOnlineMap.hpp: mixed Network controller and drawing-placement seam; not stable Commands API",
+          "CadCommands.hpp: drawing, modify, annotation, dimension, solids, pipes, paper-space, UCS, Survey and Terrain entry points; separate owner interfaces before relocation"
+        ],
+        "internal, not public": [
+          "CadCommandsInternal.hpp helpers shared only by command translation units",
+          "AppCommandState transient per-command scratch fields",
+          "anonymous-namespace registry, prompt parsers and command-family helpers"
+        ]
+      },
+      "existingTests": [
+        "tests/CommandRegistryHandlerTests.cpp",
+        "tests/ViewportPickPolicyTests.cpp",
+        "tests/PropertyCommandTests.cpp",
+        "tests/CadPropertyEditTests.cpp",
+        "tests/CadSurfaceEditTests.cpp",
+        "tests/DynInputTests.cpp",
+        "tests/ProjectAddFlowTests.cpp",
+        "tests/ProjectFilesFlowTests.cpp",
+        "tests/ProjectPointsSyncTests.cpp",
+        "tests/ProjectSettingsTests.cpp",
+        "tests/ProjectWarningsTests.cpp",
+        "tests/CadPipeRunCommandTests.cpp",
+        "tests/CadPipePaletteTests.cpp",
+        "tests/ModifyPipeRunTests.cpp",
+        "tests/OffsetCommandTests.cpp",
+        "tests/StretchGeomTests.cpp",
+        "tests/TrimLinePreviewTests.cpp",
+        "tests/FilletGeomTests.cpp",
+        "tests/ChamferGeomTests.cpp",
+        "tests/TransformationTests.cpp",
+        "tests/CutClipboardTests.cpp",
+        "tests/PaperSpaceTests.cpp",
+        "tests/PaperTypedPointsTests.cpp",
+        "tests/PaperLeaderTests.cpp",
+        "tests/PaperTableTests.cpp",
+        "tests/ViewportZoomScaleTests.cpp",
+        "tests/ZoomFramingTests.cpp",
+        "tests/ZoomExtents3dTests.cpp",
+        "tests/OnlineMapTests.cpp (Network controller plus Commands drawing placement; cross-system)",
+        "tests/GeolocationTests.cpp (Commands workflow plus IO)",
+        "tests/GeoDataReadTests.cpp (Commands workflow plus IO)",
+        "tests/AlignmentCommandTests.cpp and tests/AlignmentCreateTests.cpp (Commands runners over Survey data)",
+        "tests/QtEditorTests.cpp (Qt integration and command routing; cross-system)",
+        "tests/RightClickTests.cpp",
+        "tests/DistCommandTests.cpp",
+        "tests/Issue1019CommandTests.cpp",
+        "tests/DrapeCommandTests.cpp",
+        "tests/PadSolidCommandTests.cpp",
+        "tests/PressPullTypedDistanceDirectionTests.cpp",
+        "tests/CadBlockImportTests.cpp (INSERT/BEDIT/BCONNECT workflows; Commands plus IO/Document)",
+        "tests/AlignmentSpiralCommandTests.cpp (typed command dispatch over Survey alignments)",
+        "tests/PipeSizePaletteTests.cpp (pipe-run and pipe-split workflows)",
+        "tests/PointCloudExportTests.cpp (typed export command workflow plus PointCloud/IO)",
+        "tests/ToolspaceCatalogTests.cpp",
+        "tests/Task078InteractionTests.cpp (mixed Interaction and Commands; includes the empty MOVE prompt lifecycle case)",
+        "tests/CadFieldTests.cpp (Commands field behavior over Document-owned records)",
+        "tests/SectionClipStateTests.cpp (mixed Commands section command and Renderer/Document clip state)"
+      ],
+      "homelessConcepts": [
+        "AppCommandState is a god state object combining command workflow, persistent drawing, viewport and several domain systems.",
+        "Command registry metadata and handler dispatch have no standalone named registry type or owning module; kRegistry is private to CadCommands.cpp.",
+        "Prompt messages, progress/status strings and dialog request flags mix command decisions with UI wording/presentation (e.g. ProjectPoints::RaisePointEditPrompt and map-capture status).",
+        "A neutral file-dialog port used by command workflows has no Commands-facing owner/interface; the current header is Windows-specific."
+      ],
+      "couplings": [
+        "Commands -> Interaction: CadCommands and command implementations use viewport pick, snap, grip and preview policy; forbidden by the one-way Interaction -> Commands direction.",
+        "Commands -> Geometry and Math: command code directly uses kernels and helpers; forbidden edges remain baselined until solver and transform interfaces move.",
+        "Commands -> Qt/UI/Windows: state carries presentation flags and strings, and command flows call WinFileDialogs; introduce app/service ports.",
+        "Commands owns AppCommandState while Qt and GoSurveyEditor read and mutate it directly, bypassing operation interfaces.",
+        "Commands -> Document: command operations mutate Document records directly through AppCommandState; Document has no independent state API yet.",
+        "Commands -> Survey/Terrain/PointCloud/Pdf: orchestration calls domain logic and accesses payloads embedded in AppCommandState/DrawingDocument.",
+        "IO -> Commands: DWG/DXF, PDF plot, preferences and other IO sources include CadCommands.hpp to inspect/deserialize Commands-owned state; recorded in the IO audit.",
+        "Network -> Commands: CadOnlineMap uses AppCommandState and drawing placement; Network audit records capture job ownership and the placement split.",
+        "Renderer display assembly in CadCommands.cpp shares AppCommandState with command workflows; RefreshSolidDisplayGeometry and the block-reference/pipe-run derived-cache helpers are Renderer-owned sections. Their eventual move needs a Renderer-owned cache interface or state boundary."
+      ],
+      "testGaps": [
+        "No focused test asserts Commands includes only its allowed dependencies; the ratchet preserves current forbidden edges as baseline.",
+        "Command integration is tightly coupled to AppCommandState, so family policy tests need the full shared state.",
+        "Cancellation, undo boundaries, read-only project guards and failure recovery are covered unevenly across command families; this audit does not claim a complete per-command acceptance inventory."
       ]
     }
   },
