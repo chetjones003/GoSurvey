@@ -138,12 +138,12 @@
     },
     {
       "path": "src/util/contourgen.cpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
       "path": "src/util/contourgen.hpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
@@ -173,12 +173,12 @@
     },
     {
       "path": "src/util/daylight.cpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
       "path": "src/util/daylight.hpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
@@ -223,12 +223,12 @@
     },
     {
       "path": "src/util/gridsurface.cpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
       "path": "src/util/gridsurface.hpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
@@ -353,62 +353,62 @@
     },
     {
       "path": "src/util/surfaceanalysis.cpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
       "path": "src/util/surfaceanalysis.hpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
       "path": "src/util/surfacequery.cpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
       "path": "src/util/surfacequery.hpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
       "path": "src/util/surfacestats.cpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
       "path": "src/util/surfacestats.hpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
       "path": "src/util/surfacevolume.cpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
       "path": "src/util/surfacevolume.hpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
       "path": "src/util/tinbuild.cpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
       "path": "src/util/tinbuild.hpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
       "path": "src/util/tinvolume.cpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
       "path": "src/util/tinvolume.hpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
@@ -418,12 +418,12 @@
     },
     {
       "path": "src/util/watershed.cpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
       "path": "src/util/watershed.hpp",
-      "system": null,
+      "system": "Terrain",
       "status": "ambiguous"
     },
     {
@@ -449,7 +449,8 @@
     "Debug audit (issue #1224): benchmark scene/statistics, document-invariant diagnostics, and frame-stall watch are assigned in auditedEntries.Debug and sections. framewatch is mapped to Debug; benchmark and invariant files retain advisory Debug ownership in fileMappings until their forbidden cross-system dependencies are resolved. SaveTrace sections formerly marked Core are reassigned to Debug per this ticket, with IO/Win32 boundaries pending; crash-report trigger spans were already assigned to Debug. No code moved.",
     "Debug audit sweep (issue #1224): performance counters and PIPEPERF/PERFHUD surfaces are recorded as mixed Debug/Commands sections. BENCH command orchestration stays Commands and consumes Debug benchmark helpers. SaveTrace belongs to Debug; mapping waits on IO/Win32 seams.",
     "Document audit (issue #1226): Document file and section ownership is in auditedEntries.Document and sections. fileMappings gains Document as the advisory owner for cadblock.hpp, cadtable.hpp and PlotScales.hpp, all still ambiguous, so the ratchet and baseline do not move. Folder-mapped files get section entries only, because folder precedence would otherwise override them. The DrawingDocument god struct and CadEntities.hpp's PointCloud include are recorded in auditFindings.",
-    "Survey audit (issue #1227): Survey file and section ownership is in auditedEntries.Survey and sections. Folder-mapped src/survey, src/traverse and src/alignment files are Survey through mappedFolders. src/geo files are assigned to Survey by section, following the Geometry audit, while the folder stays Geometry. No fileMappings changed, so the ratchet and baseline do not move. The Survey -> Terrain (alignment ground sampling) and Survey -> Commands (SurveyPoints.cpp) edges are recorded in forbiddenDependencies. No code moved."
+    "Survey audit (issue #1227): Survey file and section ownership is in auditedEntries.Survey and sections. Folder-mapped src/survey, src/traverse and src/alignment files are Survey through mappedFolders. src/geo files are assigned to Survey by section, following the Geometry audit, while the folder stays Geometry. No fileMappings changed, so the ratchet and baseline do not move. The Survey -> Terrain (alignment ground sampling) and Survey -> Commands (SurveyPoints.cpp) edges are recorded in forbiddenDependencies. No code moved.",
+    "Terrain audit (issue #1228): Terrain file and section ownership is recorded in auditedEntries.Terrain and sections. The 20 mixed src/util surface files carry advisory Terrain ownership but remain ambiguous so the dependency ratchet and baseline do not change. Command god-file and Survey-folder sections are assigned by symbol; user-interface, persistence, and command orchestration remain with their systems. No code moved."
   ],
   "sections": [
     {
@@ -6021,6 +6022,303 @@
       "otherOwners": [
         "Commands"
       ]
+    },
+    {
+      "path": "src/commands/CadEntities.hpp",
+      "lines": [
+        235,
+        347
+      ],
+      "system": "Terrain",
+      "concern": "surface styles and analysis policy",
+      "symbols": [
+        "SurfaceComponentStyle",
+        "SurfaceBand",
+        "SurfaceAnalysisMode",
+        "SurfaceStyle"
+      ],
+      "note": "Persistent surface style and analysis definitions. Surface display batches later in this header are Renderer, not Terrain.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Renderer"
+      ]
+    },
+    {
+      "path": "src/commands/CadEntities.hpp",
+      "lines": [
+        1345,
+        1624
+      ],
+      "system": "Terrain",
+      "concern": "surface, TIN, profile, grading and feature-line domain data",
+      "symbols": [
+        "CadTin",
+        "CadBoundaryKind",
+        "CadSurfaceBoundary",
+        "CadSurfaceBreakline",
+        "CadSurfaceCrossingCorrection",
+        "CadSurfaceProfile",
+        "CadGradingPreset",
+        "CadFeatureLineInfo",
+        "FeatureLineElevRow",
+        "CadSurfacePointFile",
+        "SurfaceKind",
+        "CadSurface"
+      ],
+      "note": "Terrain domain payloads embedded in the Commands entity header. DrawingDocument/AppCommandState storage and rendering cache types are separately owned.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands",
+        "Document",
+        "Renderer"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1383,
+        1411
+      ],
+      "system": "Terrain",
+      "concern": "live surface profile and surface stores",
+      "symbols": [
+        "AppCommandState::cadSurfaces",
+        "AppCommandState::surfaceProfiles"
+      ],
+      "note": "Terrain state fields only; AppCommandState, command state transitions and adjacent stores remain Commands or their owning systems.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands",
+        "Survey",
+        "Document",
+        "Renderer"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1586,
+        1616
+      ],
+      "system": "Terrain",
+      "concern": "per-drawing Terrain stores in the mixed DrawingDocument",
+      "symbols": [
+        "DrawingDocument::cadSurfaces",
+        "DrawingDocument::cadSurfaceAttrs",
+        "DrawingDocument::surfaceProfiles"
+      ],
+      "note": "Terrain-owned data stored in a mixed composition struct. The struct itself is not Terrain and needs a final-map storage boundary.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document",
+        "Survey",
+        "PointCloud",
+        "Pdf",
+        "Renderer"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        3102,
+        3169
+      ],
+      "system": "Terrain",
+      "concern": "surface identity, contour display limits and volume result helpers",
+      "symbols": [
+        "SurfaceContoursSuppressed",
+        "SurfaceDisplayContourSegs",
+        "FindSurfaceIndex",
+        "FindSurfaceIndexById",
+        "RememberVolumeResult",
+        "AppendVolumeTableItemValue"
+      ],
+      "note": "Terrain model/query helpers. Surface visibility, contour geometry generation, analysis display buffers and viewport caches in the preceding range are Renderer.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        3321,
+        4679
+      ],
+      "system": "Terrain",
+      "concern": "surface definition, TIN/grid/corridor build, volumes, rebuild lifecycle and dependencies",
+      "symbols": [
+        "AppendChainConstraints",
+        "SurfaceBuildInputs",
+        "ApplySurfaceCrossingCorrections",
+        "ApplyDefinitionPointEdits",
+        "FillVolumeSurfaceInputs",
+        "ToLocalTin",
+        "BuildGridKindSurface",
+        "BuildCorridorSurface",
+        "BuildSurfaceFromSourcesImpl",
+        "BuildSurfaceFromSources",
+        "RefreshSurfaceProfilesForSurface",
+        "RefreshSurfaceDependentsAfterReplacement",
+        "CreateSurfaceFromPointGroups",
+        "CreateSurfaceFromVolumeParents",
+        "DetachSurfaceStyleIfShared",
+        "EraseSurfaceAtIndex",
+        "TickSurfaceRebuilds"
+      ],
+      "note": "Terrain model/build operations embedded in the Commands translation unit; command runners remain Commands.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands",
+        "Survey",
+        "Document"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        15362,
+        15490
+      ],
+      "system": "Terrain",
+      "concern": "surface coverage, elevation and grade queries",
+      "symbols": [
+        "SurfaceCoverage",
+        "SurfacesCovering",
+        "SurfaceElevationsAt",
+        "ReportSurfaceElevationAt",
+        "ReportSurfaceGradeTo"
+      ],
+      "note": "Terrain query/report calculations are embedded in the Commands god file; prompt and output routing remain Commands.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        26427,
+        27110
+      ],
+      "system": "Terrain",
+      "concern": "feature-line domain editing and daylight grading",
+      "symbols": [
+        "StartFeatureLineCommand",
+        "SubmitFeatureLineVertex",
+        "SubmitFeatureLinePoint",
+        "CommitFeatureLinePendingPoint",
+        "CommitFeatureLineDraft",
+        "FormatSlope",
+        "GradingDefaultSurface",
+        "GradingSelectedFeatureLine",
+        "GradingTakeFeatureLine",
+        "ReplaceFeatureLineVertices",
+        "BuildGradingDaylight"
+      ],
+      "note": "Feature-line construction/editing and daylight calculations belong to Terrain; command prompt state and runners stay Commands.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        27622,
+        27950
+      ],
+      "system": "Terrain",
+      "concern": "feature-line elevation and grade data operations",
+      "symbols": [
+        "FeatureLineRange",
+        "BuildFeatureLineElevTable",
+        "EditFeatureLineElevations",
+        "SetFeatureLinePointElevation",
+        "SetFeatureLineGradeAhead",
+        "SetFeatureLineGradeBack",
+        "RaiseFeatureLineElevations",
+        "InsertFeatureLineElevationPoint",
+        "DeleteFeatureLineElevationPoint"
+      ],
+      "note": "Terrain feature-line model operations in the Commands god file.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        2472,
+        3101
+      ],
+      "system": "Renderer",
+      "concern": "surface visibility, analysis display geometry and viewport display caches",
+      "symbols": [
+        "SurfaceVisible",
+        "AppendContourLinesFrom",
+        "BuildSurfaceAnalysisGeometry",
+        "SurfaceContourLevels",
+        "SplitContourLevels",
+        "ResolveSurfaceStoredColorRgba",
+        "RefreshSurfaceDisplayGeometry"
+      ],
+      "note": "These helpers produce or control display geometry and viewport caches; Terrain supplies surface data, while rendering presentation belongs to Renderer.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Terrain"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1364,
+        1370
+      ],
+      "system": "Terrain",
+      "concern": "live feature-line and grading stores",
+      "symbols": [
+        "AppCommandState::featureLineOffsets",
+        "AppCommandState::featureLineVerts",
+        "AppCommandState::featureLineClosed",
+        "AppCommandState::featureLineElevPt",
+        "AppCommandState::featureLineInfo",
+        "AppCommandState::gradingPresets",
+        "AppCommandState::featureLineAttrs"
+      ],
+      "note": "Terrain feature-line and grading fields in the mixed application state struct; other command state remains Commands.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1575,
+        1577
+      ],
+      "system": "Terrain",
+      "concern": "per-drawing feature-line and grading stores",
+      "symbols": [
+        "DrawingDocument::featureLineOffsets",
+        "DrawingDocument::featureLineVerts",
+        "DrawingDocument::featureLineClosed",
+        "DrawingDocument::featureLineElevPt",
+        "DrawingDocument::featureLineInfo",
+        "DrawingDocument::gradingPresets",
+        "DrawingDocument::featureLineAttrs"
+      ],
+      "note": "Terrain fields in the mixed drawing composition struct; the container itself is not Terrain.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document",
+        "Survey",
+        "PointCloud",
+        "Pdf",
+        "Renderer"
+      ]
     }
   ],
   "auditedEntries": {
@@ -7169,6 +7467,242 @@
         "WebMercator tile math was not checked by a test in this audit.",
         "Survey point label MTEXT regeneration (SurveyPoints.cpp 693-912) is not covered by a Survey-owned test (not verified in this audit)."
       ]
+    },
+    "Terrain": {
+      "tier": "T2 Domain",
+      "audit": {
+        "issue": 1228,
+        "parent": 1207,
+        "commit": "57fb581e",
+        "codeMoved": false
+      },
+      "responsibility": "Owns terrain surface models and their derived terrain analysis: TINs and grids, surface definitions and styles, contours, cut/fill volumes, feature lines, grading/daylight, watershed and surface profiles.",
+      "doesNotOwn": [
+        "drawing entities, layers, stable entity identity, undo history, or the mixed DrawingDocument container (Document)",
+        "survey points, point groups, alignments, and design profiles (Survey)",
+        "TIN triangulation as a general-purpose mesh kernel (Geometry owns general geometry; Terrain owns surface-specific TIN construction and constraints)",
+        "viewport display batches, contour rendering, surface caches, and camera state (Renderer)",
+        "DWG, DXF, LandXML, point-file parsing and writing (IO)",
+        "command registration, prompts, command lifecycle, and user workflows (Commands)",
+        "surface manager, style editor, ribbon, and toolspace widgets (Qt and GoSurveyEditor)",
+        "generic vectors, matrices, coordinate transforms, and unit formatting (Math and Core)"
+      ],
+      "allowedDependencies": [
+        "Geometry",
+        "Math",
+        "Core",
+        "Document",
+        "Survey"
+      ],
+      "dependencyNote": "Matches the Terrain row in system-map.md. Terrain -> Survey is the permitted Domain peer edge for point-group and alignment inputs. Survey -> Terrain is forbidden; existing alignment sampling calls surface query/volume helpers and closes a dependency cycle. Current includes are only advisory until the move/final-map work establishes a public seam.",
+      "currentFiles": [
+        "src/util/contourgen.cpp and .hpp (contour extraction and labels; advisory Terrain, ambiguous)",
+        "src/util/daylight.cpp and .hpp (daylight intersection and outward baseline normals; advisory Terrain, ambiguous)",
+        "src/util/gridsurface.cpp and .hpp (grid query/display triangulation and grid volume subtraction; advisory Terrain, ambiguous)",
+        "src/util/surfaceanalysis.cpp and .hpp (triangle slope/aspect analysis and band assignment; advisory Terrain, ambiguous)",
+        "src/util/surfacequery.cpp and .hpp (TIN/grid elevation, slope, aspect and profile sampling; advisory Terrain, ambiguous)",
+        "src/util/surfacestats.cpp and .hpp (surface difference cut/fill/area statistics; advisory Terrain, ambiguous)",
+        "src/util/surfacevolume.cpp and .hpp (TIN spatial index, elevation query and volume calculations; advisory Terrain, ambiguous)",
+        "src/util/tinbuild.cpp and .hpp (surface TIN triangulation, constraints, boundary culling and border extraction; advisory Terrain, ambiguous)",
+        "src/util/tinvolume.cpp and .hpp (TIN volume-surface construction; advisory Terrain, ambiguous)",
+        "src/util/watershed.cpp and .hpp (watershed, water-drop and catchment analysis; advisory Terrain, ambiguous)",
+        "src/commands/CadEntities.hpp (Terrain domain types and styles by sections; shared header remains Commands until types move)",
+        "src/commands/CadCommands.hpp and .cpp (surface, profile, feature-line and grading stores plus model/query sections; command/application state remains Commands)",
+        "src/commands/CadSurfaceEdit.hpp and .cpp (surface definition/style edit service currently coupled to AppCommandState and command logging)",
+        "src/commands/SurfaceStyle.hpp (surface-style table operations currently share CadEntities and Commands headers)",
+        "src/alignment/AlignmentFeatureLine.hpp and .cpp (whole-file Terrain feature-line data in Survey-mapped folder)",
+        "src/commands/CadCommands_Alignment.cpp (Terrain feature-line construction and quick profile section 4059-4305; remaining alignment command code is Commands/Survey)"
+      ],
+      "pendingAssignment": [
+        {
+          "files": [
+            "src/commands/CadCommands.hpp (AppCommandState and DrawingDocument surface/profile fields)",
+            "src/commands/CadCommands.cpp (Terrain model and command implementation)"
+          ],
+          "reason": "Terrain data and algorithms are embedded in Commands god files. Move behind a Terrain-owned interface with Commands as caller; split the mixed state container when all domain stores have seams."
+        },
+        {
+          "files": [
+            "src/commands/CadEntities.hpp (Terrain structs share the Commands header)",
+            "src/commands/CadSurfaceEdit.hpp and .cpp",
+            "src/commands/SurfaceStyle.hpp"
+          ],
+          "reason": "Terrain models and edit services are in Commands paths and include AppCommandState; carving a public header requires decoupling from the application state and command log."
+        },
+        {
+          "files": [
+            "src/alignment/AlignmentFeatureLine.hpp and .cpp"
+          ],
+          "reason": "Whole-file Terrain feature-line code is under the Survey folder mapping; move to Terrain when the final map and move ticket resolve the folder."
+        },
+        {
+          "files": [
+            "src/alignment/AlignmentGround.cpp",
+            "src/alignment/AlignmentSampleLines.cpp and .hpp"
+          ],
+          "reason": "These are Survey consumers of ISurfaceQuery and surface-volume APIs. Their Terrain includes violate the allowed peer direction and create a dependency cycle; introduce a Survey-facing seam or invert the query boundary."
+        },
+        {
+          "files": [
+            "src/commands/CadCommands.cpp (FormatSlope and grading/daylight sections)"
+          ],
+          "reason": "Slope formatting and much of grading are Terrain concepts embedded in a Commands god file; separate domain calculations from command prompts."
+        }
+      ],
+      "draftPublicInterface": {
+        "surface model and queries": [
+          "CadSurface",
+          "CadTin",
+          "CadBoundaryKind",
+          "CadSurfaceBoundary",
+          "CadSurfaceBreakline",
+          "CadSurfaceProfile",
+          "SurfaceKind",
+          "ISurfaceQuery",
+          "TinSurfaceQuery",
+          "GridSurfaceQuery",
+          "SurfaceProfileSample",
+          "SampleSurfaceProfileLine"
+        ],
+        "TIN construction": [
+          "TinInputPoint",
+          "TinBuildStatus",
+          "TinBuildResult",
+          "TinConstraint",
+          "TinBoundaryKind",
+          "TinBoundaryLoop",
+          "BuildTin",
+          "TinCullByBoundaries",
+          "TinBorderEdges",
+          "BuildTinVolumeSurface"
+        ],
+        "contours and analysis": [
+          "ContourResult",
+          "ContourLabelPoint",
+          "GenerateContours",
+          "ContourLevels",
+          "SmoothContoursChaikin",
+          "CollectContourLabels",
+          "SurfaceAnalysisMode",
+          "AnalysisTriangle",
+          "TriangleCentroidZ",
+          "TrianglePlaneSlopePct",
+          "TriangleDownhillDirection",
+          "AssignBand"
+        ],
+        "volumes and statistics": [
+          "TinSpatialIndex",
+          "SurfaceVolumeResult",
+          "BuildTinSpatialIndex",
+          "TinElevationAtIndexed",
+          "ComputeSurfaceVolume",
+          "SurfaceStats",
+          "ComputeSurfaceStats"
+        ],
+        "grading and hydrology": [
+          "DaylightPoint",
+          "CadGradingPreset",
+          "DaylightFailure",
+          "SideSlopes",
+          "DaylightSearch",
+          "SolveDaylightPoint",
+          "WatershedResult",
+          "WaterDropResult",
+          "CatchmentResult",
+          "ComputeWatershed",
+          "ComputeWaterDrop",
+          "ComputeCatchment"
+        ],
+        "styles": [
+          "SurfaceComponentStyle",
+          "SurfaceBand",
+          "SurfaceStyle",
+          "SurfaceStyles::Find",
+          "SurfaceStyles::Resolve",
+          "SurfaceStyles::IntervalsCompatible"
+        ],
+        "current internal, not public": [
+          "AppCommandState and DrawingDocument surface fields",
+          "surfedit:: edit helpers that take AppCommandState and write command logs",
+          "Run/Start/Handle command functions and command dispatch",
+          "Qt surface dialogs, manager and toolspace presentation"
+        ]
+      },
+      "existingTests": [
+        "tests/CadSurfaceEditTests.cpp",
+        "tests/ContourGenTests.cpp",
+        "tests/DaylightTests.cpp",
+        "tests/Issue119SurfaceTests.cpp",
+        "tests/SurfaceAnalysisTests.cpp",
+        "tests/SurfaceProfileTests.cpp",
+        "tests/SurfaceRebuildLifetimeTests.cpp",
+        "tests/SurfaceStatsTests.cpp",
+        "tests/SurfaceStyleTests.cpp",
+        "tests/SurfaceVolumeTests.cpp",
+        "tests/TinBorderTests.cpp",
+        "tests/TinBuildTests.cpp",
+        "tests/TinConstraintTests.cpp",
+        "tests/TinQueryTests.cpp",
+        "tests/TinVolumeTests.cpp",
+        "tests/WatershedTests.cpp"
+      ],
+      "testsCoveringTerrainNotOwned": [
+        "tests/AlignmentFeatureLineTests.cpp (Terrain behavior in Survey-mapped feature-line files)",
+        "tests/AlignmentGroundTests.cpp (Survey consumer of Terrain surface queries)",
+        "tests/headless/transcripts/req068-surface-selection.txt",
+        "tests/headless/transcripts/req069-surface-definition-commands.txt",
+        "tests/headless/transcripts/req070-surface-style-detach.txt",
+        "tests/headless/transcripts/req070-surface-styles-contours.txt",
+        "tests/headless/transcripts/req071-contour-extract.txt",
+        "tests/headless/transcripts/req072-surface-analysis.txt",
+        "tests/headless/transcripts/req073-surface-volumes.txt",
+        "tests/headless/transcripts/req086-surface-point-files.txt",
+        "tests/headless/transcripts/req124-empty-surface.txt",
+        "tests/headless/transcripts/req132-watershed.txt",
+        "tests/headless/transcripts/req136-volume-surface.txt",
+        "tests/headless/transcripts/req144-surface-add-del-point.txt",
+        "tests/headless/transcripts/req146-vol-table-csv-tin-edits.txt",
+        "tests/headless/transcripts/req371-grading-daylight.txt",
+        "tests/headless/transcripts/phase7-drape-onto-surface.txt",
+        "tests/headless/transcripts/regression-surfacedelete-selection.txt",
+        "tests/headless/transcripts/regression-issue08-surface-skips-are-reported.txt"
+      ],
+      "forbiddenDependencies": [
+        {
+          "from": "Survey",
+          "to": "Terrain",
+          "files": [
+            "src/alignment/AlignmentGround.cpp",
+            "src/alignment/AlignmentSampleLines.cpp",
+            "src/alignment/AlignmentSampleLines.hpp"
+          ],
+          "reason": "Alignment ground/profile and sample-line calculations include Terrain surface query/volume APIs. The map allows Terrain -> Survey, so this reverse edge is forbidden and contributes to a cycle."
+        },
+        {
+          "from": "Commands",
+          "to": "Terrain private implementation",
+          "files": [
+            "src/commands/CadCommands.cpp",
+            "src/commands/CadCommands.hpp",
+            "src/commands/CadSurfaceEdit.cpp",
+            "src/commands/CadSurfaceEdit.hpp"
+          ],
+          "reason": "Commands directly owns/uses Terrain data and algorithms through shared private headers and AppCommandState; the public seam is only a draft."
+        },
+        {
+          "from": "Qt",
+          "to": "Terrain private implementation",
+          "files": [
+            "src/qt/EditorSurfaces.cpp",
+            "src/qt/EditorSurfaceManager.cpp"
+          ],
+          "reason": "The surface UI reads and edits CadSurface/AppCommandState directly; route through Commands or a public Terrain interface when the UI boundary is carved."
+        }
+      ],
+      "testGaps": [
+        "No Terrain-owned test target or public Terrain header exists yet; current tests build through the shared Commands/util target.",
+        "Headless transcripts cover user workflows but remain under tests/headless rather than a Terrain-owned suite."
+      ]
     }
   },
   "auditFindings": {
@@ -7212,7 +7746,8 @@
       "Project session and shared point DB (ProjectPoints, ProjectWarnings, ProjectFiles, ProjectAddFlow, ProjectSettings in commands/): the Project concept is not a system in the map, so it has no owner. The final map must decide whether Survey (shared point DB) or a Project owner holds it.",
       "ALIGN (CadCommands_Align.cpp): two-point Helmert similarity applied to drawing geometry. It is coordinate-system work, but it edits Document geometry through Math transforms; no owner is assigned.",
       "Web Mercator tile math (geo/WebMercator.*): assigned to Survey by the Geometry audit, but it serves Network online maps. Decide at the final map.",
-      "Survey point-label MTEXT (SurveyPoints.cpp 693-912): label text comes from Survey data, but the MTEXT entity and placement are Document. The split is recorded; the owner of the label template is open."
+      "Survey point-label MTEXT (SurveyPoints.cpp 693-912): label text comes from Survey data, but the MTEXT entity and placement are Document. The split is recorded; the owner of the label template is open.",
+      "Terrain surface domain is homeless from its implementation boundary: surface/TIN/style/profile data and algorithms are split among src/util, Commands god files, and Survey-mapped alignment files; the final map/move tickets must create a Terrain home and public interface."
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
@@ -7284,7 +7819,12 @@
       "Qt includes Survey and Commands internals: EditorAlignmentCreate, EditorAlignmentLayout, EditorAlignmentStyle, EditorPointGroups include CadCommands.hpp, alignment/* and SurveyPoints.hpp. Qt may depend only on Core, Events and UI (baseline records these).",
       "src/io/ProjectPointDb.hpp, ProjectPointRules.hpp and SurveyCsv.cpp include survey/ and io/ headers privately. IO -> Survey is allowed, but the private-header rule applies.",
       "src/io/SurveyCsv.cpp includes CadCommands.hpp and CadCoordinateFrame.hpp (baseline forbidden IO -> Commands edges), and SurveyPoints.hpp (private). IO -> Survey is allowed, so the Survey part is the private include; the Commands includes belong to the IO audit.",
-      "src/qt/AdjustmentWindow.cpp includes traverse/TraverseIo.hpp and TraverseReport.hpp privately. Qt may depend only on Core, Events and UI, so the window belongs to the Qt audit with this coupling noted."
+      "src/qt/AdjustmentWindow.cpp includes traverse/TraverseIo.hpp and TraverseReport.hpp privately. Qt may depend only on Core, Events and UI, so the window belongs to the Qt audit with this coupling noted.",
+      "Terrain surface construction reads Survey point groups and alignment data through AppCommandState; the allowed Terrain -> Survey edge is implemented through a shared Commands state rather than a public Survey interface.",
+      "Survey AlignmentGround and AlignmentSampleLines call Terrain ISurfaceQuery/surface-volume helpers, creating forbidden Survey -> Terrain edges and a dependency cycle against the allowed Terrain -> Survey direction.",
+      "DrawingDocument and AppCommandState store Terrain surfaces, profiles, styles, feature lines and grading data alongside Document, Survey, PointCloud, Pdf and Renderer state; undo snapshots copy cross-system state.",
+      "Qt EditorSurfaces and EditorSurfaceManager directly read CadSurface and AppCommandState, while CadSurfaceEdit edit helpers are in Commands and couple to command logging; UI/domain/command seams are not separated.",
+      "Terrain display geometry, contour drawing, caches and selection/snap presentation are mixed with model helpers; rendering portions belong to Renderer and query selection/prompt routing belongs to Interaction/Commands."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
