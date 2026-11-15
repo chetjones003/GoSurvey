@@ -9618,6 +9618,45 @@
         "VectorizePdfAttachmentLines"
       ],
       "note": "Commands-owned remainder after subtracting every explicitly audited other-system section in this file at the issue #1234 audit revision."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        8215,
+        8227
+      ],
+      "system": "Interaction",
+      "concern": "CAD table hit testing",
+      "symbols": [
+        "PickCadTableAt"
+      ],
+      "note": "Table hit testing is Interaction policy; Commands consumes the resolved table pick."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        32617,
+        32632
+      ],
+      "system": "Interaction",
+      "concern": "pick-depth resolution",
+      "symbols": [
+        "PickCadEntityByDepth"
+      ],
+      "note": "Choosing the visible candidate by pick-ray depth is Interaction policy; the candidate/entity data belongs to Commands and Document."
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        47042,
+        47076
+      ],
+      "system": "Interaction",
+      "concern": "transient selection-box preview calculation",
+      "symbols": [
+        "UpdateSelectionBoxPreview"
+      ],
+      "note": "Selection-box preview policy is Interaction; committed selection changes remain with Document/Commands."
     }
   ],
   "auditedEntries": {
@@ -11940,7 +11979,8 @@
         "src/commands/CadCommands.cpp: entity/paper-underlay/gizmo picking, hover, grip and drag policy is Interaction-owned; RefreshSolidDisplayGeometry lines 37519-37572 are Renderer-owned, with Debug timing/counter lines 37573-37593. Exact ranges are in sections.",
         "src/commands/CadCommands.cpp: viewport click, filled-region and section-plane grip picking/hover belong to Interaction; solid display-buffer conversion and RefreshSolidDisplayGeometry belong to Renderer apart from the Debug profiling block. Exact ranges are in sections.",
         "src/commands/CadCommands.cpp: solid/pipe-run subobject hit testing, paper/annotation picking and section-plane grip dragging belong to Interaction; derived block-reference/pipe-run caches and visibility helpers belong to Renderer. Exact ranges are in sections.",
-        "src/commands/CadCommands.cpp: section-plane grip cancellation/axis helpers are Interaction; viewport material and entity presentation helpers are Renderer; DXF group-code lineweight conversions are IO. Exact ranges are in sections."
+        "src/commands/CadCommands.cpp: section-plane grip cancellation/axis helpers are Interaction; viewport material and entity presentation helpers are Renderer; DXF group-code lineweight conversions are IO. Exact ranges are in sections.",
+        "CadCommands.cpp Interaction carve-outs include table hit testing (PickCadTableAt), pick-depth resolution (PickCadEntityByDepth) and transient selection-box preview calculation (UpdateSelectionBoxPreview); exact ranges are assigned to Interaction in sections."
       ],
       "pendingAssignment": [
         {
@@ -12083,6 +12123,151 @@
         "Command integration is tightly coupled to AppCommandState, so family policy tests need the full shared state.",
         "Cancellation, undo boundaries, read-only project guards and failure recovery are covered unevenly across command families; this audit does not claim a complete per-command acceptance inventory."
       ]
+    },
+    "Interaction": {
+      "tier": "T4 Application",
+      "audit": {
+        "issue": 1235,
+        "parent": 1207,
+        "codeMoved": false
+      },
+      "responsibility": "Owns transient viewport interaction policy: object snapping, hit testing and pick resolution, hover and selection previews, grips, gizmo manipulation, rubber-band construction previews, and ViewCube picking/navigation decisions.",
+      "doesNotOwn": [
+        "persistent entities, selection storage, undo, or committed edits (Document and domain owners)",
+        "command registration, prompt lifecycle, or deciding what a resolved pick does next (Commands)",
+        "camera and projection state, tessellation and GPU/display buffers (Renderer)",
+        "alignment, survey-point, terrain, point-cloud, PDF, or solid model semantics and algorithms (their domain owner or Geometry)",
+        "toolkit event delivery, timers, cursors, menus, widgets, or presentation (Qt and Events)",
+        "general-purpose coordinate/vector/ray primitives (Math)"
+      ],
+      "allowedDependencies": [
+        "Commands",
+        "Renderer",
+        "Document",
+        "Survey",
+        "Terrain",
+        "PointCloud",
+        "Geometry",
+        "Math",
+        "Events",
+        "UI",
+        "Core"
+      ],
+      "dependencyNote": "Matches the Interaction row in system-map.md. Current code also reads Pdf attachment snap indexes through AppCommandState in CadSnap.cpp; this is a forbidden Interaction-to-Pdf coupling, not permission to add Pdf to the allow-list. The audit does not change enforced mappings or dependency-baseline.json.",
+      "currentFiles": [
+        "src/viewport/CadRubberPreview.cpp",
+        "src/viewport/CadRubberPreview.hpp",
+        "src/viewport/CadSnap.cpp",
+        "src/viewport/CadSnap.hpp",
+        "src/viewport/Crosshair3d.hpp",
+        "src/viewport/TransformPreview.cpp",
+        "src/viewport/TransformPreview.hpp",
+        "src/viewport/ViewCube.hpp",
+        "src/viewport/ViewportPickPolicy.hpp",
+        "src/util/hoverdwell.hpp",
+        "src/util/hoverpickgate.hpp",
+        "src/util/solidpick.cpp",
+        "src/util/solidpick.hpp",
+        "src/alignment/AlignmentGrips.cpp",
+        "src/commands/CadCommands.cpp",
+        "src/commands/CadCommands.hpp",
+        "src/qt/EditorViewport.cpp",
+        "src/qt/EditorViewport.hpp",
+        "src/qt/EditorInput.cpp",
+        "src/qt/EditorWindow.cpp",
+        "src/qt/QtAnnotations.cpp",
+        "src/qt/AdjustmentWindow.cpp",
+        "src/commands/PaperSpace.hpp"
+      ],
+      "currentSections": [
+        "src/qt/EditorViewport.cpp:1640-1692 (EditorViewport::CommitPendingIdleSelectionClick)",
+        "src/viewport/CadSnap.cpp:1006-1060 (AlignmentDirectionCardinalInUcs)",
+        "src/viewport/CadRubberPreview.cpp:210-212 (alignment-from-objects preview)",
+        "src/viewport/CadRubberPreview.cpp:403-403 (survey inverse preview)",
+        "src/alignment/AlignmentGrips.cpp:1-242 (grip editing for alignment entities)",
+        "src/commands/CadCommands.cpp:32635-33171 (PickClosestCadEntity)",
+        "src/commands/CadCommands.cpp:36796-36942 (ResolveViewportPick)",
+        "src/commands/CadCommands.cpp:1735-1949 (TryBeginEntityGripAtLocal)",
+        "src/commands/CadCommands.cpp:36776-36794 (PickPdfUnderlayAt)",
+        "src/commands/CadCommands.cpp:18150-18247 (PickGizmoAxis)",
+        "src/commands/CadCommands.cpp:18249-18253 (UpdateGizmoHover)",
+        "src/commands/CadCommands.cpp:18255-18311 (UpdateGizmoDrag)",
+        "src/commands/CadCommands.cpp:36944-36955 (ResolveViewportClickPick)",
+        "src/commands/CadCommands.cpp:45553-45581 (PickSectionPlaneGrip)",
+        "src/commands/CadCommands.cpp:45745-45750 (UpdateSectionPlaneGripHover)",
+        "src/commands/CadCommands.cpp:33177-33205 (PickFilledRegionAt)",
+        "src/commands/CadCommands.cpp:36637-36685 (PickSubObjectAcrossSolids)",
+        "src/commands/CadCommands.cpp:36695-36735 (PickClosestPipeRunEntity)",
+        "src/commands/CadCommands.cpp:36737-36774 (PickClosestSolidEntity)",
+        "src/commands/CadCommands.cpp:973-1112 (PickPaperEntityAt)",
+        "src/commands/CadCommands.cpp:8123-8213 (PickCadAnnotationAt)",
+        "src/commands/CadCommands.cpp:45647-45743 (UpdateSectionPlaneGripDrag)",
+        "src/commands/CadCommands.cpp:45605-45607 (CancelSectionPlaneGripDrag)",
+        "src/commands/CadCommands.cpp:45609-45629 (AbortSectionPlaneGripDrag)",
+        "src/commands/CadCommands.cpp:45632-45645 (SectionPlaneGripAxis)",
+        "src/viewport/: all nine files; the folder is mapped to Interaction.",
+        "src/util/hoverdwell.hpp and hoverpickgate.hpp: dwell/throttle policy; gizmooverlay.hpp is Renderer-owned draw data; solidpick.hpp/.cpp owns subobject cursor-pick policy. All remain mixed-folder ambiguous in enforced mappings.",
+        "src/alignment/AlignmentGrips.cpp: grip hit/drag policy is Interaction; alignment model semantics are Survey.",
+        "src/qt/EditorViewport.cpp/.hpp: Qt transports input and hosts viewport behavior. Interaction-owned selection, snap, hover, grip, pick, gizmo and navigation decisions are interleaved with Qt event/timer/cursor handling, Renderer camera/display work, and Commands workflow; consult all Interaction sections and audit findings.",
+        "src/commands/CadCommands.cpp/.hpp and PaperSpace.hpp: pick, grip and paper-space hit policy is interleaved with Commands, Document, Renderer and domain logic; exact recorded ranges are in sections.",
+        "src/commands/CadCommands.cpp:8215-8227 (PickCadTableAt: table hit testing)",
+        "src/commands/CadCommands.cpp:32617-32632 (PickCadEntityByDepth: pick-depth resolution)",
+        "src/commands/CadCommands.cpp:47042-47076 (UpdateSelectionBoxPreview: transient selection-box preview calculation)"
+      ],
+      "draftPublicInterface": [
+        "Create a toolkit-neutral GoSurvey/Interaction public header for SnapKind, SnapHit, SnapQuery and FindBestSnap; adapt the current CadSnap::Kind, Hit, FindBest and FindGripSnap APIs without exposing AppCommandState.",
+        "Expose pick query/result types and ResolveViewportPick/ResolveViewportClickPick policy currently represented by ViewportPickPolicy.hpp and CadCommands.cpp ranges; callers supply renderer projection/pick context and receive stable document/domain references.",
+        "Expose grip hit/drag intent and transient drag lifecycle operations, including cancellation/restoration; keep persistent mutation behind Commands/Document/domain interfaces.",
+        "Expose preview builders for rubber bands, transform/selection/hover highlights and gizmo overlays as renderer-neutral geometry batches; Renderer owns final layout/cache/device buffers.",
+        "Expose ViewCube hit and target-orientation policy (viewcube::HitTest and TargetFor), with camera values passed in and target returned rather than mutating Qt or Renderer state.",
+        "These are draft seams, not current public headers. CadSnap.hpp currently includes CadCommands.hpp, and AppCommandState carries interaction state; both are coupling points to remove during the move."
+      ],
+      "tests": [
+        "tests/CadSnapTests.cpp",
+        "tests/PdfSnapTests.cpp",
+        "tests/AlignmentGripTests.cpp",
+        "tests/HoverDwellTests.cpp",
+        "tests/HoverPickGateTests.cpp",
+        "tests/GizmoTranslateTests.cpp",
+        "tests/GizmoRotateScaleTests.cpp",
+        "tests/GizmoSubObjectMoveTests.cpp",
+        "tests/ViewportPickPolicyTests.cpp",
+        "tests/ViewportPickDepthTests.cpp",
+        "tests/PickDisambiguationTests.cpp",
+        "tests/SolidPickTests.cpp",
+        "tests/ViewportCameraTests.cpp",
+        "tests/ViewportUcsTests.cpp",
+        "tests/ViewportZoomScaleTests.cpp",
+        "tests/CameraTests.cpp",
+        "tests/DimViewportTests.cpp",
+        "tests/GsIoViewportCameraTests.cpp",
+        "tests/BoxSelectionPreviewTests.cpp",
+        "tests/ViewCubeTests.cpp",
+        "tests/Crosshair3dTests.cpp",
+        "tests/SubObjectSelectionTests.cpp",
+        "tests/MoveSubObjectTests.cpp"
+      ],
+      "testNotes": "CameraTests and GsIoViewportCameraTests primarily cover Renderer/IO camera persistence and are listed as shared boundary coverage, not wholly Interaction-owned suites. DimViewportTests contains mixed annotation/render/pick coverage.",
+      "homelessConcepts": [
+        "Transient selection state is stored in Document-facing SelectedEntity/SelectedSubObject and AppCommandState; ownership of selection intent versus persistent selection membership needs a final-map seam.",
+        "ViewCube is mapped to Interaction but computes camera target orientation; decide whether camera navigation policy stays Interaction or moves to Renderer.",
+        "View-relative pick rays and pixel-to-world aperture conversion straddle Interaction query policy and Renderer projection/camera data.",
+        "Paper-space text/chain/arc hit and sampling policy is mixed between Interaction and Renderer in PaperSpace.hpp.",
+        "GizmoOverlay is Interaction-produced visual intent but the current plain data carrier is Renderer-owned; settle a public draw-plan boundary.",
+        "View state (camera, projection, named views) is persisted inside DrawingDocument even though Renderer owns camera state."
+      ],
+      "couplings": [
+        "CadSnap.hpp includes CadCommands.hpp and exposes AppCommandState; snap queries therefore depend on the large Commands state aggregate.",
+        "CadSnap.cpp reads PdfAttachment snap vectors, visibility masks and pdfview::SnapIndex through AppCommandState; Interaction -> Pdf is forbidden by the current dependency table.",
+        "CadCommands.hpp stores solidpick::Kind in SelectedSubObject, coupling Document selection storage to Interaction policy.",
+        "CadCommands.cpp owns many current pick/grip/gizmo implementations despite being Commands-mapped; Commands consumes results and should not own hit-testing policy.",
+        "EditorViewport handlers combine Qt input delivery, Interaction policy, Commands prompt submission, Renderer camera/display work and Document/domain mutation.",
+        "Interaction preview builders emit geometry buffers while Renderer owns display batches/layout; TransformPreview.cpp contains Renderer-owned AppendSolidEdge alongside Interaction preview loops.",
+        "AlignmentGrips.cpp is Survey-folder code with Interaction-owned transient hit/drag policy and Survey-owned alignment editing semantics.",
+        "CadRubberPreview.cpp mixes generic transient preview construction with Survey/Geometry-specific construction calculations.",
+        "ViewCube policy reads Camera and UCS data and uses Qt/Renderer camera mutation at its caller.",
+        "Hover dwell helpers describe policy but timer scheduling and grip-menu presentation remain Qt-owned."
+      ]
     }
   },
   "auditFindings": {
@@ -12144,7 +12329,13 @@
       "SaveTrace is a Debug diagnostic API used by IO save paths, but its implementation reaches Win32 temp-file and debugger APIs. Define a boundary that lets IO report save outcomes without depending on Debug and Windows implementation details.",
       "IO has no format-neutral public interface directory. Import/export entry points expose a mixture of AppCommandState, domain storage, and format-specific result structures; the final map/move work must choose stable seams.",
       "Install ID: GetTelemetryIds (io/UserPrefs.cpp:535) supplies the ID used by telemetry, startup reports and crash reports. Network and Windows use it, IO stores it, and no system owns the identity policy. Final map: Network policy, IO persistence, injected provider.",
-      "Update preferences: update::UpdatePrefs (channel, enabled, skipped version) is persisted through IO UserPrefs and held in AppCommandState. Final map decides whether it is Network data, Commands state, or IO storage."
+      "Update preferences: update::UpdatePrefs (channel, enabled, skipped version) is persisted through IO UserPrefs and held in AppCommandState. Final map decides whether it is Network data, Commands state, or IO storage.",
+      "Interaction audit (#1235): Transient selection state is stored in Document-facing SelectedEntity/SelectedSubObject and AppCommandState; ownership of selection intent versus persistent selection membership needs a final-map seam.",
+      "Interaction audit (#1235): ViewCube is mapped to Interaction but computes camera target orientation; decide whether camera navigation policy stays Interaction or moves to Renderer.",
+      "Interaction audit (#1235): View-relative pick rays and pixel-to-world aperture conversion straddle Interaction query policy and Renderer projection/camera data.",
+      "Interaction audit (#1235): Paper-space text/chain/arc hit and sampling policy is mixed between Interaction and Renderer in PaperSpace.hpp.",
+      "Interaction audit (#1235): GizmoOverlay is Interaction-produced visual intent but the current plain data carrier is Renderer-owned; settle a public draw-plan boundary.",
+      "Interaction audit (#1235): View state (camera, projection, named views) is persisted inside DrawingDocument even though Renderer owns camera state."
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
@@ -12247,7 +12438,17 @@
       "PdfPlot includes PdfDocument.hpp to access the PDFium mutex, coupling IO to Pdf internals and its third-party backend.",
       "Network-to-Windows transport: platform/HttpFetch.hpp is the only HTTP transport and is WinHTTP-specific. Telemetry, update, startup and crash reports, and the online map all depend on it. Network needs an injected transport interface before it can build without Windows.",
       "Qt reaches Network directly: EditorWindow, EditorUpdate, EditorDialogs, EditorProjects and EditorViewport include update, telemetry or tile headers (ratchet: Qt may not depend on Network). The Qt layer needs a neutral update and telemetry view model.",
-      "Online-map placement: PlaceMapTile and LocalRectToMercator (CadOnlineMap.cpp) convert tile corners to LOCAL coordinates through the Survey WGS 84 frame and Document drawing settings. The controller depends on Survey and Document, which Network may not depend on."
+      "Online-map placement: PlaceMapTile and LocalRectToMercator (CadOnlineMap.cpp) convert tile corners to LOCAL coordinates through the Survey WGS 84 frame and Document drawing settings. The controller depends on Survey and Document, which Network may not depend on.",
+      "Interaction audit (#1235): CadSnap.hpp includes CadCommands.hpp and exposes AppCommandState; snap queries therefore depend on the large Commands state aggregate.",
+      "Interaction audit (#1235): CadSnap.cpp reads PdfAttachment snap vectors, visibility masks and pdfview::SnapIndex through AppCommandState; Interaction -> Pdf is forbidden by the current dependency table.",
+      "Interaction audit (#1235): CadCommands.hpp stores solidpick::Kind in SelectedSubObject, coupling Document selection storage to Interaction policy.",
+      "Interaction audit (#1235): CadCommands.cpp owns many current pick/grip/gizmo implementations despite being Commands-mapped; Commands consumes results and should not own hit-testing policy.",
+      "Interaction audit (#1235): EditorViewport handlers combine Qt input delivery, Interaction policy, Commands prompt submission, Renderer camera/display work and Document/domain mutation.",
+      "Interaction audit (#1235): Interaction preview builders emit geometry buffers while Renderer owns display batches/layout; TransformPreview.cpp contains Renderer-owned AppendSolidEdge alongside Interaction preview loops.",
+      "Interaction audit (#1235): AlignmentGrips.cpp is Survey-folder code with Interaction-owned transient hit/drag policy and Survey-owned alignment editing semantics.",
+      "Interaction audit (#1235): CadRubberPreview.cpp mixes generic transient preview construction with Survey/Geometry-specific construction calculations.",
+      "Interaction audit (#1235): ViewCube policy reads Camera and UCS data and uses Qt/Renderer camera mutation at its caller.",
+      "Interaction audit (#1235): Hover dwell helpers describe policy but timer scheduling and grip-menu presentation remain Qt-owned."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
@@ -12353,6 +12554,13 @@
       "Swept and not assigned to Network: platform/FailureReportUi.cpp SendReportToGitHub, which opens the issue URL through the OS, is Windows. GitHubIssueUrlForReport is the homeless text helper already recorded.",
       "Swept and not assigned to Network: ViewportRenderer::CreateMapTileTexture and DeleteMapTileTexture are Renderer device work (recorded in auditedEntries.Renderer).",
       "Swept and not assigned to Network: CadOnlineMap.cpp:348 status text is UI presentation. The count it formats (gathered and total) is Network state."
+    ],
+    "notInteractionDecisions": [
+      "src/util/gizmooverlay.hpp is renderer-facing draw data (Renderer), even though interaction policy populates it.",
+      "Camera storage, projection and display caches remain Renderer; ViewCube hit-testing and target-orientation policy are Interaction.",
+      "Qt event delivery, cursor/menu presentation and timer scheduling remain Qt; viewport snap, pick, hover and grip decisions are Interaction.",
+      "Alignment entity semantics remain Survey; AlignmentGrips.cpp transient hit/drag behavior belongs to Interaction.",
+      "TransformPreview.cpp display-buffer layout helper AppendSolidEdge belongs to Renderer; selection and preview outline policy belongs to Interaction."
     ]
   }
 }
