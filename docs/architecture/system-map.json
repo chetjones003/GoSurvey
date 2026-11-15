@@ -9652,7 +9652,7 @@
       "forbiddenDependencies": [
         "Network -> Windows: telemetry/TelemetryService.cpp and update/UpdateService.cpp include platform/HttpFetch.hpp, which is WinHTTP-backed (ratchet: Network may not depend on Windows).",
         "Network -> IO: telemetry/TelemetryService.cpp includes io/UserPrefs.hpp for the install ID (ratchet: Network may not depend on IO).",
-        "Network -> Commands: the online-map controller takes AppCommandState, and CadOnlineMap.* sits in the Commands folder. The Network entry depends on Commands state through this controller.",
+        "Network-owned state in Commands (no ratchet rule yet): the online-map controller in commands/CadOnlineMap.* takes AppCommandState and writes the capture job into it. Network's own code does not include Commands headers except through this file, so the ownership split is the pending fix.",
         "Commands -> Network private header: CadCommands.hpp includes update/UpdateCheck.hpp for update::UpdatePrefs.",
         "Commands -> Windows and Geometry: CadOnlineMap.hpp includes MapTileService.hpp, and CadOnlineMap.* includes geo/WebMercator.hpp (ratchet violations).",
         "Qt -> Network: EditorDialogs.cpp, EditorProjects.cpp, EditorUpdate.cpp, and EditorWindow.cpp include update/UpdateService.hpp or telemetry/TelemetryService.hpp (ratchet: Qt may not depend on Network). EditorWindow.cpp also includes platform/HttpFetch.hpp, and EditorViewport.cpp includes MapTileService.hpp.",
