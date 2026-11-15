@@ -450,7 +450,8 @@
     "Debug audit sweep (issue #1224): performance counters and PIPEPERF/PERFHUD surfaces are recorded as mixed Debug/Commands sections. BENCH command orchestration stays Commands and consumes Debug benchmark helpers. SaveTrace belongs to Debug; mapping waits on IO/Win32 seams.",
     "Document audit (issue #1226): Document file and section ownership is in auditedEntries.Document and sections. fileMappings gains Document as the advisory owner for cadblock.hpp, cadtable.hpp and PlotScales.hpp, all still ambiguous, so the ratchet and baseline do not move. Folder-mapped files get section entries only, because folder precedence would otherwise override them. The DrawingDocument god struct and CadEntities.hpp's PointCloud include are recorded in auditFindings.",
     "Survey audit (issue #1227): Survey file and section ownership is in auditedEntries.Survey and sections. Folder-mapped src/survey, src/traverse and src/alignment files are Survey through mappedFolders. src/geo files are assigned to Survey by section, following the Geometry audit, while the folder stays Geometry. No fileMappings changed, so the ratchet and baseline do not move. The Survey -> Terrain (alignment ground sampling) and Survey -> Commands (SurveyPoints.cpp) edges are recorded in forbiddenDependencies. No code moved.",
-    "Terrain audit (issue #1228): Terrain file and section ownership is recorded in auditedEntries.Terrain and sections. The 20 mixed src/util surface files carry advisory Terrain ownership but remain ambiguous so the dependency ratchet and baseline do not change. Command god-file and Survey-folder sections are assigned by symbol; user-interface, persistence, and command orchestration remain with their systems. No code moved."
+    "Terrain audit (issue #1228): Terrain file and section ownership is recorded in auditedEntries.Terrain and sections. The 20 mixed src/util surface files carry advisory Terrain ownership but remain ambiguous so the dependency ratchet and baseline do not change. Command god-file and Survey-folder sections are assigned by symbol; user-interface, persistence, and command orchestration remain with their systems. No code moved.",
+    "Renderer audit (issue #1231): Renderer file and section ownership is in auditedEntries.Renderer and sections. The src/render folder mapping, fileMappings and the ratchet baseline are unchanged, so the baseline does not move. GL device calls outside src/render (EditorViewport.cpp, FailureReport.cpp) are recorded as OpenGL sections with pending moves. GL-layout display caches in Commands state are recorded as Renderer sections. No code moved."
   ],
   "sections": [
     {
@@ -6735,6 +6736,415 @@
       "otherOwners": [
         "Pdf"
       ]
+    },
+    {
+      "path": "src/util/gizmooverlay.hpp",
+      "lines": [
+        1,
+        53
+      ],
+      "system": "Renderer",
+      "concern": "gizmo overlay draw channel",
+      "symbols": [
+        "CadGizmoOverlay"
+      ],
+      "note": "Data carrier for the renderer's translate-gizmo channel (REQ-060): per-axis GL_LINES buffers, hot flags and face mode. Mapped ambiguous; the Renderer owner is advisory until the final map resolves src/util."
+    },
+    {
+      "path": "src/util/cadsolid.hpp",
+      "lines": [
+        43,
+        117
+      ],
+      "system": "Renderer",
+      "concern": "solid display tessellation and batch carriers",
+      "symbols": [
+        "CadSolidTessellation",
+        "CadSolidDisplayBatch",
+        "CadSolidDisplayGeometry"
+      ],
+      "note": "Derived display caches in storage coordinates (triangles, normals, edges) that the renderer consumes. The solid model is Document (section at line 34). Mapped ambiguous."
+    },
+    {
+      "path": "src/util/cadsolid.hpp",
+      "lines": [
+        131,
+        152
+      ],
+      "system": "Renderer",
+      "concern": "sub-object highlight overlay carrier",
+      "symbols": [
+        "CadSubObjectOverlay"
+      ],
+      "note": "Plain data carrier for the selection and hover highlight channel, like CadGizmoOverlay. Mapped ambiguous."
+    },
+    {
+      "path": "src/util/geom2d.hpp",
+      "lines": [
+        19,
+        29
+      ],
+      "system": "Renderer",
+      "concern": "view-relative and framebuffer-dependent tessellation",
+      "symbols": [
+        "WorldToViewRelativeFloat",
+        "CirclePointViewRel",
+        "CircleTessellationSegmentCount"
+      ],
+      "note": "Outputs depend on the view anchor or the framebuffer height (VIEWRES). Geometry keeps the analytic curve helpers in its own sections."
+    },
+    {
+      "path": "src/util/geom2d.hpp",
+      "lines": [
+        81,
+        89
+      ],
+      "system": "Renderer",
+      "concern": "GL_LINES vertex emission for lines, arcs and ellipses",
+      "symbols": [
+        "AppendLineSeg3",
+        "AppendArcLineSegments",
+        "AppendEllipseLineSegments"
+      ],
+      "note": "Emit six-float GL_LINES segments for the renderer (couplings). Geometry keeps the curve maths these call."
+    },
+    {
+      "path": "src/util/geom2d.cpp",
+      "lines": [
+        74,
+        78
+      ],
+      "system": "Renderer",
+      "concern": "view-relative conversion",
+      "symbols": [
+        "WorldToViewRelativeFloat"
+      ],
+      "note": "Implementation of the view-relative conversion declared in geom2d.hpp."
+    },
+    {
+      "path": "src/util/geom2d.cpp",
+      "lines": [
+        80,
+        88
+      ],
+      "system": "Renderer",
+      "concern": "view-relative circle points",
+      "symbols": [
+        "CirclePointViewRel"
+      ],
+      "note": "Implementation of the view-relative circle point declared in geom2d.hpp."
+    },
+    {
+      "path": "src/util/geom2d.cpp",
+      "lines": [
+        90,
+        103
+      ],
+      "system": "Renderer",
+      "concern": "framebuffer-dependent circle tessellation",
+      "symbols": [
+        "CircleTessellationSegmentCount"
+      ],
+      "note": "Implementation of the VIEWRES segment count declared in geom2d.hpp."
+    },
+    {
+      "path": "src/util/geom2d.cpp",
+      "lines": [
+        207,
+        214
+      ],
+      "system": "Renderer",
+      "concern": "GL_LINES line segment emission",
+      "symbols": [
+        "AppendLineSeg3"
+      ],
+      "note": "Implementation declared in geom2d.hpp."
+    },
+    {
+      "path": "src/util/geom2d.cpp",
+      "lines": [
+        216,
+        233
+      ],
+      "system": "Renderer",
+      "concern": "GL_LINES arc emission",
+      "symbols": [
+        "AppendArcLineSegments"
+      ],
+      "note": "Implementation declared in geom2d.hpp."
+    },
+    {
+      "path": "src/util/geom2d.cpp",
+      "lines": [
+        235,
+        259
+      ],
+      "system": "Renderer",
+      "concern": "GL_LINES ellipse emission",
+      "symbols": [
+        "AppendEllipseLineSegments"
+      ],
+      "note": "Implementation declared in geom2d.hpp."
+    },
+    {
+      "path": "src/util/watershed.hpp",
+      "lines": [
+        56,
+        68
+      ],
+      "system": "Renderer",
+      "concern": "GL_LINES display builders for watershed results",
+      "symbols": [
+        "AppendWatershedBasinOutlines",
+        "AppendCatchmentBoundary",
+        "AppendPathAsLines",
+        "AppendPathFlowArrows"
+      ],
+      "note": "Build display lines from watershed results. The header says the buffers are never stored in the document payload. The analysis itself (ComputeCatchment, watershed solve) stays Terrain. Mapped ambiguous."
+    },
+    {
+      "path": "src/util/watershed.cpp",
+      "lines": [
+        543,
+        574
+      ],
+      "system": "Renderer",
+      "concern": "GL_LINES basin outline builder",
+      "symbols": [
+        "AppendWatershedBasinOutlines"
+      ],
+      "note": "Implementation declared in watershed.hpp."
+    },
+    {
+      "path": "src/util/watershed.cpp",
+      "lines": [
+        576,
+        608
+      ],
+      "system": "Renderer",
+      "concern": "GL_LINES catchment boundary builder",
+      "symbols": [
+        "AppendCatchmentBoundary"
+      ],
+      "note": "Implementation declared in watershed.hpp."
+    },
+    {
+      "path": "src/util/watershed.cpp",
+      "lines": [
+        610,
+        619
+      ],
+      "system": "Renderer",
+      "concern": "GL_LINES path builder",
+      "symbols": [
+        "AppendPathAsLines"
+      ],
+      "note": "Implementation declared in watershed.hpp."
+    },
+    {
+      "path": "src/util/watershed.cpp",
+      "lines": [
+        621,
+        672
+      ],
+      "system": "Renderer",
+      "concern": "GL_LINES flow-arrow builder",
+      "symbols": [
+        "AppendPathFlowArrows"
+      ],
+      "note": "Implementation declared in watershed.hpp."
+    },
+    {
+      "path": "src/viewport/TransformPreview.cpp",
+      "lines": [
+        1757,
+        1767
+      ],
+      "system": "Renderer",
+      "concern": "GL_LINES solid edge emission",
+      "symbols": [
+        "AppendSolidEdge"
+      ],
+      "note": "Emits one solid edge as GL_LINES for the edge highlight and the face boundary. Interaction owns which sub-objects are previewed; the emission is a Renderer layout builder. The folder is mapped Interaction."
+    },
+    {
+      "path": "src/commands/CadEntities.hpp",
+      "lines": [
+        473,
+        532
+      ],
+      "system": "Renderer",
+      "concern": "display batch carriers",
+      "symbols": [
+        "SurfaceDisplayBatch",
+        "SurfaceTriangleBatch",
+        "CadSurfaceDisplayGeometry",
+        "VolumeMapDisplayGeometry"
+      ],
+      "note": "Batch carriers the renderer reads. They borrow Terrain buffers from AppCommandState (see CadCommands.hpp sections); they do not own them."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1488,
+        1503
+      ],
+      "system": "Renderer",
+      "concern": "saved view camera state",
+      "symbols": [
+        "NamedView"
+      ],
+      "note": "Pan, zoom, projection, field of view and UCS of a saved view. This is view state of the Renderer kind stored in the drawing (homelessConcepts)."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        4011,
+        4015
+      ],
+      "system": "Renderer",
+      "concern": "GL_TRIANGLES cut and fill map buffers from the async volume build",
+      "symbols": [
+        "VolumeDashboardAsync::cutTrianglesXyz",
+        "VolumeDashboardAsync::fillTrianglesXyz"
+      ],
+      "note": "Display output in GL_TRIANGLES layout, stored in the async build state. Pending move (pendingAssignment)."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        4050,
+        4052
+      ],
+      "system": "Renderer",
+      "concern": "GL_TRIANGLES cut and fill map buffers in the volume state",
+      "symbols": [
+        "VolumeDashboardState::mapCutTrianglesXyz",
+        "VolumeDashboardState::mapFillTrianglesXyz"
+      ],
+      "note": "Display output in GL_TRIANGLES layout, empty unless resultHasMap. Pending move (pendingAssignment)."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        4097,
+        4160
+      ],
+      "system": "Renderer",
+      "concern": "surface display cache entry in GL layout",
+      "symbols": [
+        "SurfaceDisplayCacheEntry"
+      ],
+      "note": "Triangle edges, border, contours, contour labels, band triangles and slope arrows, all in GL layout, cached per surface. The Terrain results they derive from stay Terrain. Pending move (pendingAssignment)."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        4176,
+        4182
+      ],
+      "system": "Renderer",
+      "concern": "watershed display lines in cache entry",
+      "symbols": [
+        "SurfaceWatershedCacheEntry::basinOutlines",
+        "SurfaceWatershedCacheEntry::waterDropLines",
+        "SurfaceWatershedCacheEntry::catchmentLines"
+      ],
+      "note": "GL_LINES display output cached beside the watershed analysis. Pending move (pendingAssignment)."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        4199,
+        4200
+      ],
+      "system": "Renderer",
+      "concern": "watershed preview lines",
+      "symbols": [
+        "waterDropPreviewLines",
+        "catchmentPreviewLines"
+      ],
+      "note": "GL_LINES preview rebuilt each display pass from the last path state. Pending move (pendingAssignment)."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        5294,
+        5298
+      ],
+      "system": "Renderer",
+      "concern": "graphics performance display settings",
+      "symbols": [
+        "gfxSmoothLineDisplay",
+        "gfxVideoMemoryCachingLevel",
+        "gfx3dFastShadedMode"
+      ],
+      "note": "Settings → Graphics Performance values. gfxSmoothLineDisplay is wired into RenderTuning; the other two are documented placeholders."
+    },
+    {
+      "path": "src/commands/PaperSpace.hpp",
+      "lines": [
+        337,
+        341
+      ],
+      "system": "Renderer",
+      "concern": "paper viewport text overlay plan",
+      "symbols": [
+        "ViewportTextOverlayPlan"
+      ],
+      "note": "Overlay draw plan (plot scale, font family and skip-hidden) consumed by the Qt viewport. Recorded in notDocumentDecisions."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        354,
+        402
+      ],
+      "system": "OpenGL",
+      "concern": "GL initialisation in the Qt widget",
+      "symbols": [
+        "EditorViewport::initializeGL"
+      ],
+      "note": "GL error polling and state setup in the Qt widget. Pending move to the OpenGL backend (pendingAssignment)."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        403,
+        510
+      ],
+      "system": "OpenGL",
+      "concern": "stencil ear-clip fill in the Qt widget",
+      "symbols": [
+        "EditorViewport::DrawPaperViewportClipMask"
+      ],
+      "note": "Stencil writes and the triangle draw for the paper viewport clip. Pending move (pendingAssignment)."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        899,
+        908
+      ],
+      "system": "OpenGL",
+      "concern": "FBO copy of the published colour texture in paintGL",
+      "symbols": [
+        "glBlitFramebuffer"
+      ],
+      "note": "GPU-only copy through a read framebuffer and blit. Pending move (pendingAssignment)."
+    },
+    {
+      "path": "src/qt/FailureReport.cpp",
+      "lines": [
+        203,
+        208
+      ],
+      "system": "OpenGL",
+      "concern": "startup graphics probe",
+      "symbols": [
+        "glewExperimental"
+      ],
+      "note": "glewExperimental and a ViewportRenderer Init/Shutdown probe. Pending move (pendingAssignment)."
     }
   ],
   "auditedEntries": {
@@ -8520,6 +8930,220 @@
         "src/pdf/PdfAttach.cpp is not in the shared domain list, so the real attach build, FinishBuild, draft cache and texture paths are covered only through Qt tests and headless stand-ins (ProjectFilesFlowTests.cpp:3). No test asserts PdfAttach_Build output such as page size, snap vectors or visibility mask directly.",
         "No test checks that every PDFium call holds PdfiumMutex, including the TraverseReport export path."
       ]
+    },
+    "Renderer": {
+      "tier": "T3 Services",
+      "audit": {
+        "issue": 1231,
+        "parent": 1207,
+        "commit": "5b47c5c9",
+        "codeMoved": false
+      },
+      "responsibility": "Converts model state into backend-neutral draw lists and owns the camera and projection maths, the section-clip view state, the viewport and display render caches, and the graphics device interfaces that a backend implements (ADR-0003).",
+      "doesNotOwn": [
+        "Drawing, survey, terrain, point-cloud and PDF domain state. Renderer reads their data and stores only derived display caches (Document, Survey, Terrain, PointCloud, Pdf).",
+        "The OpenGL device implementation: shaders, framebuffer and multisample objects, GL texture and buffer handles, glew, and the GL calls in the Qt paint path (OpenGL backend behind the device interface; see pendingAssignment).",
+        "Snap, pick, grip, hover and preview policy, and the ViewCube and Crosshair3d hit-tests (Interaction).",
+        "Qt widget hosting, paint and resize events, input, the ribbon, and the timer that drives redraws (Qt and GoSurveyEditor).",
+        "Settings storage and the Graphics Performance dialog (Core settings and GoSurveyEditor). Renderer receives its values through RenderTuning.",
+        "Image and vector file output: CaptureThumbnailBmp writes BMP files and PdfPlot writes vector PDFs (IO).",
+        "Map tile fetch, cache and provider policy (Network). Renderer uploads tile textures only through CreateMapTileTexture until the device seam exists.",
+        "View-independent curve maths (Geometry). Renderer owns only the view-relative and framebuffer-dependent tessellation counts.",
+        "Linetype names and dash tables (Document). Renderer owns the GL_LINES emitters that consume them (couplings).",
+        "Saved-view and paper-viewport records as drawing storage (Document). NamedView and the paper viewport stay in DrawingDocument until the final map."
+      ],
+      "allowedDependencies": [
+        "Geometry",
+        "Math",
+        "Core",
+        "Document",
+        "Survey",
+        "Terrain",
+        "PointCloud",
+        "Pdf"
+      ],
+      "dependencyNote": "Matches the Renderer row in system-map.md. The ratchet baseline holds 21 Renderer-related violations of 371 total: 13 forbidden dependencies and 8 private-header includes. Renderer reaches up into Commands, Interaction and Network: ViewportRenderer.hpp includes CadCommands.hpp, CadSnap.hpp and CadOnlineMap.hpp; ViewportRenderer.cpp includes CadLinetype.hpp, CadSnap.hpp and PaperSpace.hpp; ViewportProjection.hpp includes commands/PaperSpace.hpp. Renderer's private-header includes of Pdf and Survey are PdfAttach.hpp and alignment/AlignmentDisplayCache.hpp, which must use public headers. In the other direction, Commands (CadCommands.hpp, CadCommands_Alignment.cpp), Interaction (viewport/Crosshair3d.hpp, viewport/ViewCube.hpp) and IO (io/PdfPlot.cpp) include Renderer headers. Qt (EditorViewport.cpp, EditorPipePalette.cpp, FailureReport.cpp) includes ViewportRenderer.hpp, which the Qt row forbids because Qt allows only Core, Events and UI. The GoSurvey/Renderer/ public header directory does not exist yet.",
+      "currentFiles": [
+        "src/render/Camera.hpp (Camera: orbit, plan, view rotation, orthographic and perspective projection, world-to-screen; folder-mapped)",
+        "src/render/ViewportProjection.hpp (model-to-paper projection through a camera; includes commands/PaperSpace.hpp, a forbidden edge)",
+        "src/render/SectionClip.hpp (section clip plane, shader vectors, indicator, plane extent, hatch and grip geometry; GL-free)",
+        "src/render/ViewportRenderer.hpp (RenderTuning and the ViewportRenderer class with its GL-handle members; includes CadCommands.hpp, CadSnap.hpp and CadOnlineMap.hpp, which the map forbids)",
+        "src/render/ViewportRenderer.cpp (4256 lines and grandfathered in .github/file-size-baseline.json. Device init, shader, framebuffer and multisample setup from line 827; RenderScene from about line 1250 to 3855; GPU release for solids, meshes and point clouds; part thumbnails and BMP capture from 3889. Calls GL directly.)",
+        "src/util/gizmooverlay.hpp (CadGizmoOverlay, the translate-gizmo draw channel; mapped ambiguous, see sections)",
+        "src/util/cadsolid.hpp lines 43-117 and 131-152 (solid display tessellation, batch and overlay carriers; the rest of the file is Document, see sections)"
+      ],
+      "pendingAssignment": [
+        {
+          "files": [
+            "src/render/ViewportRenderer.cpp (every GL call, about 680 references, including Init, EnsureShader, EnsureFramebuffer, EnsureMultisamplePass, RenderScene and the GPU release functions)",
+            "src/render/ViewportRenderer.hpp (GLuint, GLenum and shader members in the class)"
+          ],
+          "reason": "Renderer must hold draw lists and handles only through a device interface (ADR-0003). The interface, the factory and the OpenGL implementation do not exist yet, so ViewportRenderer is both frontend and device. Split it when the device seam is created. The headless null device in tests/headless is the first candidate implementation."
+        },
+        {
+          "files": [
+            "src/qt/EditorViewport.cpp lines 354-402 (initializeGL), 403-510 (DrawPaperViewportClipMask, a stencil ear-clip fill), 899-908 (paintGL, the FBO copy of the published colour texture)"
+          ],
+          "reason": "About 34 GL calls sit in the Qt widget. Qt may not depend on the graphics API (system-map.md: OpenGL is a platform backend). They move to the OpenGL backend behind the device interface, and the stencil fill becomes a draw-list primitive."
+        },
+        {
+          "files": [
+            "src/qt/FailureReport.cpp lines 203-208 (glewExperimental and the ViewportRenderer Init/Shutdown startup probe)"
+          ],
+          "reason": "The startup graphics probe belongs with the OpenGL backend's initialisation. Qt calls ViewportRenderer directly here."
+        },
+        {
+          "files": [
+            "src/commands/CadCommands.hpp lines 4011-4015, 4050-4052, 4097-4160, 4176-4182, 4199-4200 (GL-layout display buffers in the volume dashboard, surface display and watershed state)"
+          ],
+          "reason": "These are derived display caches stored in AppCommandState beside the Terrain results they come from. Renderer should own the cache, keyed by result identity, outside Commands state. Moving them changes undo snapshots, so this is a final-map ticket rather than a relocation."
+        },
+        {
+          "files": [
+            "src/pdf/PdfAttach.cpp (glGenTextures, glTexParameteri and glDeleteTextures, lines 393-433, 1111 and 1880)",
+            "src/pdf/PdfAttach.hpp (glTexId)"
+          ],
+          "reason": "Cross-reference to the Pdf audit (issue #1230). Texture upload and deletion belong to the OpenGL backend behind Renderer's device interface."
+        },
+        {
+          "files": [
+            "src/render/ViewportRenderer.cpp lines 4192-4256 (CaptureThumbnailBmp and the BMP write)"
+          ],
+          "reason": "The thumbnail render cache stays in Renderer, but the BMP file write is IO. Split the write from the capture when the IO seam is decided."
+        }
+      ],
+      "draftPublicInterface": {
+        "camera and projection": [
+          "Camera",
+          "Camera::Plan",
+          "Camera::ViewRotation",
+          "Camera::WorldToScreen",
+          "Camera::SetFromViewRotation",
+          "Camera::Projection",
+          "kDefaultFovDeg, kMinFovDeg, kMaxFovDeg",
+          "Camera::OrthoProjection (until the matrix representation is decided; see homelessConcepts)"
+        ],
+        "viewport projection": [
+          "ModelToPaperInThroughCamera"
+        ],
+        "section clip": [
+          "SectionClipPlane",
+          "SectionClipIndicator",
+          "SectionClipToShaderVec4",
+          "SectionClipDisabledVec4",
+          "SectionPlaneExtent",
+          "SectionPlaneGraphics",
+          "SectionPlaneGrip",
+          "SectionPlaneGrips"
+        ],
+        "draw inputs": [
+          "RenderTuning",
+          "CadSolidTessellation, CadSolidDisplayBatch, CadSolidDisplayGeometry",
+          "CadSubObjectOverlay",
+          "CadGizmoOverlay",
+          "SurfaceDisplayBatch, SurfaceTriangleBatch, CadSurfaceDisplayGeometry",
+          "VolumeMapDisplayGeometry"
+        ],
+        "scene pass": [
+          "ViewportRenderer::Init, Shutdown, SetSize",
+          "ViewportRenderer::RenderScene",
+          "ViewportRenderer::BlitRenderedFrame",
+          "ViewportRenderer::CreateMapTileTexture and DeleteMapTileTexture (move behind the device)"
+        ],
+        "part thumbnails": [
+          "ViewportRenderer::EnsurePartThumbnail, InvalidatePartThumbnail, PartThumbnailTexture",
+          "ViewportRenderer::CaptureThumbnailBmp (the file write moves to IO)"
+        ],
+        "line tessellation": [
+          "CircleTessellationSegmentCount",
+          "WorldToViewRelativeFloat",
+          "CirclePointViewRel",
+          "AppendLineSeg3, AppendArcLineSegments, AppendEllipseLineSegments"
+        ],
+        "not yet created (ADR-0003)": [
+          "Backend-neutral device interfaces for buffers, textures, shaders and draw calls",
+          "Device factory selected at startup",
+          "Headless null device (none yet; the batch dump in tests/headless/HeadlessDriver.cpp is the nearest analogue)"
+        ]
+      },
+      "existingTests": [
+        "tests/CameraTests.cpp",
+        "tests/ViewportCameraTests.cpp",
+        "tests/SectionClipTests.cpp",
+        "tests/SectionClipStateTests.cpp",
+        "tests/VisualStyleTests.cpp",
+        "tests/ZoomFramingTests.cpp",
+        "tests/ZoomExtents3dTests.cpp"
+      ],
+      "testsCoveringOtherSystems": [
+        "tests/QtEditorTests.cpp (includes ViewportRenderer.hpp; Qt paint path; Qt)",
+        "tests/ExtendedGeometryGateTests.cpp (guards the hasExt bug in ViewportRenderer.cpp; Commands)",
+        "tests/headless/HeadlessDriver.cpp (batch dump of what the renderer would be handed; harness, Headless)",
+        "tests/ViewCubeTests.cpp and tests/Crosshair3dTests.cpp (Camera projection through Interaction overlays; Interaction)",
+        "tests/OrthoUcsConstrainTests.cpp (Camera calls in ortho constraints; Interaction)",
+        "tests/LinetypeTessellationTests.cpp and tests/PlotStrokeTests.cpp (GL_LINES output of linetype tessellation and stroke output; Document and IO)"
+      ],
+      "forbiddenDependencies": [
+        {
+          "from": "src/render/ViewportRenderer.hpp, src/render/ViewportRenderer.cpp",
+          "to": "Commands, Interaction and Network (CadCommands.hpp, CadSnap.hpp, CadOnlineMap.hpp, CadLinetype.hpp, PaperSpace.hpp)",
+          "files": [
+            "src/render/ViewportRenderer.hpp",
+            "src/render/ViewportRenderer.cpp"
+          ],
+          "reason": "Ratchet baseline: Renderer may not depend on Commands, Interaction or Network. CadCommands.hpp also includes render/Camera.hpp and render/SectionClip.hpp, so the Commands edge is a cycle. Renderer should draw from a draw-input struct that Commands fills."
+        },
+        {
+          "from": "src/render/ViewportProjection.hpp",
+          "to": "Commands (commands/PaperSpace.hpp)",
+          "files": [
+            "src/render/ViewportProjection.hpp"
+          ],
+          "reason": "Ratchet baseline: Renderer may not depend on Commands. The paper-space record should be a Document type."
+        },
+        {
+          "from": "Qt (src/qt/EditorViewport.cpp, src/qt/EditorPipePalette.cpp, src/qt/FailureReport.cpp)",
+          "to": "Renderer (ViewportRenderer.hpp, render/ViewportProjection.hpp, render/SectionClip.hpp)",
+          "files": [
+            "src/qt/EditorViewport.cpp",
+            "src/qt/EditorPipePalette.cpp",
+            "src/qt/FailureReport.cpp"
+          ],
+          "reason": "Ratchet baseline: Qt allows only Core, Events and UI. The paint path needs a Renderer interface that the application layer composes."
+        },
+        {
+          "from": "IO (src/io/PdfPlot.cpp)",
+          "to": "Renderer (render/ViewportProjection.hpp)",
+          "files": [
+            "src/io/PdfPlot.cpp"
+          ],
+          "reason": "Ratchet baseline: IO may not depend on Renderer. The per-viewport projection used by the plot should be a Math or Document function."
+        },
+        {
+          "from": "Commands and Interaction (src/commands/CadCommands.hpp, src/commands/CadCommands_Alignment.cpp, src/viewport/Crosshair3d.hpp, src/viewport/ViewCube.hpp)",
+          "to": "Renderer private headers (render/Camera.hpp, render/SectionClip.hpp, render/ViewportProjection.hpp)",
+          "files": [
+            "src/commands/CadCommands.hpp",
+            "src/commands/CadCommands_Alignment.cpp",
+            "src/viewport/Crosshair3d.hpp",
+            "src/viewport/ViewCube.hpp"
+          ],
+          "reason": "Ratchet baseline, private-header rule: Commands and Interaction may depend on Renderer, but cross-system includes must use public headers, which do not exist yet."
+        },
+        {
+          "from": "Renderer (src/render/ViewportRenderer.hpp)",
+          "to": "Pdf and Survey private headers (PdfAttach.hpp, alignment/AlignmentDisplayCache.hpp)",
+          "files": [
+            "src/render/ViewportRenderer.hpp"
+          ],
+          "reason": "Ratchet baseline, private-header rule. Pdf and Survey are allowed dependencies, but the include must use their public headers."
+        }
+      ],
+      "testGaps": [
+        "No device interface and no headless null device exist, and no test calls ViewportRenderer::RenderScene. Renderer behaviour is reached only through Qt tests and the headless batch dump.",
+        "tests/CameraTests.cpp:50 reproduces the renderer's orthographic matrix in the test, because ViewportRenderer::Ortho is private (ViewportRenderer.hpp:270). No test compares the two matrix builders.",
+        "RenderScene is one method of about 2,600 lines (1250-3855). No test covers the order of its passes (surfaces, solids, point clouds, section clip, map tiles, gizmo)."
+      ]
     }
   },
   "auditFindings": {
@@ -8573,7 +9197,10 @@
       "PDF underlay picking: SelectedEntity::Type::PdfUnderlay (CadCommands.hpp line 90) and the rotated bounding-box hit test (CadCommands.cpp around 10540-10570) are Document selection and Interaction picking that depend on Pdf geometry.",
       "Units and strings: pdfview::Unit and UnitInMetres (PdfMeasure.hpp/.cpp) duplicate Core unit definitions, and PdfCoordExtract and PdfScaleCheck carry trim and upper-case helpers that duplicate Core (see sections).",
       "Viewer paging: PdfViewerCore is pure layout and cache policy in a Domain folder; whether it belongs to Pdf or to Renderer or Qt presentation is undecided.",
-      "Test fixtures in a production header: PdfViewerCore.hpp declares MakeSyntheticPdf and MakeLineWorkPdf, which BENCH commands use. Move them to tests or to Debug benchmark scenes."
+      "Test fixtures in a production header: PdfViewerCore.hpp declares MakeSyntheticPdf and MakeLineWorkPdf, which BENCH commands use. Move them to tests or to Debug benchmark scenes.",
+      "Device seam: ADR-0003 requires backend-neutral device interfaces for buffers, textures, shaders and draw calls, a factory selected at startup, and a headless null device. None exist in src/. The only Headless* files are src/platform/HeadlessFileDialogs and src/platform/HeadlessPdfAttach. The final map must create the interface in Renderer's public headers and place the GL implementation in the OpenGL backend.",
+      "Draw-list vertex layouts: GL_LINES (six floats per segment), GL_TRIANGLES (nine floats per triangle) and the seven-float coloured line vertex in CadLinetype are std::vector<float> contracts described only in comments. Producers in Document (CadLinetype.hpp), Terrain (watershed.hpp, surfacevolume.hpp), Geometry (geom2d.hpp, brep.hpp), Survey (SurveyPoints.hpp) and Interaction (TransformPreview.cpp) build them. Renderer should own one draw-list vertex type that the producers use.",
+      "Render tuning inputs: RenderTuning carries background, grid, paper ink, visual style, section clip and map tiles, and is filled from AppCommandState. Core owns the setting values; Renderer owns the tuning struct. The final map should decide where the fill happens."
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
@@ -8662,7 +9289,14 @@
       "src/qt/main.cpp calls PdfAttach_Init and PdfAttach_Shutdown; src/qt/EditorViewport.cpp copies PdfAttachment for ghost previews and repeats RotatePdfInsertAroundBase and ScalePdfInsertAroundBase (Math duplicates; see sections).",
       "src/platform/HeadlessPdfAttach.cpp implements the PdfAttach_Build seam for the headless build (CMakeLists.txt comment near line 470).",
       "src/io/PdfPlot.cpp shares PdfiumMutex and writes vector PDFs through FPDF; src/traverse/TraverseReport.cpp writes report PDFs through FPDF.",
-      "src/util/docinvariants.cpp counts st.pdfAttachments for the PdfUnderlay entity type."
+      "src/util/docinvariants.cpp counts st.pdfAttachments for the PdfUnderlay entity type.",
+      "Renderer and Commands form a cycle: ViewportRenderer.hpp includes CadCommands.hpp, while CadCommands.hpp includes render/Camera.hpp and render/SectionClip.hpp. Renderer should draw from a draw-input struct that Commands fills, and should not read AppCommandState.",
+      "Qt paint path: EditorViewport::paintGL calls ViewportRenderer::RenderScene and CaptureThumbnailBmp, and publishes its colour texture with raw GL calls (899-908). Qt may depend only on Core, Events and UI, so the Qt-to-Renderer seam belongs in the application layer. The final map decides which layer composes it.",
+      "Interaction emits draw geometry: TransformPreview.cpp builds selection and preview outlines. AppendSolidEdge (1757-1767) is a Renderer layout builder. The outline loops at 1651 are Interaction preview policy and stay with it.",
+      "Map tiles: MapTileDraw (RenderTuning::mapTiles) is a Network and Commands type, reached through a forbidden include. The tile fetch and cache belong to Network; the texture belongs to the device.",
+      "CadLinetype tessellation: CadTessellateLinetype* (CadLinetype.hpp 17-34) emits seven-float GL_LINES vertices with colour. The file's Document section [1,36] covers these declarations, so they are not sectioned here. Split them at the move ticket.",
+      "Survey and Renderer: ViewportRenderer.hpp includes alignment/AlignmentDisplayCache.hpp. The existing Renderer section for that cache makes it a Renderer-owned type, so the include should move to a public Renderer interface.",
+      "brep.hpp (1330-1332, solid edges as GL_LINES) and geom2d.hpp (81-89) are Geometry headers that emit GL_LINES. geom2d's emitters are assigned to Renderer above; brep's edge export follows the same pattern. The final map should decide both together."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
@@ -8754,6 +9388,11 @@
       "src/commands/CadCommands_Alignment.cpp feature lines and quick profile (4059-4305): Terrain, because feature lines are Terrain in the map.",
       "src/util/PointFileExt.hpp (point-file extension rule): a Platform-callable point-file naming helper, not Survey policy. Its header places it outside IO for the Platform caller.",
       "src/util/SheetGrid.hpp and src/util/DataExtract.hpp: export grids for tabular output, IO per the Document audit."
+    ],
+    "notRendererDecisions": [
+      "src/viewport/ViewCube.hpp and Crosshair3d.hpp: mapped Interaction by the viewport folder. They include Camera for projection, but hit-testing and navigation policy stay with Interaction.",
+      "src/commands/CadColor.hpp and the linetype name table in CadLinetype.hpp: Document. CadColorResolveRgb is consumed by Renderer, and its storage and ACI parsing stay Document (notDocumentDecisions).",
+      "src/util/surfacevolume.hpp and tinvolume.hpp: the GL_TRIANGLES output is part of Terrain's volume result. The cut and fill arithmetic stays Terrain; the display buffers that hold the output are Renderer caches in the Commands sections."
     ]
   }
 }
