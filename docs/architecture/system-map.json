@@ -158,12 +158,12 @@
     },
     {
       "path": "src/util/cylinderfit.cpp",
-      "system": null,
+      "system": "PointCloud",
       "status": "ambiguous"
     },
     {
       "path": "src/util/cylinderfit.hpp",
-      "system": null,
+      "system": "PointCloud",
       "status": "ambiguous"
     },
     {
@@ -273,22 +273,22 @@
     },
     {
       "path": "src/util/pointcloudcache.cpp",
-      "system": null,
+      "system": "PointCloud",
       "status": "ambiguous"
     },
     {
       "path": "src/util/pointcloudcache.hpp",
-      "system": null,
+      "system": "PointCloud",
       "status": "ambiguous"
     },
     {
       "path": "src/util/pointcloudoctree.cpp",
-      "system": null,
+      "system": "PointCloud",
       "status": "ambiguous"
     },
     {
       "path": "src/util/pointcloudoctree.hpp",
-      "system": null,
+      "system": "PointCloud",
       "status": "ambiguous"
     },
     {
@@ -6319,6 +6319,152 @@
         "Pdf",
         "Renderer"
       ]
+    },
+    {
+      "path": "src/commands/CadEntities.hpp",
+      "lines": [
+        1299,
+        1339
+      ],
+      "system": "PointCloud",
+      "concern": "immutable point-cloud payload",
+      "symbols": [
+        "CadPointCloud"
+      ],
+      "note": "Point-cloud preview payload, cache path, octree metadata and counts. The header also has Document entities, Terrain data and PointCloud type dependencies; keep the file mapping unresolved until the public type can move without forbidden includes.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document",
+        "Terrain"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1380,
+        1381
+      ],
+      "system": "PointCloud",
+      "concern": "undo snapshot point-cloud references",
+      "symbols": [
+        "DrawingGeometrySnapshot::cadPointClouds"
+      ],
+      "note": "Undo snapshots retain shared immutable cloud payloads; undo framework remains Document.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document",
+        "Survey",
+        "Terrain",
+        "Pdf",
+        "Renderer"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1584,
+        1585
+      ],
+      "system": "PointCloud",
+      "concern": "drawing point-cloud storage",
+      "symbols": [
+        "DrawingDocument::cadPointClouds"
+      ],
+      "note": "Persistent drawing storage for immutable cloud payloads; the containing DrawingDocument is a cross-system composition.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1867,
+        1876
+      ],
+      "system": "Renderer",
+      "concern": "point-cloud display policy",
+      "symbols": [
+        "PointCloudColorScheme",
+        "PointCloudDisplaySettings"
+      ],
+      "note": "Session-global visual settings consumed by rendering; not PointCloud storage or indexing.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "PointCloud"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        3607,
+        3608
+      ],
+      "system": "PointCloud",
+      "concern": "active point-cloud storage",
+      "symbols": [
+        "AppCommandState::cadPointClouds",
+        "AppCommandState::cadPointCloudAttrs"
+      ],
+      "note": "Live reference geometry and its per-cloud attributes. Payload ownership is PointCloud; the surrounding session state remains Commands.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        3930,
+        3984
+      ],
+      "system": "Commands",
+      "concern": "point-cloud import workflow state",
+      "symbols": [
+        "AppCommandState::PointCloudImportAsync"
+      ],
+      "note": "Command orchestration and worker lifecycle. It produces PointCloud payload data using IO readers and PointCloud cache building.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "PointCloud",
+        "IO"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        4269,
+        4275
+      ],
+      "system": "Commands",
+      "concern": "shared point-cloud query cache state",
+      "symbols": [
+        "AppCommandState::PointCloudOpenCacheEntry",
+        "AppCommandState::pointCloudOpenCaches"
+      ],
+      "note": "Shared EXTRACTCENTERLINE and object-snap cache lifecycle held in AppCommandState; interaction calls it through Commands, while cache metadata and leaf reads belong to PointCloud. ViewportRenderer keeps a separate render cache.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Interaction",
+        "PointCloud"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        36122,
+        36155
+      ],
+      "system": "PointCloud",
+      "concern": "cache-backed point-cloud preview sampling",
+      "symbols": [
+        "BuildPreviewFromCache"
+      ],
+      "note": "Reads cache leaves and samples a bounded preview into the immutable cloud payload. Optional leaf-progress counters are Commands job accounting; the sampling and cache-to-payload transformation belong to PointCloud.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
     }
   ],
   "auditedEntries": {
@@ -7703,6 +7849,140 @@
         "No Terrain-owned test target or public Terrain header exists yet; current tests build through the shared Commands/util target.",
         "Headless transcripts cover user workflows but remain under tests/headless rather than a Terrain-owned suite."
       ]
+    },
+    "PointCloud": {
+      "tier": "T2 Domain",
+      "audit": {
+        "issue": 1229,
+        "parent": 1207,
+        "commit": "134510b9",
+        "codeMoved": false
+      },
+      "responsibility": "Owns the immutable point-cloud payload model, octree spatial index, and the disk-backed cache format and lifecycle used to retain and page full-density point data.",
+      "doesNotOwn": [
+        "E57, PTS, PTX, LAS or LAZ parsing and writing (IO)",
+        "GPU buffers, draw selection, LOD presentation and session display settings (Renderer)",
+        "import/export command workflows, undo framework and command state (Commands and Document)",
+        "attach/export dialogs and progress presentation (Qt / GoSurveyEditor)"
+      ],
+      "allowedDependencies": [
+        "Math",
+        "Core"
+      ],
+      "dependencyNote": "Matches the PointCloud row in system-map.md. The current cache builder calls IO stream readers from src/util/pointcloudcache.cpp, which is a cross-system coupling to move behind an IO seam. Existing callers in CadEntities.hpp, CadCommands.hpp/.cpp and ViewportRenderer.hpp include or use PointCloud types directly; dependencies must be resolved via public headers in the final map before enforcement.",
+      "currentFiles": [
+        "src/util/pointcloudoctree.hpp, src/util/pointcloudoctree.cpp (PointCloud index and spatial queries; ambiguous mapping status is retained pending caller-edge cleanup)",
+        "src/util/pointcloudcache.hpp, src/util/pointcloudcache.cpp (PointCloud .gscloud cache builder, reader and leaf-page access; cache builder currently calls IO stream readers directly)",
+        "src/util/cylinderfit.hpp, src/util/cylinderfit.cpp (pure PointCloud neighborhood cylinder-axis fitting; ambiguous file status is retained pending final-map ownership enforcement)",
+        "src/commands/CadEntities.hpp (CadPointCloud payload section only; mixed Commands/Document/Terrain header)",
+        "src/commands/CadCommands.hpp (DrawingDocument and undo cloud references only; mixed god file)",
+        "src/commands/CadCommands.cpp (cloud payload lifecycle is interleaved with Commands workflows; import/export, selection and UI invocation remain Commands)",
+        "src/render/ViewportRenderer.hpp, src/render/ViewportRenderer.cpp (PointCloud GPU cache, LOD selection and drawing belong to Renderer)",
+        "src/io/CadPointCloudE57.hpp/.cpp, CadPointCloudPts.hpp/.cpp, CadPointCloudPtx.hpp/.cpp, CadPointCloudLas.hpp/.cpp, CadPointCloudLaz.hpp/.cpp (point-file parsing/writing belongs to IO)",
+        "src/qt/EditorPointClouds.cpp and related editor/project files (dialogs and progress presentation belong to Qt / GoSurveyEditor)"
+      ],
+      "pendingAssignment": [
+        {
+          "files": [
+            "src/util/pointcloudcache.cpp"
+          ],
+          "reason": "The cache builder directly calls IO stream readers. Preserve the PointCloud cache owner, but move the reader orchestration behind an allowed IO seam before dependency enforcement."
+        },
+        {
+          "files": [
+            "src/commands/CadEntities.hpp (CadPointCloud, lines 1299-1339)"
+          ],
+          "reason": "The PointCloud payload is embedded in a mixed Commands entity header that also contains Document and Terrain data. Extract or expose a public PointCloud header before assigning the entire file."
+        },
+        {
+          "files": [
+            "src/commands/CadCommands.hpp (DrawingDocument/AppCommandState fields and import state)"
+          ],
+          "reason": "God-struct storage and import state combine PointCloud data with Document and Commands behavior. Final-map work must separate owned payload and orchestration state."
+        }
+      ],
+      "draftPublicInterface": {
+        "storage and index": [
+          "pointcloud::Bounds",
+          "pointcloud::Node",
+          "pointcloud::Octree",
+          "pointcloud::BuildParams",
+          "pointcloud::CylinderLodLeaf",
+          "pointcloud::BuildOctree",
+          "pointcloud::QueryLeavesNearPoint",
+          "pointcloud::SelectLodLeavesInCylinder",
+          "CadPointCloud (immutable payload; currently declared in CadEntities.hpp)",
+          "cylinderfit::FitResult",
+          "cylinderfit::FitParams",
+          "cylinderfit::FitCylinderAxisLeastSquares"
+        ],
+        "disk cache": [
+          "pointcloudcache::SourceStamp",
+          "pointcloudcache::OpenCache",
+          "pointcloudcache::OpenResult",
+          "pointcloudcache::BuildFromE57",
+          "pointcloudcache::BuildFromPts",
+          "pointcloudcache::BuildFromPtx",
+          "pointcloudcache::BuildFromLas",
+          "pointcloudcache::BuildFromLaz",
+          "pointcloudcache::Open",
+          "pointcloudcache::ReadLeafPoints",
+          "pointcloudcache::MatchesSource"
+        ],
+        "internal, not PointCloud public interface": [
+          "PointCloudDisplaySettings and PointCloudColorScheme (Renderer policy)",
+          "PointCloudImportAsync and import/export functions (Commands)",
+          "CadPointCloud* format readers and writers (IO)",
+          "PointCloudGpuEntry and GPU buffers (Renderer)"
+        ]
+      },
+      "existingTests": [
+        "tests/PointCloudOctreeTests.cpp",
+        "tests/PointCloudCacheTests.cpp",
+        "tests/CylinderFitTests.cpp"
+      ],
+      "testsCoveringOtherSystems": [
+        "tests/CadPointCloudE57Tests.cpp",
+        "tests/CadPointCloudPtsTests.cpp",
+        "tests/CadPointCloudPtxTests.cpp",
+        "tests/CadPointCloudLasTests.cpp",
+        "tests/CadPointCloudLazTests.cpp (IO format readers/writers)",
+        "tests/PointCloudExportTests.cpp and point-cloud scenarios in tests/QtEditorTests.cpp (Commands/Qt integration)"
+      ],
+      "forbiddenDependencies": [
+        {
+          "from": "src/util/pointcloudcache.cpp",
+          "to": "io/CadPointCloudE57.hpp, io/CadPointCloudPts.hpp, io/CadPointCloudPtx.hpp, io/CadPointCloudLas.hpp, io/CadPointCloudLaz.hpp",
+          "system": "IO",
+          "note": "PointCloud cache construction directly invokes IO format stream readers. This is a downward-tier violation under the draft map; replace with an IO-owned orchestration seam."
+        },
+        {
+          "from": "src/commands/CadEntities.hpp",
+          "to": "util/pointcloudoctree.hpp",
+          "system": "PointCloud",
+          "note": "Document entity header directly includes the PointCloud octree type. The current file remains Commands-mapped; it becomes a forbidden Domain peer dependency when CadPointCloud moves to its own public header."
+        },
+        {
+          "from": "src/commands/CadCommands.hpp and src/render/ViewportRenderer.hpp",
+          "to": "PointCloud payload/cache types",
+          "system": "PointCloud",
+          "note": "Commands and Renderer need public PointCloud types, but the current headers are private util or mixed god-file declarations. The final map must establish public-header dependency boundaries."
+        }
+      ],
+      "homelessConcepts": [
+        "PointCloud persistence ownership is split: CadPointCloud holds a preview sample and cache path/octree; the .gscloud cache holds full-density data; DXF/DWG persistence intentionally excludes full cloud data. Document/persistence ownership and sidecar lifecycle need a final-map decision.",
+        "Point-cloud selection and extraction for centerline fitting currently lives in CadCommands.cpp; the final map should decide whether spatial queries remain a PointCloud API while extraction policy stays in Commands."
+      ],
+      "crossSystemCouplings": [
+        "src/util/pointcloudcache.cpp depends upward on IO stream readers for E57/PTS/PTX/LAS/LAZ.",
+        "src/commands/CadEntities.hpp includes the PointCloud octree header inside a mixed Commands/Document/Terrain entity header.",
+        "src/render/ViewportRenderer.hpp includes private util PointCloud cache headers directly.",
+        "AppCommandState and DrawingDocument contain PointCloud data, renderer display preferences and command worker/cache state in one Commands god file."
+      ],
+      "testGaps": [
+        "No isolated public-header consumer test exists because PointCloud types are declared in private util and Commands headers.",
+        "No tests currently assert the intended allowed dependency seams between PointCloud, IO and Renderer."
+      ]
     }
   },
   "auditFindings": {
@@ -7747,7 +8027,9 @@
       "ALIGN (CadCommands_Align.cpp): two-point Helmert similarity applied to drawing geometry. It is coordinate-system work, but it edits Document geometry through Math transforms; no owner is assigned.",
       "Web Mercator tile math (geo/WebMercator.*): assigned to Survey by the Geometry audit, but it serves Network online maps. Decide at the final map.",
       "Survey point-label MTEXT (SurveyPoints.cpp 693-912): label text comes from Survey data, but the MTEXT entity and placement are Document. The split is recorded; the owner of the label template is open.",
-      "Terrain surface domain is homeless from its implementation boundary: surface/TIN/style/profile data and algorithms are split among src/util, Commands god files, and Survey-mapped alignment files; the final map/move tickets must create a Terrain home and public interface."
+      "Terrain surface domain is homeless from its implementation boundary: surface/TIN/style/profile data and algorithms are split among src/util, Commands god files, and Survey-mapped alignment files; the final map/move tickets must create a Terrain home and public interface.",
+      "PointCloud persistence ownership is split: CadPointCloud holds a preview sample and cache path/octree; the .gscloud cache holds full-density data; DXF/DWG persistence intentionally excludes full cloud data. Document/persistence ownership and sidecar lifecycle need a final-map decision.",
+      "Point-cloud selection and extraction for centerline fitting currently lives in CadCommands.cpp; the final map should decide whether spatial queries remain a PointCloud API while extraction policy stays in Commands."
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
@@ -7824,7 +8106,11 @@
       "Survey AlignmentGround and AlignmentSampleLines call Terrain ISurfaceQuery/surface-volume helpers, creating forbidden Survey -> Terrain edges and a dependency cycle against the allowed Terrain -> Survey direction.",
       "DrawingDocument and AppCommandState store Terrain surfaces, profiles, styles, feature lines and grading data alongside Document, Survey, PointCloud, Pdf and Renderer state; undo snapshots copy cross-system state.",
       "Qt EditorSurfaces and EditorSurfaceManager directly read CadSurface and AppCommandState, while CadSurfaceEdit edit helpers are in Commands and couple to command logging; UI/domain/command seams are not separated.",
-      "Terrain display geometry, contour drawing, caches and selection/snap presentation are mixed with model helpers; rendering portions belong to Renderer and query selection/prompt routing belongs to Interaction/Commands."
+      "Terrain display geometry, contour drawing, caches and selection/snap presentation are mixed with model helpers; rendering portions belong to Renderer and query selection/prompt routing belongs to Interaction/Commands.",
+      "src/util/pointcloudcache.cpp depends upward on IO stream readers for E57/PTS/PTX/LAS/LAZ.",
+      "src/commands/CadEntities.hpp includes the PointCloud octree header inside a mixed Commands/Document/Terrain entity header.",
+      "src/render/ViewportRenderer.hpp includes private util PointCloud cache headers directly.",
+      "AppCommandState and DrawingDocument contain PointCloud data, renderer display preferences and command worker/cache state in one Commands god file."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
