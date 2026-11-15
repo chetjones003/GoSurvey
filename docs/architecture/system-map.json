@@ -168,7 +168,7 @@
     },
     {
       "path": "src/util/DataExtract.hpp",
-      "system": null,
+      "system": "IO",
       "status": "ambiguous"
     },
     {
@@ -313,7 +313,7 @@
     },
     {
       "path": "src/util/SheetGrid.hpp",
-      "system": null,
+      "system": "IO",
       "status": "ambiguous"
     },
     {
@@ -452,7 +452,8 @@
     "Survey audit (issue #1227): Survey file and section ownership is in auditedEntries.Survey and sections. Folder-mapped src/survey, src/traverse and src/alignment files are Survey through mappedFolders. src/geo files are assigned to Survey by section, following the Geometry audit, while the folder stays Geometry. No fileMappings changed, so the ratchet and baseline do not move. The Survey -> Terrain (alignment ground sampling) and Survey -> Commands (SurveyPoints.cpp) edges are recorded in forbiddenDependencies. No code moved.",
     "Terrain audit (issue #1228): Terrain file and section ownership is recorded in auditedEntries.Terrain and sections. The 20 mixed src/util surface files carry advisory Terrain ownership but remain ambiguous so the dependency ratchet and baseline do not change. Command god-file and Survey-folder sections are assigned by symbol; user-interface, persistence, and command orchestration remain with their systems. No code moved.",
     "Renderer audit (issue #1231): Renderer file and section ownership is in auditedEntries.Renderer and sections. The src/render folder mapping, fileMappings and the ratchet baseline are unchanged, so the baseline does not move. GL device calls outside src/render (EditorViewport.cpp, FailureReport.cpp) are recorded as OpenGL sections with pending moves. GL-layout display caches in Commands state are recorded as Renderer sections. No code moved.",
-    "IO audit (issue #1232): IO file and section ownership is recorded in auditedEntries.IO and sections. The nine format/helper files in src/util receive advisory IO ownership in fileMappings and remain ambiguous so the dependency ratchet does not change; src/util/PointFileExt.hpp is called by the Windows backend, and modelimport.hpp is a shared transfer contract. Current cross-system and platform couplings are recorded in forbiddenDependencies and auditFindings. No code moved."
+    "IO audit (issue #1232): IO file and section ownership is recorded in auditedEntries.IO and sections. The eleven format/helper files in src/util receive advisory IO ownership in fileMappings and remain ambiguous so the dependency ratchet does not change; src/util/PointFileExt.hpp is called by the Windows backend, modelimport.hpp is a shared transfer contract, and SHX parsing is sectioned under IO in src/font/. Current cross-system and platform couplings are recorded in forbiddenDependencies and auditFindings. No code moved.",
+    "IO audit follow-up: the whole SHX parser in src/font/ShxFont.cpp/.hpp is IO despite the Core folder mapping; src/util/SheetGrid.hpp and DataExtract.hpp are advisory IO export-grid ownership from the Document audit. Point-cloud readers, project-file, and B-rep serialization tests are included in existingTests. The draft DXF/DWG interface names match the current declarations and explicitly note their Commands-state coupling."
   ],
   "sections": [
     {
@@ -7215,6 +7216,36 @@
         "ExpandTessellation"
       ],
       "note": "Builds per-triangle display vertices and normals from a brep tessellation for the display cache. Renderer layout builder; pending move (pendingAssignment)."
+    },
+    {
+      "path": "src/font/ShxFont.hpp",
+      "lines": [
+        1,
+        55
+      ],
+      "system": "IO",
+      "concern": "SHX font file format interface",
+      "symbols": [
+        "Shx::Font",
+        "Shx::Resolve"
+      ],
+      "note": "Declares the SHX format reader and parsed glyph result. Shx::Vec2 and stroke geometry are transfer data consumed by Renderer; file loading and font lookup are IO.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/font/ShxFont.cpp",
+      "lines": [
+        1,
+        383
+      ],
+      "system": "IO",
+      "concern": "SHX font file parsing and glyph decode",
+      "symbols": [
+        "Font::LoadFromFile",
+        "Resolve"
+      ],
+      "note": "Reads Autodesk SHX files and decodes their glyph shape bytecode. The font folder remains mapped to Core; this section records the IO format ownership.",
+      "ownershipKind": "whole"
     }
   ],
   "auditedEntries": {
@@ -9266,45 +9297,73 @@
         "src/util/AcisSatParser.cpp, src/util/AcisSatParser.hpp, src/util/AcisSatWriter.cpp (SAT format parsing and writing).",
         "src/util/gltfimport.cpp, src/util/gltfimport.hpp, src/util/stlimport.cpp, src/util/stlimport.hpp, src/util/modelimport.hpp (3D model importers and shared import result contract).",
         "src/util/PointFileExt.hpp (pure point-file extension rule used by the platform save dialog; advisory IO ownership, remains ambiguous because Platform cannot depend upward on IO).",
-        "IO-owned sections in SurveyPoints, TraverseReport, CadCommands_Geo, ProjectPoints, LibreDwgCivil, LibreDwgCad, GsIo, and the traverse format/import files are listed in sections."
+        "IO-owned sections in SurveyPoints, TraverseReport, CadCommands_Geo, ProjectPoints, LibreDwgCivil, LibreDwgCad, GsIo, and the traverse format/import files are listed in sections.",
+        "src/font/ShxFont.cpp, src/font/ShxFont.hpp (SHX file parser and font lookup; IO sections in sections).",
+        "src/util/SheetGrid.hpp and src/util/DataExtract.hpp (tabular export grid and DATAEXTRACTION grid builder; advisory IO ownership per the Document audit, still ambiguous)."
       ],
       "pendingAssignment": [
         "src/util/PointFileExt.hpp is IO format policy called by the Windows dialog layer; move behind a lower-level neutral seam or make the helper platform-owned before enforcing the advisory assignment.",
         "The imported model result types in src/util/modelimport.hpp are shared by IO importers and Geometry/DWG conversion; confirm whether this format-neutral transfer contract belongs in IO or a neutral interchange module before moving it.",
-        "IO source currently lives in Commands, Survey, and util folders. Move only after public model interfaces and dependency edges are established."
+        "IO source currently lives in Commands, Survey, and util folders. Move only after public model interfaces and dependency edges are established.",
+        "SHX parsed glyphs expose stroke geometry shared with Renderer; preserve that transfer contract while moving file parsing from the Core-mapped font folder.",
+        "Geometry and Math are allowed dependencies. Resolve the exact public headers used by SAT and model conversion when those implementations move; the current utility locations are advisory and mixed."
       ],
       "draftPublicInterface": [
-        "Drawing interchange: io::ImportDxf, io::ExportDxf, io::ImportDwg, io::ExportDwg, and the associated DxfIo/DwgIo options and result types.",
-        "Native/legacy persistence: GsIo load/save and migration interfaces; Project, ProjectFiles, ProjectPack, ProjectPointDb, and ProjectTurnover interfaces.",
-        "Survey and point exchange: SurveyCsv import/export, LandXml import/export, traverse file formats, and StarNet/Fbk/JobXML/RW5 import entry points.",
-        "Point-cloud and model formats: CadPointCloudE57/Las/Laz/Pts/Ptx, glTF/STL import, SAT parser/writer, and their result/options structures.",
-        "Plot/report output: PdfPlot and TraverseReport export functions; spreadsheet read/write interfaces.",
-        "These are draft current symbols, not stable public headers; public include paths and format-neutral interfaces remain to be designed."
+        "Drawing interchange: ImportDxfFile and ExportDxfFile (src/io/DxfIo.hpp); ImportDwgFile, ExportDwgFile, OpenDrawingDocument, and SaveDrawingDocument (src/io/DwgIo.hpp). These current signatures take AppCommandState and expose the Commands coupling; they are not yet suitable stable public interfaces.",
+        "Native/project persistence: SaveGoSurveyTemplateFile, LoadGoSurveyTemplateFile, SerializeGoSurveyJson, and LoadGoSurveyFromJsonUtf8 (src/io/GsIo.hpp); gsproj::Create, Load, Save and the project-file/pack APIs in Project.hpp, ProjectFiles.hpp, and ProjectPack.hpp.",
+        "Survey exchange: ExportLandXmlFile and ImportLandXmlFile (LandXmlIo.hpp); SurveyCsvImportFile, SurveyCsvReadPointsOnly, and SurveyCsvExportFile (SurveyCsv.hpp); traverseio::Save/Load, travcmd::Serialize/Parse, and the FbkImport, JobXmlImport, Rw5Import, and StarNetImport entry points.",
+        "Point-cloud formats: pointcloud_e57::ReadE57File; pointcloud_las::ReadLasFile/WriteLasFile; pointcloud_laz::ReadLazFile/WriteLazFile; pointcloud_pts::ReadPtsFile/WritePtsFile; and pointcloud_ptx::ReadPtxFile/WritePtxFile, with their ReadResult/WriteResult types.",
+        "Model and solid formats: gltf::ImportGltfFile/ImportGltfBytes, stl::ImportStlFile/ImportStlBytes, and acissat::ImportSatSolid/ExportSatSolid; the shared modelimport::Options, Part, and Result transfer types.",
+        "Tabular and plot output: spreadsheet WriteCsv/ReadCsv/WriteXlsx/ReadXlsx (SpreadsheetIo.hpp), PlotLayoutsToPdf (PdfPlot.hpp), and ExportReportTxt/ExportReportRtf/ExportReportPdf (TraverseReport.hpp).",
+        "SHX import: Shx::Font::LoadFromFile, Shx::Resolve, Shx::MeasureWidthPx, and Shx::MeasureInkExtent (src/font/ShxFont.hpp), consumed by rendering and UI font selection.",
+        "These are current declarations, not stable public headers. Public include paths and format-neutral APIs remain to be designed."
       ],
       "existingTests": [
         "tests/AcisSatParserTests.cpp",
+        "tests/BrepJsonTests.cpp",
+        "tests/CadPointCloudE57Tests.cpp",
+        "tests/CadPointCloudLasTests.cpp",
+        "tests/CadPointCloudLazTests.cpp",
+        "tests/CadPointCloudPtsTests.cpp",
+        "tests/CadPointCloudPtxTests.cpp",
         "tests/DwgProbeTests.cpp",
         "tests/DxfEntityEmitTests.cpp",
+        "tests/GeoDataReadTests.cpp",
         "tests/GltfImportTests.cpp",
+        "tests/GsAnnotationJsonTests.cpp",
+        "tests/GsIoDimAngularTests.cpp",
+        "tests/GsIoPipeRunTests.cpp",
+        "tests/GsIoViewportCameraTests.cpp",
+        "tests/GsMigrateTests.cpp",
         "tests/LandXmlExportTests.cpp",
         "tests/LandXmlImportTests.cpp",
         "tests/LibreDwgCadTests.cpp",
         "tests/LibreDwgTests.cpp",
+        "tests/PlotFontTests.cpp",
+        "tests/PlotSheetPdfTests.cpp",
+        "tests/PlotStrokeTests.cpp",
+        "tests/PointCloudExportTests.cpp",
         "tests/PointFileExtTests.cpp",
+        "tests/ProjectFilesTests.cpp",
+        "tests/ProjectPackTests.cpp",
         "tests/SpreadsheetIoTests.cpp",
         "tests/StlImportTests.cpp",
         "tests/SurveyCsvValidateTests.cpp",
         "tests/TraverseTests.cpp"
       ],
       "testsCoveringOtherSystems": [
-        "tests/AlignmentDwgTests.cpp (Survey alignment conversion through DWG).",
-        "Project and point-cloud tests also exercise persistence or readers alongside their owning domain behavior."
+        "Project and point-cloud tests also exercise persistence or readers alongside their owning domain behavior.",
+        "tests/CadBlockImportTests.cpp (Commands block-import workflow over IO drawing readers).",
+        "tests/GsMigrateLegacyBreaklineTests.cpp (Terrain legacy payload migration).",
+        "tests/ProjectFilesFlowTests.cpp and tests/ProjectAddFlowTests.cpp (Commands project-file workflows).",
+        "tests/ProjectPointsSyncTests.cpp and tests/ProjectSettingsTests.cpp (Survey/Commands project data with persistence).",
+        "tests/TraverseTests.cpp (Survey calculation and IO format persistence/import).",
+        "tests/AlignmentDwgTests.cpp (Survey alignment conversion through DWG)."
       ],
       "forbiddenDependencies": [
         "Commands -> IO: IO implementations include Commands-owned CadCommands.hpp and consume AppCommandState (for example DxfIo, DwgIo, SurveyCsv, ProjectFiles, and project-point DB code). Commands -> IO is allowed, but the reverse dependency is forbidden.",
         "IO -> Windows: src/io/Project.cpp and related project/file code use Win32 process/path APIs; platform operations need a Windows adapter.",
         "IO -> Debug private header: IO save paths call SaveTrace from src/util/SaveTrace.hpp, assigned to Debug; Debug also currently reaches Win32 APIs. A narrow diagnostic interface or caller-side tracing is needed.",
-        "IO -> Geometry/Math: SAT and model conversion currently use shared geometry/math helpers whose folder assignments are mixed or unresolved; public interfaces and allowed edges must be checked during moves.",
         "IO -> Pdf private implementation: src/io/PdfPlot.cpp includes PdfDocument.hpp for the PDFium mutex; replace this with a narrow backend interface."
       ],
       "testGaps": [
