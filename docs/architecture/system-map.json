@@ -9361,7 +9361,7 @@
         "tests/AlignmentDwgTests.cpp (Survey alignment conversion through DWG)."
       ],
       "forbiddenDependencies": [
-        "Commands -> IO: IO implementations include Commands-owned CadCommands.hpp and consume AppCommandState (for example DxfIo, DwgIo, SurveyCsv, ProjectFiles, and project-point DB code). Commands -> IO is allowed, but the reverse dependency is forbidden.",
+        "IO -> Commands: IO implementations include Commands-owned CadCommands.hpp and consume AppCommandState (for example DxfIo, DwgIo, SurveyCsv, ProjectFiles, and project-point DB code). Commands -> IO is allowed, but the reverse dependency is forbidden.",
         "IO -> Windows: src/io/Project.cpp and related project/file code use Win32 process/path APIs; platform operations need a Windows adapter.",
         "IO -> Debug private header: IO save paths call SaveTrace from src/util/SaveTrace.hpp, assigned to Debug; Debug also currently reaches Win32 APIs. A narrow diagnostic interface or caller-side tracing is needed.",
         "IO -> Pdf private implementation: src/io/PdfPlot.cpp includes PdfDocument.hpp for the PDFium mutex; replace this with a narrow backend interface."
