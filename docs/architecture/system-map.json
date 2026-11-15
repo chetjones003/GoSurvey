@@ -8339,28 +8339,6 @@
           "reason": "Ratchet baseline: Qt may not depend on Pdf. The PDF viewer windows and attach dialogs are Qt presentation and should consume a public Pdf interface through the application seam."
         }
       ],
-      "homelessConcepts": [
-        "PDFium library integration: PdfDocument, PdfAttach, PdfSplit, PdfAnnotate and PdfMeasure call PDFium inside the Pdf folder although the map row excludes PDF library integration. PdfAttach_Init and PdfAttach_Shutdown are called from the Qt main, TraverseReport export calls FPDF directly, and the vector plot writer in IO calls FPDF too. The final map must decide whether PDFium is a platform backend, an IO backend, or a Pdf-owned adapter.",
-        "PDFium lock coverage: pdfview::PdfiumMutex() (PdfDocument.hpp) guards PDFium calls in Pdf and in IO's PdfPlot.cpp, and its header says every PDFium call runs under it. src/traverse/TraverseReport.cpp ExportReportPdf calls FPDF_InitLibrary, FPDF_CreateNewDocument and FPDF_SaveAsCopy without taking that lock. Not verified at runtime; record for the IO audit and the final map.",
-        "PDF placement record ownership: PdfAttachment is Pdf payload stored in Document containers (DrawingDocument and the undo snapshot), and the project file stores placements under the pdfs role (io/Project.hpp, io/ProjectFiles.cpp). Ownership of the placement record and its persistence is unassigned.",
-        "PDF underlay picking: SelectedEntity::Type::PdfUnderlay (CadCommands.hpp line 90) and the rotated bounding-box hit test (CadCommands.cpp around 10540-10570) are Document selection and Interaction picking that depend on Pdf geometry.",
-        "Units and strings: pdfview::Unit and UnitInMetres (PdfMeasure.hpp/.cpp) duplicate Core unit definitions, and PdfCoordExtract and PdfScaleCheck carry trim and upper-case helpers that duplicate Core (see sections).",
-        "Viewer paging: PdfViewerCore is pure layout and cache policy in a Domain folder; whether it belongs to Pdf or to Renderer or Qt presentation is undecided.",
-        "Test fixtures in a production header: PdfViewerCore.hpp declares MakeSyntheticPdf and MakeLineWorkPdf, which BENCH commands use. Move them to tests or to Debug benchmark scenes."
-      ],
-      "crossSystemCouplings": [
-        "src/render/ViewportRenderer.hpp includes PdfAttach.hpp for PdfAttachment, and ViewportRenderer.cpp draws underlays from attachment textures (Renderer -> Pdf is allowed; the texture handle is the problem).",
-        "src/commands/CadCommands.hpp includes PdfAttach.hpp, and AppCommandState and DrawingDocument hold PdfAttachment vectors (Commands and Document -> Pdf is allowed, but the include must use a GoSurvey/Pdf/ public header).",
-        "src/viewport/CadSnap.cpp reads PdfAttachment snap vectors, the visibility mask and pdfview::SnapIndex during object snap (Interaction -> Pdf is allowed).",
-        "src/commands/ProjectFiles.cpp and src/commands/CadCommands_Align.cpp read or write PdfAttachment placement and transform fields.",
-        "src/qt/main.cpp calls PdfAttach_Init and PdfAttach_Shutdown; src/qt/EditorViewport.cpp copies PdfAttachment for ghost previews and repeats RotatePdfInsertAroundBase and ScalePdfInsertAroundBase (Math duplicates; see sections).",
-        "src/platform/HeadlessPdfAttach.cpp implements the PdfAttach_Build seam for the headless build (CMakeLists.txt comment near line 470).",
-        "src/io/PdfPlot.cpp shares PdfiumMutex and writes vector PDFs through FPDF; src/traverse/TraverseReport.cpp writes report PDFs through FPDF.",
-        "src/util/docinvariants.cpp counts st.pdfAttachments for the PdfUnderlay entity type."
-      ],
-      "namespaceGaps": [
-        "PdfAttach.hpp declares PdfAttachment, PdfAttachPixelResult, PdfDraftCache and the PdfAttach_* and PdfDraftCache_* functions in the global namespace, while the rest of Pdf uses pdfview, pdfalign, pdfdiff and pdfview::raw. ADR-0006 requires system-qualified namespaces; the final map must choose one Pdf namespace."
-      ],
       "testGaps": [
         "No Pdf-owned test target: the Pdf unit tests compile into the shared GoSurveyTests target, which lists the Pdf sources by name (CMakeLists.txt around line 1508), and link PDFium.",
         "src/pdf/PdfAttach.cpp is not in the shared domain list, so the real attach build, FinishBuild, draft cache and texture paths are covered only through Qt tests and headless stand-ins (ProjectFilesFlowTests.cpp:3). No test asserts PdfAttach_Build output such as page size, snap vectors or visibility mask directly.",
@@ -8412,7 +8390,14 @@
       "Survey point-label MTEXT (SurveyPoints.cpp 693-912): label text comes from Survey data, but the MTEXT entity and placement are Document. The split is recorded; the owner of the label template is open.",
       "Terrain surface domain is homeless from its implementation boundary: surface/TIN/style/profile data and algorithms are split among src/util, Commands god files, and Survey-mapped alignment files; the final map/move tickets must create a Terrain home and public interface.",
       "PointCloud persistence ownership is split: CadPointCloud holds a preview sample and cache path/octree; the .gscloud cache holds full-density data; DXF/DWG persistence intentionally excludes full cloud data. Document/persistence ownership and sidecar lifecycle need a final-map decision.",
-      "Point-cloud selection and extraction for centerline fitting currently lives in CadCommands.cpp; the final map should decide whether spatial queries remain a PointCloud API while extraction policy stays in Commands."
+      "Point-cloud selection and extraction for centerline fitting currently lives in CadCommands.cpp; the final map should decide whether spatial queries remain a PointCloud API while extraction policy stays in Commands.",
+      "PDFium library integration: PdfDocument, PdfAttach, PdfSplit, PdfAnnotate and PdfMeasure call PDFium inside the Pdf folder although the map row excludes PDF library integration. PdfAttach_Init and PdfAttach_Shutdown are called from the Qt main, TraverseReport export calls FPDF directly, and the vector plot writer in IO calls FPDF too. The final map must decide whether PDFium is a platform backend, an IO backend, or a Pdf-owned adapter.",
+      "PDFium lock coverage: pdfview::PdfiumMutex() (PdfDocument.hpp) guards PDFium calls in Pdf and in IO's PdfPlot.cpp, and its header says every PDFium call runs under it. src/traverse/TraverseReport.cpp ExportReportPdf calls FPDF_InitLibrary, FPDF_CreateNewDocument and FPDF_SaveAsCopy without taking that lock. Not verified at runtime; record for the IO audit and the final map.",
+      "PDF placement record ownership: PdfAttachment is Pdf payload stored in Document containers (DrawingDocument and the undo snapshot), and the project file stores placements under the pdfs role (io/Project.hpp, io/ProjectFiles.cpp). Ownership of the placement record and its persistence is unassigned.",
+      "PDF underlay picking: SelectedEntity::Type::PdfUnderlay (CadCommands.hpp line 90) and the rotated bounding-box hit test (CadCommands.cpp around 10540-10570) are Document selection and Interaction picking that depend on Pdf geometry.",
+      "Units and strings: pdfview::Unit and UnitInMetres (PdfMeasure.hpp/.cpp) duplicate Core unit definitions, and PdfCoordExtract and PdfScaleCheck carry trim and upper-case helpers that duplicate Core (see sections).",
+      "Viewer paging: PdfViewerCore is pure layout and cache policy in a Domain folder; whether it belongs to Pdf or to Renderer or Qt presentation is undecided.",
+      "Test fixtures in a production header: PdfViewerCore.hpp declares MakeSyntheticPdf and MakeLineWorkPdf, which BENCH commands use. Move them to tests or to Debug benchmark scenes."
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
@@ -8493,7 +8478,15 @@
       "src/util/pointcloudcache.cpp depends upward on IO stream readers for E57/PTS/PTX/LAS/LAZ.",
       "src/commands/CadEntities.hpp includes the PointCloud octree header inside a mixed Commands/Document/Terrain entity header.",
       "src/render/ViewportRenderer.hpp includes private util PointCloud cache headers directly.",
-      "AppCommandState and DrawingDocument contain PointCloud data, renderer display preferences and command worker/cache state in one Commands god file."
+      "AppCommandState and DrawingDocument contain PointCloud data, renderer display preferences and command worker/cache state in one Commands god file.",
+      "src/render/ViewportRenderer.hpp includes PdfAttach.hpp for PdfAttachment, and ViewportRenderer.cpp draws underlays from attachment textures (Renderer -> Pdf is allowed; the texture handle is the problem).",
+      "src/commands/CadCommands.hpp includes PdfAttach.hpp, and AppCommandState and DrawingDocument hold PdfAttachment vectors (Commands and Document -> Pdf is allowed, but the include must use a GoSurvey/Pdf/ public header).",
+      "src/viewport/CadSnap.cpp reads PdfAttachment snap vectors, the visibility mask and pdfview::SnapIndex during object snap (Interaction -> Pdf is allowed).",
+      "src/commands/ProjectFiles.cpp and src/commands/CadCommands_Align.cpp read or write PdfAttachment placement and transform fields.",
+      "src/qt/main.cpp calls PdfAttach_Init and PdfAttach_Shutdown; src/qt/EditorViewport.cpp copies PdfAttachment for ghost previews and repeats RotatePdfInsertAroundBase and ScalePdfInsertAroundBase (Math duplicates; see sections).",
+      "src/platform/HeadlessPdfAttach.cpp implements the PdfAttach_Build seam for the headless build (CMakeLists.txt comment near line 470).",
+      "src/io/PdfPlot.cpp shares PdfiumMutex and writes vector PDFs through FPDF; src/traverse/TraverseReport.cpp writes report PDFs through FPDF.",
+      "src/util/docinvariants.cpp counts st.pdfAttachments for the PdfUnderlay entity type."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
@@ -8511,7 +8504,8 @@
       "ray3d uses namespace ray3d and ucs uses namespace ucs. ADR-0006 requires GoSurvey::<System>, which would be GoSurvey::Math. OrthoConstrain.hpp uses global functions. Namespace work follows the move, not this audit.",
       "UI headers use namespaces cmdbar, mtexttoolbar, richtext, modelingribbon, headless, and failureReportUi, and WinFileDialogs.hpp uses global functions. ADR-0006 requires GoSurvey::UI for UI-owned code. Namespace work follows the move, not this audit.",
       "Document types are in the global namespace: the CadEntities.hpp structs (CadArc, CadAnnotation, CadTable, PaperLayout, CadBlockDefinition and others) and DrawingDocument. ADR-0006 requires GoSurvey::Document. TextStyles, DimensionStyles, cadfont and CadTable* namespaces exist but are partial.",
-      "Survey headers have no GoSurvey::Survey namespace (ADR-0006): SurveyPoints.hpp, PointGroupRule.hpp, TraverseCalc.hpp and TraverseLeastSquares.hpp are global; alignment:: and geo:: are used instead. Namespace work follows the move, not this audit."
+      "Survey headers have no GoSurvey::Survey namespace (ADR-0006): SurveyPoints.hpp, PointGroupRule.hpp, TraverseCalc.hpp and TraverseLeastSquares.hpp are global; alignment:: and geo:: are used instead. Namespace work follows the move, not this audit.",
+      "PdfAttach.hpp declares PdfAttachment, PdfAttachPixelResult, PdfDraftCache and the PdfAttach_* and PdfDraftCache_* functions in the global namespace, while the rest of Pdf uses pdfview, pdfalign, pdfdiff and pdfview::raw. ADR-0006 requires system-qualified namespaces; the final map must choose one Pdf namespace."
     ],
     "notCoreDespiteName": [
       "src/util/framewatch.hpp and src/util/docinvariants.*: Debug (diagnostics), not logging.",
