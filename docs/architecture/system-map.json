@@ -6465,6 +6465,131 @@
       "otherOwners": [
         "Commands"
       ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1441,
+        1441
+      ],
+      "system": "Pdf",
+      "concern": "undo snapshot PDF underlay payload",
+      "symbols": [
+        "DrawingGeometrySnapshot::pdfAttachments"
+      ],
+      "note": "Attachment records copied into undo snapshots. The undo framework is Document; the snapshot copy zeroes GL texture ids (CadCommands.cpp:2223) so restored snapshots never reference freed textures.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document",
+        "Renderer"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1644,
+        1644
+      ],
+      "system": "Pdf",
+      "concern": "drawing-owned PDF underlay storage",
+      "symbols": [
+        "DrawingDocument::pdfAttachments"
+      ],
+      "note": "Per-drawing list of PdfAttachment payloads inside the mixed DrawingDocument composition. The struct is a Document container; this list is Pdf payload.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        5678,
+        5692
+      ],
+      "system": "Pdf",
+      "concern": "PDF draft cache, async build result and preview payload",
+      "symbols": [
+        "AppCommandState::pdfDraftCache",
+        "AppCommandState::AsyncBuild",
+        "AppCommandState::pdfAttachPreview"
+      ],
+      "note": "Opaque Pdf draft-cache handle, the PdfAttachPixelResult carried by the async build, and the cursor-following PdfAttachment preview. The PDFATTACH phase, dialog fields and thread lifecycle around them remain Commands.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands",
+        "Renderer"
+      ]
+    },
+    {
+      "path": "src/pdf/PdfAttach.hpp",
+      "lines": [
+        27,
+        30
+      ],
+      "system": "Renderer",
+      "concern": "GPU texture handle stored on the attachment",
+      "symbols": [
+        "PdfAttachment::glTexId",
+        "PdfAttachment::texW",
+        "PdfAttachment::texH"
+      ],
+      "note": "OpenGL texture id and size held in the Pdf model. Renderer owns GPU resources; the model should carry pixels or a Renderer handle, not a GL name, before enforcement.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Pdf"
+      ]
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        378,
+        435
+      ],
+      "system": "Renderer",
+      "concern": "OpenGL texture upload",
+      "symbols": [
+        "UploadBgraTexture"
+      ],
+      "note": "Calls glGenTextures and glTexParameteri directly (GL/glew.h). This is a platform-device call inside an engine system; the Pdf build should return pixels and let the Renderer upload them.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Pdf"
+      ]
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        1108,
+        1113
+      ],
+      "system": "Renderer",
+      "concern": "OpenGL texture deletion on the draft cache",
+      "symbols": [
+        "PdfDraftCache_Free"
+      ],
+      "note": "Deletes thumbnail textures on the main thread because it owns the GL context. The cache owns the ids; deletion moves with the upload seam.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Pdf"
+      ]
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        1877,
+        1886
+      ],
+      "system": "Renderer",
+      "concern": "OpenGL texture release for an attachment",
+      "symbols": [
+        "PdfAttach_ReleaseTexture"
+      ],
+      "note": "Deletes an attachment's GL texture and clears its size fields. Renderer owns the release once the model stops holding GL ids.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Pdf"
+      ]
     }
   ],
   "auditedEntries": {
@@ -7982,6 +8107,264 @@
       "testGaps": [
         "No isolated public-header consumer test exists because PointCloud types are declared in private util and Commands headers.",
         "No tests currently assert the intended allowed dependency seams between PointCloud, IO and Renderer."
+      ]
+    },
+    "Pdf": {
+      "tier": "T2 Domain",
+      "audit": {
+        "issue": 1230,
+        "parent": 1207,
+        "commit": "2679ef10",
+        "codeMoved": false
+      },
+      "responsibility": "Owns the PDF underlay model and its page analysis: attached-page placement and snap geometry, page measurement and scale calibration and checks, dimension audit, annotation and markup records, sheet alignment and comparison, page split, and the pure viewer paging core.",
+      "doesNotOwn": [
+        "PDFium binding, process-wide initialisation and the PDFium lock as a library backend (unassigned; see homelessConcepts). The src/pdf folder currently holds the implementation, which the final map must place behind a backend seam.",
+        "OpenGL texture upload, texture deletion and GPU draw batches (Renderer device interface; PdfAttach.cpp currently calls GL directly)",
+        "vector PDF plot writing and report PDF export (IO: src/io/PdfPlot.cpp, src/traverse/TraverseReport.cpp)",
+        "PDF viewer, attach, split, compare and scale windows, dialogs, ribbon and canvas (Qt and GoSurveyEditor)",
+        "drawing storage, undo, selection and the DrawingDocument container that stores attachments (Document)",
+        "snap candidate queries during picks and the PDF-space transform used by the pick loop (Interaction; Pdf owns the SnapIndex)",
+        "PDFATTACH, PDFVIEW and PDFSPLIT command state, prompts and placement workflow (Commands)",
+        "project placement records and the .gsproj pdfs role (Commands and IO)",
+        "unit and string helpers that duplicate Core (Core)"
+      ],
+      "allowedDependencies": [
+        "Geometry",
+        "Math",
+        "Core",
+        "Document"
+      ],
+      "dependencyNote": "Matches the Pdf row in system-map.md. Pdf -> Document is the permitted Domain peer edge, but no current Pdf source includes a Document header. Current Pdf includes outside src/pdf are ../font (Core, src/pdf/PdfAnnotate.cpp, a private-header include in the ratchet baseline) and the PDFium SDK (third-party, not a system). src/pdf/PdfAttach.cpp also includes GL/glew.h and calls OpenGL, which an engine system may not depend on. PdfAttach.hpp has no GoSurvey/Pdf/ public header directory yet, so every cross-system include of it is a private-header violation under the ratchet.",
+      "currentFiles": [
+        "src/pdf/PdfAttach.hpp, src/pdf/PdfAttach.cpp (underlay model, page build, snap extraction and draft cache; advisory Pdf with the GL sections listed in sections as Renderer)",
+        "src/pdf/PdfSnap.hpp, src/pdf/PdfSnap.cpp (snap index over page geometry; compiled into gosurvey_domain)",
+        "src/pdf/PdfAlign.hpp, src/pdf/PdfAlign.cpp (sheet alignment transform, tint classification and auto-align)",
+        "src/pdf/PdfDiff.hpp, src/pdf/PdfDiff.cpp (sheet comparison and revision-cloud markups)",
+        "src/pdf/PdfAnnotate.hpp, src/pdf/PdfAnnotate.cpp (annotation, dimension, leader and revision-cloud records; writes through PDFium)",
+        "src/pdf/PdfMeasure.hpp, src/pdf/PdfMeasure.cpp (page scale calibration, units and viewport dictionaries; reads through PDFium)",
+        "src/pdf/PdfScaleCheck.hpp, src/pdf/PdfScaleCheck.cpp (scale check, robust fit and correction preview)",
+        "src/pdf/PdfDimAudit.hpp, src/pdf/PdfDimAudit.cpp (dimension-text to segment matching and audit)",
+        "src/pdf/PdfCoordExtract.hpp, src/pdf/PdfCoordExtract.cpp (coordinate candidates from page text)",
+        "src/pdf/PdfRaw.hpp, src/pdf/PdfRaw.cpp (raw PDF object scanner used by measure and scale writing)",
+        "src/pdf/PdfSplit.hpp, src/pdf/PdfSplit.cpp (page-list parsing and page extraction; PDFium save)",
+        "src/pdf/PdfViewerCore.hpp, src/pdf/PdfViewerCore.cpp (pure paging layout, read-ahead and page-cache policy)",
+        "src/pdf/PdfDocument.hpp, src/pdf/PdfDocument.cpp (PDFium document wrapper, Bitmap type and the process-wide PdfiumMutex; library integration that doesNotOwn lists as unassigned)"
+      ],
+      "pendingAssignment": [
+        {
+          "files": [
+            "src/pdf/PdfAttach.cpp (UploadBgraTexture, PdfDraftCache_Free texture deletion, PdfAttach_ReleaseTexture)",
+            "src/pdf/PdfAttach.hpp (PdfAttachment::glTexId, texW, texH, PdfDraftCache_ThumbnailTex)"
+          ],
+          "reason": "GL texture ids are Renderer device resources stored in the Pdf model. Move upload and deletion behind a Renderer texture interface, and keep the model free of GL handles, before enforcement. The headless build already replaces PdfAttach_Build with a seam (src/platform/HeadlessPdfAttach.cpp; CMakeLists.txt comment near line 470)."
+        },
+        {
+          "files": [
+            "src/pdf/PdfDocument.cpp",
+            "src/pdf/PdfAttach.cpp",
+            "src/pdf/PdfSplit.cpp",
+            "src/pdf/PdfAnnotate.cpp",
+            "src/pdf/PdfMeasure.cpp (every PDFium call)"
+          ],
+          "reason": "PDFium integration sits in the Pdf folder although the map row says Pdf does not own PDF library integration. The final map must choose: a Pdf-owned adapter behind an interface, or a separate platform backend. Until then the folder stays Pdf-mapped as advisory owner."
+        },
+        {
+          "files": [
+            "src/commands/CadCommands.hpp (DrawingGeometrySnapshot::pdfAttachments line 1441, DrawingDocument::pdfAttachments line 1644, AppCommandState draft cache and async build lines 5678-5692)"
+          ],
+          "reason": "PdfAttachment payloads sit in Document undo and drawing storage, and the draft cache and async build types live in the Commands god file. Split them when the final map gives Pdf a public header."
+        }
+      ],
+      "draftPublicInterface": {
+        "underlay model and build": [
+          "PdfAttachment (until glTexId moves out)",
+          "PdfAttachPixelResult (until the GL upload is split out)",
+          "PdfAttach_Build",
+          "PdfAttach_BuildToBuffer",
+          "PdfAttach_FinishBuild",
+          "PdfDraftCache (opaque handle) with its page, size, snap and rasterize queries"
+        ],
+        "PDFium document access": [
+          "pdfview::PdfDocument",
+          "pdfview::Bitmap",
+          "pdfview::PixelSize",
+          "pdfview::PixelRect",
+          "pdfview::ObjBox",
+          "pdfview::TextHit",
+          "pdfview::TextSearch",
+          "pdfview::Downscale",
+          "pdfview::PdfiumMutex (until a backend seam owns it)"
+        ],
+        "snap index": [
+          "pdfview::SnapPoint",
+          "pdfview::SnapIndex"
+        ],
+        "measure and scale": [
+          "pdfview::Unit",
+          "pdfview::PageScale",
+          "pdfview::ScaleFromCalibration",
+          "pdfview::ReadPageScales",
+          "pdfview::ApplyPageScales",
+          "pdfview::ScaleRead",
+          "pdfview::ParseUnit",
+          "pdfview::UnitLabel",
+          "pdfview::FormatValue",
+          "pdfview::BuildMeasureDict",
+          "pdfview::BuildViewport",
+          "pdfview::ParseViewport"
+        ],
+        "scale check and fit": [
+          "pdfview::ParseLength",
+          "pdfview::ScaleCheck",
+          "pdfview::CheckLimits",
+          "pdfview::Verdict",
+          "pdfview::CheckResult",
+          "pdfview::EvaluateCheck",
+          "pdfview::BestFitScale",
+          "pdfview::PreviewCorrection",
+          "pdfview::ApplyFactor",
+          "pdfview::SolveRobust",
+          "pdfview::ScaleFromRobust",
+          "pdfview::ScaleReport"
+        ],
+        "dimension audit and coordinates": [
+          "pdfview::DimText",
+          "pdfview::DimSeg",
+          "pdfview::MatchDimensions",
+          "pdfview::AuditDimensions",
+          "pdfview::ScaleFromConsensus",
+          "pdfview::CoordCandidate",
+          "pdfview::ExtractCoordinates"
+        ],
+        "annotation and markup": [
+          "pdfview::Annot",
+          "pdfview::AnnotSession",
+          "pdfview::ReadAnnotations",
+          "pdfview::SaveAnnotated",
+          "pdfview::LengthDimLine",
+          "pdfview::LeaderLine",
+          "pdfview::RevCloudArcs",
+          "pdfview::DimensionLabel",
+          "pdfview::MeasureText",
+          "pdfview::EstimateTextBox"
+        ],
+        "alignment and comparison": [
+          "pdfalign::Pt",
+          "pdfalign::Transform",
+          "pdfalign::FromOnePoint",
+          "pdfalign::FromTwoPoints",
+          "pdfalign::AutoAlign",
+          "pdfdiff::Settings",
+          "pdfdiff::Result",
+          "pdfdiff::FindChanges",
+          "pdfdiff::RegionsToMarkups"
+        ],
+        "split and viewer core": [
+          "pdfview::ParsePageList",
+          "pdfview::SplitPdf",
+          "pdfview::PageSize",
+          "pdfview::Layout",
+          "pdfview::VisiblePages",
+          "pdfview::PlanRequests",
+          "pdfview::PageCache"
+        ],
+        "internal, not Pdf public interface": [
+          "pdfview::raw scanner (PdfRaw.hpp; used only inside Pdf)",
+          "PdfAttach_Init and PdfAttach_Shutdown (PDFium lifecycle; called from src/qt/main.cpp)",
+          "PdfAttachment::glTexId, texW and texH (GPU state; see pendingAssignment)",
+          "pdfview::MakeSyntheticPdf and MakeLineWorkPdf (test and BENCH fixtures declared in PdfViewerCore.hpp)"
+        ]
+      },
+      "existingTests": [
+        "tests/PdfViewerTests.cpp",
+        "tests/PdfSplitTests.cpp",
+        "tests/PdfAnnotateTests.cpp",
+        "tests/PdfLeaderTests.cpp",
+        "tests/PdfMeasureTests.cpp",
+        "tests/PdfDimensionTests.cpp",
+        "tests/PdfSnapTests.cpp",
+        "tests/PdfScaleCheckTests.cpp",
+        "tests/PdfDimAuditTests.cpp",
+        "tests/PdfDimAuditPdfTests.cpp",
+        "tests/PdfAlignTests.cpp",
+        "tests/PdfDiffTests.cpp",
+        "tests/PdfCoordExtractTests.cpp"
+      ],
+      "testsCoveringOtherSystems": [
+        "tests/QtEditorTests.cpp (PDF viewer window, attach dialog and scale UI; Qt)",
+        "tests/ProjectFilesFlowTests.cpp (PDF placements in project files and undo; Commands and IO)",
+        "tests/CadSnapTests.cpp (PDF underlay snapping and visibility mask; Interaction)",
+        "tests/PlotSheetPdfTests.cpp and tests/ViewFrameSheetTests.cpp (vector PDF plot placement; IO)",
+        "tests/headless/transcripts/mirror-erase.txt (PdfUnderlay exclusion in MIRROR; Commands)"
+      ],
+      "forbiddenDependencies": [
+        {
+          "from": "src/pdf/PdfAttach.cpp",
+          "to": "GL/glew.h (OpenGL platform backend)",
+          "files": [
+            "src/pdf/PdfAttach.cpp"
+          ],
+          "reason": "Engine systems may not depend on platform implementations. GL upload and deletion belong to Renderer, behind its device interface."
+        },
+        {
+          "from": "src/pdf/PdfAnnotate.cpp",
+          "to": "font/CadFontName.hpp, font/ShxFont.hpp (Core)",
+          "files": [
+            "src/pdf/PdfAnnotate.cpp"
+          ],
+          "reason": "Ratchet baseline: private-header include of Core. Use GoSurvey/Core public headers."
+        },
+        {
+          "from": "src/platform/HeadlessPdfAttach.cpp",
+          "to": "Pdf (PdfAttach.hpp)",
+          "files": [
+            "src/platform/HeadlessPdfAttach.cpp"
+          ],
+          "reason": "Ratchet baseline: Windows may not depend on Pdf. The file is the Headless backend of the PdfAttach seam (its sections entry says Headless), so the src/platform -> Windows folder mapping is wrong for this file."
+        },
+        {
+          "from": "Qt",
+          "to": "Pdf",
+          "files": [
+            "src/qt/EditorProjectAttach.cpp",
+            "src/qt/EditorRibbon.cpp",
+            "src/qt/EditorViewport.cpp",
+            "src/qt/EditorWindow.hpp",
+            "src/qt/main.cpp",
+            "src/qt/PdfWindow.cpp",
+            "src/qt/PdfWindow.hpp",
+            "src/qt/PdfScaleUi.cpp"
+          ],
+          "reason": "Ratchet baseline: Qt may not depend on Pdf. The PDF viewer windows and attach dialogs are Qt presentation and should consume a public Pdf interface through the application seam."
+        }
+      ],
+      "homelessConcepts": [
+        "PDFium library integration: PdfDocument, PdfAttach, PdfSplit, PdfAnnotate and PdfMeasure call PDFium inside the Pdf folder although the map row excludes PDF library integration. PdfAttach_Init and PdfAttach_Shutdown are called from the Qt main, TraverseReport export calls FPDF directly, and the vector plot writer in IO calls FPDF too. The final map must decide whether PDFium is a platform backend, an IO backend, or a Pdf-owned adapter.",
+        "PDFium lock coverage: pdfview::PdfiumMutex() (PdfDocument.hpp) guards PDFium calls in Pdf and in IO's PdfPlot.cpp, and its header says every PDFium call runs under it. src/traverse/TraverseReport.cpp ExportReportPdf calls FPDF_InitLibrary, FPDF_CreateNewDocument and FPDF_SaveAsCopy without taking that lock. Not verified at runtime; record for the IO audit and the final map.",
+        "PDF placement record ownership: PdfAttachment is Pdf payload stored in Document containers (DrawingDocument and the undo snapshot), and the project file stores placements under the pdfs role (io/Project.hpp, io/ProjectFiles.cpp). Ownership of the placement record and its persistence is unassigned.",
+        "PDF underlay picking: SelectedEntity::Type::PdfUnderlay (CadCommands.hpp line 90) and the rotated bounding-box hit test (CadCommands.cpp around 10540-10570) are Document selection and Interaction picking that depend on Pdf geometry.",
+        "Units and strings: pdfview::Unit and UnitInMetres (PdfMeasure.hpp/.cpp) duplicate Core unit definitions, and PdfCoordExtract and PdfScaleCheck carry trim and upper-case helpers that duplicate Core (see sections).",
+        "Viewer paging: PdfViewerCore is pure layout and cache policy in a Domain folder; whether it belongs to Pdf or to Renderer or Qt presentation is undecided.",
+        "Test fixtures in a production header: PdfViewerCore.hpp declares MakeSyntheticPdf and MakeLineWorkPdf, which BENCH commands use. Move them to tests or to Debug benchmark scenes."
+      ],
+      "crossSystemCouplings": [
+        "src/render/ViewportRenderer.hpp includes PdfAttach.hpp for PdfAttachment, and ViewportRenderer.cpp draws underlays from attachment textures (Renderer -> Pdf is allowed; the texture handle is the problem).",
+        "src/commands/CadCommands.hpp includes PdfAttach.hpp, and AppCommandState and DrawingDocument hold PdfAttachment vectors (Commands and Document -> Pdf is allowed, but the include must use a GoSurvey/Pdf/ public header).",
+        "src/viewport/CadSnap.cpp reads PdfAttachment snap vectors, the visibility mask and pdfview::SnapIndex during object snap (Interaction -> Pdf is allowed).",
+        "src/commands/ProjectFiles.cpp and src/commands/CadCommands_Align.cpp read or write PdfAttachment placement and transform fields.",
+        "src/qt/main.cpp calls PdfAttach_Init and PdfAttach_Shutdown; src/qt/EditorViewport.cpp copies PdfAttachment for ghost previews and repeats RotatePdfInsertAroundBase and ScalePdfInsertAroundBase (Math duplicates; see sections).",
+        "src/platform/HeadlessPdfAttach.cpp implements the PdfAttach_Build seam for the headless build (CMakeLists.txt comment near line 470).",
+        "src/io/PdfPlot.cpp shares PdfiumMutex and writes vector PDFs through FPDF; src/traverse/TraverseReport.cpp writes report PDFs through FPDF.",
+        "src/util/docinvariants.cpp counts st.pdfAttachments for the PdfUnderlay entity type."
+      ],
+      "namespaceGaps": [
+        "PdfAttach.hpp declares PdfAttachment, PdfAttachPixelResult, PdfDraftCache and the PdfAttach_* and PdfDraftCache_* functions in the global namespace, while the rest of Pdf uses pdfview, pdfalign, pdfdiff and pdfview::raw. ADR-0006 requires system-qualified namespaces; the final map must choose one Pdf namespace."
+      ],
+      "testGaps": [
+        "No Pdf-owned test target: the Pdf unit tests compile into the shared GoSurveyTests target, which lists the Pdf sources by name (CMakeLists.txt around line 1508), and link PDFium.",
+        "src/pdf/PdfAttach.cpp is not in the shared domain list, so the real attach build, FinishBuild, draft cache and texture paths are covered only through Qt tests and headless stand-ins (ProjectFilesFlowTests.cpp:3). No test asserts PdfAttach_Build output such as page size, snap vectors or visibility mask directly.",
+        "No test checks that every PDFium call holds PdfiumMutex, including the TraverseReport export path."
       ]
     }
   },
