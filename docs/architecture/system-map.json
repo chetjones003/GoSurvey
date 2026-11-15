@@ -448,7 +448,8 @@
     "Events audit (issue #1222): event-related ownership is recorded in auditedEntries.Events and sections. No code moved and fileMappings are unchanged; Qt is still the concrete input adapter, and document-change notification has no toolkit-neutral publisher yet.",
     "Debug audit (issue #1224): benchmark scene/statistics, document-invariant diagnostics, and frame-stall watch are assigned in auditedEntries.Debug and sections. framewatch is mapped to Debug; benchmark and invariant files retain advisory Debug ownership in fileMappings until their forbidden cross-system dependencies are resolved. SaveTrace sections formerly marked Core are reassigned to Debug per this ticket, with IO/Win32 boundaries pending; crash-report trigger spans were already assigned to Debug. No code moved.",
     "Debug audit sweep (issue #1224): performance counters and PIPEPERF/PERFHUD surfaces are recorded as mixed Debug/Commands sections. BENCH command orchestration stays Commands and consumes Debug benchmark helpers. SaveTrace belongs to Debug; mapping waits on IO/Win32 seams.",
-    "Document audit (issue #1226): Document file and section ownership is in auditedEntries.Document and sections. fileMappings gains Document as the advisory owner for cadblock.hpp, cadtable.hpp and PlotScales.hpp, all still ambiguous, so the ratchet and baseline do not move. Folder-mapped files get section entries only, because folder precedence would otherwise override them. The DrawingDocument god struct and CadEntities.hpp's PointCloud include are recorded in auditFindings."
+    "Document audit (issue #1226): Document file and section ownership is in auditedEntries.Document and sections. fileMappings gains Document as the advisory owner for cadblock.hpp, cadtable.hpp and PlotScales.hpp, all still ambiguous, so the ratchet and baseline do not move. Folder-mapped files get section entries only, because folder precedence would otherwise override them. The DrawingDocument god struct and CadEntities.hpp's PointCloud include are recorded in auditFindings.",
+    "Survey audit (issue #1227): Survey file and section ownership is in auditedEntries.Survey and sections. Folder-mapped src/survey, src/traverse and src/alignment files are Survey through mappedFolders. src/geo files are assigned to Survey by section, following the Geometry audit, while the folder stays Geometry. No fileMappings changed, so the ratchet and baseline do not move. The Survey -> Terrain (alignment ground sampling) and Survey -> Commands (SurveyPoints.cpp) edges are recorded in forbiddenDependencies. No code moved."
   ],
   "sections": [
     {
@@ -4362,6 +4363,1385 @@
       "symbols": [
         "MtextTextOps"
       ]
+    },
+    {
+      "path": "src/survey/SurveyPoints.hpp",
+      "lines": [
+        177,
+        200
+      ],
+      "system": "Renderer",
+      "concern": "point marker cross geometry",
+      "symbols": [
+        "SurveyPointCrossHalfWorldFromPaper",
+        "MarkerBillboardBasis",
+        "AppendSurveyPointCrossVertices",
+        "AppendAllSurveyPointMarkers"
+      ],
+      "note": "Draw-list vertices for survey point markers. Renderer owns the drawing; the declarations sit in the Survey header until the split.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/survey/SurveyPoints.hpp",
+      "lines": [
+        205,
+        211
+      ],
+      "system": "Survey",
+      "concern": "label and id lookup",
+      "symbols": [
+        "FindSurveyLabelAnnIndex",
+        "SurveyPointIndexForId"
+      ],
+      "note": "Lookups from a survey point to its label annotation and index.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/survey/SurveyPoints.hpp",
+      "lines": [
+        226,
+        260
+      ],
+      "system": "Survey",
+      "concern": "point create, place, duplicate and remove",
+      "symbols": [
+        "ResetCreatePointsNextIdFromSettings",
+        "CreatePointsLayer",
+        "TryPlaceSurveyPoint",
+        "DuplicateSelectedSurveyPointsTranslated",
+        "DuplicateSelectedSurveyPointsRotated",
+        "DuplicateSelectedSurveyPointsReflected",
+        "RemoveSurveyPointAt"
+      ],
+      "note": "Operations take AppCommandState, which is the forbidden Commands dependency recorded in forbiddenDependencies.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands",
+        "Document"
+      ]
+    },
+    {
+      "path": "src/survey/SurveyPoints.hpp",
+      "lines": [
+        262,
+        271
+      ],
+      "system": "Document",
+      "concern": "label MTEXT placement and regeneration",
+      "symbols": [
+        "RepositionSurveyLabelMtextForPoint",
+        "RepositionAllSurveyPointLabels",
+        "RegenerateAllSurveyPointLabels"
+      ],
+      "note": "Label MTEXT entities are Document content. Label text comes from SurveyPoint fields (Survey).",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/survey/SurveyPoints.hpp",
+      "lines": [
+        275,
+        277
+      ],
+      "system": "Survey",
+      "concern": "conflict resolution with world points",
+      "symbols": [
+        "ResolveConflictingWorldSurveyPoints"
+      ],
+      "note": "Duplicate-id and duplicate-position policy.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/survey/SurveyPoints.hpp",
+      "lines": [
+        280,
+        284
+      ],
+      "system": "IO",
+      "concern": "point JSON save and load",
+      "symbols": [
+        "SaveSurveyPointsToJsonFile",
+        "LoadSurveyPointsFromJsonFile"
+      ],
+      "note": "File parsing and writing belongs to IO.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/survey/SurveyPoints.hpp",
+      "lines": [
+        286,
+        292
+      ],
+      "system": "Commands",
+      "concern": "point command starters",
+      "symbols": [
+        "StartCreatePointsCommand",
+        "StartViewPointsCommand",
+        "StartImportPointsCommand",
+        "StartExportPointsCommand"
+      ],
+      "note": "Command entry points for the point commands.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/survey/SurveyPoints.cpp",
+      "lines": [
+        20,
+        59
+      ],
+      "system": "Renderer",
+      "concern": "point marker cross vertices",
+      "symbols": [
+        "SurveyPointCrossHalfWorldFromPaper",
+        "AppendSurveyPointCrossVertices",
+        "AppendAllSurveyPointMarkers"
+      ],
+      "note": "Marker geometry for the viewport draw list.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/survey/SurveyPoints.cpp",
+      "lines": [
+        60,
+        138
+      ],
+      "system": "Survey",
+      "concern": "id and group lookup, create-point defaults",
+      "symbols": [
+        "FindSurveyPointIndexById",
+        "SurveyIdExists",
+        "NextFreeId",
+        "ResolvePointGroup",
+        "FindPointGroupIndex",
+        "ResetCreatePointsNextIdFromSettings",
+        "CreatePointsLayer"
+      ],
+      "note": "CreatePointsLayer names a Document layer; the layer table is Document.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document"
+      ]
+    },
+    {
+      "path": "src/survey/SurveyPoints.cpp",
+      "lines": [
+        139,
+        229
+      ],
+      "system": "Survey",
+      "concern": "place one survey point",
+      "symbols": [
+        "TryPlaceSurveyPoint"
+      ],
+      "note": "Duplicate-policy handling. The undo push is Document state.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document",
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/survey/SurveyPoints.cpp",
+      "lines": [
+        230,
+        358
+      ],
+      "system": "Survey",
+      "concern": "translate duplicate",
+      "symbols": [
+        "DuplicateSelectedSurveyPointsTranslated"
+      ],
+      "note": "Copy-with-offset policy for selected points.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/survey/SurveyPoints.cpp",
+      "lines": [
+        388,
+        514
+      ],
+      "system": "Survey",
+      "concern": "rotate duplicate",
+      "symbols": [
+        "DuplicateSelectedSurveyPointsRotated"
+      ],
+      "note": "Survey policy. The rotation helper (361-368) is Math, recorded in the Math audit.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Math",
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/survey/SurveyPoints.cpp",
+      "lines": [
+        515,
+        641
+      ],
+      "system": "Survey",
+      "concern": "reflect duplicate",
+      "symbols": [
+        "DuplicateSelectedSurveyPointsReflected"
+      ],
+      "note": "Survey policy. The reflection helper (373-384) is Math, recorded in the Math audit.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Math",
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/survey/SurveyPoints.cpp",
+      "lines": [
+        642,
+        692
+      ],
+      "system": "Survey",
+      "concern": "label lookup and point removal",
+      "symbols": [
+        "FindSurveyLabelAnnIndex",
+        "SurveyPointIndexForId",
+        "RemoveSurveyPointAt"
+      ],
+      "note": "Removal also removes the label entity (Document).",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document"
+      ]
+    },
+    {
+      "path": "src/survey/SurveyPoints.cpp",
+      "lines": [
+        693,
+        835
+      ],
+      "system": "Document",
+      "concern": "label MTEXT text and placement",
+      "symbols": [
+        "ReplaceAll",
+        "FormatSurveyPointLabelPlain",
+        "RepositionSurveyLabelMtextForPoint",
+        "RepositionAllSurveyPointLabels",
+        "RegenerateAllSurveyPointLabels"
+      ],
+      "note": "MTEXT text and placement is Document content; the label template fields are Survey data.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/survey/SurveyPoints.cpp",
+      "lines": [
+        836,
+        859
+      ],
+      "system": "Survey",
+      "concern": "conflict resolution with world points",
+      "symbols": [
+        "ResolveConflictingWorldSurveyPoints"
+      ],
+      "note": "Duplicate-id and duplicate-position policy.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/survey/SurveyPoints.cpp",
+      "lines": [
+        860,
+        912
+      ],
+      "system": "Document",
+      "concern": "point label MTEXT creation",
+      "symbols": [
+        "EnsureSurveyPointLabelMtext"
+      ],
+      "note": "Creates the Document MTEXT entity for a point label.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/survey/SurveyPoints.cpp",
+      "lines": [
+        913,
+        1034
+      ],
+      "system": "IO",
+      "concern": "point JSON file format",
+      "symbols": [
+        "PointJsonInteger",
+        "PointJsonCoordinate",
+        "SaveSurveyPointsToJsonFile",
+        "LoadSurveyPointsFromJsonFile"
+      ],
+      "note": "File format and parsing belongs to IO. Sits in the Survey folder.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/survey/SurveyPoints.cpp",
+      "lines": [
+        1035,
+        1057
+      ],
+      "system": "Commands",
+      "concern": "point command starters",
+      "symbols": [
+        "StartCreatePointsCommand",
+        "StartViewPointsCommand",
+        "StartImportPointsCommand",
+        "StartExportPointsCommand"
+      ],
+      "note": "Command entry points.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/traverse/TraverseReport.cpp",
+      "lines": [
+        47,
+        158
+      ],
+      "system": "Survey",
+      "concern": "traverse report text",
+      "symbols": [
+        "BuildReportText"
+      ],
+      "note": "Report content from traverse data and least-squares results.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/traverse/TraverseReport.cpp",
+      "lines": [
+        159,
+        306
+      ],
+      "system": "IO",
+      "concern": "report file export (TXT, RTF, PDF)",
+      "symbols": [
+        "ExportReportTxt",
+        "ExportReportRtf",
+        "ExportReportPdf"
+      ],
+      "note": "File writing. The PDF writer includes io/PlotFont.hpp, a forbidden Survey dependency (see forbiddenDependencies).",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/commands/TraverseActions.cpp",
+      "lines": [
+        8,
+        40
+      ],
+      "system": "Survey",
+      "concern": "adjustment acceptance",
+      "symbols": [
+        "ValidResult",
+        "TraverseAdjustmentHasElevations",
+        "AcceptTraverseAdjustment"
+      ],
+      "note": "Policy for accepting a least-squares result.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/commands/TraverseActions.cpp",
+      "lines": [
+        41,
+        102
+      ],
+      "system": "Commands",
+      "concern": "commit traverse to drawing",
+      "symbols": [
+        "CommitTraverseToDrawing"
+      ],
+      "note": "Writes survey points and undo for a committed traverse.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey",
+        "Document"
+      ]
+    },
+    {
+      "path": "src/geo/CoordinateSystems.hpp",
+      "lines": [
+        1,
+        102
+      ],
+      "system": "Survey",
+      "concern": "CS-MAP dictionary and coordinate system wrapper",
+      "symbols": [
+        "geo::LoadDictionaries",
+        "geo::CoordinateSystemInfo",
+        "geo::GeoResult",
+        "geo::Wgs84GridConverter"
+      ],
+      "note": "Whole file. Folder mapping is Geometry; see the Geometry audit pendingAssignment.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/geo/CoordinateSystems.cpp",
+      "lines": [
+        1,
+        285
+      ],
+      "system": "Survey",
+      "concern": "CS-MAP dictionary and coordinate system wrapper",
+      "symbols": [
+        "LoadDictionaries",
+        "Wgs84GridConverter"
+      ],
+      "note": "Whole file.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/geo/LocalGridTransform.hpp",
+      "lines": [
+        1,
+        51
+      ],
+      "system": "Survey",
+      "concern": "local survey grid transform",
+      "symbols": [
+        "geo::LocalGridTransform",
+        "geo::XY"
+      ],
+      "note": "Whole file.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/geo/LocalGridTransform.cpp",
+      "lines": [
+        1,
+        68
+      ],
+      "system": "Survey",
+      "concern": "local survey grid transform",
+      "symbols": [
+        "LocalToGrid",
+        "GridToLocal",
+        "SeaLevelScaleFactor",
+        "RotationFromPoints"
+      ],
+      "note": "Whole file. The rotate-and-scale core duplicates a 2D affine (Math couplings).",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/geo/EcefTransform.hpp",
+      "lines": [
+        1,
+        46
+      ],
+      "system": "Survey",
+      "concern": "ECEF and geodetic transforms",
+      "symbols": [
+        "EcefToGeodeticWgs84",
+        "GeodeticToEcefWgs84",
+        "EcefDeltaToEnu",
+        "EcefCovarianceToEnu"
+      ],
+      "note": "Whole file.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/geo/EcefTransform.cpp",
+      "lines": [
+        1,
+        101
+      ],
+      "system": "Survey",
+      "concern": "ECEF and geodetic transforms",
+      "symbols": [],
+      "note": "Whole file.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/geo/DrawingConversion.hpp",
+      "lines": [
+        1,
+        59
+      ],
+      "system": "Survey",
+      "concern": "drawing-to-grid conversion plan",
+      "symbols": [
+        "geo::ConversionInput",
+        "geo::Similarity",
+        "geo::ConversionPlan"
+      ],
+      "note": "Whole file.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/geo/DrawingConversion.cpp",
+      "lines": [
+        32,
+        165
+      ],
+      "system": "Survey",
+      "concern": "drawing-to-grid conversion plan",
+      "symbols": [],
+      "note": "Whole file except the unit constants at 13-31, which stay Core (recorded in the Geometry audit).",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/geo/WebMercator.hpp",
+      "lines": [
+        1,
+        50
+      ],
+      "system": "Survey",
+      "concern": "Web Mercator tile math",
+      "symbols": [
+        "geo::MercatorBox",
+        "geo::TileRange"
+      ],
+      "note": "Assigned to Survey per the Geometry audit. Tile math may belong to Network; decided at the final map.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/geo/WebMercator.cpp",
+      "lines": [
+        1,
+        74
+      ],
+      "system": "Survey",
+      "concern": "Web Mercator tile math",
+      "symbols": [],
+      "note": "Whole file. See the WebMercator.hpp note.",
+      "ownershipKind": "whole"
+    },
+    {
+      "path": "src/commands/CadCommands_Geo.cpp",
+      "lines": [
+        61,
+        321
+      ],
+      "system": "Survey",
+      "concern": "drawing-to-grid coordinate transform",
+      "symbols": [
+        "ResolveDrawingTransform",
+        "DrawingWorldToGrid",
+        "GridToDrawingWorld",
+        "DrawingPointToGrid",
+        "DrawingPointToLatLong",
+        "GridToDrawingPoint",
+        "ResolveTraverseScaleFactor"
+      ],
+      "note": "Coordinate-system policy. The functions take AppCommandState, so the command file keeps the Commands dependency.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands",
+        "Document"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands_Geo.cpp",
+      "lines": [
+        322,
+        456
+      ],
+      "system": "Survey",
+      "concern": "lat/long text and GEODATA coordinate-system code",
+      "symbols": [
+        "FormatLatLongLabel",
+        "ParseGeoAngleDegrees",
+        "GeoDataCoordinateSystemCode"
+      ],
+      "note": "DMS formatting is the open homeless concept (see homelessConcepts).",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/commands/CadCommands_Geo.cpp",
+      "lines": [
+        457,
+        561
+      ],
+      "system": "IO",
+      "concern": "GEODATA DWG round trip",
+      "symbols": [
+        "ApplyDwgGeoData",
+        "BuildDwgGeoData"
+      ],
+      "note": "Reads and writes the GEODATA DWG object.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands_Geo.cpp",
+      "lines": [
+        562,
+        594
+      ],
+      "system": "Commands",
+      "concern": "geo location commands",
+      "symbols": [
+        "RemoveGeoLocation",
+        "SetOnlineMap",
+        "StartGeoCommand"
+      ],
+      "note": "Command orchestration.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/commands/CadCommands_Geo.cpp",
+      "lines": [
+        595,
+        646
+      ],
+      "system": "Network",
+      "concern": "map area capture",
+      "symbols": [
+        "StartCaptureMapArea",
+        "CommitMapCapture",
+        "FailMapCapture",
+        "RemoveCapturedMapAreas"
+      ],
+      "note": "Captured map areas are Document data; the capture is Network.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document",
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands_Geo.cpp",
+      "lines": [
+        647,
+        674
+      ],
+      "system": "Survey",
+      "concern": "geographic marker",
+      "symbols": [
+        "SetGeographicMarker"
+      ],
+      "note": "Stores a world point and north direction in DrawingSettings (Document field).",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands_Geo.cpp",
+      "lines": [
+        776,
+        803
+      ],
+      "system": "Survey",
+      "concern": "lat/long to position marker",
+      "symbols": [
+        "PlacePositionMarkerAtLatLong"
+      ],
+      "note": "Lat/long to drawing point conversion. The marker entity is Document.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands_Alignment.cpp",
+      "lines": [
+        437,
+        473
+      ],
+      "system": "Survey",
+      "concern": "view-frame best-fit scale",
+      "symbols": [
+        "ChooseBestFitScale"
+      ],
+      "note": "Scale choice for a view frame.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands_Alignment.cpp",
+      "lines": [
+        1340,
+        1376
+      ],
+      "system": "Survey",
+      "concern": "profile lookup and grade text",
+      "symbols": [
+        "FindProfileIndex",
+        "AlignmentById",
+        "InternalStationOnAlignment",
+        "GradePercent"
+      ],
+      "note": "Profile and station lookups.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/commands/CadCommands_Alignment.cpp",
+      "lines": [
+        1861,
+        1953
+      ],
+      "system": "Survey",
+      "concern": "linked offsets and continuity report",
+      "symbols": [
+        "RefreshLinkedOffsetsImpl",
+        "ParseEntityIndex",
+        "IsLinkedOffset",
+        "ReportDroppedEquations",
+        "ReportContinuity"
+      ],
+      "note": "Alignment domain refresh and reporting.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/commands/CadCommands_Alignment.cpp",
+      "lines": [
+        1954,
+        2004
+      ],
+      "system": "Survey",
+      "concern": "dynamic alignment tables",
+      "symbols": [
+        "TableKindLabel",
+        "ParseTableKind",
+        "RefreshDynamicTables"
+      ],
+      "note": "Dynamic table refresh.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/commands/CadCommands_Alignment.cpp",
+      "lines": [
+        2655,
+        2949
+      ],
+      "system": "Survey",
+      "concern": "offset, detach, intersect and edit",
+      "symbols": [
+        "ParseOffsetRequest",
+        "OffsetName",
+        "RunOffsetAlignment",
+        "RunAlignmentDetach",
+        "RunAlignmentIntersect",
+        "RunEditAlignment"
+      ],
+      "note": "Alignment geometry operations with command parsing.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands_Alignment.cpp",
+      "lines": [
+        2950,
+        3684
+      ],
+      "system": "Survey",
+      "concern": "alignment styles and label sets",
+      "symbols": [
+        "RunAlignmentStyle",
+        "RunAlignmentLabelSet",
+        "RunAlignmentLabelStyle"
+      ],
+      "note": "Style and label-set data is Survey. These editors include Survey private headers (baseline).",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands_Alignment.cpp",
+      "lines": [
+        4059,
+        4305
+      ],
+      "system": "Terrain",
+      "concern": "feature lines and quick profile from alignment",
+      "symbols": [
+        "BuildFeatureLineVerts",
+        "RefreshFeatureLineLinks",
+        "RunFeatureLineFromAlignment",
+        "RunQuickProfileAlongAlignment"
+      ],
+      "note": "Feature lines and surface profiles are Terrain, so this range is not Survey.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands_Alignment.cpp",
+      "lines": [
+        4371,
+        4818
+      ],
+      "system": "Survey",
+      "concern": "design check sets and COGO queries",
+      "symbols": [
+        "FindCheckSetIndex",
+        "RunAlignmentCheckSet",
+        "RunAlignmentCriteria",
+        "RunAlignmentSpeed",
+        "RunAlignmentCheck",
+        "RunAlignmentInverse",
+        "RunAlignmentBearing",
+        "RunAlignmentDistance"
+      ],
+      "note": "Design checks (REQ-502) and COGO inverse, bearing and distance.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands_Alignment.cpp",
+      "lines": [
+        4974,
+        5156
+      ],
+      "system": "Survey",
+      "concern": "new alignment defaults and naming",
+      "symbols": [
+        "NewAlignment",
+        "UniqueAlignmentName",
+        "NextAlignmentName",
+        "EffectiveAlignmentCurveRadius",
+        "RunAlignmentCreate"
+      ],
+      "note": "Creation policy and naming.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands_Alignment.cpp",
+      "lines": [
+        5157,
+        5302
+      ],
+      "system": "Survey",
+      "concern": "alignment from drawing objects",
+      "symbols": [
+        "AddSourceSegments",
+        "AddVertexSourceSegments",
+        "GatherSourceSegments",
+        "CommitFromObjects"
+      ],
+      "note": "Source segments from selected entities. The interactive from-objects flow stays Commands.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands",
+        "Document"
+      ]
+    },
+    {
+      "path": "src/commands/ProjectPoints.cpp",
+      "lines": [
+        48,
+        117
+      ],
+      "system": "Survey",
+      "concern": "point group rule and tab pull",
+      "symbols": [
+        "RuleGroupOf",
+        "Pull"
+      ],
+      "note": "Pulls the shared point DB into a drawing tab.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/ProjectPoints.cpp",
+      "lines": [
+        138,
+        163
+      ],
+      "system": "IO",
+      "concern": "project point DB open and flush",
+      "symbols": [
+        "OpenProjectPointDb",
+        "FlushProjectPointDb"
+      ],
+      "note": "Point DB file access.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/commands/ProjectPoints.cpp",
+      "lines": [
+        164,
+        492
+      ],
+      "system": "Survey",
+      "concern": "project point sync and database edits",
+      "symbols": [
+        "SyncProjectPoints",
+        "CountProjectPoints",
+        "ProjectPointSources",
+        "EditDatabasePoint",
+        "SelectDatabasePoints",
+        "ResolveGridNumberConflict",
+        "HideSelectedPointsHere"
+      ],
+      "note": "Point-edit prompt raising (118-137) stays Commands, recorded above.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/ProjectWarnings.cpp",
+      "lines": [
+        39,
+        82
+      ],
+      "system": "Survey",
+      "concern": "point edit risks",
+      "symbols": [
+        "GroupRuleOf",
+        "MetersPerUnitOf",
+        "FindPointEditRisks"
+      ],
+      "note": "Which edits would change other drawings' points.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/ProjectWarnings.cpp",
+      "lines": [
+        139,
+        147
+      ],
+      "system": "Survey",
+      "concern": "next free point number",
+      "symbols": [
+        "NextFreePointNumber"
+      ],
+      "note": "Numbering policy for the shared point DB.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/commands/CadField.cpp",
+      "lines": [
+        47,
+        55
+      ],
+      "system": "Survey",
+      "concern": "survey point lookup",
+      "symbols": [
+        "FindSurveyPointById"
+      ],
+      "note": "Lookup for point fields.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/commands/CadField.cpp",
+      "lines": [
+        200,
+        217
+      ],
+      "system": "Survey",
+      "concern": "survey point field properties",
+      "symbols": [
+        "EvalSurveyPointProperty"
+      ],
+      "note": "Read-only point properties. Field codes and their evaluation are Document/Commands.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document",
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/util/cadtablestyle.hpp",
+      "lines": [
+        15,
+        26
+      ],
+      "system": "Survey",
+      "concern": "point table column set",
+      "symbols": [
+        "CadPointTableColumn",
+        "CadPointTableColumnTitle"
+      ],
+      "note": "Point columns follow the NRCS point file layout.",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/util/cadtablestyle.hpp",
+      "lines": [
+        97,
+        145
+      ],
+      "system": "Survey",
+      "concern": "point table rows and cells",
+      "symbols": [
+        "CadTablePointRow",
+        "CadPointTableCells"
+      ],
+      "note": "Rows and cell text for a point table (Document audit).",
+      "ownershipKind": "mixed"
+    },
+    {
+      "path": "src/util/cadtablestyle.hpp",
+      "lines": [
+        178,
+        203
+      ],
+      "system": "Survey",
+      "concern": "sync table rows to survey point data",
+      "symbols": [
+        "CadTableUsesSurveyPointData",
+        "CadTableSyncSurveyPointTables"
+      ],
+      "note": "Table sizing (146-177) stays Document.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1612,
+        1615
+      ],
+      "system": "Survey",
+      "concern": "drawing-owned alignment storage",
+      "symbols": [
+        "alignments",
+        "viewFrameGroups",
+        "sampleLines",
+        "profiles"
+      ],
+      "note": "Survey-owned alignment fields of DrawingDocument. surfaceProfiles (1616) is Terrain and is excluded.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document",
+        "Terrain"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1621,
+        1629
+      ],
+      "system": "Survey",
+      "concern": "drawing-owned survey point, group and style storage",
+      "symbols": [
+        "surveyPoints",
+        "surveyPointStyles",
+        "surveyPointLabelStyles",
+        "pointGroups",
+        "selectedSurveyPointIndices",
+        "alignmentStyles",
+        "alignmentCheckSets",
+        "alignmentLabelSets",
+        "alignmentLabelStyles"
+      ],
+      "note": "Survey-owned fields of DrawingDocument. Lines 1617-1620 are Pdf/Document/Terrain storage and are excluded.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        3582,
+        3590
+      ],
+      "system": "Terrain",
+      "concern": "surface triangulation from point groups",
+      "symbols": [
+        "ResolvePointGroup",
+        "surface.sourcePointGroups"
+      ],
+      "note": "Terrain builds the surface from Survey point groups. Survey -> Terrain would be forbidden; recorded as a coupling.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        4201,
+        4236
+      ],
+      "system": "Terrain",
+      "concern": "surface profiles refresh for alignment",
+      "symbols": [
+        "RefreshSurfaceProfilesForAlignment"
+      ],
+      "note": "Surface profile refresh (Terrain) that reads Survey point groups.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        5729,
+        5739
+      ],
+      "system": "Survey",
+      "concern": "imported-points point group creation",
+      "symbols": [
+        "PointGroup",
+        "FindPointGroupIndex"
+      ],
+      "note": "Creates an explicit-id point group for a point-file import.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        10728,
+        10743
+      ],
+      "system": "Survey",
+      "concern": "selected survey point translate",
+      "symbols": [
+        "ApplyTranslationToSelectedSurveyPoints"
+      ],
+      "note": "Survey point edit policy inside a Commands file.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        10744,
+        10768
+      ],
+      "system": "Survey",
+      "concern": "selected survey point rotate",
+      "symbols": [
+        "ApplyRotationToSelectedSurveyPoints"
+      ],
+      "note": "Survey point edit policy inside a Commands file.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands",
+        "Math"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        11105,
+        11133
+      ],
+      "system": "Survey",
+      "concern": "alignment transform of selected alignments",
+      "symbols": [
+        "TransformSelectedAlignments"
+      ],
+      "note": "Applies move, rotate and scale to alignments. Call sites in Commands runners stay Commands.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        13578,
+        13597
+      ],
+      "system": "Survey",
+      "concern": "selected survey point scale",
+      "symbols": [
+        "ApplyScaleToSelectedSurveyPoints"
+      ],
+      "note": "Survey point edit policy inside a Commands file.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/viewport/CadSnap.cpp",
+      "lines": [
+        1006,
+        1060
+      ],
+      "system": "Interaction",
+      "concern": "alignment direction and station snapping",
+      "symbols": [
+        "AlignmentDirectionCardinalInUcs"
+      ],
+      "note": "Snap behaviour is Interaction; alignment geometry is Survey.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/viewport/CadRubberPreview.cpp",
+      "lines": [
+        210,
+        212
+      ],
+      "system": "Interaction",
+      "concern": "alignment-from-objects preview",
+      "symbols": [],
+      "note": "Preview state is Interaction; the alignment being previewed is Survey.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/viewport/CadRubberPreview.cpp",
+      "lines": [
+        403,
+        403
+      ],
+      "system": "Interaction",
+      "concern": "survey inverse preview",
+      "symbols": [],
+      "note": "Preview state is Interaction.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/qt/QtAnnotations.cpp",
+      "lines": [
+        106,
+        220
+      ],
+      "system": "Qt",
+      "concern": "survey point marker and alignment label painting",
+      "symbols": [],
+      "note": "Painting is Qt. The drawn data is Survey point and alignment label data.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey",
+        "Renderer"
+      ]
+    },
+    {
+      "path": "src/qt/QtAnnotations.cpp",
+      "lines": [
+        599,
+        599
+      ],
+      "system": "Qt",
+      "concern": "alignment label painting",
+      "symbols": [],
+      "note": "Painting is Qt.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/qt/AdjustmentWindow.cpp",
+      "lines": [
+        1,
+        1314
+      ],
+      "system": "Qt",
+      "concern": "traverse adjustment window",
+      "symbols": [],
+      "note": "Whole-file UI for the traverse adjustment. Includes traverse/TraverseIo.hpp and TraverseReport.hpp privately (coupling).",
+      "ownershipKind": "whole",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/io/LibreDwgCivil.cpp",
+      "lines": [
+        900,
+        947
+      ],
+      "system": "IO",
+      "concern": "Civil point-group DWG decode",
+      "symbols": [
+        "DecodePointGroup"
+      ],
+      "note": "Decodes Civil point-group records. IO reads the format; Survey owns the group meaning.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/io/LibreDwgCivil.cpp",
+      "lines": [
+        1239,
+        1239
+      ],
+      "system": "IO",
+      "concern": "Civil point-group import",
+      "symbols": [],
+      "note": "Import of decoded point groups into the drawing.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/io/LibreDwgCad.cpp",
+      "lines": [
+        2458,
+        2505
+      ],
+      "system": "IO",
+      "concern": "Civil alignment DWG import",
+      "symbols": [],
+      "note": "Imports Civil alignment objects into Survey alignments.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/io/GsIo.cpp",
+      "lines": [
+        3434,
+        3434
+      ],
+      "system": "IO",
+      "concern": "point group load (format retired)",
+      "symbols": [],
+      "note": "Legacy .gs PointGroup load. The .gs format is retired (project_gs_format_retired); the section records the Survey-facing type only.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands_DrawInquiry.cpp",
+      "lines": [
+        1858,
+        1905
+      ],
+      "system": "Commands",
+      "concern": "survey point inquiry",
+      "symbols": [],
+      "note": "Inquiry command for survey points; reads Survey point data.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Survey"
+      ]
     }
   ],
   "auditedEntries": {
@@ -5239,6 +6619,282 @@
         "Selection-list storage (selection, hiddenEntityIds) was not checked for isolated unit coverage in this audit.",
         "Layer rename reassigns entity layer strings across every attribute vector; coverage of that path was not verified in this audit."
       ]
+    },
+    "Survey": {
+      "tier": "T2 Domain",
+      "audit": {
+        "issue": 1227,
+        "parent": 1207,
+        "commit": "563f87c2",
+        "codeMoved": false
+      },
+      "responsibility": "Owns survey points and point groups, traverse observations with least-squares adjustment and reports, horizontal alignments with their profiles, design checks, labels, view frames and sample lines, and the coordinate systems that map drawing coordinates to grid, local grid and geodetic coordinates.",
+      "doesNotOwn": [
+        "drawing entities, layers, MTEXT label entities and table geometry (Document)",
+        "TIN surfaces, grading, feature lines, surface profiles and the surface queries alignments sample (Terrain)",
+        "DXF, DWG, LandXML, StarNet, FBK, RW5, CSV, point-file and PDF report parsing and writing (IO)",
+        "command prompts, dialogs and workflows that create or edit survey data (Commands)",
+        "point-table, alignment and point-group editors and sheets (Qt and GoSurveyEditor)",
+        "viewport markers and cross geometry (Renderer)",
+        "map tiles and online map capture (Network)",
+        "generic 2D rotation, reflection and matrix math (Math)",
+        "unit constants, number and angle formatting (Core)"
+      ],
+      "allowedDependencies": [
+        "Geometry",
+        "Math",
+        "Core",
+        "Document"
+      ],
+      "dependencyNote": "Matches the Survey row in system-map.md. Survey -> Document is the one allowed Domain peer edge. Alignment sampling and ground queries need Terrain, which the map forbids (Terrain -> Survey is the allowed direction); this is recorded in forbiddenDependencies and couplings.",
+      "currentFiles": [
+        "src/survey/ (folder-mapped Survey): PointGroupRule.hpp, PointGroupRule.cpp, SurveyPoints.hpp, SurveyPoints.cpp; SurveyPoints sections carve out Renderer, Document, IO and Commands parts",
+        "src/traverse/ (folder-mapped Survey): TraverseCalc.*, TraverseLeastSquares.*, TraverseCommandLang.*, TraverseIo.*, TraverseReport.*, FbkImport.*, JobXmlImport.*, Rw5Import.*, StarNetImport.*; TraverseReport PDF/TXT/RTF export is IO",
+        "src/alignment/ (folder-mapped Survey): Alignment.*, AlignmentDesign.*, AlignmentDisplayCache.*, AlignmentEdit.cpp, AlignmentFeatureLine.* (Terrain feature-line code, see pendingAssignment), AlignmentGround.*, AlignmentGrips.cpp, AlignmentLabels.*, AlignmentLayout.cpp, AlignmentProfile.*, AlignmentReport.*, AlignmentSampleLines.*, AlignmentTables.*, AlignmentViewFrames.*, Clothoid.*",
+        "src/geo/ (folder-mapped Geometry, assigned to Survey by section): CoordinateSystems.*, LocalGridTransform.*, EcefTransform.*, DrawingConversion.* (units stay Core), WebMercator.*",
+        "src/commands/ (folder-mapped Commands, Survey sections only): CadCommands_Geo.cpp, CadCommands_Alignment.cpp, CadCommands.hpp (DrawingDocument survey fields), TraverseActions.cpp, ProjectPoints.cpp, ProjectWarnings.cpp, CadField.cpp (point properties); AlignmentStyle.hpp and AlignmentLabelSet.hpp are Survey data in a Commands folder",
+        "src/util/cadtablestyle.hpp (mixed, ambiguous): point-table column, rows, cells and survey-point sync sections; table sizing is Document",
+        "src/commands/CadCommands.cpp (Survey sections only: point and alignment transforms, point-group import; surface code is Terrain)"
+      ],
+      "pendingAssignment": [
+        {
+          "files": [
+            "src/commands/CadCommands_Alignment.cpp (command runners Run*, Start*, Handle*, Submit* outside the Survey sections)"
+          ],
+          "reason": "A 5801-line god file. Command orchestration is Commands; the Survey domain functions are recorded as sections. Split at the move ticket."
+        },
+        {
+          "files": [
+            "src/commands/AlignmentStyle.hpp",
+            "src/commands/AlignmentLabelSet.hpp"
+          ],
+          "reason": "Survey style and label-set data in the Commands folder. Their include edges already violate the private-header rule (baseline). Moved with the alignment files."
+        },
+        {
+          "files": [
+            "src/geo/WebMercator.hpp",
+            "src/geo/WebMercator.cpp"
+          ],
+          "reason": "Assigned to Survey by the Geometry audit, but map tile math is the Network online-map concern. The final map decides."
+        },
+        {
+          "files": [
+            "src/commands/CadCommands_Align.cpp (ALIGN two-point Helmert over drawing geometry)"
+          ],
+          "reason": "Coordinate-system work that edits Document geometry through Math transforms. No owner is assigned; see homelessConcepts."
+        },
+        {
+          "files": [
+            "src/io/SurveyCsv.cpp",
+            "src/io/ProjectPointDb.*",
+            "src/io/ProjectPointRules.*"
+          ],
+          "reason": "Survey vocabulary in IO. IO may depend on Survey, so these stay IO and are not assigned to Survey. Their survey-private includes are recorded as couplings."
+        },
+        {
+          "files": [
+            "src/commands/CadCommands.hpp (DrawingDocument, lines 1513-1660)"
+          ],
+          "reason": "DrawingDocument stores every system's data. Survey owns the fields in sections; the struct cannot move until Survey, Terrain and Renderer members have their own homes. The final-map ticket decides the split."
+        },
+        {
+          "files": [
+            "src/alignment/AlignmentFeatureLine.hpp",
+            "src/alignment/AlignmentFeatureLine.cpp"
+          ],
+          "reason": "Folder-mapped Survey, but feature lines are Terrain in the map (Terrain owns feature lines). The folder decision and file move are for the final map; the Terrain feature-line code in CadCommands_Alignment.cpp 4059-4305 is already recorded as a section."
+        },
+        {
+          "files": [
+            "src/commands/CadCommands.cpp (point-group surface and profile code, 3582-3590 and 4201-4236; alignment and point transforms, 10728-13578)"
+          ],
+          "reason": "Survey transform and point-group code sits in the 14k-line Commands god file. Survey sections record the ranges; the surface code is Terrain and needs an interface before it moves."
+        }
+      ],
+      "draftPublicInterface": {
+        "survey points": [
+          "SurveyPoint",
+          "SurveyPointStyleDefinition",
+          "SurveyPointLabelStyleDefinition",
+          "SurveyPointLabelStyle",
+          "SurveyDuplicatePolicy",
+          "CreatePointsOptions",
+          "FindSurveyPointStyle",
+          "SurveyPointMarkerVisible",
+          "SurveyPointLabelVisible",
+          "TryPlaceSurveyPoint",
+          "DuplicateSelectedSurveyPointsTranslated",
+          "DuplicateSelectedSurveyPointsRotated",
+          "DuplicateSelectedSurveyPointsReflected",
+          "RemoveSurveyPointAt",
+          "ResolveConflictingWorldSurveyPoints",
+          "SurveyPointIndexForId"
+        ],
+        "point groups": [
+          "PointGroup",
+          "PointGroupRule",
+          "PointIdRange",
+          "ParseIdRanges",
+          "PointMatchesRule"
+        ],
+        "traverse": [
+          "TraverseData",
+          "TraverseLeg",
+          "TraverseSideShot",
+          "TraverseGpsVector",
+          "NetworkStation",
+          "LsaWeights",
+          "LsaResult",
+          "LsaChiSquare",
+          "ComputeTraverseLeastSquares",
+          "LsaChiSquareCritical",
+          "TraverseParseAngle",
+          "TraverseReduceToHoriz",
+          "TraverseReduceToVert",
+          "TraverseAverageFaceHoriz",
+          "TraverseFormatBearing",
+          "ComputeStats",
+          "Serialize and Parse (TraverseCommandLang)",
+          "TraverseIo Save and Load",
+          "BuildReportText",
+          "FbkImport",
+          "JobXmlImport",
+          "Rw5Import",
+          "StarNetImport"
+        ],
+        "alignments": [
+          "alignment::Alignment",
+          "alignment::CurveData",
+          "alignment::StationOffset",
+          "alignment::GeometryPoint",
+          "alignment::ContinuityIssue",
+          "alignment::AlignmentType",
+          "alignment::AlignmentCheckSet",
+          "alignment::VerticalProfile",
+          "alignment::ProfileSample",
+          "alignment::ViewFrame",
+          "alignment::ViewFrameGroup",
+          "alignment::SampleLine",
+          "alignment::SyncViewFrameGroups",
+          "alignment::SyncSampleLines",
+          "alignment::SampleSection",
+          "alignment::BuildAlignmentReportLines",
+          "alignment::BuildAlignmentReportCsv",
+          "alignment::AlignmentLabelItems"
+        ],
+        "coordinate systems": [
+          "geo::LoadDictionaries",
+          "geo::CoordinateSystemInfo",
+          "geo::GeoResult",
+          "geo::Wgs84GridConverter",
+          "geo::LocalGridTransform",
+          "geo::ConversionInput",
+          "geo::ConversionPlan",
+          "geo::Similarity",
+          "geo::EcefToGeodeticWgs84",
+          "geo::GeodeticToEcefWgs84",
+          "geo::EcefDeltaToEnu",
+          "geo::EcefCovarianceToEnu"
+        ],
+        "point tables": [
+          "CadPointTableColumn",
+          "CadTablePointRow",
+          "CadPointTableCells",
+          "CadTableUsesSurveyPointData",
+          "CadTableSyncSurveyPointTables"
+        ],
+        "internal, not public": [
+          "AppCommandState parameters on point operations (Commands coupling; see forbiddenDependencies)",
+          "Command starters and Run*/Start* runners (Commands)",
+          "Point JSON format and TraverseReport file writers (IO)",
+          "Label MTEXT placement (Document)",
+          "Feature lines and surface profiles (Terrain)"
+        ]
+      },
+      "existingTests": [
+        "tests/AlignmentAnnotationTests.cpp",
+        "tests/AlignmentCogoTests.cpp",
+        "tests/AlignmentCommandTests.cpp",
+        "tests/AlignmentCreateTests.cpp",
+        "tests/AlignmentDesignTests.cpp",
+        "tests/AlignmentEditTests.cpp",
+        "tests/AlignmentGripTests.cpp",
+        "tests/AlignmentLabelOffsetTests.cpp",
+        "tests/AlignmentLabelTests.cpp",
+        "tests/AlignmentProfileSeamTests.cpp",
+        "tests/AlignmentProfileTests.cpp",
+        "tests/AlignmentReportTests.cpp",
+        "tests/AlignmentSampleLineTests.cpp",
+        "tests/AlignmentSpecTests.cpp",
+        "tests/AlignmentSpiralCommandTests.cpp",
+        "tests/AlignmentStyleFieldTests.cpp",
+        "tests/AlignmentStyleTests.cpp",
+        "tests/AlignmentTableTests.cpp",
+        "tests/AlignmentTests.cpp",
+        "tests/AlignmentViewFrameTests.cpp",
+        "tests/PointGroupTests.cpp",
+        "tests/ProjectPointRulesTests.cpp",
+        "tests/TraverseTests.cpp",
+        "tests/SurveyLabelMeasureTests.cpp",
+        "tests/CoordinateSystemsTests.cpp",
+        "tests/EcefTransformTests.cpp"
+      ],
+      "testsCoveringSurveyNotOwned": [
+        "tests/AlignmentDwgTests.cpp (DWG IO round trip)",
+        "tests/AlignmentFeatureLineTests.cpp (Terrain feature lines)",
+        "tests/AlignmentGroundTests.cpp (Terrain surface query used by alignments)",
+        "tests/CadSurfaceEditTests.cpp (Terrain)",
+        "tests/ProjectPointDbTests.cpp and tests/SurveyCsvValidateTests.cpp (IO)",
+        "tests/ProjectPointsSyncTests.cpp, tests/ProjectWarningsTests.cpp and tests/ProjectSettingsTests.cpp (Commands project workflows)",
+        "tests/GeolocationTests.cpp and tests/GeoDataReadTests.cpp (Commands and IO GEODATA)",
+        "tests/CadFieldTests.cpp (Document field codes)",
+        "tests/ViewFrameSheetTests.cpp and tests/SectionSheetTests.cpp (sheets are Document paper layouts built by Commands)"
+      ],
+      "forbiddenDependencies": [
+        {
+          "from": "src/survey/SurveyPoints.cpp",
+          "to": "src/commands/CadCommands.hpp",
+          "system": "Commands",
+          "note": "Survey may not depend on Commands. Fix: pure point operations take the point vector, and the AppCommandState wrappers move to Commands."
+        },
+        {
+          "from": "src/survey/SurveyPoints.hpp",
+          "to": "AppCommandState (forward declaration, line 173)",
+          "system": "Commands",
+          "note": "The public header exposes the Commands state type in every point operation."
+        },
+        {
+          "from": "src/alignment/AlignmentGround.cpp",
+          "to": "util/surfacequery.hpp",
+          "system": "Terrain",
+          "note": "Survey may not depend on Terrain (Terrain depends on Survey). Fix: a Survey-side ground-query interface, or move ground sampling to Terrain."
+        },
+        {
+          "from": "src/alignment/AlignmentSampleLines.cpp",
+          "to": "util/surfacequery.hpp, util/surfacevolume.hpp",
+          "system": "Terrain",
+          "note": "Same cycle as AlignmentGround. TinSpatialIndex comes from Terrain."
+        },
+        {
+          "from": "src/traverse/TraverseReport.cpp",
+          "to": "../io/PlotFont.hpp",
+          "system": "IO",
+          "note": "PDF report writer. Fix: move ExportReportPdf to IO and keep BuildReportText in Survey."
+        },
+        {
+          "from": "src/alignment/AlignmentReport.hpp",
+          "to": "util/SheetGrid.hpp",
+          "system": "IO",
+          "note": "SheetGrid is an export grid. Fix: move it to IO or pass plain rows."
+        }
+      ],
+      "testGaps": [
+        "No test asserts that the src/survey, src/traverse and src/alignment includes follow the Survey allowed-dependency list. The baseline records the current violations and the ratchet only stops them growing.",
+        "Point operations take AppCommandState, so the SurveyPoint policy is not tested without the Commands state (not verified in this audit).",
+        "Coordinate-system dictionary load failure (geo::LoadDictionaries returning false) was not checked by a Survey-owned test in this audit.",
+        "WebMercator tile math was not checked by a test in this audit.",
+        "Survey point label MTEXT regeneration (SurveyPoints.cpp 693-912) is not covered by a Survey-owned test (not verified in this audit)."
+      ]
     }
   },
   "auditFindings": {
@@ -5278,7 +6934,11 @@
       "Named views: NamedView (CadCommands.hpp 1488-1503) pairs camera state with a drawing name. It is stored in DrawingDocument but is view state, so the final map must decide where saved views live.",
       "Drawing settings and units: DrawingSettings and drawingInsUnits are Document, while kDrawingUnitNames and kDrawingUnitCodes (cadblock.hpp 1669-1672) and the units block (1606-1635) are Core. The split is not decided; Core may own the unit vocabulary and Document the per-drawing value.",
       "Style property parsing: src/util/styleproperty.hpp (StyleProperty, StyleNumber, StyleFlag) is used by DimensionStyle and style files, but no system claims it.",
-      "Solid display caches: CadSolidTessellation, CadSolidDisplayBatch and CadSolidDisplayGeometry (src/util/cadsolid.hpp 43-130) are Renderer caches stored next to Document solid pointers."
+      "Solid display caches: CadSolidTessellation, CadSolidDisplayBatch and CadSolidDisplayGeometry (src/util/cadsolid.hpp 43-130) are Renderer caches stored next to Document solid pointers.",
+      "Project session and shared point DB (ProjectPoints, ProjectWarnings, ProjectFiles, ProjectAddFlow, ProjectSettings in commands/): the Project concept is not a system in the map, so it has no owner. The final map must decide whether Survey (shared point DB) or a Project owner holds it.",
+      "ALIGN (CadCommands_Align.cpp): two-point Helmert similarity applied to drawing geometry. It is coordinate-system work, but it edits Document geometry through Math transforms; no owner is assigned.",
+      "Web Mercator tile math (geo/WebMercator.*): assigned to Survey by the Geometry audit, but it serves Network online maps. Decide at the final map.",
+      "Survey point-label MTEXT (SurveyPoints.cpp 693-912): label text comes from Survey data, but the MTEXT entity and placement are Document. The split is recorded; the owner of the label template is open."
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
@@ -5340,7 +7000,17 @@
       "Layer identity is the layer name string on each entity's EntityAttributes. CadRenameDrawingLayer rewrites every entity's layer string (CadCommands.cpp 30098-30150), so layer identity has no stable id.",
       "Units are split between Core (cadblock.hpp 1606-1635 and 1669-1672) and Document (DrawingSettings, drawingInsUnits), with no single owner.",
       "Font selection: CadFontName (src/font, folder Core) is Document text-style policy, while ShxFont (IO) loads the files. The renderer consumes both. The Core folder mapping is wrong for CadFontName.",
-      "Document change notification is polled through revisions (cadGpuRevision, savedRevision) and raw callbacks, not through Events publishers (see auditedEntries.Events)."
+      "Document change notification is polled through revisions (cadGpuRevision, savedRevision) and raw callbacks, not through Events publishers (see auditedEntries.Events).",
+      "src/survey/SurveyPoints.hpp exposes AppCommandState in every point operation (forward declaration at line 173). SurveyPoints.cpp includes CadCommands.hpp. Survey may not depend on Commands.",
+      "src/alignment/AlignmentGround.cpp, AlignmentSampleLines.cpp and AlignmentSampleLines.hpp use util/surfacequery.hpp and util/surfacevolume.hpp. Terrain depends on Survey, so this edge closes a cycle.",
+      "src/traverse/TraverseCalc.cpp and TraverseLeastSquares.cpp include ../geo/EcefTransform.hpp as a private-header include. Once EcefTransform is assigned to Survey, it becomes a same-system include.",
+      "src/traverse/TraverseReport.cpp includes io/PlotFont.hpp for PDF export, a forbidden Survey -> IO edge.",
+      "src/alignment/AlignmentReport.hpp includes util/SheetGrid.hpp (export grid). Survey -> IO is forbidden.",
+      "Commands includes Survey private headers: CadCommands_Alignment.cpp and CadCommands.hpp include alignment/* and traverse/*; TraverseActions.hpp includes traverse/*; AlignmentStyle.hpp and AlignmentLabelSet.hpp include alignment/Alignment*. Cross-system includes must use GoSurvey/Survey/ headers (baseline records these).",
+      "Qt includes Survey and Commands internals: EditorAlignmentCreate, EditorAlignmentLayout, EditorAlignmentStyle, EditorPointGroups include CadCommands.hpp, alignment/* and SurveyPoints.hpp. Qt may depend only on Core, Events and UI (baseline records these).",
+      "src/io/ProjectPointDb.hpp, ProjectPointRules.hpp and SurveyCsv.cpp include survey/ and io/ headers privately. IO -> Survey is allowed, but the private-header rule applies.",
+      "src/io/SurveyCsv.cpp includes CadCommands.hpp and CadCoordinateFrame.hpp (baseline forbidden IO -> Commands edges), and SurveyPoints.hpp (private). IO -> Survey is allowed, so the Survey part is the private include; the Commands includes belong to the IO audit.",
+      "src/qt/AdjustmentWindow.cpp includes traverse/TraverseIo.hpp and TraverseReport.hpp privately. Qt may depend only on Core, Events and UI, so the window belongs to the Qt audit with this coupling noted."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
@@ -5350,13 +7020,15 @@
       "src/platform/ is mapped wholesale to Windows, but WinFileDialogs.hpp is the UI file-dialog interface and HeadlessFileDialogs.* is the Headless backend. Assign per file in the final map.",
       "src/geo/ is currently mapped wholesale to Geometry, but the files implement geodetic coordinate-system selection, local survey grids, and ECEF/Web Mercator transforms, which belong with Survey coordinate systems. DrawingConversion.cpp also contains a Core-owned unit-conversion section. Reassign by file in the final map.",
       "src/commands/ is mapped to Commands but holds Document data: CadEntities.hpp, PaperSpace.hpp, TextStyle.hpp, DimensionStyle.hpp, MultileaderStyle.hpp, EntityId.*, CadLinetype.*, CadColor.hpp, and the DrawingDocument and undo code in CadCommands.hpp and CadCommands.cpp. _system_for gives folder mappings precedence over fileMappings, so file-level Document mappings cannot take effect inside this folder until the move.",
-      "src/ui/MtextRichSpans.hpp, MtextRichFormat.* and MtextTextOps.hpp are Document under the Qt folder mapping, as the UI audit already noted."
+      "src/ui/MtextRichSpans.hpp, MtextRichFormat.* and MtextTextOps.hpp are Document under the Qt folder mapping, as the UI audit already noted.",
+      "src/geo/ is mapped to Geometry, but the Geometry audit assigns its coordinate-system files to Survey. The folder mapping stays until the final map; section entries record per-file ownership."
     ],
     "namespaceGaps": [
       "ADR-0006 requires GoSurvey::<System> namespaces. NumFormat and AngleFormat use the global namespace (anglefmt_detail is global). StringUtil is namespace StringUtil. Core.cpp's detail is GoSurvey::Core::detail. Namespace work follows the move, not this audit.",
       "ray3d uses namespace ray3d and ucs uses namespace ucs. ADR-0006 requires GoSurvey::<System>, which would be GoSurvey::Math. OrthoConstrain.hpp uses global functions. Namespace work follows the move, not this audit.",
       "UI headers use namespaces cmdbar, mtexttoolbar, richtext, modelingribbon, headless, and failureReportUi, and WinFileDialogs.hpp uses global functions. ADR-0006 requires GoSurvey::UI for UI-owned code. Namespace work follows the move, not this audit.",
-      "Document types are in the global namespace: the CadEntities.hpp structs (CadArc, CadAnnotation, CadTable, PaperLayout, CadBlockDefinition and others) and DrawingDocument. ADR-0006 requires GoSurvey::Document. TextStyles, DimensionStyles, cadfont and CadTable* namespaces exist but are partial."
+      "Document types are in the global namespace: the CadEntities.hpp structs (CadArc, CadAnnotation, CadTable, PaperLayout, CadBlockDefinition and others) and DrawingDocument. ADR-0006 requires GoSurvey::Document. TextStyles, DimensionStyles, cadfont and CadTable* namespaces exist but are partial.",
+      "Survey headers have no GoSurvey::Survey namespace (ADR-0006): SurveyPoints.hpp, PointGroupRule.hpp, TraverseCalc.hpp and TraverseLeastSquares.hpp are global; alignment:: and geo:: are used instead. Namespace work follows the move, not this audit."
     ],
     "notCoreDespiteName": [
       "src/util/framewatch.hpp and src/util/docinvariants.*: Debug (diagnostics), not logging.",
@@ -5420,6 +7092,15 @@
       "Swept and not assigned to Document: CadMesh, CadPointCloud, CadTin, CadSurface and feature-line types (CadEntities.hpp 1248-1624) are Geometry, PointCloud or Terrain data. DrawingDocument stores them, but Document does not own them.",
       "Swept and not assigned to Document: CadColorResolveRgb (CadColor.hpp) is consumed by Renderer. The storage and ACI parsing are Document, and the section is recorded.",
       "Swept and not assigned to Document: SheetGrid.hpp and DataExtract.hpp are export grids for tabular output (IO)."
+    ],
+    "notSurveyDecisions": [
+      "src/commands/CadCoordinateFrame.cpp (LocalFromWorld, ShiftAllStorageBy, RebaseDrawingToLocalOrigin): local-storage invariant owned by Document with Math transforms, not Survey.",
+      "src/survey/SurveyPoints.cpp rotation and reflection helpers (361-384): pure 2D math, assigned to Math in auditedEntries.Math sections.",
+      "src/traverse/TraverseLeastSquares.cpp angle wrap and 3x3 inverse: Math, already recorded in the Math sections.",
+      "src/commands/CadCommands_Alignment.cpp interactive layout state machine (5375-5800): Commands workflow. Survey supplies only the layout point rules.",
+      "src/commands/CadCommands_Alignment.cpp feature lines and quick profile (4059-4305): Terrain, because feature lines are Terrain in the map.",
+      "src/util/PointFileExt.hpp (point-file extension rule): a Platform-callable point-file naming helper, not Survey policy. Its header places it outside IO for the Platform caller.",
+      "src/util/SheetGrid.hpp and src/util/DataExtract.hpp: export grids for tabular output, IO per the Document audit."
     ]
   }
 }
