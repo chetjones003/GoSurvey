@@ -6534,7 +6534,7 @@
         "PdfAttachment::texW",
         "PdfAttachment::texH"
       ],
-      "note": "OpenGL texture id and size held in the Pdf model. Renderer owns GPU resources; the model should carry pixels or a Renderer handle, not a GL name, before enforcement.",
+      "note": "OpenGL texture id and size held in the Pdf model. ADR-0003: the document stores model data, not GPU-shaped handles. Renderer owns the backend-neutral device handle; the GL name itself belongs to the OpenGL backend. Replace with a Renderer handle before enforcement.",
       "ownershipKind": "mixed",
       "otherOwners": [
         "Pdf"
@@ -6546,15 +6546,16 @@
         378,
         435
       ],
-      "system": "Renderer",
+      "system": "OpenGL",
       "concern": "OpenGL texture upload",
       "symbols": [
         "UploadBgraTexture"
       ],
-      "note": "Calls glGenTextures and glTexParameteri directly (GL/glew.h). This is a platform-device call inside an engine system; the Pdf build should return pixels and let the Renderer upload them.",
+      "note": "Calls glGenTextures and glTexParameteri directly (GL/glew.h). ADR-0003 keeps GL calls in the OpenGL backend; Renderer owns only the device interface. The Pdf build should return pixels and let the OpenGL backend upload them through the Renderer device interface.",
       "ownershipKind": "mixed",
       "otherOwners": [
-        "Pdf"
+        "Pdf",
+        "Renderer"
       ]
     },
     {
@@ -6563,15 +6564,16 @@
         1108,
         1113
       ],
-      "system": "Renderer",
+      "system": "OpenGL",
       "concern": "OpenGL texture deletion on the draft cache",
       "symbols": [
         "PdfDraftCache_Free"
       ],
-      "note": "Deletes thumbnail textures on the main thread because it owns the GL context. The cache owns the ids; deletion moves with the upload seam.",
+      "note": "Deletes thumbnail textures on the main thread because the GL context owner must do it. The cache owns the ids; deletion belongs to the OpenGL backend behind the Renderer device interface.",
       "ownershipKind": "mixed",
       "otherOwners": [
-        "Pdf"
+        "Pdf",
+        "Renderer"
       ]
     },
     {
@@ -6580,12 +6582,155 @@
         1877,
         1886
       ],
-      "system": "Renderer",
+      "system": "OpenGL",
       "concern": "OpenGL texture release for an attachment",
       "symbols": [
         "PdfAttach_ReleaseTexture"
       ],
-      "note": "Deletes an attachment's GL texture and clears its size fields. Renderer owns the release once the model stops holding GL ids.",
+      "note": "Deletes an attachment's GL texture and clears its size fields. The OpenGL backend performs the release through the Renderer device interface once the model stops holding GL ids.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Pdf",
+        "Renderer"
+      ]
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        8,
+        9
+      ],
+      "system": "Windows",
+      "concern": "Win32 and Shell header includes",
+      "symbols": [
+        "windows.h",
+        "ShlObj.h"
+      ],
+      "note": "Windows platform headers included by the Pdf implementation file.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Pdf"
+      ]
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        20,
+        27
+      ],
+      "system": "Windows",
+      "concern": "WinRT header includes",
+      "symbols": [
+        "winrt/Windows.Data.Pdf.h",
+        "winrt/Windows.Storage.h",
+        "winrt/Windows.Graphics.Imaging.h"
+      ],
+      "note": "C++/WinRT headers, compiled only when PDF_WINRT_ENABLED is defined (the comment in PdfAttach.cpp says the cppwinrt SDK headers were found).",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Pdf"
+      ]
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        52,
+        67
+      ],
+      "system": "Windows",
+      "concern": "timer and debug output",
+      "symbols": [
+        "PdfTimer",
+        "PdfLog"
+      ],
+      "note": "QueryPerformanceCounter and OutputDebugStringA. Platform timing and logging, not Pdf behaviour.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Pdf"
+      ]
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        75,
+        167
+      ],
+      "system": "Windows",
+      "concern": "Windows shell thumbnail path",
+      "symbols": [
+        "ExtractHBitmapPixels",
+        "GetShellThumbnailImpl",
+        "GetShellThumbnailCached"
+      ],
+      "note": "SHCreateItemFromParsingName and HBITMAP pixel extraction. Windows shell thumbnails are a platform backend concern.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Pdf"
+      ]
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        168,
+        235
+      ],
+      "system": "Windows",
+      "concern": "WIC PNG decode for the WinRT path",
+      "symbols": [
+        "WicDecodeImageToBgra"
+      ],
+      "note": "Windows Imaging Component decode of PNG output from Windows.Data.Pdf. Only compiled with PDF_WINRT_ENABLED.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Pdf"
+      ]
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        271,
+        372
+      ],
+      "system": "Windows",
+      "concern": "Windows.Data.Pdf renderer",
+      "symbols": [
+        "RenderPageWithWinRT"
+      ],
+      "note": "Hardware-accelerated page render through Windows.Data.Pdf. Platform backend; the PDFium path is the portable one.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Pdf"
+      ]
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        1247,
+        1258
+      ],
+      "system": "Windows",
+      "concern": "WinRT thumbnail branch in TickThumb",
+      "symbols": [
+        "PdfDraftCache_TickThumb"
+      ],
+      "note": "Thumbnail render attempt through Windows.Data.Pdf before the PDFium fallback. Compiled only with PDF_WINRT_ENABLED.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Pdf"
+      ]
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        1416,
+        1524
+      ],
+      "system": "Windows",
+      "concern": "WinRT fast render branch in attach build",
+      "symbols": [
+        "PdfAttach_BuildToBuffer"
+      ],
+      "note": "Runs WinRT render in parallel with PDFium snap extraction. Compiled only with PDF_WINRT_ENABLED; platform backend code inside the Pdf folder.",
       "ownershipKind": "mixed",
       "otherOwners": [
         "Pdf"
@@ -8120,14 +8265,15 @@
       "responsibility": "Owns the PDF underlay model and its page analysis: attached-page placement and snap geometry, page measurement and scale calibration and checks, dimension audit, annotation and markup records, sheet alignment and comparison, page split, and the pure viewer paging core.",
       "doesNotOwn": [
         "PDFium binding, process-wide initialisation and the PDFium lock as a library backend (unassigned; see homelessConcepts). The src/pdf folder currently holds the implementation, which the final map must place behind a backend seam.",
-        "OpenGL texture upload, texture deletion and GPU draw batches (Renderer device interface; PdfAttach.cpp currently calls GL directly)",
+        "OpenGL texture upload, texture deletion and GPU draw batches (OpenGL backend behind Renderer's device interface; PdfAttach.cpp currently calls GL directly)",
         "vector PDF plot writing and report PDF export (IO: src/io/PdfPlot.cpp, src/traverse/TraverseReport.cpp)",
         "PDF viewer, attach, split, compare and scale windows, dialogs, ribbon and canvas (Qt and GoSurveyEditor)",
         "drawing storage, undo, selection and the DrawingDocument container that stores attachments (Document)",
         "snap candidate queries during picks and the PDF-space transform used by the pick loop (Interaction; Pdf owns the SnapIndex)",
         "PDFATTACH, PDFVIEW and PDFSPLIT command state, prompts and placement workflow (Commands)",
         "project placement records and the .gsproj pdfs role (Commands and IO)",
-        "unit and string helpers that duplicate Core (Core)"
+        "unit and string helpers that duplicate Core (Core)",
+        "Windows shell thumbnails, WIC decode, Win32 timing and Windows.Data.Pdf rendering (Windows backend; PdfAttach.cpp currently includes these)"
       ],
       "allowedDependencies": [
         "Geometry",
@@ -8135,9 +8281,9 @@
         "Core",
         "Document"
       ],
-      "dependencyNote": "Matches the Pdf row in system-map.md. Pdf -> Document is the permitted Domain peer edge, but no current Pdf source includes a Document header. Current Pdf includes outside src/pdf are ../font (Core, src/pdf/PdfAnnotate.cpp, a private-header include in the ratchet baseline) and the PDFium SDK (third-party, not a system). src/pdf/PdfAttach.cpp also includes GL/glew.h and calls OpenGL, which an engine system may not depend on. PdfAttach.hpp has no GoSurvey/Pdf/ public header directory yet, so every cross-system include of it is a private-header violation under the ratchet.",
+      "dependencyNote": "Matches the Pdf row in system-map.md. Pdf -> Document is the permitted Domain peer edge, but no current Pdf source includes a Document header. Current Pdf-folder includes outside Pdf are: ../font (Core; src/pdf/PdfAnnotate.cpp, a private-header include in the ratchet baseline); the PDFium SDK (third-party, not a system); GL/glew.h (OpenGL backend); and Win32, Shell, WIC and WinRT Windows.Data.Pdf headers (Windows backend). The last two are engine-to-platform dependencies. The ratchet baseline classifies cross-system includes of Pdf headers two ways. Private-header includes: Commands (src/commands/CadCommands.hpp and ProjectFiles.cpp include PdfAttach.hpp), Renderer (src/render/ViewportRenderer.hpp includes PdfAttach.hpp), and IO (src/io/PdfPlot.cpp includes PdfDocument.hpp for PdfiumMutex). Forbidden dependencies: Qt (src/qt/EditorRibbon.cpp, EditorViewport.cpp and main.cpp include PdfAttach.hpp; EditorProjectAttach.cpp includes PdfAttach.hpp and PdfDocument.hpp; PdfWindow.hpp includes PdfDocument.hpp) and Windows (src/platform/HeadlessPdfAttach.cpp includes PdfAttach.hpp). PdfAttach.hpp has no GoSurvey/Pdf/ public header directory yet.",
       "currentFiles": [
-        "src/pdf/PdfAttach.hpp, src/pdf/PdfAttach.cpp (underlay model, page build, snap extraction and draft cache; advisory Pdf with the GL sections listed in sections as Renderer)",
+        "src/pdf/PdfAttach.hpp, src/pdf/PdfAttach.cpp (underlay model, page build, snap extraction and draft cache; advisory Pdf with the GL and Windows sections listed in sections)",
         "src/pdf/PdfSnap.hpp, src/pdf/PdfSnap.cpp (snap index over page geometry; compiled into gosurvey_domain)",
         "src/pdf/PdfAlign.hpp, src/pdf/PdfAlign.cpp (sheet alignment transform, tint classification and auto-align)",
         "src/pdf/PdfDiff.hpp, src/pdf/PdfDiff.cpp (sheet comparison and revision-cloud markups)",
@@ -8157,7 +8303,7 @@
             "src/pdf/PdfAttach.cpp (UploadBgraTexture, PdfDraftCache_Free texture deletion, PdfAttach_ReleaseTexture)",
             "src/pdf/PdfAttach.hpp (PdfAttachment::glTexId, texW, texH, PdfDraftCache_ThumbnailTex)"
           ],
-          "reason": "GL texture ids are Renderer device resources stored in the Pdf model. Move upload and deletion behind a Renderer texture interface, and keep the model free of GL handles, before enforcement. The headless build already replaces PdfAttach_Build with a seam (src/platform/HeadlessPdfAttach.cpp; CMakeLists.txt comment near line 470)."
+          "reason": "GL texture ids are device resources stored in the Pdf model. Move upload and deletion into the OpenGL backend behind Renderer's device interface, and keep the model free of GL handles, before enforcement. The headless build already replaces PdfAttach_Build with a seam (src/platform/HeadlessPdfAttach.cpp; CMakeLists.txt comment near line 470)."
         },
         {
           "files": [
@@ -8174,6 +8320,12 @@
             "src/commands/CadCommands.hpp (DrawingGeometrySnapshot::pdfAttachments line 1441, DrawingDocument::pdfAttachments line 1644, AppCommandState draft cache and async build lines 5678-5692)"
           ],
           "reason": "PdfAttachment payloads sit in Document undo and drawing storage, and the draft cache and async build types live in the Commands god file. Split them when the final map gives Pdf a public header."
+        },
+        {
+          "files": [
+            "src/pdf/PdfAttach.cpp Windows sections (lines 8-9, 20-27, 52-67, 75-235, 271-372, 1247-1258, 1416-1524)"
+          ],
+          "reason": "Windows shell thumbnails, WIC decode, the Windows.Data.Pdf renderer and Win32 timing are platform-backend code inside an engine folder. Move them to the Windows backend behind a Pdf rasterizer seam, the same seam the headless build already uses. Until then they are advisory Windows sections and a forbidden Pdf -> Windows dependency."
         }
       ],
       "draftPublicInterface": {
@@ -8305,7 +8457,7 @@
           "files": [
             "src/pdf/PdfAttach.cpp"
           ],
-          "reason": "Engine systems may not depend on platform implementations. GL upload and deletion belong to Renderer, behind its device interface."
+          "reason": "Engine systems may not depend on platform implementations. GL upload and deletion belong to the OpenGL backend, behind Renderer's device interface (ADR-0003)."
         },
         {
           "from": "src/pdf/PdfAnnotate.cpp",
@@ -8337,6 +8489,30 @@
             "src/qt/PdfScaleUi.cpp"
           ],
           "reason": "Ratchet baseline: Qt may not depend on Pdf. The PDF viewer windows and attach dialogs are Qt presentation and should consume a public Pdf interface through the application seam."
+        },
+        {
+          "from": "src/pdf/PdfAttach.cpp",
+          "to": "Windows backend: windows.h, ShlObj.h, wincodec.h, winrt Windows.Data.Pdf and Windows.Storage headers",
+          "files": [
+            "src/pdf/PdfAttach.cpp"
+          ],
+          "reason": "Engine systems may not depend on platform implementations (system-map.md). Windows-only paths are recorded as Windows sections; moving them is in pendingAssignment."
+        },
+        {
+          "from": "src/commands/CadCommands.hpp (DrawingDocument and DrawingGeometrySnapshot fields)",
+          "to": "Pdf",
+          "files": [
+            "src/commands/CadCommands.hpp"
+          ],
+          "reason": "The fields are Document-owned containers holding Pdf payloads. Document may not depend on Pdf (Pdf -> Document is the only Domain peer edge). The file is Commands-mapped, so the direct-include ratchet does not flag it."
+        },
+        {
+          "from": "src/viewport/CadSnap.cpp (through CadCommands.hpp)",
+          "to": "Pdf (PdfAttachment, pdfview::SnapIndex)",
+          "files": [
+            "src/viewport/CadSnap.cpp"
+          ],
+          "reason": "The Interaction row in system-map.md omits Pdf, so Interaction may not depend on Pdf. The direct-include ratchet does not see it because CadSnap.cpp reaches PdfAttachment through CadCommands.hpp."
         }
       ],
       "testGaps": [
@@ -8480,8 +8656,8 @@
       "src/render/ViewportRenderer.hpp includes private util PointCloud cache headers directly.",
       "AppCommandState and DrawingDocument contain PointCloud data, renderer display preferences and command worker/cache state in one Commands god file.",
       "src/render/ViewportRenderer.hpp includes PdfAttach.hpp for PdfAttachment, and ViewportRenderer.cpp draws underlays from attachment textures (Renderer -> Pdf is allowed; the texture handle is the problem).",
-      "src/commands/CadCommands.hpp includes PdfAttach.hpp, and AppCommandState and DrawingDocument hold PdfAttachment vectors (Commands and Document -> Pdf is allowed, but the include must use a GoSurvey/Pdf/ public header).",
-      "src/viewport/CadSnap.cpp reads PdfAttachment snap vectors, the visibility mask and pdfview::SnapIndex during object snap (Interaction -> Pdf is allowed).",
+      "src/commands/CadCommands.hpp includes PdfAttach.hpp, and AppCommandState holds PdfAttachment vectors (Commands -> Pdf is allowed, but the include must use a GoSurvey/Pdf/ public header). DrawingDocument and DrawingGeometrySnapshot hold PdfAttachment vectors inside the Commands-mapped file; Document may not depend on Pdf, so that storage is a forbidden coupling.",
+      "src/viewport/CadSnap.cpp reads PdfAttachment snap vectors, the visibility mask and pdfview::SnapIndex during object snap through CadCommands.hpp. The Interaction row omits Pdf, so this is a forbidden dependency that the direct-include ratchet does not see.",
       "src/commands/ProjectFiles.cpp and src/commands/CadCommands_Align.cpp read or write PdfAttachment placement and transform fields.",
       "src/qt/main.cpp calls PdfAttach_Init and PdfAttach_Shutdown; src/qt/EditorViewport.cpp copies PdfAttachment for ghost previews and repeats RotatePdfInsertAroundBase and ScalePdfInsertAroundBase (Math duplicates; see sections).",
       "src/platform/HeadlessPdfAttach.cpp implements the PdfAttach_Build seam for the headless build (CMakeLists.txt comment near line 470).",
