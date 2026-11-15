@@ -6027,7 +6027,7 @@
       "path": "src/commands/CadEntities.hpp",
       "lines": [
         235,
-        315
+        347
       ],
       "system": "Terrain",
       "concern": "surface styles and analysis policy",
@@ -6120,26 +6120,23 @@
     {
       "path": "src/commands/CadCommands.cpp",
       "lines": [
-        2472,
+        3102,
         3169
       ],
       "system": "Terrain",
-      "concern": "surface lookup, contour and analysis calculations, profile/volume helpers",
+      "concern": "surface identity, contour display limits and volume result helpers",
       "symbols": [
-        "SurfaceVisible",
-        "AppendContourLinesFrom",
-        "BuildSurfaceAnalysisGeometry",
-        "SplitContourLevels",
         "SurfaceContoursSuppressed",
+        "SurfaceDisplayContourSegs",
         "FindSurfaceIndex",
+        "FindSurfaceIndexById",
         "RememberVolumeResult",
         "AppendVolumeTableItemValue"
       ],
-      "note": "Terrain algorithms and query helpers in the Commands god file. Rendering batches and viewport presentation in this region remain Renderer.",
+      "note": "Terrain model/query helpers. Surface visibility, contour geometry generation, analysis display buffers and viewport caches in the preceding range are Renderer.",
       "ownershipKind": "mixed",
       "otherOwners": [
-        "Commands",
-        "Renderer"
+        "Commands"
       ]
     },
     {
@@ -6248,6 +6245,79 @@
       "ownershipKind": "mixed",
       "otherOwners": [
         "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.cpp",
+      "lines": [
+        2472,
+        3101
+      ],
+      "system": "Renderer",
+      "concern": "surface visibility, analysis display geometry and viewport display caches",
+      "symbols": [
+        "SurfaceVisible",
+        "AppendContourLinesFrom",
+        "BuildSurfaceAnalysisGeometry",
+        "SurfaceContourLevels",
+        "SplitContourLevels",
+        "ResolveSurfaceStoredColorRgba",
+        "RefreshSurfaceDisplayGeometry"
+      ],
+      "note": "These helpers produce or control display geometry and viewport caches; Terrain supplies surface data, while rendering presentation belongs to Renderer.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Terrain"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1364,
+        1370
+      ],
+      "system": "Terrain",
+      "concern": "live feature-line and grading stores",
+      "symbols": [
+        "AppCommandState::featureLineOffsets",
+        "AppCommandState::featureLineVerts",
+        "AppCommandState::featureLineClosed",
+        "AppCommandState::featureLineElevPt",
+        "AppCommandState::featureLineInfo",
+        "AppCommandState::gradingPresets",
+        "AppCommandState::featureLineAttrs"
+      ],
+      "note": "Terrain feature-line and grading fields in the mixed application state struct; other command state remains Commands.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Commands"
+      ]
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        1575,
+        1577
+      ],
+      "system": "Terrain",
+      "concern": "per-drawing feature-line and grading stores",
+      "symbols": [
+        "DrawingDocument::featureLineOffsets",
+        "DrawingDocument::featureLineVerts",
+        "DrawingDocument::featureLineClosed",
+        "DrawingDocument::featureLineElevPt",
+        "DrawingDocument::featureLineInfo",
+        "DrawingDocument::gradingPresets",
+        "DrawingDocument::featureLineAttrs"
+      ],
+      "note": "Terrain fields in the mixed drawing composition struct; the container itself is not Terrain.",
+      "ownershipKind": "mixed",
+      "otherOwners": [
+        "Document",
+        "Survey",
+        "PointCloud",
+        "Pdf",
+        "Renderer"
       ]
     }
   ],
@@ -7437,7 +7507,7 @@
         "src/util/tinvolume.cpp and .hpp (TIN volume-surface construction; advisory Terrain, ambiguous)",
         "src/util/watershed.cpp and .hpp (watershed, water-drop and catchment analysis; advisory Terrain, ambiguous)",
         "src/commands/CadEntities.hpp (Terrain domain types and styles by sections; shared header remains Commands until types move)",
-        "src/commands/CadCommands.hpp and .cpp (surface stores, build/rebuild, query and feature-line sections; command/application state remains Commands)",
+        "src/commands/CadCommands.hpp and .cpp (surface, profile, feature-line and grading stores plus model/query sections; command/application state remains Commands)",
         "src/commands/CadSurfaceEdit.hpp and .cpp (surface definition/style edit service currently coupled to AppCommandState and command logging)",
         "src/commands/SurfaceStyle.hpp (surface-style table operations currently share CadEntities and Commands headers)",
         "src/alignment/AlignmentFeatureLine.hpp and .cpp (whole-file Terrain feature-line data in Survey-mapped folder)",
@@ -7594,7 +7664,8 @@
         "tests/headless/transcripts/req146-vol-table-csv-tin-edits.txt",
         "tests/headless/transcripts/req371-grading-daylight.txt",
         "tests/headless/transcripts/phase7-drape-onto-surface.txt",
-        "tests/headless/transcripts/regression-surfacedelete-selection.txt"
+        "tests/headless/transcripts/regression-surfacedelete-selection.txt",
+        "tests/headless/transcripts/regression-issue08-surface-skips-are-reported.txt"
       ],
       "forbiddenDependencies": [
         {
