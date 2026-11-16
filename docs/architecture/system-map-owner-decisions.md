@@ -1,6 +1,6 @@
 # Proposed final-map ownership decisions
 
-For owner review under issue #1238. These recommendations address the homeless-concept findings from audits #1220–#1237 using current responsibilities and the existing tier direction. They are proposals only: do not treat them as approved ownership, regenerate the enforcement baseline from them, or move code until the owner records approval. A decision may require a later seam or a carve-out ticket; this list does not authorize code movement.
+For owner review under issue #1238. These recommendations address the homeless-concept findings from audits #1220–#1237 using current responsibilities and the existing tier direction. The candidate machine map and dependency baseline reflect these recommendations, but the owner has not approved them. Do not treat them as authoritative or move code until the owner records approval. A decision may require a later seam or a carve-out ticket; this list does not authorize code movement.
 
 | # | Finding | Proposed ownership |
 |---:|---|---|
