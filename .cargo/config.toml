@@ -1,0 +1,3 @@
+[build]
+# Keep the throwaway Cargo intermediates out of the native application runtime directory.
+target-dir = "build/.cmake/tauri-spike"
