@@ -9747,7 +9747,7 @@
       "path": "src/render/ViewportRenderer.cpp",
       "lines": [
         1250,
-        3888
+        3855
       ],
       "system": "Renderer",
       "concern": "mixed-scene-draw",
@@ -9759,7 +9759,7 @@
     {
       "path": "src/render/ViewportRenderer.cpp",
       "lines": [
-        3889,
+        3856,
         3960
       ],
       "system": "OpenGL",
@@ -9887,7 +9887,7 @@
       "path": "src/qt/EditorViewport.cpp",
       "lines": [
         610,
-        1580
+        1578
       ],
       "system": "OpenGL",
       "concern": "mixed-paint",
@@ -10388,7 +10388,7 @@
         "ReadGpuPreferenceForThisExe",
         "WriteGpuPreferenceForThisExe"
       ],
-      "note": "Registry-backed GPU preference for hybrid graphics. Windows OS service; called from Commands (CadCommands.hpp)."
+      "note": "Registry-backed GPU preference for hybrid graphics. Windows OS service. No current production caller; GpuPreferenceTests.cpp is its only consumer."
     },
     {
       "path": "src/platform/GpuPreference.hpp",
@@ -10522,7 +10522,7 @@
       "symbols": [
         "stb_image"
       ],
-      "note": "The single compiled copy of the vendored stb_image decoder. It is an image-decode dependency for IO and Document, not a Platform backend; it sits in the platform folder."
+      "note": "The single compiled copy of the vendored stb_image decoder. Users are IO (io/RasterImage.cpp, io/PlotStyleTable.cpp) and Network (platform/MapTileService.cpp). It is a decoder dependency, not a Platform backend, and sits in the platform folder."
     },
     {
       "path": "src/platform/ThumbnailCache.hpp",
@@ -10725,6 +10725,138 @@
         "PdfCanvas"
       ],
       "note": "PDF page surface and pointer events. Qt presentation over Pdf data."
+    },
+    {
+      "path": "src/platform/StartupFailure.hpp",
+      "lines": [
+        1,
+        19
+      ],
+      "system": "Network",
+      "concern": "report-upload",
+      "symbols": [
+        "StartupFailure"
+      ],
+      "note": "Declares the startup-failure log path (Windows) and the silent send (Network). The send is the Network part of this header."
+    },
+    {
+      "path": "src/platform/CrashReporter.hpp",
+      "lines": [
+        1,
+        63
+      ],
+      "system": "Windows",
+      "concern": "crash-capture-decl",
+      "symbols": [
+        "InstallHandler",
+        "TakeCrashReportFromCommandLine",
+        "TriggerTestCrash"
+      ],
+      "note": "Crash-capture declarations. The upload entry point is Network-owned (see CrashReporter.cpp:248-325)."
+    },
+    {
+      "path": "src/platform/FailureReportUi.hpp",
+      "lines": [
+        1,
+        16
+      ],
+      "system": "Network",
+      "concern": "report-url",
+      "symbols": [
+        "FailureReportUi"
+      ],
+      "note": "Declares the GitHub new-issue URL builder used by both the Win32 failure window and the Qt dialog. URL policy is Network; the window that uses it is Windows (FailureReportUi.cpp)."
+    },
+    {
+      "path": "src/platform/MapTileService.hpp",
+      "lines": [
+        1,
+        124
+      ],
+      "system": "Network",
+      "concern": "map-tile-service",
+      "symbols": [
+        "MapTileService"
+      ],
+      "note": "Online map tile fetch and disk cache (REQ-363). Network-owned per the Network audit (#1233); the GL texture upload is in ViewportRenderer (OpenGL)."
+    },
+    {
+      "path": "src/platform/MapTileService.cpp",
+      "lines": [
+        1,
+        220
+      ],
+      "system": "Network",
+      "concern": "map-tile-service",
+      "symbols": [
+        "MapTileService"
+      ],
+      "note": "Tile fetch, disk cache and one-shot workers. Network-owned; file lives in the Windows folder by mapping."
+    },
+    {
+      "path": "tests/headless/FuzzMain.cpp",
+      "lines": [
+        1,
+        298
+      ],
+      "system": "Headless",
+      "concern": "fuzz-driver",
+      "symbols": [
+        "FuzzMain"
+      ],
+      "note": "Fuzz entry point for the headless driver."
+    },
+    {
+      "path": "tests/headless/FuzzGenerator.hpp",
+      "lines": [
+        1,
+        112
+      ],
+      "system": "Headless",
+      "concern": "fuzz-driver",
+      "symbols": [
+        "FuzzGenerator"
+      ],
+      "note": "Fuzz transcript generator declaration."
+    },
+    {
+      "path": "tests/headless/FuzzGenerator.cpp",
+      "lines": [
+        1,
+        369
+      ],
+      "system": "Headless",
+      "concern": "fuzz-driver",
+      "symbols": [
+        "FuzzGenerator"
+      ],
+      "note": "Fuzz transcript generator."
+    },
+    {
+      "path": "tests/headless/Minimizer.hpp",
+      "lines": [
+        1,
+        60
+      ],
+      "system": "Headless",
+      "concern": "fuzz-driver",
+      "symbols": [
+        "Minimizer"
+      ],
+      "note": "Transcript minimiser declaration."
+    },
+    {
+      "path": "tests/headless/Minimizer.cpp",
+      "lines": [
+        1,
+        94
+      ],
+      "system": "Headless",
+      "concern": "fuzz-driver",
+      "symbols": [
+        "Minimizer"
+      ],
+      "note": "Transcript minimiser."
     }
   ],
   "auditedEntries": {
@@ -13358,6 +13490,7 @@
         "Core",
         "Events",
         "UI",
+        "Math",
         "Renderer",
         "Network"
       ],
@@ -13378,8 +13511,8 @@
         "src/render/ViewportRenderer.cpp:41-204 (GLSL source and compile/link helpers)",
         "src/render/ViewportRenderer.cpp:804-898 (GL setup, teardown and tile texture)",
         "src/render/ViewportRenderer.cpp:899-1249 (shader, MSAA, framebuffer, blit and resize)",
-        "src/render/ViewportRenderer.cpp:1250-3888 (RenderScene; Renderer policy mixed with GL draw calls)",
-        "src/render/ViewportRenderer.cpp:3889-4256 (part thumbnails and BMP readback)",
+        "src/render/ViewportRenderer.cpp:1250-3855 (RenderScene; Renderer policy mixed with GL draw calls)",
+        "src/render/ViewportRenderer.cpp:3856-4256 (part thumbnails and BMP readback)",
         "src/qt/EditorViewport.cpp:328-402 (Cleanup, initializeGL)",
         "src/qt/EditorViewport.cpp:403-510 (paper clip mask)",
         "src/qt/EditorViewport.cpp:610-1580 (paintGL; GL present mixed with Qt overlays)",
@@ -13388,7 +13521,7 @@
         "src/qt/FailureReport.cpp:183-214 (startup GL probe)",
         "src/qt/EditorChrome.cpp:128-226 (frameless native event)",
         "src/qt/EditorWindow.cpp:2135-2146 (frameless style restore)",
-        "src/pdf/PdfAttach.cpp:8-75, 279-445, 1010-1032 (Win32, WIC, WinRT, GL upload, COM init)",
+        "src/pdf/PdfAttach.cpp:8-242, 279-445, 1010-1032 (Win32, WIC, WinRT, GL upload, COM init; 243-278 is Pdf's pdfium thumbnail)",
         "src/platform/ (per-file entries in sections)",
         "src/platform/CrashReporter.cpp:248-325 (Network upload); the rest of CrashReporter.cpp is Windows crash capture"
       ],
@@ -13412,11 +13545,13 @@
         "tests/CameraTests.cpp, tests/SectionClipTests.cpp (ViewportRenderer; shared with Renderer)",
         "tests/OnlineMapTests.cpp (map tile service; shared with Network)",
         "tests/CadBlockImportTests.cpp, tests/PointCloudExportTests.cpp (HeadlessFileDialogs seam)",
-        "tests/headless/HeadlessDriver.cpp and tests/headless/transcripts/ (182 files)"
+        "tests/headless/HeadlessDriver.cpp and tests/headless/transcripts/ (182 files)",
+        "tests/FuzzHarnessTests.cpp (headless FuzzGenerator and Minimizer)",
+        "tests/ExtendedGeometryGateTests.cpp (references ViewportRenderer; shared with Renderer)"
       ],
       "testNotes": "Gaps: no test references StbImage, WinFileDialogs, MapTilePlatform, CrashReporterWireReason, HeadlessPdfAttach, QtViewCube or ProcessRun; FuzzMain.cpp mentions ProcessRun but does not test it. ViewportRenderer is covered only indirectly. QtEditorTests.cpp (17,518 lines) carries platform checks alongside GoSurveyEditor tests and is grandfathered in the file-size baseline. HeadlessDriver.cpp (3,235 lines) is also grandfathered. No test exercises a render device seam, because none exists yet.",
       "homelessConcepts": [
-        "Render device interface and factory: none exists in source (ADR-0003). ViewportRenderer.cpp makes about 707 direct GL calls.",
+        "Render device interface and factory: none exists in source (ADR-0003). ViewportRenderer.cpp makes 659 lines with direct GL calls.",
         "Headless null render device: none exists. HeadlessDriver is a transcript driver for the domain, not a recorder of draw calls.",
         "Toolkit-neutral UI interfaces (ADR-0002): none exist. Browse*Utf8 are free functions, and the Headless seam is a link-time substitution.",
         "Three GL initialisation paths: main.cpp sets the format, EditorViewport::initializeGL and ViewportRenderer::Init call glewInit, and the startup probe in FailureReport.cpp creates its own context.",
@@ -13424,15 +13559,14 @@
         "Single-instance and window handoff: a Windows mutex in main.cpp and WM_COPYDATA in EditorChrome.cpp's native event hook. A neutral IPC port is needed.",
         "Shell thumbnails for PDF previews (IShellItemImageFactory in PdfAttach.cpp) and the ThumbnailCache header have no clear owner. Pdf, Windows and GoSurveyEditor each have a claim.",
         "Frameless window: caption drag, WM_NCCALCSIZE and WM_NCHITTEST handling, and the style restore in EditorWindow.cpp. Window chrome has no abstract interface.",
-        "GPU preference policy: the registry read and write is Windows, but the decision to request high performance is application policy that Commands reaches through CadCommands.hpp.",
-        "Image decode: stb_image in src/platform/StbImage.cpp has no owner; IO and Document are its users.",
+        "GPU preference policy: the registry read and write is Windows. No current caller requests a preference; the decision of whether to request high performance has no owner.",
+        "Image decode: stb_image in src/platform/StbImage.cpp has no owner; its users are IO (RasterImage.cpp, PlotStyleTable.cpp) and Network (MapTileService.cpp).",
         "Map tile GL texture: the upload is in ViewportRenderer (OpenGL) but the tile source is Network. The final map must choose where the texture cache lives."
       ],
       "couplings": [
-        "src/render/ViewportRenderer.cpp (Renderer) includes GL/glew.h and calls GL directly, about 707 call sites. This breaks the ADR-0003 device boundary; the Renderer row does not include OpenGL.",
+        "src/render/ViewportRenderer.cpp (Renderer) includes GL/glew.h and calls GL directly, 659 lines with GL calls. This breaks the ADR-0003 device boundary; the Renderer row does not include OpenGL.",
         "src/pdf/PdfAttach.cpp (Pdf) includes GL/glew.h, windows.h, ShlObj.h and wincodec.h, and uploads GL textures. Pdf's row does not include OpenGL or Windows. CMakeLists.txt names this file as the seam; HeadlessPdfAttach.cpp is the other side.",
         "src/commands/CadBlocks.cpp, CadCommands.cpp, CadCommands_Alignment.cpp and CadCommands_DrawInquiry.cpp call the Browse*Utf8 Windows dialogs directly. Commands' row does not include Windows.",
-        "src/commands/CadCommands.hpp (Commands) reaches GpuPreference (Windows).",
         "src/util/SaveTrace.cpp (Debug) calls GetTempPathW and OutputDebugStringA. Debug's only allowed dependency is Core.",
         "src/update/UpdateService.cpp (Network) calls ShellExecuteExW and GetModuleFileNameW. Network's allowed dependencies are Core and Events.",
         "src/io/Project.cpp (IO) calls CreateFileW and GetLastError. src/io/DwgIo.cpp and RecentDrawings.cpp include windows.h without a visible Win32 call; check whether the include is needed. IO's row does not include Windows.",
@@ -13440,13 +13574,13 @@
         "src/qt/EditorWindow.cpp, EditorChrome.cpp and main.cpp call Win32 directly for frameless style and native events. Qt's row does not include Windows.",
         "src/platform/CrashReporter.cpp and StartupFailure.cpp (Windows) call the Network upload functions. Windows may depend on Network, so this edge is allowed; the upload should go through the Network interface.",
         "src/platform/HeadlessFileDialogs.cpp (Headless) uses the same free-function names as WinFileDialogs.cpp. This is a link-time seam, not a dependency; it stays until the UI interface exists.",
-        "src/platform/StbImage.cpp is used by IO and Document code in the domain library, while the file sits in the platform folder. Mapped to IO; a misplaced-folder finding.",
+        "src/platform/StbImage.cpp is used by IO (RasterImage.cpp, PlotStyleTable.cpp) and Network (MapTileService.cpp), while the file sits in the platform folder. Mapped to IO; a misplaced-folder finding.",
         "tests/TestSoundGuard.cpp intercepts PlaySoundW and MessageBeep in test processes. It is Headless infrastructure with a Windows dependency."
       ],
       "misMappedFolders": [
         "src/platform/ is mapped wholesale to Windows, but it holds Headless backends, a Network interface and transport, IO image decoding, and GoSurveyEditor start-screen state.",
         "src/qt/ is mapped wholesale to Qt, but most of it is GoSurveyEditor windows, dialogs, ribbon and panels (ADR-0002). Only the thin adapters listed in sections are Qt.",
-        "src/render/ViewportRenderer.cpp is mapped to Renderer, but about 707 of its calls are OpenGL device calls that belong in the OpenGL backend.",
+        "src/render/ViewportRenderer.cpp is mapped to Renderer, but 659 of its lines are OpenGL device calls that belong in the OpenGL backend.",
         "tests/headless/ and tests/TestSoundGuard.* are not mapped; they are Headless test infrastructure."
       ]
     }
