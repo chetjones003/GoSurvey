@@ -513,6 +513,21 @@ target_include_directories(gosurvey_events INTERFACE "$<BUILD_INTERFACE:${CMAKE_
 target_compile_features(gosurvey_events INTERFACE cxx_std_17)
 target_link_libraries(gosurvey_events INTERFACE GoSurvey::Core GoSurvey::Math)
 
+# GoSurvey::Debug — Foundation library for developer diagnostics (carve-out ticket #1243). Its
+# public include root is src/debug/include/ (headers under GoSurvey/Debug/). The sources are the
+# map's whole-file assignments that link with Core alone; they keep their current paths until the
+# move-only follow-up. Allowed dependency: Core only. docinvariants stays in gosurvey_domain
+# because it reads AppCommandState from Commands, which Debug may not depend on.
+add_library(gosurvey_debug STATIC
+  src/util/benchscene.cpp
+  src/util/SaveTrace.cpp
+)
+add_library(GoSurvey::Debug ALIAS gosurvey_debug)
+target_include_directories(gosurvey_debug PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/debug/include>")
+target_compile_features(gosurvey_debug PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_debug PUBLIC GoSurvey::Core)
+gosurvey_target_warnings(gosurvey_debug)
+
 # --- OpenXLSX (vendored, third_party/OpenXLSX, approved D-2026-10-30-a): .xlsx read/write for
 # Extract Data and Link Data (REQ-467 / REQ-468). Compiled into gosurvey_domain with the pugixml
 # copy above; zip support comes from the vendored miniz.
@@ -721,7 +736,6 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/util/surfacequery.cpp
   src/util/gridsurface.cpp
   src/util/daylight.cpp
-  src/util/benchscene.cpp
   # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). Pure by that ADR — no GL, no UI, no
   # document — so a wrong volume integral or an unclosed shell is caught against a closed-form
   # expectation rather than by looking at a shaded viewport.
@@ -777,7 +791,6 @@ set(GOSURVEY_DOMAIN_SOURCES
 
   # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
   src/util/docinvariants.cpp
-  src/util/SaveTrace.cpp
 )
 
 # One static library so CadCommands.cpp (and the rest of the domain list) is compiled
@@ -812,7 +825,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
-target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math)
+target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Debug)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
@@ -824,7 +837,7 @@ gosurvey_enable_pch(gosurvey_domain)
 # Stable umbrella for application consumers; individual systems remain linkable in isolation.
 add_library(gosurvey_engine INTERFACE)
 add_library(GoSurvey::Engine ALIAS gosurvey_engine)
-target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Events)
+target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Events GoSurvey::Debug)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
@@ -1172,7 +1185,6 @@ if(GOSURVEY_BUILD_TESTS)
     tests/LibreDwgTests.cpp
     tests/LinetypeTessellationTests.cpp
     tests/CurveIntersectTests.cpp
-    tests/BenchSceneTests.cpp
     tests/VisualStyleTests.cpp
     tests/MeshGeomTests.cpp
     # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). The whole point of the kernel being
@@ -1338,7 +1350,6 @@ if(GOSURVEY_BUILD_TESTS)
     # the only new logic in the investigation instrument for the multi-select freeze — it decides
     # where in a stall episode a frame sits — and its edges (began / ended) are what gate the one
     # diagnostic snapshot per episode, so both are pinned here with no GL context.
-    tests/FrameWatchTests.cpp
     # REQ-316 / ADR-047: the bulge -> arc (centre, radius, start, sweep) helper and arc-segment
     # length. Pure geom2d, double math; the tangency and quarter-circle cases are what POLYLINE arc
     # mode and JOIN both rest on, and a sign error here is silent in plan view.
@@ -1386,7 +1397,6 @@ if(GOSURVEY_BUILD_TESTS)
     # module exist at all under architecture §11.4.
     tests/DocInvariantsTests.cpp
     src/util/docinvariants.cpp
-    src/util/SaveTrace.cpp
     # REQ-069: the background rebuild worker's lifetime. Header-only against CadCommands.hpp (the
     # struct and its destructor), so it needs no extra domain source on the link line.
     tests/SurfaceRebuildLifetimeTests.cpp
@@ -1442,8 +1452,6 @@ if(GOSURVEY_BUILD_TESTS)
     # quarter-circle and tangency cases POLYLINE arc mode and JOIN rest on are pinned without GL.
     src/util/geom2d.cpp
     src/util/spline.cpp
-    # REQ-100 bench scene generator + frame statistics. Pure and deterministic by design.
-    src/util/benchscene.cpp
     # REQ-063 mesh validation + bounds + normals. Pure; the GPU-facing checks must be testable.
     src/util/meshgeom.cpp
     # REQ-065 glTF reader. Pure and GL-free by design (ADR-026 (d)) so it is tested without a window.
@@ -1581,6 +1589,17 @@ if(GOSURVEY_BUILD_TESTS)
   target_link_libraries(GoSurveyMathTests PRIVATE GoSurvey::Math Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyMathTests PROPERTIES LABELS Math)
   gosurvey_target_warnings(GoSurveyMathTests TEST)
+
+  # GoSurvey::Debug tests (#1243). Pure: they link Debug (which links Core) and Catch2 only, never Qt,
+  # OpenGL or gosurvey_domain. DocInvariantsTests stays in GoSurveyTests with docinvariants.
+  add_executable(GoSurveyDebugTests
+    tests/Debug/BenchSceneTests.cpp
+    tests/Debug/FrameWatchTests.cpp)
+  set_target_properties(GoSurveyDebugTests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug Catch2::Catch2WithMain)
+  catch_discover_tests(GoSurveyDebugTests PROPERTIES LABELS Debug)
+  gosurvey_target_warnings(GoSurveyDebugTests TEST)
 
   # ---------------------------------------------------------------------------
   # Command-layer cases share the Catch2 executable and existing domain library.

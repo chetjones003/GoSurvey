@@ -19,6 +19,14 @@
       "system": "Events"
     },
     {
+      "path": "src/debug/include/",
+      "system": "Debug"
+    },
+    {
+      "path": "src/debug/src/",
+      "system": "Debug"
+    },
+    {
       "path": "src/alignment/",
       "system": "Survey"
     },
