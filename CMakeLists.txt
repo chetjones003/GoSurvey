@@ -503,6 +503,16 @@ target_include_directories(gosurvey_math INTERFACE "$<BUILD_INTERFACE:${CMAKE_CU
 target_compile_features(gosurvey_math INTERFACE cxx_std_17)
 target_link_libraries(gosurvey_math INTERFACE GoSurvey::Core)
 
+# GoSurvey::Events — header-only Foundation library (carve-out ticket #1241). Its public include
+# root is src/events/include/. The approved map assigns Events no whole files yet (its items are
+# sections inside Qt files), so it is an INTERFACE target. It links its allowed
+# dependencies, Core and Math, and is part of the GoSurvey::Engine umbrella.
+add_library(gosurvey_events INTERFACE)
+add_library(GoSurvey::Events ALIAS gosurvey_events)
+target_include_directories(gosurvey_events INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/events/include>")
+target_compile_features(gosurvey_events INTERFACE cxx_std_17)
+target_link_libraries(gosurvey_events INTERFACE GoSurvey::Core GoSurvey::Math)
+
 # --- OpenXLSX (vendored, third_party/OpenXLSX, approved D-2026-10-30-a): .xlsx read/write for
 # Extract Data and Link Data (REQ-467 / REQ-468). Compiled into gosurvey_domain with the pugixml
 # copy above; zip support comes from the vendored miniz.
@@ -814,7 +824,7 @@ gosurvey_enable_pch(gosurvey_domain)
 # Stable umbrella for application consumers; individual systems remain linkable in isolation.
 add_library(gosurvey_engine INTERFACE)
 add_library(GoSurvey::Engine ALIAS gosurvey_engine)
-target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math)
+target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Events)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
