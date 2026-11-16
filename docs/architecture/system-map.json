@@ -14683,6 +14683,62 @@
         "Hover dwell helpers describe policy but timer scheduling and grip-menu presentation remain Qt-owned."
       ]
     },
+    "GoSurveyEditor": {
+      "tier": "Application",
+      "audit": { "issue": 1237, "parent": 1207, "codeMoved": false },
+      "responsibility": "Composes the engine and owns startup, application windows, dialogs, ribbon, panels, hotkeys, and user-facing workflow decisions.",
+      "doesNotOwn": [
+        "persistent drawing, survey, terrain, point-cloud, and PDF model state",
+        "command execution and command-specific state",
+        "toolkit adapters, platform services, rendering policy, and format persistence",
+        "pure geometry, surface analysis, and exchange-format algorithms"
+      ],
+      "allowedDependencies": ["Commands", "Interaction", "Renderer", "IO", "Network", "Qt", "OpenGL", "Windows"],
+      "dependencyNote": "Advisory union of application composition and required backend edges in system-map.md; it does not change enforced mappings or the dependency baseline.",
+      "currentFiles": [
+        "src/app/*: application composition and startup.",
+        "src/qt/*: editor windows, dialogs, ribbon, panels, hotkeys and UI workflow. The detailed Qt/PlatformBackends audit sections remain authoritative where files mix ownership.",
+        "src/ui/ModelingRibbon.hpp: editor ribbon button catalog.",
+        "src/platform/ThumbnailCache.hpp: recent-drawing start-screen thumbnail cache policy."
+      ],
+      "currentSections": [
+        "src/qt/main.cpp: main() and window composition; GL format and Windows single-instance sections remain PlatformBackends.",
+        "src/qt/EditorWindow.*: window lifecycle, drawing tabs, dialog decisions and user workflow; domain mutations remain with owning systems.",
+        "src/qt/EditorViewport.*: widget hosting, event dispatch, resize and redraw orchestration; Qt input, Interaction and OpenGL sections remain with those systems.",
+        "src/qt/EditorRibbon.cpp and src/ui/ModelingRibbon.hpp: ribbon composition and button catalog.",
+        "src/qt/EditorDialogs.cpp, EditorChrome.cpp, EditorContextMenu.cpp, EditorInput.cpp, EditorProjects.cpp and EditorUpdate.cpp: application workflow portions; backend and Network sections remain separately assigned.",
+        "src/commands/CadCommands.hpp: dialog decisions, prompt lifecycle and application handoffs are GoSurveyEditor; command sequencing and state remain Commands.",
+        "src/platform/ThumbnailCache.hpp: full header is a GoSurveyEditor section."
+      ],
+      "pendingAssignment": ["Qt files are mixed: use per-symbol sections in specialized audits before any future file move; this audit is advisory."],
+      "draftPublicInterface": [
+        "main() startup composition in src/qt/main.cpp",
+        "EditorWindow public slots and drawing/window lifecycle methods in src/qt/EditorWindow.hpp",
+        "EditorViewport widget boundary in src/qt/EditorViewport.hpp",
+        "RibbonCatalog and ModelingRibbon button catalog consumed by editor composition"
+      ],
+      "existingTests": [
+        "Qt editor integration tests in tests/QtEditor* (window, viewport and workflow coverage)",
+        "tests/ToolspaceCatalogTests.cpp",
+        "tests/ViewCubeTests.cpp and tests/ZoomFramingTests.cpp for editor-facing viewport workflows; underlying policy is Renderer/Interaction"
+      ],
+      "homelessConcepts": [
+        "Recent-drawing thumbnail cache ownership and invalidation lifecycle (ThumbnailCache.hpp).",
+        "Application orchestration embedded in CadCommands.hpp and other god files; final-map work must split by symbol.",
+        "What's New billboard presentation versus pure version-gating logic (WhatsNewLogic).",
+        "Drawing tab lifecycle coordination across Qt, Commands, Document, IO and Renderer."
+      ],
+      "couplings": [
+        "EditorWindow and EditorViewport coordinate Commands state, Document entities and undo, Renderer caches, Survey/Terrain/Pdf workflows and IO persistence; these are current application seams, not permission to add engine dependencies.",
+        "Qt widgets directly use Windows and OpenGL implementation details; see PlatformBackends for those forbidden couplings.",
+        "EditorWindow dispatches Network update services and presents update state; Qt reaches Network directly today.",
+        "Dialog and ribbon composition exposes domain command actions while model state and rules remain in owning systems."
+      ],
+      "testGaps": [
+        "No isolated composition test covers startup wiring and backend selection.",
+        "Editor workflow coverage depends on the Qt integration harness; there is no toolkit-neutral application test seam."
+      ]
+    },
     "PlatformBackends": {
       "tier": "Platform backend",
       "audit": {
