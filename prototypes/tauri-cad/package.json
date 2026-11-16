@@ -11,10 +11,13 @@
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --no-default-features",
     "test:camera": "node --test scripts/camera.test.mjs",
     "test:desktop": "node scripts/smoke.mjs",
-    "test:hmr": "node scripts/hmr.mjs"
+    "test:hmr": "node scripts/hmr.mjs",
+    "test:ui": "vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
+    "@ui-sdk/core": "^0.1.0-beta.3",
+    "@ui-sdk/react": "^0.1.0-beta.3",
     "lucide-react": "^0.468.0",
     "react": "^19",
     "react-dom": "^19"
@@ -23,12 +26,17 @@
     "@playwright/test": "^1.65.1",
     "@tailwindcss/vite": "^4",
     "@tauri-apps/cli": "^2",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.12",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^4",
     "daisyui": "^5",
+    "jsdom": "^31.0.1",
     "tailwindcss": "^4",
     "typescript": "^5.7",
-    "vite": "^6"
+    "vite": "^6",
+    "vitest": "^5.1.0"
   }
 }

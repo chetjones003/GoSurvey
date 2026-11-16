@@ -35,6 +35,26 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { Button } from "@ui-sdk/react/button";
+import {
+  Dialog,
+  DialogBackdrop,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@ui-sdk/react/dialog";
+import { Input } from "@ui-sdk/react/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@ui-sdk/react/select";
+import { Tabs, TabsList, TabsPanel, TabsTab } from "@ui-sdk/react/tabs";
+import { Toggle, ToggleIcon } from "@ui-sdk/react/toggle";
 import { fit } from "./camera";
 import { useEngine } from "./useEngine";
 import {
@@ -64,21 +84,34 @@ function Tool({
   disabled?: boolean;
   large?: boolean;
 }) {
-  return (
-    <button
-      className={`btn btn-ghost tool ${active ? "active" : ""} ${large ? "tool-large" : ""}`}
-      onClick={onClick}
-      disabled={disabled}
-      title={
-        disabled
-          ? `${label} · outside this spike`
-          : `${label}${shortcut ? ` · ${shortcut}` : ""}`
-      }
-    >
+  const title = disabled
+    ? `${label} · outside this spike`
+    : `${label}${shortcut ? ` · ${shortcut}` : ""}`;
+  const content = (
+    <>
       <Icon size={large ? 25 : 16} strokeWidth={1.55} />
       <span>{label}</span>
       {shortcut && !large && <kbd>{shortcut}</kbd>}
-    </button>
+    </>
+  );
+  const className = `btn btn-ghost tool ${large ? "tool-large" : ""}`;
+  if (active === undefined) {
+    return (
+      <Button className={className} onClick={onClick} disabled={disabled} title={title}>
+        {content}
+      </Button>
+    );
+  }
+  return (
+    <Toggle
+      className={`${className} ${active ? "active" : ""}`}
+      pressed={active}
+      onPressedChange={() => onClick?.()}
+      disabled={disabled}
+      title={title}
+    >
+      {content}
+    </Toggle>
   );
 }
 function Inspector({ drawing }: { drawing: Drawing | null }) {
@@ -210,20 +243,25 @@ function Toolspace({
         </span>
         <PanelLeftClose size={14} />
       </div>
-      <div className="tabs tabs-border sidebar-tabs" role="tablist">
-        {["Drawing", "Objects"].map((tab) => (
-          <button
-            role="tab"
-            aria-selected={selectedTab === tab}
-            key={tab}
-            className={`tab ${selectedTab === tab ? "tab-active" : ""}`}
-            onClick={() => setTab(tab)}
-          >
-            {tab}
-          </button>
-        ))}
-      </div>
-      {selectedTab === "Drawing" ? (
+      <Tabs
+        className="contents"
+        value={selectedTab}
+        onValueChange={(value) => {
+          if (value) setTab(value);
+        }}
+      >
+        <TabsList aria-label="Toolspace" className="tabs tabs-border sidebar-tabs">
+          {["Drawing", "Objects"].map((tab) => (
+            <TabsTab
+              key={tab}
+              value={tab}
+              className={`tab ${selectedTab === tab ? "tab-active" : ""}`}
+            >
+              {tab}
+            </TabsTab>
+          ))}
+        </TabsList>
+        <TabsPanel value="Drawing">
         <>
           <div className="drawing-tree">
             <span>
@@ -247,7 +285,7 @@ function Toolspace({
                 className={`layer-row ${drawing?.layer === layer.name ? "current" : ""}`}
                 key={layer.name}
               >
-                <button
+                <Button
                   className="layer-name"
                   onClick={() => setLayer(layer.name)}
                   title={`Draw on ${layer.name}`}
@@ -260,19 +298,22 @@ function Toolspace({
                   {drawing?.layer === layer.name && (
                     <span className="current-dot" />
                   )}
-                </button>
-                <button
+                </Button>
+                <Toggle
                   className="visibility"
                   title={`${hidden.includes(layer.name) ? "Show" : "Hide"} ${layer.name}`}
-                  aria-label={`Toggle ${layer.name} visibility`}
-                  onClick={() => toggleLayer(layer.name)}
+                  aria-label={`Hide ${layer.name}`}
+                  pressed={hidden.includes(layer.name)}
+                  onPressedChange={() => toggleLayer(layer.name)}
                 >
-                  {hidden.includes(layer.name) ? (
-                    <EyeOff size={13} />
-                  ) : (
-                    <Eye size={13} />
-                  )}
-                </button>
+                  <ToggleIcon>
+                    {hidden.includes(layer.name) ? (
+                      <EyeOff size={13} />
+                    ) : (
+                      <Eye size={13} />
+                    )}
+                  </ToggleIcon>
+                </Toggle>
               </div>
             ))}
           </div>
@@ -316,7 +357,8 @@ function Toolspace({
             </div>
           </div>
         </>
-      ) : (
+        </TabsPanel>
+        <TabsPanel value="Objects">
         <div className="object-list">
           {drawing?.lines.map((line) => (
             <div
@@ -336,7 +378,8 @@ function Toolspace({
             </div>
           ))}
         </div>
-      )}
+        </TabsPanel>
+      </Tabs>
       <div className="workspace-note">
         <span className="note-icon">
           <Activity size={15} />
@@ -556,29 +599,37 @@ export default function App() {
             <i />
             {error ? "Disconnected" : drawing ? "Rust engine" : "Connecting"}
           </span>
-          <button
+          <Button
             className="btn btn-ghost btn-square btn-sm"
             aria-label="Command reference"
             onClick={() => setHelp(true)}
           >
             <CircleHelp size={16} />
-          </button>
+          </Button>
         </div>
       </header>
       <nav className="menubar">
-        <div className="ribbon-tabs">
-          {["Drafting", "Survey", "View"].map((name) => (
-            <button
-              key={name}
-              className={name === tab ? "selected" : ""}
-              onClick={() => setTab(name)}
-            >
-              {name}
-            </button>
-          ))}
-        </div>
+        <Tabs
+          className="contents"
+          value={tab}
+          onValueChange={(value) => {
+            if (value) setTab(value);
+          }}
+        >
+          <TabsList aria-label="Ribbon" className="ribbon-tabs">
+            {["Drafting", "Survey", "View"].map((name) => (
+              <TabsTab
+                key={name}
+                value={name}
+                className={name === tab ? "selected" : ""}
+              >
+                {name}
+              </TabsTab>
+            ))}
+          </TabsList>
+        </Tabs>
         <div className="quick-actions">
-          <button
+          <Button
             className="btn btn-ghost btn-square btn-xs"
             aria-label="Undo"
             title="Undo · Ctrl+Z"
@@ -586,8 +637,8 @@ export default function App() {
             onClick={() => void send({ type: "undo" })}
           >
             <Undo2 size={15} />
-          </button>
-          <button
+          </Button>
+          <Button
             className="btn btn-ghost btn-square btn-xs"
             aria-label="Redo"
             title="Redo · Ctrl+Y"
@@ -595,7 +646,7 @@ export default function App() {
             onClick={() => void send({ type: "redo" })}
           >
             <Redo2 size={15} />
-          </button>
+          </Button>
           <span className="vertical-rule" />
           <span className="muted text-xs">Drafting workspace</span>
           <ChevronDown size={12} />
@@ -676,19 +727,24 @@ export default function App() {
                   <Layers size={25} strokeWidth={1.4} />
                 </span>
                 <div>
-                  <label htmlFor="active-layer">Current layer</label>
-                  <select
-                    id="active-layer"
-                    className="select select-bordered select-xs"
-                    value={drawing?.layer ?? "Boundary"}
-                    onChange={(e) =>
-                      void send({ type: "layer", layer: e.target.value })
-                    }
-                  >
+                <Select
+                  value={drawing?.layer ?? "Boundary"}
+                  onValueChange={(layer) => {
+                    if (layer) void send({ type: "layer", layer });
+                  }}
+                >
+                  <SelectLabel>Current layer</SelectLabel>
+                  <SelectTrigger className="select select-bordered select-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
                     {layers.map((l) => (
-                      <option key={l.name}>{l.name}</option>
+                      <SelectItem key={l.name} value={l.name}>
+                        {l.name}
+                      </SelectItem>
                     ))}
-                  </select>
+                  </SelectContent>
+                </Select>
                 </div>
               </div>
               <span className="group-label">LAYERS</span>
@@ -816,16 +872,17 @@ export default function App() {
           <section
             className={`command-panel ${historyExpanded ? "expanded" : ""}`}
           >
-            <button
+            <Toggle
               className="command-heading"
-              onClick={() => setHistoryExpanded((v) => !v)}
+              pressed={historyExpanded}
+              onPressedChange={() => setHistoryExpanded((v) => !v)}
             >
               <span>
                 <Terminal size={13} />
                 COMMAND LINE<span className="keyboard-hint">F2</span>
               </span>
               <Maximize2 size={12} />
-            </button>
+            </Toggle>
             <div className="command-history" ref={history} aria-live="polite">
               {drawing?.log.map((line, index) => (
                 <div
@@ -846,7 +903,7 @@ export default function App() {
               }}
             >
               <ChevronRight size={17} />
-              <input
+              <Input
                 autoFocus
                 ref={input}
                 aria-label="Command input"
@@ -854,7 +911,7 @@ export default function App() {
                 autoComplete="off"
                 spellCheck={false}
                 value={command}
-                onChange={(e) => setCommand(e.target.value)}
+                onValueChange={(value) => setCommand(value)}
                 onKeyDown={(e) => {
                   if (e.key === "ArrowUp" || e.key === "ArrowDown") {
                     e.preventDefault();
@@ -891,30 +948,35 @@ export default function App() {
           <span className="unit-label">ft</span>
         </div>
         <span className="status-spacer" />
-        <button
+        <Toggle
           className={grid ? "enabled" : ""}
           title="Show grid"
-          onClick={() => setGrid((v) => !v)}
+          pressed={grid}
+          onPressedChange={() => setGrid((v) => !v)}
         >
           <Grid2X2 size={12} />
           GRID
-        </button>
-        <button
+        </Toggle>
+        <Toggle
           className={drawing?.ortho ? "enabled" : ""}
           title="ORTHO · F8"
-          onClick={() => void send({ type: "ortho", enabled: !drawing?.ortho })}
+          pressed={!!drawing?.ortho}
+          onPressedChange={() =>
+            void send({ type: "ortho", enabled: !drawing?.ortho })
+          }
         >
           <ArrowUpRight size={12} />
           ORTHO
-        </button>
-        <button
+        </Toggle>
+        <Toggle
           className={snap ? "enabled" : ""}
           title="Endpoint object snap · F3"
-          onClick={() => setSnap((v) => !v)}
+          pressed={snap}
+          onPressedChange={() => setSnap((v) => !v)}
         >
           <Focus size={12} />
           OSNAP
-        </button>
+        </Toggle>
         <span className="status-divider" />
         <span className="precision-label">f64</span>
         <span className="ready-label">{drawing ? "READY" : "WAITING"}</span>
@@ -928,27 +990,23 @@ export default function App() {
           </div>
         </div>
       )}
-      {help && (
-        <div
-          className="modal modal-open"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Command reference"
-        >
-          <div className="modal-box help-modal">
-            <button
+      <Dialog
+        open={help}
+        onOpenChange={(open) => setHelp(open)}
+      >
+          <DialogContent className="help-modal">
+            <DialogClose
               className="btn btn-sm btn-circle btn-ghost absolute right-3 top-3"
               aria-label="Close help"
-              onClick={() => setHelp(false)}
             >
               <X size={16} />
-            </button>
+            </DialogClose>
             <span className="eyebrow">GOSURVEY LABS</span>
-            <h2>Make a little linework.</h2>
-            <p>
+            <DialogTitle render={<h2 />}>Make a little linework.</DialogTitle>
+            <DialogDescription>
               Use the ribbon, type a command, or combine both. All committed
               geometry lives in Rust.
-            </p>
+            </DialogDescription>
             <div className="help-commands">
               {[
                 [
@@ -983,23 +1041,12 @@ export default function App() {
               click adds to selection. F3 toggles endpoint snap; F8 toggles
               ORTHO. Nothing is saved to disk in this spike.
             </p>
-            <button
-              className="btn btn-primary"
-              onClick={() => {
-                setHelp(false);
-                focusCommand();
-              }}
-            >
+            <DialogClose className="btn btn-primary" onClick={focusCommand}>
               Start drafting <ArrowUpRight size={15} />
-            </button>
-          </div>
-          <button
-            className="modal-backdrop"
-            aria-label="Dismiss help"
-            onClick={() => setHelp(false)}
-          />
-        </div>
-      )}
+            </DialogClose>
+          </DialogContent>
+          <DialogBackdrop className="help-backdrop" />
+      </Dialog>
     </div>
   );
 }

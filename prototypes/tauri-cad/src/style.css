@@ -966,12 +966,26 @@ button:focus-visible {
   letter-spacing: 1px;
   margin-left: 5px;
 }
+.help-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgb(0 0 0 / 0.6);
+}
 .help-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  z-index: 50;
+  box-sizing: border-box;
+  width: min(620px, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
   background: #262626;
   border: 1px solid #525252;
   padding: 32px;
   color: #b9b9b9;
-  max-width: 620px;
 }
 .eyebrow {
   font-size: 9px;
