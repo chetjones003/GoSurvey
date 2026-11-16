@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "status": "draft",
+  "status": "approved",
   "mappedFolders": [
     {
       "path": "src/core/include/",
@@ -77,119 +77,199 @@
   ],
   "fileMappings": [
     {
+      "path": "src/ui/CadUiStyleWidgets.hpp",
+      "system": "Document",
+      "status": "audited"
+    },
+    {
+      "path": "src/ui/CommandBar.hpp",
+      "system": "UI",
+      "status": "audited"
+    },
+    {
+      "path": "src/ui/ModelingRibbon.hpp",
+      "system": "GoSurveyEditor",
+      "status": "audited"
+    },
+    {
+      "path": "src/ui/MtextRichFormat.cpp",
+      "system": "Document",
+      "status": "audited"
+    },
+    {
+      "path": "src/ui/MtextRichFormat.hpp",
+      "system": "Document",
+      "status": "audited"
+    },
+    {
+      "path": "src/ui/MtextRichSpans.hpp",
+      "system": "Document",
+      "status": "audited"
+    },
+    {
+      "path": "src/ui/MtextTextOps.hpp",
+      "system": "Document",
+      "status": "audited"
+    },
+    {
+      "path": "src/ui/MtextToolbar.hpp",
+      "system": "UI",
+      "status": "audited"
+    },
+    {
+      "path": "src/ui/RichTextLayout.hpp",
+      "system": "UI",
+      "status": "audited"
+    },
+    {
       "path": "src/util/AcisSatParser.cpp",
       "system": "IO",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/AcisSatParser.hpp",
       "system": "IO",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/AcisSatWriter.cpp",
       "system": "IO",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/benchscene.cpp",
-      "system": "Debug",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/benchscene.hpp",
-      "system": "Debug",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/brep.cpp",
-      "system": "Geometry",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/brep.hpp",
-      "system": "Geometry",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/cadblock.hpp",
-      "system": "Document",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/cadpiperun.hpp",
-      "system": null,
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/cadsolid.hpp",
-      "system": null,
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/cadtable.hpp",
-      "system": "Document",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/cadtablestyle.hpp",
-      "system": null,
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/contourgen.cpp",
-      "system": "Terrain",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/contourgen.hpp",
-      "system": "Terrain",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/curveintersect.cpp",
-      "system": "Geometry",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/curveintersect.hpp",
-      "system": "Geometry",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/cylinderfit.cpp",
-      "system": "PointCloud",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/cylinderfit.hpp",
-      "system": "PointCloud",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/DataExtract.hpp",
       "system": "IO",
-      "status": "ambiguous"
+      "status": "audited"
+    },
+    {
+      "path": "src/util/PlotScales.hpp",
+      "system": "Document",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/PointFileExt.hpp",
+      "system": "IO",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/SaveTrace.cpp",
+      "system": "Debug",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/SaveTrace.hpp",
+      "system": "Debug",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/SheetGrid.hpp",
+      "system": "IO",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/WhatsNewLogic.cpp",
+      "system": "GoSurveyEditor",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/WhatsNewLogic.hpp",
+      "system": "GoSurveyEditor",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/benchscene.cpp",
+      "system": "Debug",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/benchscene.hpp",
+      "system": "Debug",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/brep.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/brep.hpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/cadblock.hpp",
+      "system": "Document",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/cadpiperun.hpp",
+      "system": "Document",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/cadsolid.hpp",
+      "system": "Renderer",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/cadtable.hpp",
+      "system": "Document",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/cadtablestyle.hpp",
+      "system": "Document",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/contourgen.cpp",
+      "system": "Terrain",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/contourgen.hpp",
+      "system": "Terrain",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/curveintersect.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/curveintersect.hpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/cylinderfit.cpp",
+      "system": "PointCloud",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/cylinderfit.hpp",
+      "system": "PointCloud",
+      "status": "audited"
     },
     {
       "path": "src/util/daylight.cpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/daylight.hpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/docinvariants.cpp",
       "system": "Debug",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/docinvariants.hpp",
       "system": "Debug",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/framewatch.hpp",
@@ -199,242 +279,207 @@
     {
       "path": "src/util/geom2d.cpp",
       "system": "Geometry",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/geom2d.hpp",
       "system": "Geometry",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/gizmooverlay.hpp",
-      "system": null,
-      "status": "ambiguous"
+      "system": "Renderer",
+      "status": "audited"
     },
     {
       "path": "src/util/gltfimport.cpp",
       "system": "IO",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/gltfimport.hpp",
       "system": "IO",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/gridsurface.cpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/gridsurface.hpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/hoverdwell.hpp",
-      "system": null,
-      "status": "ambiguous"
+      "system": "Interaction",
+      "status": "audited"
     },
     {
       "path": "src/util/hoverpickgate.hpp",
-      "system": null,
-      "status": "ambiguous"
+      "system": "Interaction",
+      "status": "audited"
     },
     {
       "path": "src/util/meshgeom.cpp",
       "system": "Geometry",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/meshgeom.hpp",
       "system": "Geometry",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/modelimport.hpp",
       "system": "IO",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/nurbs.cpp",
       "system": "Geometry",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/nurbs.hpp",
       "system": "Geometry",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/PlotScales.hpp",
-      "system": "Document",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/pointcloudcache.cpp",
       "system": "PointCloud",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/pointcloudcache.hpp",
       "system": "PointCloud",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/pointcloudoctree.cpp",
       "system": "PointCloud",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/pointcloudoctree.hpp",
       "system": "PointCloud",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/PointFileExt.hpp",
-      "system": "IO",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/ray3d.hpp",
-      "system": null,
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/SaveTrace.cpp",
-      "system": "Debug",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/SaveTrace.hpp",
-      "system": "Debug",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/SheetGrid.hpp",
-      "system": "IO",
-      "status": "ambiguous"
+      "system": "Math",
+      "status": "audited"
     },
     {
       "path": "src/util/solidpick.cpp",
-      "system": null,
-      "status": "ambiguous"
+      "system": "Interaction",
+      "status": "audited"
     },
     {
       "path": "src/util/solidpick.hpp",
-      "system": null,
-      "status": "ambiguous"
+      "system": "Interaction",
+      "status": "audited"
     },
     {
       "path": "src/util/spline.cpp",
       "system": "Geometry",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/spline.hpp",
       "system": "Geometry",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/stlimport.cpp",
       "system": "IO",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/stlimport.hpp",
       "system": "IO",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/styleproperty.hpp",
-      "system": null,
-      "status": "ambiguous"
+      "system": "Document",
+      "status": "audited"
     },
     {
       "path": "src/util/surfaceanalysis.cpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/surfaceanalysis.hpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/surfacequery.cpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/surfacequery.hpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/surfacestats.cpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/surfacestats.hpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/surfacevolume.cpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/surfacevolume.hpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/tinbuild.cpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/tinbuild.hpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/tinvolume.cpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/tinvolume.hpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/ucs.hpp",
-      "system": null,
-      "status": "ambiguous"
+      "system": "Math",
+      "status": "audited"
     },
     {
       "path": "src/util/watershed.cpp",
       "system": "Terrain",
-      "status": "ambiguous"
+      "status": "audited"
     },
     {
       "path": "src/util/watershed.hpp",
       "system": "Terrain",
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/WhatsNewLogic.cpp",
-      "system": null,
-      "status": "ambiguous"
-    },
-    {
-      "path": "src/util/WhatsNewLogic.hpp",
-      "system": null,
-      "status": "ambiguous"
+      "status": "audited"
     }
   ],
   "unmappedPaths": [],
@@ -453,7 +498,8 @@
     "Terrain audit (issue #1228): Terrain file and section ownership is recorded in auditedEntries.Terrain and sections. The 20 mixed src/util surface files carry advisory Terrain ownership but remain ambiguous so the dependency ratchet and baseline do not change. Command god-file and Survey-folder sections are assigned by symbol; user-interface, persistence, and command orchestration remain with their systems. No code moved.",
     "Renderer audit (issue #1231): Renderer file and section ownership is in auditedEntries.Renderer and sections. The src/render folder mapping, fileMappings and the ratchet baseline are unchanged, so the baseline does not move. GL device calls outside src/render (EditorViewport.cpp, FailureReport.cpp) are recorded as OpenGL sections with pending moves. GL-layout display caches in Commands state are recorded as Renderer sections. No code moved.",
     "IO audit (issue #1232): IO file and section ownership is recorded in auditedEntries.IO and sections. The eleven format/helper files in src/util receive advisory IO ownership in fileMappings and remain ambiguous so the dependency ratchet does not change; src/util/PointFileExt.hpp is called by the Windows backend, modelimport.hpp is a shared transfer contract, and SHX parsing is sectioned under IO in src/font/. Current cross-system and platform couplings are recorded in forbiddenDependencies and auditFindings. No code moved.",
-    "IO audit follow-up: the whole SHX parser in src/font/ShxFont.cpp/.hpp is IO despite the Core folder mapping; src/util/SheetGrid.hpp and DataExtract.hpp are advisory IO export-grid ownership from the Document audit. Point-cloud readers, project-file, and B-rep serialization tests are included in existingTests. The draft DXF/DWG interface names match the current declarations and explicitly note their Commands-state coupling."
+    "IO audit follow-up: the whole SHX parser in src/font/ShxFont.cpp/.hpp is IO despite the Core folder mapping; src/util/SheetGrid.hpp and DataExtract.hpp are advisory IO export-grid ownership from the Document audit. Point-cloud readers, project-file, and B-rep serialization tests are included in existingTests. The draft DXF/DWG interface names match the current declarations and explicitly note their Commands-state coupling.",
+    "Owner approved the final system map and ownership decisions on issue #1238 in comment https://github.com/chetjones003/GoSurvey/issues/1238#issuecomment-6906650509. No source code moved; future map changes require a recorded decision."
   ],
   "sections": [
     {
@@ -624,7 +670,7 @@
       "symbols": [
         "CadFormatBearingCwNorthDegMinSec"
       ],
-      "note": "Divergent from Core FormatBearing, not a duplicate: prints 0°0'0.0\" where Core prints 0°00'00.0\" (asserted in tests/Core/AngleFormatTests.cpp). AngleFormat.hpp claims parity; that claim is false."
+      "note": "Divergent from Core FormatBearing, not a duplicate: prints 0Â°0'0.0\" where Core prints 0Â°00'00.0\" (asserted in tests/Core/AngleFormatTests.cpp). AngleFormat.hpp claims parity; that claim is false."
     },
     {
       "path": "src/commands/CadCommands.cpp",
@@ -2704,9 +2750,7 @@
       ],
       "system": "Qt",
       "concern": "Qt timer arm for held right-click",
-      "symbols": [
-        "EditorViewport::RightPress"
-      ],
+      "symbols": [],
       "note": "Starts the Qt timer using the Commands-owned rightClickLongerClickMs threshold; timer scheduling is Qt-owned.",
       "ownershipKind": "mixed",
       "otherOwners": [
@@ -2721,9 +2765,7 @@
       ],
       "system": "Qt",
       "concern": "cancel held right-click timer on release",
-      "symbols": [
-        "EditorViewport::mouseReleaseEvent"
-      ],
+      "symbols": [],
       "note": "Stops the Qt timer when the held right button is released."
     },
     {
@@ -3023,9 +3065,7 @@
       ],
       "system": "Debug",
       "concern": "crash-report window mode",
-      "symbols": [
-        "TakeCrashReportFromCommandLine"
-      ],
+      "symbols": [],
       "uiRole": "command-line entry that opens the crash report window",
       "note": "Command-line entry for the crash-report window mode. The window is UI; this declaration is the Debug trigger."
     },
@@ -7081,7 +7121,7 @@
         "gfxVideoMemoryCachingLevel",
         "gfx3dFastShadedMode"
       ],
-      "note": "Settings → Graphics Performance values. gfxSmoothLineDisplay is wired into RenderTuning; the other two are documented placeholders."
+      "note": "Settings â†’ Graphics Performance values. gfxSmoothLineDisplay is wired into RenderTuning; the other two are documented placeholders."
     },
     {
       "path": "src/commands/PaperSpace.hpp",
@@ -7341,9 +7381,7 @@
       ],
       "system": "Network",
       "concern": "online map selection command",
-      "symbols": [
-        "SetOnlineMap"
-      ],
+      "symbols": [],
       "note": "Map Off rule and the not-geolocated rule. Writes the Document-owned setting."
     },
     {
@@ -13693,7 +13731,7 @@
             "src/util/benchscene.cpp",
             "src/util/benchscene.hpp"
           ],
-          "reason": "Debug owns deterministic benchmark scenes and statistics, but Commands currently includes benchscene.hpp in CadCommands.cpp and CadCommands_Bench.cpp. The dependency table does not allow Commands → Debug, so keep the ownership advisory until the final-map/move ticket chooses a legal benchmark interface or reassigns the command-facing concept."
+          "reason": "Debug owns deterministic benchmark scenes and statistics, but Commands currently includes benchscene.hpp in CadCommands.cpp and CadCommands_Bench.cpp. The dependency table does not allow Commands â†’ Debug, so keep the ownership advisory until the final-map/move ticket chooses a legal benchmark interface or reassigns the command-facing concept."
         },
         {
           "files": [
@@ -15859,7 +15897,11 @@
     },
     "GoSurveyEditor": {
       "tier": "Application",
-      "audit": { "issue": 1237, "parent": 1207, "codeMoved": false },
+      "audit": {
+        "issue": 1237,
+        "parent": 1207,
+        "codeMoved": false
+      },
       "responsibility": "Composes the engine and owns startup, application windows, dialogs, ribbon, panels, hotkeys, and user-facing workflow decisions.",
       "doesNotOwn": [
         "persistent drawing, survey, terrain, point-cloud, and PDF model state",
@@ -15867,7 +15909,16 @@
         "toolkit adapters, platform services, rendering policy, and format persistence",
         "pure geometry, surface analysis, and exchange-format algorithms"
       ],
-      "allowedDependencies": ["Commands", "Interaction", "Renderer", "IO", "Network", "Qt", "OpenGL", "Windows"],
+      "allowedDependencies": [
+        "Commands",
+        "Interaction",
+        "Renderer",
+        "IO",
+        "Network",
+        "Qt",
+        "OpenGL",
+        "Windows"
+      ],
       "dependencyNote": "Advisory union of application composition and required backend edges in system-map.md; it does not change enforced mappings or the dependency baseline.",
       "currentFiles": [
         "src/app/*: application composition and startup.",
@@ -16358,13 +16409,376 @@
         "No render device interface, no Headless null device, and no toolkit-neutral UI interface exists in source. ADR-0002 and ADR-0003 are accepted; the audit records the implementations as missing.",
         "Pdf, Renderer, Commands, Debug, IO, Network and Qt each include Win32 or GL headers, or call their APIs directly. Each is a forbidden edge in the current rows, and none is recorded in dependency-baseline.json."
       ],
-      "decisionsForFinalMap": [
-        "Choose one failure-report UI: Qt (src/qt/FailureReport.cpp) or Win32 (src/platform/FailureReportUi.cpp).",
-        "Decide where the map-tile GL texture cache lives: the OpenGL device, or Network with a device handle.",
-        "Decide whether the GPU preference request is Windows or GoSurveyEditor policy.",
-        "Decide whether ThumbnailCache.hpp is start-screen state (GoSurveyEditor) or a reusable cache (Core).",
-        "Decide whether the HttpFetch interface moves to Network in full, or whether the WinHTTP implementation becomes a Network transport adapter."
+      "decisions": [
+        {
+          "finding": "Failure-report UI is duplicated in Qt and Win32.",
+          "status": "approved",
+          "home": "Keep Qt presentation; use Windows services for OS report opening; retire the duplicate Win32 dialog in a later approved carve-out."
+        },
+        {
+          "finding": "Map-tile GL texture cache.",
+          "status": "approved",
+          "home": "OpenGL owns device resources; Network owns tile data and requests."
+        },
+        {
+          "finding": "GPU preference request.",
+          "status": "approved",
+          "home": "GoSurveyEditor owns startup/composition policy; Windows provides the OS API."
+        },
+        {
+          "finding": "ThumbnailCache.",
+          "status": "approved",
+          "home": "GoSurveyEditor owns start-screen cache policy and lifecycle."
+        },
+        {
+          "finding": "HttpFetch.",
+          "status": "approved",
+          "home": "Network owns the interface; Windows implements the WinHTTP transport adapter."
+        }
       ]
-    }
-  }
+    },
+    "ownershipDecisions": [
+      {
+        "finding": "Logging facade: none. Sinks are scattered: EditorWindow::m_Log (command line, Qt), SaveTrace (Debug diagnostic sink), UpdateService LogSilently (Network), StartupFailure startup-failure.log (Windows), and Qt qWarning/qDebug calls in src/qt. The final map must decide whether Core owns one facade or only the file sink.",
+        "status": "approved",
+        "home": "Core logging facade; sinks remain owned by their callers/backends"
+      },
+      {
+        "finding": "Settings store: AppCommandState holds nearly all settings in one god struct. There is no Settings system. Core owns the value vocabulary; the holder and its consumers belong to the final map.",
+        "status": "approved",
+        "home": "Core owns settings vocabulary; GoSurveyEditor composes live settings and Commands consumes them"
+      },
+      {
+        "finding": "Duration and ETA text: FormatEtaRemaining is pure formatting used only by a progress UI. Core or UI?",
+        "status": "approved",
+        "home": "UI presentation"
+      },
+      {
+        "finding": "Lat/long DMS label: FormatLatLongLabel and CadCommands_Geo FormatDms. Geo or Core formatting?",
+        "status": "approved",
+        "home": "Survey geo formatting; Core owns primitive numeric DMS formatting"
+      },
+      {
+        "finding": "Plot-scale labels: PlotScaleChoicesFor and PlotScaleLabel (util/PlotScales.hpp) are Document or Plot, not Core.",
+        "status": "approved",
+        "home": "Document"
+      },
+      {
+        "finding": "Slope text: FormatSlope (CadCommands.cpp) is grading/Terrain.",
+        "status": "approved",
+        "home": "Terrain"
+      },
+      {
+        "finding": "Station text: FormatStation (Alignment) belongs to Alignment, not Core.",
+        "status": "approved",
+        "home": "Survey"
+      },
+      {
+        "finding": "2D point and vector types: curveisect::Vec2 (curveintersect.hpp), Alignment Point2, geo Pt and TraverseCalc Point are all 2D points. Shx::Vec2 is font-unit geometry, not Math. The final map decides whether Math owns one 2D vector type.",
+        "status": "approved",
+        "home": "Math shared 2D primitives; Shx::Vec2 remains Geometry font units"
+      },
+      {
+        "finding": "2D affine transforms: Xf2 (LibreDwgCad.cpp), Affine2D (DxfIo.cpp), Xf (ConvertDrawing.cpp), PlotSheetTransform Transform, PdfAlign Transform and CadCommands Transform (grid rotation). Math could own one affine type, but each owner keeps its domain meaning (for example grid rotation is Survey).",
+        "status": "approved",
+        "home": "Math owns affine primitives; domain systems retain named semantic transforms"
+      },
+      {
+        "finding": "Matrix representations: double row-major Mat4 (gltfimport.cpp) and float column-major out16 arrays (Camera::OrthoProjection, ViewportRenderer::Ortho). The final map must choose one representation or document why two exist.",
+        "status": "approved",
+        "home": "Renderer owns the canonical camera matrix representation; IO converts imported formats at the boundary"
+      },
+      {
+        "finding": "Camera and projection matrix construction is pure math but Renderer owns it. ucs::PlanViewAngles also encodes the camera convention in Math. The final map decides which side owns that convention.",
+        "status": "approved",
+        "home": "Renderer camera/projection convention; Survey owns UCS policy; Math owns primitives"
+      },
+      {
+        "finding": "Degree wrapping: ucs::PlanViewAngles, AzimuthAboutWorldZDeg and SnapToPolarRay (wrap180) each carry their own wrap loop. A shared helper is a candidate once Math is moved.",
+        "status": "approved",
+        "home": "Math"
+      },
+      {
+        "finding": "PlotSheetTransform Transform, PdfAlign Transform and Pt, and the Math-owned Xf2/Affine2D/Xf sections together form a set of 2D affine and point types. Math should own one of each, and the owners keep their domain meaning.",
+        "status": "approved",
+        "home": "Math shared 2D point and affine primitives"
+      },
+      {
+        "finding": "Input event vocabulary and document/command-state change notifications: no toolkit-neutral Events files or dispatcher exist. Qt viewport handlers and callbacks currently carry the behavior (auditedEntries.Events and sections); the final map/move tickets must decide event payloads, subscription lifetime, and the source of document-change notifications.",
+        "status": "approved",
+        "home": "Events owns toolkit-neutral event vocabulary and publisher contracts; Qt adapts input and state changes"
+      },
+      {
+        "finding": "Appearance vocabulary: src/ui/CadUiStyleWidgets.hpp holds the named colour palette, linetype names, and lineweight ladder. It is not UI-neutral: it includes CadEntities.hpp (Commands/Document). The final map must assign it to Document (entity appearance) or GoSurveyEditor.",
+        "status": "approved",
+        "home": "Document owns appearance values; GoSurveyEditor/Qt owns their presentation"
+      },
+      {
+        "finding": "Report text policy: GitHubIssueUrlForReport and SendOutcomeMessage (platform/FailureReportUi.cpp, declared in FailureReportUi.hpp) are pure text helpers beside a Windows dialog. Owner is Debug (crash reporting) or UI; the final map decides.",
+        "status": "approved",
+        "home": "Debug owns report URL policy; UI owns outcome presentation"
+      },
+      {
+        "finding": "OS text clipboard: CopyUtf8TextToClipboard (platform/FailureReportUi.cpp) is the only engine-side OS clipboard call. Qt-side clipboard and timer use is in src/qt. The generic part belongs behind the UI clipboard interface; the Win32 calls stay Windows.",
+        "status": "approved",
+        "home": "UI clipboard interface; Windows implements the OS clipboard call"
+      },
+      {
+        "finding": "ETA text: FormatEtaRemaining is used only by progress UI; it is either Core formatting or UI presentation (see the entry above, now with its UI caller identified).",
+        "status": "approved",
+        "home": "UI presentation"
+      },
+      {
+        "finding": "Dialog-open flags and dialog-wait phases in Commands state (CadCommands.hpp insertBlockDialogOpen 5601, wblockDialogOpen 5659; CadBlocks.cpp WaitDialog phases): the state is Commands-owned; the decision to open a dialog is GoSurveyEditor's. The final map should decide whether the pending-question state moves to a Commands-owned prompt type.",
+        "status": "approved",
+        "home": "Commands owns pending state; GoSurveyEditor decides and presents dialogs"
+      },
+      {
+        "finding": "Pending-question prompt state: AppCommandState::PointEditPrompt and projectRefreshPrompt (CadCommands.hpp ~5441) and AnswerPointEdit (commands/ProjectWarnings.hpp:40). The header comment says the dialogs live in ui/CadUi_Projects.cpp, which does not exist in src/ui. Owner of the prompt state is Commands or Projects; the dialog is UI.",
+        "status": "approved",
+        "home": "Commands owns question state; GoSurveyEditor owns Projects dialog presentation"
+      },
+      {
+        "finding": "Start-screen thumbnail cache (platform/ThumbnailCache.hpp): disk cache of drawing thumbnails; owner is Document or the start-screen owner, not UI.",
+        "status": "approved",
+        "home": "GoSurveyEditor"
+      },
+      {
+        "finding": "Map-capture status text: CadOnlineMap.cpp:348 formats \"Capturing map... N of M\" into mapCapture.prompt. Commands should emit values (gathered, total); the string belongs to UI presentation.",
+        "status": "approved",
+        "home": "GoSurveyEditor formats map-capture progress from gathered/total values"
+      },
+      {
+        "finding": "Point-edit prompt raising: RaisePointEditPrompt (commands/ProjectPoints.cpp:118-269) and the pointEditPrompt state. Commands owns the question; the dialog is UI.",
+        "status": "approved",
+        "home": "Commands"
+      },
+      {
+        "finding": "Dynamic-input prompt presentation: CadDynInputPromptFor (commands/CadDynInput.cpp:434) builds the CadDynInputPrompt shown by the dynamic-input bar. The prompt text is UI presentation; the command's input state is Commands.",
+        "status": "approved",
+        "home": "UI presentation; Commands keeps input state"
+      },
+      {
+        "finding": "Attach flow with a dialog: commands/ProjectAddFlow.hpp:5 describes a three-step add flow built around a dialog. The flow is Commands; the dialog is UI. Mixed ownership to resolve in the final map.",
+        "status": "approved",
+        "home": "Commands owns add-flow policy; GoSurveyEditor/Qt presents the dialog"
+      },
+      {
+        "finding": "Document invariant diagnostics: CheckDocumentInvariants and stable violation formatting are Debug tools over Commands-owned AppCommandState; resolve the ownership/dependency boundary before relocating code.",
+        "status": "approved",
+        "home": "Debug checks an immutable diagnostic snapshot supplied at the application boundary"
+      },
+      {
+        "finding": "Profiling interface: measurements are stored in AppCommandState and exposed through Commands PIPEPERF/PERFHUD surfaces; the final map must decide whether Debug owns a reusable collector or only diagnostic algorithms.",
+        "status": "approved",
+        "home": "Debug owns the reusable profiler; Commands owns PIPEPERF/PERFHUD command surfaces"
+      },
+      {
+        "finding": "FrameWatch has no production call site yet; it is a tested diagnostic utility whose integration owner and lifecycle remain to be decided.",
+        "status": "approved",
+        "home": "Debug"
+      },
+      {
+        "finding": "The 2D vector vocabulary is split between curveisect::Vec2, Alignment Point2, geo::Pt, and TraverseCalc Point. Geometry owns its intersection vector today; the final map should decide whether Math supplies one shared 2D primitive.",
+        "status": "approved",
+        "home": "Math supplies a shared primitive; Geometry and Survey adapt domain types during later moves"
+      },
+      {
+        "finding": "Geodetic transformations and coordinate-system definitions are mixed under src/geo/ and currently mapped to Geometry. Survey owns coordinate-system policy; DrawingConversion.cpp has a separate Core-owned unit conversion section. The final map must assign the geodetic algorithms and coordinate-system data by concept.",
+        "status": "approved",
+        "home": "Survey owns geodetic algorithms and coordinate-system definitions; Core owns unit conversion"
+      },
+      {
+        "finding": "Piping: CadPipeRun, CadPipingSystem, CadPipePartType, CadBlockConnection and cadpiperun.hpp (NPS table and fillet rules) belong to no system. They are stored as Document data, so Document either owns a piping module or a separate Piping system is needed before the final map.",
+        "status": "approved",
+        "home": "Document owns piping records and rules until a separate Piping system is justified by an approved move ticket"
+      },
+      {
+        "finding": "Imported lighting: CadDwgImportedLight, CadDwgImportedSun and CadDwgImportedLightList (CadEntities.hpp 1636-1672) are drawing-stored records with no owner. Document storage with a Renderer consumer is the likely answer.",
+        "status": "approved",
+        "home": "Document owns imported-light records; Renderer owns their display representation"
+      },
+      {
+        "finding": "Named views: NamedView (CadCommands.hpp 1488-1503) pairs camera state with a drawing name. It is stored in DrawingDocument but is view state, so the final map must decide where saved views live.",
+        "status": "approved",
+        "home": "Document owns the persisted named-view value; Renderer interprets it as camera state"
+      },
+      {
+        "finding": "Drawing settings and units: DrawingSettings and drawingInsUnits are Document, while kDrawingUnitNames and kDrawingUnitCodes (cadblock.hpp 1669-1672) and the units block (1606-1635) are Core. The split is not decided; Core may own the unit vocabulary and Document the per-drawing value.",
+        "status": "approved",
+        "home": "Core owns unit vocabulary; Document owns per-drawing settings and selected units"
+      },
+      {
+        "finding": "Style property parsing: src/util/styleproperty.hpp (StyleProperty, StyleNumber, StyleFlag) is used by DimensionStyle and style files, but no system claims it.",
+        "status": "approved",
+        "home": "Document"
+      },
+      {
+        "finding": "Solid display caches: CadSolidTessellation, CadSolidDisplayBatch and CadSolidDisplayGeometry (src/util/cadsolid.hpp 43-130) are Renderer caches stored next to Document solid pointers.",
+        "status": "approved",
+        "home": "Renderer"
+      },
+      {
+        "finding": "Project session and shared point DB (ProjectPoints, ProjectWarnings, ProjectFiles, ProjectAddFlow, ProjectSettings in commands/): the Project concept is not a system in the map, so it has no owner. The final map must decide whether Survey (shared point DB) or a Project owner holds it.",
+        "status": "approved",
+        "home": "GoSurveyEditor owns the .gsproj Projects feature and session workflow; Survey owns shared point data; IO owns serialization"
+      },
+      {
+        "finding": "ALIGN (CadCommands_Align.cpp): two-point Helmert similarity applied to drawing geometry. It is coordinate-system work, but it edits Document geometry through Math transforms; no owner is assigned.",
+        "status": "approved",
+        "home": "Survey owns ALIGN coordinate operation; Commands coordinates the operation and Document mutation"
+      },
+      {
+        "finding": "Web Mercator tile math (geo/WebMercator.*): assigned to Survey by the Geometry audit, but it serves Network online maps. Decide at the final map.",
+        "status": "approved",
+        "home": "Network"
+      },
+      {
+        "finding": "Survey point-label MTEXT (SurveyPoints.cpp 693-912): label text comes from Survey data, but the MTEXT entity and placement are Document. The split is recorded; the owner of the label template is open.",
+        "status": "approved",
+        "home": "Survey owns label templates; Document owns resulting MTEXT entities and placement"
+      },
+      {
+        "finding": "Terrain surface domain is homeless from its implementation boundary: surface/TIN/style/profile data and algorithms are split among src/util, Commands god files, and Survey-mapped alignment files; the final map/move tickets must create a Terrain home and public interface.",
+        "status": "approved",
+        "home": "Terrain"
+      },
+      {
+        "finding": "PointCloud persistence ownership is split: CadPointCloud holds a preview sample and cache path/octree; the .gscloud cache holds full-density data; DXF/DWG persistence intentionally excludes full cloud data. Document/persistence ownership and sidecar lifecycle need a final-map decision.",
+        "status": "approved",
+        "home": "PointCloud owns cache lifecycle and full-density data; Document stores references; IO adapts DXF/DWG persistence"
+      },
+      {
+        "finding": "Point-cloud selection and extraction for centerline fitting currently lives in CadCommands.cpp; the final map should decide whether spatial queries remain a PointCloud API while extraction policy stays in Commands.",
+        "status": "approved",
+        "home": "PointCloud owns spatial queries; Commands owns centerline-extraction workflow"
+      },
+      {
+        "finding": "PDFium library integration: PdfDocument, PdfAttach, PdfSplit, PdfAnnotate and PdfMeasure call PDFium inside the Pdf folder although the map row excludes PDF library integration. PdfAttach_Init and PdfAttach_Shutdown are called from the Qt main, TraverseReport export calls FPDF directly, and the vector plot writer in IO calls FPDF too. The final map must decide whether PDFium is a platform backend, an IO backend, or a Pdf-owned adapter.",
+        "status": "approved",
+        "home": "Pdf owns a PDFium adapter boundary used by Pdf and IO callers; backend details stay behind that adapter"
+      },
+      {
+        "finding": "PDFium lock coverage: pdfview::PdfiumMutex() (PdfDocument.hpp) guards PDFium calls in Pdf and in IO's PdfPlot.cpp, and its header says every PDFium call runs under it. src/traverse/TraverseReport.cpp ExportReportPdf calls FPDF_InitLibrary, FPDF_CreateNewDocument and FPDF_SaveAsCopy without taking that lock. Not verified at runtime; record for the IO audit and the final map.",
+        "status": "approved",
+        "home": "Pdf adapter serializes every PDFium operation under one lock, including traverse report export"
+      },
+      {
+        "finding": "PDF placement record ownership: PdfAttachment is Pdf payload stored in Document containers (DrawingDocument and the undo snapshot), and the project file stores placements under the pdfs role (io/Project.hpp, io/ProjectFiles.cpp). Ownership of the placement record and its persistence is unassigned.",
+        "status": "approved",
+        "home": "Pdf owns attachment payload; Document owns drawing membership; IO persists placement records"
+      },
+      {
+        "finding": "PDF underlay picking: SelectedEntity::Type::PdfUnderlay (CadCommands.hpp line 90) and the rotated bounding-box hit test (CadCommands.cpp around 10540-10570) are Document selection and Interaction picking that depend on Pdf geometry.",
+        "status": "approved",
+        "home": "Document owns selected-entity membership; Interaction owns transient hit testing and selection intent"
+      },
+      {
+        "finding": "Units and strings: pdfview::Unit and UnitInMetres (PdfMeasure.hpp/.cpp) duplicate Core unit definitions, and PdfCoordExtract and PdfScaleCheck carry trim and upper-case helpers that duplicate Core (see sections).",
+        "status": "approved",
+        "home": "Core owns shared unit definitions and string helpers; Pdf owns measurement policy"
+      },
+      {
+        "finding": "Viewer paging: PdfViewerCore is pure layout and cache policy in a Domain folder; whether it belongs to Pdf or to Renderer or Qt presentation is undecided.",
+        "status": "approved",
+        "home": "Pdf owns paging/cache policy; Qt owns the viewer widgets"
+      },
+      {
+        "finding": "Test fixtures in a production header: PdfViewerCore.hpp declares MakeSyntheticPdf and MakeLineWorkPdf, which BENCH commands use. Move them to tests or to Debug benchmark scenes.",
+        "status": "approved",
+        "home": "Debug benchmark scenes/tests"
+      },
+      {
+        "finding": "Device seam: ADR-0003 requires backend-neutral device interfaces for buffers, textures, shaders and draw calls, a factory selected at startup, and a headless null device. None exist in src/. The only Headless* files are src/platform/HeadlessFileDialogs and src/platform/HeadlessPdfAttach. The final map must create the interface in Renderer's public headers and place the GL implementation in the OpenGL backend.",
+        "status": "approved",
+        "home": "Renderer owns device interfaces; OpenGL and Headless implement them"
+      },
+      {
+        "finding": "Draw-list vertex layouts: GL_LINES (six floats per segment), GL_TRIANGLES (nine floats per triangle) and the seven-float coloured line vertex in CadLinetype are std::vector<float> contracts described only in comments. Producers in Document (CadLinetype.hpp), Terrain (watershed.hpp, surfacevolume.hpp), Geometry (geom2d.hpp, brep.hpp), Survey (SurveyPoints.hpp) and Interaction (TransformPreview.cpp) build them. Renderer should own one draw-list vertex type that the producers use.",
+        "status": "approved",
+        "home": "Renderer owns draw-list vertex contracts; producers build through the public contract"
+      },
+      {
+        "finding": "Render tuning inputs: RenderTuning carries background, grid, paper ink, visual style, section clip and map tiles, and is filled from AppCommandState. Core owns the setting values; Renderer owns the tuning struct. The final map should decide where the fill happens.",
+        "status": "approved",
+        "home": "Core owns setting values; GoSurveyEditor composition fills Renderer tuning inputs"
+      },
+      {
+        "finding": "Format-neutral imported model payload (modelimport::Options, Part and Result in src/util/modelimport.hpp) is shared by glTF and STL importers and consumed by drawing conversion. Decide whether IO owns this interchange contract or it belongs in a lower-level neutral module.",
+        "status": "approved",
+        "home": "IO"
+      },
+      {
+        "finding": "SaveTrace is a Debug diagnostic API used by IO save paths, but its implementation reaches Win32 temp-file and debugger APIs. Define a boundary that lets IO report save outcomes without depending on Debug and Windows implementation details.",
+        "status": "approved",
+        "home": "Debug owns save-trace policy; IO reports outcomes through an approved diagnostics seam; Windows owns OS-specific sinks"
+      },
+      {
+        "finding": "IO has no format-neutral public interface directory. Import/export entry points expose a mixture of AppCommandState, domain storage, and format-specific result structures; the final map/move work must choose stable seams.",
+        "status": "approved",
+        "home": "IO owns format-neutral import/export interfaces; keep command/domain adapters at the application boundary"
+      },
+      {
+        "finding": "Install ID: GetTelemetryIds (io/UserPrefs.cpp:535) supplies the ID used by telemetry, startup reports and crash reports. Network and Windows use it, IO stores it, and no system owns the identity policy. Final map: Network policy, IO persistence, injected provider.",
+        "status": "approved",
+        "home": "Network owns install-ID policy; IO persists IDs; startup injects the provider"
+      },
+      {
+        "finding": "Update preferences: update::UpdatePrefs (channel, enabled, skipped version) is persisted through IO UserPrefs and held in AppCommandState. Final map decides whether it is Network data, Commands state, or IO storage.",
+        "status": "approved",
+        "home": "Network owns update policy; IO persists preferences; GoSurveyEditor presents them"
+      },
+      {
+        "finding": "Interaction audit (#1235): Transient selection state is stored in Document-facing SelectedEntity/SelectedSubObject and AppCommandState; ownership of selection intent versus persistent selection membership needs a final-map seam.",
+        "status": "approved",
+        "home": "Interaction owns selection intent; Document owns any persisted membership/value representation"
+      },
+      {
+        "finding": "Interaction audit (#1235): ViewCube is mapped to Interaction but computes camera target orientation; decide whether camera navigation policy stays Interaction or moves to Renderer.",
+        "status": "approved",
+        "home": "Interaction owns ViewCube navigation policy; Renderer owns camera state/projection"
+      },
+      {
+        "finding": "Interaction audit (#1235): View-relative pick rays and pixel-to-world aperture conversion straddle Interaction query policy and Renderer projection/camera data.",
+        "status": "approved",
+        "home": "Interaction owns pick-query policy; Renderer provides camera rays and aperture conversion"
+      },
+      {
+        "finding": "Interaction audit (#1235): Paper-space text/chain/arc hit and sampling policy is mixed between Interaction and Renderer in PaperSpace.hpp.",
+        "status": "approved",
+        "home": "Interaction owns hit/sampling policy; Renderer provides projected geometry/draw plans"
+      },
+      {
+        "finding": "Interaction audit (#1235): GizmoOverlay is Interaction-produced visual intent but the current plain data carrier is Renderer-owned; settle a public draw-plan boundary.",
+        "status": "approved",
+        "home": "Renderer owns the public gizmo draw-plan DTO; Interaction produces it"
+      },
+      {
+        "finding": "Interaction audit (#1235): View state (camera, projection, named views) is persisted inside DrawingDocument even though Renderer owns camera state.",
+        "status": "approved",
+        "home": "Document owns serialized view values; Renderer owns active camera state and projection"
+      },
+      {
+        "finding": "GoSurveyEditor audit (#1237): WhatsNewLogic (src/util/WhatsNewLogic.*) is unmapped; its version gating is pure logic while the billboard presentation is EditorWindow::ShowWhatsNew (GoSurveyEditor).",
+        "status": "approved",
+        "home": "GoSurveyEditor"
+      },
+      {
+        "finding": "GoSurveyEditor audit (#1237): Recent-drawing and recent-project thumbnail caches (ThumbnailCache.hpp) are start-screen policy with no owner beyond the GoSurveyEditor section; their invalidation runs through EditorWindow refresh paths.",
+        "status": "approved",
+        "home": "GoSurveyEditor"
+      },
+      {
+        "finding": "GoSurveyEditor audit (#1237): The Pdf window shells (PdfWindow*, PdfScaleUi, PdfRibbon) hold Pdf workflow that has no system owner until the Pdf audit assigns it.",
+        "status": "approved",
+        "home": "Qt owns window shells; Pdf owns workflow state and operations"
+      },
+      {
+        "finding": "GoSurveyEditor audit (#1237): The ribbon's style gallery and dimension/multileader/table preview painters (EditorRibbon.cpp) are presentation of Document style data with no toolkit-neutral home.",
+        "status": "approved",
+        "home": "Document owns style data; Qt/GoSurveyEditor owns style gallery and preview presentation"
+      }
+    ]
+  },
+  "sectionAssignmentRule": "Each section record has one system owner. Named symbols are assigned by their symbol list; line ranges identify the audited code and may contain more specific member or side-effect ranges owned by another system. A symbol is owned by exactly one system; a line-only record assigns that range to its stated owner."
 }

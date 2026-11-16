@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check source includes against the draft system map and a non-growing baseline."""
+"""Check source includes against the candidate system map and a non-growing baseline."""
 
 import argparse
 import importlib.util
@@ -22,17 +22,17 @@ INVENTORY_SPEC.loader.exec_module(INVENTORY)
 
 def _system_for(path, mapping):
     normalized = path.as_posix()
+    for entry in mapping.get("fileMappings", []):
+        if entry["path"] == normalized and entry.get("status") != "ambiguous":
+            return entry["system"]
     for entry in sorted(mapping.get("mappedFolders", []), key=lambda item: len(item["path"]), reverse=True):
         if normalized.startswith(entry["path"]):
             return entry["system"]
-    for entry in mapping.get("fileMappings", []):
-        if entry["path"] == normalized:
-            return entry["system"] if entry.get("status") != "ambiguous" else None
     return None
 
 
-def _read_systems(root):
-    text = (root / "docs/architecture/system-map.md").read_text(encoding="utf-8")
+def _read_systems(mapping_root):
+    text = (mapping_root / "docs/architecture/system-map.md").read_text(encoding="utf-8")
     systems = {}
     for row in SYSTEM_ROW.findall(text):
         columns = [column.strip() for column in row.strip().strip("|").split("|")]
@@ -73,11 +73,12 @@ def compare_baseline(current, baseline):
     }
 
 
-def check(root):
+def check(root, mapping_root=None):
     root = Path(root).resolve()
-    mapping_path = root / "docs/architecture/system-map.json"
+    mapping_root = Path(mapping_root or root).resolve()
+    mapping_path = mapping_root / "docs/architecture/system-map.json"
     mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
-    systems = _read_systems(root)
+    systems = _read_systems(mapping_root)
     files = sorted(path for path in (root / "src").rglob("*") if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES)
     unmapped = []
     violations = []
@@ -154,7 +155,7 @@ def main():
     parser.add_argument("--write-baseline", action="store_true", help="write current violations as the baseline")
     parser.add_argument("--report", type=Path, help="write all include classifications and comparison details as JSON")
     parser.add_argument("--reference-root", type=Path,
-                        help="reject baseline entries absent from a fresh scan of this reference tree")
+                        help="scan reference source using the candidate map; reject baseline entries absent there")
     args = parser.parse_args()
     root = args.root.resolve()
     baseline_path = args.baseline if args.baseline.is_absolute() else root / args.baseline
@@ -170,7 +171,9 @@ def main():
         comparison = compare_baseline(result["violations"], baseline)
         baseline_growth = None
         if args.reference_root:
-            reference_violations = check(args.reference_root.resolve())["violations"]
+            # A mapping-only change can reveal violations already present in base source. Use
+            # the candidate ownership table for both scans so only source changes grow the ratchet.
+            reference_violations = check(args.reference_root.resolve(), mapping_root=root)["violations"]
             baseline_growth = compare_baseline(baseline, reference_violations)["new_violations"]
             comparison["ok"] = comparison["ok"] and not baseline_growth
             comparison["baseline_growth"] = baseline_growth

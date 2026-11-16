@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -57,6 +58,68 @@ class ArchitectureDependencyTests(unittest.TestCase):
         result = checker.check(self.root)
         self.assertEqual(result["violations"][0]["rule"], "forbidden dependency")
         self.assertEqual(result["violations"][0]["include"], "Header.hpp")
+
+    def test_file_mapping_overrides_its_folder_owner(self):
+        public_header = self.root / "src/b/GoSurvey/B/Api.hpp"
+        public_header.parent.mkdir(parents=True)
+        public_header.write_text("#pragma once\n", encoding="utf-8")
+        (self.root / "src/a/A.cpp").write_text('#include "GoSurvey/B/Api.hpp"\n', encoding="utf-8")
+        mapping_path = self.root / "docs/architecture/system-map.json"
+        mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+        mapping["fileMappings"] = [{"path": "src/a/A.cpp", "system": "C", "status": "audited"}]
+        mapping_path.write_text(json.dumps(mapping), encoding="utf-8")
+        (self.root / "docs/architecture/system-map.md").write_text(
+            "| System | Tier | Responsibility | Does not own | Allowed dependencies |\n"
+            "|---|---|---|---|---|\n"
+            "| A | T2 Domain | A system | Nothing | None |\n"
+            "| B | T1 Kernel | B system | Nothing | None |\n"
+            "| C | T2 Domain | C system | Nothing | B |\n", encoding="utf-8")
+
+        result = checker.check(self.root)
+
+        self.assertEqual(result["violations"], [])
+        self.assertEqual(result["includes"][0]["classification"], "allowed")
+
+    def test_reference_scan_uses_candidate_map_for_unchanged_source(self):
+        public_header = self.root / "src/b/GoSurvey/B/Api.hpp"
+        public_header.parent.mkdir(parents=True)
+        public_header.write_text("#pragma once\n", encoding="utf-8")
+        (self.root / "src/a/A.cpp").write_text('#include "GoSurvey/B/Api.hpp"\n', encoding="utf-8")
+        mapping_path = self.root / "docs/architecture/system-map.json"
+        mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+        mapping["fileMappings"] = [{"path": "src/a/A.cpp", "system": "C", "status": "audited"}]
+        mapping_path.write_text(json.dumps(mapping), encoding="utf-8")
+        (self.root / "docs/architecture/system-map.md").write_text(
+            "| System | Tier | Responsibility | Does not own | Allowed dependencies |\n"
+            "|---|---|---|---|---|\n"
+            "| A | T2 Domain | A system | Nothing | None |\n"
+            "| B | T1 Kernel | B system | Nothing | None |\n"
+            "| C | T2 Domain | C system | Nothing | B |\n", encoding="utf-8")
+
+        reference_root = self.root / "reference"
+        reference_root.mkdir()
+        shutil.copytree(self.root / "src", reference_root / "src")
+        (reference_root / "docs/architecture").mkdir(parents=True)
+        (reference_root / "docs/architecture/system-map.json").write_text(json.dumps({
+            "mappedFolders": [
+                {"path": "src/a/", "system": "A"},
+                {"path": "src/b/", "system": "B"},
+            ],
+            "fileMappings": [],
+        }), encoding="utf-8")
+        (reference_root / "docs/architecture/system-map.md").write_text(
+            "| System | Tier | Responsibility | Does not own | Allowed dependencies |\n"
+            "|---|---|---|---|---|\n"
+            "| A | T2 Domain | A system | Nothing | None |\n"
+            "| B | T1 Kernel | B system | Nothing | None |\n", encoding="utf-8")
+
+        baseline = checker.check(self.root)["violations"]
+        old_reference = checker.check(reference_root)["violations"]
+        reference = checker.check(reference_root, mapping_root=self.root)["violations"]
+
+        self.assertEqual(baseline, [])
+        self.assertFalse(checker.compare_baseline(baseline, old_reference)["ok"])
+        self.assertTrue(checker.compare_baseline(baseline, reference)["ok"])
 
     def test_allowed_dependency_through_private_header_fails(self):
         (self.root / "docs/architecture/system-map.md").write_text(
