@@ -59,4 +59,4 @@ Captured at the start of final-map issue #1238, after audits #1220–#1237 and b
 
 ## Baseline notes
 
-This report is a snapshot, not a target or a new pass/fail threshold. The final map and dependency ratchet baseline remain provisional until the owner approves the decisions recorded for #1238.
+This report is a snapshot, not a target or a new pass/fail threshold. The map and dependency baseline were finalized from the approved decisions recorded for #1238; source-code moves remain governed by the carve-out tickets.

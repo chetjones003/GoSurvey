@@ -1,8 +1,8 @@
-# Proposed final-map ownership decisions
+# Final-map ownership decisions
 
-For owner review under issue #1238. These recommendations address the homeless-concept findings from audits #1220–#1237 using current responsibilities and the existing tier direction. The candidate machine map and dependency baseline reflect these recommendations, but the owner has not approved them. Do not treat them as authoritative or move code until the owner records approval. A decision may require a later seam or a carve-out ticket; this list does not authorize code movement.
+Approved by the owner on [issue #1238](https://github.com/chetjones003/GoSurvey/issues/1238#issuecomment-6906650509). These decisions assign homes to the findings from audits #1220–#1237 using current responsibilities and the existing tier direction. They establish architecture ownership; source moves remain governed by their carve-out tickets.
 
-| # | Finding | Proposed ownership |
+| # | Finding | Approved ownership |
 |---:|---|---|
 | 1 | Logging facade: none. Sinks are scattered: EditorWindow::m_Log (command line, Qt), SaveTrace (Debug diagnostic sink), UpdateService LogSilently (Network), StartupFailure startup-failure.log (Windows), and Qt qWarning/qDebug calls in src/qt. The final map must decide whether Core owns one facade or only the file sink. | Core logging facade; sinks remain owned by their callers/backends |
 | 2 | Settings store: AppCommandState holds nearly all settings in one god struct. There is no Settings system. Core owns the value vocabulary; the holder and its consumers belong to the final map. | Core owns settings vocabulary; GoSurveyEditor composes live settings and Commands consumes them |
@@ -75,7 +75,7 @@ For owner review under issue #1238. These recommendations address the homeless-c
 
 ## Platform-backend decisions
 
-| Finding | Proposed ownership |
+| Finding | Approved ownership |
 |---|---|
 | Failure-report UI is duplicated in Qt and Win32 | Keep Qt presentation; route OS-specific report opening through Windows services. Remove the duplicate Win32 dialog in a later approved move. |
 | Map-tile GL texture cache | OpenGL owns device resources; Network owns tile data and requests. |
@@ -83,8 +83,8 @@ For owner review under issue #1238. These recommendations address the homeless-c
 | ThumbnailCache | GoSurveyEditor start-screen policy and lifecycle. |
 | HttpFetch | Network owns the interface; Windows implements the WinHTTP transport adapter. |
 
-## Approval gate
+## Carve-out order and scope
 
-The starting inventory is [audit-starting-inventory.md](audit-starting-inventory.md). The candidate leaves the Phase 2–6 order unchanged. The proposed `.gsproj` split keeps project command handlers in Commands (#1278); GoSurveyEditor owns session/composition, Survey owns shared point data, and IO owns persistence. No carve-out ticket scope change is proposed for #1278. If the owner changes that allocation, update #1278 before code moves.
+The starting inventory is [audit-starting-inventory.md](audit-starting-inventory.md). The approved map leaves the Phase 2–6 order unchanged. The `.gsproj` split keeps project command handlers in Commands (#1278); GoSurveyEditor owns session/composition, Survey owns shared point data, and IO owns persistence. No carve-out ticket scope change is needed for #1278.
 
-Once the owner approves or revises these decisions, update `system-map.json`, the system table/diagrams, and the dependency baseline together; verify exact system-edge acyclicity and complete source coverage; then update any other affected carve-out tickets before code moves.
+Future system-map changes require a recorded decision. Any future change to carve-out order or ticket scope must update affected carve-out tickets before code moves.
