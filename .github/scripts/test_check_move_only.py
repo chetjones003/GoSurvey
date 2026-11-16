@@ -79,6 +79,45 @@ class MoveOnlyFixtureTests(unittest.TestCase):
             "src/old/Widget.hpp -> src/new/Widget.hpp",
         ])
 
+    def test_unmoved_source_include_rewrite_to_public_moved_header_passes(self):
+        self.move("src/old/Widget.hpp", "src/new/include/GoSurvey/New/Widget.hpp")
+        self.write("src/old/Widget.cpp", (
+            '#include "../new/include/GoSurvey/New/Widget.hpp"\n'
+            "void Widget::reset() {}\n"
+            "void Widget::run() { --counter; }\n"
+        ))
+        self.commit("move widget header to public tree")
+        self.write("src/old/Widget.cpp", (
+            '#include <GoSurvey/New/Widget.hpp>\n'
+            "void Widget::reset() {}\n"
+            "void Widget::run() { --counter; }\n"
+        ))
+        self.commit("rewrite include of moved header to public path")
+
+        self.assertEqual(self.check(), [
+            "src/old/Widget.hpp -> src/new/include/GoSurvey/New/Widget.hpp",
+        ])
+
+    def test_unmoved_source_include_rewrite_to_unrelated_header_fails(self):
+        self.move("src/old/Widget.hpp", "src/new/Widget.hpp")
+        self.write("src/old/Widget.cpp", (
+            '#include "Other.hpp"\n'
+            "void Widget::reset() {}\n"
+            "void Widget::run() { --counter; }\n"
+        ))
+        self.commit("point include at an unrelated header")
+
+        with self.assertRaises(ValueError):
+            self.check()
+
+    def test_unmoved_source_non_include_edit_fails(self):
+        self.move("src/old/Widget.hpp", "src/new/Widget.hpp")
+        self.write("src/old/Other.hpp", "#pragma once\n// edited\n")
+        self.commit("edit unmoved source body")
+
+        with self.assertRaises(ValueError):
+            self.check()
+
     def test_real_source_edit_fails(self):
         self.move("src/old/Widget.cpp", "src/new/Widget.cpp")
         self.write("src/new/Widget.cpp", (

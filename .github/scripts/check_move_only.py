@@ -11,6 +11,7 @@ from pathlib import PurePosixPath
 
 BUILD_FILE_NAMES = {"CMakeLists.txt", "CMakePresets.json"}
 BUILD_FILE_SUFFIXES = (".cmake", ".vcxproj", ".vcxproj.filters", ".props", ".targets", ".sln")
+SOURCE_FILE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx")
 INCLUDE_LINE = re.compile(r'^(\s*#\s*include\s*)([<"])([^>"\n]+)([>"])(\s*(?://.*|/\*.*\*/)?\s*)$')
 CMAKE_SOURCE_COMMANDS = {"add_executable", "add_library", "target_sources", "source_group"}
 CMAKE_SOURCE_VARIABLE = re.compile(r"^\s*([A-Za-z_]\w*)", re.IGNORECASE)
@@ -33,6 +34,10 @@ def is_build_file(path):
     return name in BUILD_FILE_NAMES or path.endswith(BUILD_FILE_SUFFIXES)
 
 
+def is_source_file(path):
+    return path.endswith(SOURCE_FILE_SUFFIXES)
+
+
 def classify_changed_files(root, base_ref, head_ref):
     fields = git(
         root, "diff", "--name-status", "-z", "--find-renames=20%", f"{base_ref}...{head_ref}"
@@ -40,6 +45,7 @@ def classify_changed_files(root, base_ref, head_ref):
     fields = [field for field in fields if field]
     moves = []
     build_edits = []
+    include_edits = []
     index = 0
     while index < len(fields):
         status = fields[index]
@@ -52,13 +58,18 @@ def classify_changed_files(root, base_ref, head_ref):
         elif status == "M" and is_build_file(fields[index]):
             build_edits.append(fields[index])
             index += 1
+        elif status == "M" and is_source_file(fields[index]):
+            # An unmoved source file may change only include lines that point at moved files.
+            include_edits.append(fields[index])
+            index += 1
         else:
             raise ValueError(
-                f"{status} {fields[index]}: changed files must be renames or build-file path entries"
+                f"{status} {fields[index]}: changed files must be renames, build-file path entries, "
+                "or source files whose only edits are include paths of moved files"
             )
     if not moves:
         raise ValueError("no renamed files found")
-    return moves, build_edits
+    return moves, build_edits, include_edits
 
 
 def changed_hunks(root, base_ref, head_ref, old_path, new_path):
@@ -148,6 +159,9 @@ def include_resolves_to(include_path, source_path, moved_path):
         candidates.add(normalized_repo_path(posixpath.join("src", include_path)))
         direct_child = moved_path.split("/", 2)[1]
         candidates.add(normalized_repo_path(posixpath.join("src", direct_child, include_path)))
+    # Public include tree: src/<system>/include/<path> is included as <path>.
+    if "/include/" in moved_path and include_path == moved_path.split("/include/", 1)[1]:
+        return True
     return moved_path in candidates
 
 
@@ -367,10 +381,10 @@ def validate_pair(
     old_include = INCLUDE_LINE.fullmatch(old_line)
     new_include = INCLUDE_LINE.fullmatch(new_line)
     if old_include and new_include:
-        fixed_parts_match = (
-            old_include.group(1), old_include.group(2), old_include.group(4), old_include.group(5)
-        ) == (
-            new_include.group(1), new_include.group(2), new_include.group(4), new_include.group(5)
+        # The delimiter may change from "..." to <...> when a moved header joins the public include
+        # tree; the directive and any trailing comment must stay exactly the same.
+        fixed_parts_match = (old_include.group(1), old_include.group(5)) == (
+            new_include.group(1), new_include.group(5)
         )
         if fixed_parts_match and include_path_maps(
             old_include.group(3), new_include.group(3), old_file, new_file, moves
@@ -393,7 +407,7 @@ def validate_pair(
 
 
 def check_move_only(root, base_ref, head_ref):
-    moves, build_edits = classify_changed_files(root, base_ref, head_ref)
+    moves, build_edits, include_edits = classify_changed_files(root, base_ref, head_ref)
     details = []
     for old_path, new_path in moves:
         verify_rename_metadata(root, base_ref, head_ref, old_path, new_path)
@@ -415,6 +429,23 @@ def check_move_only(root, base_ref, head_ref):
                     moves,
                 )
         details.append(f"{old_path} -> {new_path}")
+
+    for include_path in include_edits:
+        for removed, added in changed_hunks(root, base_ref, head_ref, include_path, include_path):
+            if len(removed) != len(added):
+                raise ValueError(f"{include_path}: inserted or deleted lines are not allowed")
+            for (old_line_number, old_line), (new_line_number, new_line) in zip(removed, added):
+                validate_pair(
+                    old_line_number,
+                    old_line,
+                    new_line_number,
+                    new_line,
+                    include_path,
+                    include_path,
+                    "",
+                    "",
+                    moves,
+                )
 
     for build_path in build_edits:
         old_text = git_text(root, base_ref, build_path)
