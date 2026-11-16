@@ -3,7 +3,7 @@
 #include "commands/CadEntities.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "util/geom2d.hpp"
-#include "util/ray3d.hpp"
+#include <GoSurvey/Math/ray3d.hpp>
 
 #include <cmath>
 

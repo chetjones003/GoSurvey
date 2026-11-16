@@ -117,9 +117,9 @@
     },
     {
       "file": "src/commands/CadBlocks.hpp",
-      "include": "util/ray3d.hpp",
+      "include": "GoSurvey/Math/ray3d.hpp",
       "rule": "forbidden dependency",
-      "message": "src/commands/CadBlocks.hpp includes \"util/ray3d.hpp\": Commands may not depend on Math (forbidden dependency)"
+      "message": "src/commands/CadBlocks.hpp includes \"GoSurvey/Math/ray3d.hpp\": Commands may not depend on Math (forbidden dependency)"
     },
     {
       "file": "src/commands/CadBlocks.hpp",
@@ -411,9 +411,9 @@
     },
     {
       "file": "src/commands/CadCommands.hpp",
-      "include": "util/ucs.hpp",
+      "include": "GoSurvey/Math/ucs.hpp",
       "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands.hpp includes \"util/ucs.hpp\": Commands may not depend on Math (forbidden dependency)"
+      "message": "src/commands/CadCommands.hpp includes \"GoSurvey/Math/ucs.hpp\": Commands may not depend on Math (forbidden dependency)"
     },
     {
       "file": "src/commands/CadCommands.hpp",
@@ -735,9 +735,9 @@
     },
     {
       "file": "src/commands/CadDynInput.hpp",
-      "include": "util/ray3d.hpp",
+      "include": "GoSurvey/Math/ray3d.hpp",
       "rule": "forbidden dependency",
-      "message": "src/commands/CadDynInput.hpp includes \"util/ray3d.hpp\": Commands may not depend on Math (forbidden dependency)"
+      "message": "src/commands/CadDynInput.hpp includes \"GoSurvey/Math/ray3d.hpp\": Commands may not depend on Math (forbidden dependency)"
     },
     {
       "file": "src/commands/CadEntities.hpp",
@@ -753,9 +753,9 @@
     },
     {
       "file": "src/commands/CadEntities.hpp",
-      "include": "util/ucs.hpp",
+      "include": "GoSurvey/Math/ucs.hpp",
       "rule": "forbidden dependency",
-      "message": "src/commands/CadEntities.hpp includes \"util/ucs.hpp\": Commands may not depend on Math (forbidden dependency)"
+      "message": "src/commands/CadEntities.hpp includes \"GoSurvey/Math/ucs.hpp\": Commands may not depend on Math (forbidden dependency)"
     },
     {
       "file": "src/commands/CadField.cpp",
@@ -819,9 +819,9 @@
     },
     {
       "file": "src/commands/PaperSpace.hpp",
-      "include": "util/ucs.hpp",
+      "include": "GoSurvey/Math/ucs.hpp",
       "rule": "forbidden dependency",
-      "message": "src/commands/PaperSpace.hpp includes \"util/ucs.hpp\": Commands may not depend on Math (forbidden dependency)"
+      "message": "src/commands/PaperSpace.hpp includes \"GoSurvey/Math/ucs.hpp\": Commands may not depend on Math (forbidden dependency)"
     },
     {
       "file": "src/commands/ProjectAddFlow.cpp",
@@ -990,12 +990,6 @@
       "include": "util/cadtable.hpp",
       "rule": "private-header include",
       "message": "src/io/DxfIo.cpp includes \"util/cadtable.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/DxfIo.cpp",
-      "include": "util/ucs.hpp",
-      "rule": "private-header include",
-      "message": "src/io/DxfIo.cpp includes \"util/ucs.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
     },
     {
       "file": "src/io/GsAnnotationJson.hpp",
@@ -1244,18 +1238,6 @@
       "message": "src/io/LibreDwgMaterial.cpp includes \"CadEntities.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgPlant.cpp",
-      "include": "util/ray3d.hpp",
-      "rule": "private-header include",
-      "message": "src/io/LibreDwgPlant.cpp includes \"util/ray3d.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/LibreDwgPlant.cpp",
-      "include": "util/ucs.hpp",
-      "rule": "private-header include",
-      "message": "src/io/LibreDwgPlant.cpp includes \"util/ucs.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
-    },
-    {
       "file": "src/io/LibreDwgPlant.hpp",
       "include": "util/brep.hpp",
       "rule": "private-header include",
@@ -1368,12 +1350,6 @@
       "include": "util/geom2d.hpp",
       "rule": "private-header include",
       "message": "src/io/PolylineTiltedArc.hpp includes \"util/geom2d.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/PolylineTiltedArc.hpp",
-      "include": "util/ray3d.hpp",
-      "rule": "private-header include",
-      "message": "src/io/PolylineTiltedArc.hpp includes \"util/ray3d.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
     },
     {
       "file": "src/io/ProjectPointDb.hpp",
@@ -2738,24 +2714,6 @@
       "message": "src/qt/StyleEditors.hpp includes \"cadtablestyle.hpp\": Qt may not depend on Document (forbidden dependency)"
     },
     {
-      "file": "src/render/Camera.hpp",
-      "include": "util/ray3d.hpp",
-      "rule": "private-header include",
-      "message": "src/render/Camera.hpp includes \"util/ray3d.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
-    },
-    {
-      "file": "src/render/SectionClip.hpp",
-      "include": "util/ray3d.hpp",
-      "rule": "private-header include",
-      "message": "src/render/SectionClip.hpp includes \"util/ray3d.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
-    },
-    {
-      "file": "src/render/SectionClip.hpp",
-      "include": "util/ucs.hpp",
-      "rule": "private-header include",
-      "message": "src/render/SectionClip.hpp includes \"util/ucs.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
-    },
-    {
       "file": "src/render/ViewportProjection.hpp",
       "include": "commands/PaperSpace.hpp",
       "rule": "forbidden dependency",
@@ -2882,18 +2840,6 @@
       "message": "src/util/AcisSatParser.cpp includes \"nurbs.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
     },
     {
-      "file": "src/util/AcisSatParser.cpp",
-      "include": "ray3d.hpp",
-      "rule": "private-header include",
-      "message": "src/util/AcisSatParser.cpp includes \"ray3d.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
-    },
-    {
-      "file": "src/util/AcisSatParser.cpp",
-      "include": "ucs.hpp",
-      "rule": "private-header include",
-      "message": "src/util/AcisSatParser.cpp includes \"ucs.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
-    },
-    {
       "file": "src/util/AcisSatParser.hpp",
       "include": "brep.hpp",
       "rule": "private-header include",
@@ -2912,18 +2858,6 @@
       "message": "src/util/AcisSatWriter.cpp includes \"nurbs.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
     },
     {
-      "file": "src/util/AcisSatWriter.cpp",
-      "include": "ray3d.hpp",
-      "rule": "private-header include",
-      "message": "src/util/AcisSatWriter.cpp includes \"ray3d.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
-    },
-    {
-      "file": "src/util/brep.hpp",
-      "include": "ucs.hpp",
-      "rule": "private-header include",
-      "message": "src/util/brep.hpp includes \"ucs.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
-    },
-    {
       "file": "src/util/cadblock.hpp",
       "include": "CadEntities.hpp",
       "rule": "forbidden dependency",
@@ -2934,12 +2868,6 @@
       "include": "cadsolid.hpp",
       "rule": "forbidden dependency",
       "message": "src/util/cadblock.hpp includes \"cadsolid.hpp\": Document may not depend on Renderer (forbidden dependency)"
-    },
-    {
-      "file": "src/util/cadblock.hpp",
-      "include": "ray3d.hpp",
-      "rule": "private-header include",
-      "message": "src/util/cadblock.hpp includes \"ray3d.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
     },
     {
       "file": "src/util/cadpiperun.hpp",
@@ -2960,18 +2888,6 @@
       "message": "src/util/cadpiperun.hpp includes \"cadsolid.hpp\": Document may not depend on Renderer (forbidden dependency)"
     },
     {
-      "file": "src/util/cadpiperun.hpp",
-      "include": "ray3d.hpp",
-      "rule": "private-header include",
-      "message": "src/util/cadpiperun.hpp includes \"ray3d.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
-    },
-    {
-      "file": "src/util/cadpiperun.hpp",
-      "include": "ucs.hpp",
-      "rule": "private-header include",
-      "message": "src/util/cadpiperun.hpp includes \"ucs.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
-    },
-    {
       "file": "src/util/cadsolid.hpp",
       "include": "brep.hpp",
       "rule": "private-header include",
@@ -2988,12 +2904,6 @@
       "include": "meshgeom.hpp",
       "rule": "private-header include",
       "message": "src/util/gltfimport.cpp includes \"meshgeom.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
-      "file": "src/util/nurbs.hpp",
-      "include": "ray3d.hpp",
-      "rule": "private-header include",
-      "message": "src/util/nurbs.hpp includes \"ray3d.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
     },
     {
       "file": "src/util/pointcloudcache.cpp",
@@ -3030,18 +2940,6 @@
       "include": "brep.hpp",
       "rule": "private-header include",
       "message": "src/util/solidpick.hpp includes \"brep.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
-      "file": "src/util/solidpick.hpp",
-      "include": "ray3d.hpp",
-      "rule": "private-header include",
-      "message": "src/util/solidpick.hpp includes \"ray3d.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
-    },
-    {
-      "file": "src/util/spline.hpp",
-      "include": "ray3d.hpp",
-      "rule": "private-header include",
-      "message": "src/util/spline.hpp includes \"ray3d.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
     },
     {
       "file": "src/util/stlimport.cpp",
@@ -3144,12 +3042,6 @@
       "include": "render/Camera.hpp",
       "rule": "private-header include",
       "message": "src/viewport/Crosshair3d.hpp includes \"render/Camera.hpp\": cross-system include must use GoSurvey/Renderer/ public headers (private-header include)"
-    },
-    {
-      "file": "src/viewport/Crosshair3d.hpp",
-      "include": "util/ucs.hpp",
-      "rule": "private-header include",
-      "message": "src/viewport/Crosshair3d.hpp includes \"util/ucs.hpp\": cross-system include must use GoSurvey/Math/ public headers (private-header include)"
     },
     {
       "file": "src/viewport/TransformPreview.cpp",

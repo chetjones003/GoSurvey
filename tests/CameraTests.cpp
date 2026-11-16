@@ -17,7 +17,7 @@
 #include <cstring>
 
 #include "render/Camera.hpp"
-#include "util/ucs.hpp"
+#include <GoSurvey/Math/ucs.hpp>
 
 using Catch::Approx;
 

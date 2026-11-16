@@ -26,8 +26,8 @@
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
 #include "render/SectionClip.hpp"  // GL-free; the pick and snap paths honour the live clip (REQ-341)
 // The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
-// util/ray3d beside it, so the coordinate-system rules are testable without a window.
-#include "util/ucs.hpp"
+// GoSurvey/Math/ray3d beside it, so the coordinate-system rules are testable without a window.
+#include <GoSurvey/Math/ucs.hpp>
 #include "geo/CoordinateSystems.hpp"
 #include "geo/LocalGridTransform.hpp"
 // ADR-060 .gscloud out-of-core cache: EXTRACTCENTERLINE (REQ-347) keeps one open cache handle

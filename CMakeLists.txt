@@ -494,6 +494,15 @@ target_compile_features(gosurvey_core PUBLIC cxx_std_17)
 target_compile_definitions(gosurvey_core PRIVATE GOSURVEY_CORE_IMPLEMENTATION=1)
 gosurvey_target_warnings(gosurvey_core)
 
+# GoSurvey::Math — header-only Foundation library (carve-out ticket #1240). Its public headers
+# live in src/math/include/GoSurvey/Math/ and are consumed as <GoSurvey/Math/...>. Math has no
+# compiled sources yet, so it is an INTERFACE target; it links only its allowed dependency, Core.
+add_library(gosurvey_math INTERFACE)
+add_library(GoSurvey::Math ALIAS gosurvey_math)
+target_include_directories(gosurvey_math INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/math/include>")
+target_compile_features(gosurvey_math INTERFACE cxx_std_17)
+target_link_libraries(gosurvey_math INTERFACE GoSurvey::Core)
+
 # --- OpenXLSX (vendored, third_party/OpenXLSX, approved D-2026-10-30-a): .xlsx read/write for
 # Extract Data and Link Data (REQ-467 / REQ-468). Compiled into gosurvey_domain with the pugixml
 # copy above; zip support comes from the vendored miniz.
@@ -793,7 +802,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
-target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core)
+target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
@@ -805,7 +814,7 @@ gosurvey_enable_pch(gosurvey_domain)
 # Stable umbrella for application consumers; individual systems remain linkable in isolation.
 add_library(gosurvey_engine INTERFACE)
 add_library(GoSurvey::Engine ALIAS gosurvey_engine)
-target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core)
+target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
@@ -1118,8 +1127,6 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PointFileExtTests.cpp
     tests/HatchGeomTests.cpp
     tests/ZStoreTests.cpp
-    tests/UcsTests.cpp
-    tests/Ray3dTests.cpp
     tests/CameraTests.cpp
     # REQ-059 / #1034: the ViewCube is header-only and pure, like Camera.
     tests/ViewCubeTests.cpp
@@ -1553,6 +1560,17 @@ if(GOSURVEY_BUILD_TESTS)
   target_link_libraries(GoSurveyCoreTests PRIVATE GoSurvey::Core Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyCoreTests PROPERTIES LABELS Core)
   gosurvey_target_warnings(GoSurveyCoreTests TEST)
+
+  # GoSurvey::Math tests (#1240). Pure and header-only: they link Math and Catch2 only, never Qt,
+  # OpenGL or gosurvey_domain, which is the Foundation independence check for this system.
+  add_executable(GoSurveyMathTests
+    tests/Math/Ray3dTests.cpp
+    tests/Math/UcsTests.cpp)
+  set_target_properties(GoSurveyMathTests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyMathTests PRIVATE GoSurvey::Math Catch2::Catch2WithMain)
+  catch_discover_tests(GoSurveyMathTests PROPERTIES LABELS Math)
+  gosurvey_target_warnings(GoSurveyMathTests TEST)
 
   # ---------------------------------------------------------------------------
   # Command-layer cases share the Catch2 executable and existing domain library.

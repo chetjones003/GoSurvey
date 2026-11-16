@@ -11,7 +11,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include "util/ucs.hpp"
+#include <GoSurvey/Math/ucs.hpp>
 
 #include <cmath>
 #include <string>
