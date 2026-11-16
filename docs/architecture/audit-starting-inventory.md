@@ -5,7 +5,7 @@ Captured at the start of final-map issue #1238, after audits #1220–#1237 and b
 - Source files: 451
 - CadCommands.hpp include fan-in: 65
 - Include graph: 451 files, 1048 edges
-- Dependency cycles: 0
+- Source include-graph cycles: 0
 - Qt includes outside src/qt: 0
 - OpenGL use outside src/render: 4
 
