@@ -371,6 +371,11 @@
       "status": "audited"
     },
     {
+      "path": "src/util/ray3d.hpp",
+      "system": "Math",
+      "status": "audited"
+    },
+    {
       "path": "src/util/solidpick.cpp",
       "system": "Interaction",
       "status": "audited"
@@ -463,6 +468,11 @@
     {
       "path": "src/util/tinvolume.hpp",
       "system": "Terrain",
+      "status": "audited"
+    },
+    {
+      "path": "src/util/ucs.hpp",
+      "system": "Math",
       "status": "audited"
     },
     {
