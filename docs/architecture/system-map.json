@@ -12071,6 +12071,1167 @@
         "TestSoundGuard"
       ],
       "note": "Tests for the sound guard."
+    },
+    {
+      "path": "src/qt/EditorWindow.cpp",
+      "lines": [
+        1,
+        120
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "window-shell",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorWindow.cpp",
+      "lines": [
+        122,
+        844
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "window-shell",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorWindow.cpp",
+      "lines": [
+        846,
+        1006
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "window-shell",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorWindow.cpp",
+      "lines": [
+        1019,
+        2051
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "window-shell",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorWindow.cpp",
+      "lines": [
+        2131,
+        2134
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "window-shell",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorWindow.cpp",
+      "lines": [
+        2147,
+        2549
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "window-shell",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorWindow.cpp",
+      "lines": [
+        2555,
+        3630
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "window-shell",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorWindow.cpp",
+      "lines": [
+        3632,
+        3694
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "window-shell",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorWindow.hpp",
+      "lines": [
+        1,
+        266
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "window-shell",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorWindow.hpp",
+      "lines": [
+        272,
+        278
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "window-shell",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        1,
+        32
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        38,
+        100
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        109,
+        136
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        156,
+        239
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        299,
+        304
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        306,
+        311
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        313,
+        314
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        316,
+        316
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        324,
+        327
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        353,
+        353
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        511,
+        528
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        530,
+        562
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        568,
+        609
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        1579,
+        1611
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        1626,
+        1639
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2663,
+        2673
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2695,
+        2710
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        2717,
+        2729
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        1,
+        21
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        26,
+        26
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        28,
+        31
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        44,
+        62
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        72,
+        88
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        93,
+        93
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        101,
+        143
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "viewport-host",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorRibbon.cpp",
+      "lines": [
+        1,
+        2082
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "ribbon",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/RibbonCatalog.hpp",
+      "lines": [
+        1,
+        305
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "ribbon",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/ui/ModelingRibbon.hpp",
+      "lines": [
+        1,
+        106
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "ribbon",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorDialogs.cpp",
+      "lines": [
+        1,
+        2291
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorChrome.cpp",
+      "lines": [
+        1,
+        31
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "chrome",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorChrome.cpp",
+      "lines": [
+        33,
+        73
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "chrome",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorChrome.cpp",
+      "lines": [
+        77,
+        127
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "chrome",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorChrome.cpp",
+      "lines": [
+        227,
+        382
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "chrome",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorChrome.hpp",
+      "lines": [
+        1,
+        45
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "chrome",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorContextMenu.cpp",
+      "lines": [
+        1,
+        365
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "context-menu",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorInput.cpp",
+      "lines": [
+        1,
+        306
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "hotkeys",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorInput.cpp",
+      "lines": [
+        451,
+        593
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "hotkeys",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorUpdate.cpp",
+      "lines": [
+        1,
+        359
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "update-presentation",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorProjects.cpp",
+      "lines": [
+        1,
+        756
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "project-workflow",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorProjectAttach.cpp",
+      "lines": [
+        1,
+        753
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "project-workflow",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorProjectSettings.cpp",
+      "lines": [
+        1,
+        616
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "project-workflow",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorBlockAuthoring.cpp",
+      "lines": [
+        1,
+        564
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorGradingPalette.cpp",
+      "lines": [
+        1,
+        574
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "palettes",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorPipePalette.cpp",
+      "lines": [
+        1,
+        412
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "palettes",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorPipePalette.hpp",
+      "lines": [
+        1,
+        18
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "palettes",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorLayerManager.cpp",
+      "lines": [
+        1,
+        563
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "panels",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorLayerManager.hpp",
+      "lines": [
+        1,
+        11
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "panels",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorProperties.cpp",
+      "lines": [
+        1,
+        1096
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "panels",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/TopographicArtwork.hpp",
+      "lines": [
+        1,
+        135
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "panel-artwork",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorPoints.cpp",
+      "lines": [
+        1,
+        225
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorPointClouds.cpp",
+      "lines": [
+        1,
+        403
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorPointGroups.cpp",
+      "lines": [
+        1,
+        368
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorPointGroups.hpp",
+      "lines": [
+        1,
+        10
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorPointTableDialog.cpp",
+      "lines": [
+        1,
+        234
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorPointTableDialog.hpp",
+      "lines": [
+        1,
+        11
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorPointTransfer.cpp",
+      "lines": [
+        1,
+        146
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorSampleLinesDialog.cpp",
+      "lines": [
+        1,
+        92
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorSampleLinesDialog.hpp",
+      "lines": [
+        1,
+        12
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorSectionSheetsDialog.cpp",
+      "lines": [
+        1,
+        101
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorSectionSheetsDialog.hpp",
+      "lines": [
+        1,
+        12
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorSheetsDialog.cpp",
+      "lines": [
+        1,
+        57
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorSheetsDialog.hpp",
+      "lines": [
+        1,
+        12
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewFrameDialog.cpp",
+      "lines": [
+        1,
+        116
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorViewFrameDialog.hpp",
+      "lines": [
+        1,
+        12
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorAlignmentCreate.cpp",
+      "lines": [
+        1,
+        625
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorAlignmentCreate.hpp",
+      "lines": [
+        1,
+        67
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorAlignmentLayout.cpp",
+      "lines": [
+        1,
+        337
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorAlignmentLayout.hpp",
+      "lines": [
+        1,
+        58
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorAlignmentStyle.cpp",
+      "lines": [
+        1,
+        320
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorAlignmentStyle.hpp",
+      "lines": [
+        1,
+        13
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorSurfaces.cpp",
+      "lines": [
+        1,
+        728
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorSurfaceManager.cpp",
+      "lines": [
+        1,
+        785
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorSurfaceStyles.cpp",
+      "lines": [
+        1,
+        622
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/EditorSurfaceUi.hpp",
+      "lines": [
+        1,
+        111
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialogs",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/StyleEditors.cpp",
+      "lines": [
+        1,
+        923
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "style-editors",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/StyleEditors.hpp",
+      "lines": [
+        1,
+        20
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "style-editors",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/qt/StylePreview.hpp",
+      "lines": [
+        1,
+        17
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "style-editors",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/app/Version.hpp.in",
+      "lines": [
+        1,
+        35
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "app-version",
+      "symbols": [],
+      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        2330,
+        2330
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialog-flags",
+      "symbols": [
+        "showRightClickDialog"
+      ],
+      "note": "Right-click dialog open flag."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        3698,
+        3698
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialog-request",
+      "symbols": [
+        "tableInsertDialogRequested"
+      ],
+      "note": "TABLE dialog handoff; the command's prompt phase stays Commands."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        3709,
+        3711
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialog-request",
+      "symbols": [
+        "addPointTableDialogRequested"
+      ],
+      "note": "ADDPOINTTABLE asks the Qt editor to open its dialog instead of typed prompts."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        3714,
+        3714
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialog-request",
+      "symbols": [
+        "alignmentLayoutRequested"
+      ],
+      "note": "Alignment layout manager open request."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        3718,
+        3718
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialog-request",
+      "symbols": [
+        "alignmentStyleEditorRequested"
+      ],
+      "note": "Alignment style editor open request."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        3723,
+        3724
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialog-request",
+      "symbols": [
+        "createAlignmentDialogRequested",
+        "alignmentFromObjectsDialogRequested"
+      ],
+      "note": "Alignment creation dialog open requests."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        5051,
+        5055
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "style-dialog",
+      "symbols": [
+        "showDimStyleDialog",
+        "showMleaderStyleDialog",
+        "showTableStyleDialog"
+      ],
+      "note": "Annotation style dialog open flags."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        5233,
+        5233
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialog-flags",
+      "symbols": [
+        "systemDisplayOLETextSizeDialog"
+      ],
+      "note": "OLE text size dialog flag."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        5295,
+        5295
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialog-flags",
+      "symbols": [
+        "showGraphicsPerformanceDialog"
+      ],
+      "note": "Graphics performance dialog flag."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        5341,
+        5341
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "modal-request",
+      "symbols": [
+        "copySurveyDupModalOpenRequested"
+      ],
+      "note": "Survey duplicate modal open request; the pending survey-point data stays Survey."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        5349,
+        5350
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "modal-request",
+      "symbols": [
+        "dxfPointConflictModalOpen",
+        "dxfPointConflictModalOpenRequested"
+      ],
+      "note": "DXF point-conflict modal flags; the held SurveyPoint list stays Survey."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        5400,
+        5440
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "project-prompt",
+      "symbols": [
+        "ProjectPrompt",
+        "ProjectAttachPrompt",
+        "ProjectRefreshPrompt",
+        "showNewProjectDialog"
+      ],
+      "note": "Project prompt state and New Project dialog flag."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        5464,
+        5501
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "project-prompt",
+      "symbols": [
+        "PastePrompt",
+        "CloseTabPrompt",
+        "ProjectPackPrompt",
+        "ProjectTurnoverPrompt",
+        "openPackRequested"
+      ],
+      "note": "Paste, close-tab and project pack/turnover prompts plus the Open Packed Project request."
+    },
+    {
+      "path": "src/commands/CadCommands.hpp",
+      "lines": [
+        5846,
+        5846
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "dialog-flags",
+      "symbols": [
+        "showBatchPlotDialog"
+      ],
+      "note": "Batch plot dialog flag."
     }
   ],
   "auditedEntries": {
@@ -14710,7 +15871,11 @@
         "src/commands/CadCommands.hpp: dialog decisions, prompt lifecycle and application handoffs are GoSurveyEditor; command sequencing and state remain Commands.",
         "src/platform/ThumbnailCache.hpp: full header is a GoSurveyEditor section."
       ],
-      "pendingAssignment": ["Qt files are mixed: use per-symbol sections in specialized audits before any future file move; this audit is advisory."],
+      "pendingAssignment": [
+        "Qt files are mixed: use per-symbol sections in specialized audits before any future file move; this audit is advisory.",
+        "Pdf window shells (src/qt/PdfWindow*.cpp, PdfScaleUi.cpp, PdfRibbon.hpp), AdjustmentWindow.* and FailureReport.* are not assigned here; the Pdf audit and the Qt/PlatformBackends sections decide them.",
+        "Commands' CadCommands.cpp dialog-open handoffs are listed only where the header declares the flag; the .cpp bodies that set them are not enumerated line by line."
+      ],
       "draftPublicInterface": [
         "main() startup composition in src/qt/main.cpp",
         "EditorWindow public slots and drawing/window lifecycle methods in src/qt/EditorWindow.hpp",
@@ -14718,9 +15883,10 @@
         "RibbonCatalog and ModelingRibbon button catalog consumed by editor composition"
       ],
       "existingTests": [
-        "Qt editor integration tests in tests/QtEditor* (window, viewport and workflow coverage)",
+        "tests/QtEditorTests.cpp (window, viewport and workflow coverage; runs on the hidden desktop)",
         "tests/ToolspaceCatalogTests.cpp",
-        "tests/ViewCubeTests.cpp and tests/ZoomFramingTests.cpp for editor-facing viewport workflows; underlying policy is Renderer/Interaction"
+        "tests/ViewCubeTests.cpp and tests/ZoomFramingTests.cpp for editor-facing viewport workflows; underlying policy is Renderer/Interaction",
+        "tests/WhatsNewLogicTests.cpp covers the pure What's New version-gating logic, which is homeless (see homelessConcepts)"
       ],
       "homelessConcepts": [
         "Recent-drawing thumbnail cache ownership and invalidation lifecycle (ThumbnailCache.hpp).",
@@ -14934,7 +16100,11 @@
       "Interaction audit (#1235): View-relative pick rays and pixel-to-world aperture conversion straddle Interaction query policy and Renderer projection/camera data.",
       "Interaction audit (#1235): Paper-space text/chain/arc hit and sampling policy is mixed between Interaction and Renderer in PaperSpace.hpp.",
       "Interaction audit (#1235): GizmoOverlay is Interaction-produced visual intent but the current plain data carrier is Renderer-owned; settle a public draw-plan boundary.",
-      "Interaction audit (#1235): View state (camera, projection, named views) is persisted inside DrawingDocument even though Renderer owns camera state."
+      "Interaction audit (#1235): View state (camera, projection, named views) is persisted inside DrawingDocument even though Renderer owns camera state.",
+      "GoSurveyEditor audit (#1237): WhatsNewLogic (src/util/WhatsNewLogic.*) is unmapped; its version gating is pure logic while the billboard presentation is EditorWindow::ShowWhatsNew (GoSurveyEditor).",
+      "GoSurveyEditor audit (#1237): Recent-drawing and recent-project thumbnail caches (ThumbnailCache.hpp) are start-screen policy with no owner beyond the GoSurveyEditor section; their invalidation runs through EditorWindow refresh paths.",
+      "GoSurveyEditor audit (#1237): The Pdf window shells (PdfWindow*, PdfScaleUi, PdfRibbon) hold Pdf workflow that has no system owner until the Pdf audit assigns it.",
+      "GoSurveyEditor audit (#1237): The ribbon's style gallery and dimension/multileader/table preview painters (EditorRibbon.cpp) are presentation of Document style data with no toolkit-neutral home."
     ],
     "couplings": [
       "Foot/meter conversion constants are duplicated in several systems: geo/DrawingConversion.cpp, io/LandXmlIo.cpp, pdf/PdfMeasure.cpp, traverse/JobXmlImport.cpp, traverse/TraverseCalc.cpp, traverse/TraverseLeastSquares.cpp (kMetersToFeet), traverse/StarNetImport.cpp. Core units should own them.",
@@ -15047,7 +16217,10 @@
       "Interaction audit (#1235): AlignmentGrips.cpp is Survey-folder code with Interaction-owned transient hit/drag policy and Survey-owned alignment editing semantics.",
       "Interaction audit (#1235): CadRubberPreview.cpp mixes generic transient preview construction with Survey/Geometry-specific construction calculations.",
       "Interaction audit (#1235): ViewCube policy reads Camera and UCS data and uses Qt/Renderer camera mutation at its caller.",
-      "Interaction audit (#1235): Hover dwell helpers describe policy but timer scheduling and grip-menu presentation remain Qt-owned."
+      "Interaction audit (#1235): Hover dwell helpers describe policy but timer scheduling and grip-menu presentation remain Qt-owned.",
+      "GoSurveyEditor audit (#1237): EditorWindow.cpp and EditorViewport.cpp call Commands, Document, Renderer, IO, Survey, Terrain and Pdf directly; the final map must narrow these into owned interfaces rather than add edges.",
+      "GoSurveyEditor audit (#1237): AppCommandState in CadCommands.hpp holds dialog-open flags and prompt handoffs that the Qt editor polls; moving them into a GoSurveyEditor-owned request type is a later move, not part of this audit.",
+      "GoSurveyEditor audit (#1237): src/qt/main.cpp composes the engine and selects Qt, OpenGL and Windows backends directly; the composition root is GoSurveyEditor but backend selection is not yet an interface."
     ],
     "misMappedFolders": [
       "mappedFolders src/font/ -> Core is wrong. src/font holds the SHX file loader (ShxFont.*: file format, IO) and font-name classification (CadFontName.hpp: Renderer or Document). Not changed in this PR; the final-map ticket should reassign it. ADR-022 calls it a 'shared lower layer', which the final map must reconcile.",
@@ -15060,7 +16233,8 @@
       "src/ui/MtextRichSpans.hpp, MtextRichFormat.* and MtextTextOps.hpp are Document under the Qt folder mapping, as the UI audit already noted.",
       "src/geo/ is mapped to Geometry, but the Geometry audit assigns its coordinate-system files to Survey. The folder mapping stays until the final map; section entries record per-file ownership.",
       "src/platform/ holds Network-owned MapTileService.* and the HttpFetch.hpp transport interface, both mapped to Windows. src/commands/CadOnlineMap.* is a Network controller under the Commands folder mapping. The update and telemetry folders are correctly mapped to Network.",
-      "src/platform/CrashReporter.cpp and StartupFailure.cpp: the upload functions are Network, while the containing files are Windows (folder) and Debug (crash reporting). Split the upload functions out."
+      "src/platform/CrashReporter.cpp and StartupFailure.cpp: the upload functions are Network, while the containing files are Windows (folder) and Debug (crash reporting). Split the upload functions out.",
+      "src/qt/ is mapped to Qt, but most of its files are GoSurveyEditor window, dialog, panel and palette workflow (see the GoSurveyEditor sections). Only the presentation adapters (QtAnnotations, QtAppearance, QtSplash, QtText, QtViewCube, QtAccent, NonDismissableDialog, PdfCanvas) are Qt. Map the folder per file before enforcement."
     ],
     "namespaceGaps": [
       "ADR-0006 requires GoSurvey::<System> namespaces. NumFormat and AngleFormat use the global namespace (anglefmt_detail is global). StringUtil is namespace StringUtil. Core.cpp's detail is GoSurvey::Core::detail. Namespace work follows the move, not this audit.",
