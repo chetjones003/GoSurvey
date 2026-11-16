@@ -85,4 +85,6 @@ For owner review under issue #1238. These recommendations address the homeless-c
 
 ## Approval gate
 
-The starting inventory is [audit-starting-inventory.md](audit-starting-inventory.md). Once the owner approves or revises these decisions, update `system-map.json`, the system table/diagrams, and the dependency baseline together; verify exact system-edge acyclicity and complete source coverage; then update any affected carve-out tickets before code moves.
+The starting inventory is [audit-starting-inventory.md](audit-starting-inventory.md). The candidate leaves the Phase 2–6 order unchanged. The proposed `.gsproj` split keeps project command handlers in Commands (#1278); GoSurveyEditor owns session/composition, Survey owns shared point data, and IO owns persistence. No carve-out ticket scope change is proposed for #1278. If the owner changes that allocation, update #1278 before code moves.
+
+Once the owner approves or revises these decisions, update `system-map.json`, the system table/diagrams, and the dependency baseline together; verify exact system-edge acyclicity and complete source coverage; then update any other affected carve-out tickets before code moves.
