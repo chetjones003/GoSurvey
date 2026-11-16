@@ -503,6 +503,36 @@ target_include_directories(gosurvey_math INTERFACE "$<BUILD_INTERFACE:${CMAKE_CU
 target_compile_features(gosurvey_math INTERFACE cxx_std_17)
 target_link_libraries(gosurvey_math INTERFACE GoSurvey::Core)
 
+# GoSurvey::Geometry — T1 Kernel library (carve-out ticket #1244): 2D curves and intersections,
+# splines and NURBS, meshes, and the B-rep solid kernel. Public headers will live in
+# src/geometry/include/GoSurvey/Geometry/ and are consumed as <GoSurvey/Geometry/...>; private
+# sources in src/geometry/src/. Until the move-only PR lands, the sources and headers stay in
+# src/util/ and are compiled here, so that PR is pure path rewrites. It links only its allowed
+# dependencies, Math and Core. src/util stays on the include path (public: brep.hpp and nurbs.hpp
+# include "ucs.hpp" / "ray3d.hpp") until the Math headers move into src/math/include.
+add_library(gosurvey_geometry STATIC
+  # Planar geometry math: bulge arcs, extents, revision clouds.
+  src/util/geom2d.cpp
+  # REQ-443 SPLINE mathematics (NURBS curve: fit / control-vertex construction, evaluation, tessellation).
+  src/util/spline.cpp
+  # Intersection math behind the INT/APPINT snaps (REQ-062). Pure and dependency-free on purpose.
+  src/util/curveintersect.cpp
+  # REQ-063 mesh validation + bounds + normals.
+  src/util/meshgeom.cpp
+  # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). Pure by that ADR — no GL, no UI, no
+  # document — so a wrong volume integral or an unclosed shell is caught against a closed-form
+  # expectation rather than by looking at a shaded viewport.
+  src/util/brep.cpp
+  # REQ-315 / ADR-048: the freeform (NURBS) surface patch — pure math, no GL and no brep coupling.
+  src/util/nurbs.cpp)
+add_library(GoSurvey::Geometry ALIAS gosurvey_geometry)
+target_include_directories(gosurvey_geometry PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/geometry/include>"
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/util>")
+target_compile_features(gosurvey_geometry PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_geometry PUBLIC GoSurvey::Math GoSurvey::Core)
+gosurvey_target_warnings(gosurvey_geometry)
+
 # GoSurvey::Events — header-only Foundation library (carve-out ticket #1241). Its public include
 # root is src/events/include/. The approved map assigns Events no whole files yet (its items are
 # sections inside Qt files), so it is an INTERFACE target. It links its allowed
@@ -703,12 +733,6 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/alignment/AlignmentTables.cpp
   src/alignment/AlignmentDisplayCache.cpp
   src/alignment/Clothoid.cpp
-  # Geometry math (util)
-  src/util/geom2d.cpp
-  # REQ-443 SPLINE mathematics (NURBS curve: fit / control-vertex construction, evaluation, tessellation)
-  src/util/spline.cpp
-  src/util/curveintersect.cpp
-  src/util/meshgeom.cpp
   src/util/gltfimport.cpp
   src/util/stlimport.cpp
   src/util/tinbuild.cpp
@@ -722,19 +746,11 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/util/gridsurface.cpp
   src/util/daylight.cpp
   src/util/benchscene.cpp
-  # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). Pure by that ADR — no GL, no UI, no
-  # document — so a wrong volume integral or an unclosed shell is caught against a closed-form
-  # expectation rather than by looking at a shaded viewport.
-  src/util/brep.cpp
   # REQ-320 / ADR-051: the ACIS SAT record parser feeding 3DSOLID import (GitHub issue #299). Pure
   # and dependency-free like brep.cpp itself — no LibreDWG, no GL — so a malformed or unsupported
   # record is caught against a hand-authored SAT fixture rather than a real vendor block library.
   src/util/AcisSatParser.cpp
   src/util/AcisSatWriter.cpp
-  # REQ-315 / ADR-048: the freeform (NURBS) surface patch — pure math (evaluation, derivatives,
-  # validation, the loft builders), no GL and no brep coupling, so its correctness is pinned against
-  # closed-form circle / plane expectations rather than a viewport.
-  src/util/nurbs.cpp
   # REQ-318 sub-object picking (ADR-049, GitHub issue #148). Pure for the same reason the kernel
   # above it is: the precedence between a face, an edge and a vertex, and the refusal to report a
   # pick it cannot justify, are decided without a window.
@@ -812,7 +828,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
-target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math)
+target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
@@ -824,7 +840,7 @@ gosurvey_enable_pch(gosurvey_domain)
 # Stable umbrella for application consumers; individual systems remain linkable in isolation.
 add_library(gosurvey_engine INTERFACE)
 add_library(GoSurvey::Engine ALIAS gosurvey_engine)
-target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Events)
+target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Events)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
@@ -1171,18 +1187,14 @@ if(GOSURVEY_BUILD_TESTS)
     tests/DwgProbeTests.cpp
     tests/LibreDwgTests.cpp
     tests/LinetypeTessellationTests.cpp
-    tests/CurveIntersectTests.cpp
     tests/BenchSceneTests.cpp
     tests/VisualStyleTests.cpp
-    tests/MeshGeomTests.cpp
     # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). The whole point of the kernel being
     # graphics-free is that this suite can exist: every primitive's topology, its closed-form volume
     # and surface area, its refusals, and its behaviour at state-plane coordinate magnitudes are all
     # decided here, with no window and no document.
     tests/BrepTests.cpp
     # REQ-323 / ADR-046 (j) — FILLET. Closed-form acceptance numbers, written before the code.
-    tests/ChamferEdgeTests.cpp
-    tests/FilletEdgeTests.cpp
     # REQ-319 / ADR-046 amendment (i) — push/pull, the first kernel op that EDITS a solid. Its own
     # file because its subject is the PRECONDITION Validate cannot enforce, not another builder.
     tests/PushPullTests.cpp
@@ -1202,12 +1214,6 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AcisSatParserTests.cpp
     src/util/AcisSatParser.cpp
   src/util/AcisSatWriter.cpp
-    src/util/brep.cpp
-    # REQ-315 / ADR-048: the NURBS patch math. Partition-of-unity, a bilinear patch reproducing a
-    # plane, a rational arc row that is exactly on its circle, and derivative agreement with finite
-    # differences are all decided here, with no window — the same reason BrepTests exists.
-    tests/NurbsTests.cpp
-    src/util/nurbs.cpp
     # REQ-315 acceptance: a solid survives document-payload JSON save/reopen with topology counts identical and
     # volume/area stable. BrepJson.hpp is header-only and pulls in only nlohmann/json + brep.hpp, so
     # the serializer the saver actually runs is exercised directly here (GsIo.cpp is not linkable).
@@ -1339,13 +1345,8 @@ if(GOSURVEY_BUILD_TESTS)
     # where in a stall episode a frame sits — and its edges (began / ended) are what gate the one
     # diagnostic snapshot per episode, so both are pinned here with no GL context.
     tests/FrameWatchTests.cpp
-    # REQ-316 / ADR-047: the bulge -> arc (centre, radius, start, sweep) helper and arc-segment
-    # length. Pure geom2d, double math; the tangency and quarter-circle cases are what POLYLINE arc
-    # mode and JOIN both rest on, and a sign error here is silent in plan view.
-    tests/BulgeArcTests.cpp
-    # REQ-444 (issue #803): the scallop geometry behind REVCLOUD. Pure geom2d, like BulgeArcTests.
-    tests/RevisionCloudTests.cpp
-    # REQ-443 (issue #803): the SPLINE mathematics. Pure util/spline - needs spline.cpp, added below.
+    # REQ-443 (issue #803): the SPLINE mathematics. Needs CadCommands.hpp and viewport code, so it
+    # stays here; spline.cpp itself is compiled into GoSurvey::Geometry.
     tests/SplineTests.cpp
     tests/UpdateCheckTests.cpp
     # REQ-308 Start screen. RecentDrawingsTests drives the MRU store; StartScreenTests covers the
@@ -1435,17 +1436,8 @@ if(GOSURVEY_BUILD_TESTS)
     # Linetype dash tessellation, including per-vertex Z (REQ-058). Standalone like DwgProbe.cpp —
     # only <string>/<vector>/<cmath>/<cctype> — so it links without the GUI stack.
     src/commands/CadLinetype.cpp
-    # Intersection math behind the INT/APPINT snaps (REQ-062). Pure and dependency-free on purpose:
-    # this is where REQ-101 is actually enforced, and it must be testable without a GL context.
-    src/util/curveintersect.cpp
-    # REQ-316 / ADR-047 bulge -> arc math (BulgeArcTests). Pure geom2d — <cmath> only — so the
-    # quarter-circle and tangency cases POLYLINE arc mode and JOIN rest on are pinned without GL.
-    src/util/geom2d.cpp
-    src/util/spline.cpp
     # REQ-100 bench scene generator + frame statistics. Pure and deterministic by design.
     src/util/benchscene.cpp
-    # REQ-063 mesh validation + bounds + normals. Pure; the GPU-facing checks must be testable.
-    src/util/meshgeom.cpp
     # REQ-065 glTF reader. Pure and GL-free by design (ADR-026 (d)) so it is tested without a window.
     src/util/gltfimport.cpp
     src/util/stlimport.cpp
@@ -1581,6 +1573,25 @@ if(GOSURVEY_BUILD_TESTS)
   target_link_libraries(GoSurveyMathTests PRIVATE GoSurvey::Math Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyMathTests PROPERTIES LABELS Math)
   gosurvey_target_warnings(GoSurveyMathTests TEST)
+
+  # GoSurvey::Geometry tests (#1244). Pure: they link Geometry (which links Math and Core) and Catch2 only,
+  # never Qt, OpenGL or gosurvey_domain, which is the Kernel independence check for this system. They include
+  # the headers at their current paths until the move PR. BrepTests (needs IO's BrepJson.hpp), SplineTests
+  # and FilletGeomTests / ChamferGeomTests (need CadCommands.hpp) cover Geometry code through a higher
+  # layer, so they stay in GoSurveyTests.
+  add_executable(GoSurveyGeometryTests
+    tests/Geometry/BulgeArcTests.cpp
+    tests/Geometry/ChamferEdgeTests.cpp
+    tests/Geometry/CurveIntersectTests.cpp
+    tests/Geometry/FilletEdgeTests.cpp
+    tests/Geometry/MeshGeomTests.cpp
+    tests/Geometry/NurbsTests.cpp
+    tests/Geometry/RevisionCloudTests.cpp)
+  set_target_properties(GoSurveyGeometryTests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyGeometryTests PRIVATE GoSurvey::Geometry Catch2::Catch2WithMain)
+  catch_discover_tests(GoSurveyGeometryTests PROPERTIES LABELS Geometry)
+  gosurvey_target_warnings(GoSurveyGeometryTests TEST)
 
   # ---------------------------------------------------------------------------
   # Command-layer cases share the Catch2 executable and existing domain library.

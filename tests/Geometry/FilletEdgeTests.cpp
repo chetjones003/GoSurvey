@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-#include "brep.hpp"
+#include "../../src/util/brep.hpp"
 
 using Catch::Approx;
 using brep::Problem;

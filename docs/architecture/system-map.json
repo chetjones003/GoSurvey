@@ -15,6 +15,14 @@
       "system": "Math"
     },
     {
+      "path": "src/geometry/include/",
+      "system": "Geometry"
+    },
+    {
+      "path": "src/geometry/src/",
+      "system": "Geometry"
+    },
+    {
       "path": "src/events/include/",
       "system": "Events"
     },
