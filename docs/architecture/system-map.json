@@ -9657,6 +9657,1074 @@
         "UpdateSelectionBoxPreview"
       ],
       "note": "Selection-box preview policy is Interaction; committed selection changes remain with Document/Commands."
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        41,
+        204
+      ],
+      "system": "OpenGL",
+      "concern": "gl-shader",
+      "symbols": [
+        "kLineVs",
+        "kLineFs",
+        "kLineVcVs",
+        "kShadedVs",
+        "kTexVs",
+        "kTexFs",
+        "kPaperInkGlsl",
+        "CompileShader",
+        "LinkProgram"
+      ],
+      "note": "GLSL source strings and compile/link helpers. Shader source and GL object creation are OpenGL-backend code; ADR-0003 keeps GLSL inside the OpenGL backend."
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        804,
+        853
+      ],
+      "system": "OpenGL",
+      "concern": "gl-context",
+      "symbols": [
+        "CreateMapTileTexture",
+        "DeleteMapTileTexture",
+        "Init",
+        "Shutdown"
+      ],
+      "note": "glewInit, GL object setup and teardown, and map-tile texture upload. Tile bytes come from the Network-owned tile service; the GL texture is OpenGL."
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        854,
+        866
+      ],
+      "system": "Renderer",
+      "concern": "projection",
+      "symbols": [
+        "Ortho"
+      ],
+      "note": "Pure orthographic matrix. Renderer policy, not device code."
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        867,
+        898
+      ],
+      "system": "OpenGL",
+      "concern": "gl-release",
+      "symbols": [
+        "ReleaseMeshGpu",
+        "ReleasePointCloudGpu",
+        "ReleaseSolidGpu"
+      ],
+      "note": "Deletes GPU buffers held by Renderer cache entries. Device-side cleanup the device interface would own."
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        899,
+        1249
+      ],
+      "system": "OpenGL",
+      "concern": "gl-device-objects",
+      "symbols": [
+        "EnsureShader",
+        "DestroyShader",
+        "EnsureMultisamplePass",
+        "DestroyMultisamplePass",
+        "EnsureFramebuffer",
+        "DestroyFramebuffer",
+        "BlitRenderedFrame",
+        "SetSize"
+      ],
+      "note": "Shader programs, MSAA and framebuffer objects, blit and resize. This is the device-object lifecycle the Headless null device must mirror."
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        1250,
+        3888
+      ],
+      "system": "Renderer",
+      "concern": "mixed-scene-draw",
+      "symbols": [
+        "RenderScene"
+      ],
+      "note": "Scene-to-draw-list policy interleaved with direct GL draw calls. This is the largest Renderer-to-OpenGL coupling and the main split for the device seam."
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        3889,
+        3960
+      ],
+      "system": "OpenGL",
+      "concern": "gl-thumbnail",
+      "symbols": [
+        "DestroyPartThumbnailEntry",
+        "ReleasePartThumbnails",
+        "PartThumbnailTexture",
+        "ReadPartThumbnailPixels",
+        "InvalidatePartThumbnail"
+      ],
+      "note": "Part-thumbnail texture lifetime and pixel readback."
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        3961,
+        4191
+      ],
+      "system": "Renderer",
+      "concern": "mixed-thumbnail-draw",
+      "symbols": [
+        "EnsurePartThumbnail"
+      ],
+      "note": "Renders a part thumbnail with inline GL calls. Renderer policy with OpenGL calls, same split as RenderScene."
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        4192,
+        4256
+      ],
+      "system": "OpenGL",
+      "concern": "gl-readback",
+      "symbols": [
+        "CaptureThumbnailBmp"
+      ],
+      "note": "Framebuffer readback to a BMP."
+    },
+    {
+      "path": "src/render/ViewportRenderer.hpp",
+      "lines": [
+        335,
+        356
+      ],
+      "system": "OpenGL",
+      "concern": "gl-handles",
+      "symbols": [
+        "MeshGpuEntry",
+        "PointCloudGpuEntry"
+      ],
+      "note": "GLuint handles stored in the Renderer frontend header. The frontend should hold device handle types from the device interface."
+    },
+    {
+      "path": "src/render/ViewportRenderer.hpp",
+      "lines": [
+        539,
+        588
+      ],
+      "system": "OpenGL",
+      "concern": "gl-handles",
+      "symbols": [
+        "SolidGpuBatch",
+        "VcLineBatch"
+      ],
+      "note": "GL buffer and VAO handles in the frontend header."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        33,
+        37
+      ],
+      "system": "OpenGL",
+      "concern": "gl-include",
+      "symbols": [
+        "QOpenGLContext",
+        "QOpenGLBuffer",
+        "QOpenGLShaderProgram",
+        "QOpenGLTextureBlitter",
+        "QOpenGLVertexArrayObject"
+      ],
+      "note": "Qt OpenGL helper types. Qt is the hosting toolkit; these calls are the OpenGL backend."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        328,
+        352
+      ],
+      "system": "OpenGL",
+      "concern": "gl-context",
+      "symbols": [
+        "EditorViewport::Cleanup"
+      ],
+      "note": "GL object teardown when the QOpenGLWidget is destroyed."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        354,
+        402
+      ],
+      "system": "OpenGL",
+      "concern": "gl-context",
+      "symbols": [
+        "EditorViewport::initializeGL"
+      ],
+      "note": "glewInit and creation of the blitter and clip-mask GL objects. Second GL initialisation path next to ViewportRenderer::Init."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        403,
+        510
+      ],
+      "system": "OpenGL",
+      "concern": "gl-clip-mask",
+      "symbols": [
+        "EditorViewport::DrawPaperViewportClipMask"
+      ],
+      "note": "Paper-viewport clip mask drawn through GL from a QPainterPath."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        610,
+        1580
+      ],
+      "system": "OpenGL",
+      "concern": "mixed-paint",
+      "symbols": [
+        "EditorViewport::paintGL"
+      ],
+      "note": "Frame present mixed with QPainter overlays and Interaction preview/snap drawing. Only the GL present and blit calls are Platform; the overlays are Qt presentation or Interaction."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        22,
+        25
+      ],
+      "system": "OpenGL",
+      "concern": "gl-forward-decl",
+      "symbols": [
+        "QOpenGLBuffer",
+        "QOpenGLShaderProgram",
+        "QOpenGLTextureBlitter",
+        "QOpenGLVertexArrayObject"
+      ],
+      "note": "Forward declarations for the GL helper types."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        89,
+        92
+      ],
+      "system": "OpenGL",
+      "concern": "gl-members",
+      "symbols": [
+        "m_ClipMaskBuffer",
+        "m_ClipMaskProgram",
+        "m_TextureBlitter",
+        "m_ClipMaskVao"
+      ],
+      "note": "GL object members owned by the Qt widget."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        27,
+        27
+      ],
+      "system": "Qt",
+      "concern": "widget-host",
+      "symbols": [
+        "EditorViewport : QOpenGLWidget"
+      ],
+      "note": "The viewport widget. Qt hosts it, but its input handling mixes Interaction and Commands behaviour (EditorViewport.cpp:1693-2723)."
+    },
+    {
+      "path": "src/qt/main.cpp",
+      "lines": [
+        142,
+        147
+      ],
+      "system": "OpenGL",
+      "concern": "gl-format",
+      "symbols": [
+        "QSurfaceFormat"
+      ],
+      "note": "Default core-profile GL format, set before the first window. Chosen in the application composition root."
+    },
+    {
+      "path": "src/qt/main.cpp",
+      "lines": [
+        75,
+        75
+      ],
+      "system": "Windows",
+      "concern": "win-process-path",
+      "symbols": [
+        "GetModuleFileNameW"
+      ],
+      "note": "Executable path for the per-executable mutex name."
+    },
+    {
+      "path": "src/qt/main.cpp",
+      "lines": [
+        88,
+        89
+      ],
+      "system": "Windows",
+      "concern": "win-single-instance",
+      "symbols": [
+        "CreateMutexW",
+        "GetLastError",
+        "ERROR_ALREADY_EXISTS"
+      ],
+      "note": "Per-executable single-instance mutex."
+    },
+    {
+      "path": "src/qt/main.cpp",
+      "lines": [
+        95,
+        113
+      ],
+      "system": "Windows",
+      "concern": "win-window-handoff",
+      "symbols": [
+        "GetModuleFileNameW",
+        "ShowWindow",
+        "SW_RESTORE"
+      ],
+      "note": "Finds the running instance's window and restores it."
+    },
+    {
+      "path": "src/qt/main.cpp",
+      "lines": [
+        128,
+        265
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "composition-root",
+      "symbols": [
+        "main"
+      ],
+      "note": "Application composition: crash mode, GL format, PDF init, window creation. Not Platform-owned; listed for the OpenGL and Windows lines it calls."
+    },
+    {
+      "path": "src/qt/FailureReport.cpp",
+      "lines": [
+        29,
+        182
+      ],
+      "system": "Qt",
+      "concern": "dialog-presenter",
+      "symbols": [
+        "ReportFont",
+        "StylePrimary",
+        "CreateFailureReportDialog",
+        "ExecFailureReportDialog"
+      ],
+      "note": "Qt failure-report dialog. Presentation glue for the Qt backend."
+    },
+    {
+      "path": "src/qt/FailureReport.cpp",
+      "lines": [
+        183,
+        214
+      ],
+      "system": "OpenGL",
+      "concern": "gl-probe",
+      "symbols": [
+        "ProbeStartupGraphics"
+      ],
+      "note": "Startup GL probe: builds a QOpenGLContext and calls glewInit. Graphics probing belongs to the OpenGL backend, not the Qt dialog file."
+    },
+    {
+      "path": "src/qt/EditorChrome.cpp",
+      "lines": [
+        32,
+        32
+      ],
+      "system": "Windows",
+      "concern": "win-include",
+      "symbols": [
+        "windows.h"
+      ],
+      "note": "Win32 header for the frameless window."
+    },
+    {
+      "path": "src/qt/EditorChrome.cpp",
+      "lines": [
+        74,
+        76
+      ],
+      "system": "Windows",
+      "concern": "win-frameless-drag",
+      "symbols": [
+        "WM_NCLBUTTONDOWN",
+        "SendMessageW",
+        "HTCAPTION"
+      ],
+      "note": "Starts a caption drag on the frameless title area."
+    },
+    {
+      "path": "src/qt/EditorChrome.cpp",
+      "lines": [
+        128,
+        226
+      ],
+      "system": "Windows",
+      "concern": "win-native-event",
+      "symbols": [
+        "EditorWindow::nativeEvent",
+        "WM_COPYDATA",
+        "WM_NCCALCSIZE",
+        "WM_NCHITTEST"
+      ],
+      "note": "Qt native-event hook: single-instance WM_COPYDATA, frameless non-client sizing and hit-testing."
+    },
+    {
+      "path": "src/qt/EditorWindow.cpp",
+      "lines": [
+        121,
+        121
+      ],
+      "system": "Windows",
+      "concern": "win-include",
+      "symbols": [
+        "windows.h"
+      ],
+      "note": "Win32 header for the main window."
+    },
+    {
+      "path": "src/qt/EditorWindow.cpp",
+      "lines": [
+        2135,
+        2146
+      ],
+      "system": "Windows",
+      "concern": "win-frame-style",
+      "symbols": [
+        "EditorWindow::showEvent",
+        "GetWindowLongPtrW",
+        "SetWindowLongPtrW",
+        "SetWindowPos"
+      ],
+      "note": "Restores caption and sizing styles after Qt reapplies the frameless flag on first show."
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        8,
+        10
+      ],
+      "system": "Windows",
+      "concern": "win-include",
+      "symbols": [
+        "windows.h",
+        "ShlObj.h",
+        "wincodec.h"
+      ],
+      "note": "Win32, Shell and WIC headers in a Pdf-owned file."
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        29,
+        29
+      ],
+      "system": "OpenGL",
+      "concern": "gl-include",
+      "symbols": [
+        "GL/glew.h"
+      ],
+      "note": "GL header in a Pdf-owned file. This is why PdfAttach.cpp is a link-time seam (CMakeLists.txt)."
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        52,
+        75
+      ],
+      "system": "Windows",
+      "concern": "win-timer-log",
+      "symbols": [
+        "PdfTimer",
+        "PdfLog",
+        "QueryPerformanceCounter",
+        "OutputDebugStringA"
+      ],
+      "note": "High-resolution timing and debug output."
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        75,
+        242
+      ],
+      "system": "Windows",
+      "concern": "win-shell-thumbnail-wic",
+      "symbols": [
+        "ExtractHBitmapPixels",
+        "GetShellThumbnailImpl",
+        "GetShellThumbnailCached",
+        "WicDecodeImageToBgra"
+      ],
+      "note": "Shell thumbnail and WIC image decode for PDF previews."
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        279,
+        377
+      ],
+      "system": "Windows",
+      "concern": "win-winrt-render",
+      "symbols": [
+        "RenderPageWithWinRT"
+      ],
+      "note": "Windows.Data.Pdf render path, including WIC PNG decode."
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        378,
+        445
+      ],
+      "system": "OpenGL",
+      "concern": "gl-texture-upload",
+      "symbols": [
+        "UploadBgraTexture"
+      ],
+      "note": "Creates the GL texture and CPU mip chain for a PDF page. Called from Pdf code: a Pdf-to-OpenGL coupling."
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        1010,
+        1032
+      ],
+      "system": "Windows",
+      "concern": "win-com-init",
+      "symbols": [
+        "PdfAttach_Init",
+        "PdfAttach_Shutdown"
+      ],
+      "note": "COM/STA initialisation for the Shell thumbnail API."
+    },
+    {
+      "path": "src/platform/AppPaths.cpp",
+      "lines": [
+        1,
+        87
+      ],
+      "system": "Windows",
+      "concern": "os-paths",
+      "symbols": [
+        "AppPaths"
+      ],
+      "note": "Application folder paths. Win32 with a POSIX/macOS branch (mach-o, unistd) that the Windows build does not use."
+    },
+    {
+      "path": "src/platform/AppPaths.hpp",
+      "lines": [
+        1,
+        32
+      ],
+      "system": "Windows",
+      "concern": "os-paths",
+      "symbols": [
+        "AppPaths"
+      ],
+      "note": "Header comment says it is pure filesystem and environment queries. The implementation is Windows."
+    },
+    {
+      "path": "src/platform/CrashBuildInfo.cpp",
+      "lines": [
+        1,
+        181
+      ],
+      "system": "Windows",
+      "concern": "pe-build-identity",
+      "symbols": [
+        "CrashBuildInfo"
+      ],
+      "note": "Reads the CodeView PDB identity and MSVC exception metadata of the loaded module."
+    },
+    {
+      "path": "src/platform/CrashBuildInfo.hpp",
+      "lines": [
+        1,
+        25
+      ],
+      "system": "Windows",
+      "concern": "pe-build-identity",
+      "symbols": [
+        "CrashBuildInfo"
+      ],
+      "note": "PDB identity declaration."
+    },
+    {
+      "path": "src/platform/CrashReporter.cpp",
+      "lines": [
+        1,
+        247
+      ],
+      "system": "Windows",
+      "concern": "win-crash-capture",
+      "symbols": [
+        "UnhandledExceptionFilterHandler",
+        "AbortSignalHandler",
+        "TerminateHandler",
+        "AppendStackTrace",
+        "BuildCrashReport",
+        "HandleCrash",
+        "WriteMinidumpWithHelper",
+        "SpawnCrashReportUi",
+        "InstallHandler"
+      ],
+      "note": "Exception and abort hooks, stack trace, minidump helper and the crash bundle on disk."
+    },
+    {
+      "path": "src/platform/CrashReporter.cpp",
+      "lines": [
+        248,
+        325
+      ],
+      "system": "Network",
+      "concern": "report-upload",
+      "symbols": [
+        "TryPostCrashReportSilent",
+        "ReadBoundedCrashDump"
+      ],
+      "note": "Silent upload of the crash report. Network-owned per the Network audit (#1233); the Windows file is a transport location only."
+    },
+    {
+      "path": "src/platform/CrashReporter.cpp",
+      "lines": [
+        326,
+        728
+      ],
+      "system": "Windows",
+      "concern": "win-crash-capture",
+      "symbols": [
+        "Utf8PathToWide",
+        "WriteCrashBundleFile",
+        "MakePendingCrashBundlePath",
+        "WriteMinidumpInHelper",
+        "RunMinidumpWriterMode",
+        "ParseBundleFile",
+        "CommandLineHasArg",
+        "TakeCrashReportFromCommandLine",
+        "TryRunCrashReportUiMode"
+      ],
+      "note": "Crash bundle read and write, minidump writer mode, and command-line entry points."
+    },
+    {
+      "path": "src/platform/CrashReporterWireReason.cpp",
+      "lines": [
+        1,
+        52
+      ],
+      "system": "Network",
+      "concern": "wire-format",
+      "symbols": [
+        "CrashReporterWireReason"
+      ],
+      "note": "UTF-8-safe truncation of the wire reason field. Network payload policy kept in the Windows folder."
+    },
+    {
+      "path": "src/platform/FailureReportUi.cpp",
+      "lines": [
+        13,
+        14
+      ],
+      "system": "Windows",
+      "concern": "win-include",
+      "symbols": [
+        "windows.h",
+        "shellapi.h"
+      ],
+      "note": "Win32 failure window headers."
+    },
+    {
+      "path": "src/platform/FailureReportUi.cpp",
+      "lines": [
+        130,
+        130
+      ],
+      "system": "Windows",
+      "concern": "win-shell-open",
+      "symbols": [
+        "ShellExecuteW"
+      ],
+      "note": "Opens the prefilled GitHub issue in the browser."
+    },
+    {
+      "path": "src/platform/FailureReportUi.cpp",
+      "lines": [
+        180,
+        269
+      ],
+      "system": "Windows",
+      "concern": "win-failure-window",
+      "symbols": [
+        "FailureWindowProc",
+        "SetWindowTextW",
+        "CreateWindowExW",
+        "DestroyWindow"
+      ],
+      "note": "A native Win32 failure-report window that duplicates the Qt dialog in src/qt/FailureReport.cpp. Two failure UIs exist; the final map must choose one."
+    },
+    {
+      "path": "src/platform/GpuPreference.cpp",
+      "lines": [
+        1,
+        120
+      ],
+      "system": "Windows",
+      "concern": "gpu-preference",
+      "symbols": [
+        "ReadGpuPreferenceForThisExe",
+        "WriteGpuPreferenceForThisExe"
+      ],
+      "note": "Registry-backed GPU preference for hybrid graphics. Windows OS service; called from Commands (CadCommands.hpp)."
+    },
+    {
+      "path": "src/platform/GpuPreference.hpp",
+      "lines": [
+        1,
+        45
+      ],
+      "system": "Windows",
+      "concern": "gpu-preference",
+      "symbols": [
+        "GpuPreference"
+      ],
+      "note": "Preference enum and read/write declarations."
+    },
+    {
+      "path": "src/platform/HttpFetch.cpp",
+      "lines": [
+        1,
+        599
+      ],
+      "system": "Windows",
+      "concern": "transport-impl",
+      "symbols": [
+        "HttpFetch"
+      ],
+      "note": "WinHTTP implementation of the HTTPS fetch and file hashing. The transport interface is Network-owned; the split is recorded in the Network audit."
+    },
+    {
+      "path": "src/platform/HttpFetch.hpp",
+      "lines": [
+        1,
+        87
+      ],
+      "system": "Windows",
+      "concern": "transport-impl",
+      "symbols": [
+        "HttpFetch"
+      ],
+      "note": "Transport declaration. Its interface moves to Network; the WinHTTP implementation stays here."
+    },
+    {
+      "path": "src/platform/MapTilePlatform.cpp",
+      "lines": [
+        1,
+        30
+      ],
+      "system": "Windows",
+      "concern": "map-tile-adapter",
+      "symbols": [
+        "MapTilePlatform"
+      ],
+      "note": "Windows adapter for the map tile service. The service itself is Network-owned (MapTileService.*)."
+    },
+    {
+      "path": "src/platform/ProcessRun.cpp",
+      "lines": [
+        1,
+        117
+      ],
+      "system": "Windows",
+      "concern": "process-run",
+      "symbols": [
+        "ProcessRun",
+        "CreateProcessW"
+      ],
+      "note": "Launches a child process with a timeout and CommandLineToArgvW-compatible quoting."
+    },
+    {
+      "path": "src/platform/ProcessRun.hpp",
+      "lines": [
+        1,
+        19
+      ],
+      "system": "Windows",
+      "concern": "process-run",
+      "symbols": [
+        "ProcessRun"
+      ],
+      "note": "Process launch declaration."
+    },
+    {
+      "path": "src/platform/StartupFailure.cpp",
+      "lines": [
+        29,
+        83
+      ],
+      "system": "Network",
+      "concern": "wire-format",
+      "symbols": [
+        "StageWireName",
+        "TryPostStartupReportSilent",
+        "StageSummary"
+      ],
+      "note": "Startup-failure wire names, summary and silent send. Network-owned, same as the crash upload path."
+    },
+    {
+      "path": "src/platform/StartupFailure.cpp",
+      "lines": [
+        84,
+        117
+      ],
+      "system": "Windows",
+      "concern": "win-startup-log",
+      "symbols": [
+        "StartupFailureLogPath",
+        "WriteStartupFailureLog"
+      ],
+      "note": "Writes startup-failure.log under %APPDATA%."
+    },
+    {
+      "path": "src/platform/StartupFailure.cpp",
+      "lines": [
+        118,
+        147
+      ],
+      "system": "Network",
+      "concern": "report-upload",
+      "symbols": [
+        "RecordAndSend"
+      ],
+      "note": "Records the failure and sends the report. Network-owned."
+    },
+    {
+      "path": "src/platform/StbImage.cpp",
+      "lines": [
+        1,
+        6
+      ],
+      "system": "IO",
+      "concern": "misplaced-decoder",
+      "symbols": [
+        "stb_image"
+      ],
+      "note": "The single compiled copy of the vendored stb_image decoder. It is an image-decode dependency for IO and Document, not a Platform backend; it sits in the platform folder."
+    },
+    {
+      "path": "src/platform/ThumbnailCache.hpp",
+      "lines": [
+        1,
+        66
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "start-screen-cache",
+      "symbols": [
+        "ThumbnailCache"
+      ],
+      "note": "Recent-drawings thumbnail naming and bounded eviction. Header-only and pure. Start-screen state; homeless in the final map."
+    },
+    {
+      "path": "src/platform/WinFileDialogs.cpp",
+      "lines": [
+        1,
+        1107
+      ],
+      "system": "Windows",
+      "concern": "file-dialog-impl",
+      "symbols": [
+        "BrowseOpenFileCsvUtf8",
+        "BrowseSaveFileDxfUtf8",
+        "BrowseFolderUtf8"
+      ],
+      "note": "Win32 common file-dialog implementation of every Browse* function. Commands calls these directly (CadBlocks, CadCommands, CadCommands_Alignment, CadCommands_DrawInquiry)."
+    },
+    {
+      "path": "src/platform/WinFileDialogs.hpp",
+      "lines": [
+        1,
+        108
+      ],
+      "system": "Windows",
+      "concern": "file-dialog-interface",
+      "symbols": [
+        "Browse*Utf8"
+      ],
+      "note": "Free-function dialog API used as a link-time seam. No toolkit-neutral UI interface exists yet (ADR-0002); the contract is homeless until the UI interface is defined."
+    },
+    {
+      "path": "src/platform/HeadlessFileDialogs.cpp",
+      "lines": [
+        1,
+        149
+      ],
+      "system": "Headless",
+      "concern": "dialog-answer-queue",
+      "symbols": [
+        "QueueDialogAnswer",
+        "QueueDialogCancel",
+        "ClearDialogAnswers",
+        "PendingDialogAnswers"
+      ],
+      "note": "Headless implementation of the Browse* seam: a FIFO queue of scripted answers."
+    },
+    {
+      "path": "src/platform/HeadlessFileDialogs.hpp",
+      "lines": [
+        1,
+        35
+      ],
+      "system": "Headless",
+      "concern": "dialog-answer-queue",
+      "symbols": [
+        "headless::DialogAnswer"
+      ],
+      "note": "Queue interface for scripted answers."
+    },
+    {
+      "path": "src/platform/HeadlessPdfAttach.cpp",
+      "lines": [
+        1,
+        127
+      ],
+      "system": "Headless",
+      "concern": "pdf-seam-stub",
+      "symbols": [
+        "PdfAttach_Init",
+        "PdfDraftCache_Create",
+        "PdfDraftCache_ThumbnailTex"
+      ],
+      "note": "Headless stub for the PdfAttach.cpp seam, so the domain library links without pdfium, GL or WinRT."
+    },
+    {
+      "path": "src/qt/QtAccent.hpp",
+      "lines": [
+        1,
+        76
+      ],
+      "system": "Qt",
+      "concern": "chrome-accent",
+      "symbols": [
+        "QtAccent"
+      ],
+      "note": "Qt chrome accent colour (REQ-436). Qt presentation constant."
+    },
+    {
+      "path": "src/qt/QtAppearance.cpp",
+      "lines": [
+        1,
+        232
+      ],
+      "system": "Qt",
+      "concern": "chrome-theme",
+      "symbols": [
+        "QtAppearance"
+      ],
+      "note": "Fusion light/dark palette application. Qt presentation."
+    },
+    {
+      "path": "src/qt/QtSplash.cpp",
+      "lines": [
+        1,
+        106
+      ],
+      "system": "Qt",
+      "concern": "splash",
+      "symbols": [
+        "QtSplash"
+      ],
+      "note": "Startup splash window. Qt presentation."
+    },
+    {
+      "path": "src/qt/QtText.cpp",
+      "lines": [
+        1,
+        79
+      ],
+      "system": "Qt",
+      "concern": "text-metrics",
+      "symbols": [
+        "QtText"
+      ],
+      "note": "Qt pixel-height text sizing for CAD nominal height. Qt presentation."
+    },
+    {
+      "path": "src/qt/QtViewCube.cpp",
+      "lines": [
+        1,
+        105
+      ],
+      "system": "Qt",
+      "concern": "viewcube-paint",
+      "symbols": [
+        "QtViewCube"
+      ],
+      "note": "Paints the ViewCube scene. Layout and hit-testing are Interaction-owned (viewcube::BuildScene)."
+    },
+    {
+      "path": "src/qt/QtAnnotations.cpp",
+      "lines": [
+        1,
+        1459
+      ],
+      "system": "Qt",
+      "concern": "preview-paint",
+      "symbols": [
+        "QtAnnotations"
+      ],
+      "note": "Paints transform ghost previews. Preview geometry is Interaction-owned; the painting is Qt."
+    },
+    {
+      "path": "src/qt/DrawingDocumentTabBar.cpp",
+      "lines": [
+        1,
+        202
+      ],
+      "system": "Qt",
+      "concern": "tab-paint",
+      "symbols": [
+        "DrawingDocumentTabBar"
+      ],
+      "note": "Paints tab shapes and labels; Qt owns layout and scrolling."
+    },
+    {
+      "path": "src/qt/NonDismissableDialog.hpp",
+      "lines": [
+        1,
+        21
+      ],
+      "system": "Qt",
+      "concern": "dialog-base",
+      "symbols": [
+        "NonDismissableDialog"
+      ],
+      "note": "Qt dialog base class whose only exits are its own buttons."
+    },
+    {
+      "path": "src/qt/PdfCanvas.hpp",
+      "lines": [
+        1,
+        50
+      ],
+      "system": "Qt",
+      "concern": "pdf-canvas",
+      "symbols": [
+        "PdfCanvas"
+      ],
+      "note": "PDF page surface and pointer events. Qt presentation over Pdf data."
     }
   ],
   "auditedEntries": {
@@ -12268,6 +13336,119 @@
         "ViewCube policy reads Camera and UCS data and uses Qt/Renderer camera mutation at its caller.",
         "Hover dwell helpers describe policy but timer scheduling and grip-menu presentation remain Qt-owned."
       ]
+    },
+    "PlatformBackends": {
+      "tier": "Platform backend",
+      "audit": {
+        "issue": 1236,
+        "parent": 1207,
+        "codeMoved": false
+      },
+      "responsibility": "Implements the swappable platform services below the engine's interfaces: the OpenGL render device, the Qt adapters that translate Qt events and host widgets, the Windows OS services (paths, process launch, GPU preference, Win32 file dialogs, crash capture, the frameless window), and the Headless null device and scripted test services.",
+      "doesNotOwn": [
+        "domain behaviour, command orchestration, and persistent document or survey state (Document, Survey, Commands)",
+        "draw-list policy, render caches, and camera state (Renderer)",
+        "engine UI interfaces, which ADR-0002 keeps toolkit-neutral (UI); Qt and Headless implement them",
+        "windows, dialogs, ribbon, panels and hotkeys, which ADR-0002 assigns to GoSurveyEditor",
+        "HTTP, update and telemetry payload policy and the map tile service (Network)",
+        "snap, pick, grip and gizmo policy (Interaction)",
+        "PDF rendering semantics and the PDF model (Pdf)"
+      ],
+      "allowedDependencies": [
+        "Core",
+        "Events",
+        "UI",
+        "Renderer",
+        "Network"
+      ],
+      "dependencyNote": "Records the union of the four Platform backend rows in system-map.md as drawn today: Qt (Core, Events, UI), OpenGL (Core, Math, Renderer), Windows (Core, UI, Network), Headless (Core, Events, UI, Renderer). This entry does not widen any row. Current code breaks the rules in several places (see couplings); those are not permission to add edges.",
+      "currentFiles": [
+        "src/platform/* (all files): Windows, except the Network files (CrashReporter upload functions, CrashReporterWireReason.cpp, StartupFailure send path), StbImage.cpp (IO), ThumbnailCache.hpp (GoSurveyEditor) and HeadlessFileDialogs.* / HeadlessPdfAttach.cpp (Headless). MapTileService.* is Network-owned and is listed in the Network audit.",
+        "src/render/ViewportRenderer.cpp and .hpp: OpenGL sections listed in sections; the frame loop and scene policy stay Renderer.",
+        "src/qt/EditorViewport.cpp and .hpp: GL setup, clip-mask and paint sections are OpenGL; input translation is Qt.",
+        "src/qt/main.cpp: GL format and the Windows mutex and window handoff; the composition root is GoSurveyEditor.",
+        "src/qt/FailureReport.cpp: Qt dialog (Qt) and startup GL probe (OpenGL).",
+        "src/qt/EditorChrome.cpp and EditorWindow.cpp: Win32 frameless-window sections (Windows); the rest of these files is GoSurveyEditor.",
+        "src/qt/*, other files: Qt presentation adapters where listed in sections; otherwise GoSurveyEditor composition (windows, dialogs, ribbon, panels). The folder mapping is provisional.",
+        "src/pdf/PdfAttach.cpp: Windows, OpenGL and the link-time seam sections; the pdfium and document logic stays Pdf.",
+        "src/update/UpdateService.cpp, src/io/Project.cpp, src/util/SaveTrace.cpp: Win32 calls recorded as couplings (owned by Network, IO and Debug).",
+        "tests/TestSoundGuard.cpp/.hpp, tests/TestSoundGuardTests.cpp, tests/headless/* (HeadlessDriver.cpp, FuzzMain.cpp, Minimizer, FuzzGenerator, transcripts/): Headless."
+      ],
+      "currentSections": [
+        "src/render/ViewportRenderer.cpp:41-204 (GLSL source and compile/link helpers)",
+        "src/render/ViewportRenderer.cpp:804-898 (GL setup, teardown and tile texture)",
+        "src/render/ViewportRenderer.cpp:899-1249 (shader, MSAA, framebuffer, blit and resize)",
+        "src/render/ViewportRenderer.cpp:1250-3888 (RenderScene; Renderer policy mixed with GL draw calls)",
+        "src/render/ViewportRenderer.cpp:3889-4256 (part thumbnails and BMP readback)",
+        "src/qt/EditorViewport.cpp:328-402 (Cleanup, initializeGL)",
+        "src/qt/EditorViewport.cpp:403-510 (paper clip mask)",
+        "src/qt/EditorViewport.cpp:610-1580 (paintGL; GL present mixed with Qt overlays)",
+        "src/qt/main.cpp:142-147 (GL default format)",
+        "src/qt/main.cpp:75-113 (single-instance mutex and window handoff)",
+        "src/qt/FailureReport.cpp:183-214 (startup GL probe)",
+        "src/qt/EditorChrome.cpp:128-226 (frameless native event)",
+        "src/qt/EditorWindow.cpp:2135-2146 (frameless style restore)",
+        "src/pdf/PdfAttach.cpp:8-75, 279-445, 1010-1032 (Win32, WIC, WinRT, GL upload, COM init)",
+        "src/platform/ (per-file entries in sections)",
+        "src/platform/CrashReporter.cpp:248-325 (Network upload); the rest of CrashReporter.cpp is Windows crash capture"
+      ],
+      "draftPublicInterface": [
+        "Render device: a toolkit-neutral GoSurvey/Renderer device interface (buffer, texture, shader, framebuffer and draw-submit handles) plus a factory. The OpenGL backend implements it with GLEW; the Headless null device implements it by recording submitted draw calls. Neither exists in source yet (ADR-0003); ViewportRenderer.cpp is the de facto device today.",
+        "Graphics context: one call that creates the context and format, made from GoSurveyEditor composition. It replaces QSurfaceFormat in main.cpp and the two glewInit calls (EditorViewport::initializeGL and ViewportRenderer::Init).",
+        "File dialogs: the Browse*Utf8 free functions become a UI interface that Commands depends on. WinFileDialogs is the Windows implementation; headless::QueueDialogAnswer, ClearDialogAnswers and PendingDialogAnswers are the Headless control surface.",
+        "OS services: AppPaths, ProcessRun, GpuPreference, and the process-level handoff in main.cpp (single-instance mutex and window restore) are Windows implementations behind neutral service declarations.",
+        "Crash capture: InstallHandler, TakeCrashReportFromCommandLine and TryRunCrashReportUiMode stay Windows; the upload (TryPostCrashReportSilent) is called through the Network interface.",
+        "Transport: the HttpFetch declaration is split into a Network interface and a WinHTTP implementation here.",
+        "PDF seam: PdfAttach_Init, PdfAttach_Shutdown and the PdfDraftCache_* calls form the Pdf-facing interface. Windows and Headless implement it; the GL upload moves to the OpenGL device.",
+        "Qt adapters: input translation from QMouseEvent and QKeyEvent into Events types, and the paint and widget host for the viewport. Qt implements the UI interfaces; it does not own viewport policy.",
+        "Headless: the transcript driver and FuzzMain drive the domain through the same seams; TestSoundGuard blocks Windows sound APIs in test processes."
+      ],
+      "tests": [
+        "tests/GpuPreferenceTests.cpp",
+        "tests/CrashReporterTests.cpp",
+        "tests/TestSoundGuardTests.cpp",
+        "tests/QtEditorTests.cpp (AppPaths, HttpFetch, StartupFailure, FailureReportUi, QtSplash, QtAppearance, EditorViewport)",
+        "tests/StartScreenTests.cpp (ThumbnailCache)",
+        "tests/CameraTests.cpp, tests/SectionClipTests.cpp (ViewportRenderer; shared with Renderer)",
+        "tests/OnlineMapTests.cpp (map tile service; shared with Network)",
+        "tests/CadBlockImportTests.cpp, tests/PointCloudExportTests.cpp (HeadlessFileDialogs seam)",
+        "tests/headless/HeadlessDriver.cpp and tests/headless/transcripts/ (182 files)"
+      ],
+      "testNotes": "Gaps: no test references StbImage, WinFileDialogs, MapTilePlatform, CrashReporterWireReason, HeadlessPdfAttach, QtViewCube or ProcessRun; FuzzMain.cpp mentions ProcessRun but does not test it. ViewportRenderer is covered only indirectly. QtEditorTests.cpp (17,518 lines) carries platform checks alongside GoSurveyEditor tests and is grandfathered in the file-size baseline. HeadlessDriver.cpp (3,235 lines) is also grandfathered. No test exercises a render device seam, because none exists yet.",
+      "homelessConcepts": [
+        "Render device interface and factory: none exists in source (ADR-0003). ViewportRenderer.cpp makes about 707 direct GL calls.",
+        "Headless null render device: none exists. HeadlessDriver is a transcript driver for the domain, not a recorder of draw calls.",
+        "Toolkit-neutral UI interfaces (ADR-0002): none exist. Browse*Utf8 are free functions, and the Headless seam is a link-time substitution.",
+        "Three GL initialisation paths: main.cpp sets the format, EditorViewport::initializeGL and ViewportRenderer::Init call glewInit, and the startup probe in FailureReport.cpp creates its own context.",
+        "Two failure-report UIs: the Qt dialog (src/qt/FailureReport.cpp) and the Win32 window (src/platform/FailureReportUi.cpp). The final map must choose one.",
+        "Single-instance and window handoff: a Windows mutex in main.cpp and WM_COPYDATA in EditorChrome.cpp's native event hook. A neutral IPC port is needed.",
+        "Shell thumbnails for PDF previews (IShellItemImageFactory in PdfAttach.cpp) and the ThumbnailCache header have no clear owner. Pdf, Windows and GoSurveyEditor each have a claim.",
+        "Frameless window: caption drag, WM_NCCALCSIZE and WM_NCHITTEST handling, and the style restore in EditorWindow.cpp. Window chrome has no abstract interface.",
+        "GPU preference policy: the registry read and write is Windows, but the decision to request high performance is application policy that Commands reaches through CadCommands.hpp.",
+        "Image decode: stb_image in src/platform/StbImage.cpp has no owner; IO and Document are its users.",
+        "Map tile GL texture: the upload is in ViewportRenderer (OpenGL) but the tile source is Network. The final map must choose where the texture cache lives."
+      ],
+      "couplings": [
+        "src/render/ViewportRenderer.cpp (Renderer) includes GL/glew.h and calls GL directly, about 707 call sites. This breaks the ADR-0003 device boundary; the Renderer row does not include OpenGL.",
+        "src/pdf/PdfAttach.cpp (Pdf) includes GL/glew.h, windows.h, ShlObj.h and wincodec.h, and uploads GL textures. Pdf's row does not include OpenGL or Windows. CMakeLists.txt names this file as the seam; HeadlessPdfAttach.cpp is the other side.",
+        "src/commands/CadBlocks.cpp, CadCommands.cpp, CadCommands_Alignment.cpp and CadCommands_DrawInquiry.cpp call the Browse*Utf8 Windows dialogs directly. Commands' row does not include Windows.",
+        "src/commands/CadCommands.hpp (Commands) reaches GpuPreference (Windows).",
+        "src/util/SaveTrace.cpp (Debug) calls GetTempPathW and OutputDebugStringA. Debug's only allowed dependency is Core.",
+        "src/update/UpdateService.cpp (Network) calls ShellExecuteExW and GetModuleFileNameW. Network's allowed dependencies are Core and Events.",
+        "src/io/Project.cpp (IO) calls CreateFileW and GetLastError. src/io/DwgIo.cpp and RecentDrawings.cpp include windows.h without a visible Win32 call; check whether the include is needed. IO's row does not include Windows.",
+        "src/qt/EditorViewport.cpp and FailureReport.cpp (Qt) use OpenGL. Qt's row does not include OpenGL; the viewport is composition code the final map should move to GoSurveyEditor or the OpenGL backend.",
+        "src/qt/EditorWindow.cpp, EditorChrome.cpp and main.cpp call Win32 directly for frameless style and native events. Qt's row does not include Windows.",
+        "src/platform/CrashReporter.cpp and StartupFailure.cpp (Windows) call the Network upload functions. Windows may depend on Network, so this edge is allowed; the upload should go through the Network interface.",
+        "src/platform/HeadlessFileDialogs.cpp (Headless) uses the same free-function names as WinFileDialogs.cpp. This is a link-time seam, not a dependency; it stays until the UI interface exists.",
+        "src/platform/StbImage.cpp is used by IO and Document code in the domain library, while the file sits in the platform folder. Mapped to IO; a misplaced-folder finding.",
+        "tests/TestSoundGuard.cpp intercepts PlaySoundW and MessageBeep in test processes. It is Headless infrastructure with a Windows dependency."
+      ],
+      "misMappedFolders": [
+        "src/platform/ is mapped wholesale to Windows, but it holds Headless backends, a Network interface and transport, IO image decoding, and GoSurveyEditor start-screen state.",
+        "src/qt/ is mapped wholesale to Qt, but most of it is GoSurveyEditor windows, dialogs, ribbon and panels (ADR-0002). Only the thin adapters listed in sections are Qt.",
+        "src/render/ViewportRenderer.cpp is mapped to Renderer, but about 707 of its calls are OpenGL device calls that belong in the OpenGL backend.",
+        "tests/headless/ and tests/TestSoundGuard.* are not mapped; they are Headless test infrastructure."
+      ]
     }
   },
   "auditFindings": {
@@ -12561,6 +13742,22 @@
       "Qt event delivery, cursor/menu presentation and timer scheduling remain Qt; viewport snap, pick, hover and grip decisions are Interaction.",
       "Alignment entity semantics remain Survey; AlignmentGrips.cpp transient hit/drag behavior belongs to Interaction.",
       "TransformPreview.cpp display-buffer layout helper AppendSolidEdge belongs to Renderer; selection and preview outline policy belongs to Interaction."
-    ]
+    ],
+    "platformBackends": {
+      "notes": [
+        "Advisory only. fileMappings, the table in system-map.md, and dependency-baseline.json are unchanged. No code moved."
+      ],
+      "gaps": [
+        "No render device interface, no Headless null device, and no toolkit-neutral UI interface exists in source. ADR-0002 and ADR-0003 are accepted; the audit records the implementations as missing.",
+        "Pdf, Renderer, Commands, Debug, IO, Network and Qt each include Win32 or GL headers, or call their APIs directly. Each is a forbidden edge in the current rows, and none is recorded in dependency-baseline.json."
+      ],
+      "decisionsForFinalMap": [
+        "Choose one failure-report UI: Qt (src/qt/FailureReport.cpp) or Win32 (src/platform/FailureReportUi.cpp).",
+        "Decide where the map-tile GL texture cache lives: the OpenGL device, or Network with a device handle.",
+        "Decide whether the GPU preference request is Windows or GoSurveyEditor policy.",
+        "Decide whether ThumbnailCache.hpp is start-screen state (GoSurveyEditor) or a reusable cache (Core).",
+        "Decide whether the HttpFetch interface moves to Network in full, or whether the WinHTTP implementation becomes a Network transport adapter."
+      ]
+    }
   }
 }
