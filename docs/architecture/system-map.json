@@ -11688,6 +11688,19 @@
       "path": "src/platform/ThumbnailCache.hpp",
       "lines": [
         1,
+        36
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "start-screen-cache",
+      "symbols": [
+        "ThumbnailCache"
+      ],
+      "note": "Recent-drawings thumbnail naming and start-screen state. Lines 37-64 are the disk-cache eviction the Document section claims. Homeless in the final map."
+    },
+    {
+      "path": "src/platform/ThumbnailCache.hpp",
+      "lines": [
+        65,
         66
       ],
       "system": "GoSurveyEditor",
@@ -11695,7 +11708,7 @@
       "symbols": [
         "ThumbnailCache"
       ],
-      "note": "Recent-drawings thumbnail naming and bounded eviction. Header-only and pure. Start-screen state; homeless in the final map."
+      "note": "Trailing header lines after the Document-claimed eviction range. Homeless in the final map."
     },
     {
       "path": "src/platform/WinFileDialogs.cpp",
@@ -12081,7 +12094,7 @@
       "system": "GoSurveyEditor",
       "concern": "window-shell",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorWindow.cpp",
@@ -12092,7 +12105,7 @@
       "system": "GoSurveyEditor",
       "concern": "window-shell",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorWindow.cpp",
@@ -12103,7 +12116,7 @@
       "system": "GoSurveyEditor",
       "concern": "window-shell",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorWindow.cpp",
@@ -12114,7 +12127,7 @@
       "system": "GoSurveyEditor",
       "concern": "window-shell",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorWindow.cpp",
@@ -12125,7 +12138,7 @@
       "system": "GoSurveyEditor",
       "concern": "window-shell",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorWindow.cpp",
@@ -12136,7 +12149,7 @@
       "system": "GoSurveyEditor",
       "concern": "window-shell",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorWindow.cpp",
@@ -12147,7 +12160,7 @@
       "system": "GoSurveyEditor",
       "concern": "window-shell",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorWindow.cpp",
@@ -12158,7 +12171,7 @@
       "system": "GoSurveyEditor",
       "concern": "window-shell",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorWindow.hpp",
@@ -12169,7 +12182,7 @@
       "system": "GoSurveyEditor",
       "concern": "window-shell",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorWindow.hpp",
@@ -12180,7 +12193,7 @@
       "system": "GoSurveyEditor",
       "concern": "window-shell",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12191,7 +12204,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12202,7 +12215,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12213,7 +12226,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12224,7 +12237,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12235,7 +12248,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12246,7 +12259,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12257,7 +12270,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12268,7 +12281,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12279,7 +12292,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12290,7 +12303,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12301,7 +12314,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12312,7 +12325,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12323,7 +12336,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12334,7 +12347,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12345,7 +12358,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12356,7 +12369,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12367,7 +12380,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.cpp",
@@ -12378,7 +12391,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.hpp",
@@ -12389,7 +12402,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.hpp",
@@ -12400,7 +12413,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.hpp",
@@ -12411,7 +12424,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.hpp",
@@ -12422,7 +12435,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.hpp",
@@ -12433,7 +12446,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.hpp",
@@ -12444,7 +12457,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewport.hpp",
@@ -12455,7 +12468,7 @@
       "system": "GoSurveyEditor",
       "concern": "viewport-host",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorRibbon.cpp",
@@ -12466,7 +12479,7 @@
       "system": "GoSurveyEditor",
       "concern": "ribbon",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/RibbonCatalog.hpp",
@@ -12477,7 +12490,7 @@
       "system": "GoSurveyEditor",
       "concern": "ribbon",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/ui/ModelingRibbon.hpp",
@@ -12488,7 +12501,7 @@
       "system": "GoSurveyEditor",
       "concern": "ribbon",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorDialogs.cpp",
@@ -12499,7 +12512,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorChrome.cpp",
@@ -12510,7 +12523,7 @@
       "system": "GoSurveyEditor",
       "concern": "chrome",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorChrome.cpp",
@@ -12521,7 +12534,7 @@
       "system": "GoSurveyEditor",
       "concern": "chrome",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorChrome.cpp",
@@ -12532,7 +12545,7 @@
       "system": "GoSurveyEditor",
       "concern": "chrome",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorChrome.cpp",
@@ -12543,7 +12556,7 @@
       "system": "GoSurveyEditor",
       "concern": "chrome",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorChrome.hpp",
@@ -12554,7 +12567,7 @@
       "system": "GoSurveyEditor",
       "concern": "chrome",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorContextMenu.cpp",
@@ -12565,7 +12578,7 @@
       "system": "GoSurveyEditor",
       "concern": "context-menu",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorInput.cpp",
@@ -12576,7 +12589,7 @@
       "system": "GoSurveyEditor",
       "concern": "hotkeys",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorInput.cpp",
@@ -12587,7 +12600,7 @@
       "system": "GoSurveyEditor",
       "concern": "hotkeys",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorUpdate.cpp",
@@ -12598,7 +12611,7 @@
       "system": "GoSurveyEditor",
       "concern": "update-presentation",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorProjects.cpp",
@@ -12609,7 +12622,7 @@
       "system": "GoSurveyEditor",
       "concern": "project-workflow",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorProjectAttach.cpp",
@@ -12620,7 +12633,7 @@
       "system": "GoSurveyEditor",
       "concern": "project-workflow",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorProjectSettings.cpp",
@@ -12631,7 +12644,7 @@
       "system": "GoSurveyEditor",
       "concern": "project-workflow",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorBlockAuthoring.cpp",
@@ -12642,7 +12655,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorGradingPalette.cpp",
@@ -12653,7 +12666,7 @@
       "system": "GoSurveyEditor",
       "concern": "palettes",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorPipePalette.cpp",
@@ -12664,7 +12677,7 @@
       "system": "GoSurveyEditor",
       "concern": "palettes",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorPipePalette.hpp",
@@ -12675,7 +12688,7 @@
       "system": "GoSurveyEditor",
       "concern": "palettes",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorLayerManager.cpp",
@@ -12686,7 +12699,7 @@
       "system": "GoSurveyEditor",
       "concern": "panels",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorLayerManager.hpp",
@@ -12697,7 +12710,7 @@
       "system": "GoSurveyEditor",
       "concern": "panels",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorProperties.cpp",
@@ -12708,7 +12721,7 @@
       "system": "GoSurveyEditor",
       "concern": "panels",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/TopographicArtwork.hpp",
@@ -12719,7 +12732,7 @@
       "system": "GoSurveyEditor",
       "concern": "panel-artwork",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorPoints.cpp",
@@ -12730,7 +12743,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorPointClouds.cpp",
@@ -12741,7 +12754,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorPointGroups.cpp",
@@ -12752,7 +12765,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorPointGroups.hpp",
@@ -12763,7 +12776,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorPointTableDialog.cpp",
@@ -12774,7 +12787,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorPointTableDialog.hpp",
@@ -12785,7 +12798,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorPointTransfer.cpp",
@@ -12796,7 +12809,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorSampleLinesDialog.cpp",
@@ -12807,7 +12820,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorSampleLinesDialog.hpp",
@@ -12818,7 +12831,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorSectionSheetsDialog.cpp",
@@ -12829,7 +12842,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorSectionSheetsDialog.hpp",
@@ -12840,7 +12853,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorSheetsDialog.cpp",
@@ -12851,7 +12864,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorSheetsDialog.hpp",
@@ -12862,7 +12875,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewFrameDialog.cpp",
@@ -12873,7 +12886,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorViewFrameDialog.hpp",
@@ -12884,7 +12897,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorAlignmentCreate.cpp",
@@ -12895,7 +12908,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorAlignmentCreate.hpp",
@@ -12906,7 +12919,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorAlignmentLayout.cpp",
@@ -12917,7 +12930,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorAlignmentLayout.hpp",
@@ -12928,7 +12941,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorAlignmentStyle.cpp",
@@ -12939,7 +12952,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorAlignmentStyle.hpp",
@@ -12950,7 +12963,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorSurfaces.cpp",
@@ -12961,7 +12974,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorSurfaceManager.cpp",
@@ -12972,7 +12985,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorSurfaceStyles.cpp",
@@ -12983,7 +12996,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/EditorSurfaceUi.hpp",
@@ -12994,7 +13007,7 @@
       "system": "GoSurveyEditor",
       "concern": "dialogs",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/StyleEditors.cpp",
@@ -13005,7 +13018,7 @@
       "system": "GoSurveyEditor",
       "concern": "style-editors",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/StyleEditors.hpp",
@@ -13016,7 +13029,7 @@
       "system": "GoSurveyEditor",
       "concern": "style-editors",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/qt/StylePreview.hpp",
@@ -13027,7 +13040,7 @@
       "system": "GoSurveyEditor",
       "concern": "style-editors",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/app/Version.hpp.in",
@@ -13038,7 +13051,7 @@
       "system": "GoSurveyEditor",
       "concern": "app-version",
       "symbols": [],
-      "note": "Unclaimed lines after the other systems' sections at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
+      "note": "Lines not claimed by another system's section at the audited commit. GoSurveyEditor owns this window, dialog, panel or palette workflow; domain rules and state stay with their owning systems."
     },
     {
       "path": "src/commands/CadCommands.hpp",
@@ -15869,16 +15882,16 @@
         "src/qt/EditorRibbon.cpp and src/ui/ModelingRibbon.hpp: ribbon composition and button catalog.",
         "src/qt/EditorDialogs.cpp, EditorChrome.cpp, EditorContextMenu.cpp, EditorInput.cpp, EditorProjects.cpp and EditorUpdate.cpp: application workflow portions; backend and Network sections remain separately assigned.",
         "src/commands/CadCommands.hpp: dialog decisions, prompt lifecycle and application handoffs are GoSurveyEditor; command sequencing and state remain Commands.",
-        "src/platform/ThumbnailCache.hpp: full header is a GoSurveyEditor section."
+        "src/platform/ThumbnailCache.hpp: naming and start-screen state (lines 1-36, 65-66) are GoSurveyEditor; the disk-cache eviction (lines 37-64) is claimed by the Document section."
       ],
       "pendingAssignment": [
         "Qt files are mixed: use per-symbol sections in specialized audits before any future file move; this audit is advisory.",
-        "Pdf window shells (src/qt/PdfWindow*.cpp, PdfScaleUi.cpp, PdfRibbon.hpp), AdjustmentWindow.* and FailureReport.* are not assigned here; the Pdf audit and the Qt/PlatformBackends sections decide them.",
+        "Pdf window shells (src/qt/PdfWindow*.cpp, PdfScaleUi.cpp, PdfRibbon.hpp), AdjustmentWindow.* and its display widgets AdjustmentEditor.*, and FailureReport.* are not assigned here; the Pdf audit and the Qt/PlatformBackends sections decide them.",
         "Commands' CadCommands.cpp dialog-open handoffs are listed only where the header declares the flag; the .cpp bodies that set them are not enumerated line by line."
       ],
       "draftPublicInterface": [
         "main() startup composition in src/qt/main.cpp",
-        "EditorWindow public slots and drawing/window lifecycle methods in src/qt/EditorWindow.hpp",
+        "EditorWindow drawing and window lifecycle methods (declared in src/qt/EditorWindow.hpp): SwitchDrawing(int), NewDrawing(std::uint32_t), OpenDrawing(const QString&), SaveDrawing(bool), CloseDrawing(int), Submit(const QString&), Refresh(), RefreshRibbon()",
         "EditorViewport widget boundary in src/qt/EditorViewport.hpp",
         "RibbonCatalog and ModelingRibbon button catalog consumed by editor composition"
       ],
@@ -15886,7 +15899,9 @@
         "tests/QtEditorTests.cpp (window, viewport and workflow coverage; runs on the hidden desktop)",
         "tests/ToolspaceCatalogTests.cpp",
         "tests/ViewCubeTests.cpp and tests/ZoomFramingTests.cpp for editor-facing viewport workflows; underlying policy is Renderer/Interaction",
-        "tests/WhatsNewLogicTests.cpp covers the pure What's New version-gating logic, which is homeless (see homelessConcepts)"
+        "tests/WhatsNewLogicTests.cpp covers the pure What's New version-gating logic, which is homeless (see homelessConcepts)",
+        "tests/ModelingRibbonTests.cpp and tests/RibbonWiringGapTests.cpp cover the ribbon button catalog assigned here",
+        "tests/StartScreenTests.cpp covers the start-screen recent-drawing state assigned here"
       ],
       "homelessConcepts": [
         "Recent-drawing thumbnail cache ownership and invalidation lifecycle (ThumbnailCache.hpp).",
@@ -16234,7 +16249,7 @@
       "src/geo/ is mapped to Geometry, but the Geometry audit assigns its coordinate-system files to Survey. The folder mapping stays until the final map; section entries record per-file ownership.",
       "src/platform/ holds Network-owned MapTileService.* and the HttpFetch.hpp transport interface, both mapped to Windows. src/commands/CadOnlineMap.* is a Network controller under the Commands folder mapping. The update and telemetry folders are correctly mapped to Network.",
       "src/platform/CrashReporter.cpp and StartupFailure.cpp: the upload functions are Network, while the containing files are Windows (folder) and Debug (crash reporting). Split the upload functions out.",
-      "src/qt/ is mapped to Qt, but most of its files are GoSurveyEditor window, dialog, panel and palette workflow (see the GoSurveyEditor sections). Only the presentation adapters (QtAnnotations, QtAppearance, QtSplash, QtText, QtViewCube, QtAccent, NonDismissableDialog, PdfCanvas) are Qt. Map the folder per file before enforcement."
+      "src/qt/ is mapped to Qt, but most of its files are GoSurveyEditor window, dialog, panel and palette workflow (see the GoSurveyEditor sections). Only the presentation adapters (QtAnnotations, QtAppearance, QtSplash, QtText, QtViewCube, QtAccent, NonDismissableDialog, PdfCanvas) and the DrawingDocumentTabBar widget are Qt; the tab lifecycle decisions are GoSurveyEditor (EditorWindow). Map the folder per file before enforcement."
     ],
     "namespaceGaps": [
       "ADR-0006 requires GoSurvey::<System> namespaces. NumFormat and AngleFormat use the global namespace (anglefmt_detail is global). StringUtil is namespace StringUtil. Core.cpp's detail is GoSurvey::Core::detail. Namespace work follows the move, not this audit.",
