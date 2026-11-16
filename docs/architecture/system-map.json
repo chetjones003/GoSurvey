@@ -9657,6 +9657,2420 @@
         "UpdateSelectionBoxPreview"
       ],
       "note": "Selection-box preview policy is Interaction; committed selection changes remain with Document/Commands."
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        41,
+        204
+      ],
+      "system": "OpenGL",
+      "concern": "gl-shader",
+      "symbols": [
+        "kLineVs",
+        "kLineFs",
+        "kLineVcVs",
+        "kShadedVs",
+        "kTexVs",
+        "kTexFs",
+        "kPaperInkGlsl",
+        "CompileShader",
+        "LinkProgram"
+      ],
+      "note": "GLSL source strings and compile/link helpers. Shader source and GL object creation are OpenGL-backend code; ADR-0003 keeps GLSL inside the OpenGL backend."
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        804,
+        853
+      ],
+      "system": "OpenGL",
+      "concern": "gl-context",
+      "symbols": [
+        "CreateMapTileTexture",
+        "DeleteMapTileTexture",
+        "Init",
+        "Shutdown"
+      ],
+      "note": "glewInit, GL object setup and teardown, and map-tile texture upload. Tile bytes come from the Network-owned tile service; the GL texture is OpenGL."
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        854,
+        866
+      ],
+      "system": "Renderer",
+      "concern": "projection",
+      "symbols": [
+        "Ortho"
+      ],
+      "note": "Pure orthographic matrix. Renderer policy, not device code."
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        867,
+        898
+      ],
+      "system": "OpenGL",
+      "concern": "gl-release",
+      "symbols": [
+        "ReleaseMeshGpu",
+        "ReleasePointCloudGpu",
+        "ReleaseSolidGpu"
+      ],
+      "note": "Deletes GPU buffers held by Renderer cache entries. Device-side cleanup the device interface would own."
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        899,
+        1249
+      ],
+      "system": "OpenGL",
+      "concern": "gl-device-objects",
+      "symbols": [
+        "EnsureShader",
+        "DestroyShader",
+        "EnsureMultisamplePass",
+        "DestroyMultisamplePass",
+        "EnsureFramebuffer",
+        "DestroyFramebuffer",
+        "BlitRenderedFrame",
+        "SetSize"
+      ],
+      "note": "Shader programs, MSAA and framebuffer objects, blit and resize. This is the device-object lifecycle the Headless null device must mirror."
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        1250,
+        3855
+      ],
+      "system": "Renderer",
+      "concern": "mixed-scene-draw",
+      "symbols": [
+        "RenderScene"
+      ],
+      "note": "RenderScene: primary owner Renderer (scene-to-draw-list policy). GL calls listed in glCallLines are OpenGL device calls.",
+      "glCallLines": [
+        1282,
+        1284,
+        1285,
+        1287,
+        1311,
+        1312,
+        1314,
+        1316,
+        1317,
+        1329,
+        1330,
+        1331,
+        1333,
+        1334,
+        1340,
+        1341,
+        1345,
+        1346,
+        1347,
+        1415,
+        1466,
+        1475,
+        1484,
+        1486,
+        1488,
+        1509,
+        1510,
+        1516,
+        1517,
+        1518,
+        1519,
+        1520,
+        1521,
+        1522,
+        1523,
+        1524,
+        1525,
+        1526,
+        1527,
+        1528,
+        1529,
+        1530,
+        1531,
+        1532,
+        1545,
+        1546,
+        1547,
+        1548,
+        1550,
+        1551,
+        1553,
+        1555,
+        1570,
+        1571,
+        1572,
+        1573,
+        1575,
+        1576,
+        1577,
+        1579,
+        1581,
+        1583,
+        1585,
+        1590,
+        1591,
+        1592,
+        1593,
+        1594,
+        1595,
+        1596,
+        1597,
+        1598,
+        1599,
+        1600,
+        1601,
+        1602,
+        1603,
+        1604,
+        1610,
+        1611,
+        1612,
+        1642,
+        1643,
+        1644,
+        1647,
+        1648,
+        1649,
+        1652,
+        1653,
+        1663,
+        1814,
+        1815,
+        1816,
+        1817,
+        1818,
+        1819,
+        1821,
+        1822,
+        1823,
+        1824,
+        1825,
+        1826,
+        1844,
+        1845,
+        1846,
+        1853,
+        1855,
+        1857,
+        1858,
+        1859,
+        1860,
+        1893,
+        1894,
+        1895,
+        1896,
+        1898,
+        1899,
+        1900,
+        1902,
+        1904,
+        1905,
+        1906,
+        1907,
+        1908,
+        1935,
+        1936,
+        1937,
+        1949,
+        1952,
+        1965,
+        1966,
+        1970,
+        1972,
+        1973,
+        1987,
+        1988,
+        1990,
+        1991,
+        1999,
+        2000,
+        2027,
+        2028,
+        2029,
+        2030,
+        2032,
+        2033,
+        2034,
+        2035,
+        2036,
+        2095,
+        2096,
+        2097,
+        2110,
+        2113,
+        2114,
+        2115,
+        2249,
+        2250,
+        2338,
+        2339,
+        2340,
+        2341,
+        2343,
+        2344,
+        2345,
+        2346,
+        2348,
+        2350,
+        2351,
+        2352,
+        2361,
+        2362,
+        2367,
+        2411,
+        2412,
+        2413,
+        2414,
+        2416,
+        2417,
+        2418,
+        2419,
+        2423,
+        2424,
+        2425,
+        2426,
+        2427,
+        2428,
+        2430,
+        2467,
+        2468,
+        2469,
+        2473,
+        2474,
+        2475,
+        2484,
+        2486,
+        2488,
+        2489,
+        2490,
+        2491,
+        2492,
+        2493,
+        2495,
+        2504,
+        2506,
+        2507,
+        2508,
+        2510,
+        2511,
+        2512,
+        2521,
+        2530,
+        2532,
+        2533,
+        2534,
+        2535,
+        2537,
+        2538,
+        2539,
+        2552,
+        2553,
+        2554,
+        2555,
+        2556,
+        2557,
+        2558,
+        2559,
+        2621,
+        2622,
+        2623,
+        2624,
+        2625,
+        2626,
+        2627,
+        2628,
+        2636,
+        2637,
+        2638,
+        2651,
+        2652,
+        2653,
+        2655,
+        2657,
+        2658,
+        2659,
+        2660,
+        2661,
+        2663,
+        2664,
+        2665,
+        2666,
+        2667,
+        2668,
+        2670,
+        2673,
+        2674,
+        2677,
+        2678,
+        2679,
+        2680,
+        2683,
+        2684,
+        2685,
+        2686,
+        2687,
+        2688,
+        2689,
+        2698,
+        2699,
+        3100,
+        3101,
+        3102,
+        3103,
+        3104,
+        3105,
+        3106,
+        3114,
+        3115,
+        3128,
+        3131,
+        3138,
+        3139,
+        3143,
+        3150,
+        3151,
+        3154,
+        3155,
+        3158,
+        3159,
+        3160,
+        3161,
+        3163,
+        3164,
+        3185,
+        3186,
+        3187,
+        3188,
+        3189,
+        3190,
+        3191,
+        3206,
+        3207,
+        3208,
+        3209,
+        3210,
+        3211,
+        3212,
+        3235,
+        3236,
+        3237,
+        3238,
+        3239,
+        3241,
+        3242,
+        3243,
+        3246,
+        3247,
+        3248,
+        3249,
+        3261,
+        3262,
+        3263,
+        3278,
+        3279,
+        3280,
+        3281,
+        3282,
+        3283,
+        3284,
+        3314,
+        3315,
+        3316,
+        3317,
+        3318,
+        3319,
+        3320,
+        3333,
+        3334,
+        3335,
+        3336,
+        3337,
+        3338,
+        3339,
+        3347,
+        3348,
+        3349,
+        3350,
+        3351,
+        3364,
+        3365,
+        3366,
+        3367,
+        3368,
+        3369,
+        3370,
+        3371,
+        3385,
+        3386,
+        3387,
+        3388,
+        3389,
+        3390,
+        3395,
+        3408,
+        3409,
+        3410,
+        3411,
+        3412,
+        3413,
+        3414,
+        3415,
+        3434,
+        3435,
+        3440,
+        3441,
+        3442,
+        3443,
+        3454,
+        3455,
+        3460,
+        3461,
+        3462,
+        3463,
+        3482,
+        3483,
+        3486,
+        3489,
+        3490,
+        3491,
+        3492,
+        3495,
+        3504,
+        3505,
+        3506,
+        3507,
+        3508,
+        3509,
+        3510,
+        3511,
+        3522,
+        3524,
+        3526,
+        3527,
+        3528,
+        3529,
+        3530,
+        3553,
+        3561,
+        3562,
+        3563,
+        3564,
+        3571,
+        3572,
+        3573,
+        3574,
+        3575,
+        3576,
+        3594,
+        3595,
+        3596,
+        3597,
+        3598,
+        3599,
+        3600,
+        3601,
+        3611,
+        3612,
+        3613,
+        3614,
+        3615,
+        3626,
+        3627,
+        3628,
+        3629,
+        3630,
+        3755,
+        3756,
+        3757,
+        3758,
+        3759,
+        3760,
+        3761,
+        3762,
+        3763,
+        3764,
+        3765,
+        3766,
+        3767,
+        3771,
+        3779,
+        3785,
+        3786,
+        3787,
+        3788,
+        3789,
+        3829,
+        3834,
+        3835,
+        3836,
+        3842,
+        3845,
+        3846,
+        3847,
+        3848,
+        3849,
+        3852
+      ],
+      "componentOwnership": [
+        {
+          "system": "OpenGL",
+          "lines": [
+            1282,
+            1284,
+            1285,
+            1287,
+            1311,
+            1312,
+            1314,
+            1316,
+            1317,
+            1329,
+            1330,
+            1331,
+            1333,
+            1334,
+            1340,
+            1341,
+            1345,
+            1346,
+            1347,
+            1415,
+            1466,
+            1475,
+            1484,
+            1486,
+            1488,
+            1509,
+            1510,
+            1516,
+            1517,
+            1518,
+            1519,
+            1520,
+            1521,
+            1522,
+            1523,
+            1524,
+            1525,
+            1526,
+            1527,
+            1528,
+            1529,
+            1530,
+            1531,
+            1532,
+            1545,
+            1546,
+            1547,
+            1548,
+            1550,
+            1551,
+            1553,
+            1555,
+            1570,
+            1571,
+            1572,
+            1573,
+            1575,
+            1576,
+            1577,
+            1579,
+            1581,
+            1583,
+            1585,
+            1590,
+            1591,
+            1592,
+            1593,
+            1594,
+            1595,
+            1596,
+            1597,
+            1598,
+            1599,
+            1600,
+            1601,
+            1602,
+            1603,
+            1604,
+            1610,
+            1611,
+            1612,
+            1642,
+            1643,
+            1644,
+            1647,
+            1648,
+            1649,
+            1652,
+            1653,
+            1663,
+            1814,
+            1815,
+            1816,
+            1817,
+            1818,
+            1819,
+            1821,
+            1822,
+            1823,
+            1824,
+            1825,
+            1826,
+            1844,
+            1845,
+            1846,
+            1853,
+            1855,
+            1857,
+            1858,
+            1859,
+            1860,
+            1893,
+            1894,
+            1895,
+            1896,
+            1898,
+            1899,
+            1900,
+            1902,
+            1904,
+            1905,
+            1906,
+            1907,
+            1908,
+            1935,
+            1936,
+            1937,
+            1949,
+            1952,
+            1965,
+            1966,
+            1970,
+            1972,
+            1973,
+            1987,
+            1988,
+            1990,
+            1991,
+            1999,
+            2000,
+            2027,
+            2028,
+            2029,
+            2030,
+            2032,
+            2033,
+            2034,
+            2035,
+            2036,
+            2095,
+            2096,
+            2097,
+            2110,
+            2113,
+            2114,
+            2115,
+            2249,
+            2250,
+            2338,
+            2339,
+            2340,
+            2341,
+            2343,
+            2344,
+            2345,
+            2346,
+            2348,
+            2350,
+            2351,
+            2352,
+            2361,
+            2362,
+            2367,
+            2411,
+            2412,
+            2413,
+            2414,
+            2416,
+            2417,
+            2418,
+            2419,
+            2423,
+            2424,
+            2425,
+            2426,
+            2427,
+            2428,
+            2430,
+            2467,
+            2468,
+            2469,
+            2473,
+            2474,
+            2475,
+            2484,
+            2486,
+            2488,
+            2489,
+            2490,
+            2491,
+            2492,
+            2493,
+            2495,
+            2504,
+            2506,
+            2507,
+            2508,
+            2510,
+            2511,
+            2512,
+            2521,
+            2530,
+            2532,
+            2533,
+            2534,
+            2535,
+            2537,
+            2538,
+            2539,
+            2552,
+            2553,
+            2554,
+            2555,
+            2556,
+            2557,
+            2558,
+            2559,
+            2621,
+            2622,
+            2623,
+            2624,
+            2625,
+            2626,
+            2627,
+            2628,
+            2636,
+            2637,
+            2638,
+            2651,
+            2652,
+            2653,
+            2655,
+            2657,
+            2658,
+            2659,
+            2660,
+            2661,
+            2663,
+            2664,
+            2665,
+            2666,
+            2667,
+            2668,
+            2670,
+            2673,
+            2674,
+            2677,
+            2678,
+            2679,
+            2680,
+            2683,
+            2684,
+            2685,
+            2686,
+            2687,
+            2688,
+            2689,
+            2698,
+            2699,
+            3100,
+            3101,
+            3102,
+            3103,
+            3104,
+            3105,
+            3106,
+            3114,
+            3115,
+            3128,
+            3131,
+            3138,
+            3139,
+            3143,
+            3150,
+            3151,
+            3154,
+            3155,
+            3158,
+            3159,
+            3160,
+            3161,
+            3163,
+            3164,
+            3185,
+            3186,
+            3187,
+            3188,
+            3189,
+            3190,
+            3191,
+            3206,
+            3207,
+            3208,
+            3209,
+            3210,
+            3211,
+            3212,
+            3235,
+            3236,
+            3237,
+            3238,
+            3239,
+            3241,
+            3242,
+            3243,
+            3246,
+            3247,
+            3248,
+            3249,
+            3261,
+            3262,
+            3263,
+            3278,
+            3279,
+            3280,
+            3281,
+            3282,
+            3283,
+            3284,
+            3314,
+            3315,
+            3316,
+            3317,
+            3318,
+            3319,
+            3320,
+            3333,
+            3334,
+            3335,
+            3336,
+            3337,
+            3338,
+            3339,
+            3347,
+            3348,
+            3349,
+            3350,
+            3351,
+            3364,
+            3365,
+            3366,
+            3367,
+            3368,
+            3369,
+            3370,
+            3371,
+            3385,
+            3386,
+            3387,
+            3388,
+            3389,
+            3390,
+            3395,
+            3408,
+            3409,
+            3410,
+            3411,
+            3412,
+            3413,
+            3414,
+            3415,
+            3434,
+            3435,
+            3440,
+            3441,
+            3442,
+            3443,
+            3454,
+            3455,
+            3460,
+            3461,
+            3462,
+            3463,
+            3482,
+            3483,
+            3486,
+            3489,
+            3490,
+            3491,
+            3492,
+            3495,
+            3504,
+            3505,
+            3506,
+            3507,
+            3508,
+            3509,
+            3510,
+            3511,
+            3522,
+            3524,
+            3526,
+            3527,
+            3528,
+            3529,
+            3530,
+            3553,
+            3561,
+            3562,
+            3563,
+            3564,
+            3571,
+            3572,
+            3573,
+            3574,
+            3575,
+            3576,
+            3594,
+            3595,
+            3596,
+            3597,
+            3598,
+            3599,
+            3600,
+            3601,
+            3611,
+            3612,
+            3613,
+            3614,
+            3615,
+            3626,
+            3627,
+            3628,
+            3629,
+            3630,
+            3755,
+            3756,
+            3757,
+            3758,
+            3759,
+            3760,
+            3761,
+            3762,
+            3763,
+            3764,
+            3765,
+            3766,
+            3767,
+            3771,
+            3779,
+            3785,
+            3786,
+            3787,
+            3788,
+            3789,
+            3829,
+            3834,
+            3835,
+            3836,
+            3842,
+            3845,
+            3846,
+            3847,
+            3848,
+            3849,
+            3852
+          ],
+          "unit": "single lines"
+        }
+      ]
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        3856,
+        3960
+      ],
+      "system": "OpenGL",
+      "concern": "gl-thumbnail",
+      "symbols": [
+        "DestroyPartThumbnailEntry",
+        "ReleasePartThumbnails",
+        "PartThumbnailTexture",
+        "ReadPartThumbnailPixels",
+        "InvalidatePartThumbnail"
+      ],
+      "note": "Part-thumbnail texture lifetime and pixel readback."
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        3961,
+        4191
+      ],
+      "system": "Renderer",
+      "concern": "mixed-thumbnail-draw",
+      "symbols": [
+        "EnsurePartThumbnail"
+      ],
+      "note": "EnsurePartThumbnail: primary owner Renderer. GL calls listed in glCallLines are OpenGL device calls.",
+      "glCallLines": [
+        4006,
+        4007,
+        4008,
+        4009,
+        4010,
+        4011,
+        4012,
+        4013,
+        4014,
+        4015,
+        4016,
+        4017,
+        4018,
+        4019,
+        4020,
+        4021,
+        4022,
+        4023,
+        4033,
+        4035,
+        4053,
+        4089,
+        4090,
+        4091,
+        4092,
+        4093,
+        4094,
+        4095,
+        4096,
+        4100,
+        4101,
+        4103,
+        4104,
+        4119,
+        4120,
+        4122,
+        4123,
+        4124,
+        4125,
+        4127,
+        4128,
+        4129,
+        4131,
+        4133,
+        4134,
+        4135,
+        4136,
+        4140,
+        4141,
+        4142,
+        4143,
+        4144,
+        4145,
+        4146,
+        4147,
+        4150,
+        4152,
+        4153,
+        4159,
+        4160,
+        4161,
+        4163,
+        4164,
+        4165,
+        4166,
+        4168,
+        4169,
+        4170,
+        4171,
+        4172,
+        4173,
+        4174,
+        4177,
+        4178,
+        4179,
+        4180,
+        4183
+      ],
+      "componentOwnership": [
+        {
+          "system": "OpenGL",
+          "lines": [
+            4006,
+            4007,
+            4008,
+            4009,
+            4010,
+            4011,
+            4012,
+            4013,
+            4014,
+            4015,
+            4016,
+            4017,
+            4018,
+            4019,
+            4020,
+            4021,
+            4022,
+            4023,
+            4033,
+            4035,
+            4053,
+            4089,
+            4090,
+            4091,
+            4092,
+            4093,
+            4094,
+            4095,
+            4096,
+            4100,
+            4101,
+            4103,
+            4104,
+            4119,
+            4120,
+            4122,
+            4123,
+            4124,
+            4125,
+            4127,
+            4128,
+            4129,
+            4131,
+            4133,
+            4134,
+            4135,
+            4136,
+            4140,
+            4141,
+            4142,
+            4143,
+            4144,
+            4145,
+            4146,
+            4147,
+            4150,
+            4152,
+            4153,
+            4159,
+            4160,
+            4161,
+            4163,
+            4164,
+            4165,
+            4166,
+            4168,
+            4169,
+            4170,
+            4171,
+            4172,
+            4173,
+            4174,
+            4177,
+            4178,
+            4179,
+            4180,
+            4183
+          ],
+          "unit": "single lines"
+        }
+      ]
+    },
+    {
+      "path": "src/render/ViewportRenderer.cpp",
+      "lines": [
+        4192,
+        4256
+      ],
+      "system": "OpenGL",
+      "concern": "gl-readback",
+      "symbols": [
+        "CaptureThumbnailBmp"
+      ],
+      "note": "Framebuffer readback to a BMP."
+    },
+    {
+      "path": "src/render/ViewportRenderer.hpp",
+      "lines": [
+        335,
+        356
+      ],
+      "system": "OpenGL",
+      "concern": "gl-handles",
+      "symbols": [
+        "MeshGpuEntry",
+        "PointCloudGpuEntry"
+      ],
+      "note": "GLuint handles stored in the Renderer frontend header. The frontend should hold device handle types from the device interface."
+    },
+    {
+      "path": "src/render/ViewportRenderer.hpp",
+      "lines": [
+        539,
+        588
+      ],
+      "system": "OpenGL",
+      "concern": "gl-handles",
+      "symbols": [
+        "SolidGpuBatch",
+        "VcLineBatch"
+      ],
+      "note": "GL buffer and VAO handles in the frontend header."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        33,
+        37
+      ],
+      "system": "OpenGL",
+      "concern": "gl-include",
+      "symbols": [
+        "QOpenGLContext",
+        "QOpenGLBuffer",
+        "QOpenGLShaderProgram",
+        "QOpenGLTextureBlitter",
+        "QOpenGLVertexArrayObject"
+      ],
+      "note": "Qt OpenGL helper types. Qt is the hosting toolkit; these calls are the OpenGL backend."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        328,
+        352
+      ],
+      "system": "OpenGL",
+      "concern": "gl-context",
+      "symbols": [
+        "EditorViewport::Cleanup"
+      ],
+      "note": "GL object teardown when the QOpenGLWidget is destroyed."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        354,
+        402
+      ],
+      "system": "OpenGL",
+      "concern": "gl-context",
+      "symbols": [
+        "EditorViewport::initializeGL"
+      ],
+      "note": "glewInit and creation of the blitter and clip-mask GL objects. Second GL initialisation path next to ViewportRenderer::Init."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        403,
+        510
+      ],
+      "system": "OpenGL",
+      "concern": "gl-clip-mask",
+      "symbols": [
+        "EditorViewport::DrawPaperViewportClipMask"
+      ],
+      "note": "Paper-viewport clip mask drawn through GL from a QPainterPath."
+    },
+    {
+      "path": "src/qt/EditorViewport.cpp",
+      "lines": [
+        610,
+        1578
+      ],
+      "system": "Qt",
+      "concern": "mixed-paint",
+      "symbols": [
+        "EditorViewport::paintGL"
+      ],
+      "note": "paintGL: primary owner Qt (QPainter overlays and Interaction drawing). GL calls listed in glCallLines are OpenGL.",
+      "glCallLines": [
+        902,
+        903,
+        904,
+        906,
+        907,
+        908,
+        909,
+        914,
+        915,
+        916,
+        917,
+        984,
+        985,
+        986,
+        988,
+        999,
+        1000,
+        1002,
+        1004,
+        1005,
+        1012,
+        1013
+      ],
+      "componentOwnership": [
+        {
+          "system": "OpenGL",
+          "lines": [
+            902,
+            903,
+            904,
+            906,
+            907,
+            908,
+            909,
+            914,
+            915,
+            916,
+            917,
+            984,
+            985,
+            986,
+            988,
+            999,
+            1000,
+            1002,
+            1004,
+            1005,
+            1012,
+            1013
+          ],
+          "unit": "single lines"
+        }
+      ]
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        22,
+        25
+      ],
+      "system": "OpenGL",
+      "concern": "gl-forward-decl",
+      "symbols": [
+        "QOpenGLBuffer",
+        "QOpenGLShaderProgram",
+        "QOpenGLTextureBlitter",
+        "QOpenGLVertexArrayObject"
+      ],
+      "note": "Forward declarations for the GL helper types."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        89,
+        92
+      ],
+      "system": "OpenGL",
+      "concern": "gl-members",
+      "symbols": [
+        "m_ClipMaskBuffer",
+        "m_ClipMaskProgram",
+        "m_TextureBlitter",
+        "m_ClipMaskVao"
+      ],
+      "note": "GL object members owned by the Qt widget."
+    },
+    {
+      "path": "src/qt/EditorViewport.hpp",
+      "lines": [
+        27,
+        27
+      ],
+      "system": "Qt",
+      "concern": "widget-host",
+      "symbols": [
+        "EditorViewport : QOpenGLWidget"
+      ],
+      "note": "The viewport widget. Qt hosts it, but its input handling mixes Interaction and Commands behaviour (EditorViewport.cpp:1693-2723)."
+    },
+    {
+      "path": "src/qt/main.cpp",
+      "lines": [
+        142,
+        147
+      ],
+      "system": "OpenGL",
+      "concern": "gl-format",
+      "symbols": [
+        "QSurfaceFormat"
+      ],
+      "note": "Default core-profile GL format, set before the first window. Chosen in the application composition root."
+    },
+    {
+      "path": "src/qt/main.cpp",
+      "lines": [
+        75,
+        75
+      ],
+      "system": "Windows",
+      "concern": "win-process-path",
+      "symbols": [
+        "GetModuleFileNameW"
+      ],
+      "note": "Executable path for the per-executable mutex name."
+    },
+    {
+      "path": "src/qt/main.cpp",
+      "lines": [
+        88,
+        89
+      ],
+      "system": "Windows",
+      "concern": "win-single-instance",
+      "symbols": [
+        "CreateMutexW",
+        "GetLastError",
+        "ERROR_ALREADY_EXISTS"
+      ],
+      "note": "Per-executable single-instance mutex."
+    },
+    {
+      "path": "src/qt/main.cpp",
+      "lines": [
+        95,
+        113
+      ],
+      "system": "Windows",
+      "concern": "win-window-handoff",
+      "symbols": [
+        "GetModuleFileNameW",
+        "ShowWindow",
+        "SW_RESTORE"
+      ],
+      "note": "Finds the running instance's window and restores it."
+    },
+    {
+      "path": "src/qt/main.cpp",
+      "lines": [
+        128,
+        265
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "composition-root",
+      "symbols": [
+        "main"
+      ],
+      "note": "Application composition: crash mode, GL format, PDF init, window creation. Not Platform-owned; listed for the OpenGL and Windows lines it calls."
+    },
+    {
+      "path": "src/qt/FailureReport.cpp",
+      "lines": [
+        29,
+        182
+      ],
+      "system": "Qt",
+      "concern": "dialog-presenter",
+      "symbols": [
+        "ReportFont",
+        "StylePrimary",
+        "CreateFailureReportDialog",
+        "ExecFailureReportDialog"
+      ],
+      "note": "Qt failure-report dialog. Presentation glue for the Qt backend."
+    },
+    {
+      "path": "src/qt/FailureReport.cpp",
+      "lines": [
+        183,
+        214
+      ],
+      "system": "OpenGL",
+      "concern": "gl-probe",
+      "symbols": [
+        "ProbeStartupGraphics"
+      ],
+      "note": "Startup GL probe: builds a QOpenGLContext and calls glewInit. Graphics probing belongs to the OpenGL backend, not the Qt dialog file."
+    },
+    {
+      "path": "src/qt/EditorChrome.cpp",
+      "lines": [
+        32,
+        32
+      ],
+      "system": "Windows",
+      "concern": "win-include",
+      "symbols": [
+        "windows.h"
+      ],
+      "note": "Win32 header for the frameless window."
+    },
+    {
+      "path": "src/qt/EditorChrome.cpp",
+      "lines": [
+        74,
+        76
+      ],
+      "system": "Windows",
+      "concern": "win-frameless-drag",
+      "symbols": [
+        "WM_NCLBUTTONDOWN",
+        "SendMessageW",
+        "HTCAPTION"
+      ],
+      "note": "Starts a caption drag on the frameless title area."
+    },
+    {
+      "path": "src/qt/EditorChrome.cpp",
+      "lines": [
+        128,
+        226
+      ],
+      "system": "Windows",
+      "concern": "win-native-event",
+      "symbols": [
+        "EditorWindow::nativeEvent",
+        "WM_COPYDATA",
+        "WM_NCCALCSIZE",
+        "WM_NCHITTEST"
+      ],
+      "note": "Qt native-event hook: single-instance WM_COPYDATA, frameless non-client sizing and hit-testing."
+    },
+    {
+      "path": "src/qt/EditorWindow.cpp",
+      "lines": [
+        121,
+        121
+      ],
+      "system": "Windows",
+      "concern": "win-include",
+      "symbols": [
+        "windows.h"
+      ],
+      "note": "Win32 header for the main window."
+    },
+    {
+      "path": "src/qt/EditorWindow.cpp",
+      "lines": [
+        2135,
+        2146
+      ],
+      "system": "Windows",
+      "concern": "win-frame-style",
+      "symbols": [
+        "EditorWindow::showEvent",
+        "GetWindowLongPtrW",
+        "SetWindowLongPtrW",
+        "SetWindowPos"
+      ],
+      "note": "Restores caption and sizing styles after Qt reapplies the frameless flag on first show."
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        8,
+        10
+      ],
+      "system": "Windows",
+      "concern": "win-include",
+      "symbols": [
+        "windows.h",
+        "ShlObj.h",
+        "wincodec.h"
+      ],
+      "note": "Win32, Shell and WIC headers in a Pdf-owned file."
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        29,
+        29
+      ],
+      "system": "OpenGL",
+      "concern": "gl-include",
+      "symbols": [
+        "GL/glew.h"
+      ],
+      "note": "GL header in a Pdf-owned file. This is why PdfAttach.cpp is a link-time seam (CMakeLists.txt)."
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        52,
+        75
+      ],
+      "system": "Windows",
+      "concern": "win-timer-log",
+      "symbols": [
+        "PdfTimer",
+        "PdfLog",
+        "QueryPerformanceCounter",
+        "OutputDebugStringA"
+      ],
+      "note": "High-resolution timing and debug output."
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        75,
+        242
+      ],
+      "system": "Windows",
+      "concern": "win-shell-thumbnail-wic",
+      "symbols": [
+        "ExtractHBitmapPixels",
+        "GetShellThumbnailImpl",
+        "GetShellThumbnailCached",
+        "WicDecodeImageToBgra"
+      ],
+      "note": "Shell thumbnail and WIC image decode for PDF previews."
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        279,
+        377
+      ],
+      "system": "Windows",
+      "concern": "win-winrt-render",
+      "symbols": [
+        "RenderPageWithWinRT"
+      ],
+      "note": "Windows.Data.Pdf render path, including WIC PNG decode."
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        378,
+        445
+      ],
+      "system": "OpenGL",
+      "concern": "gl-texture-upload",
+      "symbols": [
+        "UploadBgraTexture"
+      ],
+      "note": "Creates the GL texture and CPU mip chain for a PDF page. Called from Pdf code: a Pdf-to-OpenGL coupling."
+    },
+    {
+      "path": "src/pdf/PdfAttach.cpp",
+      "lines": [
+        1010,
+        1032
+      ],
+      "system": "Windows",
+      "concern": "win-com-init",
+      "symbols": [
+        "PdfAttach_Init",
+        "PdfAttach_Shutdown"
+      ],
+      "note": "COM/STA initialisation for the Shell thumbnail API."
+    },
+    {
+      "path": "src/platform/AppPaths.cpp",
+      "lines": [
+        1,
+        87
+      ],
+      "system": "Windows",
+      "concern": "os-paths",
+      "symbols": [
+        "AppPaths"
+      ],
+      "note": "Application folder paths. Win32 with a POSIX/macOS branch (mach-o, unistd) that the Windows build does not use."
+    },
+    {
+      "path": "src/platform/AppPaths.hpp",
+      "lines": [
+        1,
+        32
+      ],
+      "system": "Windows",
+      "concern": "os-paths",
+      "symbols": [
+        "AppPaths"
+      ],
+      "note": "Header comment says it is pure filesystem and environment queries. The implementation is Windows."
+    },
+    {
+      "path": "src/platform/CrashBuildInfo.cpp",
+      "lines": [
+        1,
+        181
+      ],
+      "system": "Windows",
+      "concern": "pe-build-identity",
+      "symbols": [
+        "CrashBuildInfo"
+      ],
+      "note": "Reads the CodeView PDB identity and MSVC exception metadata of the loaded module."
+    },
+    {
+      "path": "src/platform/CrashBuildInfo.hpp",
+      "lines": [
+        1,
+        25
+      ],
+      "system": "Windows",
+      "concern": "pe-build-identity",
+      "symbols": [
+        "CrashBuildInfo"
+      ],
+      "note": "PDB identity declaration."
+    },
+    {
+      "path": "src/platform/CrashReporter.cpp",
+      "lines": [
+        1,
+        247
+      ],
+      "system": "Windows",
+      "concern": "win-crash-capture",
+      "symbols": [
+        "UnhandledExceptionFilterHandler",
+        "AbortSignalHandler",
+        "TerminateHandler",
+        "AppendStackTrace",
+        "BuildCrashReport",
+        "HandleCrash",
+        "WriteMinidumpWithHelper",
+        "SpawnCrashReportUi",
+        "InstallHandler"
+      ],
+      "note": "Exception and abort hooks, stack trace, minidump helper and the crash bundle on disk."
+    },
+    {
+      "path": "src/platform/CrashReporter.cpp",
+      "lines": [
+        248,
+        325
+      ],
+      "system": "Network",
+      "concern": "report-upload",
+      "symbols": [
+        "TryPostCrashReportSilent",
+        "ReadBoundedCrashDump"
+      ],
+      "note": "Silent upload of the crash report. Network-owned per the Network audit (#1233); the Windows file is a transport location only."
+    },
+    {
+      "path": "src/platform/CrashReporter.cpp",
+      "lines": [
+        326,
+        728
+      ],
+      "system": "Windows",
+      "concern": "win-crash-capture",
+      "symbols": [
+        "Utf8PathToWide",
+        "WriteCrashBundleFile",
+        "MakePendingCrashBundlePath",
+        "WriteMinidumpInHelper",
+        "RunMinidumpWriterMode",
+        "ParseBundleFile",
+        "CommandLineHasArg",
+        "TakeCrashReportFromCommandLine",
+        "TryRunCrashReportUiMode"
+      ],
+      "note": "Crash bundle read and write, minidump writer mode, and command-line entry points."
+    },
+    {
+      "path": "src/platform/CrashReporterWireReason.cpp",
+      "lines": [
+        1,
+        52
+      ],
+      "system": "Network",
+      "concern": "wire-format",
+      "symbols": [
+        "CrashReporterWireReason"
+      ],
+      "note": "UTF-8-safe truncation of the wire reason field. Network payload policy kept in the Windows folder."
+    },
+    {
+      "path": "src/platform/FailureReportUi.cpp",
+      "lines": [
+        13,
+        14
+      ],
+      "system": "Windows",
+      "concern": "win-include",
+      "symbols": [
+        "windows.h",
+        "shellapi.h"
+      ],
+      "note": "Win32 failure window headers."
+    },
+    {
+      "path": "src/platform/FailureReportUi.cpp",
+      "lines": [
+        130,
+        130
+      ],
+      "system": "Windows",
+      "concern": "win-shell-open",
+      "symbols": [
+        "ShellExecuteW"
+      ],
+      "note": "Opens the prefilled GitHub issue in the browser."
+    },
+    {
+      "path": "src/platform/FailureReportUi.cpp",
+      "lines": [
+        180,
+        269
+      ],
+      "system": "Windows",
+      "concern": "win-failure-window",
+      "symbols": [
+        "FailureWindowProc",
+        "SetWindowTextW",
+        "CreateWindowExW",
+        "DestroyWindow"
+      ],
+      "note": "A native Win32 failure-report window that duplicates the Qt dialog in src/qt/FailureReport.cpp. Two failure UIs exist; the final map must choose one."
+    },
+    {
+      "path": "src/platform/GpuPreference.cpp",
+      "lines": [
+        1,
+        120
+      ],
+      "system": "Windows",
+      "concern": "gpu-preference",
+      "symbols": [
+        "ReadGpuPreferenceForThisExe",
+        "WriteGpuPreferenceForThisExe"
+      ],
+      "note": "Registry-backed GPU preference for hybrid graphics. Windows OS service. No current production caller; GpuPreferenceTests.cpp is its only consumer."
+    },
+    {
+      "path": "src/platform/GpuPreference.hpp",
+      "lines": [
+        1,
+        45
+      ],
+      "system": "Windows",
+      "concern": "gpu-preference",
+      "symbols": [
+        "GpuPreference"
+      ],
+      "note": "Preference enum and read/write declarations."
+    },
+    {
+      "path": "src/platform/HttpFetch.cpp",
+      "lines": [
+        1,
+        599
+      ],
+      "system": "Windows",
+      "concern": "transport-impl",
+      "symbols": [
+        "HttpFetch"
+      ],
+      "note": "WinHTTP implementation of the HTTPS fetch and file hashing. The transport interface is Network-owned; the split is recorded in the Network audit."
+    },
+    {
+      "path": "src/platform/HttpFetch.hpp",
+      "lines": [
+        1,
+        87
+      ],
+      "system": "Windows",
+      "concern": "transport-impl",
+      "symbols": [
+        "HttpFetch"
+      ],
+      "note": "Transport declaration. Its interface moves to Network; the WinHTTP implementation stays here."
+    },
+    {
+      "path": "src/platform/MapTilePlatform.cpp",
+      "lines": [
+        1,
+        30
+      ],
+      "system": "Windows",
+      "concern": "map-tile-adapter",
+      "symbols": [
+        "MapTilePlatform"
+      ],
+      "note": "Windows adapter for the map tile service. The service itself is Network-owned (MapTileService.*)."
+    },
+    {
+      "path": "src/platform/ProcessRun.cpp",
+      "lines": [
+        1,
+        117
+      ],
+      "system": "Windows",
+      "concern": "process-run",
+      "symbols": [
+        "ProcessRun",
+        "CreateProcessW"
+      ],
+      "note": "Launches a child process with a timeout and CommandLineToArgvW-compatible quoting."
+    },
+    {
+      "path": "src/platform/ProcessRun.hpp",
+      "lines": [
+        1,
+        19
+      ],
+      "system": "Windows",
+      "concern": "process-run",
+      "symbols": [
+        "ProcessRun"
+      ],
+      "note": "Process launch declaration."
+    },
+    {
+      "path": "src/platform/StartupFailure.cpp",
+      "lines": [
+        29,
+        83
+      ],
+      "system": "Network",
+      "concern": "wire-format",
+      "symbols": [
+        "StageWireName",
+        "TryPostStartupReportSilent",
+        "StageSummary"
+      ],
+      "note": "Startup-failure wire names, summary and silent send. Network-owned, same as the crash upload path."
+    },
+    {
+      "path": "src/platform/StartupFailure.cpp",
+      "lines": [
+        84,
+        117
+      ],
+      "system": "Windows",
+      "concern": "win-startup-log",
+      "symbols": [
+        "StartupFailureLogPath",
+        "WriteStartupFailureLog"
+      ],
+      "note": "Writes startup-failure.log under %APPDATA%."
+    },
+    {
+      "path": "src/platform/StartupFailure.cpp",
+      "lines": [
+        118,
+        147
+      ],
+      "system": "Network",
+      "concern": "report-upload",
+      "symbols": [
+        "RecordAndSend"
+      ],
+      "note": "Records the failure and sends the report. Network-owned."
+    },
+    {
+      "path": "src/platform/StbImage.cpp",
+      "lines": [
+        1,
+        6
+      ],
+      "system": "IO",
+      "concern": "misplaced-decoder",
+      "symbols": [
+        "stb_image"
+      ],
+      "note": "The single compiled copy of the vendored stb_image decoder. Users are IO (io/RasterImage.cpp, io/PlotStyleTable.cpp) and Network (platform/MapTileService.cpp). It is a decoder dependency, not a Platform backend, and sits in the platform folder."
+    },
+    {
+      "path": "src/platform/ThumbnailCache.hpp",
+      "lines": [
+        1,
+        66
+      ],
+      "system": "GoSurveyEditor",
+      "concern": "start-screen-cache",
+      "symbols": [
+        "ThumbnailCache"
+      ],
+      "note": "Recent-drawings thumbnail naming and bounded eviction. Header-only and pure. Start-screen state; homeless in the final map."
+    },
+    {
+      "path": "src/platform/WinFileDialogs.cpp",
+      "lines": [
+        1,
+        1107
+      ],
+      "system": "Windows",
+      "concern": "file-dialog-impl",
+      "symbols": [
+        "BrowseOpenFileCsvUtf8",
+        "BrowseSaveFileDxfUtf8",
+        "BrowseFolderUtf8"
+      ],
+      "note": "Win32 common file-dialog implementation of every Browse* function. Commands calls these directly (CadBlocks, CadCommands, CadCommands_Alignment, CadCommands_DrawInquiry)."
+    },
+    {
+      "path": "src/platform/WinFileDialogs.hpp",
+      "lines": [
+        1,
+        108
+      ],
+      "system": "Windows",
+      "concern": "file-dialog-interface",
+      "symbols": [
+        "Browse*Utf8"
+      ],
+      "note": "Free-function dialog API used as a link-time seam. No toolkit-neutral UI interface exists yet (ADR-0002); the contract is homeless until the UI interface is defined."
+    },
+    {
+      "path": "src/platform/HeadlessFileDialogs.cpp",
+      "lines": [
+        1,
+        149
+      ],
+      "system": "Headless",
+      "concern": "dialog-answer-queue",
+      "symbols": [
+        "QueueDialogAnswer",
+        "QueueDialogCancel",
+        "ClearDialogAnswers",
+        "PendingDialogAnswers"
+      ],
+      "note": "Headless implementation of the Browse* seam: a FIFO queue of scripted answers."
+    },
+    {
+      "path": "src/platform/HeadlessFileDialogs.hpp",
+      "lines": [
+        1,
+        35
+      ],
+      "system": "Headless",
+      "concern": "dialog-answer-queue",
+      "symbols": [
+        "headless::DialogAnswer"
+      ],
+      "note": "Queue interface for scripted answers."
+    },
+    {
+      "path": "src/platform/HeadlessPdfAttach.cpp",
+      "lines": [
+        1,
+        127
+      ],
+      "system": "Headless",
+      "concern": "pdf-seam-stub",
+      "symbols": [
+        "PdfAttach_Init",
+        "PdfDraftCache_Create",
+        "PdfDraftCache_ThumbnailTex"
+      ],
+      "note": "Headless stub for the PdfAttach.cpp seam, so the domain library links without pdfium, GL or WinRT."
+    },
+    {
+      "path": "src/qt/QtAccent.hpp",
+      "lines": [
+        1,
+        76
+      ],
+      "system": "Qt",
+      "concern": "chrome-accent",
+      "symbols": [
+        "QtAccent"
+      ],
+      "note": "Qt chrome accent colour (REQ-436). Qt presentation constant."
+    },
+    {
+      "path": "src/qt/QtAppearance.cpp",
+      "lines": [
+        1,
+        232
+      ],
+      "system": "Qt",
+      "concern": "chrome-theme",
+      "symbols": [
+        "QtAppearance"
+      ],
+      "note": "Fusion light/dark palette application. Qt presentation."
+    },
+    {
+      "path": "src/qt/QtSplash.cpp",
+      "lines": [
+        1,
+        106
+      ],
+      "system": "Qt",
+      "concern": "splash",
+      "symbols": [
+        "QtSplash"
+      ],
+      "note": "Startup splash window. Qt presentation."
+    },
+    {
+      "path": "src/qt/QtText.cpp",
+      "lines": [
+        1,
+        79
+      ],
+      "system": "Qt",
+      "concern": "text-metrics",
+      "symbols": [
+        "QtText"
+      ],
+      "note": "Qt pixel-height text sizing for CAD nominal height. Qt presentation."
+    },
+    {
+      "path": "src/qt/QtViewCube.cpp",
+      "lines": [
+        1,
+        105
+      ],
+      "system": "Qt",
+      "concern": "viewcube-paint",
+      "symbols": [
+        "QtViewCube"
+      ],
+      "note": "Paints the ViewCube scene. Layout and hit-testing are Interaction-owned (viewcube::BuildScene)."
+    },
+    {
+      "path": "src/qt/QtAnnotations.cpp",
+      "lines": [
+        1,
+        1459
+      ],
+      "system": "Qt",
+      "concern": "preview-paint",
+      "symbols": [
+        "QtAnnotations"
+      ],
+      "note": "Paints transform ghost previews. Preview geometry is Interaction-owned; the painting is Qt."
+    },
+    {
+      "path": "src/qt/DrawingDocumentTabBar.cpp",
+      "lines": [
+        1,
+        202
+      ],
+      "system": "Qt",
+      "concern": "tab-paint",
+      "symbols": [
+        "DrawingDocumentTabBar"
+      ],
+      "note": "Paints tab shapes and labels; Qt owns layout and scrolling."
+    },
+    {
+      "path": "src/qt/NonDismissableDialog.hpp",
+      "lines": [
+        1,
+        21
+      ],
+      "system": "Qt",
+      "concern": "dialog-base",
+      "symbols": [
+        "NonDismissableDialog"
+      ],
+      "note": "Qt dialog base class whose only exits are its own buttons."
+    },
+    {
+      "path": "src/qt/PdfCanvas.hpp",
+      "lines": [
+        1,
+        50
+      ],
+      "system": "Qt",
+      "concern": "pdf-canvas",
+      "symbols": [
+        "PdfCanvas"
+      ],
+      "note": "PDF page surface and pointer events. Qt presentation over Pdf data."
+    },
+    {
+      "path": "src/platform/StartupFailure.hpp",
+      "lines": [
+        1,
+        19
+      ],
+      "system": "Network",
+      "concern": "report-upload",
+      "symbols": [
+        "StartupFailure"
+      ],
+      "note": "Declares the startup-failure log path (Windows) and the silent send (Network). The send is the Network part of this header."
+    },
+    {
+      "path": "src/platform/CrashReporter.hpp",
+      "lines": [
+        1,
+        63
+      ],
+      "system": "Windows",
+      "concern": "crash-capture-decl",
+      "symbols": [
+        "InstallHandler",
+        "TakeCrashReportFromCommandLine",
+        "TriggerTestCrash"
+      ],
+      "note": "Crash-capture declarations. The upload entry point is Network-owned (see CrashReporter.cpp:248-325)."
+    },
+    {
+      "path": "src/platform/FailureReportUi.hpp",
+      "lines": [
+        1,
+        16
+      ],
+      "system": "Network",
+      "concern": "report-url",
+      "symbols": [
+        "FailureReportUi"
+      ],
+      "note": "Declares the GitHub new-issue URL builder used by both the Win32 failure window and the Qt dialog. URL policy is Network; the window that uses it is Windows (FailureReportUi.cpp)."
+    },
+    {
+      "path": "src/platform/MapTileService.hpp",
+      "lines": [
+        1,
+        124
+      ],
+      "system": "Network",
+      "concern": "map-tile-service",
+      "symbols": [
+        "MapTileService"
+      ],
+      "note": "Online map tile fetch and disk cache (REQ-363). Network-owned per the Network audit (#1233); the GL texture upload is in ViewportRenderer (OpenGL)."
+    },
+    {
+      "path": "src/platform/MapTileService.cpp",
+      "lines": [
+        1,
+        220
+      ],
+      "system": "Network",
+      "concern": "map-tile-service",
+      "symbols": [
+        "MapTileService"
+      ],
+      "note": "Tile fetch, disk cache and one-shot workers. Network-owned; file lives in the Windows folder by mapping."
+    },
+    {
+      "path": "tests/headless/FuzzMain.cpp",
+      "lines": [
+        1,
+        298
+      ],
+      "system": "Headless",
+      "concern": "fuzz-driver",
+      "symbols": [
+        "FuzzMain"
+      ],
+      "note": "Fuzz entry point for the headless driver."
+    },
+    {
+      "path": "tests/headless/FuzzGenerator.hpp",
+      "lines": [
+        1,
+        112
+      ],
+      "system": "Headless",
+      "concern": "fuzz-driver",
+      "symbols": [
+        "FuzzGenerator"
+      ],
+      "note": "Fuzz transcript generator declaration."
+    },
+    {
+      "path": "tests/headless/FuzzGenerator.cpp",
+      "lines": [
+        1,
+        369
+      ],
+      "system": "Headless",
+      "concern": "fuzz-driver",
+      "symbols": [
+        "FuzzGenerator"
+      ],
+      "note": "Fuzz transcript generator."
+    },
+    {
+      "path": "tests/headless/Minimizer.hpp",
+      "lines": [
+        1,
+        60
+      ],
+      "system": "Headless",
+      "concern": "fuzz-driver",
+      "symbols": [
+        "Minimizer"
+      ],
+      "note": "Transcript minimiser declaration."
+    },
+    {
+      "path": "tests/headless/Minimizer.cpp",
+      "lines": [
+        1,
+        94
+      ],
+      "system": "Headless",
+      "concern": "fuzz-driver",
+      "symbols": [
+        "Minimizer"
+      ],
+      "note": "Transcript minimiser."
+    },
+    {
+      "path": "tests/headless/HeadlessDriver.cpp",
+      "lines": [
+        1,
+        3235
+      ],
+      "system": "Headless",
+      "concern": "transcript-driver",
+      "symbols": [
+        "main",
+        "RunTranscriptMain",
+        "ExecuteStep"
+      ],
+      "note": "Transcript driver for the headless build. Scripted UI services and the test-side null device."
+    },
+    {
+      "path": "tests/TestSoundGuard.hpp",
+      "lines": [
+        1,
+        29
+      ],
+      "system": "Headless",
+      "concern": "test-sound-guard",
+      "symbols": [
+        "TestSoundGuard"
+      ],
+      "note": "Declares the test-process sound guard that blocks PlaySound and MessageBeep."
+    },
+    {
+      "path": "tests/TestSoundGuard.cpp",
+      "lines": [
+        1,
+        315
+      ],
+      "system": "Headless",
+      "concern": "test-sound-guard",
+      "symbols": [
+        "TestSoundGuard"
+      ],
+      "note": "Intercepts PlaySoundW and MessageBeep in test processes and writes a call-stack log. Headless test infrastructure with a Windows API dependency."
+    },
+    {
+      "path": "tests/TestSoundGuardTests.cpp",
+      "lines": [
+        1,
+        85
+      ],
+      "system": "Headless",
+      "concern": "test-sound-guard",
+      "symbols": [
+        "TestSoundGuard"
+      ],
+      "note": "Tests for the sound guard."
     }
   ],
   "auditedEntries": {
@@ -12268,6 +14682,135 @@
         "ViewCube policy reads Camera and UCS data and uses Qt/Renderer camera mutation at its caller.",
         "Hover dwell helpers describe policy but timer scheduling and grip-menu presentation remain Qt-owned."
       ]
+    },
+    "PlatformBackends": {
+      "tier": "Platform backend",
+      "audit": {
+        "issue": 1236,
+        "parent": 1207,
+        "codeMoved": false
+      },
+      "responsibility": "Implements the swappable platform services below the engine's interfaces: the OpenGL render device, the Qt adapters that translate Qt events and host widgets, the Windows OS services (paths, process launch, GPU preference, Win32 file dialogs, crash capture, the frameless window), and the Headless null device and scripted test services.",
+      "doesNotOwn": [
+        "domain behaviour, command orchestration, and persistent document or survey state (Document, Survey, Commands)",
+        "draw-list policy, render caches, and camera state (Renderer)",
+        "engine UI interfaces, which ADR-0002 keeps toolkit-neutral (UI); Qt and Headless implement them",
+        "windows, dialogs, ribbon, panels and hotkeys, which ADR-0002 assigns to GoSurveyEditor",
+        "HTTP, update and telemetry payload policy and the map tile service (Network)",
+        "snap, pick, grip and gizmo policy (Interaction)",
+        "PDF rendering semantics and the PDF model (Pdf)"
+      ],
+      "allowedDependencies": [
+        "Core",
+        "Events",
+        "UI",
+        "Math",
+        "Renderer",
+        "Network"
+      ],
+      "dependencyNote": "Records the union of the four Platform backend rows in system-map.md as drawn today: Qt (Core, Events, UI), OpenGL (Core, Math, Renderer), Windows (Core, UI, Network), Headless (Core, Events, UI, Renderer). This entry does not widen any row. Current code breaks the rules in several places (see couplings); those are not permission to add edges.",
+      "currentFiles": [
+        "src/platform/* (all files): Windows, except the Network files (CrashReporter upload functions, CrashReporterWireReason.cpp, StartupFailure send path), StbImage.cpp (IO), ThumbnailCache.hpp (GoSurveyEditor) and HeadlessFileDialogs.* / HeadlessPdfAttach.cpp (Headless). MapTileService.* is Network-owned and is listed in the Network audit.",
+        "src/render/ViewportRenderer.cpp and .hpp: OpenGL sections listed in sections; the frame loop and scene policy stay Renderer.",
+        "src/qt/EditorViewport.cpp and .hpp: GL setup, clip-mask and paint sections are OpenGL; input translation is Qt.",
+        "src/qt/main.cpp: GL format and the Windows mutex and window handoff; the composition root is GoSurveyEditor.",
+        "src/qt/FailureReport.cpp: Qt dialog (Qt) and startup GL probe (OpenGL).",
+        "src/qt/EditorChrome.cpp and EditorWindow.cpp: Win32 frameless-window sections (Windows); the rest of these files is GoSurveyEditor.",
+        "src/qt/*, other files: Qt presentation adapters where listed in sections; otherwise GoSurveyEditor composition (windows, dialogs, ribbon, panels). The folder mapping is provisional.",
+        "src/pdf/PdfAttach.cpp: Windows, OpenGL and the link-time seam sections; the pdfium and document logic stays Pdf.",
+        "src/update/UpdateService.cpp, src/io/Project.cpp, src/util/SaveTrace.cpp: Win32 calls recorded as couplings (owned by Network, IO and Debug).",
+        "tests/TestSoundGuard.cpp/.hpp, tests/TestSoundGuardTests.cpp, tests/headless/* (HeadlessDriver.cpp, FuzzMain.cpp, Minimizer, FuzzGenerator, transcripts/): Headless."
+      ],
+      "currentSections": [
+        "src/render/ViewportRenderer.cpp:41-204 (GLSL source and compile/link helpers)",
+        "src/render/ViewportRenderer.cpp:804-898 (GL setup, teardown and tile texture)",
+        "src/render/ViewportRenderer.cpp:899-1249 (shader, MSAA, framebuffer, blit and resize)",
+        "src/render/ViewportRenderer.cpp:1250-3855 (RenderScene; Renderer policy mixed with GL draw calls)",
+        "src/render/ViewportRenderer.cpp:3856-4256 (part thumbnails and BMP readback)",
+        "src/qt/EditorViewport.cpp:328-402 (Cleanup, initializeGL)",
+        "src/qt/EditorViewport.cpp:403-510 (paper clip mask)",
+        "src/qt/EditorViewport.cpp:610-1580 (paintGL; GL present mixed with Qt overlays)",
+        "src/qt/main.cpp:142-147 (GL default format)",
+        "src/qt/main.cpp:75-113 (single-instance mutex and window handoff)",
+        "src/qt/FailureReport.cpp:183-214 (startup GL probe)",
+        "src/qt/EditorChrome.cpp:128-226 (frameless native event)",
+        "src/qt/EditorWindow.cpp:2135-2146 (frameless style restore)",
+        "src/pdf/PdfAttach.cpp:8-242, 279-445, 1010-1032 (Win32, WIC, WinRT, GL upload, COM init; 243-278 is Pdf's pdfium thumbnail)",
+        "src/platform/ (per-file entries in sections)",
+        "src/platform/CrashReporter.cpp:248-325 (Network upload); the rest of CrashReporter.cpp is Windows crash capture"
+      ],
+      "draftPublicInterface": [
+        "Render device: a toolkit-neutral GoSurvey/Renderer device interface (buffer, texture, shader, framebuffer and draw-submit handles) plus a factory. The OpenGL backend implements it with GLEW; the Headless null device implements it by recording submitted draw calls. Neither exists in source yet (ADR-0003); ViewportRenderer.cpp is the de facto device today.",
+        "Graphics context: one call that creates the context and format, made from GoSurveyEditor composition. It replaces QSurfaceFormat in main.cpp and the two glewInit calls (EditorViewport::initializeGL and ViewportRenderer::Init).",
+        "File dialogs: the Browse*Utf8 free functions become a UI interface that Commands depends on. WinFileDialogs is the Windows implementation; headless::QueueDialogAnswer, ClearDialogAnswers and PendingDialogAnswers are the Headless control surface.",
+        "OS services: AppPaths, ProcessRun, GpuPreference, and the process-level handoff in main.cpp (single-instance mutex and window restore) are Windows implementations behind neutral service declarations.",
+        "Crash capture: InstallHandler, TakeCrashReportFromCommandLine and TryRunCrashReportUiMode stay Windows; the upload (TryPostCrashReportSilent) is called through the Network interface.",
+        "Transport: the HttpFetch declaration is split into a Network interface and a WinHTTP implementation here.",
+        "PDF seam: PdfAttach_Init, PdfAttach_Shutdown and the PdfDraftCache_* calls form the Pdf-facing interface. Windows and Headless implement it; the GL upload moves to the OpenGL device.",
+        "Qt adapters: input translation from QMouseEvent and QKeyEvent into Events types, and the paint and widget host for the viewport. Qt implements the UI interfaces; it does not own viewport policy.",
+        "Headless: the transcript driver and FuzzMain drive the domain through the same seams; TestSoundGuard blocks Windows sound APIs in test processes."
+      ],
+      "tests": [
+        "tests/GpuPreferenceTests.cpp",
+        "tests/CrashReporterTests.cpp",
+        "tests/TestSoundGuardTests.cpp",
+        "tests/QtEditorTests.cpp (AppPaths, HttpFetch, StartupFailure, FailureReportUi, QtSplash, QtAppearance, EditorViewport)",
+        "tests/StartScreenTests.cpp (ThumbnailCache)",
+        "tests/CameraTests.cpp, tests/SectionClipTests.cpp (ViewportRenderer; shared with Renderer)",
+        "tests/OnlineMapTests.cpp (map tile service; shared with Network)",
+        "tests/CadBlockImportTests.cpp, tests/PointCloudExportTests.cpp (HeadlessFileDialogs seam)",
+        "tests/headless/HeadlessDriver.cpp and tests/headless/transcripts/ (182 files)",
+        "tests/FuzzHarnessTests.cpp (headless FuzzGenerator and Minimizer)",
+        "tests/ExtendedGeometryGateTests.cpp (references ViewportRenderer; shared with Renderer)"
+      ],
+      "testNotes": "Gaps: no test references StbImage, WinFileDialogs, MapTilePlatform, CrashReporterWireReason, HeadlessPdfAttach, QtViewCube or ProcessRun; FuzzMain.cpp mentions ProcessRun but does not test it. ViewportRenderer is covered only indirectly. QtEditorTests.cpp (17,518 lines) carries platform checks alongside GoSurveyEditor tests and is grandfathered in the file-size baseline. HeadlessDriver.cpp (3,235 lines) is also grandfathered. No test exercises a render device seam, because none exists yet.",
+      "homelessConcepts": [
+        "Render device interface and factory: none exists in source (ADR-0003). ViewportRenderer.cpp makes 659 lines with direct GL calls.",
+        "Headless null render device: none exists. HeadlessDriver is a transcript driver for the domain, not a recorder of draw calls.",
+        "Toolkit-neutral UI interfaces (ADR-0002): none exist. Browse*Utf8 are free functions, and the Headless seam is a link-time substitution.",
+        "Three GL initialisation paths: main.cpp sets the format, EditorViewport::initializeGL and ViewportRenderer::Init call glewInit, and the startup probe in FailureReport.cpp creates its own context.",
+        "Two failure-report UIs: the Qt dialog (src/qt/FailureReport.cpp) and the Win32 window (src/platform/FailureReportUi.cpp). The final map must choose one.",
+        "Single-instance and window handoff: a Windows mutex in main.cpp and WM_COPYDATA in EditorChrome.cpp's native event hook. A neutral IPC port is needed.",
+        "Shell thumbnails for PDF previews (IShellItemImageFactory in PdfAttach.cpp) and the ThumbnailCache header have no clear owner. Pdf, Windows and GoSurveyEditor each have a claim.",
+        "Frameless window: caption drag, WM_NCCALCSIZE and WM_NCHITTEST handling, and the style restore in EditorWindow.cpp. Window chrome has no abstract interface.",
+        "GPU preference policy: the registry read and write is Windows. No current caller requests a preference; the decision of whether to request high performance has no owner.",
+        "Image decode: stb_image in src/platform/StbImage.cpp has no owner; its users are IO (RasterImage.cpp, PlotStyleTable.cpp) and Network (MapTileService.cpp).",
+        "Map tile GL texture: the upload is in ViewportRenderer (OpenGL) but the tile source is Network. The final map must choose where the texture cache lives."
+      ],
+      "couplings": [
+        "src/render/ViewportRenderer.cpp (Renderer) includes GL/glew.h and calls GL directly, 659 lines with GL calls. This breaks the ADR-0003 device boundary; the Renderer row does not include OpenGL.",
+        "src/pdf/PdfAttach.cpp (Pdf) includes GL/glew.h, windows.h, ShlObj.h and wincodec.h, and uploads GL textures. Pdf's row does not include OpenGL or Windows. CMakeLists.txt names this file as the seam; HeadlessPdfAttach.cpp is the other side.",
+        "src/commands/CadBlocks.cpp, CadCommands.cpp, CadCommands_Alignment.cpp and CadCommands_DrawInquiry.cpp call the Browse*Utf8 Windows dialogs directly. Commands' row does not include Windows.",
+        "src/util/SaveTrace.cpp (Debug) calls GetTempPathW and OutputDebugStringA. Debug's only allowed dependency is Core.",
+        "src/update/UpdateService.cpp (Network) calls ShellExecuteExW and GetModuleFileNameW. Network's allowed dependencies are Core and Events.",
+        "src/io/Project.cpp (IO) calls CreateFileW and GetLastError. src/io/DwgIo.cpp and RecentDrawings.cpp include windows.h without a visible Win32 call; check whether the include is needed. IO's row does not include Windows.",
+        "src/qt/EditorViewport.cpp and FailureReport.cpp (Qt) use OpenGL. Qt's row does not include OpenGL; the viewport is composition code the final map should move to GoSurveyEditor or the OpenGL backend.",
+        "src/qt/EditorWindow.cpp, EditorChrome.cpp and main.cpp call Win32 directly for frameless style and native events. Qt's row does not include Windows.",
+        "src/platform/CrashReporter.cpp and StartupFailure.cpp (Windows) call the Network upload functions. Windows may depend on Network, so this edge is allowed; the upload should go through the Network interface.",
+        "src/platform/HeadlessFileDialogs.cpp (Headless) uses the same free-function names as WinFileDialogs.cpp. This is a link-time seam, not a dependency; it stays until the UI interface exists.",
+        "src/platform/StbImage.cpp is used by IO (RasterImage.cpp, PlotStyleTable.cpp) and Network (MapTileService.cpp), while the file sits in the platform folder. Mapped to IO; a misplaced-folder finding.",
+        "tests/TestSoundGuard.cpp intercepts PlaySoundW and MessageBeep in test processes. It is Headless infrastructure with a Windows dependency."
+      ],
+      "misMappedFolders": [
+        "src/platform/ is mapped wholesale to Windows, but it holds Headless backends, a Network interface and transport, IO image decoding, and GoSurveyEditor start-screen state.",
+        "src/qt/ is mapped wholesale to Qt, but most of it is GoSurveyEditor windows, dialogs, ribbon and panels (ADR-0002). Only the thin adapters listed in sections are Qt.",
+        "src/render/ViewportRenderer.cpp is mapped to Renderer, but 659 of its lines are OpenGL device calls that belong in the OpenGL backend.",
+        "tests/headless/ and tests/TestSoundGuard.* are not mapped; they are Headless test infrastructure."
+      ],
+      "structuredOwnership": [
+        {
+          "path": "tests/headless/transcripts/",
+          "system": "Headless",
+          "kind": "folder",
+          "note": "Transcript scripts consumed by HeadlessDriver.cpp. Each is a Headless test input."
+        },
+        {
+          "path": "tests/headless/",
+          "system": "Headless",
+          "kind": "folder",
+          "note": "Driver, fuzz and minimiser files. Individually listed in sections."
+        }
+      ]
     }
   },
   "auditFindings": {
@@ -12561,6 +15104,22 @@
       "Qt event delivery, cursor/menu presentation and timer scheduling remain Qt; viewport snap, pick, hover and grip decisions are Interaction.",
       "Alignment entity semantics remain Survey; AlignmentGrips.cpp transient hit/drag behavior belongs to Interaction.",
       "TransformPreview.cpp display-buffer layout helper AppendSolidEdge belongs to Renderer; selection and preview outline policy belongs to Interaction."
-    ]
+    ],
+    "platformBackends": {
+      "notes": [
+        "Advisory only. fileMappings, the table in system-map.md, and dependency-baseline.json are unchanged. No code moved."
+      ],
+      "gaps": [
+        "No render device interface, no Headless null device, and no toolkit-neutral UI interface exists in source. ADR-0002 and ADR-0003 are accepted; the audit records the implementations as missing.",
+        "Pdf, Renderer, Commands, Debug, IO, Network and Qt each include Win32 or GL headers, or call their APIs directly. Each is a forbidden edge in the current rows, and none is recorded in dependency-baseline.json."
+      ],
+      "decisionsForFinalMap": [
+        "Choose one failure-report UI: Qt (src/qt/FailureReport.cpp) or Win32 (src/platform/FailureReportUi.cpp).",
+        "Decide where the map-tile GL texture cache lives: the OpenGL device, or Network with a device handle.",
+        "Decide whether the GPU preference request is Windows or GoSurveyEditor policy.",
+        "Decide whether ThumbnailCache.hpp is start-screen state (GoSurveyEditor) or a reusable cache (Core).",
+        "Decide whether the HttpFetch interface moves to Network in full, or whether the WinHTTP implementation becomes a Network transport adapter."
+      ]
+    }
   }
 }
