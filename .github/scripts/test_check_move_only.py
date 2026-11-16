@@ -1,5 +1,6 @@
 """Fixture-tree tests for the move-only PR proof."""
 
+import json
 import subprocess
 import tempfile
 import unittest
@@ -78,6 +79,78 @@ class MoveOnlyFixtureTests(unittest.TestCase):
             "src/old/Widget.cpp -> src/new/Widget.cpp",
             "src/old/Widget.hpp -> src/new/Widget.hpp",
         ])
+
+    def test_unmoved_source_include_rewrite_to_public_moved_header_passes(self):
+        self.move("src/old/Widget.hpp", "src/new/include/GoSurvey/New/Widget.hpp")
+        self.write("src/old/Widget.cpp", (
+            '#include "../new/include/GoSurvey/New/Widget.hpp"\n'
+            "void Widget::reset() {}\n"
+            "void Widget::run() { --counter; }\n"
+        ))
+        self.commit("move widget header to public tree")
+        self.write("src/old/Widget.cpp", (
+            '#include <GoSurvey/New/Widget.hpp>\n'
+            "void Widget::reset() {}\n"
+            "void Widget::run() { --counter; }\n"
+        ))
+        self.commit("rewrite include of moved header to public path")
+
+        self.assertEqual(self.check(), [
+            "src/old/Widget.hpp -> src/new/include/GoSurvey/New/Widget.hpp",
+        ])
+
+    def test_unmoved_source_include_rewrite_to_unrelated_header_fails(self):
+        self.move("src/old/Widget.hpp", "src/new/Widget.hpp")
+        self.write("src/old/Widget.cpp", (
+            '#include "Other.hpp"\n'
+            "void Widget::reset() {}\n"
+            "void Widget::run() { --counter; }\n"
+        ))
+        self.commit("point include at an unrelated header")
+
+        with self.assertRaises(ValueError):
+            self.check()
+
+    def test_unmoved_source_non_include_edit_fails(self):
+        self.move("src/old/Widget.hpp", "src/new/Widget.hpp")
+        self.write("src/old/Other.hpp", "#pragma once\n// edited\n")
+        self.commit("edit unmoved source body")
+
+        with self.assertRaises(ValueError):
+            self.check()
+
+    def test_baseline_may_lose_entries_in_a_move_only_pr(self):
+        self.write("docs/architecture/dependency-baseline.json", json.dumps({"violations": [
+            {"file": "src/a.cpp", "rule": "forbidden dependency", "target": "Math"},
+            {"file": "src/b.cpp", "rule": "private-header include", "target": "Core"},
+        ]}))
+        self.commit("baseline before move")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True).strip()
+        self.move("src/old/Other.hpp", "src/new/Other.hpp")
+        self.write("docs/architecture/dependency-baseline.json", json.dumps({"violations": [
+            {"file": "src/a.cpp", "rule": "forbidden dependency", "target": "Math"},
+        ]}))
+        self.commit("move and shrink baseline")
+
+        self.assertEqual(self.check(), ["src/old/Other.hpp -> src/new/Other.hpp"])
+
+    def test_baseline_may_not_gain_entries_in_a_move_only_pr(self):
+        self.write("docs/architecture/dependency-baseline.json", json.dumps({"violations": [
+            {"file": "src/a.cpp", "rule": "forbidden dependency", "target": "Math"},
+        ]}))
+        self.commit("baseline before move")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True).strip()
+        self.move("src/old/Other.hpp", "src/new/Other.hpp")
+        self.write("docs/architecture/dependency-baseline.json", json.dumps({"violations": [
+            {"file": "src/a.cpp", "rule": "forbidden dependency", "target": "Math"},
+            {"file": "src/c.cpp", "rule": "forbidden dependency", "target": "Core"},
+        ]}))
+        self.commit("move and grow baseline")
+
+        with self.assertRaises(ValueError):
+            self.check()
 
     def test_real_source_edit_fails(self):
         self.move("src/old/Widget.cpp", "src/new/Widget.cpp")
