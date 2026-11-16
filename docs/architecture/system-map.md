@@ -1,6 +1,8 @@
 # GoSurvey system map
 
-Status: draft target architecture and file mapping. This is the architecture reference for agents and checks; the source tree has not yet been moved. Mapping ambiguity is recorded in `system-map.json` and must be resolved during the audit before enforcement.
+Status: proposal for owner approval. This is the target architecture reference for agents and checks; the source tree has not yet been moved. The per-system audits are recorded in `system-map.json`. Final ownership decisions and the dependency ratchet baseline remain provisional until the owner records approval on issue #1238.
+
+The starting source-tree metrics captured for the audit are in [audit-starting-inventory.md](audit-starting-inventory.md). Proposed owners for the 68 homeless-concept findings are listed in [system-map-owner-decisions.md](system-map-owner-decisions.md). The machine map still has 71 provisional file mappings, including 13 without an assigned system; see `fileMappings` in `system-map.json`. The owner must approve or revise the proposal before the map is treated as authoritative or carve-out code moves.
 
 ## Dependency rules
 
