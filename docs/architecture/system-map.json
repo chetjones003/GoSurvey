@@ -19,6 +19,10 @@
       "system": "Events"
     },
     {
+      "path": "src/ui/include/",
+      "system": "UI"
+    },
+    {
       "path": "src/alignment/",
       "system": "Survey"
     },
