@@ -1561,7 +1561,7 @@ if(GOSURVEY_BUILD_TESTS)
   catch_discover_tests(GoSurveyCoreTests PROPERTIES LABELS Core)
   gosurvey_target_warnings(GoSurveyCoreTests TEST)
 
-  # GoSurvey::Math tests (#1240). Pure and header-only: they link Math and Catch2 only, never Qt,
+  # GoSurvey::Math tests (#1240). Pure and header-only: they link Math (which links Core) and Catch2 only, never Qt,
   # OpenGL or gosurvey_domain, which is the Foundation independence check for this system.
   add_executable(GoSurveyMathTests
     tests/Math/Ray3dTests.cpp
