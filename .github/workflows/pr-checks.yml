@@ -73,7 +73,8 @@ jobs:
       - name: Check out PR changes
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          # Full history so the move-only proof can find the merge base with the PR base.
+          fetch-depth: 0
 
       - name: Check patch formatting and Python syntax
         env:
