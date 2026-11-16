@@ -59,7 +59,10 @@ def _resolve_include(root, source, include, mapping):
 
 
 def _identity(item):
-    return (item["file"], item["include"], item["rule"])
+    # Key by edge (file, rule, target system), not include text. A move that renames an include
+    # keeps the same forbidden edge, so it must not count as new violations. Each edge is still
+    # counted, so a new forbidden include from the same file grows the baseline.
+    return (item["file"], item["rule"], item["target"])
 
 
 def compare_baseline(current, baseline):
@@ -104,7 +107,8 @@ def check(root, mapping_root=None):
                 elif target_owner != owner and target_owner not in systems.get(owner, {}).get("dependencies", set()):
                     result.update(classification="violation", rule="forbidden dependency",
                                   message=f'{relative} includes "{include}": {owner} may not depend on {target_owner} (forbidden dependency)')
-                    violations.append({"file": relative, "include": include, "rule": result["rule"], "message": result["message"]})
+                    violations.append({"file": relative, "include": include, "target": target_owner,
+                                       "rule": result["rule"], "message": result["message"]})
                 includes.append(result)
                 continue
             target_path = _resolve_include(root, source, include, mapping)
@@ -143,7 +147,8 @@ def check(root, mapping_root=None):
                 result.update(classification="violation", rule="private-header include",
                               message=f'{relative} includes "{include}": cross-system include must use GoSurvey/{target_owner}/ public headers (private-header include)')
             if result["classification"] == "violation":
-                violations.append({"file": relative, "include": include, "rule": result["rule"], "message": result["message"]})
+                violations.append({"file": relative, "include": include, "target": target_owner,
+                                   "rule": result["rule"], "message": result["message"]})
             includes.append(result)
     return {"includes": includes, "violations": violations, "unmapped_files": unmapped}
 

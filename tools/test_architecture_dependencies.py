@@ -166,13 +166,22 @@ class ArchitectureDependencyTests(unittest.TestCase):
         self.assertFalse(checker.compare_baseline(baseline + baseline, baseline)["ok"])
 
     def test_candidate_cannot_add_a_violation_and_its_baseline_together(self):
-        reference = [{"file": "src/a/A.cpp", "include": "b/Private.hpp",
+        reference = [{"file": "src/a/A.cpp", "include": "b/Private.hpp", "target": "Core",
                       "rule": "forbidden dependency", "message": "fixture violation"}]
-        candidate_baseline = reference + [{"file": "src/a/A.cpp", "include": "b/Other.hpp",
+        candidate_baseline = reference + [{"file": "src/a/A.cpp", "include": "b/Other.hpp", "target": "Renderer",
                                           "rule": "forbidden dependency", "message": "new fixture violation"}]
         self.assertTrue(checker.compare_baseline(candidate_baseline, candidate_baseline)["ok"])
         growth = checker.compare_baseline(candidate_baseline, reference)
-        self.assertEqual(growth["new_violations"], [["src/a/A.cpp", "b/Other.hpp", "forbidden dependency"]])
+        self.assertEqual(growth["new_violations"], [["src/a/A.cpp", "forbidden dependency", "Renderer"]])
+
+    def test_renamed_include_for_the_same_edge_is_not_growth(self):
+        reference = [{"file": "src/a/A.cpp", "include": "util/ucs.hpp", "target": "Math",
+                      "rule": "forbidden dependency", "message": "old include text"}]
+        renamed = [{"file": "src/a/A.cpp", "include": "GoSurvey/Math/ucs.hpp", "target": "Math",
+                    "rule": "forbidden dependency", "message": "new include text"}]
+        self.assertTrue(checker.compare_baseline(renamed, reference)["ok"])
+        self.assertEqual(checker.compare_baseline(renamed + renamed, reference)["new_violations"],
+                         [["src/a/A.cpp", "forbidden dependency", "Math"]])
 
     def test_unmapped_source_files_are_reported(self):
         (self.root / "src/unknown").mkdir()

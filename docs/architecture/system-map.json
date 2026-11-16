@@ -11,6 +11,10 @@
       "system": "Core"
     },
     {
+      "path": "src/math/include/",
+      "system": "Math"
+    },
+    {
       "path": "src/alignment/",
       "system": "Survey"
     },
@@ -13366,7 +13370,7 @@
         "issue": 1221,
         "parent": 1207,
         "commit": "64f35eea",
-        "codeMoved": false
+        "codeMoved": true
       },
       "responsibility": "Provides vector, ray, plane and rotation primitives, and the User Coordinate System frame math built on them: transforms between WCS and UCS, frame construction from picks or normals, axis rotations, plane projection, and the pure angle quantising behind polar tracking.",
       "doesNotOwn": [
@@ -13382,18 +13386,16 @@
       ],
       "dependencyNote": "The map allows Core. No Math file includes anything beyond the standard library today, so the edge is unused. The final map may tighten this to none.",
       "currentFiles": [
-        "src/util/ray3d.hpp",
-        "src/util/ucs.hpp",
+        "src/math/include/GoSurvey/Math/ray3d.hpp",
+        "src/math/include/GoSurvey/Math/ucs.hpp",
         "src/commands/OrthoConstrain.hpp"
       ],
       "pendingAssignment": [
         {
           "files": [
-            "src/util/ray3d.hpp",
-            "src/util/ucs.hpp",
             "src/commands/OrthoConstrain.hpp"
           ],
-          "reason": "Assigned to Math by this audit (currentFiles). fileMappings still mark src/util files ambiguous, and OrthoConstrain.hpp sits in the Commands folder. Mapping them to Math now would add 6 Commands-to-Math violations (ucs.hpp 3, ray3d.hpp 2, OrthoConstrain.hpp 1; see auditFindings) and grow the ratchet baseline. The final-map ticket must first add Math to the allowed dependencies of Commands, or move those includes, and then update fileMappings."
+          "reason": "Assigned to Math by the approved map (#1238) and moved in #1240. OrthoConstrain.hpp sits in the Commands folder and stays there: mapping it to Math would add Commands-to-Math violations. Its final home needs a recorded decision."
         },
         {
           "files": [
