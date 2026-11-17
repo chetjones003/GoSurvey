@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "util/pointcloudcache.hpp"
+#include "GoSurvey/IO/PointCloudCacheImport.hpp"
 
 namespace {
 
@@ -95,7 +96,7 @@ TEST_CASE("BuildFromE57 + Open: round-trips point count, octree covers every poi
 
   std::vector<std::string> log;
   std::string err;
-  const bool built = pointcloudcache::BuildFromE57(srcPath.string(), cachePath.string(), log, &err);
+  const bool built = pointcloudcache_io::BuildFromE57(srcPath.string(), cachePath.string(), log, &err);
   REQUIRE(built);
   CHECK(err.empty());
 
@@ -162,7 +163,7 @@ TEST_CASE("BuildFromE57: a leaf-threshold-forcing point count actually splits in
 
   std::vector<std::string> log;
   std::string err;
-  REQUIRE(pointcloudcache::BuildFromE57(srcPath.string(), cachePath.string(), log, &err));
+  REQUIRE(pointcloudcache_io::BuildFromE57(srcPath.string(), cachePath.string(), log, &err));
 
   const pointcloudcache::OpenResult opened = pointcloudcache::Open(cachePath.string());
   REQUIRE(opened.ok);
@@ -208,7 +209,7 @@ TEST_CASE("BuildFromE57: an octant-0-empty split does not orphan points "
 
   std::vector<std::string> log;
   std::string err;
-  REQUIRE(pointcloudcache::BuildFromE57(srcPath.string(), cachePath.string(), log, &err));
+  REQUIRE(pointcloudcache_io::BuildFromE57(srcPath.string(), cachePath.string(), log, &err));
 
   const pointcloudcache::OpenResult opened = pointcloudcache::Open(cachePath.string());
   REQUIRE(opened.ok);
@@ -236,7 +237,7 @@ TEST_CASE("MatchesSource: true right after build, false once the source file cha
 
   std::vector<std::string> log;
   std::string err;
-  REQUIRE(pointcloudcache::BuildFromE57(srcPath.string(), cachePath.string(), log, &err));
+  REQUIRE(pointcloudcache_io::BuildFromE57(srcPath.string(), cachePath.string(), log, &err));
   CHECK(pointcloudcache::MatchesSource(cachePath.string(), srcPath.string()));
 
   // Rewrite the source with a different point count — same path, different size/mtime.
@@ -278,7 +279,7 @@ TEST_CASE("BuildFromE57: a malformed source produces no partial cache file", "[p
 
   std::vector<std::string> log;
   std::string err;
-  const bool built = pointcloudcache::BuildFromE57(srcPath.string(), cachePath.string(), log, &err);
+  const bool built = pointcloudcache_io::BuildFromE57(srcPath.string(), cachePath.string(), log, &err);
   CHECK_FALSE(built);
   CHECK_FALSE(err.empty());
   CHECK_FALSE(std::filesystem::exists(cachePath));
@@ -296,7 +297,7 @@ TEST_CASE("BuildFromPts + Open: round-trips point count, octree covers every poi
 
   std::vector<std::string> log;
   std::string err;
-  const bool built = pointcloudcache::BuildFromPts(srcPath.string(), cachePath.string(), log, &err);
+  const bool built = pointcloudcache_io::BuildFromPts(srcPath.string(), cachePath.string(), log, &err);
   REQUIRE(built);
   CHECK(err.empty());
 
@@ -332,7 +333,7 @@ TEST_CASE("BuildFromPts: a malformed source produces no partial cache file (REQ-
 
   std::vector<std::string> log;
   std::string err;
-  const bool built = pointcloudcache::BuildFromPts(srcPath.string(), cachePath.string(), log, &err);
+  const bool built = pointcloudcache_io::BuildFromPts(srcPath.string(), cachePath.string(), log, &err);
   CHECK_FALSE(built);
   CHECK_FALSE(err.empty());
   CHECK_FALSE(std::filesystem::exists(cachePath));

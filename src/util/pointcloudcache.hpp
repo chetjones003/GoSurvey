@@ -5,18 +5,29 @@
 #include <string>
 #include <vector>
 
-#include "util/pointcloudoctree.hpp"
+#include "GoSurvey/PointCloud/StreamedChunk.hpp"
+#include "GoSurvey/PointCloud/Octree.hpp"
 
 /// `.gscloud` out-of-core point-cloud cache (REQ-171/172, ADR-060).
 ///
 /// A sidecar file next to the source scan holding a pre-built octree (`pointcloud::Octree`) plus,
-/// per leaf, its point data on disk — built once from a source scan (E57 today) via a purely
+/// per leaf, its point data on disk — built once from a source scan via a purely
 /// **out-of-core** construction: the source is streamed once into a root temp file (bounded
-/// memory, `CadPointCloudE57.hpp`'s `StreamE57File`), then recursively bucket-split into child
+/// memory), then recursively bucket-split into child
 /// temp files entirely by local disk IO, never holding more than one chunk of points in memory at
 /// once. This is what makes importing a multi-GB scan not exhaust RAM (the bug ADR-060 exists to
 /// fix — see the point-cloud epic's TASK-270 log).
 namespace pointcloudcache {
+
+/// Format-neutral out-of-core cache construction. The reader streams bounded chunks synchronously;
+/// each view is valid only during its callback. The caller supplies the established no-points error.
+[[nodiscard]] bool BuildFromStreamedSource(
+    const std::string &sourcePath, const std::string &cachePath,
+    std::vector<std::string> &progressLog, std::string *errorMessage,
+    std::atomic<std::int64_t> *pointsStreamedOut,
+    std::atomic<std::int64_t> *pointsFinalizedOut,
+    const std::atomic<bool> *cancelRequested, const pointcloud::StreamedPointReader &reader,
+    const char *zeroPointsMessage);
 
 /// Header stamp (ADR-060 (b)): identifies the source file this cache was built from, so a stale or
 /// mismatched cache is detected and rebuilt rather than silently trusted.
@@ -46,67 +57,6 @@ struct OpenCache {
   std::int64_t totalPointCount = 0;
   SourceStamp stamp;
 };
-
-/// Builds a `.gscloud` cache at `cachePath` from the E57 at `sourcePath`, via `StreamE57File`
-/// (bounded-memory streaming) and on-disk recursive bucket splitting. `progressLog` receives
-/// human-readable progress lines (point/leaf counts); the caller decides whether to surface them.
-///
-/// Meant to be called from a background thread for anything but a small file — this is the
-/// long-running half of an import. Progress is reported through two counters the caller may poll
-/// from another thread at any time (both optional, default nullptr):
-///   - `*pointsStreamedOut` — points written to disk during the streaming pass (phase 1).
-///   - `*pointsFinalizedOut` — points that have landed in a completed LEAF during the recursive
-///     split (phase 2); reaches the source's total point count exactly when the build finishes.
-/// `cancelRequested`, if non-null and observed true, aborts the build at the next safe point —
-/// after the current bounded chunk/block, never mid-record — and is treated the same as any other
-/// failure: the partial cache and temp files are removed, `*errorMessage` names the cancellation.
-///
-/// Returns `false` with `*errorMessage` set on any failure (malformed source, disk write failure,
-/// zero points, cancellation) — a failed build **removes any partial `cachePath`/temp files it
-/// created**, never leaving a half-written cache a later open could mistake for a complete one
-/// (REQ-001).
-[[nodiscard]] bool BuildFromE57(const std::string &sourcePath, const std::string &cachePath,
-                                 std::vector<std::string> &progressLog, std::string *errorMessage,
-                                 std::atomic<std::int64_t> *pointsStreamedOut = nullptr,
-                                 std::atomic<std::int64_t> *pointsFinalizedOut = nullptr,
-                                 const std::atomic<bool> *cancelRequested = nullptr);
-
-/// Same contract as \ref BuildFromE57 above, sourcing from `pointcloud_pts::StreamPtsFile`
-/// (`CadPointCloudPts.hpp`) instead of the E57 reader — REQ-172's PTS increment (delivered after
-/// E57 per `spec/file-format-specs.md` §6).
-[[nodiscard]] bool BuildFromPts(const std::string &sourcePath, const std::string &cachePath,
-                                 std::vector<std::string> &progressLog, std::string *errorMessage,
-                                 std::atomic<std::int64_t> *pointsStreamedOut = nullptr,
-                                 std::atomic<std::int64_t> *pointsFinalizedOut = nullptr,
-                                 const std::atomic<bool> *cancelRequested = nullptr);
-
-/// Same contract as \ref BuildFromE57 above, sourcing from `pointcloud_ptx::StreamPtxFile`
-/// (`CadPointCloudPtx.hpp`) instead of the E57 reader — REQ-172's PTX increment (issue #825
-/// increment 2, delivered after PTS per `spec/file-format-specs.md` §6).
-[[nodiscard]] bool BuildFromPtx(const std::string &sourcePath, const std::string &cachePath,
-                                 std::vector<std::string> &progressLog, std::string *errorMessage,
-                                 std::atomic<std::int64_t> *pointsStreamedOut = nullptr,
-                                 std::atomic<std::int64_t> *pointsFinalizedOut = nullptr,
-                                 const std::atomic<bool> *cancelRequested = nullptr);
-
-/// Same contract as \ref BuildFromE57 above, sourcing from `pointcloud_las::StreamLasFile`
-/// (`CadPointCloudLas.hpp`) instead of the E57 reader — REQ-172's LAS increment (issue #825
-/// increment 3, delivered after PTX per `spec/file-format-specs.md` §6).
-[[nodiscard]] bool BuildFromLas(const std::string &sourcePath, const std::string &cachePath,
-                                 std::vector<std::string> &progressLog, std::string *errorMessage,
-                                 std::atomic<std::int64_t> *pointsStreamedOut = nullptr,
-                                 std::atomic<std::int64_t> *pointsFinalizedOut = nullptr,
-                                 const std::atomic<bool> *cancelRequested = nullptr);
-
-/// Builds a `.gscloud` cache at `cachePath` from the LAZ at `sourcePath` (REQ-172 LAZ increment,
-/// issue #825 increment 4) — same contract as \ref BuildFromE57, via
-/// `CadPointCloudLaz.hpp`'s `StreamLazFile` (bounded-memory streaming, decoding through vendored
-/// LASzip) instead of `StreamE57File`.
-[[nodiscard]] bool BuildFromLaz(const std::string &sourcePath, const std::string &cachePath,
-                                 std::vector<std::string> &progressLog, std::string *errorMessage,
-                                 std::atomic<std::int64_t> *pointsStreamedOut = nullptr,
-                                 std::atomic<std::int64_t> *pointsFinalizedOut = nullptr,
-                                 const std::atomic<bool> *cancelRequested = nullptr);
 
 /// Reads a cache's header + octree structure (not point data) from `cachePath`. `ok` is false and
 /// `errorMessage` is set if the file is missing, truncated, or its magic/version does not match —
