@@ -17,7 +17,7 @@
 #include <thread>
 #include <vector>
 
-#include "util/pointcloudcache.hpp"
+#include "GoSurvey/PointCloud/CacheStorage.hpp"
 #include "GoSurvey/IO/PointCloudCacheImport.hpp"
 
 namespace {

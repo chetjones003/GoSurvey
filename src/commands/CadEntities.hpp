@@ -13,7 +13,7 @@
 #include <type_traits>
 #include <vector>
 
-#include "util/pointcloudoctree.hpp"
+#include "GoSurvey/PointCloud/OctreeIndex.hpp"
 #include <GoSurvey/Geometry/spline.hpp>
 #include <GoSurvey/Math/ucs.hpp>
 

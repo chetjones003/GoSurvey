@@ -164,13 +164,6 @@
     },
     {
       "file": "src/commands/CadCommands.cpp",
-      "include": "util/cylinderfit.hpp",
-      "target": "PointCloud",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"util/cylinderfit.hpp\": cross-system include must use GoSurvey/PointCloud/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
       "include": "io/CadPointCloudE57.hpp",
       "target": "IO",
       "rule": "private-header include",
@@ -357,13 +350,6 @@
       "target": "Renderer",
       "rule": "private-header include",
       "message": "src/commands/CadCommands.hpp includes \"render/SectionClip.hpp\": cross-system include must use GoSurvey/Renderer/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "util/pointcloudcache.hpp",
-      "target": "PointCloud",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"util/pointcloudcache.hpp\": cross-system include must use GoSurvey/PointCloud/ public headers (private-header include)"
     },
     {
       "file": "src/commands/CadCommands.hpp",
@@ -639,13 +625,6 @@
       "message": "src/commands/CadCoordinateFrame.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
     },
     {
-      "file": "src/commands/CadEntities.hpp",
-      "include": "util/pointcloudoctree.hpp",
-      "target": "PointCloud",
-      "rule": "private-header include",
-      "message": "src/commands/CadEntities.hpp includes \"util/pointcloudoctree.hpp\": cross-system include must use GoSurvey/PointCloud/ public headers (private-header include)"
-    },
-    {
       "file": "src/commands/CadOnlineMap.hpp",
       "include": "MapTileService.hpp",
       "target": "Windows",
@@ -721,13 +700,6 @@
       "target": "Pdf",
       "rule": "private-header include",
       "message": "src/commands/ProjectFiles.cpp includes \"pdf/PdfAttach.hpp\": cross-system include must use GoSurvey/Pdf/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/ProjectFiles.cpp",
-      "include": "util/pointcloudcache.hpp",
-      "target": "PointCloud",
-      "rule": "private-header include",
-      "message": "src/commands/ProjectFiles.cpp includes \"util/pointcloudcache.hpp\": cross-system include must use GoSurvey/PointCloud/ public headers (private-header include)"
     },
     {
       "file": "src/commands/ProjectFiles.cpp",
@@ -924,13 +896,6 @@
       "target": "Survey",
       "rule": "private-header include",
       "message": "src/io/GsIo.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/GsIo.cpp",
-      "include": "util/pointcloudcache.hpp",
-      "target": "PointCloud",
-      "rule": "private-header include",
-      "message": "src/io/GsIo.cpp includes \"util/pointcloudcache.hpp\": cross-system include must use GoSurvey/PointCloud/ public headers (private-header include)"
     },
     {
       "file": "src/io/LandXmlIo.cpp",
@@ -3111,13 +3076,6 @@
     },
     {
       "file": "src/render/ViewportRenderer.hpp",
-      "include": "util/pointcloudcache.hpp",
-      "target": "PointCloud",
-      "rule": "private-header include",
-      "message": "src/render/ViewportRenderer.hpp includes \"util/pointcloudcache.hpp\": cross-system include must use GoSurvey/PointCloud/ public headers (private-header include)"
-    },
-    {
-      "file": "src/render/ViewportRenderer.hpp",
       "include": "alignment/AlignmentDisplayCache.hpp",
       "target": "Survey",
       "rule": "private-header include",
@@ -3262,20 +3220,6 @@
       "target": "Document",
       "rule": "private-header include",
       "message": "src/viewport/CadSnap.cpp includes \"util/cadpiperun.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/viewport/CadSnap.cpp",
-      "include": "util/pointcloudcache.hpp",
-      "target": "PointCloud",
-      "rule": "private-header include",
-      "message": "src/viewport/CadSnap.cpp includes \"util/pointcloudcache.hpp\": cross-system include must use GoSurvey/PointCloud/ public headers (private-header include)"
-    },
-    {
-      "file": "src/viewport/CadSnap.cpp",
-      "include": "util/pointcloudoctree.hpp",
-      "target": "PointCloud",
-      "rule": "private-header include",
-      "message": "src/viewport/CadSnap.cpp includes \"util/pointcloudoctree.hpp\": cross-system include must use GoSurvey/PointCloud/ public headers (private-header include)"
     },
     {
       "file": "src/viewport/CadSnap.hpp",

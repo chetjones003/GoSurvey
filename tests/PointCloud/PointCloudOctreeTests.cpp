@@ -13,7 +13,7 @@
 #include <algorithm>
 #include <vector>
 
-#include "util/pointcloudoctree.hpp"
+#include "GoSurvey/PointCloud/OctreeIndex.hpp"
 
 using Catch::Approx;
 using pointcloud::BuildOctree;

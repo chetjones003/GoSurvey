@@ -6,8 +6,8 @@
 #include "util/cadblock.hpp"
 #include "util/cadpiperun.hpp"
 #include <GoSurvey/Geometry/curveintersect.hpp>
-#include "util/pointcloudcache.hpp"
-#include "util/pointcloudoctree.hpp"
+#include "GoSurvey/PointCloud/CacheStorage.hpp"
+#include "GoSurvey/PointCloud/OctreeIndex.hpp"
 #include "util/solidpick.hpp"
 
 #include <algorithm>

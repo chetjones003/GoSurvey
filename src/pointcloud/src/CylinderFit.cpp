@@ -1,4 +1,4 @@
-#include "util/cylinderfit.hpp"
+#include "GoSurvey/PointCloud/CylinderFit.hpp"
 
 #include <array>
 #include <cmath>

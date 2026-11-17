@@ -800,9 +800,9 @@ set(GOSURVEY_DOMAIN_SOURCES
 
 # PointCloud storage and IO format orchestration are separate libraries.
 add_library(gosurvey_pointcloud STATIC
-  src/util/pointcloudoctree.cpp
-  src/util/pointcloudcache.cpp
-  src/util/cylinderfit.cpp)
+  src/pointcloud/src/Octree.cpp
+  src/pointcloud/src/Cache.cpp
+  src/pointcloud/src/CylinderFit.cpp)
 add_library(GoSurvey::PointCloud ALIAS gosurvey_pointcloud)
 target_include_directories(gosurvey_pointcloud
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/pointcloud/include>"
@@ -1766,9 +1766,9 @@ if(GOSURVEY_BUILD_TESTS)
   )
   target_link_libraries(GoSurveyTests PRIVATE gosurvey_domain Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format GoSurvey::IOPointCloud)
   add_executable(GoSurveyPointCloudTests
-    tests/PointCloudOctreeTests.cpp
-    tests/PointCloudCacheTests.cpp
-    tests/CylinderFitTests.cpp)
+    tests/PointCloud/PointCloudOctreeTests.cpp
+    tests/PointCloud/PointCloudCacheTests.cpp
+    tests/PointCloud/CylinderFitTests.cpp)
   set_target_properties(GoSurveyPointCloudTests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
   target_include_directories(GoSurveyPointCloudTests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"

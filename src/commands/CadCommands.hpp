@@ -32,7 +32,7 @@
 #include <GoSurvey/Survey/LocalGridTransform.hpp>
 // ADR-060 .gscloud out-of-core cache: EXTRACTCENTERLINE (REQ-347) keeps one open cache handle
 // across hover frames rather than re-opening it every frame.
-#include "util/pointcloudcache.hpp"
+#include "GoSurvey/PointCloud/CacheStorage.hpp"
 #include "DwgIo.hpp"
 #include "PdfAttach.hpp"
 #include "ProjectPointRules.hpp"  // projpts::Db + projpts::Rules (REQ-376, REQ-377)
