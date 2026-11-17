@@ -18,8 +18,8 @@
 // SurfaceStyles::DefaultSurfaceStyles, for the surfaceStyles member's initializer — same reason,
 // same shape, and pure for the same reason (REQ-070 / ADR-036 (d)).
 #include "SurfaceStyle.hpp"
-#include "AlignmentStyle.hpp"
-#include "AlignmentLabelSet.hpp"
+#include <GoSurvey/Survey/AlignmentStylePublic.hpp>
+#include <GoSurvey/Survey/AlignmentLabelSetPublic.hpp>
 #include "DimensionStyle.hpp"
 #include "MultileaderStyle.hpp"
 #include "util/cadtablestyle.hpp"

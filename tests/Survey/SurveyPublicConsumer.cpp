@@ -3,6 +3,7 @@
 #include <GoSurvey/Survey/AlignmentReport.hpp>
 #include <GoSurvey/Survey/TraverseReportPublic.hpp>
 #include <GoSurvey/Survey/TraverseCalcPublic.hpp>
+#include <GoSurvey/Survey/AlignmentLabelSetPublic.hpp>
 
 #include <cmath>
 #include <iostream>
@@ -38,5 +39,12 @@ int main() {
   LsaResult result;
   const auto adjustment = traverserpt::BuildReportText(traverse, weights, result, "Consumer", "ft");
   if (adjustment.find("Summary of Files Used") == std::string::npos) return 8;
+  const auto standardStyle = AlignmentStyles::StandardAlignmentStyle();
+  if (standardStyle.name != "Standard" || standardStyle.arrows.visible) return 9;
+  AlignmentLabelSet labels;
+  if (!labels.geometryPointsOn) return 10;
+  alignment::Alignment spiral;
+  if (!spiral.AppendTangent({0.0, 0.0}, 0.0, 1.0)) return 11;
+  if (!spiral.AppendSpiral(10.0, 0.0, 100.0, true)) return 12;
   return 0;
 }

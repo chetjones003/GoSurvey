@@ -1,4 +1,4 @@
-#include "AlignmentLabelSet.hpp"
+#include <GoSurvey/Survey/AlignmentLabelSetPublic.hpp>
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
 #include "alignment/Alignment.hpp"

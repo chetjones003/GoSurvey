@@ -6,8 +6,6 @@
 #include "CadDimStroke.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "TextStyle.hpp"
-#include "AlignmentLabelSet.hpp"
-#include "AlignmentStyle.hpp"
 #include "alignment/AlignmentLabels.hpp"
 #include "alignment/AlignmentDesign.hpp"
 #include "alignment/AlignmentTables.hpp"

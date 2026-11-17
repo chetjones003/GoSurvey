@@ -514,6 +514,7 @@ add_library(gosurvey_geometry STATIC
   src/geometry/src/TriangleGridIndex.cpp
   # REQ-443 SPLINE mathematics (NURBS curve: fit / control-vertex construction, evaluation, tessellation).
   src/geometry/src/spline.cpp
+  src/geometry/src/ClothoidIntegration.cpp
   # Intersection math behind the INT/APPINT snaps (REQ-062). Pure and dependency-free on purpose.
   src/geometry/src/curveintersect.cpp
   # REQ-063 mesh validation + bounds + normals.
@@ -533,6 +534,13 @@ gosurvey_target_warnings(gosurvey_geometry)
 
 # GoSurvey::Survey — T2 domain library. Alignment is a public Survey model used by Terrain;
 # its legacy declarations stay at their existing paths until the move-only follow-up.
+# Shared persisted appearance values, used by Surface and Survey style records.
+add_library(gosurvey_document_appearance INTERFACE)
+add_library(GoSurvey::DocumentAppearance ALIAS gosurvey_document_appearance)
+target_include_directories(gosurvey_document_appearance INTERFACE
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/document/include>")
+target_compile_features(gosurvey_document_appearance INTERFACE cxx_std_17)
+
 set(GOSURVEY_COORDINATE_SOURCES
   src/geo/CoordinateSystems.cpp)
 add_library(gosurvey_survey STATIC
@@ -563,7 +571,7 @@ target_include_directories(gosurvey_survey
           "${CMAKE_CURRENT_SOURCE_DIR}/src/traverse"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/util")
 target_compile_features(gosurvey_survey PUBLIC cxx_std_17)
-target_link_libraries(gosurvey_survey PUBLIC GoSurvey::Geometry GoSurvey::Math GoSurvey::Core CsMap::csmap)
+target_link_libraries(gosurvey_survey PUBLIC GoSurvey::DocumentAppearance GoSurvey::Geometry GoSurvey::Math GoSurvey::Core CsMap::csmap)
 gosurvey_target_warnings(gosurvey_survey)
 
 # GoSurvey::Terrain — T2 Domain library (issue #1245). The pure surface/TIN and grading
@@ -1659,7 +1667,7 @@ if(GOSURVEY_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/terrain/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests"
     ${NLOHMANN_JSON_INCLUDE})
-  target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug GoSurvey::Geometry GoSurvey::PointCloud GoSurvey::Pdf Catch2::Catch2WithMain)
+  target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug GoSurvey::Geometry GoSurvey::PointCloud GoSurvey::Pdf GoSurvey::Survey Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyDebugTests PROPERTIES LABELS Debug)
   gosurvey_target_warnings(GoSurveyDebugTests TEST)
 
