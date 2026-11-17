@@ -510,6 +510,8 @@ target_link_libraries(gosurvey_math INTERFACE GoSurvey::Core)
 add_library(gosurvey_geometry STATIC
   # Planar geometry math: bulge arcs, extents, revision clouds.
   src/geometry/src/geom2d.cpp
+  # Uniform-grid broad phase shared by Geometry, Survey and Terrain.
+  src/geometry/src/TriangleGridIndex.cpp
   # REQ-443 SPLINE mathematics (NURBS curve: fit / control-vertex construction, evaluation, tessellation).
   src/geometry/src/spline.cpp
   src/geometry/src/ClothoidIntegration.cpp
@@ -549,6 +551,7 @@ add_library(gosurvey_survey STATIC
   src/alignment/AlignmentEdit.cpp
   src/alignment/AlignmentLayout.cpp
   src/alignment/AlignmentGround.cpp
+  src/alignment/AlignmentSampleLines.cpp
   src/alignment/AlignmentViewFrames.cpp
   src/alignment/AlignmentProfile.cpp
   src/alignment/AlignmentDesign.cpp
@@ -844,9 +847,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Update check (REQ-077/078, ADR-029) — UpdatePrefs is reachable from AppCommandState
   src/update/UpdateCheck.cpp
 
-  # Civil alignments (REQ-480..484, ADR-075, issue #121): exact tangent/curve geometry, stationing, queries
+  # Application alignment grip operations; model and display-cache implementations have their own providers.
   src/alignment/AlignmentGrips.cpp
-  src/alignment/AlignmentSampleLines.cpp
   src/util/gltfimport.cpp
   src/util/stlimport.cpp
   # BENCH scene/statistics implementation is compiled by GoSurvey::Debug.

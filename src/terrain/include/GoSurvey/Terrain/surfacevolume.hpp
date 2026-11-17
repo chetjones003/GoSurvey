@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <GoSurvey/Geometry/TriangleGridIndex.hpp>
 #include <utility>
 #include <vector>
 
@@ -23,16 +24,7 @@
 /// so a point query tests only the triangles whose box could plausibly contain it. Built fresh for
 /// one volume computation — unlike the display-geometry cache, it is not kept across frames, because
 /// it exists only for the lifetime of one (usually off-UI-thread) recompute.
-struct TinSpatialIndex {
-  double minX = 0.0, minY = 0.0;
-  double cellSize = 1.0;
-  int cols = 0, rows = 0;
-  /// One bucket per cell (`cells[row * cols + col]`), holding TRIANGLE ORDINALS — `indices[ord*3]` is
-  /// that triangle's first corner — not raw vertex indices, so a bucket entry names one triangle.
-  std::vector<std::vector<std::uint32_t>> cells;
-
-  [[nodiscard]] bool empty() const { return cols == 0 || rows == 0; }
-};
+using TinSpatialIndex = geometry::TriangleGridIndex;
 
 /// Builds a spatial index over \p vertsXyz / \p indices, cell-sized so each cell holds a handful of
 /// triangles on average (a fixed triangles-per-cell target, not a fixed cell count — the index scales
