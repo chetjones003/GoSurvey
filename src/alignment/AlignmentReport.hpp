@@ -1,8 +1,8 @@
 #pragma once
 
-#include "alignment/Alignment.hpp"  // StationFormat
+#include "Alignment.hpp"  // StationFormat
 #include <GoSurvey/Core/AngleFormat.hpp>
-#include "util/SheetGrid.hpp"
+#include <GoSurvey/Core/SheetGrid.hpp>
 
 #include <string>
 #include <vector>

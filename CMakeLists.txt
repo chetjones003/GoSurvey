@@ -529,17 +529,29 @@ target_compile_features(gosurvey_geometry PUBLIC cxx_std_17)
 target_link_libraries(gosurvey_geometry PUBLIC GoSurvey::Math GoSurvey::Core)
 gosurvey_target_warnings(gosurvey_geometry)
 
-# The existing Survey alignment model is the concrete provider for Terrain's public sampling
-# API. Keep this small provider independently linkable until Survey's full carve-out is complete.
-add_library(gosurvey_survey_alignment_model STATIC
+# GoSurvey::Survey — T2 domain library. Alignment is a public Survey model used by Terrain;
+# its legacy declarations stay at their existing paths until the move-only follow-up.
+add_library(gosurvey_survey STATIC
   src/alignment/Alignment.cpp
-  src/alignment/Clothoid.cpp)
-add_library(GoSurvey::SurveyAlignmentModel ALIAS gosurvey_survey_alignment_model)
-target_include_directories(gosurvey_survey_alignment_model
+  src/alignment/Clothoid.cpp
+  src/alignment/AlignmentLabels.cpp
+  src/alignment/AlignmentReport.cpp
+  src/alignment/AlignmentEdit.cpp
+  src/alignment/AlignmentLayout.cpp
+  src/alignment/AlignmentGround.cpp
+  src/alignment/AlignmentViewFrames.cpp
+  src/alignment/AlignmentProfile.cpp
+  src/alignment/AlignmentDesign.cpp
+  src/alignment/AlignmentTables.cpp)
+add_library(GoSurvey::Survey ALIAS gosurvey_survey)
+target_include_directories(gosurvey_survey
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include>"
-  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_compile_features(gosurvey_survey_alignment_model PUBLIC cxx_std_17)
-gosurvey_target_warnings(gosurvey_survey_alignment_model)
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/alignment"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/util")
+target_compile_features(gosurvey_survey PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_survey PUBLIC GoSurvey::Geometry GoSurvey::Math GoSurvey::Core)
+gosurvey_target_warnings(gosurvey_survey)
 
 # GoSurvey::Terrain — T2 Domain library (issue #1245). The pure surface/TIN and grading
 # algorithms compile independently of the application layer. Physical relocation is isolated
@@ -560,7 +572,7 @@ add_library(GoSurvey::Terrain ALIAS gosurvey_terrain)
 target_include_directories(gosurvey_terrain
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/terrain/include>")
 target_compile_features(gosurvey_terrain PUBLIC cxx_std_17)
-target_link_libraries(gosurvey_terrain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::SurveyAlignmentModel)
+target_link_libraries(gosurvey_terrain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey)
 gosurvey_target_warnings(gosurvey_terrain)
 
 # GoSurvey::Events — toolkit-neutral Foundation library (boundary seal #1287). The public
@@ -804,17 +816,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/update/UpdateCheck.cpp
 
   # Civil alignments (REQ-480..484, ADR-075, issue #121): exact tangent/curve geometry, stationing, queries
-  src/alignment/AlignmentLabels.cpp
-  src/alignment/AlignmentReport.cpp
-  src/alignment/AlignmentEdit.cpp
-  src/alignment/AlignmentLayout.cpp
   src/alignment/AlignmentGrips.cpp
-  src/alignment/AlignmentGround.cpp
-  src/alignment/AlignmentViewFrames.cpp
   src/alignment/AlignmentSampleLines.cpp
-  src/alignment/AlignmentProfile.cpp  # REQ-521 (issue #1163)
-  src/alignment/AlignmentDesign.cpp
-  src/alignment/AlignmentTables.cpp
   src/alignment/AlignmentDisplayCache.cpp
   src/util/gltfimport.cpp
   src/util/stlimport.cpp
@@ -892,7 +895,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
-target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf)
+target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
@@ -904,7 +907,7 @@ gosurvey_enable_pch(gosurvey_domain)
 # Stable umbrella for application consumers; individual systems remain linkable in isolation.
 add_library(gosurvey_engine INTERFACE)
 add_library(GoSurvey::Engine ALIAS gosurvey_engine)
-target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Events GoSurvey::UI GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf)
+target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey GoSurvey::Events GoSurvey::UI GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
@@ -1831,6 +1834,15 @@ if(GOSURVEY_BUILD_TESTS)
   gosurvey_target_warnings(GoSurveyPointCloudPublicConsumer TEST)
   add_test(NAME PointCloud.public-consumer COMMAND GoSurveyPointCloudPublicConsumer)
   set_tests_properties(PointCloud.public-consumer PROPERTIES LABELS PointCloud)
+
+  # Verify Survey's real public header and transitive provider closure without application-private roots.
+  add_executable(GoSurveySurveyPublicConsumer tests/Survey/SurveyPublicConsumer.cpp)
+  set_target_properties(GoSurveySurveyPublicConsumer PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveySurveyPublicConsumer PRIVATE GoSurvey::Survey)
+  gosurvey_target_warnings(GoSurveySurveyPublicConsumer TEST)
+  add_test(NAME Survey.public-consumer COMMAND GoSurveySurveyPublicConsumer)
+  set_tests_properties(Survey.public-consumer PROPERTIES LABELS Survey)
 
   target_compile_definitions(GoSurveyTests PRIVATE
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"

@@ -2,20 +2,6 @@
   "generatedFrom": "beta",
   "violations": [
     {
-      "file": "src/alignment/AlignmentGround.cpp",
-      "include": "util/surfacequery.hpp",
-      "target": "Terrain",
-      "rule": "forbidden dependency",
-      "message": "src/alignment/AlignmentGround.cpp includes \"util/surfacequery.hpp\": Survey may not depend on Terrain (forbidden dependency)"
-    },
-    {
-      "file": "src/alignment/AlignmentReport.hpp",
-      "include": "util/SheetGrid.hpp",
-      "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/alignment/AlignmentReport.hpp includes \"util/SheetGrid.hpp\": Survey may not depend on IO (forbidden dependency)"
-    },
-    {
       "file": "src/alignment/AlignmentSampleLines.cpp",
       "include": "util/surfacequery.hpp",
       "target": "Terrain",

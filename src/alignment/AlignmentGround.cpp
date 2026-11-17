@@ -1,7 +1,5 @@
 #include "alignment/AlignmentGround.hpp"
 
-#include <GoSurvey/Terrain/surfacequery.hpp>
-
 #include <algorithm>
 #include <cmath>
 
@@ -27,7 +25,7 @@ constexpr double kSameStation = 1e-9;
 
 }  // namespace
 
-GroundPoint GroundAt(const Alignment& a, const ISurfaceQuery& surface, double internalStation, double offset) {
+GroundPoint GroundAt(const Alignment& a, const survey::ElevationSampler& sampleElevation, double internalStation, double offset) {
   GroundPoint g;
   g.internalStation = internalStation;
   g.offset = offset;
@@ -36,14 +34,14 @@ GroundPoint GroundAt(const Alignment& a, const ISurfaceQuery& surface, double in
   if (internalStation < a.StartStation() - kSameStation || internalStation > a.EndStation() + kSameStation) return g;
   g.point = a.GetPointFromStationOffset(internalStation, offset);
   double z = 0.0;
-  if (surface.elevationAt(g.point.x, g.point.y, &z)) {
+  if (sampleElevation && sampleElevation(g.point.x, g.point.y, &z)) {
     g.hasGround = true;
     g.ground = z;
   }
   return g;
 }
 
-bool SampleGround(const Alignment& a, const ISurfaceQuery& surface, double interval, int maxSamples,
+bool SampleGround(const Alignment& a, const survey::ElevationSampler& sampleElevation, double interval, int maxSamples,
                   std::vector<GroundPoint>* out, std::string* err) {
   if (out == nullptr) return false;
   out->clear();
@@ -79,7 +77,7 @@ bool SampleGround(const Alignment& a, const ISurfaceQuery& surface, double inter
     return false;
   }
   out->reserve(stations.size());
-  for (const double s : stations) out->push_back(GroundAt(a, surface, a.StartStation() + s, 0.0));
+  for (const double s : stations) out->push_back(GroundAt(a, sampleElevation, a.StartStation() + s, 0.0));
   return true;
 }
 
