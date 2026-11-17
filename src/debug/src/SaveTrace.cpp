@@ -1,4 +1,4 @@
-#include "SaveTrace.hpp"
+#include <GoSurvey/Debug/SaveTrace.hpp>
 
 #include <cstdio>
 #include <string>

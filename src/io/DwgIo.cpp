@@ -3,7 +3,7 @@
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
 #include "LibreDwgCad.hpp"
-#include "util/SaveTrace.hpp"
+#include <GoSurvey/Debug/SaveTrace.hpp>
 
 #include <chrono>
 #include <cstdint>

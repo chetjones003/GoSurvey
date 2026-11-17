@@ -14,7 +14,7 @@
 #include <GoSurvey/Geometry/HatchBoundary.hpp>
 #include <GoSurvey/Geometry/FilletChamfer.hpp>
 #include <GoSurvey/Geometry/geom2d.hpp>
-#include "util/benchscene.hpp"
+#include <GoSurvey/Debug/BenchScene.hpp>
 #include "util/cadpiperun.hpp"  // CadPipeRun solid generation (issue #486 increment B1 / REQ-345)
 #include <GoSurvey/Geometry/meshgeom.hpp>
 #include "util/pointcloudoctree.hpp"  // REQ-171/172 out-of-core octree (ADR-060)

@@ -1,4 +1,4 @@
-#include "docinvariants.hpp"
+#include <GoSurvey/Debug/DocumentInvariants.hpp>
 
 #include <cmath>
 #include <cstdio>
