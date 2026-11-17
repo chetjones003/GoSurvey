@@ -533,15 +533,14 @@ target_compile_features(gosurvey_geometry PUBLIC cxx_std_17)
 target_link_libraries(gosurvey_geometry PUBLIC GoSurvey::Math GoSurvey::Core)
 gosurvey_target_warnings(gosurvey_geometry)
 
-# GoSurvey::Events — header-only Foundation library (carve-out ticket #1241). Its public include
-# root is src/events/include/. The approved map assigns Events no whole files yet (its items are
-# sections inside Qt files), so it is an INTERFACE target. It links its allowed
-# dependencies, Core and Math, and is part of the GoSurvey::Engine umbrella.
-add_library(gosurvey_events INTERFACE)
+# GoSurvey::Events — toolkit-neutral Foundation library (boundary seal #1287). The public
+# interface lives under src/events/include/ and the dispatcher implementation stays private.
+add_library(gosurvey_events STATIC src/events/src/Events.cpp)
 add_library(GoSurvey::Events ALIAS gosurvey_events)
-target_include_directories(gosurvey_events INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/events/include>")
-target_compile_features(gosurvey_events INTERFACE cxx_std_17)
-target_link_libraries(gosurvey_events INTERFACE GoSurvey::Core GoSurvey::Math)
+target_include_directories(gosurvey_events PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/events/include>")
+target_compile_features(gosurvey_events PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_events PUBLIC GoSurvey::Core GoSurvey::Math)
+gosurvey_target_warnings(gosurvey_events)
 
 # GoSurvey::UI — header-only Foundation library (carve-out ticket #1242). Its public include root
 # is src/ui/include/, consumed as <GoSurvey/UI/...>. The approved map assigns UI whole files
@@ -1572,6 +1571,14 @@ if(GOSURVEY_BUILD_TESTS)
   target_link_libraries(GoSurveyCoreTests PRIVATE GoSurvey::Core Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyCoreTests PROPERTIES LABELS Core)
   gosurvey_target_warnings(GoSurveyCoreTests TEST)
+
+# GoSurvey::Events tests stay toolkit-neutral: link only Events and Catch2.
+  add_executable(GoSurveyEventsTests tests/Events/EventBusTests.cpp)
+  set_target_properties(GoSurveyEventsTests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyEventsTests PRIVATE GoSurvey::Events Catch2::Catch2WithMain)
+  catch_discover_tests(GoSurveyEventsTests PROPERTIES LABELS Events)
+  gosurvey_target_warnings(GoSurveyEventsTests TEST)
 
   # GoSurvey::Math tests (#1240). Pure and header-only: they link Math (which links Core) and Catch2 only, never Qt,
   # OpenGL or gosurvey_domain, which is the Foundation independence check for this system.
