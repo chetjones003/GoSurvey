@@ -11,7 +11,7 @@
 #include "GsIo.hpp"
 #include "alignment/Alignment.hpp"
 #include "alignment/AlignmentLabels.hpp"
-#include "AlignmentLabelSet.hpp"
+#include <GoSurvey/Survey/AlignmentLabelSetPublic.hpp>
 
 using alignment::Alignment;
 using alignment::StationOffsetLabel;

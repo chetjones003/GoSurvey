@@ -1,6 +1,5 @@
 #include "EditorAlignmentStyle.hpp"
 
-#include "AlignmentStyle.hpp"
 #include "alignment/AlignmentDesign.hpp"
 #include "CadCommands.hpp"
 

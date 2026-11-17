@@ -126,7 +126,6 @@
       "path": "tests/PointCloud/",
       "system": "PointCloud"
     },
-
     {
       "path": "src/terrain/include/",
       "system": "Terrain"
@@ -134,6 +133,10 @@
     {
       "path": "src/terrain/src/",
       "system": "Terrain"
+    },
+    {
+      "path": "src/document/include/",
+      "system": "Document"
     }
   ],
   "fileMappings": [
@@ -605,6 +608,16 @@
     {
       "path": "src/alignment/AlignmentFeatureLine.cpp",
       "system": "Terrain",
+      "status": "audited"
+    },
+    {
+      "path": "src/commands/AlignmentStyle.hpp",
+      "system": "Survey",
+      "status": "audited"
+    },
+    {
+      "path": "src/commands/AlignmentLabelSet.hpp",
+      "system": "Survey",
       "status": "audited"
     }
   ],

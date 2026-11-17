@@ -3,8 +3,8 @@
 #include <string>
 #include <vector>
 
-#include "CadEntities.hpp"
-#include "alignment/Alignment.hpp"
+#include <GoSurvey/Survey/AlignmentStyleData.hpp>
+#include <GoSurvey/Survey/Alignment.hpp>
 
 // Pure alignment-style helpers (REQ-491 / REQ-478 pattern). Dependency-free aside from
 // Alignment forward use in Count — same layering as SurfaceStyle.hpp.

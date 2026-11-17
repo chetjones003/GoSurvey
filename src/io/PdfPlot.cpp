@@ -17,7 +17,7 @@
 #include "CadDimStroke.hpp"
 #include "render/ViewportProjection.hpp"  // REQ-061: per-viewport camera projection
 #include "util/cadtable.hpp"
-#include "AlignmentStyle.hpp"  // REQ-495.1: alignments plot in their style
+#include <GoSurvey/Survey/AlignmentStylePublic.hpp>  // REQ-495.1: alignments plot in their style
 
 #include <cctype>
 

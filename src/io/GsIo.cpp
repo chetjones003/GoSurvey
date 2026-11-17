@@ -2,8 +2,8 @@
 #include "GsAnnotationJson.hpp"
 
 #include "CadCommands.hpp"
-#include "AlignmentLabelSet.hpp"
-#include "AlignmentStyle.hpp"
+#include <GoSurvey/Survey/AlignmentLabelSetPublic.hpp>
+#include <GoSurvey/Survey/AlignmentStylePublic.hpp>
 #include "GsMigrate.hpp"
 #include "ProjectPoints.hpp"
 #include "TextStyle.hpp"

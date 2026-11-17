@@ -3,7 +3,6 @@
 #include "CadCommands.hpp"
 #include "EditorWindow.hpp"
 #include "alignment/AlignmentDesign.hpp"
-#include "AlignmentStyle.hpp"
 #include <GoSurvey/Core/NumFormat.hpp>
 
 #include <QColor>
