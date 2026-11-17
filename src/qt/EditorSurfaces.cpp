@@ -8,7 +8,7 @@
 #include "CadSurfaceEdit.hpp"
 #include "EditorSurfaceUi.hpp"
 #include "SurfaceStyle.hpp"
-#include "util/surfacestats.hpp"
+#include <GoSurvey/Terrain/surfacestats.hpp>
 #include "EditorViewport.hpp"
 #include <QFileInfo>
 

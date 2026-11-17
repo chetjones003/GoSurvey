@@ -1,5 +1,5 @@
-#include "gridsurface.hpp"
-#include "surfacequery.hpp"
+#include <GoSurvey/Terrain/gridsurface.hpp>
+#include <GoSurvey/Terrain/surfacequery.hpp>
 
 #include <cmath>
 #include <limits>

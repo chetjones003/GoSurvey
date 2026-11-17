@@ -26,17 +26,17 @@
 #include "io/CadPointCloudLas.hpp"    // REQ-172 LAS increment — reader/writer, same contract as E57
 #include "io/CadPointCloudLaz.hpp"    // REQ-172 LAZ increment — reader/writer, same contract as E57
 #include "io/RasterImage.hpp"        // REQ-511 readable model-space raster attachments
-#include "util/tinbuild.hpp"
-#include "util/contourgen.hpp"  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
-#include "util/surfaceanalysis.hpp"  // REQ-072 banding + slope arrows (ADR-036 (g)) — pure, like contourgen
-#include "util/surfacevolume.hpp"  // REQ-073 surface-to-surface volumes (TASK-095) — pure, like surfaceanalysis
-#include "util/surfacestats.hpp"   // REQ-125
-#include "util/watershed.hpp"      // REQ-132…134
+#include <GoSurvey/Terrain/tinbuild.hpp>
+#include <GoSurvey/Terrain/contourgen.hpp>  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
+#include <GoSurvey/Terrain/surfaceanalysis.hpp>  // REQ-072 banding + slope arrows (ADR-036 (g)) — pure, like contourgen
+#include <GoSurvey/Terrain/surfacevolume.hpp>  // REQ-073 surface-to-surface volumes (TASK-095) — pure, like surfaceanalysis
+#include <GoSurvey/Terrain/surfacestats.hpp>   // REQ-125
+#include <GoSurvey/Terrain/watershed.hpp>      // REQ-132…134
 #include "alignment/AlignmentGround.hpp" // REQ-513 surface profiles
-#include "util/tinvolume.hpp"      // REQ-136
-#include "util/gridsurface.hpp"    // REQ-137
-#include "util/surfacequery.hpp"   // REQ-137
-#include "util/daylight.hpp"       // REQ-398 side slope grading — the daylight solver
+#include <GoSurvey/Terrain/tinvolume.hpp>      // REQ-136
+#include <GoSurvey/Terrain/gridsurface.hpp>    // REQ-137
+#include <GoSurvey/Terrain/surfacequery.hpp>   // REQ-137
+#include <GoSurvey/Terrain/daylight.hpp>       // REQ-398 side slope grading — the daylight solver
 #include "io/LandXmlIo.hpp"  // issue #1002: EXPORTLANDXML
 #include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
 #include "util/gltfimport.hpp"

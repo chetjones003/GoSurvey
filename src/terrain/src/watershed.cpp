@@ -1,7 +1,7 @@
-#include "watershed.hpp"
+#include <GoSurvey/Terrain/watershed.hpp>
 
-#include "surfaceanalysis.hpp"
-#include "tinbuild.hpp"
+#include <GoSurvey/Terrain/surfaceanalysis.hpp>
+#include <GoSurvey/Terrain/tinbuild.hpp>
 
 #include <algorithm>
 #include <cmath>

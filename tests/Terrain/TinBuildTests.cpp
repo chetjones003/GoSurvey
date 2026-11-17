@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "commands/CadEntities.hpp"
-#include "util/tinbuild.hpp"
+#include <GoSurvey/Terrain/tinbuild.hpp>
 
 namespace {
 

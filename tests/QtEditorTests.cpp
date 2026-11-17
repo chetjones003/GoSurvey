@@ -79,7 +79,7 @@
 #include "platform/HttpFetch.hpp"
 #include "update/UpdateService.hpp"
 #include "util/gizmooverlay.hpp"
-#include "util/surfacevolume.hpp"
+#include <GoSurvey/Terrain/surfacevolume.hpp>
 #include "util/PlotScales.hpp"
 #include <E57SimpleData.h>
 #include <E57SimpleWriter.h>

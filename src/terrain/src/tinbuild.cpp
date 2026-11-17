@@ -1,4 +1,4 @@
-#include "tinbuild.hpp"
+#include <GoSurvey/Terrain/tinbuild.hpp>
 
 #include <algorithm>
 #include <cmath>

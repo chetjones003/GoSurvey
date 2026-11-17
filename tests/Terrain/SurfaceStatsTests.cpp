@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "util/surfacestats.hpp"
+#include <GoSurvey/Terrain/surfacestats.hpp>
 
 using Catch::Approx;
 

@@ -16,7 +16,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "util/tinbuild.hpp"
+#include <GoSurvey/Terrain/tinbuild.hpp>
 
 using Catch::Approx;
 

@@ -1,6 +1,6 @@
-#include "surfacevolume.hpp"
+#include <GoSurvey/Terrain/surfacevolume.hpp>
 
-#include "tinbuild.hpp"
+#include <GoSurvey/Terrain/tinbuild.hpp>
 
 #include <algorithm>
 #include <cmath>

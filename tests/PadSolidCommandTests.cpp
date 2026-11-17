@@ -18,7 +18,7 @@
 #include <vector>
 
 #include "CadCommands.hpp"
-#include "surfacevolume.hpp"
+#include <GoSurvey/Terrain/surfacevolume.hpp>
 
 using Catch::Approx;
 

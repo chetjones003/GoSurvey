@@ -14,7 +14,7 @@
 #include <cmath>
 #include <vector>
 
-#include "util/daylight.hpp"
+#include <GoSurvey/Terrain/daylight.hpp>
 
 using Catch::Approx;
 

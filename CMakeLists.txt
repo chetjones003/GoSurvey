@@ -545,17 +545,17 @@ gosurvey_target_warnings(gosurvey_survey_alignment_model)
 # algorithms compile independently of the application layer. Physical relocation is isolated
 # from library creation and the public Survey alignment seam.
 add_library(gosurvey_terrain STATIC
-  src/alignment/AlignmentFeatureLine.cpp
-  src/util/contourgen.cpp
-  src/util/daylight.cpp
-  src/util/gridsurface.cpp
-  src/util/surfaceanalysis.cpp
-  src/util/surfacequery.cpp
-  src/util/surfacestats.cpp
-  src/util/surfacevolume.cpp
-  src/util/tinbuild.cpp
-  src/util/tinvolume.cpp
-  src/util/watershed.cpp)
+  src/terrain/src/AlignmentFeatureLine.cpp
+  src/terrain/src/contourgen.cpp
+  src/terrain/src/daylight.cpp
+  src/terrain/src/gridsurface.cpp
+  src/terrain/src/surfaceanalysis.cpp
+  src/terrain/src/surfacequery.cpp
+  src/terrain/src/surfacestats.cpp
+  src/terrain/src/surfacevolume.cpp
+  src/terrain/src/tinbuild.cpp
+  src/terrain/src/tinvolume.cpp
+  src/terrain/src/watershed.cpp)
 add_library(GoSurvey::Terrain ALIAS gosurvey_terrain)
 target_include_directories(gosurvey_terrain
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/terrain/include>")
@@ -1321,7 +1321,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AlignmentTableTests.cpp
     tests/AlignmentLabelOffsetTests.cpp
     tests/AlignmentStyleFieldTests.cpp
-    tests/AlignmentFeatureLineTests.cpp
+    tests/Terrain/AlignmentFeatureLineTests.cpp
     tests/AlignmentProfileSeamTests.cpp
     tests/AlignmentCogoTests.cpp
     tests/AlignmentDesignTests.cpp
@@ -1568,22 +1568,22 @@ if(GOSURVEY_BUILD_TESTS)
   # Terrain algorithms run with the isolated library and Catch2. SurfaceVolumeTests also links
   # the toolkit-neutral Debug benchmark scene fixture; neither test dependency uses Qt or OpenGL.
   add_executable(GoSurveyTerrainTests
-    tests/ContourGenTests.cpp
-    tests/DaylightTests.cpp
-    tests/SurfaceAnalysisTests.cpp
-    tests/SurfaceStatsTests.cpp
-    tests/SurfaceVolumeTests.cpp
-    tests/TinBorderTests.cpp
-    tests/TinBuildTests.cpp
-    tests/TinConstraintTests.cpp
-    tests/TinQueryTests.cpp
-    tests/TinVolumeTests.cpp
-    tests/WatershedTests.cpp
-    tests/Issue119SurfaceTests.cpp
-    tests/SurfaceProfileTests.cpp
-    tests/SurfaceStyleTests.cpp
-    tests/SurfaceRebuildLifetimeTests.cpp
-    tests/FeatureLineStationsTests.cpp)
+    tests/Terrain/ContourGenTests.cpp
+    tests/Terrain/DaylightTests.cpp
+    tests/Terrain/SurfaceAnalysisTests.cpp
+    tests/Terrain/SurfaceStatsTests.cpp
+    tests/Terrain/SurfaceVolumeTests.cpp
+    tests/Terrain/TinBorderTests.cpp
+    tests/Terrain/TinBuildTests.cpp
+    tests/Terrain/TinConstraintTests.cpp
+    tests/Terrain/TinQueryTests.cpp
+    tests/Terrain/TinVolumeTests.cpp
+    tests/Terrain/WatershedTests.cpp
+    tests/Terrain/Issue119SurfaceTests.cpp
+    tests/Terrain/SurfaceProfileTests.cpp
+    tests/Terrain/SurfaceStyleTests.cpp
+    tests/Terrain/SurfaceRebuildLifetimeTests.cpp
+    tests/Terrain/FeatureLineStationsTests.cpp)
   target_include_directories(GoSurveyTerrainTests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/util"
@@ -1705,7 +1705,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/CadPipePaletteTests.cpp
     # Issue #891: property-panel edit services and the shared right-click classifier
     tests/CadPropertyEditTests.cpp
-    tests/CadSurfaceEditTests.cpp
+    tests/Terrain/CadSurfaceEditTests.cpp
     # REQ-351 / D-2026-09-28-f — MOVE / ROTATE / SCALE / MIRROR / COPY / ARRAY on a pipe run.
     tests/ModifyPipeRunTests.cpp
     # REQ-352 / D-2026-09-28-g — layer and colour edits on solids and pipe runs.

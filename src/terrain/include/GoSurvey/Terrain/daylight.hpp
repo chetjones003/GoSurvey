@@ -13,7 +13,7 @@
 /// values because a cut face stands steeper than placed fill, so one slope for both would have no
 /// engineering meaning (D-2026-10-05-b).
 
-#include "surfacequery.hpp"
+#include <GoSurvey/Terrain/surfacequery.hpp>
 
 #include <vector>
 

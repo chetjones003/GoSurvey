@@ -1,8 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
-#include "surfacequery.hpp"
-#include "tinbuild.hpp"
+#include <GoSurvey/Terrain/surfacequery.hpp>
+#include <GoSurvey/Terrain/tinbuild.hpp>
 
 #include <cmath>
 #include <vector>

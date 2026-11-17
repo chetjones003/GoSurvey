@@ -11,8 +11,8 @@
 
 #include "alignment/Alignment.hpp"
 #include "alignment/AlignmentSampleLines.hpp"
-#include "util/surfacequery.hpp"
-#include "util/surfacevolume.hpp"
+#include <GoSurvey/Terrain/surfacequery.hpp>
+#include <GoSurvey/Terrain/surfacevolume.hpp>
 
 using Catch::Approx;
 
