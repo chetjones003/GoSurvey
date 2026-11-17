@@ -14,7 +14,7 @@ struct EventBus::State {
 
   std::mutex mutex;
   std::uint64_t nextId = 1;
-  std::unordered_map<std::type_index, std::vector<Slot>> handlers;
+  std::unordered_map<std::type_index, std::vector<std::shared_ptr<Slot>>> handlers;
 };
 
 EventBus::EventBus() : state_(std::make_shared<State>()) {}
@@ -22,43 +22,53 @@ EventBus::EventBus() : state_(std::make_shared<State>()) {}
 EventBus::~EventBus() = default;
 
 std::uint64_t EventBus::SubscribeImpl(std::type_index key, std::function<void(const void*)> callback) {
-  std::lock_guard lock(state_->mutex);
-  const auto id = state_->nextId++;
-  state_->handlers[key].push_back({id, std::move(callback)});
+  std::uint64_t id;
+  {
+    std::lock_guard lock(state_->mutex);
+    id = state_->nextId++;
+  }
+
+  auto slot = std::make_shared<State::Slot>(State::Slot{id, std::move(callback)});
+  {
+    std::lock_guard lock(state_->mutex);
+    state_->handlers[key].push_back(slot);
+  }
   return id;
 }
 
 void EventBus::UnsubscribeImpl(const std::shared_ptr<State>& state, std::type_index key, std::uint64_t id) {
-  std::lock_guard lock(state->mutex);
-  const auto found = state->handlers.find(key);
-  if (found == state->handlers.end())
-    return;
+  std::shared_ptr<State::Slot> removed;
+  {
+    std::lock_guard lock(state->mutex);
+    const auto found = state->handlers.find(key);
+    if (found == state->handlers.end())
+      return;
 
-  auto& slots = found->second;
-  for (auto it = slots.begin(); it != slots.end(); ++it) {
-    if (it->id == id) {
-      slots.erase(it);
-      break;
+    auto& slots = found->second;
+    for (auto it = slots.begin(); it != slots.end(); ++it) {
+      if ((*it)->id == id) {
+        removed = *it;
+        slots.erase(it);
+        break;
+      }
     }
+    if (slots.empty())
+      state->handlers.erase(found);
   }
-  if (slots.empty())
-    state->handlers.erase(found);
 }
 
 void EventBus::PublishImpl(std::type_index key, const void* event) const {
-  std::vector<std::function<void(const void*)>> callbacks;
+  std::vector<std::shared_ptr<State::Slot>> callbacks;
   {
     std::lock_guard lock(state_->mutex);
     const auto found = state_->handlers.find(key);
     if (found == state_->handlers.end())
       return;
-    callbacks.reserve(found->second.size());
-    for (const auto& slot : found->second)
-      callbacks.push_back(slot.callback);
+    callbacks = found->second;
   }
 
   for (const auto& callback : callbacks)
-    callback(event);
+    callback->callback(event);
 }
 
 }  // namespace GoSurvey::Events

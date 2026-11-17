@@ -75,6 +75,7 @@ class EventSubscription {
   }
   ~EventSubscription() { Reset(); }
 
+  /// Removes the subscription from future dispatches; an in-flight publish may still invoke it.
   void Reset() {
     if (auto reset = std::exchange(reset_, {}))
       reset();
@@ -84,7 +85,9 @@ class EventSubscription {
   std::function<void()> reset_;
 };
 
-/// Instance-owned, toolkit-neutral event bus. Callbacks run outside the internal lock.
+/// Instance-owned, toolkit-neutral event bus. Publish snapshots handlers and invokes callbacks
+/// outside the registry lock. Reset prevents future snapshots; callbacks already in a snapshot may
+/// still run, and concurrent Publish calls may invoke the same callback concurrently.
 class EventBus {
  public:
   EventBus();

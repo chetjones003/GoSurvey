@@ -2,7 +2,21 @@
 
 #include <GoSurvey/Events/Events.hpp>
 
+#include <memory>
+
 using namespace GoSurvey::Events;
+
+namespace {
+
+struct ResetSubscriptionOnDestruction {
+  explicit ResetSubscriptionOnDestruction(EventSubscription& subscription) : subscription(&subscription) {}
+
+  EventSubscription* subscription;
+
+  ~ResetSubscriptionOnDestruction() { subscription->Reset(); }
+};
+
+}  // namespace
 
 TEST_CASE("EventBus delivers typed events to active subscriptions") {
   EventBus bus;
@@ -54,6 +68,34 @@ TEST_CASE("EventBus invokes callbacks outside its lock") {
   REQUIRE(calls == 2);
   bus.Publish(WheelEvent{});
   REQUIRE(calls == 3);
+}
+
+TEST_CASE("EventBus preserves mutable callback state across publications") {
+  EventBus bus;
+  int observed = 0;
+  auto subscription = bus.Subscribe<KeyEvent>([count = 0, &observed](const KeyEvent&) mutable {
+    observed = ++count;
+  });
+
+  bus.Publish(KeyEvent{});
+  bus.Publish(KeyEvent{});
+
+  REQUIRE(observed == 2);
+}
+
+TEST_CASE("EventBus destroys removed callbacks outside its registry lock") {
+  EventBus bus;
+  EventSubscription nestedSubscription;
+  auto listener = std::make_shared<ResetSubscriptionOnDestruction>(nestedSubscription);
+  int nestedCalls = 0;
+  nestedSubscription = bus.Subscribe<WheelEvent>([&](const WheelEvent&) { ++nestedCalls; });
+  auto subscription = bus.Subscribe<KeyEvent>([listener](const KeyEvent&) {});
+  listener.reset();
+
+  subscription.Reset();
+  bus.Publish(WheelEvent{});
+
+  REQUIRE(nestedCalls == 0);
 }
 
 TEST_CASE("input and change events carry toolkit-neutral payloads") {
