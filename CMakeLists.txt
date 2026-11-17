@@ -609,10 +609,18 @@ gosurvey_target_warnings(gosurvey_core_shx_font)
 # GoSurvey::Pdf (issue #1247). The public include tree is a compatibility facade for legacy
 # declarations; physical source/header relocation is a separate follow-up.
 add_library(gosurvey_pdf STATIC
-  src/pdf/PdfDocument.cpp src/pdf/PdfSplit.cpp src/pdf/PdfAnnotate.cpp
-  src/pdf/PdfRaw.cpp src/pdf/PdfMeasure.cpp src/pdf/PdfScaleCheck.cpp
-  src/pdf/PdfDimAudit.cpp src/pdf/PdfCoordExtract.cpp src/pdf/PdfAlign.cpp
-  src/pdf/PdfDiff.cpp src/pdf/PdfViewerCore.cpp src/pdf/PdfSnap.cpp)
+  src/pdf/PdfDocument.cpp
+  src/pdf/PdfSplit.cpp
+  src/pdf/PdfAnnotate.cpp
+  src/pdf/PdfRaw.cpp
+  src/pdf/PdfMeasure.cpp
+  src/pdf/PdfScaleCheck.cpp
+  src/pdf/PdfDimAudit.cpp
+  src/pdf/PdfCoordExtract.cpp
+  src/pdf/PdfAlign.cpp
+  src/pdf/PdfDiff.cpp
+  src/pdf/PdfViewerCore.cpp
+  src/pdf/PdfSnap.cpp)
 add_library(GoSurvey::Pdf ALIAS gosurvey_pdf)
 target_include_directories(gosurvey_pdf PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/pdf/include>"
@@ -1579,10 +1587,18 @@ if(GOSURVEY_BUILD_TESTS)
   gosurvey_target_warnings(GoSurveyTerrainTests TEST)
 
   add_executable(GoSurveyPdfTests
-    tests/PdfViewerTests.cpp tests/PdfSplitTests.cpp tests/PdfAnnotateTests.cpp
-    tests/PdfLeaderTests.cpp tests/PdfMeasureTests.cpp tests/PdfDimensionTests.cpp
-    tests/PdfSnapTests.cpp tests/PdfScaleCheckTests.cpp tests/PdfDimAuditTests.cpp
-    tests/PdfDimAuditPdfTests.cpp tests/PdfAlignTests.cpp tests/PdfDiffTests.cpp
+    tests/PdfViewerTests.cpp
+    tests/PdfSplitTests.cpp
+    tests/PdfAnnotateTests.cpp
+    tests/PdfLeaderTests.cpp
+    tests/PdfMeasureTests.cpp
+    tests/PdfDimensionTests.cpp
+    tests/PdfSnapTests.cpp
+    tests/PdfScaleCheckTests.cpp
+    tests/PdfDimAuditTests.cpp
+    tests/PdfDimAuditPdfTests.cpp
+    tests/PdfAlignTests.cpp
+    tests/PdfDiffTests.cpp
     tests/PdfCoordExtractTests.cpp)
   target_include_directories(GoSurveyPdfTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
   set_target_properties(GoSurveyPdfTests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
