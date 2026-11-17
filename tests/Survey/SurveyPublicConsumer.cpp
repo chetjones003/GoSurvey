@@ -1,6 +1,7 @@
 #include <GoSurvey/Survey/Alignment.hpp>
 #include <GoSurvey/Survey/AlignmentGround.hpp>
 #include <GoSurvey/Survey/AlignmentReport.hpp>
+#include <GoSurvey/Survey/SurveyPoints.hpp>
 #include <GoSurvey/Survey/TraverseReportPublic.hpp>
 #include <GoSurvey/Survey/TraverseCalcPublic.hpp>
 
@@ -38,5 +39,12 @@ int main() {
   LsaResult result;
   const auto adjustment = traverserpt::BuildReportText(traverse, weights, result, "Consumer", "ft");
   if (adjustment.find("Summary of Files Used") == std::string::npos) return 8;
+  SurveyPoint point;
+  point.id = 42;
+  point.labelStyle = SurveyPointLabelStyle::NumberOnly;
+  if (FormatSurveyPointLabelPlain(point, point.labelStyle, {}, 2) != "42") return 9;
+  std::vector<float> marker;
+  AppendAllSurveyPointMarkers(0.1f, {point}, &marker);
+  if (marker.size() != 12) return 10;
   return 0;
 }

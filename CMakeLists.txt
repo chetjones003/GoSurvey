@@ -551,7 +551,9 @@ add_library(gosurvey_survey STATIC
   src/geo/EcefTransform.cpp
   src/traverse/TraverseCalc.cpp
   src/traverse/TraverseLeastSquares.cpp
-  src/traverse/TraverseReport.cpp)
+  src/traverse/TraverseReport.cpp
+  src/survey/PointGroupRule.cpp
+  src/survey/SurveyPoints.cpp)
 add_library(GoSurvey::Survey ALIAS gosurvey_survey)
 target_include_directories(gosurvey_survey
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include>"
@@ -723,7 +725,6 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/CadBlocks.cpp
   src/commands/CadLinetype.cpp
   src/commands/EntityId.cpp
-  src/survey/PointGroupRule.cpp
   src/commands/CadCoordinateFrame.cpp
   src/commands/ViewportZoomScale.cpp
   src/commands/CadColor.cpp
@@ -751,7 +752,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Fonts (shared lower layer — SHX stroke geometry, ADR-022)
 
   # Survey / COGO
-  src/survey/SurveyPoints.cpp
+  src/commands/SurveyPointActions.cpp
 
   # Traverse engine
   src/traverse/FbkImport.cpp
@@ -1452,7 +1453,6 @@ if(GOSURVEY_BUILD_TESTS)
     src/commands/EntityId.cpp
     # REQ-067 point-group membership rules. Pure like EntityId.cpp: the union-vs-intersection
     # semantics are a recorded user decision and must be testable without the GUI stack.
-    src/survey/PointGroupRule.cpp
     # REQ-077/078 version ordering + manifest parse. Pure by ADR-029 (g) — no network, no window.
     # Wrong version ordering has NO symptom (the user is simply never offered an update), which is
     # exactly why it must be pinned by a test rather than noticed in use.

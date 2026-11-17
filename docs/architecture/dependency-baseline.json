@@ -367,13 +367,6 @@
     },
     {
       "file": "src/commands/CadCommands.hpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
       "include": "traverse/TraverseCalc.hpp",
       "target": "Survey",
       "rule": "private-header include",
@@ -3024,13 +3017,6 @@
       "target": "Survey",
       "rule": "private-header include",
       "message": "src/render/ViewportRenderer.hpp includes \"alignment/AlignmentDisplayCache.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/survey/SurveyPoints.cpp",
-      "include": "CadCommands.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/survey/SurveyPoints.cpp includes \"CadCommands.hpp\": Survey may not depend on Commands (forbidden dependency)"
     },
     {
       "file": "src/telemetry/TelemetryService.cpp",
