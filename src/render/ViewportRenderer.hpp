@@ -2,7 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "CadSnap.hpp"
-#include "PdfAttach.hpp"
+#include "GoSurvey/Pdf/PdfAttach.hpp"
 #include "CadOnlineMap.hpp"
 #include "gizmooverlay.hpp"
 #include "render/SectionClip.hpp"

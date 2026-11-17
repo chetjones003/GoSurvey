@@ -3,7 +3,7 @@
 #include "FailureReport.hpp"
 #include "QtAppearance.hpp"
 #include "QtSplash.hpp"
-#include "PdfAttach.hpp"
+#include "GoSurvey/Pdf/PdfAttach.hpp"
 #include "StartupFailure.hpp"
 #include "UserPrefs.hpp"
 #include "Version.hpp"

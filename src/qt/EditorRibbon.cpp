@@ -7,7 +7,7 @@
 #include "CadBlocks.hpp"
 #include "DxfIo.hpp"
 #include "DwgIo.hpp"
-#include "PdfAttach.hpp"
+#include "GoSurvey/Pdf/PdfAttach.hpp"
 #include "PdfPlot.hpp"
 #include "ProjectFiles.hpp"
 #include "cadpiperun.hpp"

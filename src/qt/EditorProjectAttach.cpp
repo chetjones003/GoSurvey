@@ -7,8 +7,8 @@
 #include "EditorWindow.hpp"
 #include "QtAccent.hpp"
 #include "ProjectFiles.hpp"
-#include "pdf/PdfAttach.hpp"
-#include "pdf/PdfDocument.hpp"
+#include "GoSurvey/Pdf/PdfAttach.hpp"
+#include "GoSurvey/Pdf/PdfDocument.hpp"
 
 #include <QDialog>
 #include <QFileDialog>

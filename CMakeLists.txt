@@ -479,7 +479,7 @@ endif()
 # Two members are *absent* on purpose, because each target supplies its own implementation of the
 # same pure header (the link-time platform seams, ADR-031 (b′)):
 #   src/platform/WinFileDialogs.cpp   -> headless: src/platform/HeadlessFileDialogs.cpp
-#   src/pdf/PdfAttach.cpp             -> headless: src/platform/HeadlessPdfAttach.cpp
+#   src/pdf/src/PdfAttach.cpp             -> headless: src/platform/HeadlessPdfAttach.cpp
 # PdfAttach.cpp is where <GL/glew.h> reaches the Commands layer, which is precisely why it is a seam.
 # ---------------------------------------------------------------------------
 # GoSurvey::Core — first system library in the system layout (issue #1219).
@@ -609,10 +609,10 @@ gosurvey_target_warnings(gosurvey_core_shx_font)
 # GoSurvey::Pdf (issue #1247). The public include tree is a compatibility facade for legacy
 # declarations; physical source/header relocation is a separate follow-up.
 add_library(gosurvey_pdf STATIC
-  src/pdf/PdfDocument.cpp src/pdf/PdfSplit.cpp src/pdf/PdfAnnotate.cpp
-  src/pdf/PdfRaw.cpp src/pdf/PdfMeasure.cpp src/pdf/PdfScaleCheck.cpp
-  src/pdf/PdfDimAudit.cpp src/pdf/PdfCoordExtract.cpp src/pdf/PdfAlign.cpp
-  src/pdf/PdfDiff.cpp src/pdf/PdfViewerCore.cpp src/pdf/PdfSnap.cpp)
+  src/pdf/src/PdfDocument.cpp src/pdf/src/PdfSplit.cpp src/pdf/src/PdfAnnotate.cpp
+  src/pdf/src/PdfRaw.cpp src/pdf/src/PdfMeasure.cpp src/pdf/src/PdfScaleCheck.cpp
+  src/pdf/src/PdfDimAudit.cpp src/pdf/src/PdfCoordExtract.cpp src/pdf/src/PdfAlign.cpp
+  src/pdf/src/PdfDiff.cpp src/pdf/src/PdfViewerCore.cpp src/pdf/src/PdfSnap.cpp)
 add_library(GoSurvey::Pdf ALIAS gosurvey_pdf)
 target_include_directories(gosurvey_pdf PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/pdf/include>"
@@ -1579,11 +1579,11 @@ if(GOSURVEY_BUILD_TESTS)
   gosurvey_target_warnings(GoSurveyTerrainTests TEST)
 
   add_executable(GoSurveyPdfTests
-    tests/PdfViewerTests.cpp tests/PdfSplitTests.cpp tests/PdfAnnotateTests.cpp
-    tests/PdfLeaderTests.cpp tests/PdfMeasureTests.cpp tests/PdfDimensionTests.cpp
-    tests/PdfSnapTests.cpp tests/PdfScaleCheckTests.cpp tests/PdfDimAuditTests.cpp
-    tests/PdfDimAuditPdfTests.cpp tests/PdfAlignTests.cpp tests/PdfDiffTests.cpp
-    tests/PdfCoordExtractTests.cpp)
+    tests/Pdf/PdfViewerTests.cpp tests/Pdf/PdfSplitTests.cpp tests/Pdf/PdfAnnotateTests.cpp
+    tests/Pdf/PdfLeaderTests.cpp tests/Pdf/PdfMeasureTests.cpp tests/Pdf/PdfDimensionTests.cpp
+    tests/Pdf/PdfSnapTests.cpp tests/Pdf/PdfScaleCheckTests.cpp tests/Pdf/PdfDimAuditTests.cpp
+    tests/Pdf/PdfDimAuditPdfTests.cpp tests/Pdf/PdfAlignTests.cpp tests/Pdf/PdfDiffTests.cpp
+    tests/Pdf/PdfCoordExtractTests.cpp)
   target_include_directories(GoSurveyPdfTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
   set_target_properties(GoSurveyPdfTests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
   target_link_libraries(GoSurveyPdfTests PRIVATE GoSurvey::Pdf Catch2::Catch2WithMain)

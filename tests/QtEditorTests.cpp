@@ -23,7 +23,7 @@
 #include "traverse/TraverseIo.hpp"
 #include "traverse/FbkImport.hpp"
 #include "traverse/TraverseCommandLang.hpp"
-#include "PdfAttach.hpp"
+#include "GoSurvey/Pdf/PdfAttach.hpp"
 #include "PdfWindow.hpp"
 #include "PdfCanvas.hpp"
 #include "PdfRibbon.hpp"
@@ -33,7 +33,7 @@
 #ifdef small
 #undef small
 #endif
-#include "PdfViewerCore.hpp"
+#include "GoSurvey/Pdf/PdfViewerCore.hpp"
 #include "QtAnnotations.hpp"
 #include "QtText.hpp"
 #include "util/gizmooverlay.hpp"
@@ -57,7 +57,7 @@
 #include "FailureReportUi.hpp"
 #include "GsIo.hpp"
 #include "GsMigrate.hpp"
-#include "PdfViewerCore.hpp"
+#include "GoSurvey/Pdf/PdfViewerCore.hpp"
 #include "ProjectAddFlow.hpp"
 #include "ProjectFiles.hpp"
 #include "ProjectPack.hpp"

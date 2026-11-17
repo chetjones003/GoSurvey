@@ -3,9 +3,9 @@
 #include "PdfCanvas.hpp"
 #include "PdfRibbon.hpp"
 #include "EditorWindow.hpp"
-#include "PdfSplit.hpp"
-#include "PdfScaleCheck.hpp"
-#include "PdfDimAudit.hpp"
+#include "GoSurvey/Pdf/PdfSplit.hpp"
+#include "GoSurvey/Pdf/PdfScaleCheck.hpp"
+#include "GoSurvey/Pdf/PdfDimAudit.hpp"
 #include "SurveyPoints.hpp"
 #include <QAction>
 #include <QFileDialog>
