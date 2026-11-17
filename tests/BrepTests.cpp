@@ -18,7 +18,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "io/BrepJson.hpp"
-#include "util/brep.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
 
 #include <algorithm>
 #include <array>

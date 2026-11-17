@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-#include "../../src/util/meshgeom.hpp"
+#include <GoSurvey/Geometry/meshgeom.hpp>
 
 using Catch::Approx;
 using meshgeom::MeshProblem;

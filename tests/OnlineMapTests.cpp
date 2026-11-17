@@ -21,8 +21,8 @@
 #include "CadOnlineMap.hpp"
 #include "GsIo.hpp"
 #include "MapTileService.hpp"
-#include "geo/CoordinateSystems.hpp"
-#include "geo/WebMercator.hpp"
+#include <GoSurvey/Survey/CoordinateSystems.hpp>
+#include <GoSurvey/Network/WebMercator.hpp>
 
 namespace {
 

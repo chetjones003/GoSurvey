@@ -1,6 +1,6 @@
 // CS-MAP wrapper (REQ-358, ADR-063). The only file that includes a CS-MAP header.
 
-#include "CoordinateSystems.hpp"
+#include <GoSurvey/Survey/CoordinateSystems.hpp>
 
 #include "cs_map.h"
 

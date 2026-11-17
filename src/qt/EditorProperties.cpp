@@ -19,8 +19,8 @@
 #include "CadPropertyEdit.hpp"
 #include "CadUiStyleWidgets.hpp"
 #include <GoSurvey/Core/AngleFormat.hpp>
-#include "util/brep.hpp"
-#include "util/geom2d.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
+#include <GoSurvey/Geometry/geom2d.hpp>
 #include <GoSurvey/Core/NumFormat.hpp>
 
 #include <QColorDialog>

@@ -7,7 +7,7 @@
 
 #include "CadCommands.hpp"
 #include "MapTileService.hpp"
-#include "geo/WebMercator.hpp"
+#include <GoSurvey/Network/WebMercator.hpp>
 
 #include <chrono>
 #include <functional>

@@ -11,7 +11,7 @@
 /// formula, or a second sweep.
 
 #include "CadEntities.hpp"
-#include "brep.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
 #include "cadsolid.hpp"
 #include <GoSurvey/Math/ray3d.hpp>
 #include <GoSurvey/Math/ucs.hpp>

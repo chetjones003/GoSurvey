@@ -1,6 +1,7 @@
-#include "DrawingConversion.hpp"
+#include <GoSurvey/Survey/DrawingConversion.hpp>
 
-#include "CoordinateSystems.hpp"
+#include <GoSurvey/Survey/CoordinateSystems.hpp>
+#include <GoSurvey/Core/Units.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -10,25 +11,12 @@ namespace geo {
 
 namespace {
 
-constexpr double kUsSurveyFootMeters = 1200.0 / 3937.0;
-constexpr double kInternationalFootMeters = 0.3048;
-
 struct Pt {
   double x = 0.0;
   double y = 0.0;
 };
 
 }  // namespace
-
-double MetersPerInsUnit(int insUnits, bool usSurveyFoot) {
-  switch (insUnits) {
-    case 1: return 0.0254;
-    case 2: return usSurveyFoot ? kUsSurveyFootMeters : kInternationalFootMeters;
-    case 4: return 0.001;
-    case 6: return 1.0;
-    default: return 0.0;
-  }
-}
 
 void Similarity::Apply(double x, double y, double* ox, double* oy) const {
   const double c = std::cos(rotationRad);

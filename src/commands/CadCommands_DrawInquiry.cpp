@@ -9,8 +9,8 @@
 #include "util/cadtablestyle.hpp"
 #include "SpreadsheetIo.hpp"
 #include "platform/WinFileDialogs.hpp"
-#include "util/geom2d.hpp"
-#include "util/spline.hpp"
+#include <GoSurvey/Geometry/geom2d.hpp>
+#include <GoSurvey/Geometry/spline.hpp>
 
 #include <algorithm>
 #include <cassert>

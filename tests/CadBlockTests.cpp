@@ -1,6 +1,6 @@
 #include "commands/PaperSpace.hpp"
 #include "util/cadblock.hpp"
-#include "util/brep.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
 #include <GoSurvey/Math/ucs.hpp>
 
 #include <catch2/catch_approx.hpp>

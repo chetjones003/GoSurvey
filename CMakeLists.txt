@@ -485,7 +485,7 @@ endif()
 # GoSurvey::Core — first system library in the system layout (issue #1219).
 # Its public headers are the only Core include path exported to consumers; implementation
 # details under src/core/src stay private to this target.
-add_library(gosurvey_core STATIC src/core/src/Core.cpp)
+add_library(gosurvey_core STATIC src/core/src/Core.cpp src/core/src/Units.cpp)
 add_library(GoSurvey::Core ALIAS gosurvey_core)
 target_include_directories(gosurvey_core
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core/include>"
@@ -504,31 +504,27 @@ target_compile_features(gosurvey_math INTERFACE cxx_std_17)
 target_link_libraries(gosurvey_math INTERFACE GoSurvey::Core)
 
 # GoSurvey::Geometry — T1 Kernel library (carve-out ticket #1244): 2D curves and intersections,
-# splines and NURBS, meshes, and the B-rep solid kernel. Public headers will live in
+# splines and NURBS, meshes, and the B-rep solid kernel. Public headers live in
 # src/geometry/include/GoSurvey/Geometry/ and are consumed as <GoSurvey/Geometry/...>; private
-# sources in src/geometry/src/. Until the move-only PR lands, the sources and headers stay in
-# src/util/ and are compiled here, so that PR is pure path rewrites. It links only its allowed
-# dependencies, Math and Core. src/util stays on the include path (public: brep.hpp and nurbs.hpp
-# include "ucs.hpp" / "ray3d.hpp") until the Math headers move into src/math/include.
+# sources live in src/geometry/src/. It links only its allowed dependencies, Math and Core.
 add_library(gosurvey_geometry STATIC
   # Planar geometry math: bulge arcs, extents, revision clouds.
-  src/util/geom2d.cpp
+  src/geometry/src/geom2d.cpp
   # REQ-443 SPLINE mathematics (NURBS curve: fit / control-vertex construction, evaluation, tessellation).
-  src/util/spline.cpp
+  src/geometry/src/spline.cpp
   # Intersection math behind the INT/APPINT snaps (REQ-062). Pure and dependency-free on purpose.
-  src/util/curveintersect.cpp
+  src/geometry/src/curveintersect.cpp
   # REQ-063 mesh validation + bounds + normals.
-  src/util/meshgeom.cpp
+  src/geometry/src/meshgeom.cpp
   # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). Pure by that ADR — no GL, no UI, no
   # document — so a wrong volume integral or an unclosed shell is caught against a closed-form
   # expectation rather than by looking at a shaded viewport.
-  src/util/brep.cpp
+  src/geometry/src/brep.cpp
   # REQ-315 / ADR-048: the freeform (NURBS) surface patch — pure math, no GL and no brep coupling.
-  src/util/nurbs.cpp)
+  src/geometry/src/nurbs.cpp)
 add_library(GoSurvey::Geometry ALIAS gosurvey_geometry)
 target_include_directories(gosurvey_geometry PUBLIC
-  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/geometry/include>"
-  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/util>")
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/geometry/include>")
 target_compile_features(gosurvey_geometry PUBLIC cxx_std_17)
 target_link_libraries(gosurvey_geometry PUBLIC GoSurvey::Math GoSurvey::Core)
 gosurvey_target_warnings(gosurvey_geometry)
@@ -822,6 +818,8 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src/util
   ${CMAKE_CURRENT_SOURCE_DIR}/src/io
   ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/network/include
   ${CMAKE_CURRENT_SOURCE_DIR}/src/render
   ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
   ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
@@ -1403,13 +1401,6 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-103 STRETCH (TASK-098). Header-only against CadCommands.hpp — RecomputeArcFromEndpoints
     # is inline and pure (<cmath> + CadArc only), the same reasoning as the gate test above.
     tests/StretchGeomTests.cpp
-    # REQ-103 FILLET (TASK-102). Header-only against CadCommands.hpp — the tangent-arc solve
-    # (SolveFilletCenter and friends) is inline and pure (<cmath>/<vector> + curveintersect.hpp,
-    # both dependency-free), the same reasoning as the STRETCH geometry test above.
-    tests/FilletGeomTests.cpp
-    # REQ-103 CHAMFER (TASK-103). Header-only against CadCommands.hpp, same reasoning as FILLET's
-    # own geometry test above — ChamferPointAtDistance/ChamferRayIntersect are inline and pure.
-    tests/ChamferGeomTests.cpp
     # REQ-087: the gate that decides the viewport has geometry to draw. Header-only against
     # CadCommands.hpp — the predicate is pure, which is the whole reason it is testable at all
     # while the rendering around it is not.
@@ -1565,7 +1556,8 @@ if(GOSURVEY_BUILD_TESTS)
   add_executable(GoSurveyCoreTests
     tests/Core/CoreTests.cpp
     tests/Core/NumFormatTests.cpp
-    tests/Core/AngleFormatTests.cpp)
+    tests/Core/AngleFormatTests.cpp
+    tests/Core/UnitsTests.cpp)
   set_target_properties(GoSurveyCoreTests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
   target_link_libraries(GoSurveyCoreTests PRIVATE GoSurvey::Core Catch2::Catch2WithMain)
@@ -1592,15 +1584,14 @@ if(GOSURVEY_BUILD_TESTS)
   gosurvey_target_warnings(GoSurveyMathTests TEST)
 
   # GoSurvey::Geometry tests (#1244). Pure: they link Geometry (which links Math and Core) and Catch2 only,
-  # never Qt, OpenGL or gosurvey_domain, which is the Kernel independence check for this system. They include
-  # the headers at their current paths until the move PR. BrepTests (needs IO's BrepJson.hpp), SplineTests
-  # and FilletGeomTests / ChamferGeomTests (need CadCommands.hpp) cover Geometry code through a higher
-  # layer, so they stay in GoSurveyTests.
+  # never Qt, OpenGL or gosurvey_domain, which is the Kernel independence check for this system.
   add_executable(GoSurveyGeometryTests
     tests/Geometry/BulgeArcTests.cpp
     tests/Geometry/ChamferEdgeTests.cpp
     tests/Geometry/CurveIntersectTests.cpp
     tests/Geometry/FilletEdgeTests.cpp
+    tests/FilletGeomTests.cpp
+    tests/ChamferGeomTests.cpp
     tests/Geometry/MeshGeomTests.cpp
     tests/Geometry/NurbsTests.cpp
     tests/Geometry/RevisionCloudTests.cpp)

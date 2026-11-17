@@ -1,4 +1,4 @@
-#include "geom2d.hpp"
+#include <GoSurvey/Geometry/geom2d.hpp>
 
 #include <algorithm>
 #include <cmath>

@@ -1,3 +1,5 @@
+#include <GoSurvey/Core/Units.hpp>
+
 // REQ-383 (issue #696 P9) — the warnings before destructive or cross-project actions on shared data.
 // Domain only: AppCommandState and temp folders, no window. The dialogs are thin: they show the
 // question the domain raised and call AnswerPointEdit, which is what these tests do.
@@ -6,8 +8,8 @@
 #include "ConvertDrawing.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectWarnings.hpp"
-#include "geo/CoordinateSystems.hpp"
-#include "geo/DrawingConversion.hpp"
+#include <GoSurvey/Survey/CoordinateSystems.hpp>
+#include <GoSurvey/Survey/DrawingConversion.hpp>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -426,7 +428,7 @@ void PasteSetup(AppCommandState& st, const fs::path& dir) {
   st.clipboard.srcProjectName = "Source";
   st.clipboard.srcZone = "";
   st.drawingInsUnits = 2;  // feet
-  st.clipboard.srcMetersPerUnit = geo::MetersPerInsUnit(
+  st.clipboard.srcMetersPerUnit = GoSurvey::Core::MetersPerInsUnit(
       2, st.drawingSettings.footDefinition == DrawingSettings::FootDefinition::UsSurvey);  // the same unit
 }
 
@@ -732,7 +734,7 @@ TEST_CASE("req383 a units mismatch can be converted: lengths, heights, radii and
   AppCommandState st;
   PasteSetup(st, d.path);
   st.drawingTabs[1].projectUid = 7;
-  const double m = geo::MetersPerInsUnit(
+  const double m = GoSurvey::Core::MetersPerInsUnit(
       2, st.drawingSettings.footDefinition == DrawingSettings::FootDefinition::UsSurvey);
   st.clipboard.srcMetersPerUnit = 1.0;  // copied from a metre drawing, pasted into feet
   st.clipboard.srcOriginX = 10.0;

@@ -43,7 +43,7 @@
 #include "ProjectPack.hpp"
 #include "ProjectTurnover.hpp"
 #include "ProjectSettings.hpp"
-#include "geo/CoordinateSystems.hpp"
+#include <GoSurvey/Survey/CoordinateSystems.hpp>
 #include "SurveyCsv.hpp"
 #include "io/ProjectPointDb.hpp"
 #include "io/Project.hpp"
@@ -69,7 +69,7 @@
 #include "SurfaceStyle.hpp"
 #include "SurveyCsv.hpp"
 #include "UserPrefs.hpp"
-#include "geo/CoordinateSystems.hpp"
+#include <GoSurvey/Survey/CoordinateSystems.hpp>
 #include "io/CadPointCloudLas.hpp"
 #include "io/CadPointCloudLaz.hpp"
 #include "io/CadPointCloudPts.hpp"

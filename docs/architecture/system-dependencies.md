@@ -33,6 +33,8 @@ flowchart LR
   editor__renderer["Renderer"]
   editor__io["IO"]
   editor__network["Network"]
+  editor__survey["Survey"]
+  editor__geometry["Geometry"]
   editor__pqt["Qt"]
   editor__pgl["OpenGL"]
   editor__pwin["Windows"]
@@ -43,6 +45,8 @@ flowchart LR
   editor__src --> editor__renderer
   editor__src --> editor__io
   editor__src --> editor__network
+  editor__src --> editor__survey
+  editor__src --> editor__geometry
   editor__src --> editor__pqt
   editor__src --> editor__pgl
   editor__src --> editor__pwin
@@ -54,6 +58,8 @@ flowchart LR
   style editor__renderer fill:#164e63,stroke:#22d3ee,stroke-width:2px,color:#f8fafc
   style editor__io fill:#164e63,stroke:#38bdf8,stroke-width:2px,color:#f8fafc
   style editor__network fill:#164e63,stroke:#2dd4bf,stroke-width:2px,color:#f8fafc
+  style editor__survey fill:#14532d,stroke:#facc15,stroke-width:2px,color:#f8fafc
+  style editor__geometry fill:#713f12,stroke:#fbbf24,stroke-width:2px,color:#f8fafc
   style editor__pqt fill:#3f3f46,stroke:#f472b6,stroke-width:2px,color:#f8fafc
   style editor__pgl fill:#3f3f46,stroke:#fb923c,stroke-width:2px,color:#f8fafc
   style editor__pwin fill:#3f3f46,stroke:#94a3b8,stroke-width:2px,color:#f8fafc
@@ -67,8 +73,10 @@ flowchart LR
   linkStyle 5 stroke:#f8fafc,stroke-width:2.5px
   linkStyle 6 stroke:#f8fafc,stroke-width:2.5px
   linkStyle 7 stroke:#f8fafc,stroke-width:2.5px
-  linkStyle 8 stroke:#ef4444,stroke-width:2.5px,stroke-dasharray:8 5
-  linkStyle 9 stroke:#ef4444,stroke-width:2.5px,stroke-dasharray:8 5
+  linkStyle 8 stroke:#f8fafc,stroke-width:2.5px
+  linkStyle 9 stroke:#f8fafc,stroke-width:2.5px
+  linkStyle 10 stroke:#ef4444,stroke-width:2.5px,stroke-dasharray:8 5
+  linkStyle 11 stroke:#ef4444,stroke-width:2.5px,stroke-dasharray:8 5
 ```
 
 ### Interaction
@@ -136,6 +144,7 @@ flowchart LR
   commands__terrain["Terrain"]
   commands__pointcloud["PointCloud"]
   commands__pdf["Pdf"]
+  commands__geometry["Geometry"]
   commands__math["Math"]
   commands__events["Events"]
   commands__ui["UI"]
@@ -148,6 +157,7 @@ flowchart LR
   commands__src --> commands__terrain
   commands__src --> commands__pointcloud
   commands__src --> commands__pdf
+  commands__src --> commands__geometry
   commands__src --> commands__math
   commands__src --> commands__events
   commands__src --> commands__ui
@@ -161,6 +171,7 @@ flowchart LR
   style commands__terrain fill:#14532d,stroke:#4ade80,stroke-width:2px,color:#f8fafc
   style commands__pointcloud fill:#14532d,stroke:#a3e635,stroke-width:2px,color:#f8fafc
   style commands__pdf fill:#14532d,stroke:#34d399,stroke-width:2px,color:#f8fafc
+  style commands__geometry fill:#713f12,stroke:#fbbf24,stroke-width:2px,color:#f8fafc
   style commands__math fill:#4c1d95,stroke:#a78bfa,stroke-width:2px,color:#f8fafc
   style commands__events fill:#4c1d95,stroke:#c084fc,stroke-width:2px,color:#f8fafc
   style commands__ui fill:#4c1d95,stroke:#d8b4fe,stroke-width:2px,color:#f8fafc
@@ -176,7 +187,8 @@ flowchart LR
   linkStyle 8 stroke:#60a5fa,stroke-width:2.5px
   linkStyle 9 stroke:#60a5fa,stroke-width:2.5px
   linkStyle 10 stroke:#60a5fa,stroke-width:2.5px
-  linkStyle 11 stroke:#ef4444,stroke-width:2.5px,stroke-dasharray:8 5
+  linkStyle 11 stroke:#60a5fa,stroke-width:2.5px
+  linkStyle 12 stroke:#ef4444,stroke-width:2.5px,stroke-dasharray:8 5
 ```
 
 ### Renderer
@@ -1331,7 +1343,7 @@ flowchart LR
 
 | From | ✗ To | Why |
 |---|---|---|
-| GoSurveyEditor | Document | Reaches Domain only through Commands / Interaction. |
+| GoSurveyEditor | Document | Does not access drawing storage directly. |
 | GoSurveyEditor | Headless | Headless is for tests and batch runs. |
 | Commands | Interaction | One-way: Interaction may use Commands. |
 | Interaction | IO | Interaction also may not use Network or Pdf. |
@@ -1351,8 +1363,8 @@ the generator drops a gap from this list once the table no longer has it.
 
 - **Debug has no consumers.** No system lists Debug as an allowed dependency, so nothing may
   call the profiler, tracer or invariant checks.
-- **Commands may not include Geometry.** Math is allowed for general primitives; Interaction,
-  Renderer and IO may include both Geometry and Math.
+- **Commands and GoSurveyEditor may use Geometry's public kernel interface.** Geometry remains
+  a lower-tier library with only Math and Core dependencies; Qt remains independent of Geometry.
 - **Interaction may not include Pdf**, though it may include every other Domain system.
 - **GoSurveyEditor may not include Headless, Events, UI or Core directly**; it reaches them
   only through the systems it lists.

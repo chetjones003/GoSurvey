@@ -15,10 +15,6 @@ namespace geo {
 /// Largest leftover error (meters) at the drawing's extents that a conversion may have (D-2026-10-05-g).
 inline constexpr double kMaxResidualMeters = 0.02;
 
-/// Meters in one drawing unit (INSUNITS code: 1 in, 2 ft, 4 mm, 6 m). 0 = unitless / unknown, which
-/// compares as "nothing to convert". \p usSurveyFoot picks the foot's definition (REQ-357).
-[[nodiscard]] double MetersPerInsUnit(int insUnits, bool usSurveyFoot);
-
 struct ConversionInput {
   std::string fromZone;  ///< the drawing's CS-MAP code; empty = none
   std::string toZone;    ///< the project's; empty = none

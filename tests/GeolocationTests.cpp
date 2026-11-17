@@ -15,7 +15,7 @@
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
 #include "ViewportPickPolicy.hpp"
-#include "geo/CoordinateSystems.hpp"
+#include <GoSurvey/Survey/CoordinateSystems.hpp>
 
 namespace {
 

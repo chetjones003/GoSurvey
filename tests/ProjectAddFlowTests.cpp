@@ -8,8 +8,8 @@
 #include "ProjectAddFlow.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectSettings.hpp"
-#include "geo/CoordinateSystems.hpp"
-#include "geo/DrawingConversion.hpp"
+#include <GoSurvey/Survey/CoordinateSystems.hpp>
+#include <GoSurvey/Survey/DrawingConversion.hpp>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>

@@ -22,8 +22,8 @@
 #include <string>
 #include <vector>
 
-#include "util/brep.hpp"
-#include "util/nurbs.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
+#include <GoSurvey/Geometry/nurbs.hpp>
 
 using Catch::Approx;
 

@@ -56,12 +56,12 @@ class SystemDependencyDiagramTests(unittest.TestCase):
             diagrams.validate(self.changed("renderer", "core", add=False), feature_edges=[])
         with self.assertRaisesRegex(diagrams.DiagramError, "allows editor -> core"):
             diagrams.validate(self.changed("editor", "core", add=True))
+        diagrams.validate(self.changed("editor", "survey", add=True))
 
     def test_gap_is_dropped_when_the_map_no_longer_has_it(self):
-        self.assertIn("Commands may not include Geometry", diagrams.render_markdown(self.allowed))
-        self.assertIn("Math is allowed for general primitives", diagrams.render_markdown(self.allowed))
-        fixed = self.changed("commands", "geometry", add=True)
-        self.assertNotIn("Commands may not include Geometry", diagrams.render_markdown(fixed))
+        self.assertIn("Commands and GoSurveyEditor may use Geometry's public kernel interface", diagrams.render_markdown(self.allowed))
+        fixed = self.changed("commands", "geometry", add=False)
+        self.assertNotIn("Commands and GoSurveyEditor may use Geometry's public kernel interface", diagrams.render_markdown(fixed))
 
     def test_system_missing_from_diagrams_is_reported(self):
         with tempfile.TemporaryDirectory() as temporary:

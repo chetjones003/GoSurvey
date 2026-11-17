@@ -1,6 +1,6 @@
 #pragma once
 
-#include "brep.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
 
 #include <string>
 #include <string_view>

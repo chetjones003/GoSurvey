@@ -15,7 +15,7 @@
 
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
-#include "util/brep.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
 #include "util/cadblock.hpp"
 
 namespace {

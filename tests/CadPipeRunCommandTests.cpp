@@ -2,7 +2,7 @@
 #include "CadCommands.hpp"
 #include "util/cadpiperun.hpp"
 #include "CadRubberPreview.hpp"
-#include "util/brep.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
 #include <chrono>
 #include <GoSurvey/Math/ucs.hpp>
 

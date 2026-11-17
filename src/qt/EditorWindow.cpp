@@ -33,7 +33,7 @@
 #include "DwgIo.hpp"
 #include "GsIo.hpp"
 #include "AppPaths.hpp"
-#include "geo/CoordinateSystems.hpp"
+#include <GoSurvey/Survey/CoordinateSystems.hpp>
 #include "UserPrefs.hpp"
 #include "ViewportZoomScale.hpp"
 #include <QInputDialog>

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "curveintersect.hpp"
-#include "nurbs.hpp"
+#include <GoSurvey/Geometry/curveintersect.hpp>
+#include <GoSurvey/Geometry/nurbs.hpp>
 #include <GoSurvey/Math/ucs.hpp>
 
 #include <cstdint>

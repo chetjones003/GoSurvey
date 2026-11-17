@@ -11,7 +11,7 @@
 //                           database. The user's original is never opened for writing.
 
 #include "CadCommands.hpp"
-#include "geo/DrawingConversion.hpp"
+#include <GoSurvey/Survey/DrawingConversion.hpp>
 #include "io/ProjectAddDrawing.hpp"
 
 #include <map>

@@ -1,4 +1,4 @@
-#include "nurbs.hpp"
+#include <GoSurvey/Geometry/nurbs.hpp>
 
 #include <algorithm>
 #include <array>

@@ -17,7 +17,7 @@
 #include "CadCommands.hpp"
 #include "DwgIo.hpp"
 #include "LibreDwgCad.hpp"
-#include "geo/CoordinateSystems.hpp"
+#include <GoSurvey/Survey/CoordinateSystems.hpp>
 
 #if defined(__cplusplus) && !defined(restrict)
 #define restrict

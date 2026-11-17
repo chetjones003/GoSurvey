@@ -15,7 +15,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include "../../src/util/nurbs.hpp"
+#include <GoSurvey/Geometry/nurbs.hpp>
 
 #include <cmath>
 #include <vector>

@@ -4,7 +4,7 @@
 #include "CadCommands.hpp"
 #include "CadDimStroke.hpp"
 #include "CadCoordinateFrame.hpp"
-#include "geom2d.hpp"
+#include <GoSurvey/Geometry/geom2d.hpp>
 #include "util/cadpiperun.hpp"  // CadBuildPipeRunSolids (issue #486 increment B2 / REQ-345)
 
 #include <vector>

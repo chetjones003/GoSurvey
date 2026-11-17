@@ -2,10 +2,10 @@
 
 #include "SurveyPoints.hpp"
 #include "alignment/Alignment.hpp"
-#include "geom2d.hpp"
+#include <GoSurvey/Geometry/geom2d.hpp>
 #include "util/cadblock.hpp"
 #include "util/cadpiperun.hpp"
-#include "util/curveintersect.hpp"
+#include <GoSurvey/Geometry/curveintersect.hpp>
 #include "util/pointcloudcache.hpp"
 #include "util/pointcloudoctree.hpp"
 #include "util/solidpick.hpp"

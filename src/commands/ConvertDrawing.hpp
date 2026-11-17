@@ -8,7 +8,7 @@
 // ever carries the (large) shift and nothing loses precision to it.
 
 #include "CadCommands.hpp"
-#include "geo/DrawingConversion.hpp"
+#include <GoSurvey/Survey/DrawingConversion.hpp>
 
 #include <string>
 #include <vector>

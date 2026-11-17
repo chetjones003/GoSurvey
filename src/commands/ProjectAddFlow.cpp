@@ -1,3 +1,5 @@
+#include <GoSurvey/Core/Units.hpp>
+
 #include "ProjectAddFlow.hpp"
 
 #include "ConvertDrawing.hpp"
@@ -40,10 +42,10 @@ geo::ConversionInput InputFor(const AppCommandState& d, const ProjectSettings& p
   geo::ConversionInput in;
   in.fromZone = d.drawingSettings.zoneCode;
   in.toZone = ps.zoneCode;
-  in.fromMetersPerUnit = geo::MetersPerInsUnit(d.drawingInsUnits, UsSurveyFoot(d.drawingSettings));
+  in.fromMetersPerUnit = GoSurvey::Core::MetersPerInsUnit(d.drawingInsUnits, UsSurveyFoot(d.drawingSettings));
   const bool toUs = ps.hasDefaults ? ps.defaults.footDefinition == DrawingSettings::FootDefinition::UsSurvey
                                    : UsSurveyFoot(d.drawingSettings);
-  in.toMetersPerUnit = ps.insUnits >= 0 ? geo::MetersPerInsUnit(ps.insUnits, toUs) : 0.0;
+  in.toMetersPerUnit = ps.insUnits >= 0 ? GoSurvey::Core::MetersPerInsUnit(ps.insUnits, toUs) : 0.0;
   DrawingWorldExtents(d, &in.minX, &in.maxX, &in.minY, &in.maxY);
   return in;
 }

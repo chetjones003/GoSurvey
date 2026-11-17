@@ -8,7 +8,7 @@
 
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
-#include "geo/LocalGridTransform.hpp"
+#include <GoSurvey/Survey/LocalGridTransform.hpp>
 
 #include <algorithm>
 #include <cctype>

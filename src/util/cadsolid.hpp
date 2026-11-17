@@ -7,7 +7,7 @@
 /// tessellation cache, and the batches the renderer is handed. It is still pure — no GL or UI,
 /// no `AppCommandState` — so the cache's staleness rule stays testable without a window.
 
-#include "brep.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
 
 #include <cstdint>
 #include <memory>
