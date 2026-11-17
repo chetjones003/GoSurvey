@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include "util/benchscene.hpp"
+#include "../../src/util/benchscene.hpp"
 
 using Catch::Approx;
 
