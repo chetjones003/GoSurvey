@@ -6,6 +6,7 @@
 #include <GoSurvey/Survey/AlignmentLabelSetPublic.hpp>
 #include <GoSurvey/Survey/CoordinateSystems.hpp>
 #include <GoSurvey/Survey/EcefTransformPublic.hpp>
+#include <GoSurvey/Survey/SampleLines.hpp>
 
 #include <cmath>
 #include <iostream>
@@ -56,5 +57,13 @@ int main() {
   double x = 0.0, y = 0.0, z = 0.0;
   geo::GeodeticToEcefWgs84(0.0, 0.0, 0.0, &x, &y, &z);
   if (std::fabs(x - 6378137.0) > 1e-6 || std::fabs(y) > 1e-6 || std::fabs(z) > 1e-6) return 14;
+  alignment::SampleLine section;
+  section.origin = {0.0, 0.0};
+  section.direction = {1.0, 0.0};
+  section.leftWidth = 0.25;
+  section.rightWidth = 0.25;
+  const survey::ElevationSampler flat = [](double, double, double* out) { *out = 0.0; return true; };
+  alignment::SampleSection({-1.0, -1.0, 0.0, 1.0, -1.0, 0.0, 0.0, 1.0, 0.0}, {0, 1, 2}, flat, section);
+  if (section.section.empty()) return 15;
   return 0;
 }

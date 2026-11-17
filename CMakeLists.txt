@@ -1234,7 +1234,6 @@ if(GOSURVEY_BUILD_TESTS)
     tests/TestSoundGuard.cpp
     tests/TestSoundGuardTests.cpp
     tests/TraverseTests.cpp
-    tests/EcefTransformTests.cpp
     tests/PaperSpaceTests.cpp
     tests/PaperLeaderTests.cpp
     tests/PaperTableTests.cpp
@@ -1350,16 +1349,13 @@ if(GOSURVEY_BUILD_TESTS)
     tests/CadTableTests.cpp
     tests/CadBlockTests.cpp
     tests/CadPipeRunTests.cpp
-    tests/AlignmentTests.cpp
     tests/AlignmentCommandTests.cpp
     tests/AlignmentViewFrameTests.cpp
     tests/ViewFrameSheetTests.cpp
-    tests/AlignmentSampleLineTests.cpp
     tests/AlignmentProfileTests.cpp  # REQ-521 (issue #1163)
     tests/SectionSheetTests.cpp
     tests/AlignmentStyleTests.cpp
     tests/AlignmentLabelTests.cpp
-    tests/AlignmentReportTests.cpp
     tests/AlignmentGroundTests.cpp
     tests/AlignmentTableTests.cpp
     tests/AlignmentLabelOffsetTests.cpp
@@ -1861,6 +1857,18 @@ if(GOSURVEY_BUILD_TESTS)
   add_test(NAME PointCloud.public-consumer COMMAND GoSurveyPointCloudPublicConsumer)
   set_tests_properties(PointCloud.public-consumer PROPERTIES LABELS PointCloud)
 
+  # Pure Survey algorithms and Terrain sampling integration run without Qt or OpenGL.
+  add_executable(GoSurveySurveyTests
+    tests/AlignmentReportTests.cpp
+    tests/AlignmentTests.cpp
+    tests/AlignmentSampleLineTests.cpp
+    tests/EcefTransformTests.cpp)
+  set_target_properties(GoSurveySurveyTests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_include_directories(GoSurveySurveyTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  target_link_libraries(GoSurveySurveyTests PRIVATE GoSurvey::Survey GoSurvey::Terrain Catch2::Catch2WithMain)
+  gosurvey_target_warnings(GoSurveySurveyTests TEST)
+  catch_discover_tests(GoSurveySurveyTests PROPERTIES LABELS Survey)
+
   # Verify Survey's real public header and transitive provider closure without application-private roots.
   add_executable(GoSurveySurveyPublicConsumer tests/Survey/SurveyPublicConsumer.cpp)
   set_target_properties(GoSurveySurveyPublicConsumer PROPERTIES
@@ -1899,7 +1907,7 @@ if(GOSURVEY_BUILD_TESTS)
         -ShardIndex ${_shard} -ShardCount ${GOSURVEY_CATCH_TEST_SHARDS}
         -WorkingDirectory "$<TARGET_FILE_DIR:GoSurveyQt>"
         -OutputDirectory "${CMAKE_BINARY_DIR}/../../artifacts/catch")
-    set_tests_properties(unit.catch.shard-${_shard} PROPERTIES TIMEOUT 900 COST 100 LABELS "Integration;Terrain")
+    set_tests_properties(unit.catch.shard-${_shard} PROPERTIES TIMEOUT 900 COST 100 LABELS "Integration;Terrain;Survey")
   endforeach()
 
   # Register the independent, isolated Qt shards before the transcript cases so CTest can run both
