@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "tinbuild.hpp"
+#include <GoSurvey/Terrain/tinbuild.hpp>
 
 [[nodiscard]] bool GridIndexValid(int cols, int rows, const std::vector<float>& z);
 

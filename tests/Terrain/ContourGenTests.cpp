@@ -22,7 +22,7 @@
 #include <limits>
 #include <vector>
 
-#include "util/contourgen.hpp"
+#include <GoSurvey/Terrain/contourgen.hpp>
 
 namespace {
 

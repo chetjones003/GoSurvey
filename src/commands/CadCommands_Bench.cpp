@@ -8,7 +8,7 @@
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
 #include <GoSurvey/Debug/BenchScene.hpp>
-#include "util/tinbuild.hpp"
+#include <GoSurvey/Terrain/tinbuild.hpp>
 #include "SurfaceStyle.hpp"
 #include "AppPaths.hpp"
 

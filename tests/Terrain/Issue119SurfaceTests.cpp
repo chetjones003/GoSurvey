@@ -2,11 +2,11 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
-#include "contourgen.hpp"
-#include "gridsurface.hpp"
-#include "surfacequery.hpp"
-#include "surfacestats.hpp"
-#include "tinbuild.hpp"
+#include <GoSurvey/Terrain/contourgen.hpp>
+#include <GoSurvey/Terrain/gridsurface.hpp>
+#include <GoSurvey/Terrain/surfacequery.hpp>
+#include <GoSurvey/Terrain/surfacestats.hpp>
+#include <GoSurvey/Terrain/tinbuild.hpp>
 
 #include <limits>
 #include <vector>

@@ -3,7 +3,7 @@
 /// REQ-136: a TIN volume surface — comparison elevation minus base elevation at shared plan
 /// positions, triangulated as an ordinary TIN. Pure and GL-free (ADR-028 (c), ADR-039 (a)).
 
-#include "tinbuild.hpp"
+#include <GoSurvey/Terrain/tinbuild.hpp>
 
 #include <cstdint>
 #include <vector>

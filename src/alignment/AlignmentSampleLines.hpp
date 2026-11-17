@@ -1,7 +1,7 @@
 #pragma once
 
 #include "alignment/Alignment.hpp"
-#include "util/surfacevolume.hpp"  // TinSpatialIndex
+#include <GoSurvey/Terrain/surfacevolume.hpp>  // TinSpatialIndex
 
 #include <cstdint>
 #include <string>

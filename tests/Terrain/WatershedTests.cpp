@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "util/watershed.hpp"
+#include <GoSurvey/Terrain/watershed.hpp>
 
 using Catch::Approx;
 

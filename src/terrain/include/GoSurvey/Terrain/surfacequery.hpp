@@ -5,7 +5,7 @@
 /// Pure util: no document types. Callers that have a `CadSurface` construct the matching
 /// implementation. Two concrete classes satisfy REQ-301.
 
-#include "surfacevolume.hpp"
+#include <GoSurvey/Terrain/surfacevolume.hpp>
 
 #include <cstdint>
 #include <vector>

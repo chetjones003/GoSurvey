@@ -1,9 +1,9 @@
-#include "surfacequery.hpp"
+#include <GoSurvey/Terrain/surfacequery.hpp>
 
-#include "gridsurface.hpp"
-#include "surfaceanalysis.hpp"
-#include "surfacevolume.hpp"
-#include "tinbuild.hpp"
+#include <GoSurvey/Terrain/gridsurface.hpp>
+#include <GoSurvey/Terrain/surfaceanalysis.hpp>
+#include <GoSurvey/Terrain/surfacevolume.hpp>
+#include <GoSurvey/Terrain/tinbuild.hpp>
 
 #include <cassert>
 #include <cmath>

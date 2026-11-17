@@ -12,7 +12,7 @@
 #include "CadCommands.hpp"
 #include "alignment/Alignment.hpp"
 #include "alignment/AlignmentGround.hpp"
-#include "util/surfacequery.hpp"
+#include <GoSurvey/Terrain/surfacequery.hpp>
 
 using alignment::Alignment;
 using alignment::GroundPoint;

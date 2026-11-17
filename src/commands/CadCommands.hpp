@@ -4,7 +4,7 @@
 #include <limits>
 
 #include "CadEntities.hpp"
-#include "util/surfacequery.hpp"  // ISurfaceQuery, for MakeSurfaceQueryForCommands (REQ-497)
+#include <GoSurvey/Terrain/surfacequery.hpp>  // ISurfaceQuery, for MakeSurfaceQueryForCommands (REQ-497)
 #include "alignment/Alignment.hpp"  // REQ-480 / ADR-075: per-drawing alignment store
 #include "alignment/AlignmentViewFrames.hpp"  // REQ-517: view frame groups that follow an alignment
 #include "alignment/AlignmentSampleLines.hpp"  // REQ-519: sample lines and their sections
@@ -44,10 +44,10 @@
 #include "traverse/TraverseCalc.hpp"
 #include "traverse/TraverseLeastSquares.hpp"
 #include "update/UpdateCheck.hpp"  // update::UpdatePrefs only — pure, no network, no <thread>
-#include "util/tinbuild.hpp"       // TinBuildResult, for AppCommandState::SurfaceRebuildAsync (REQ-069)
-#include "util/surfacevolume.hpp"  // SurfaceVolumeResult, for AppCommandState::VolumeDashboardState (REQ-073)
-#include "util/surfacequery.hpp"   // SurfaceProfileSample, Quick Profile (REQ-145)
-#include "util/watershed.hpp"      // WatershedResult, for AppCommandState::SurfaceWatershedCacheEntry (REQ-132)
+#include <GoSurvey/Terrain/tinbuild.hpp>       // TinBuildResult, for AppCommandState::SurfaceRebuildAsync (REQ-069)
+#include <GoSurvey/Terrain/surfacevolume.hpp>  // SurfaceVolumeResult, for AppCommandState::VolumeDashboardState (REQ-073)
+#include <GoSurvey/Terrain/surfacequery.hpp>   // SurfaceProfileSample, Quick Profile (REQ-145)
+#include <GoSurvey/Terrain/watershed.hpp>      // WatershedResult, for AppCommandState::SurfaceWatershedCacheEntry (REQ-132)
 #include <GoSurvey/Geometry/geom2d.hpp>        // BulgeArc, for the polyline arc-segment grips (REQ-316 / ADR-047)
 // HoverDwell, for AppCommandState's surface rollover timer (REQ-089). Pure and dependency-free
 // (<cmath>), and deliberately in util/ rather than beside the UI that drives it: the state lives on

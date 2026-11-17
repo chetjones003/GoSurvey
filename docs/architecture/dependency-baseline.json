@@ -227,80 +227,10 @@
     },
     {
       "file": "src/commands/CadCommands.cpp",
-      "include": "util/tinbuild.hpp",
-      "target": "Terrain",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"util/tinbuild.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "util/contourgen.hpp",
-      "target": "Terrain",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"util/contourgen.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "util/surfaceanalysis.hpp",
-      "target": "Terrain",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"util/surfaceanalysis.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "util/surfacevolume.hpp",
-      "target": "Terrain",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"util/surfacevolume.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "util/surfacestats.hpp",
-      "target": "Terrain",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"util/surfacestats.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "util/watershed.hpp",
-      "target": "Terrain",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"util/watershed.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
       "include": "alignment/AlignmentGround.hpp",
       "target": "Survey",
       "rule": "private-header include",
       "message": "src/commands/CadCommands.cpp includes \"alignment/AlignmentGround.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "util/tinvolume.hpp",
-      "target": "Terrain",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"util/tinvolume.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "util/gridsurface.hpp",
-      "target": "Terrain",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"util/gridsurface.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "util/surfacequery.hpp",
-      "target": "Terrain",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"util/surfacequery.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "util/daylight.hpp",
-      "target": "Terrain",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"util/daylight.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
     },
     {
       "file": "src/commands/CadCommands.cpp",
@@ -385,13 +315,6 @@
       "target": "Interaction",
       "rule": "forbidden dependency",
       "message": "src/commands/CadCommands.cpp includes \"CadSnap.hpp\": Commands may not depend on Interaction (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "util/surfacequery.hpp",
-      "target": "Terrain",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"util/surfacequery.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
     },
     {
       "file": "src/commands/CadCommands.hpp",
@@ -518,34 +441,6 @@
       "target": "Network",
       "rule": "private-header include",
       "message": "src/commands/CadCommands.hpp includes \"update/UpdateCheck.hpp\": cross-system include must use GoSurvey/Network/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "util/tinbuild.hpp",
-      "target": "Terrain",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"util/tinbuild.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "util/surfacevolume.hpp",
-      "target": "Terrain",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"util/surfacevolume.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "util/surfacequery.hpp",
-      "target": "Terrain",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"util/surfacequery.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "util/watershed.hpp",
-      "target": "Terrain",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"util/watershed.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
     },
     {
       "file": "src/commands/CadCommands.hpp",
@@ -707,13 +602,6 @@
       "target": "Debug",
       "rule": "forbidden dependency",
       "message": "src/commands/CadCommands_Bench.cpp includes \"util/benchscene.hpp\": Commands may not depend on Debug (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands_Bench.cpp",
-      "include": "util/tinbuild.hpp",
-      "target": "Terrain",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands_Bench.cpp includes \"util/tinbuild.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
     },
     {
       "file": "src/commands/CadCommands_Bench.cpp",

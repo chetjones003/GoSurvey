@@ -1,6 +1,6 @@
-#include "surfacestats.hpp"
+#include <GoSurvey/Terrain/surfacestats.hpp>
 
-#include "surfaceanalysis.hpp"
+#include <GoSurvey/Terrain/surfaceanalysis.hpp>
 
 #include <algorithm>
 #include <cmath>

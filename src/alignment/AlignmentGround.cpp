@@ -1,6 +1,6 @@
 #include "alignment/AlignmentGround.hpp"
 
-#include "util/surfacequery.hpp"
+#include <GoSurvey/Terrain/surfacequery.hpp>
 
 #include <algorithm>
 #include <cmath>

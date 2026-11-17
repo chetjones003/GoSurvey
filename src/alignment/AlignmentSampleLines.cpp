@@ -1,8 +1,8 @@
 #include "alignment/AlignmentSampleLines.hpp"
 
 #include "alignment/AlignmentViewFrames.hpp"
-#include "util/surfacequery.hpp"
-#include "util/surfacevolume.hpp"
+#include <GoSurvey/Terrain/surfacequery.hpp>
+#include <GoSurvey/Terrain/surfacevolume.hpp>
 
 #include <algorithm>
 #include <cmath>

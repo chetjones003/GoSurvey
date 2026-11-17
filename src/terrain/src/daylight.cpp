@@ -1,4 +1,4 @@
-#include "daylight.hpp"
+#include <GoSurvey/Terrain/daylight.hpp>
 
 #include <cmath>
 

@@ -20,7 +20,7 @@
 
 #include <vector>
 
-#include "util/surfaceanalysis.hpp"
+#include <GoSurvey/Terrain/surfaceanalysis.hpp>
 
 using Catch::Approx;
 

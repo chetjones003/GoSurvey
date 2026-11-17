@@ -1,4 +1,4 @@
-#include "AlignmentFeatureLine.hpp"
+#include <GoSurvey/Terrain/AlignmentFeatureLine.hpp>
 
 #include <GoSurvey/Survey/Alignment.hpp>
 

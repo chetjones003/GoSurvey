@@ -3,8 +3,8 @@
 // example and wrong on exactly the cases a real grading comparison needs — no overlap, self vs self,
 // partial overlap.
 
-#include "util/surfacevolume.hpp"
-#include "util/tinbuild.hpp"
+#include <GoSurvey/Terrain/surfacevolume.hpp>
+#include <GoSurvey/Terrain/tinbuild.hpp>
 #include <GoSurvey/Debug/BenchScene.hpp>
 
 #include <catch2/catch_test_macros.hpp>

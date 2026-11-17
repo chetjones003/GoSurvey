@@ -1,4 +1,4 @@
-#include "contourgen.hpp"
+#include <GoSurvey/Terrain/contourgen.hpp>
 
 #include <algorithm>
 #include <cmath>
