@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-#include "util/meshgeom.hpp"
+#include "../../src/util/meshgeom.hpp"
 
 using Catch::Approx;
 using meshgeom::MeshProblem;

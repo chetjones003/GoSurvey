@@ -12,7 +12,7 @@
 #include <cmath>
 #include <vector>
 
-#include "util/curveintersect.hpp"
+#include "../../src/util/curveintersect.hpp"
 
 using Catch::Approx;
 using namespace curveisect;
