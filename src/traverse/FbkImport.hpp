@@ -1,6 +1,6 @@
 #pragma once
 
-#include "TraverseCalc.hpp"
+#include <GoSurvey/Survey/TraverseCalcPublic.hpp>
 
 #include <string>
 

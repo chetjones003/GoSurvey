@@ -382,7 +382,7 @@ unset(_lasz)
 # --- CS-MAP: vendored headers + prebuilt static lib + dictionaries (REQ-358 / ADR-063) ---
 # OSGeo MetaCRS CS-MAP, the coordinate-system catalogue and projection engine. Prebuilt MSVC x64
 # Release /MD static lib, like LibreDWG. Its headers are NOT an interface include directory: only
-# src/geo/CoordinateSystems.cpp may include them (ADR-063 (c)), so they are added to that one source
+# the coordinate implementation may include them (ADR-063 (c)), so they are added to that source
 # below. The compiled dictionaries and the US grid files (D-2026-09-29-d) are staged beside the
 # executable as resources/csmap/ — installer payload and what the tests load.
 set(GOSURVEY_CSMAP_DIR "${GOSURVEY_TP}/csmap")
@@ -510,8 +510,11 @@ target_link_libraries(gosurvey_math INTERFACE GoSurvey::Core)
 add_library(gosurvey_geometry STATIC
   # Planar geometry math: bulge arcs, extents, revision clouds.
   src/geometry/src/geom2d.cpp
+  # Uniform-grid broad phase shared by Geometry, Survey and Terrain.
+  src/geometry/src/TriangleGridIndex.cpp
   # REQ-443 SPLINE mathematics (NURBS curve: fit / control-vertex construction, evaluation, tessellation).
   src/geometry/src/spline.cpp
+  src/geometry/src/ClothoidIntegration.cpp
   # Intersection math behind the INT/APPINT snaps (REQ-062). Pure and dependency-free on purpose.
   src/geometry/src/curveintersect.cpp
   # REQ-063 mesh validation + bounds + normals.
@@ -529,6 +532,13 @@ target_compile_features(gosurvey_geometry PUBLIC cxx_std_17)
 target_link_libraries(gosurvey_geometry PUBLIC GoSurvey::Math GoSurvey::Core)
 gosurvey_target_warnings(gosurvey_geometry)
 
+# Shared persisted appearance values, used by Surface and Survey style records.
+add_library(gosurvey_document_appearance INTERFACE)
+add_library(GoSurvey::DocumentAppearance ALIAS gosurvey_document_appearance)
+target_include_directories(gosurvey_document_appearance INTERFACE
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/document/include>")
+target_compile_features(gosurvey_document_appearance INTERFACE cxx_std_17)
+
 # GoSurvey::Survey — T2 domain library. Alignment is a public Survey model used by Terrain;
 # its legacy declarations stay at their existing paths until the move-only follow-up.
 set(GOSURVEY_COORDINATE_SOURCES
@@ -541,6 +551,7 @@ add_library(gosurvey_survey STATIC
   src/alignment/AlignmentEdit.cpp
   src/alignment/AlignmentLayout.cpp
   src/alignment/AlignmentGround.cpp
+  src/alignment/AlignmentSampleLines.cpp
   src/alignment/AlignmentViewFrames.cpp
   src/alignment/AlignmentProfile.cpp
   src/alignment/AlignmentDesign.cpp
@@ -562,8 +573,17 @@ target_include_directories(gosurvey_survey
           "${CMAKE_CURRENT_SOURCE_DIR}/src/traverse"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/util")
 target_compile_features(gosurvey_survey PUBLIC cxx_std_17)
-target_link_libraries(gosurvey_survey PUBLIC GoSurvey::Geometry GoSurvey::Math GoSurvey::Core CsMap::csmap)
+target_link_libraries(gosurvey_survey PUBLIC GoSurvey::DocumentAppearance GoSurvey::Geometry GoSurvey::Math GoSurvey::Core CsMap::csmap)
 gosurvey_target_warnings(gosurvey_survey)
+
+# Real backend-neutral Renderer cache provider over the Survey alignment model.
+add_library(gosurvey_renderer_alignment_cache STATIC src/alignment/AlignmentDisplayCache.cpp)
+add_library(GoSurvey::RendererAlignmentCache ALIAS gosurvey_renderer_alignment_cache)
+target_include_directories(gosurvey_renderer_alignment_cache PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include>")
+target_compile_features(gosurvey_renderer_alignment_cache PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_renderer_alignment_cache PUBLIC GoSurvey::Survey)
+gosurvey_target_warnings(gosurvey_renderer_alignment_cache)
 
 # GoSurvey::Terrain — T2 Domain library (issue #1245). The pure surface/TIN and grading
 # algorithms compile independently of the application layer. Physical relocation is isolated
@@ -703,6 +723,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/CadField.cpp
   src/commands/TraverseActions.cpp
   src/commands/TraverseReportActions.cpp
+  src/commands/TraverseFileActions.cpp
   # Cohesive slices split out of the CadCommands.cpp mega-TU (TASK-150 Phase 2,
   # issue #142). Same TU rules; entry points declared in CadCommands.hpp.
   src/commands/CadCommands_Align.cpp
@@ -827,10 +848,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Update check (REQ-077/078, ADR-029) — UpdatePrefs is reachable from AppCommandState
   src/update/UpdateCheck.cpp
 
-  # Civil alignments (REQ-480..484, ADR-075, issue #121): exact tangent/curve geometry, stationing, queries
+  # Application alignment grip operations; model and display-cache implementations have their own providers.
   src/alignment/AlignmentGrips.cpp
-  src/alignment/AlignmentSampleLines.cpp
-  src/alignment/AlignmentDisplayCache.cpp
   src/util/gltfimport.cpp
   src/util/stlimport.cpp
   # BENCH scene/statistics implementation is compiled by GoSurvey::Debug.
@@ -907,7 +926,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
-target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf GoSurvey::IOTraverseReport)
+target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf GoSurvey::IOTraverseReport GoSurvey::RendererAlignmentCache)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
@@ -1657,7 +1676,7 @@ if(GOSURVEY_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/terrain/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests"
     ${NLOHMANN_JSON_INCLUDE})
-  target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug GoSurvey::Geometry GoSurvey::PointCloud GoSurvey::Pdf Catch2::Catch2WithMain)
+  target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug GoSurvey::Geometry GoSurvey::PointCloud GoSurvey::Pdf GoSurvey::Survey Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyDebugTests PROPERTIES LABELS Debug)
   gosurvey_target_warnings(GoSurveyDebugTests TEST)
 

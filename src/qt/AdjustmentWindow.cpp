@@ -4,13 +4,7 @@
 #include "QtText.hpp"
 #include "ProjectFiles.hpp"
 #include "QtAccent.hpp"
-#include "traverse/TraverseIo.hpp"
 #include "traverse/TraverseReport.hpp"
-#include "traverse/TraverseCommandLang.hpp"
-#include "traverse/FbkImport.hpp"
-#include "traverse/StarNetImport.hpp"
-#include "traverse/Rw5Import.hpp"
-#include "traverse/JobXmlImport.hpp"
 #include <QAction>
 #include <QColor>
 #include <QFile>
@@ -302,7 +296,7 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   m_WorkspaceTabs = workspaceTabs;
   m_Editor = new AdjustmentCodeEdit(workspaceTabs);
   m_Editor->setObjectName("adjustmentCommands");
-  m_Editor->setPlainText(QString::fromUtf8(travcmd::Serialize(state.traverseData, state.traverseLsaWeights).c_str()));
+  m_Editor->setPlainText(QString::fromUtf8(SerializeTraverseCommandText(state.traverseData, state.traverseLsaWeights).c_str()));
   m_SourceText = m_SavedText = m_Editor->toPlainText();
   workspaceTabs->addTab(m_Editor, "Commands");
   auto* results = new QTabWidget(workspaceTabs);
@@ -535,7 +529,7 @@ void AdjustmentWindow::ValidateNow() {
   TraverseData data;
   LsaWeights weights = m_Weights;
   std::string reason;
-  if (travcmd::Parse(m_Editor->toPlainText().toUtf8().toStdString(), data, weights, reason)) {
+  if (ParseTraverseCommandText(m_Editor->toPlainText().toUtf8().toStdString(), data, weights, reason)) {
     ComputeTraverse(data);
     m_PreviewData = std::move(data);
     m_Editor->SetError(0, {});
@@ -827,10 +821,10 @@ bool AdjustmentWindow::LoadFile(const QString& path, QString& reason) {
   std::string error;
   const QByteArray utf8 = path.toUtf8();
   bool ok = false;
-  if (suffix == "gstrav") ok = traverseio::Load(utf8.toStdString(), data, weights, error);
+  if (suffix == "gstrav") ok = LoadTraverseDataFile(utf8.toStdString(), data, weights, error);
   else {
     QFile file(path);
-    if (file.open(QIODevice::ReadOnly)) ok = travcmd::Parse(file.readAll().toStdString(), data, weights, error);
+    if (file.open(QIODevice::ReadOnly)) ok = ParseTraverseCommandText(file.readAll().toStdString(), data, weights, error);
     else error = file.errorString().toUtf8().toStdString();
   }
   if (!ok) { reason = QString::fromUtf8(error.c_str()); return false; }
@@ -839,7 +833,7 @@ bool AdjustmentWindow::LoadFile(const QString& path, QString& reason) {
   m_CurvRefr->setChecked(data.applyCurvRefCorr);
   m_RefractionK->setValue(data.refractionCoeff);
   m_SyncingOptions = false;
-  m_Editor->setPlainText(QString::fromUtf8(travcmd::Serialize(data, weights).c_str()));
+  m_Editor->setPlainText(QString::fromUtf8(SerializeTraverseCommandText(data, weights).c_str()));
   m_SourceText = m_SavedText = m_Editor->toPlainText();
   m_Path = suffix == "gstrav" || suffix == "gstc" || suffix == "gsdat" ? path : QString{};
   m_Imported = m_Path.isEmpty();
@@ -869,10 +863,10 @@ int AdjustmentWindow::ImportFiles(const QStringList& paths, QStringList& failure
     std::string reason;
     bool ok = false;
     const char* format = "raw traverse";
-    if (suffix == "fbk") { ok = FbkImport(utf8.constData(), imported, reason); format = "FBK"; }
-    else if (suffix == "dat") { ok = StarNetImport(utf8.constData(), imported, reason); format = "STAR*NET"; }
-    else if (suffix == "rw5") { ok = Rw5Import(utf8.constData(), imported, reason); format = "RW5"; }
-    else if (suffix == "jxl" || suffix == "xml") { ok = JobXmlImport(utf8.constData(), imported, reason); format = "JobXML"; }
+    if (suffix == "fbk") { ok = ImportTraverseMeasurements("fbk", utf8.constData(), imported, reason); format = "FBK"; }
+    else if (suffix == "dat") { ok = ImportTraverseMeasurements("dat", utf8.constData(), imported, reason); format = "STAR*NET"; }
+    else if (suffix == "rw5") { ok = ImportTraverseMeasurements("rw5", utf8.constData(), imported, reason); format = "RW5"; }
+    else if (suffix == "jxl" || suffix == "xml") { ok = ImportTraverseMeasurements("jxl", utf8.constData(), imported, reason); format = "JobXML"; }
     else reason = "Unsupported raw traverse file type.";
 
     if (!ok) {
@@ -899,7 +893,7 @@ int AdjustmentWindow::ImportFiles(const QStringList& paths, QStringList& failure
   if (importedCount == 0) return 0;
   m_Path.clear();
   m_Imported = true;
-  m_Editor->setPlainText(QString::fromUtf8(travcmd::Serialize(m_Data, m_Weights).c_str()));
+  m_Editor->setPlainText(QString::fromUtf8(SerializeTraverseCommandText(m_Data, m_Weights).c_str()));
   m_SourceText = m_Editor->toPlainText();
   m_Coordinates->setRowCount(0);
   m_Residuals->setRowCount(0);
@@ -1035,7 +1029,7 @@ bool AdjustmentWindow::ParseEditor(QString& error) {
   TraverseData data;
   LsaWeights weights = m_Weights;
   std::string reason;
-  if (!travcmd::Parse(m_Editor->toPlainText().toUtf8().toStdString(), data, weights, reason)) {
+  if (!ParseTraverseCommandText(m_Editor->toPlainText().toUtf8().toStdString(), data, weights, reason)) {
     error = AddDirectiveSuggestion(QString::fromUtf8(reason.c_str())); return false;
   }
   data.importedFiles = importedFiles;
@@ -1051,7 +1045,7 @@ bool AdjustmentWindow::SaveFile(const QString& path, QString& error) {
   ApplyResolvedScale();  // keep the saved factor current; an unresolvable one is saved as 1.0
   if (QFileInfo(path).suffix().compare("gstrav", Qt::CaseInsensitive) == 0) {
     std::string reason;
-    if (!traverseio::Save(path.toUtf8().toStdString(), m_Data, m_Weights, reason)) {
+    if (!SaveTraverseDataFile(path.toUtf8().toStdString(), m_Data, m_Weights, reason)) {
       error = QString::fromUtf8(reason.c_str()); return false;
     }
   } else {
@@ -1286,7 +1280,7 @@ void AdjustmentWindow::ApplySettingsDraft() {
   m_Weights.refractionCoefficient = findChild<QDoubleSpinBox*>("issue915RefractionCoefficient")->value();
   m_State.traverseData = m_Data;
   m_State.traverseLsaWeights = m_Weights;
-  m_Editor->setPlainText(QString::fromUtf8(travcmd::Serialize(m_Data, m_Weights).c_str()));
+  m_Editor->setPlainText(QString::fromUtf8(SerializeTraverseCommandText(m_Data, m_Weights).c_str()));
   m_SourceText = m_Editor->toPlainText();
   m_Imported = true;
   InvalidateResult();

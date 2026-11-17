@@ -7,12 +7,12 @@
 
 #include "traverse/TraverseCalc.hpp"
 #include "traverse/TraverseLeastSquares.hpp"
-#include "traverse/FbkImport.hpp"
-#include "traverse/TraverseIo.hpp"
-#include "traverse/TraverseCommandLang.hpp"
-#include "traverse/StarNetImport.hpp"
-#include "traverse/Rw5Import.hpp"
-#include "traverse/JobXmlImport.hpp"
+#include <GoSurvey/IO/FbkImportPublic.hpp>
+#include <GoSurvey/IO/TraverseIoPublic.hpp>
+#include <GoSurvey/IO/TraverseCommandLangPublic.hpp>
+#include <GoSurvey/IO/StarNetImportPublic.hpp>
+#include <GoSurvey/IO/Rw5ImportPublic.hpp>
+#include <GoSurvey/IO/JobXmlImportPublic.hpp>
 #include "traverse/TraverseReport.hpp"
 #include <GoSurvey/IO/TraverseReportExport.hpp>
 #include <algorithm>

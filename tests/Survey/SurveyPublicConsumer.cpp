@@ -4,10 +4,17 @@
 #include <GoSurvey/Survey/SurveyPoints.hpp>
 #include <GoSurvey/Survey/TraverseReportPublic.hpp>
 #include <GoSurvey/Survey/TraverseCalcPublic.hpp>
+#include <GoSurvey/Survey/AlignmentLabelSetPublic.hpp>
+#include <GoSurvey/Survey/CoordinateSystems.hpp>
+#include <GoSurvey/Survey/EcefTransformPublic.hpp>
 
 #include <cmath>
 #include <iostream>
 #include <vector>
+
+#if __has_include(<commands/CadCommands.hpp>) || __has_include(<cs_map.h>)
+#error Survey consumers must not inherit application or CS-MAP private roots
+#endif
 
 int main() {
   alignment::Alignment route;
@@ -39,12 +46,23 @@ int main() {
   LsaResult result;
   const auto adjustment = traverserpt::BuildReportText(traverse, weights, result, "Consumer", "ft");
   if (adjustment.find("Summary of Files Used") == std::string::npos) return 8;
+  const auto standardStyle = AlignmentStyles::StandardAlignmentStyle();
+  if (standardStyle.name != "Standard" || standardStyle.arrows.visible) return 9;
+  AlignmentLabelSet labels;
+  if (!labels.geometryPointsOn) return 10;
+  alignment::Alignment spiral;
+  if (!spiral.AppendTangent({0.0, 0.0}, 0.0, 1.0)) return 11;
+  if (!spiral.AppendSpiral(10.0, 0.0, 100.0, true)) return 12;
+  if (geo::LoadDictionaries({}) || geo::DictionariesLoaded() || geo::DictionaryError().empty()) return 13;
+  double x = 0.0, y = 0.0, z = 0.0;
+  geo::GeodeticToEcefWgs84(0.0, 0.0, 0.0, &x, &y, &z);
+  if (std::fabs(x - 6378137.0) > 1e-6 || std::fabs(y) > 1e-6 || std::fabs(z) > 1e-6) return 14;
   SurveyPoint point;
   point.id = 42;
   point.labelStyle = SurveyPointLabelStyle::NumberOnly;
-  if (FormatSurveyPointLabelPlain(point, point.labelStyle, {}, 2) != "42") return 9;
+  if (FormatSurveyPointLabelPlain(point, point.labelStyle, {}, 2) != "42") return 15;
   std::vector<float> marker;
   AppendAllSurveyPointMarkers(0.1f, {point}, &marker);
-  if (marker.size() != 12) return 10;
+  if (marker.size() != 12) return 16;
   return 0;
 }

@@ -1,4 +1,4 @@
-#include "TraverseIo.hpp"
+#include <GoSurvey/IO/TraverseIoPublic.hpp>
 
 #include <nlohmann/json.hpp>
 

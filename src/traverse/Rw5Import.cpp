@@ -1,4 +1,4 @@
-#include "Rw5Import.hpp"
+#include <GoSurvey/IO/Rw5ImportPublic.hpp>
 
 #include <cmath>
 #include <cstdlib>

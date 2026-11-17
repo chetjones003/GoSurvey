@@ -1,4 +1,4 @@
-#include "TraverseCommandLang.hpp"
+#include <GoSurvey/IO/TraverseCommandLangPublic.hpp>
 
 #include <algorithm>
 #include <array>

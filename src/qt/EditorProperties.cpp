@@ -11,7 +11,6 @@
 #include <QApplication>
 #include <QPainter>
 
-#include "AlignmentStyle.hpp"
 #include "alignment/AlignmentDesign.hpp"
 #include "CadColor.hpp"
 #include "CadCoordinateFrame.hpp"
