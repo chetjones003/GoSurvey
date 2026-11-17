@@ -113,6 +113,14 @@
     {
       "path": "src/viewport/",
       "system": "Interaction"
+    },
+    {
+      "path": "src/terrain/include/",
+      "system": "Terrain"
+    },
+    {
+      "path": "src/terrain/src/",
+      "system": "Terrain"
     }
   ],
   "fileMappings": [
@@ -575,6 +583,16 @@
       "path": "src/util/watershed.hpp",
       "system": "Terrain",
       "status": "audited"
+    },
+    {
+      "path": "src/alignment/AlignmentFeatureLine.hpp",
+      "system": "Terrain",
+      "status": "audited"
+    },
+    {
+      "path": "src/alignment/AlignmentFeatureLine.cpp",
+      "system": "Terrain",
+      "status": "audited"
     }
   ],
   "unmappedPaths": [],
@@ -594,7 +612,8 @@
     "Renderer audit (issue #1231): Renderer file and section ownership is in auditedEntries.Renderer and sections. The src/render folder mapping, fileMappings and the ratchet baseline are unchanged, so the baseline does not move. GL device calls outside src/render (EditorViewport.cpp, FailureReport.cpp) are recorded as OpenGL sections with pending moves. GL-layout display caches in Commands state are recorded as Renderer sections. No code moved.",
     "IO audit (issue #1232): IO file and section ownership is recorded in auditedEntries.IO and sections. The eleven format/helper files in src/util receive advisory IO ownership in fileMappings and remain ambiguous so the dependency ratchet does not change; src/util/PointFileExt.hpp is called by the Windows backend, modelimport.hpp is a shared transfer contract, and SHX parsing is sectioned under IO in src/font/. Current cross-system and platform couplings are recorded in forbiddenDependencies and auditFindings. No code moved.",
     "IO audit follow-up: the whole SHX parser in src/font/ShxFont.cpp/.hpp is IO despite the Core folder mapping; src/util/SheetGrid.hpp and DataExtract.hpp are advisory IO export-grid ownership from the Document audit. Point-cloud readers, project-file, and B-rep serialization tests are included in existingTests. The draft DXF/DWG interface names match the current declarations and explicitly note their Commands-state coupling.",
-    "Owner approved the final system map and ownership decisions on issue #1238 in comment https://github.com/chetjones003/GoSurvey/issues/1238#issuecomment-6906650509. No source code moved; future map changes require a recorded decision."
+    "Owner approved the final system map and ownership decisions on issue #1238 in comment https://github.com/chetjones003/GoSurvey/issues/1238#issuecomment-6906650509. No source code moved; future map changes require a recorded decision.",
+    "Terrain carve-out (#1245) preparation: standalone surface/TIN algorithms and alignment feature-line station sampling compile in GoSurvey::Terrain. The existing Survey alignment model has a public forwarding header; feature-line declarations are Terrain-owned and forward-declare the Survey type. Legacy whole-file paths remain mapped until the separate pure-move PR. Mixed Commands god-file sections and command orchestration stay in Commands for their extraction tickets. Pure/header-only fixtures build in GoSurveyTerrainTests without Qt/OpenGL; command-workflow integration fixtures remain in the shared application test shards with Terrain and Integration labels."
   ],
   "sections": [
     {
@@ -765,7 +784,7 @@
       "symbols": [
         "CadFormatBearingCwNorthDegMinSec"
       ],
-      "note": "Divergent from Core FormatBearing, not a duplicate: prints 0Â°0'0.0\" where Core prints 0Â°00'00.0\" (asserted in tests/Core/AngleFormatTests.cpp). AngleFormat.hpp claims parity; that claim is false."
+      "note": "Divergent from Core FormatBearing, not a duplicate: prints 0\u00c2\u00b00'0.0\" where Core prints 0\u00c2\u00b000'00.0\" (asserted in tests/Core/AngleFormatTests.cpp). AngleFormat.hpp claims parity; that claim is false."
     },
     {
       "path": "src/commands/CadCommands.cpp",
@@ -7216,7 +7235,7 @@
         "gfxVideoMemoryCachingLevel",
         "gfx3dFastShadedMode"
       ],
-      "note": "Settings â†’ Graphics Performance values. gfxSmoothLineDisplay is wired into RenderTuning; the other two are documented placeholders."
+      "note": "Settings \u00e2\u2020\u2019 Graphics Performance values. gfxSmoothLineDisplay is wired into RenderTuning; the other two are documented placeholders."
     },
     {
       "path": "src/commands/PaperSpace.hpp",
@@ -13824,7 +13843,7 @@
             "src/util/benchscene.cpp",
             "src/util/benchscene.hpp"
           ],
-          "reason": "Debug owns deterministic benchmark scenes and statistics, but Commands currently includes benchscene.hpp in CadCommands.cpp and CadCommands_Bench.cpp. The dependency table does not allow Commands â†’ Debug, so keep the ownership advisory until the final-map/move ticket chooses a legal benchmark interface or reassigns the command-facing concept."
+          "reason": "Debug owns deterministic benchmark scenes and statistics, but Commands currently includes benchscene.hpp in CadCommands.cpp and CadCommands_Bench.cpp. The dependency table does not allow Commands \u00e2\u2020\u2019 Debug, so keep the ownership advisory until the final-map/move ticket chooses a legal benchmark interface or reassigns the command-facing concept."
         },
         {
           "files": [

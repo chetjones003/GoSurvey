@@ -530,9 +530,10 @@ target_link_libraries(gosurvey_geometry PUBLIC GoSurvey::Math GoSurvey::Core)
 gosurvey_target_warnings(gosurvey_geometry)
 
 # GoSurvey::Terrain — T2 Domain library (issue #1245). The pure surface/TIN and grading
-# algorithms compile independently of the application layer. Their headers remain in src/util
-# until the dedicated move-only change creates the public and private Terrain trees.
+# algorithms compile independently of the application layer. Physical relocation is isolated
+# from library creation and the public Survey alignment seam.
 add_library(gosurvey_terrain STATIC
+  src/alignment/AlignmentFeatureLine.cpp
   src/util/contourgen.cpp
   src/util/daylight.cpp
   src/util/gridsurface.cpp
@@ -545,8 +546,8 @@ add_library(gosurvey_terrain STATIC
   src/util/watershed.cpp)
 add_library(GoSurvey::Terrain ALIAS gosurvey_terrain)
 target_include_directories(gosurvey_terrain
-  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
-  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/util")
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/terrain/include>"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include")
 target_compile_features(gosurvey_terrain PUBLIC cxx_std_17)
 target_link_libraries(gosurvey_terrain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry)
 gosurvey_target_warnings(gosurvey_terrain)
@@ -765,7 +766,6 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/alignment/AlignmentLayout.cpp
   src/alignment/AlignmentGrips.cpp
   src/alignment/AlignmentGround.cpp
-  src/alignment/AlignmentFeatureLine.cpp
   src/alignment/AlignmentViewFrames.cpp
   src/alignment/AlignmentSampleLines.cpp
   src/alignment/AlignmentProfile.cpp  # REQ-521 (issue #1163)
@@ -1295,30 +1295,6 @@ if(GOSURVEY_BUILD_TESTS)
     tests/StlImportTests.cpp
     tests/EntityIdTests.cpp
     tests/PointGroupTests.cpp
-    tests/TinBuildTests.cpp
-    tests/TinQueryTests.cpp
-    tests/TinConstraintTests.cpp
-    # REQ-068 / REQ-070 border extraction (ADR-036 (b)). Pure, like the rest of tinbuild — and the
-    # border-vs-convex-hull distinction is the part that looks correct on simple data and is wrong
-    # on exactly the shapes real survey data produces (a hole, a notch).
-    tests/TinBorderTests.cpp
-    # REQ-070 contour generation (ADR-036 (f)). Pure marching triangles: the vertex-tie rule and the
-    # shared-edge chaining are both invisible on simple data and wrong on exactly the shapes a real
-    # surface produces — a saddle, a level grazing a vertex, a contour running off the border.
-    tests/ContourGenTests.cpp
-    # REQ-072 surface analysis (ADR-036 (g)). Pure band assignment and downhill vectors: the
-    # breakpoint rule and the flat-triangle refusal are both invisible on ordinary data and wrong
-    # exactly at a band boundary and on level ground, which is most of a real site.
-    tests/SurfaceAnalysisTests.cpp
-    # REQ-073 surface-to-surface volumes (TASK-095). Pure spatial index + grid-sample integrator: the
-    # cut/fill sign convention and the bbox-disjoint early-out are both invisible on a single hand
-    # example and wrong on exactly the cases a real grading comparison needs (no overlap, self vs
-    # self, partial overlap).
-    # REQ-398 side slope grading. Every expected offset is hand-computed in the test from the two
-    # equations that cross, because a daylight offset wrong by a slope factor is entirely plausible
-    # on screen — and comparing against another approximation of the same thing would hide a
-    # systematic error in both.
-    tests/DaylightTests.cpp
     tests/CadTableTests.cpp
     tests/CadBlockTests.cpp
     tests/CadPipeRunTests.cpp
@@ -1347,16 +1323,6 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AlignmentSpecTests.cpp
     tests/AlignmentAnnotationTests.cpp
     tests/AlignmentGripTests.cpp
-    tests/SurfaceStatsTests.cpp
-    tests/WatershedTests.cpp
-    tests/TinVolumeTests.cpp
-    tests/Issue119SurfaceTests.cpp
-    tests/SurfaceProfileTests.cpp
-    # REQ-070 surface style table (ADR-036 (d)). Header-only and pure, so it needs no source entry
-    # below. Three of REQ-070's five acceptance conditions — the deleted-style fallback, the legacy
-    # empty-name fallback, and the rejection of a major interval that is not a whole multiple of the
-    # minor — are decided entirely here, before any geometry exists to look at.
-    tests/SurfaceStyleTests.cpp
     tests/ToolspaceCatalogTests.cpp
     # REQ-089 surface rollover dwell. Header-only and pure, like the style table above. It is the
     # feature's ONLY new logic — the readout's numbers come from TinQueryTests' and
@@ -1410,9 +1376,6 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/CrashBuildInfo.cpp
     tests/GsMigrateTests.cpp
     tests/GpuPreferenceTests.cpp
-    # REQ-069: the background rebuild worker's lifetime. Header-only against CadCommands.hpp (the
-    # struct and its destructor), so it needs no extra domain source on the link line.
-    tests/SurfaceRebuildLifetimeTests.cpp
     # REQ-103 STRETCH (TASK-098). Header-only against CadCommands.hpp — RecomputeArcFromEndpoints
     # is inline and pure (<cmath> + CadArc only), the same reasoning as the gate test above.
     tests/StretchGeomTests.cpp
@@ -1461,17 +1424,6 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-067 point-group membership rules. Pure like EntityId.cpp: the union-vs-intersection
     # semantics are a recorded user decision and must be testable without the GUI stack.
     src/survey/PointGroupRule.cpp
-    # REQ-068 Delaunay triangulation. Pure by ADR-028 (c); its double-precision predicates are the
-    # part a float build gets silently wrong, so they must be pinned without a GL context.
-    # REQ-070 contour generation. Pure by ADR-036 (f) — no GL, no document — so a half-open contour
-    # is caught against a hand-computed expectation rather than by looking at a viewport.
-    # REQ-072 surface analysis. Pure by ADR-036 (g) — no GL, no document — so a reversed arrow is
-    # caught against a hand-computed fall line rather than by squinting at a viewport full of them.
-    # REQ-073 surface-to-surface volumes + the spatial index they run on. Pure — no GL, no document —
-    # so a wrong sign on cut vs. fill is caught against a hand-computed planar case, TASK-095.
-    # REQ-398 side slope grading. Pure over ISurfaceQuery — no GL, no document — so a reversed cut/
-    # fill sign or a daylight offset off by a slope factor is caught against hand arithmetic rather
-    # than by looking at a slope in a viewport, where a plausible wrong answer looks correct.
     # REQ-077/078 version ordering + manifest parse. Pure by ADR-029 (g) — no network, no window.
     # Wrong version ordering has NO symptom (the user is simply never offered an update), which is
     # exactly why it must be pinned by a test rather than noticed in use.
@@ -1617,8 +1569,28 @@ if(GOSURVEY_BUILD_TESTS)
     tests/TinConstraintTests.cpp
     tests/TinQueryTests.cpp
     tests/TinVolumeTests.cpp
-    tests/WatershedTests.cpp)
-  target_include_directories(GoSurveyTerrainTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/util")
+    tests/WatershedTests.cpp
+    tests/Issue119SurfaceTests.cpp
+    tests/SurfaceProfileTests.cpp
+    tests/SurfaceStyleTests.cpp
+    tests/SurfaceRebuildLifetimeTests.cpp
+    tests/FeatureLineStationsTests.cpp
+    # Real Survey geometry builds the fixture for the existing feature-line sampling test.
+    # Survey's library is introduced by its later carve-out; no application/Qt code is needed.
+    src/alignment/Alignment.cpp
+    src/alignment/Clothoid.cpp)
+  target_include_directories(GoSurveyTerrainTests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/util"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/commands"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/io"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/survey"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/render"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/pdf"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/network/include"
+    ${NLOHMANN_JSON_INCLUDE})
   set_target_properties(GoSurveyTerrainTests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
   target_link_libraries(GoSurveyTerrainTests PRIVATE GoSurvey::Terrain GoSurvey::Debug Catch2::Catch2WithMain)
@@ -1645,6 +1617,8 @@ if(GOSURVEY_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/pdf"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/network/include"
+    # The capture fixture constructs legacy command state, including Terrain data types.
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/terrain/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests"
     ${NLOHMANN_JSON_INCLUDE})
   target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug GoSurvey::Geometry Catch2::Catch2WithMain)
@@ -1840,7 +1814,7 @@ if(GOSURVEY_BUILD_TESTS)
         -ShardIndex ${_shard} -ShardCount ${GOSURVEY_CATCH_TEST_SHARDS}
         -WorkingDirectory "$<TARGET_FILE_DIR:GoSurveyQt>"
         -OutputDirectory "${CMAKE_BINARY_DIR}/../../artifacts/catch")
-    set_tests_properties(unit.catch.shard-${_shard} PROPERTIES TIMEOUT 900 COST 100)
+    set_tests_properties(unit.catch.shard-${_shard} PROPERTIES TIMEOUT 900 COST 100 LABELS "Integration;Terrain")
   endforeach()
 
   # Register the independent, isolated Qt shards before the transcript cases so CTest can run both

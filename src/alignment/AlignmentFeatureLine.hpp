@@ -1,10 +1,10 @@
 #pragma once
 
-#include "alignment/Alignment.hpp"
-
 #include <vector>
 
 namespace alignment {
+
+class Alignment;
 
 /// The stations a feature line made from an alignment samples at (REQ-498.1), as distances from the start.
 /// Every entity boundary and geometry point is included (so PC and PT are vertices), plus a station every
