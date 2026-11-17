@@ -1,4 +1,4 @@
-#include "util/pointcloudoctree.hpp"
+#include "GoSurvey/PointCloud/OctreeIndex.hpp"
 
 #include <algorithm>
 #include <cmath>

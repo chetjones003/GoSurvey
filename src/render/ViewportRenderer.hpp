@@ -6,7 +6,7 @@
 #include "CadOnlineMap.hpp"
 #include "gizmooverlay.hpp"
 #include "render/SectionClip.hpp"
-#include "util/pointcloudcache.hpp"
+#include "GoSurvey/PointCloud/CacheStorage.hpp"
 #include "alignment/AlignmentDisplayCache.hpp"
 
 #include <chrono>

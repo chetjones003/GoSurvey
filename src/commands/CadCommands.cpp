@@ -20,7 +20,7 @@
 #include "GoSurvey/PointCloud/Octree.hpp"  // REQ-171/172 out-of-core octree (ADR-060)
 #include "GoSurvey/PointCloud/Cache.hpp"
 #include "GoSurvey/IO/PointCloudCacheImport.hpp"   // ADR-060 .gscloud out-of-core cache (streams the E57 internally)
-#include "util/cylinderfit.hpp"       // REQ-347 EXTRACTCENTERLINE's least-squares cylinder-axis fit
+#include "GoSurvey/PointCloud/CylinderFit.hpp"       // REQ-347 EXTRACTCENTERLINE's least-squares cylinder-axis fit
 #include "io/CadPointCloudE57.hpp"    // QuickPointCountEstimate, for the import progress bar's total
 #include "io/CadPointCloudPts.hpp"    // REQ-172 PTS increment — reader/writer, same contract as E57
 #include "io/CadPointCloudPtx.hpp"    // REQ-172 PTX increment — reader/writer, same contract as E57

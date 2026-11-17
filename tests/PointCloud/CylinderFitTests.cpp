@@ -13,7 +13,7 @@
 #include <random>
 #include <vector>
 
-#include "util/cylinderfit.hpp"
+#include "GoSurvey/PointCloud/CylinderFit.hpp"
 
 namespace {
 constexpr double kTwoPi = 6.283185307179586476925286766559;

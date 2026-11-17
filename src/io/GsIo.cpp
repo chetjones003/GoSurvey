@@ -12,7 +12,7 @@
 #include "SurveyPoints.hpp"
 #include <GoSurvey/Geometry/meshgeom.hpp>
 #include <GoSurvey/Geometry/geom2d.hpp>
-#include "util/pointcloudcache.hpp"
+#include "GoSurvey/PointCloud/CacheStorage.hpp"
 #include "BrepJson.hpp"
 
 #include <algorithm>
