@@ -10,7 +10,7 @@
 #include "GoSurvey/Pdf/PdfAnnotate.hpp"
 #include "GoSurvey/Pdf/PdfDocument.hpp"
 #include "GoSurvey/Pdf/PdfMeasure.hpp"
-#include "PdfRaw.hpp"
+#include "pdf/src/PdfRaw.hpp"
 #include "GoSurvey/Pdf/PdfViewerCore.hpp"
 
 #include <cmath>
