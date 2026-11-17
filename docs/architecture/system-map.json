@@ -19,6 +19,14 @@
       "system": "Events"
     },
     {
+      "path": "src/network/include/",
+      "system": "Network"
+    },
+    {
+      "path": "src/network/src/",
+      "system": "Network"
+    },
+    {
       "path": "src/alignment/",
       "system": "Survey"
     },

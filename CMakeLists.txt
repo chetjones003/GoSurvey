@@ -513,6 +513,18 @@ target_include_directories(gosurvey_events INTERFACE "$<BUILD_INTERFACE:${CMAKE_
 target_compile_features(gosurvey_events INTERFACE cxx_std_17)
 target_link_libraries(gosurvey_events INTERFACE GoSurvey::Core GoSurvey::Math)
 
+# GoSurvey::Network — internet-facing services library (carve-out ticket #1252). Public headers
+# live in src/network/include/GoSurvey/Network/ and are consumed as <GoSurvey/Network/...>; the
+# implementation under src/network/src stays private to this target. It links only its allowed
+# dependencies, Core and Events, and is part of the GoSurvey::Engine umbrella. This scaffold holds
+# no moved code yet; the Network-assigned files move in the follow-up move-only PR.
+add_library(gosurvey_network STATIC src/network/src/Network.cpp)
+add_library(GoSurvey::Network ALIAS gosurvey_network)
+target_include_directories(gosurvey_network PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/network/include>")
+target_compile_features(gosurvey_network PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_network PUBLIC GoSurvey::Core GoSurvey::Events)
+gosurvey_target_warnings(gosurvey_network)
+
 # --- OpenXLSX (vendored, third_party/OpenXLSX, approved D-2026-10-30-a): .xlsx read/write for
 # Extract Data and Link Data (REQ-467 / REQ-468). Compiled into gosurvey_domain with the pugixml
 # copy above; zip support comes from the vendored miniz.
@@ -812,7 +824,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
-target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math)
+target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Network)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
@@ -824,7 +836,7 @@ gosurvey_enable_pch(gosurvey_domain)
 # Stable umbrella for application consumers; individual systems remain linkable in isolation.
 add_library(gosurvey_engine INTERFACE)
 add_library(GoSurvey::Engine ALIAS gosurvey_engine)
-target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Events)
+target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Events GoSurvey::Network)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
@@ -1581,6 +1593,16 @@ if(GOSURVEY_BUILD_TESTS)
   target_link_libraries(GoSurveyMathTests PRIVATE GoSurvey::Math Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyMathTests PROPERTIES LABELS Math)
   gosurvey_target_warnings(GoSurveyMathTests TEST)
+
+  # GoSurvey::Network tests (#1252). They link Network (which links Core and Events) and Catch2 only,
+  # never Qt, OpenGL or gosurvey_domain, which is the T3 independence check for this system.
+  add_executable(GoSurveyNetworkTests
+    tests/Network/NetworkTests.cpp)
+  set_target_properties(GoSurveyNetworkTests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyNetworkTests PRIVATE GoSurvey::Network Catch2::Catch2WithMain)
+  catch_discover_tests(GoSurveyNetworkTests PROPERTIES LABELS Network)
+  gosurvey_target_warnings(GoSurveyNetworkTests TEST)
 
   # ---------------------------------------------------------------------------
   # Command-layer cases share the Catch2 executable and existing domain library.

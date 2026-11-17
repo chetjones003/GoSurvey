@@ -153,7 +153,7 @@ jobs:
           - name: integration
             regex: ''
             exclude: '^(qt[.]editor[.]shard-|unit[.]catch[.]shard-)'
-            targets: GoSurveyQtTests,GoSurveyCoreTests,GoSurveyMathTests,gosurvey_headless
+            targets: GoSurveyQtTests,GoSurveyCoreTests,GoSurveyMathTests,GoSurveyNetworkTests,gosurvey_headless
     env:
       SCCACHE_GHA_ENABLED: "true"
     steps:
