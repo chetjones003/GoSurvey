@@ -795,35 +795,10 @@ set(GOSURVEY_DOMAIN_SOURCES
   # pick it cannot justify, are decided without a window.
   src/util/solidpick.cpp
 
-  # Point-cloud out-of-core octree (REQ-171/REQ-172, ADR-060) — pure; builds/queries the spatial
-  # index over an in-memory point set, no file IO and no GL calls.
-  # E57 point-cloud reader (REQ-172, ADR-042 (d)) — adapts vendored libE57Format to GoSurvey's
-  # flat interleaved point layout. Delivered first among REQ-172's formats (D-2026-09-17-d).
 
-  # PTS (Cyclone-style ASCII) point-cloud reader/writer (REQ-172, PTS increment — delivered after
-  # E57 per `spec/file-format-specs.md` §6). In-tree, no delimiter sniffing.
-
-  # PTX (Cyclone-style ASCII, per-scan-setup) point-cloud reader/writer (REQ-172, issue #825
-  # increment 2 — delivered after PTS per `spec/file-format-specs.md` §6). In-tree, no delimiter
-  # sniffing.
-
-  # LAS (ASPRS binary) point-cloud reader/writer (REQ-172, LAS increment — delivered after PTX
-  # per `spec/file-format-specs.md` §6). In-tree, no LASlib dependency.
-
-  # LAZ (LASzip-compressed LAS) point-cloud reader/writer (REQ-172, LAZ increment, issue #825
-  # increment 4 — the last of REQ-172's four remaining formats). Parses the LAS Public Header
-  # Block itself (same byte layout as a plain LAS) and hands the compressed point-data section to
-  # vendored LASzip for decode/encode (third_party/laszip/VENDORED.md).
-
-  # .gscloud out-of-core cache codec (ADR-060) — builds/reads the disk-backed octree so a
-  # multi-GB scan is never fully resident in memory.
-
-  # Least-squares cylinder-axis fit (REQ-347) — pure; fits a neighborhood of point-cloud points to
-  # a cylinder axis via PCA + radial least squares, no file IO and no GL calls.
 )
 
-# One static library so CadCommands.cpp (and the rest of the domain list) is compiled
-# once per configuration rather than once per executable that needs it.
+# PointCloud storage and IO format orchestration are separate libraries.
 add_library(gosurvey_pointcloud STATIC
   src/util/pointcloudoctree.cpp
   src/util/pointcloudcache.cpp
@@ -850,6 +825,7 @@ target_include_directories(gosurvey_io_pointcloud
 target_compile_features(gosurvey_io_pointcloud PUBLIC cxx_std_17)
 target_link_libraries(gosurvey_io_pointcloud PUBLIC GoSurvey::PointCloud PRIVATE E57Format::E57Format Laszip::laszip)
 gosurvey_target_warnings(gosurvey_io_pointcloud)
+# The application aggregate compiles the remaining command/domain sources once.
 add_library(gosurvey_domain STATIC ${GOSURVEY_DOMAIN_SOURCES})
 # CadCommands.cpp exceeds MSVC's default COFF section limit on current hosted toolchains.
 if(MSVC)
@@ -1274,8 +1250,6 @@ if(GOSURVEY_BUILD_TESTS)
     tests/BrepJsonTests.cpp
     tests/SolidPickTests.cpp
     src/util/solidpick.cpp
-    # REQ-171/REQ-172, ADR-060 — the octree is pure Domain code (no file IO, no GL), so it is
-    # pinned directly here, the same way BrepTests pins src/util/brep.cpp with no window.
     # REQ-172 — E57 reader round-trip (writes a tiny fixture E57 with libE57Format's own Simple
     # Writer, then reads it back) and malformed/missing-file refusal. Pinned directly, same as
     # AcisSatParserTests pins its own reader above.
@@ -1300,9 +1274,6 @@ if(GOSURVEY_BUILD_TESTS)
     # either format), and malformed/truncated/corrupt-compressed-stream/missing-file refusal.
     # Pinned directly, same as the E57 reader above.
     tests/CadPointCloudLazTests.cpp
-    # ADR-060 — .gscloud out-of-core cache build/read/stamp round-trip. Pinned directly, same as
-    # the octree and E57 reader above.
-    # REQ-347 — least-squares cylinder-axis fit. Pinned directly, same as the octree above.
     tests/MeshPayloadRoundTripTests.cpp
     tests/GsAnnotationJsonTests.cpp
     tests/GltfImportTests.cpp

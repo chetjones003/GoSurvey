@@ -36,27 +36,54 @@ bool Build(const std::string &sourcePath, const std::string &cachePath,
 
 }  // namespace
 
-#define GOSURVEY_DEFINE_POINTCLOUD_CACHE_IMPORT(format, reader, zeroMessage)                   \
-  bool BuildFrom##format(const std::string &sourcePath, const std::string &cachePath,          \
-                         std::vector<std::string> &progressLog, std::string *errorMessage,     \
-                         std::atomic<std::int64_t> *pointsStreamedOut,                         \
-                         std::atomic<std::int64_t> *pointsFinalizedOut,                       \
-                         const std::atomic<bool> *cancelRequested) {                           \
-    return Build(sourcePath, cachePath, progressLog, errorMessage, pointsStreamedOut,           \
-                 pointsFinalizedOut, cancelRequested, reader, zeroMessage);                    \
-  }
+bool BuildFromE57(const std::string& sourcePath, const std::string& cachePath,
+                  std::vector<std::string>& progressLog, std::string* errorMessage,
+                  std::atomic<std::int64_t>* pointsStreamedOut,
+                  std::atomic<std::int64_t>* pointsFinalizedOut,
+                  const std::atomic<bool>* cancelRequested) {
+  return Build(sourcePath, cachePath, progressLog, errorMessage, pointsStreamedOut,
+               pointsFinalizedOut, cancelRequested, pointcloud_e57::StreamE57File,
+               "E57 import: contains zero valid points");
+}
 
-GOSURVEY_DEFINE_POINTCLOUD_CACHE_IMPORT(E57, pointcloud_e57::StreamE57File,
-                                        "E57 import: contains zero valid points")
-GOSURVEY_DEFINE_POINTCLOUD_CACHE_IMPORT(Pts, pointcloud_pts::StreamPtsFile,
-                                        "PTS import: contains zero valid points")
-GOSURVEY_DEFINE_POINTCLOUD_CACHE_IMPORT(Ptx, pointcloud_ptx::StreamPtxFile,
-                                        "PTX import: contains zero valid points")
-GOSURVEY_DEFINE_POINTCLOUD_CACHE_IMPORT(Las, pointcloud_las::StreamLasFile,
-                                        "LAS import: contains zero valid points")
-GOSURVEY_DEFINE_POINTCLOUD_CACHE_IMPORT(Laz, pointcloud_laz::StreamLazFile,
-                                        "LAZ import: contains zero valid points")
+bool BuildFromPts(const std::string& sourcePath, const std::string& cachePath,
+                  std::vector<std::string>& progressLog, std::string* errorMessage,
+                  std::atomic<std::int64_t>* pointsStreamedOut,
+                  std::atomic<std::int64_t>* pointsFinalizedOut,
+                  const std::atomic<bool>* cancelRequested) {
+  return Build(sourcePath, cachePath, progressLog, errorMessage, pointsStreamedOut,
+               pointsFinalizedOut, cancelRequested, pointcloud_pts::StreamPtsFile,
+               "PTS import: contains zero valid points");
+}
 
-#undef GOSURVEY_DEFINE_POINTCLOUD_CACHE_IMPORT
+bool BuildFromPtx(const std::string& sourcePath, const std::string& cachePath,
+                  std::vector<std::string>& progressLog, std::string* errorMessage,
+                  std::atomic<std::int64_t>* pointsStreamedOut,
+                  std::atomic<std::int64_t>* pointsFinalizedOut,
+                  const std::atomic<bool>* cancelRequested) {
+  return Build(sourcePath, cachePath, progressLog, errorMessage, pointsStreamedOut,
+               pointsFinalizedOut, cancelRequested, pointcloud_ptx::StreamPtxFile,
+               "PTX import: contains zero valid points");
+}
+
+bool BuildFromLas(const std::string& sourcePath, const std::string& cachePath,
+                  std::vector<std::string>& progressLog, std::string* errorMessage,
+                  std::atomic<std::int64_t>* pointsStreamedOut,
+                  std::atomic<std::int64_t>* pointsFinalizedOut,
+                  const std::atomic<bool>* cancelRequested) {
+  return Build(sourcePath, cachePath, progressLog, errorMessage, pointsStreamedOut,
+               pointsFinalizedOut, cancelRequested, pointcloud_las::StreamLasFile,
+               "LAS import: contains zero valid points");
+}
+
+bool BuildFromLaz(const std::string& sourcePath, const std::string& cachePath,
+                  std::vector<std::string>& progressLog, std::string* errorMessage,
+                  std::atomic<std::int64_t>* pointsStreamedOut,
+                  std::atomic<std::int64_t>* pointsFinalizedOut,
+                  const std::atomic<bool>* cancelRequested) {
+  return Build(sourcePath, cachePath, progressLog, errorMessage, pointsStreamedOut,
+               pointsFinalizedOut, cancelRequested, pointcloud_laz::StreamLazFile,
+               "LAZ import: contains zero valid points");
+}
 
 }  // namespace pointcloudcache_io
