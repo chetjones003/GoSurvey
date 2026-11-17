@@ -598,7 +598,11 @@ gosurvey_target_warnings(gosurvey_debug)
 # The font folder is still mapped to Core, so compile its SHX provider as a Core-owned helper.
 # This keeps Pdf's transitive provider closure concrete without a forbidden Pdf -> IO dependency.
 add_library(gosurvey_core_shx_font STATIC src/font/ShxFont.cpp)
-target_include_directories(gosurvey_core_shx_font PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_library(GoSurvey::CoreShxFont ALIAS gosurvey_core_shx_font)
+target_include_directories(gosurvey_core_shx_font
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core/include>"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(gosurvey_core_shx_font PUBLIC GoSurvey::Core)
 target_compile_features(gosurvey_core_shx_font PUBLIC cxx_std_17)
 gosurvey_target_warnings(gosurvey_core_shx_font)
 
@@ -616,7 +620,7 @@ target_include_directories(gosurvey_pdf PUBLIC
 target_compile_features(gosurvey_pdf PUBLIC cxx_std_17)
 target_compile_definitions(gosurvey_pdf PRIVATE NOMINMAX)
 target_link_libraries(gosurvey_pdf PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry pdfium
-  PRIVATE gosurvey_core_shx_font)
+  PRIVATE GoSurvey::CoreShxFont)
 gosurvey_target_warnings(gosurvey_pdf)
 
 # --- OpenXLSX (vendored, third_party/OpenXLSX, approved D-2026-10-30-a): .xlsx read/write for

@@ -1290,20 +1290,6 @@
       "message": "src/io/WikiHelp.cpp includes \"CadCommands.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/pdf/PdfAnnotate.cpp",
-      "include": "../font/CadFontName.hpp",
-      "target": "Core",
-      "rule": "private-header include",
-      "message": "src/pdf/PdfAnnotate.cpp includes \"../font/CadFontName.hpp\": cross-system include must use GoSurvey/Core/ public headers (private-header include)"
-    },
-    {
-      "file": "src/pdf/PdfAnnotate.cpp",
-      "include": "../font/ShxFont.hpp",
-      "target": "Core",
-      "rule": "private-header include",
-      "message": "src/pdf/PdfAnnotate.cpp includes \"../font/ShxFont.hpp\": cross-system include must use GoSurvey/Core/ public headers (private-header include)"
-    },
-    {
       "file": "src/platform/CrashReporter.cpp",
       "include": "TelemetryPing.hpp",
       "target": "Network",

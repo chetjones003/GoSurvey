@@ -4,9 +4,9 @@
 
 #include "PdfAnnotate.hpp"
 
-#include "font/CadFontName.hpp"
+#include "GoSurvey/Core/CadFontName.hpp"
 #include "PdfDocument.hpp"
-#include "font/ShxFont.hpp"
+#include "GoSurvey/Core/ShxFont.hpp"
 
 #include <fpdf_annot.h>
 #include <fpdf_edit.h>
