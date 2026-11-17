@@ -164,20 +164,6 @@
     },
     {
       "file": "src/commands/CadCommands.cpp",
-      "include": "util/pointcloudoctree.hpp",
-      "target": "PointCloud",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"util/pointcloudoctree.hpp\": cross-system include must use GoSurvey/PointCloud/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "util/pointcloudcache.hpp",
-      "target": "PointCloud",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"util/pointcloudcache.hpp\": cross-system include must use GoSurvey/PointCloud/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
       "include": "util/cylinderfit.hpp",
       "target": "PointCloud",
       "rule": "private-header include",

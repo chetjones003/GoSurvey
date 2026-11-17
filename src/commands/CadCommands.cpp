@@ -17,8 +17,8 @@
 #include <GoSurvey/Debug/BenchScene.hpp>
 #include "util/cadpiperun.hpp"  // CadPipeRun solid generation (issue #486 increment B1 / REQ-345)
 #include <GoSurvey/Geometry/meshgeom.hpp>
-#include "util/pointcloudoctree.hpp"  // REQ-171/172 out-of-core octree (ADR-060)
-#include "util/pointcloudcache.hpp"
+#include "GoSurvey/PointCloud/Octree.hpp"  // REQ-171/172 out-of-core octree (ADR-060)
+#include "GoSurvey/PointCloud/Cache.hpp"
 #include "GoSurvey/IO/PointCloudCacheImport.hpp"   // ADR-060 .gscloud out-of-core cache (streams the E57 internally)
 #include "util/cylinderfit.hpp"       // REQ-347 EXTRACTCENTERLINE's least-squares cylinder-axis fit
 #include "io/CadPointCloudE57.hpp"    // QuickPointCountEstimate, for the import progress bar's total
