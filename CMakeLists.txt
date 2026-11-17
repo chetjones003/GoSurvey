@@ -512,6 +512,7 @@ add_library(gosurvey_geometry STATIC
   src/geometry/src/geom2d.cpp
   # REQ-443 SPLINE mathematics (NURBS curve: fit / control-vertex construction, evaluation, tessellation).
   src/geometry/src/spline.cpp
+  src/geometry/src/ClothoidIntegration.cpp
   # Intersection math behind the INT/APPINT snaps (REQ-062). Pure and dependency-free on purpose.
   src/geometry/src/curveintersect.cpp
   # REQ-063 mesh validation + bounds + normals.

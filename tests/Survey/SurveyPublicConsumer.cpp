@@ -43,5 +43,8 @@ int main() {
   if (standardStyle.name != "Standard" || standardStyle.arrows.visible) return 9;
   AlignmentLabelSet labels;
   if (!labels.geometryPointsOn) return 10;
+  alignment::Alignment spiral;
+  if (!spiral.AppendTangent({0.0, 0.0}, 0.0, 1.0)) return 11;
+  if (!spiral.AppendSpiral(10.0, 0.0, 100.0, true)) return 12;
   return 0;
 }
