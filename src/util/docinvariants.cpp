@@ -1,7 +1,5 @@
 #include "docinvariants.hpp"
 
-#include "CadCommands.hpp"
-
 #include <cmath>
 #include <cstdio>
 #include <unordered_map>
@@ -64,7 +62,7 @@ void CheckAttrCount(std::vector<InvariantViolation>* out, const char* what, size
 /// getting it wrong makes every one of these checks fire on every valid drawing. That is not a
 /// hypothetical: the first version of this file made exactly that mistake and reported
 /// "2 entities but 1 attribute rows" against a perfectly good single polyline.
-size_t PolylineCount(const AppCommandState& st) {
+size_t PolylineCount(const DocumentDiagnosticSnapshot& st) {
   return st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1;
 }
 
@@ -94,7 +92,7 @@ void NoteId(std::vector<InvariantViolation>* out, std::unordered_map<std::uint64
 
 }  // namespace
 
-void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantViolation>* out) {
+void CheckDocumentInvariants(const DocumentDiagnosticSnapshot& st, std::vector<InvariantViolation>* out) {
   if (!out)
     return;
 
@@ -106,7 +104,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
   CheckStride(out, "featureLineVerts", st.featureLineVerts.size(), 3);   // REQ-087, §11.8
   for (size_t i = 0; i < st.cadFilledRegions.size(); ++i) {
     const std::string label = "cadFilledRegions[" + std::to_string(i) + "].vertsXyz";
-    CheckStride(out, label.c_str(), st.cadFilledRegions[i].vertsXyz.size(), 3);
+    CheckStride(out, label.c_str(), st.cadFilledRegions[i].coordinateCount, 3);
   }
 
   // --- Finite coordinates ---------------------------------------------------------------------
@@ -150,7 +148,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
           "userPolylineVertsNormal[" + std::to_string(i / 3) + "] is not a unit vector");
   }
   for (size_t i = 0; i < st.userArcs.size(); ++i) {
-    const CadArc& a = st.userArcs[i];
+    const DocumentDiagnosticSnapshot::Arc& a = st.userArcs[i];
     const std::string p = "userArcs[" + std::to_string(i) + "].";
     CheckFiniteScalar(out, (p + "cx").c_str(), a.cx, static_cast<int>(i));
     CheckFiniteScalar(out, (p + "cy").c_str(), a.cy, static_cast<int>(i));
@@ -163,7 +161,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
     CheckFiniteScalar(out, (p + "nz").c_str(), a.nz, static_cast<int>(i));
   }
   for (size_t i = 0; i < st.userEllipses.size(); ++i) {
-    const CadEllipse& e = st.userEllipses[i];
+    const DocumentDiagnosticSnapshot::Ellipse& e = st.userEllipses[i];
     const std::string p = "userEllipses[" + std::to_string(i) + "].";
     CheckFiniteScalar(out, (p + "cx").c_str(), e.cx, static_cast<int>(i));
     CheckFiniteScalar(out, (p + "cy").c_str(), e.cy, static_cast<int>(i));
@@ -174,13 +172,13 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
   }
   // REQ-443: a spline that is not a usable curve (a knot out of order, a NaN control point, a weight
   // that is not positive) would tessellate to nothing and vanish without a word.
-  for (size_t i = 0; i < st.cadSplines.size(); ++i) {
-    const std::string why = spline::Validate(st.cadSplines[i]);
+  for (size_t i = 0; i < st.splineValidationErrors.size(); ++i) {
+    const std::string why = st.splineValidationErrors[i];
     if (!why.empty())
       Add(out, docinv::kFiniteCoords, "cadSplines[" + std::to_string(i) + "]: " + why, static_cast<int>(i));
   }
   for (size_t i = 0; i < st.cadAnnotations.size(); ++i) {
-    const CadAnnotation& a = st.cadAnnotations[i];
+    const DocumentDiagnosticSnapshot::Annotation& a = st.cadAnnotations[i];
     const std::string p = "cadAnnotations[" + std::to_string(i) + "].";
     CheckFiniteScalar(out, (p + "insX").c_str(), a.insX, static_cast<int>(i));
     CheckFiniteScalar(out, (p + "insY").c_str(), a.insY, static_cast<int>(i));
@@ -199,18 +197,18 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
                  st.userCircleNormals.size() / 3);   // REQ-312 side-car (D-2026-08-31-f)
   CheckAttrCount(out, "arcs", st.userArcs.size(), st.userArcAttrs.size());
   CheckAttrCount(out, "ellipses", st.userEllipses.size(), st.userEllAttrs.size());
-  CheckAttrCount(out, "splines", st.cadSplines.size(), st.cadSplineAttrs.size());  // REQ-443
-  CheckAttrCount(out, "points", st.cadPoints.size(), st.cadPointAttrs.size());     // REQ-456
+  CheckAttrCount(out, "splines", st.splineValidationErrors.size(), st.cadSplineAttrs.size());  // REQ-443
+  CheckAttrCount(out, "points", st.cadPointsCount, st.cadPointAttrsCount);     // REQ-456
   CheckAttrCount(out, "annotations", st.cadAnnotations.size(), st.cadAnnotationAttrs.size());
   CheckAttrCount(out, "filled regions", st.cadFilledRegions.size(), st.cadFilledRegionAttrs.size());
-  CheckAttrCount(out, "meshes", st.cadMeshes.size(), st.cadMeshAttrs.size());
-  CheckAttrCount(out, "point clouds", st.cadPointClouds.size(), st.cadPointCloudAttrs.size());
-  CheckAttrCount(out, "surfaces", st.cadSurfaces.size(), st.cadSurfaceAttrs.size());
-  CheckAttrCount(out, "solids", st.cadSolids.size(), st.cadSolidAttrs.size());  // REQ-313
-  CheckAttrCount(out, "tables", st.cadTables.size(), st.cadTableAttrs.size());
-  CheckAttrCount(out, "block refs", st.cadBlockRefs.size(), st.cadBlockRefAttrs.size());
+  CheckAttrCount(out, "meshes", st.cadMeshesCount, st.cadMeshAttrs.size());
+  CheckAttrCount(out, "point clouds", st.cadPointCloudsCount, st.cadPointCloudAttrs.size());
+  CheckAttrCount(out, "surfaces", st.cadSurfacesCount, st.cadSurfaceAttrs.size());
+  CheckAttrCount(out, "solids", st.cadSolidsCount, st.cadSolidAttrsCount);  // REQ-313
+  CheckAttrCount(out, "tables", st.cadTablesCount, st.cadTableAttrs.size());
+  CheckAttrCount(out, "block refs", st.cadBlockRefsCount, st.cadBlockRefAttrs.size());
   CheckAttrCount(out, "polylines", PolylineCount(st), st.userPolylineAttrs.size());
-  CheckAttrCount(out, "polyline closed-flags", PolylineCount(st), st.userPolylineClosed.size());
+  CheckAttrCount(out, "polyline closed-flags", PolylineCount(st), st.userPolylineClosedCount);
 
   // --- Polyline offsets ------------------------------------------------------------------------
   {
@@ -268,12 +266,12 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
     const int vertexCount = static_cast<int>(st.featureLineVerts.size() / 3);
 
     CheckAttrCount(out, "feature lines", featureLineCount, st.featureLineAttrs.size());
-    CheckAttrCount(out, "feature-line closed-flags", featureLineCount, st.featureLineClosed.size());
-    CheckAttrCount(out, "feature-line info rows", featureLineCount, st.featureLineInfo.size());
+    CheckAttrCount(out, "feature-line closed-flags", featureLineCount, st.featureLineClosedCount);
+    CheckAttrCount(out, "feature-line info rows", featureLineCount, st.featureLineInfoCount);
 
-    if (st.featureLineElevPt.size() != static_cast<size_t>(vertexCount)) {
+    if (st.featureLineElevPtCount != static_cast<size_t>(vertexCount)) {
       Add(out, docinv::kFeatureLineOffsets,
-          "featureLineElevPt holds " + std::to_string(st.featureLineElevPt.size()) +
+          "featureLineElevPt holds " + std::to_string(st.featureLineElevPtCount) +
               " flags but featureLineVerts holds " + std::to_string(vertexCount) +
               " vertices; the flag array is per vertex");
     }
@@ -313,8 +311,8 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
 
   // --- Filled-region loop starts ----------------------------------------------------------------
   for (size_t r = 0; r < st.cadFilledRegions.size(); ++r) {
-    const CadFilledRegion& fr = st.cadFilledRegions[r];
-    const int vertexCount = static_cast<int>(fr.vertsXyz.size() / 3);
+    const DocumentDiagnosticSnapshot::Region& fr = st.cadFilledRegions[r];
+    const int vertexCount = static_cast<int>(fr.coordinateCount / 3);
     int prev = -1;
     for (size_t k = 0; k < fr.loopStart.size(); ++k) {
       const int s = fr.loopStart[k];
@@ -342,7 +340,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
   // --- Entity identity (REQ-076) -----------------------------------------------------------------
   {
     std::unordered_map<std::uint64_t, std::string> seen;
-    const auto sweep = [&](const char* store, const std::vector<EntityAttributes>& attrs) {
+    const auto sweep = [&](const char* store, const std::vector<DocumentDiagnosticSnapshot::EntityIdentity>& attrs) {
       for (size_t i = 0; i < attrs.size(); ++i)
         NoteId(out, &seen, attrs[i].id, store, i, st.nextEntityId);
     };
@@ -364,49 +362,9 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
 
   // --- Selection (architecture §11.9) --------------------------------------------------------------
   {
-    using T = SelectedEntity::Type;
-    const auto capacity = [&](T t) -> size_t {
-      switch (t) {
-      case T::LineSeg:      return st.userLinesFlat.size() / 6;
-      case T::Circle:       return st.userCirclesCxCyZR.size() / 4;
-      case T::Annotation:   return st.cadAnnotations.size();
-      case T::Polyline:     return PolylineCount(st);
-      case T::Arc:          return st.userArcs.size();
-      case T::Ellipse:      return st.userEllipses.size();
-      case T::Spline:       return st.cadSplines.size();  // REQ-443
-      case T::Point:        return st.cadPoints.size();   // REQ-456
-      case T::PositionMarker: return st.cadPositionMarkers.size();  // -Wswitch with Point
-      case T::Multileader:    return st.cadMultileaders.size();     // -Wswitch with Point
-      case T::PdfUnderlay:  return st.pdfAttachments.size();
-      case T::FilledRegion: return st.cadFilledRegions.size();
-      case T::Mesh:         return st.cadMeshes.size();
-      case T::PointCloud:   return st.cadPointClouds.size();
-      // REQ-087. Without this case the function returned 0 for a selected feature line, so the
-      // check fired on every valid selection of one — the exact inverse of a missed case, and
-      // caught by `-Wswitch` rather than by the MSVC build, which does not warn here.
-      case T::FeatureLine:  return st.featureLineOffsets.empty() ? 0 : st.featureLineOffsets.size() - 1;
-      case T::Surface:      return st.cadSurfaces.size();  // REQ-068 / ADR-036 (b)
-      case T::Table:        return st.cadTables.size();
-      case T::BlockRef:     return st.cadBlockRefs.size();  // GitHub issue #124
-      case T::Solid:        return st.cadSolids.size();      // REQ-313 / ADR-045
-      // Pre-existing gap found while adding PointCloud above: MSVC (the shipping compiler) does
-      // not warn on this switch missing a case, only clang's -Wswitch does, so PipeRun (issue
-      // #486) was silently returning 0 capacity — meaning a selected pipe run always failed this
-      // invariant's range check. Fixed alongside PointCloud rather than filed separately since it
-      // is the same one-line shape as every case above it.
-      case T::PipeRun:      return st.cadPipeRuns.size();
-      // REQ-343 amended / ADR-059 (i), issue #479. SectionPlane is a type TAG only — the plane is
-      // singular and its "is it selected" state lives in the dedicated `sectionPlaneSelected` bool,
-      // never as an entry in `st.selection` (see the enumerator's doc comment in CadCommands.hpp).
-      // So this case can never actually be reached by the loop below; 0 is correct either way, but
-      // it is stated explicitly rather than left to silently fall through -Wswitch.
-      case T::SectionPlane: return 0;
-      }
-      return 0;
-    };
     for (size_t i = 0; i < st.selection.size(); ++i) {
-      const SelectedEntity& s = st.selection[i];
-      const size_t cap = capacity(s.type);
+      const DocumentDiagnosticSnapshot::Selection& s = st.selection[i];
+      const size_t cap = s.capacity;
       if (s.index < 0 || static_cast<size_t>(s.index) >= cap) {
         Add(out, docinv::kSelectionInRange,
             "selection[" + std::to_string(i) + "] type=" +
@@ -433,7 +391,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
         continue;  // the label was erased; the id resolves to nothing, which is the REQ-076 promise
 
       // It resolves — so the annotation must agree that it belongs to this point.
-      const CadAnnotation& a = st.cadAnnotations[it->second];
+      const DocumentDiagnosticSnapshot::Annotation& a = st.cadAnnotations[it->second];
       if (a.surveyPointLabelForId != st.surveyPoints[i].id) {
         Add(out, docinv::kSurveyLabelLinks,
             "surveyPoints[" + std::to_string(i) + "] (id " +

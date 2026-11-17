@@ -21,7 +21,7 @@
 #include "TransformPreview.hpp"
 #include "viewport/CadSnap.hpp"  // WorldToleranceFromPixels, for the GIZMO verb's screen-derived aperture
 #include "ViewportPickPolicy.hpp"
-#include "docinvariants.hpp"
+#include "DocumentDiagnostics.hpp"
 
 
 #include <cstdio>
@@ -222,7 +222,7 @@ std::string FailureSignature(const Run& run) {
 /// Run the invariant set and record every violation as a failure.
 void CheckInvariants(Run& run, int sourceLine) {
   std::vector<InvariantViolation> v;
-  CheckDocumentInvariants(run.st, &v);
+  CheckDocumentInvariants(CaptureDocumentDiagnosticSnapshot(run.st), &v);
   for (const InvariantViolation& iv : v)
     Fail(run, "invariant", std::string(iv.name) + ": " + iv.detail, sourceLine);
 }
