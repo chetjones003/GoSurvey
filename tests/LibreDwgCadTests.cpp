@@ -18,7 +18,7 @@
 #include "CadRubberPreview.hpp"
 #include "SurveyPoints.hpp"
 #include "io/SurveyCsv.hpp"
-#include "util/ucs.hpp"
+#include <GoSurvey/Math/ucs.hpp>
 #include "util/AcisSatParser.hpp"
 #include "util/brep.hpp"
 #include "util/cadpiperun.hpp"

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ray3d.hpp"
+#include <GoSurvey/Math/ray3d.hpp>
 
 #include <cstdint>
 #include <vector>

@@ -3,8 +3,8 @@
 #include <cmath>
 #include <vector>
 
-#include "util/ray3d.hpp"
-#include "util/ucs.hpp"
+#include <GoSurvey/Math/ray3d.hpp>
+#include <GoSurvey/Math/ucs.hpp>
 
 /// The live section clip plane (REQ-341 / ADR-058, GitHub issue #149 acceptance 6).
 ///

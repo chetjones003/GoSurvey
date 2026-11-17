@@ -16,7 +16,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "CadCommands.hpp"
-#include "util/ray3d.hpp"
+#include <GoSurvey/Math/ray3d.hpp>
 
 #include <cmath>
 #include <vector>

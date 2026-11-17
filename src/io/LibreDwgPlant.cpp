@@ -1,7 +1,7 @@
 #include "LibreDwgPlant.hpp"
 
-#include "util/ray3d.hpp"
-#include "util/ucs.hpp"
+#include <GoSurvey/Math/ray3d.hpp>
+#include <GoSurvey/Math/ucs.hpp>
 
 #include <cmath>
 #include <cstring>

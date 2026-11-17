@@ -2,7 +2,7 @@
 
 #include "curveintersect.hpp"
 #include "nurbs.hpp"
-#include "ucs.hpp"
+#include <GoSurvey/Math/ucs.hpp>
 
 #include <cstdint>
 #include <utility>

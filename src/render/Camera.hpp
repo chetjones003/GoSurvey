@@ -3,7 +3,7 @@
 #include <cmath>
 #include <cstring>
 
-#include "util/ray3d.hpp"
+#include <GoSurvey/Math/ray3d.hpp>
 
 /// Perspective field-of-view default and bounds (REQ-309).
 ///

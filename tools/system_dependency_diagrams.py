@@ -208,10 +208,11 @@ GAPS = [
     (lambda allowed: all("debug" not in targets for targets in allowed.values()),
      "**Debug has no consumers.** No system lists Debug as an allowed dependency, so nothing may\n"
      "  call the profiler, tracer or invariant checks."),
-    (lambda allowed: not {"geometry", "math"} & allowed["commands"]
+    (lambda allowed: "geometry" not in allowed["commands"]
+     and "math" in allowed["commands"]
      and all({"geometry", "math"} <= allowed[s] for s in ("interaction", "renderer", "io")),
-     "**Commands may not include Geometry or Math.** Interaction, Renderer and IO may; Commands\n"
-     "  may not, even though command families build geometry."),
+     "**Commands may not include Geometry.** Math is allowed for general primitives; Interaction,\n"
+     "  Renderer and IO may include both Geometry and Math."),
     (lambda allowed: "pdf" not in allowed["interaction"]
      and all(d in allowed["interaction"] for d in DOMAIN if d != "pdf"),
      "**Interaction may not include Pdf**, though it may include every other Domain system."),

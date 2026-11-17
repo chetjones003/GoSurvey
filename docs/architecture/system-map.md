@@ -18,6 +18,7 @@ The rationale behind the architecture boundaries is recorded in these ADRs:
 - [Public includes and private system sources](../adr/0004-public-includes-and-private-sources.md)
 - [Dependency ratchet and file-size gate](../adr/0005-dependency-ratchet-and-file-size-gate.md)
 - [System-qualified C++ namespaces](../adr/0006-system-qualified-cpp-namespaces.md)
+- [Commands may use Math primitives](../adr/0007-commands-may-use-math-primitives.md)
 
 ## Systems
 
@@ -37,7 +38,7 @@ The rationale behind the architecture boundaries is recorded in these ADRs:
 | Renderer | T3 Services | Converts model state into backend-neutral draw lists and owns render caches and device interfaces. | Domain model state and concrete graphics API implementation. | Geometry, Math, Core, Document, Survey, Terrain, PointCloud, Pdf |
 | IO | T3 Services | Reads and writes drawing and exchange formats, including DXF, DWG, glTF, STL, SAT, point files, and StarNet. | Domain ownership, UI, OS services. | Geometry, Math, Core, Document, Survey, Terrain, PointCloud, Pdf |
 | Network | T3 Services | Provides map tiles, update checks, and telemetry behind replaceable interfaces. | UI presentation and OS transport implementation. | Core, Events |
-| Commands | T4 Application | Coordinates command registration and user-requested operations. | Persistent domain data, toolkit widgets, GPU APIs. | Renderer, IO, Network, Document, Survey, Terrain, PointCloud, Pdf, UI, Events, Core |
+| Commands | T4 Application | Coordinates command registration and user-requested operations. | Persistent domain data, toolkit widgets, GPU APIs. | Renderer, IO, Network, Document, Survey, Terrain, PointCloud, Pdf, UI, Events, Math, Core |
 | Interaction | T4 Application | Coordinates snapping, grips, previews, picking, and transient user interaction. | Persistent document ownership, concrete widgets, GPU APIs. | Commands, Renderer, Document, Survey, Terrain, PointCloud, Geometry, Math, Events, UI, Core |
 | Qt | Platform backend | Implements UI and event interfaces using Qt. | Domain rules, command behavior, application ownership. | Core, Events, UI |
 | OpenGL | Platform backend | Implements renderer device interfaces using OpenGL. | Draw-list policy and domain state. | Core, Math, Renderer |
@@ -188,7 +189,7 @@ Fixture coverage is in `python -m unittest discover -s .github/scripts -p "test_
 
 Math carve-out (issue #1240) is staged in two PRs. This first PR adds the `GoSurvey::Math` header-only INTERFACE library, linked into `gosurvey_domain` and the `GoSurvey::Engine` umbrella, with its public include root at `src/math/include/`. Its tests move to `tests/Math/` and build as `GoSurveyMathTests` with the `Math` CTest label. The headers stay in `src/util/` until the second PR, a move-only change: `ray3d.hpp` and `ucs.hpp` move into `src/math/include/GoSurvey/Math/` and consumers include them as `<GoSurvey/Math/...>`. That PR removes the 18 private-header baseline entries, which is the only baseline change a move-only PR may make.
 
-The ratchet keys each violation by file, rule and target system rather than by include text, so a move that renames an include keeps the same forbidden edge and does not count as growth. A new forbidden edge still grows the baseline. The five Commands-to-Math includes remain recorded forbidden dependencies. The baseline stays at 530 violations in this PR.
+The ratchet keys each violation by file, rule and target system rather than by include text, so a move that renames an include keeps the same forbidden edge and does not count as growth. A new forbidden edge still grows the baseline. The follow-up boundary seal in issue #1286 moved ray3d.hpp and ucs.hpp to Math public headers, recorded the Commands-to-Math dependency in ADR-0007, and regenerated the baseline.
 
 Events carve-out (issue #1241) is a scaffold with no file moves. The approved map assigns Events no whole files: `auditedEntries.Events.currentFiles` is empty, and its responsibilities are sections inside Qt files, which a history-preserving move cannot carry. This PR adds the `GoSurvey::Events` header-only INTERFACE library, linked into the `GoSurvey::Engine` umbrella, with its public include root at `src/events/include/` (headers under `GoSurvey/Events/`) and allowed dependencies Core and Math. There is no `src/events/src/` private source tree yet, as with Math until its move. It records that folder as Events in `mappedFolders`. Events has no pure tests to move, so no `GoSurveyEventsTests` target is added. The move-only proof cannot run on this change because it has no renames, so this PR is not labelled `refactor: move-only`. The dependency baseline is unchanged at 530 violations. Moving the Events sections into the new library and its toolkit-neutral types are follow-up decisions recorded in `auditedEntries.Events.draftPublicInterface`.
 

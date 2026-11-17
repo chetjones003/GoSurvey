@@ -4,7 +4,7 @@
 #include "util/cadblock.hpp"
 #include "util/cadtable.hpp"
 #include "util/geom2d.hpp"  // the shared segment/circle-vs-box tests the model-space fence uses
-#include "util/ucs.hpp"  // REQ-155: per-viewport active UCS frame (pure value type, ray3d only)
+#include <GoSurvey/Math/ucs.hpp>  // REQ-155: per-viewport active UCS frame (pure value type, ray3d only)
 
 #include <algorithm>
 #include <cmath>

@@ -2,7 +2,7 @@
 
 #include "brep.hpp"
 #include "nurbs.hpp"
-#include "ray3d.hpp"
+#include <GoSurvey/Math/ray3d.hpp>
 
 #include <algorithm>
 #include <cassert>

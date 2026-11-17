@@ -15,7 +15,7 @@
 
 #include "util/pointcloudoctree.hpp"
 #include "util/spline.hpp"
-#include "util/ucs.hpp"
+#include <GoSurvey/Math/ucs.hpp>
 
 /// A SPLINE entity (REQ-443 / issue #803): a 3D NURBS curve - see util/spline.hpp. Kept as the
 /// util type itself, with no wrapper, because it already is the whole entity (points, knots,
