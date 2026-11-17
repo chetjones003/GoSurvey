@@ -548,6 +548,18 @@ target_include_directories(gosurvey_ui INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURR
 target_compile_features(gosurvey_ui INTERFACE cxx_std_17)
 target_link_libraries(gosurvey_ui INTERFACE GoSurvey::Core GoSurvey::Events)
 
+# GoSurvey::Debug — Foundation library for developer diagnostics (carve-out ticket #1243). Its
+# public include root is src/debug/include/ (headers under GoSurvey/Debug/), with a private source
+# tree at src/debug/src/. The sources keep their current paths until the move-only follow-up.
+add_library(gosurvey_debug STATIC
+  src/util/benchscene.cpp
+  src/util/SaveTrace.cpp)
+add_library(GoSurvey::Debug ALIAS gosurvey_debug)
+target_include_directories(gosurvey_debug PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/debug/include>")
+target_compile_features(gosurvey_debug PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_debug PUBLIC GoSurvey::Core)
+gosurvey_target_warnings(gosurvey_debug)
+
 # --- OpenXLSX (vendored, third_party/OpenXLSX, approved D-2026-10-30-a): .xlsx read/write for
 # Extract Data and Link Data (REQ-467 / REQ-468). Compiled into gosurvey_domain with the pugixml
 # copy above; zip support comes from the vendored miniz.
@@ -750,7 +762,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/util/surfacequery.cpp
   src/util/gridsurface.cpp
   src/util/daylight.cpp
-  src/util/benchscene.cpp
+  # BENCH scene/statistics implementation is compiled by GoSurvey::Debug.
   # REQ-320 / ADR-051: the ACIS SAT record parser feeding 3DSOLID import (GitHub issue #299). Pure
   # and dependency-free like brep.cpp itself — no LibreDWG, no GL — so a malformed or unsupported
   # record is caught against a hand-authored SAT fixture rather than a real vendor block library.
@@ -798,7 +810,6 @@ set(GOSURVEY_DOMAIN_SOURCES
 
   # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
   src/util/docinvariants.cpp
-  src/util/SaveTrace.cpp
 )
 
 # One static library so CadCommands.cpp (and the rest of the domain list) is compiled
@@ -835,7 +846,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
-target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry)
+target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Debug)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
@@ -847,7 +858,7 @@ gosurvey_enable_pch(gosurvey_domain)
 # Stable umbrella for application consumers; individual systems remain linkable in isolation.
 add_library(gosurvey_engine INTERFACE)
 add_library(GoSurvey::Engine ALIAS gosurvey_engine)
-target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Events GoSurvey::UI)
+target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Events GoSurvey::UI GoSurvey::Debug)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
@@ -1194,7 +1205,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/DwgProbeTests.cpp
     tests/LibreDwgTests.cpp
     tests/LinetypeTessellationTests.cpp
-    tests/BenchSceneTests.cpp
+    # BenchSceneTests moved to GoSurveyDebugTests.
     tests/VisualStyleTests.cpp
     # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). The whole point of the kernel being
     # graphics-free is that this suite can exist: every primitive's topology, its closed-form volume
@@ -1351,7 +1362,7 @@ if(GOSURVEY_BUILD_TESTS)
     # the only new logic in the investigation instrument for the multi-select freeze — it decides
     # where in a stall episode a frame sits — and its edges (began / ended) are what gate the one
     # diagnostic snapshot per episode, so both are pinned here with no GL context.
-    tests/FrameWatchTests.cpp
+    # FrameWatchTests moved to GoSurveyDebugTests.
     # REQ-443 (issue #803): the SPLINE mathematics. Needs CadCommands.hpp and viewport code, so it
     # stays here; spline.cpp itself is compiled into GoSurvey::Geometry.
     tests/SplineTests.cpp
@@ -1394,7 +1405,6 @@ if(GOSURVEY_BUILD_TESTS)
     # module exist at all under architecture §11.4.
     tests/DocInvariantsTests.cpp
     src/util/docinvariants.cpp
-    src/util/SaveTrace.cpp
     # REQ-069: the background rebuild worker's lifetime. Header-only against CadCommands.hpp (the
     # struct and its destructor), so it needs no extra domain source on the link line.
     tests/SurfaceRebuildLifetimeTests.cpp
@@ -1436,8 +1446,6 @@ if(GOSURVEY_BUILD_TESTS)
     # Linetype dash tessellation, including per-vertex Z (REQ-058). Standalone like DwgProbe.cpp —
     # only <string>/<vector>/<cmath>/<cctype> — so it links without the GUI stack.
     src/commands/CadLinetype.cpp
-    # REQ-100 bench scene generator + frame statistics. Pure and deterministic by design.
-    src/util/benchscene.cpp
     # REQ-065 glTF reader. Pure and GL-free by design (ADR-026 (d)) so it is tested without a window.
     src/util/gltfimport.cpp
     src/util/stlimport.cpp
@@ -1600,6 +1608,16 @@ if(GOSURVEY_BUILD_TESTS)
   target_link_libraries(GoSurveyGeometryTests PRIVATE GoSurvey::Geometry Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyGeometryTests PROPERTIES LABELS Geometry)
   gosurvey_target_warnings(GoSurveyGeometryTests TEST)
+
+  # GoSurvey::Debug tests (#1243). These are pure and link only Debug, Core and Catch2.
+  add_executable(GoSurveyDebugTests
+    tests/Debug/BenchSceneTests.cpp
+    tests/Debug/FrameWatchTests.cpp)
+  set_target_properties(GoSurveyDebugTests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug Catch2::Catch2WithMain)
+  catch_discover_tests(GoSurveyDebugTests PROPERTIES LABELS Debug)
+  gosurvey_target_warnings(GoSurveyDebugTests TEST)
 
   # ---------------------------------------------------------------------------
   # Command-layer cases share the Catch2 executable and existing domain library.

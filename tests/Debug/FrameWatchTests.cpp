@@ -10,7 +10,7 @@
 #include <cmath>
 #include <limits>
 
-#include "util/framewatch.hpp"
+#include "../../src/util/framewatch.hpp"
 
 using framewatch::Event;
 using framewatch::FrameWatch;
