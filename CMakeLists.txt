@@ -382,7 +382,7 @@ unset(_lasz)
 # --- CS-MAP: vendored headers + prebuilt static lib + dictionaries (REQ-358 / ADR-063) ---
 # OSGeo MetaCRS CS-MAP, the coordinate-system catalogue and projection engine. Prebuilt MSVC x64
 # Release /MD static lib, like LibreDWG. Its headers are NOT an interface include directory: only
-# src/geo/CoordinateSystems.cpp may include them (ADR-063 (c)), so they are added to that one source
+# the coordinate implementation may include them (ADR-063 (c)), so they are added to that source
 # below. The compiled dictionaries and the US grid files (D-2026-09-29-d) are staged beside the
 # executable as resources/csmap/ — installer payload and what the tests load.
 set(GOSURVEY_CSMAP_DIR "${GOSURVEY_TP}/csmap")
@@ -530,8 +530,6 @@ target_compile_features(gosurvey_geometry PUBLIC cxx_std_17)
 target_link_libraries(gosurvey_geometry PUBLIC GoSurvey::Math GoSurvey::Core)
 gosurvey_target_warnings(gosurvey_geometry)
 
-# GoSurvey::Survey — T2 domain library. Alignment is a public Survey model used by Terrain;
-# its legacy declarations stay at their existing paths until the move-only follow-up.
 # Shared persisted appearance values, used by Surface and Survey style records.
 add_library(gosurvey_document_appearance INTERFACE)
 add_library(GoSurvey::DocumentAppearance ALIAS gosurvey_document_appearance)
@@ -539,6 +537,8 @@ target_include_directories(gosurvey_document_appearance INTERFACE
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/document/include>")
 target_compile_features(gosurvey_document_appearance INTERFACE cxx_std_17)
 
+# GoSurvey::Survey — T2 domain library. Alignment is a public Survey model used by Terrain;
+# its legacy declarations stay at their existing paths until the move-only follow-up.
 set(GOSURVEY_COORDINATE_SOURCES
   src/geo/CoordinateSystems.cpp)
 add_library(gosurvey_survey STATIC
@@ -571,9 +571,6 @@ target_compile_features(gosurvey_survey PUBLIC cxx_std_17)
 target_link_libraries(gosurvey_survey PUBLIC GoSurvey::DocumentAppearance GoSurvey::Geometry GoSurvey::Math GoSurvey::Core CsMap::csmap)
 gosurvey_target_warnings(gosurvey_survey)
 
-# GoSurvey::Terrain — T2 Domain library (issue #1245). The pure surface/TIN and grading
-# algorithms compile independently of the application layer. Physical relocation is isolated
-# from library creation and the public Survey alignment seam.
 # Real backend-neutral Renderer cache provider over the Survey alignment model.
 add_library(gosurvey_renderer_alignment_cache STATIC src/alignment/AlignmentDisplayCache.cpp)
 add_library(GoSurvey::RendererAlignmentCache ALIAS gosurvey_renderer_alignment_cache)
@@ -583,6 +580,9 @@ target_compile_features(gosurvey_renderer_alignment_cache PUBLIC cxx_std_17)
 target_link_libraries(gosurvey_renderer_alignment_cache PUBLIC GoSurvey::Survey)
 gosurvey_target_warnings(gosurvey_renderer_alignment_cache)
 
+# GoSurvey::Terrain — T2 Domain library (issue #1245). The pure surface/TIN and grading
+# algorithms compile independently of the application layer. Physical relocation is isolated
+# from library creation and the public Survey alignment seam.
 add_library(gosurvey_terrain STATIC
   src/terrain/src/AlignmentFeatureLine.cpp
   src/terrain/src/contourgen.cpp
