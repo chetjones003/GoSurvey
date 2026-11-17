@@ -479,7 +479,7 @@ endif()
 # Two members are *absent* on purpose, because each target supplies its own implementation of the
 # same pure header (the link-time platform seams, ADR-031 (b′)):
 #   src/platform/WinFileDialogs.cpp   -> headless: src/platform/HeadlessFileDialogs.cpp
-#   src/pdf/src/PdfAttach.cpp             -> headless: src/platform/HeadlessPdfAttach.cpp
+#   src/pdf/PdfAttach.cpp             -> headless: src/platform/HeadlessPdfAttach.cpp
 # PdfAttach.cpp is where <GL/glew.h> reaches the Commands layer, which is precisely why it is a seam.
 # ---------------------------------------------------------------------------
 # GoSurvey::Core — first system library in the system layout (issue #1219).
