@@ -2,27 +2,6 @@
   "generatedFrom": "beta",
   "violations": [
     {
-      "file": "src/alignment/AlignmentSampleLines.cpp",
-      "include": "util/surfacequery.hpp",
-      "target": "Terrain",
-      "rule": "forbidden dependency",
-      "message": "src/alignment/AlignmentSampleLines.cpp includes \"util/surfacequery.hpp\": Survey may not depend on Terrain (forbidden dependency)"
-    },
-    {
-      "file": "src/alignment/AlignmentSampleLines.cpp",
-      "include": "util/surfacevolume.hpp",
-      "target": "Terrain",
-      "rule": "forbidden dependency",
-      "message": "src/alignment/AlignmentSampleLines.cpp includes \"util/surfacevolume.hpp\": Survey may not depend on Terrain (forbidden dependency)"
-    },
-    {
-      "file": "src/alignment/AlignmentSampleLines.hpp",
-      "include": "util/surfacevolume.hpp",
-      "target": "Terrain",
-      "rule": "forbidden dependency",
-      "message": "src/alignment/AlignmentSampleLines.hpp includes \"util/surfacevolume.hpp\": Survey may not depend on Terrain (forbidden dependency)"
-    },
-    {
       "file": "src/commands/CadBlocks.cpp",
       "include": "CadRubberPreview.hpp",
       "target": "Interaction",
