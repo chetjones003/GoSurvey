@@ -598,7 +598,7 @@ gosurvey_target_warnings(gosurvey_debug)
 # The font folder is still mapped to Core, so compile its SHX provider as a Core-owned helper.
 # This keeps Pdf's transitive provider closure concrete without a forbidden Pdf -> IO dependency.
 add_library(gosurvey_core_shx_font STATIC src/font/ShxFont.cpp)
-target_include_directories(gosurvey_core_shx_font PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(gosurvey_core_shx_font PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_features(gosurvey_core_shx_font PUBLIC cxx_std_17)
 gosurvey_target_warnings(gosurvey_core_shx_font)
 
@@ -704,7 +704,6 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/ui/MtextRichFormat.cpp
 
   # Fonts (shared lower layer — SHX stroke geometry, ADR-022)
-  src/font/ShxFont.cpp
 
   # Survey / COGO
   src/survey/SurveyPoints.cpp
@@ -1576,7 +1575,6 @@ if(GOSURVEY_BUILD_TESTS)
   gosurvey_target_warnings(GoSurveyTerrainTests TEST)
 
   add_executable(GoSurveyPdfTests
-    tests/Pdf/PublicConsumerTests.cpp
     tests/PdfViewerTests.cpp tests/PdfSplitTests.cpp tests/PdfAnnotateTests.cpp
     tests/PdfLeaderTests.cpp tests/PdfMeasureTests.cpp tests/PdfDimensionTests.cpp
     tests/PdfSnapTests.cpp tests/PdfScaleCheckTests.cpp tests/PdfDimAuditTests.cpp
@@ -1589,8 +1587,20 @@ if(GOSURVEY_BUILD_TESTS)
   gosurvey_target_warnings(GoSurveyPdfTests TEST)
   if(WIN32)
     add_custom_command(TARGET GoSurveyPdfTests POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pdfium_binaries_SOURCE_DIR}/bin/pdfium.dll" "$<TARGET_FILE_DIR:GoSurveyPdfTests>/pdfium.dll"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:pdfium>" "$<TARGET_FILE_DIR:GoSurveyPdfTests>/pdfium.dll"
       COMMENT "Copy pdfium.dll beside GoSurveyPdfTests")
+  endif()
+
+  # Check the advertised Pdf target without the private roots used by legacy fixtures.
+  add_executable(GoSurveyPdfPublicConsumer tests/Pdf/PublicConsumer.cpp)
+  set_target_properties(GoSurveyPdfPublicConsumer PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyPdfPublicConsumer PRIVATE GoSurvey::Pdf)
+  gosurvey_target_warnings(GoSurveyPdfPublicConsumer TEST)
+  add_test(NAME Pdf.public-consumer COMMAND GoSurveyPdfPublicConsumer)
+  set_tests_properties(Pdf.public-consumer PROPERTIES LABELS Pdf)
+  if(WIN32)
+    add_custom_command(TARGET GoSurveyPdfPublicConsumer POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:pdfium>" "$<TARGET_FILE_DIR:GoSurveyPdfPublicConsumer>/pdfium.dll")
   endif()
 
   # GoSurvey::Debug tests (#1243). The capture fixtures use Geometry to validate splines;
