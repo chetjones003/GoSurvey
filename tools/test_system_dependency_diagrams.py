@@ -59,6 +59,7 @@ class SystemDependencyDiagramTests(unittest.TestCase):
 
     def test_gap_is_dropped_when_the_map_no_longer_has_it(self):
         self.assertIn("Commands may not include Geometry", diagrams.render_markdown(self.allowed))
+        self.assertIn("Math is allowed for general primitives", diagrams.render_markdown(self.allowed))
         fixed = self.changed("commands", "geometry", add=True)
         self.assertNotIn("Commands may not include Geometry", diagrams.render_markdown(fixed))
 

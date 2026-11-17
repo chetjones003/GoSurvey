@@ -1351,6 +1351,8 @@ the generator drops a gap from this list once the table no longer has it.
 
 - **Debug has no consumers.** No system lists Debug as an allowed dependency, so nothing may
   call the profiler, tracer or invariant checks.
+- **Commands may not include Geometry.** Math is allowed for general primitives; Interaction,
+  Renderer and IO may include both Geometry and Math.
 - **Interaction may not include Pdf**, though it may include every other Domain system.
 - **GoSurveyEditor may not include Headless, Events, UI or Core directly**; it reaches them
   only through the systems it lists.
