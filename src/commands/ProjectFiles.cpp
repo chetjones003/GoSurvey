@@ -1,7 +1,7 @@
 #include "ProjectFiles.hpp"
 
 #include "io/ProjectTurnover.hpp"
-#include "pdf/PdfAttach.hpp"
+#include "GoSurvey/Pdf/PdfAttach.hpp"
 #include "GoSurvey/PointCloud/CacheStorage.hpp"
 #include "io/DwgIo.hpp"
 #include "io/GsIo.hpp"

@@ -1,3 +1,3 @@
 #pragma once
 
-#include "../../../PdfScaleCheck.hpp"
+#include "GoSurvey/Pdf/PdfScaleCheck.hpp"

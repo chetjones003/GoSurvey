@@ -34,7 +34,7 @@
 // across hover frames rather than re-opening it every frame.
 #include "GoSurvey/PointCloud/CacheStorage.hpp"
 #include "DwgIo.hpp"
-#include "PdfAttach.hpp"
+#include "GoSurvey/Pdf/PdfAttach.hpp"
 #include "ProjectPointRules.hpp"  // projpts::Db + projpts::Rules (REQ-376, REQ-377)
 #include "Project.hpp"  // gsproj::Project / LockInfo, for AppCommandState::openProjects (REQ-374)
 #include "ProjectPack.hpp"  // gspack::PackPlan, for AppCommandState::projectPackPrompt (REQ-380)

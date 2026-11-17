@@ -360,13 +360,6 @@
     },
     {
       "file": "src/commands/CadCommands.hpp",
-      "include": "PdfAttach.hpp",
-      "target": "Pdf",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"PdfAttach.hpp\": cross-system include must use GoSurvey/Pdf/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
       "include": "ProjectPointRules.hpp",
       "target": "IO",
       "rule": "private-header include",
@@ -693,13 +686,6 @@
       "target": "IO",
       "rule": "private-header include",
       "message": "src/commands/ProjectFiles.cpp includes \"io/ProjectTurnover.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/ProjectFiles.cpp",
-      "include": "pdf/PdfAttach.hpp",
-      "target": "Pdf",
-      "rule": "private-header include",
-      "message": "src/commands/ProjectFiles.cpp includes \"pdf/PdfAttach.hpp\": cross-system include must use GoSurvey/Pdf/ public headers (private-header include)"
     },
     {
       "file": "src/commands/ProjectFiles.cpp",
@@ -1099,13 +1085,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgVisualStyle.hpp includes \"CadEntities.hpp\": IO may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/io/PdfPlot.cpp",
-      "include": "PdfDocument.hpp",
-      "target": "Pdf",
-      "rule": "private-header include",
-      "message": "src/io/PdfPlot.cpp includes \"PdfDocument.hpp\": cross-system include must use GoSurvey/Pdf/ public headers (private-header include)"
     },
     {
       "file": "src/io/PdfPlot.cpp",
@@ -3045,13 +3024,6 @@
       "target": "Interaction",
       "rule": "forbidden dependency",
       "message": "src/render/ViewportRenderer.hpp includes \"CadSnap.hpp\": Renderer may not depend on Interaction (forbidden dependency)"
-    },
-    {
-      "file": "src/render/ViewportRenderer.hpp",
-      "include": "PdfAttach.hpp",
-      "target": "Pdf",
-      "rule": "private-header include",
-      "message": "src/render/ViewportRenderer.hpp includes \"PdfAttach.hpp\": cross-system include must use GoSurvey/Pdf/ public headers (private-header include)"
     },
     {
       "file": "src/render/ViewportRenderer.hpp",

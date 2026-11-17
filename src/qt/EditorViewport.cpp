@@ -47,7 +47,7 @@
 #include <algorithm>
 #include <cassert>
 #include "CadCommands.hpp"
-#include "pdf/PdfAttach.hpp"
+#include "GoSurvey/Pdf/PdfAttach.hpp"
 
 namespace {
 

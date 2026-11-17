@@ -5,8 +5,8 @@
 #include "QtAccent.hpp"
 #include "PdfCanvas.hpp"
 #include "PdfRibbon.hpp"
-#include "PdfScaleCheck.hpp"
-#include "PdfSplit.hpp"
+#include "GoSurvey/Pdf/PdfScaleCheck.hpp"
+#include "GoSurvey/Pdf/PdfSplit.hpp"
 
 #include <QAbstractItemView>
 #include <QAction>

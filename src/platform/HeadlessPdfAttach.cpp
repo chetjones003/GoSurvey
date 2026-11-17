@@ -19,7 +19,7 @@
 // PdfDraftCache_Free); the rest are implemented so the seam covers the whole header and a new call
 // site is a behaviour change rather than a link error.
 
-#include "PdfAttach.hpp"
+#include "GoSurvey/Pdf/PdfAttach.hpp"
 
 // The opaque type the header forward-declares. Headless never creates one, but the definition has
 // to exist for PdfDraftCache_Free's parameter to be a complete type at the call site.

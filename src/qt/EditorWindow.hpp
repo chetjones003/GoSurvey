@@ -5,7 +5,7 @@
 #include "CadCommands.hpp"
 #include "CadDynInput.hpp"
 #include "WikiContent.hpp"
-#include "PdfCoordExtract.hpp"
+#include "GoSurvey/Pdf/PdfCoordExtract.hpp"
 
 namespace update { struct UpdateState; }
 namespace telemetry { struct TelemetryTask; }

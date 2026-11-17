@@ -1,6 +1,6 @@
 #include "PdfPlot.hpp"
 
-#include "PdfDocument.hpp"       // pdfview::PdfiumMutex — the viewer renders on a worker thread (REQ-387)
+#include "GoSurvey/Pdf/PdfDocument.hpp"       // pdfview::PdfiumMutex — the viewer renders on a worker thread (REQ-387)
 
 #include "CadCommands.hpp"
 #include "PaperSpace.hpp"
