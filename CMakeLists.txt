@@ -548,7 +548,8 @@ add_library(gosurvey_survey STATIC
   src/geo/LocalGridTransform.cpp
   src/geo/EcefTransform.cpp
   src/traverse/TraverseCalc.cpp
-  src/traverse/TraverseLeastSquares.cpp)
+  src/traverse/TraverseLeastSquares.cpp
+  src/traverse/TraverseReport.cpp)
 add_library(GoSurvey::Survey ALIAS gosurvey_survey)
 target_include_directories(gosurvey_survey
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include>"
@@ -650,6 +651,16 @@ target_link_libraries(gosurvey_pdf PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey
   PRIVATE GoSurvey::CoreShxFont)
 gosurvey_target_warnings(gosurvey_pdf)
 
+# IO owns report file formats; Survey owns the report text and adjustment data.
+add_library(gosurvey_io_traverse_report STATIC src/io/src/TraverseReportExport.cpp)
+add_library(GoSurvey::IOTraverseReport ALIAS gosurvey_io_traverse_report)
+target_include_directories(gosurvey_io_traverse_report
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/io/include>"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_features(gosurvey_io_traverse_report PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_io_traverse_report PRIVATE GoSurvey::Pdf)
+gosurvey_target_warnings(gosurvey_io_traverse_report)
+
 # --- OpenXLSX (vendored, third_party/OpenXLSX, approved D-2026-10-30-a): .xlsx read/write for
 # Extract Data and Link Data (REQ-467 / REQ-468). Compiled into gosurvey_domain with the pugixml
 # copy above; zip support comes from the vendored miniz.
@@ -687,6 +698,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/CadCommands.cpp
   src/commands/CadField.cpp
   src/commands/TraverseActions.cpp
+  src/commands/TraverseReportActions.cpp
   # Cohesive slices split out of the CadCommands.cpp mega-TU (TASK-150 Phase 2,
   # issue #142). Same TU rules; entry points declared in CadCommands.hpp.
   src/commands/CadCommands_Align.cpp
@@ -892,7 +904,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
-target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf)
+target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf GoSurvey::IOTraverseReport)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
@@ -1415,7 +1427,6 @@ if(GOSURVEY_BUILD_TESTS)
     # BUG-013 per-application GPU preference. Win32 registry only — no GL, no window — so the value
     # the user's choice actually turns into is testable without the application running.
     src/platform/GpuPreference.cpp
-    src/traverse/TraverseReport.cpp
     src/traverse/FbkImport.cpp
     src/traverse/TraverseIo.cpp
     src/traverse/TraverseCommandLang.cpp

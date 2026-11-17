@@ -14,7 +14,7 @@
 #include "traverse/Rw5Import.hpp"
 #include "traverse/JobXmlImport.hpp"
 #include "traverse/TraverseReport.hpp"
-
+#include <GoSurvey/IO/TraverseReportExport.hpp>
 #include <algorithm>
 #include <atomic>
 #include <cmath>

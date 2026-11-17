@@ -14,3 +14,7 @@ bool AcceptTraverseAdjustment(TraverseData& data, const LsaResult& result, std::
 // The optional accepted result also supplies GPS-only/network station coordinates.
 int CommitTraverseToDrawing(AppCommandState& state, const TraverseData& data,
                             const LsaResult* accepted, std::vector<std::string>& log);
+
+// Exports an already computed report through the format provider; unsupported formats return false.
+bool ExportTraverseReport(const std::string& format, const std::string& pathUtf8,
+                          const std::string& text, std::string& error);

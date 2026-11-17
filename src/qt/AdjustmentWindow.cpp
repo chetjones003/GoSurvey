@@ -1177,9 +1177,7 @@ bool AdjustmentWindow::ExportReportFile(const QString& path, QString& error) {
   const auto utf8 = path.toUtf8().toStdString();
   const auto suffix = QFileInfo(path).suffix().toLower();
   std::string reason;
-  const bool ok = suffix == "pdf" ? traverserpt::ExportReportPdf(utf8, report, reason) :
-      suffix == "rtf" ? traverserpt::ExportReportRtf(utf8, report, reason) :
-      suffix == "txt" ? traverserpt::ExportReportTxt(utf8, report, reason) : false;
+  const bool ok = ExportTraverseReport(suffix.toStdString(), utf8, report, reason);
   if (!ok) {
     error = reason.empty() ? "Choose a .txt, .rtf, or .pdf report file." : QString::fromUtf8(reason.c_str());
     return false;

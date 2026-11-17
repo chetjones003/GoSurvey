@@ -1,6 +1,8 @@
 #include <GoSurvey/Survey/Alignment.hpp>
 #include <GoSurvey/Survey/AlignmentGround.hpp>
 #include <GoSurvey/Survey/AlignmentReport.hpp>
+#include <GoSurvey/Survey/TraverseReportPublic.hpp>
+#include <GoSurvey/Survey/TraverseCalcPublic.hpp>
 
 #include <cmath>
 #include <iostream>
@@ -31,5 +33,10 @@ int main() {
   if (lines.empty()) return 6;
   const auto csv = alignment::BuildAlignmentReportCsv(route, format);
   if (csv.empty()) return 7;
+  TraverseData traverse;
+  LsaWeights weights;
+  LsaResult result;
+  const auto adjustment = traverserpt::BuildReportText(traverse, weights, result, "Consumer", "ft");
+  if (adjustment.find("Summary of Files Used") == std::string::npos) return 8;
   return 0;
 }

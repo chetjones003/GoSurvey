@@ -3047,13 +3047,6 @@
       "message": "src/telemetry/TelemetryService.cpp includes \"HttpFetch.hpp\": Network may not depend on Windows (forbidden dependency)"
     },
     {
-      "file": "src/traverse/TraverseReport.cpp",
-      "include": "../io/PlotFont.hpp",
-      "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/traverse/TraverseReport.cpp includes \"../io/PlotFont.hpp\": Survey may not depend on IO (forbidden dependency)"
-    },
-    {
       "file": "src/ui/CadUiStyleWidgets.hpp",
       "include": "CadEntities.hpp",
       "target": "Commands",
