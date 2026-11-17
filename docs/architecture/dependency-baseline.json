@@ -633,13 +633,6 @@
     },
     {
       "file": "src/commands/CadCommands_Alignment.cpp",
-      "include": "alignment/AlignmentFeatureLine.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands_Alignment.cpp includes \"alignment/AlignmentFeatureLine.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands_Alignment.cpp",
       "include": "alignment/AlignmentTables.hpp",
       "target": "Survey",
       "rule": "private-header include",

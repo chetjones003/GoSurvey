@@ -18,7 +18,7 @@
 #include "TextStyle.hpp"
 #include "alignment/AlignmentReport.hpp"
 #include "alignment/AlignmentGround.hpp"
-#include "alignment/AlignmentFeatureLine.hpp"
+#include <GoSurvey/Terrain/FeatureLineStations.hpp>
 #include <memory>
 #include "alignment/AlignmentTables.hpp"
 #include "alignment/AlignmentLabels.hpp"

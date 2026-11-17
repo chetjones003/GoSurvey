@@ -1,4 +1,6 @@
-#include "alignment/AlignmentFeatureLine.hpp"
+#include "AlignmentFeatureLine.hpp"
+
+#include <GoSurvey/Survey/Alignment.hpp>
 
 #include <algorithm>
 #include <cmath>
