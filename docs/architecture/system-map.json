@@ -27,6 +27,10 @@
       "system": "Events"
     },
     {
+      "path": "src/events/src/",
+      "system": "Events"
+    },
+    {
       "path": "src/ui/include/",
       "system": "UI"
     },
@@ -13515,7 +13519,7 @@
         ],
         "design note": [
           "Payload structs, change-kind enums, and opaque tokens are defined by Events; consumers translate their own Document/Commands state into these values without Events including those systems.",
-          "The Qt backend converts Qt input types at the adapter boundary. The EventBus is an instance composed by GoSurveyEditor and passed to publishers/subscribers; it is not a global. Exact payload fields and subscription ownership remain for the Events move/interface ticket."
+          "The Qt backend converts Qt input types at the adapter boundary. The EventBus is an instance composed by GoSurveyEditor and passed to publishers/subscribers; it is not a global. Issue #1287 implements the toolkit-neutral payloads and move-only RAII EventSubscription in the public Events header; its dispatcher state and implementation live under src/events/src/."
         ]
       },
       "existingTests": [
@@ -13540,10 +13544,10 @@
         "tests/QtEditorTests.cpp::frontViewPanMovesInCameraPlane",
         "tests/QtEditorTests.cpp::qtViewportGizmoDragCommitsOneUndoableTransform",
         "tests/QtEditorTests.cpp::qtViewportSectionPlaneGripDragEndsOnReleaseAndUndoes",
-        "tests/QtEditorTests.cpp::rightClickModesFollowThePreferencesForEveryContext (viewport no-selection branches only; Commands policy)"
+        "tests/QtEditorTests.cpp::rightClickModesFollowThePreferencesForEveryContext (viewport no-selection branches only; Commands policy)",
+        "tests/Events/EventBusTests.cpp"
       ],
       "testGaps": [
-        "No toolkit-neutral Events types, dispatcher, or focused event-system tests exist yet; no focused test covers AdjustmentWindow::drawingChanged through EditorWindow refresh, and no test directly names EditorWindow::eventFilter/EditorWindow::DraftingInputEvent (current coverage is via broader Qt integration cases).",
         "Document dirty tracking compares cadGpuRevision with activeDocSavedRevision for the active drawing and documents[i].cadGpuRevision with documents[i].savedRevision for other tabs; there is no DocumentChangedEvent publisher/subscriber contract.",
         "Viewport input tests are embedded in the large QtEditorTests suite and mix event transport with command, selection, and UI behavior.",
         "No typed command-state changed publisher exists today; the viewport changed callback is an untyped refresh callback, not dedicated command-state event coverage."
