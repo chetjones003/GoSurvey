@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CadCommands.hpp"
-#include "util/docinvariants.hpp"
+#include <GoSurvey/Debug/DocumentInvariants.hpp>
 
 // Capture by value: subsequent document edits cannot change a diagnostic
 // result. Used by both the transcript driver and the deliberately broken

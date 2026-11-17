@@ -7,7 +7,7 @@
 
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
-#include "util/benchscene.hpp"
+#include <GoSurvey/Debug/BenchScene.hpp>
 #include "util/tinbuild.hpp"
 #include "SurfaceStyle.hpp"
 #include "AppPaths.hpp"

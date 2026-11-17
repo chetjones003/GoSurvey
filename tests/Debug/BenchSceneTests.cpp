@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include "../../src/util/benchscene.hpp"
+#include <GoSurvey/Debug/BenchScene.hpp>
 
 using Catch::Approx;
 

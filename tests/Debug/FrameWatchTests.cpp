@@ -10,7 +10,7 @@
 #include <cmath>
 #include <limits>
 
-#include "../../src/util/framewatch.hpp"
+#include <GoSurvey/Debug/FrameWatch.hpp>
 
 using framewatch::Event;
 using framewatch::FrameWatch;

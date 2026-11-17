@@ -28,7 +28,7 @@
 #include "SurveyPoints.hpp"
 #include "TextStyle.hpp"
 #include "util/cadtable.hpp"
-#include "util/SaveTrace.hpp"
+#include <GoSurvey/Debug/SaveTrace.hpp>
 
 #include <algorithm>
 #include <cctype>

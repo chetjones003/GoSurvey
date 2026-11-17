@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
 
-#include "util/docinvariants.hpp"
+#include <GoSurvey/Debug/DocumentInvariants.hpp>
 
 TEST_CASE("Document snapshot checker preserves diagnostic identifiers and detail",
           "[Debug][snapshot]") {

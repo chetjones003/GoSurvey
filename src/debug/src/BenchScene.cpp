@@ -1,4 +1,4 @@
-#include "benchscene.hpp"
+#include <GoSurvey/Debug/BenchScene.hpp>
 
 #include <algorithm>
 #include <cmath>
