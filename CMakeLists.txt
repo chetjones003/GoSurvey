@@ -797,43 +797,59 @@ set(GOSURVEY_DOMAIN_SOURCES
 
   # Point-cloud out-of-core octree (REQ-171/REQ-172, ADR-060) — pure; builds/queries the spatial
   # index over an in-memory point set, no file IO and no GL calls.
-  src/util/pointcloudoctree.cpp
-
   # E57 point-cloud reader (REQ-172, ADR-042 (d)) — adapts vendored libE57Format to GoSurvey's
   # flat interleaved point layout. Delivered first among REQ-172's formats (D-2026-09-17-d).
-  src/io/CadPointCloudE57.cpp
 
   # PTS (Cyclone-style ASCII) point-cloud reader/writer (REQ-172, PTS increment — delivered after
   # E57 per `spec/file-format-specs.md` §6). In-tree, no delimiter sniffing.
-  src/io/CadPointCloudPts.cpp
 
   # PTX (Cyclone-style ASCII, per-scan-setup) point-cloud reader/writer (REQ-172, issue #825
   # increment 2 — delivered after PTS per `spec/file-format-specs.md` §6). In-tree, no delimiter
   # sniffing.
-  src/io/CadPointCloudPtx.cpp
 
   # LAS (ASPRS binary) point-cloud reader/writer (REQ-172, LAS increment — delivered after PTX
   # per `spec/file-format-specs.md` §6). In-tree, no LASlib dependency.
-  src/io/CadPointCloudLas.cpp
 
   # LAZ (LASzip-compressed LAS) point-cloud reader/writer (REQ-172, LAZ increment, issue #825
   # increment 4 — the last of REQ-172's four remaining formats). Parses the LAS Public Header
   # Block itself (same byte layout as a plain LAS) and hands the compressed point-data section to
   # vendored LASzip for decode/encode (third_party/laszip/VENDORED.md).
-  src/io/CadPointCloudLaz.cpp
 
   # .gscloud out-of-core cache codec (ADR-060) — builds/reads the disk-backed octree so a
   # multi-GB scan is never fully resident in memory.
-  src/util/pointcloudcache.cpp
 
   # Least-squares cylinder-axis fit (REQ-347) — pure; fits a neighborhood of point-cloud points to
   # a cylinder axis via PCA + radial least squares, no file IO and no GL calls.
-  src/util/cylinderfit.cpp
-
 )
 
 # One static library so CadCommands.cpp (and the rest of the domain list) is compiled
 # once per configuration rather than once per executable that needs it.
+add_library(gosurvey_pointcloud STATIC
+  src/util/pointcloudoctree.cpp
+  src/util/pointcloudcache.cpp
+  src/util/cylinderfit.cpp)
+add_library(GoSurvey::PointCloud ALIAS gosurvey_pointcloud)
+target_include_directories(gosurvey_pointcloud
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/pointcloud/include>"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_features(gosurvey_pointcloud PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_pointcloud PUBLIC GoSurvey::Math GoSurvey::Core)
+gosurvey_target_warnings(gosurvey_pointcloud)
+
+add_library(gosurvey_io_pointcloud STATIC
+  src/io/src/PointCloudCacheImport.cpp
+  src/io/CadPointCloudE57.cpp
+  src/io/CadPointCloudPts.cpp
+  src/io/CadPointCloudPtx.cpp
+  src/io/CadPointCloudLas.cpp
+  src/io/CadPointCloudLaz.cpp)
+add_library(GoSurvey::IOPointCloud ALIAS gosurvey_io_pointcloud)
+target_include_directories(gosurvey_io_pointcloud
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/io/include>"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_features(gosurvey_io_pointcloud PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_io_pointcloud PUBLIC GoSurvey::PointCloud PRIVATE E57Format::E57Format Laszip::laszip)
+gosurvey_target_warnings(gosurvey_io_pointcloud)
 add_library(gosurvey_domain STATIC ${GOSURVEY_DOMAIN_SOURCES})
 # CadCommands.cpp exceeds MSVC's default COFF section limit on current hosted toolchains.
 if(MSVC)
@@ -866,7 +882,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
-target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Debug GoSurvey::Terrain)
+target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
@@ -878,7 +894,7 @@ gosurvey_enable_pch(gosurvey_domain)
 # Stable umbrella for application consumers; individual systems remain linkable in isolation.
 add_library(gosurvey_engine INTERFACE)
 add_library(GoSurvey::Engine ALIAS gosurvey_engine)
-target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Events GoSurvey::UI GoSurvey::Debug GoSurvey::Terrain)
+target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Events GoSurvey::UI GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
@@ -1260,44 +1276,33 @@ if(GOSURVEY_BUILD_TESTS)
     src/util/solidpick.cpp
     # REQ-171/REQ-172, ADR-060 — the octree is pure Domain code (no file IO, no GL), so it is
     # pinned directly here, the same way BrepTests pins src/util/brep.cpp with no window.
-    tests/PointCloudOctreeTests.cpp
-    src/util/pointcloudoctree.cpp
     # REQ-172 — E57 reader round-trip (writes a tiny fixture E57 with libE57Format's own Simple
     # Writer, then reads it back) and malformed/missing-file refusal. Pinned directly, same as
     # AcisSatParserTests pins its own reader above.
     tests/CadPointCloudE57Tests.cpp
-    src/io/CadPointCloudE57.cpp
     # REQ-172 PTS increment (delivered after E57, `spec/file-format-specs.md` §6) — in-tree ASCII
     # reader/writer round-trip (3/4/7-token line shapes) and malformed/truncated/missing-file
     # refusal. Pinned directly, same as the E57 reader above.
     tests/CadPointCloudPtsTests.cpp
-    src/io/CadPointCloudPts.cpp
     # REQ-172 PTX increment (issue #825 increment 2, delivered after PTS, `spec/file-format-specs.md`
     # §6) — in-tree ASCII reader/writer round-trip (per-scan-setup 4x4 transform, including a
     # hand-checked non-identity case), "no return" filtering, and malformed/truncated/missing-file
     # refusal. Pinned directly, same as the E57 reader above.
     tests/CadPointCloudPtxTests.cpp
-    src/io/CadPointCloudPtx.cpp
     # REQ-172 LAS increment (delivered after PTX, `spec/file-format-specs.md` §6) — in-tree binary
     # reader/writer round-trip (point formats 0/2, hand-checked scale+offset decode) and
     # malformed/truncated/unsupported-format/missing-file refusal. Pinned directly, same as the
     # E57 reader above.
     tests/CadPointCloudLasTests.cpp
-    src/io/CadPointCloudLas.cpp
     # REQ-172 LAZ increment (issue #825 increment 4, the last of REQ-172's four remaining
     # formats) — LASzip-compressed LAS round-trip (point formats 0/2, matching the uncompressed
     # LAS convention), the LAS/LAZ cross-check (same points import equal counts and XYZ from
     # either format), and malformed/truncated/corrupt-compressed-stream/missing-file refusal.
     # Pinned directly, same as the E57 reader above.
     tests/CadPointCloudLazTests.cpp
-    src/io/CadPointCloudLaz.cpp
     # ADR-060 — .gscloud out-of-core cache build/read/stamp round-trip. Pinned directly, same as
     # the octree and E57 reader above.
-    tests/PointCloudCacheTests.cpp
-    src/util/pointcloudcache.cpp
     # REQ-347 — least-squares cylinder-axis fit. Pinned directly, same as the octree above.
-    tests/CylinderFitTests.cpp
-    src/util/cylinderfit.cpp
     tests/MeshPayloadRoundTripTests.cpp
     tests/GsAnnotationJsonTests.cpp
     tests/GltfImportTests.cpp
@@ -1507,7 +1512,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PlotSheetPdfTests.cpp
     src/io/PdfPlot.cpp
     src/io/PlotStyleTable.cpp)
-  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium Laszip::laszip)
+  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium Laszip::laszip GoSurvey::IOPointCloud)
   if(WIN32)
     add_custom_command(TARGET GoSurveyTests POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -1597,7 +1602,7 @@ if(GOSURVEY_BUILD_TESTS)
     ${NLOHMANN_JSON_INCLUDE})
   set_target_properties(GoSurveyTerrainTests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
-  target_link_libraries(GoSurveyTerrainTests PRIVATE GoSurvey::Terrain GoSurvey::Debug Catch2::Catch2WithMain)
+  target_link_libraries(GoSurveyTerrainTests PRIVATE GoSurvey::Terrain GoSurvey::Debug GoSurvey::PointCloud Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyTerrainTests PROPERTIES LABELS Terrain)
   gosurvey_target_warnings(GoSurveyTerrainTests TEST)
 
@@ -1625,7 +1630,7 @@ if(GOSURVEY_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/terrain/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests"
     ${NLOHMANN_JSON_INCLUDE})
-  target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug GoSurvey::Geometry Catch2::Catch2WithMain)
+  target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug GoSurvey::Geometry GoSurvey::PointCloud Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyDebugTests PROPERTIES LABELS Debug)
   gosurvey_target_warnings(GoSurveyDebugTests TEST)
 
@@ -1788,7 +1793,28 @@ if(GOSURVEY_BUILD_TESTS)
   ${PUGIXML_INCLUDE}
     ${CMAKE_BINARY_DIR}/generated
   )
-  target_link_libraries(GoSurveyTests PRIVATE gosurvey_domain Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format)
+  target_link_libraries(GoSurveyTests PRIVATE gosurvey_domain Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format GoSurvey::IOPointCloud)
+  add_executable(GoSurveyPointCloudTests
+    tests/PointCloudOctreeTests.cpp
+    tests/PointCloudCacheTests.cpp
+    tests/CylinderFitTests.cpp)
+  set_target_properties(GoSurveyPointCloudTests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_include_directories(GoSurveyPointCloudTests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
+    "${NLOHMANN_JSON_INCLUDE}")
+  target_link_libraries(GoSurveyPointCloudTests PRIVATE
+    GoSurvey::PointCloud GoSurvey::IOPointCloud Catch2::Catch2WithMain E57Format::E57Format)
+  gosurvey_target_warnings(GoSurveyPointCloudTests TEST)
+  gosurvey_enable_pch(GoSurveyPointCloudTests)
+  catch_discover_tests(GoSurveyPointCloudTests PROPERTIES LABELS PointCloud)
+  add_executable(GoSurveyPointCloudPublicConsumer tests/PointCloud/PublicConsumer.cpp)
+  set_target_properties(GoSurveyPointCloudPublicConsumer PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyPointCloudPublicConsumer PRIVATE GoSurvey::PointCloud)
+  gosurvey_target_warnings(GoSurveyPointCloudPublicConsumer TEST)
+  add_test(NAME PointCloud.public-consumer COMMAND GoSurveyPointCloudPublicConsumer)
+  set_tests_properties(PointCloud.public-consumer PROPERTIES LABELS PointCloud)
+
   target_compile_definitions(GoSurveyTests PRIVATE
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
     GOSURVEY_CSMAP_DICTIONARY_DIR="$<TARGET_FILE_DIR:GoSurveyQt>/resources/csmap")

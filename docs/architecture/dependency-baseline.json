@@ -3215,41 +3215,6 @@
       "message": "src/util/cadpiperun.hpp includes \"cadsolid.hpp\": Document may not depend on Renderer (forbidden dependency)"
     },
     {
-      "file": "src/util/pointcloudcache.cpp",
-      "include": "io/CadPointCloudE57.hpp",
-      "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/util/pointcloudcache.cpp includes \"io/CadPointCloudE57.hpp\": PointCloud may not depend on IO (forbidden dependency)"
-    },
-    {
-      "file": "src/util/pointcloudcache.cpp",
-      "include": "io/CadPointCloudPts.hpp",
-      "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/util/pointcloudcache.cpp includes \"io/CadPointCloudPts.hpp\": PointCloud may not depend on IO (forbidden dependency)"
-    },
-    {
-      "file": "src/util/pointcloudcache.cpp",
-      "include": "io/CadPointCloudPtx.hpp",
-      "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/util/pointcloudcache.cpp includes \"io/CadPointCloudPtx.hpp\": PointCloud may not depend on IO (forbidden dependency)"
-    },
-    {
-      "file": "src/util/pointcloudcache.cpp",
-      "include": "io/CadPointCloudLas.hpp",
-      "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/util/pointcloudcache.cpp includes \"io/CadPointCloudLas.hpp\": PointCloud may not depend on IO (forbidden dependency)"
-    },
-    {
-      "file": "src/util/pointcloudcache.cpp",
-      "include": "io/CadPointCloudLaz.hpp",
-      "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/util/pointcloudcache.cpp includes \"io/CadPointCloudLaz.hpp\": PointCloud may not depend on IO (forbidden dependency)"
-    },
-    {
       "file": "src/viewport/CadRubberPreview.cpp",
       "include": "CadBlocks.hpp",
       "target": "Commands",

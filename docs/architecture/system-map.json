@@ -115,6 +115,19 @@
       "system": "Interaction"
     },
     {
+      "path": "src/pointcloud/include/",
+      "system": "PointCloud"
+    },
+    {
+      "path": "src/pointcloud/src/",
+      "system": "PointCloud"
+    },
+    {
+      "path": "tests/PointCloud/",
+      "system": "PointCloud"
+    },
+
+    {
       "path": "src/terrain/include/",
       "system": "Terrain"
     },

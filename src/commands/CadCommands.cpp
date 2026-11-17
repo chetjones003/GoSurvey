@@ -18,7 +18,8 @@
 #include "util/cadpiperun.hpp"  // CadPipeRun solid generation (issue #486 increment B1 / REQ-345)
 #include <GoSurvey/Geometry/meshgeom.hpp>
 #include "util/pointcloudoctree.hpp"  // REQ-171/172 out-of-core octree (ADR-060)
-#include "util/pointcloudcache.hpp"   // ADR-060 .gscloud out-of-core cache (streams the E57 internally)
+#include "util/pointcloudcache.hpp"
+#include "GoSurvey/IO/PointCloudCacheImport.hpp"   // ADR-060 .gscloud out-of-core cache (streams the E57 internally)
 #include "util/cylinderfit.hpp"       // REQ-347 EXTRACTCENTERLINE's least-squares cylinder-axis fit
 #include "io/CadPointCloudE57.hpp"    // QuickPointCountEstimate, for the import progress bar's total
 #include "io/CadPointCloudPts.hpp"    // REQ-172 PTS increment — reader/writer, same contract as E57
@@ -36168,23 +36169,23 @@ void RunPointCloudImportWorker(AppCommandState::PointCloudImportAsync* job) {
                                         // is what the UI polls) but kept for a future log dump.
     using Format = AppCommandState::PointCloudImportAsync::SourceFormat;
     if (job->format == Format::Pts) {
-      built = pointcloudcache::BuildFromPts(job->sourcePath, job->cachePath, buildLog,
+      built = pointcloudcache_io::BuildFromPts(job->sourcePath, job->cachePath, buildLog,
                                             &errorMessage, &job->pointsStreamed,
                                             &job->pointsFinalized, &job->cancelRequested);
     } else if (job->format == Format::Ptx) {
-      built = pointcloudcache::BuildFromPtx(job->sourcePath, job->cachePath, buildLog,
+      built = pointcloudcache_io::BuildFromPtx(job->sourcePath, job->cachePath, buildLog,
                                             &errorMessage, &job->pointsStreamed,
                                             &job->pointsFinalized, &job->cancelRequested);
     } else if (job->format == Format::Las) {
-      built = pointcloudcache::BuildFromLas(job->sourcePath, job->cachePath, buildLog,
+      built = pointcloudcache_io::BuildFromLas(job->sourcePath, job->cachePath, buildLog,
                                             &errorMessage, &job->pointsStreamed,
                                             &job->pointsFinalized, &job->cancelRequested);
     } else if (job->format == Format::Laz) {
-      built = pointcloudcache::BuildFromLaz(job->sourcePath, job->cachePath, buildLog,
+      built = pointcloudcache_io::BuildFromLaz(job->sourcePath, job->cachePath, buildLog,
                                             &errorMessage, &job->pointsStreamed,
                                             &job->pointsFinalized, &job->cancelRequested);
     } else {
-      built = pointcloudcache::BuildFromE57(job->sourcePath, job->cachePath, buildLog,
+      built = pointcloudcache_io::BuildFromE57(job->sourcePath, job->cachePath, buildLog,
                                             &errorMessage, &job->pointsStreamed,
                                             &job->pointsFinalized, &job->cancelRequested);
     }
@@ -36318,7 +36319,7 @@ PointCloudImportProgress UpdatePointCloudImportProgress(AppCommandState::PointCl
   const std::int64_t leavesRead = job.previewLeavesRead.load(std::memory_order_relaxed);
   const std::int64_t totalLeaves = job.previewTotalLeaves.load(std::memory_order_relaxed);
 
-  // Three real phases, in strict sequence (see pointcloudcache::BuildFromE57 and
+  // Three real phases, in strict sequence (see pointcloudcache_io::BuildFromE57 and
   // RunPointCloudImportWorker): streaming completes fully before the recursive octree split
   // starts, which completes fully before the preview sample is read back. Phase 3 was invisible
   // before this fix — it re-reads the WHOLE cache off disk to subsample it, a real full pass with
