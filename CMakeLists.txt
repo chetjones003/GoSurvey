@@ -529,6 +529,28 @@ target_compile_features(gosurvey_geometry PUBLIC cxx_std_17)
 target_link_libraries(gosurvey_geometry PUBLIC GoSurvey::Math GoSurvey::Core)
 gosurvey_target_warnings(gosurvey_geometry)
 
+# GoSurvey::Terrain — T2 Domain library (issue #1245). The pure surface/TIN and grading
+# algorithms compile independently of the application layer. Their headers remain in src/util
+# until the dedicated move-only change creates the public and private Terrain trees.
+add_library(gosurvey_terrain STATIC
+  src/util/contourgen.cpp
+  src/util/daylight.cpp
+  src/util/gridsurface.cpp
+  src/util/surfaceanalysis.cpp
+  src/util/surfacequery.cpp
+  src/util/surfacestats.cpp
+  src/util/surfacevolume.cpp
+  src/util/tinbuild.cpp
+  src/util/tinvolume.cpp
+  src/util/watershed.cpp)
+add_library(GoSurvey::Terrain ALIAS gosurvey_terrain)
+target_include_directories(gosurvey_terrain
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/util")
+target_compile_features(gosurvey_terrain PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_terrain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry)
+gosurvey_target_warnings(gosurvey_terrain)
+
 # GoSurvey::Events — toolkit-neutral Foundation library (boundary seal #1287). The public
 # interface lives under src/events/include/ and the dispatcher implementation stays private.
 add_library(gosurvey_events STATIC src/events/src/Events.cpp)
@@ -753,16 +775,6 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/alignment/Clothoid.cpp
   src/util/gltfimport.cpp
   src/util/stlimport.cpp
-  src/util/tinbuild.cpp
-  src/util/contourgen.cpp
-  src/util/surfaceanalysis.cpp
-  src/util/surfacevolume.cpp
-  src/util/surfacestats.cpp
-  src/util/watershed.cpp
-  src/util/tinvolume.cpp
-  src/util/surfacequery.cpp
-  src/util/gridsurface.cpp
-  src/util/daylight.cpp
   # BENCH scene/statistics implementation is compiled by GoSurvey::Debug.
   # REQ-320 / ADR-051: the ACIS SAT record parser feeding 3DSOLID import (GitHub issue #299). Pure
   # and dependency-free like brep.cpp itself — no LibreDWG, no GL — so a malformed or unsupported
@@ -845,7 +857,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
-target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Debug)
+target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Debug GoSurvey::Terrain)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
@@ -857,7 +869,7 @@ gosurvey_enable_pch(gosurvey_domain)
 # Stable umbrella for application consumers; individual systems remain linkable in isolation.
 add_library(gosurvey_engine INTERFACE)
 add_library(GoSurvey::Engine ALIAS gosurvey_engine)
-target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Events GoSurvey::UI GoSurvey::Debug)
+target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Events GoSurvey::UI GoSurvey::Debug GoSurvey::Terrain)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
@@ -1302,7 +1314,6 @@ if(GOSURVEY_BUILD_TESTS)
     # cut/fill sign convention and the bbox-disjoint early-out are both invisible on a single hand
     # example and wrong on exactly the cases a real grading comparison needs (no overlap, self vs
     # self, partial overlap).
-    tests/SurfaceVolumeTests.cpp
     # REQ-398 side slope grading. Every expected offset is hand-computed in the test from the two
     # equations that cross, because a daylight offset wrong by a slope factor is entirely plausible
     # on screen — and comparing against another approximation of the same thing would hide a
@@ -1452,25 +1463,15 @@ if(GOSURVEY_BUILD_TESTS)
     src/survey/PointGroupRule.cpp
     # REQ-068 Delaunay triangulation. Pure by ADR-028 (c); its double-precision predicates are the
     # part a float build gets silently wrong, so they must be pinned without a GL context.
-    src/util/tinbuild.cpp
     # REQ-070 contour generation. Pure by ADR-036 (f) — no GL, no document — so a half-open contour
     # is caught against a hand-computed expectation rather than by looking at a viewport.
-    src/util/contourgen.cpp
     # REQ-072 surface analysis. Pure by ADR-036 (g) — no GL, no document — so a reversed arrow is
     # caught against a hand-computed fall line rather than by squinting at a viewport full of them.
-    src/util/surfaceanalysis.cpp
     # REQ-073 surface-to-surface volumes + the spatial index they run on. Pure — no GL, no document —
     # so a wrong sign on cut vs. fill is caught against a hand-computed planar case, TASK-095.
-    src/util/surfacevolume.cpp
-    src/util/surfacestats.cpp
-    src/util/watershed.cpp
-    src/util/tinvolume.cpp
-    src/util/surfacequery.cpp
-    src/util/gridsurface.cpp
     # REQ-398 side slope grading. Pure over ISurfaceQuery — no GL, no document — so a reversed cut/
     # fill sign or a daylight offset off by a slope factor is caught against hand arithmetic rather
     # than by looking at a slope in a viewport, where a plausible wrong answer looks correct.
-    src/util/daylight.cpp
     # REQ-077/078 version ordering + manifest parse. Pure by ADR-029 (g) — no network, no window.
     # Wrong version ordering has NO symptom (the user is simply never offered an update), which is
     # exactly why it must be pinned by a test rather than noticed in use.
@@ -1602,6 +1603,27 @@ if(GOSURVEY_BUILD_TESTS)
   target_link_libraries(GoSurveyGeometryTests PRIVATE GoSurvey::Geometry Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyGeometryTests PROPERTIES LABELS Geometry)
   gosurvey_target_warnings(GoSurveyGeometryTests TEST)
+
+  # Terrain algorithms run with the isolated library and Catch2. SurfaceVolumeTests also links
+  # the toolkit-neutral Debug benchmark scene fixture; neither test dependency uses Qt or OpenGL.
+  add_executable(GoSurveyTerrainTests
+    tests/ContourGenTests.cpp
+    tests/DaylightTests.cpp
+    tests/SurfaceAnalysisTests.cpp
+    tests/SurfaceStatsTests.cpp
+    tests/SurfaceVolumeTests.cpp
+    tests/TinBorderTests.cpp
+    tests/TinBuildTests.cpp
+    tests/TinConstraintTests.cpp
+    tests/TinQueryTests.cpp
+    tests/TinVolumeTests.cpp
+    tests/WatershedTests.cpp)
+  target_include_directories(GoSurveyTerrainTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/util")
+  set_target_properties(GoSurveyTerrainTests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyTerrainTests PRIVATE GoSurvey::Terrain GoSurvey::Debug Catch2::Catch2WithMain)
+  catch_discover_tests(GoSurveyTerrainTests PROPERTIES LABELS Terrain)
+  gosurvey_target_warnings(GoSurveyTerrainTests TEST)
 
   # GoSurvey::Debug tests (#1243). The capture fixtures use Geometry to validate splines;
   # the Debug library itself links Core only. Neither target needs Qt or OpenGL.
