@@ -542,15 +542,22 @@ add_library(gosurvey_survey STATIC
   src/alignment/AlignmentViewFrames.cpp
   src/alignment/AlignmentProfile.cpp
   src/alignment/AlignmentDesign.cpp
-  src/alignment/AlignmentTables.cpp)
+  src/alignment/AlignmentTables.cpp
+  src/geo/CoordinateSystems.cpp
+  src/geo/DrawingConversion.cpp
+  src/geo/LocalGridTransform.cpp
+  src/geo/EcefTransform.cpp
+  src/traverse/TraverseCalc.cpp
+  src/traverse/TraverseLeastSquares.cpp)
 add_library(GoSurvey::Survey ALIAS gosurvey_survey)
 target_include_directories(gosurvey_survey
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include>"
   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/alignment"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/traverse"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/util")
 target_compile_features(gosurvey_survey PUBLIC cxx_std_17)
-target_link_libraries(gosurvey_survey PUBLIC GoSurvey::Geometry GoSurvey::Math GoSurvey::Core)
+target_link_libraries(gosurvey_survey PUBLIC GoSurvey::Geometry GoSurvey::Math GoSurvey::Core CsMap::csmap)
 gosurvey_target_warnings(gosurvey_survey)
 
 # GoSurvey::Terrain — T2 Domain library (issue #1245). The pure surface/TIN and grading
@@ -733,8 +740,6 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/survey/SurveyPoints.cpp
 
   # Traverse engine
-  src/traverse/TraverseCalc.cpp
-  src/traverse/TraverseLeastSquares.cpp
   src/traverse/FbkImport.cpp
   src/traverse/TraverseIo.cpp
   src/traverse/TraverseCommandLang.cpp
@@ -748,14 +753,6 @@ set(GOSURVEY_DOMAIN_SOURCES
 
   # I/O
   src/io/GsIo.cpp
-  # Coordinate systems — the one CS-MAP wrapper (REQ-358 / ADR-063)
-  src/geo/CoordinateSystems.cpp
-  # REQ-378 (#696 P5): the pure similarity-transform plan for Convert
-  src/geo/DrawingConversion.cpp
-  # REQ-360: the pure local <-> grid transformation (no CS-MAP)
-  src/geo/LocalGridTransform.cpp
-  # Issue #847: WGS84 ECEF <-> geodetic + local ENU rotation (pure, no CS-MAP)
-  src/geo/EcefTransform.cpp
   # REQ-363 / ADR-064: Web Mercator tile maths (pure)
   src/geo/WebMercator.cpp
   # REQ-363 / ADR-064 (c): online map tile fetch + disk cache (fetch injected; no WinHTTP here)
@@ -1418,8 +1415,6 @@ if(GOSURVEY_BUILD_TESTS)
     # BUG-013 per-application GPU preference. Win32 registry only — no GL, no window — so the value
     # the user's choice actually turns into is testable without the application running.
     src/platform/GpuPreference.cpp
-    src/traverse/TraverseCalc.cpp
-    src/traverse/TraverseLeastSquares.cpp
     src/traverse/TraverseReport.cpp
     src/traverse/FbkImport.cpp
     src/traverse/TraverseIo.cpp
@@ -1427,7 +1422,6 @@ if(GOSURVEY_BUILD_TESTS)
     src/traverse/StarNetImport.cpp
     src/traverse/Rw5Import.cpp
     src/traverse/JobXmlImport.cpp
-    src/geo/EcefTransform.cpp
     ${GOSURVEY_TP}/pugixml/src/pugixml.cpp
     # DWG version detection + converter discovery. Deliberately its own TU (see DwgProbe.cpp):
     # it depends only on <filesystem>, so tests link it without DxfIo and the GUI stack.
