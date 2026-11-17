@@ -13,7 +13,7 @@
 
 #include "CadCommands.hpp"
 #include "DwgIo.hpp"
-#include "util/ray3d.hpp"
+#include <GoSurvey/Math/ray3d.hpp>
 
 #include <string>
 #include <vector>

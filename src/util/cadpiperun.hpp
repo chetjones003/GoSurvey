@@ -13,8 +13,8 @@
 #include "CadEntities.hpp"
 #include "brep.hpp"
 #include "cadsolid.hpp"
-#include "ray3d.hpp"
-#include "ucs.hpp"
+#include <GoSurvey/Math/ray3d.hpp>
+#include <GoSurvey/Math/ucs.hpp>
 
 #include <algorithm>
 #include <cmath>

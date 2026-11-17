@@ -8,7 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include "../../src/util/ray3d.hpp"
+#include <GoSurvey/Math/ray3d.hpp>
 
 using namespace ray3d;
 using Catch::Approx;

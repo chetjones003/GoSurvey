@@ -1,8 +1,8 @@
 #include "AcisSatParser.hpp"
 
 #include "nurbs.hpp"
-#include "ray3d.hpp"
-#include "ucs.hpp"
+#include <GoSurvey/Math/ray3d.hpp>
+#include <GoSurvey/Math/ucs.hpp>
 
 #include <algorithm>
 #include <cmath>

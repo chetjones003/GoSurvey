@@ -12,7 +12,7 @@
 #include "MtextRichFormat.hpp"
 #include "TextStyle.hpp"
 #include "util/cadtable.hpp"
-#include "util/ucs.hpp"
+#include <GoSurvey/Math/ucs.hpp>
 
 #include <algorithm>
 #include <cmath>

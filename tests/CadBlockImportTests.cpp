@@ -4,7 +4,7 @@
 #include "HeadlessFileDialogs.hpp"
 #include "io/GsIo.hpp"
 #include "util/brep.hpp"
-#include "util/ucs.hpp"
+#include <GoSurvey/Math/ucs.hpp>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>

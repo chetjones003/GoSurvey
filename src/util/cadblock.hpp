@@ -5,7 +5,7 @@
 
 #include "CadEntities.hpp"
 #include "cadsolid.hpp"
-#include "ray3d.hpp"
+#include <GoSurvey/Math/ray3d.hpp>
 
 #include <algorithm>
 #include <array>

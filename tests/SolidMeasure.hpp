@@ -1,7 +1,7 @@
 #pragma once
 
 #include "util/brep.hpp"
-#include "util/ray3d.hpp"
+#include <GoSurvey/Math/ray3d.hpp>
 
 #include <cmath>
 #include <cstdint>

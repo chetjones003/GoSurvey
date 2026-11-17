@@ -18,6 +18,7 @@ The rationale behind the architecture boundaries is recorded in these ADRs:
 - [Public includes and private system sources](../adr/0004-public-includes-and-private-sources.md)
 - [Dependency ratchet and file-size gate](../adr/0005-dependency-ratchet-and-file-size-gate.md)
 - [System-qualified C++ namespaces](../adr/0006-system-qualified-cpp-namespaces.md)
+- [Commands may use Math primitives](../adr/0007-commands-may-use-math-primitives.md)
 
 ## Systems
 
@@ -37,7 +38,7 @@ The rationale behind the architecture boundaries is recorded in these ADRs:
 | Renderer | T3 Services | Converts model state into backend-neutral draw lists and owns render caches and device interfaces. | Domain model state and concrete graphics API implementation. | Geometry, Math, Core, Document, Survey, Terrain, PointCloud, Pdf |
 | IO | T3 Services | Reads and writes drawing and exchange formats, including DXF, DWG, glTF, STL, SAT, point files, and StarNet. | Domain ownership, UI, OS services. | Geometry, Math, Core, Document, Survey, Terrain, PointCloud, Pdf |
 | Network | T3 Services | Provides map tiles, update checks, and telemetry behind replaceable interfaces. | UI presentation and OS transport implementation. | Core, Events |
-| Commands | T4 Application | Coordinates command registration and user-requested operations. | Persistent domain data, toolkit widgets, GPU APIs. | Renderer, IO, Network, Document, Survey, Terrain, PointCloud, Pdf, UI, Events, Core |
+| Commands | T4 Application | Coordinates command registration and user-requested operations. | Persistent domain data, toolkit widgets, GPU APIs. | Renderer, IO, Network, Document, Survey, Terrain, PointCloud, Pdf, UI, Events, Math, Core |
 | Interaction | T4 Application | Coordinates snapping, grips, previews, picking, and transient user interaction. | Persistent document ownership, concrete widgets, GPU APIs. | Commands, Renderer, Document, Survey, Terrain, PointCloud, Geometry, Math, Events, UI, Core |
 | Qt | Platform backend | Implements UI and event interfaces using Qt. | Domain rules, command behavior, application ownership. | Core, Events, UI |
 | OpenGL | Platform backend | Implements renderer device interfaces using OpenGL. | Draw-list policy and domain state. | Core, Math, Renderer |
