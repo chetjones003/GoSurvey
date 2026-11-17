@@ -595,6 +595,42 @@ target_compile_features(gosurvey_debug PUBLIC cxx_std_17)
 target_link_libraries(gosurvey_debug PUBLIC GoSurvey::Core)
 gosurvey_target_warnings(gosurvey_debug)
 
+# The font folder is still mapped to Core, so compile its SHX provider as a Core-owned helper.
+# This keeps Pdf's transitive provider closure concrete without a forbidden Pdf -> IO dependency.
+add_library(gosurvey_core_shx_font STATIC src/font/ShxFont.cpp)
+add_library(GoSurvey::CoreShxFont ALIAS gosurvey_core_shx_font)
+target_include_directories(gosurvey_core_shx_font
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core/include>"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(gosurvey_core_shx_font PUBLIC GoSurvey::Core)
+target_compile_features(gosurvey_core_shx_font PUBLIC cxx_std_17)
+gosurvey_target_warnings(gosurvey_core_shx_font)
+
+# GoSurvey::Pdf (issue #1247). The public include tree is a compatibility facade for legacy
+# declarations; physical source/header relocation is a separate follow-up.
+add_library(gosurvey_pdf STATIC
+  src/pdf/PdfDocument.cpp
+  src/pdf/PdfSplit.cpp
+  src/pdf/PdfAnnotate.cpp
+  src/pdf/PdfRaw.cpp
+  src/pdf/PdfMeasure.cpp
+  src/pdf/PdfScaleCheck.cpp
+  src/pdf/PdfDimAudit.cpp
+  src/pdf/PdfCoordExtract.cpp
+  src/pdf/PdfAlign.cpp
+  src/pdf/PdfDiff.cpp
+  src/pdf/PdfViewerCore.cpp
+  src/pdf/PdfSnap.cpp)
+add_library(GoSurvey::Pdf ALIAS gosurvey_pdf)
+target_include_directories(gosurvey_pdf PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/pdf/include>"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/src/pdf")
+target_compile_features(gosurvey_pdf PUBLIC cxx_std_17)
+target_compile_definitions(gosurvey_pdf PRIVATE NOMINMAX)
+target_link_libraries(gosurvey_pdf PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry pdfium
+  PRIVATE GoSurvey::CoreShxFont)
+gosurvey_target_warnings(gosurvey_pdf)
+
 # --- OpenXLSX (vendored, third_party/OpenXLSX, approved D-2026-10-30-a): .xlsx read/write for
 # Extract Data and Link Data (REQ-467 / REQ-468). Compiled into gosurvey_domain with the pugixml
 # copy above; zip support comes from the vendored miniz.
@@ -665,7 +701,6 @@ set(GOSURVEY_DOMAIN_SOURCES
 
   # Object snapping (pure geometry; no GL despite living under viewport/)
   src/viewport/CadSnap.cpp
-  src/pdf/PdfSnap.cpp
 
   # Preview geometry (pure geometry; no GL, same as CadSnap.cpp above — it builds vertex lists, it
   # does not draw them). Moved into the shared list by TASK-101 so the headless driver can assert
@@ -681,7 +716,6 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/ui/MtextRichFormat.cpp
 
   # Fonts (shared lower layer — SHX stroke geometry, ADR-022)
-  src/font/ShxFont.cpp
 
   # Survey / COGO
   src/survey/SurveyPoints.cpp
@@ -858,7 +892,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
-target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud)
+target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
@@ -870,7 +904,7 @@ gosurvey_enable_pch(gosurvey_domain)
 # Stable umbrella for application consumers; individual systems remain linkable in isolation.
 add_library(gosurvey_engine INTERFACE)
 add_library(GoSurvey::Engine ALIAS gosurvey_engine)
-target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Events GoSurvey::UI GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud)
+target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Events GoSurvey::UI GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
@@ -1454,36 +1488,11 @@ if(GOSURVEY_BUILD_TESTS)
   )
   # REQ-387: the PDF viewer's pure core and its PDFium wrapper (opened against generated PDFs).
   target_sources(GoSurveyTests PRIVATE
-    tests/PdfViewerTests.cpp
-    tests/PdfSplitTests.cpp
-    tests/PdfAnnotateTests.cpp
-    tests/PdfLeaderTests.cpp
-    tests/PdfMeasureTests.cpp
-    tests/PdfDimensionTests.cpp
-    tests/PdfSnapTests.cpp
-    tests/PdfScaleCheckTests.cpp
-    tests/PdfDimAuditTests.cpp
-    tests/PdfDimAuditPdfTests.cpp
-    tests/PdfAlignTests.cpp
-    tests/PdfDiffTests.cpp
-    tests/PdfCoordExtractTests.cpp
-    src/pdf/PdfViewerCore.cpp
-    src/pdf/PdfDocument.cpp
-    src/pdf/PdfSplit.cpp
-    src/pdf/PdfAnnotate.cpp
-    src/font/ShxFont.cpp
-    src/pdf/PdfRaw.cpp
-    src/pdf/PdfMeasure.cpp
-    src/pdf/PdfScaleCheck.cpp
-    src/pdf/PdfDimAudit.cpp
-    src/pdf/PdfCoordExtract.cpp
-    src/pdf/PdfAlign.cpp
-    src/pdf/PdfDiff.cpp
     # REQ-445: the PDF plot's Page Setup placement, measured on the PDF it writes.
     tests/PlotSheetPdfTests.cpp
     src/io/PdfPlot.cpp
     src/io/PlotStyleTable.cpp)
-  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium Laszip::laszip GoSurvey::IOPointCloud)
+  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz Laszip::laszip GoSurvey::IOPointCloud GoSurvey::Pdf)
   if(WIN32)
     add_custom_command(TARGET GoSurveyTests POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -1573,9 +1582,46 @@ if(GOSURVEY_BUILD_TESTS)
     ${NLOHMANN_JSON_INCLUDE})
   set_target_properties(GoSurveyTerrainTests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
-  target_link_libraries(GoSurveyTerrainTests PRIVATE GoSurvey::Terrain GoSurvey::Debug GoSurvey::PointCloud Catch2::Catch2WithMain)
+  target_link_libraries(GoSurveyTerrainTests PRIVATE GoSurvey::Terrain GoSurvey::Debug GoSurvey::PointCloud GoSurvey::Pdf Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyTerrainTests PROPERTIES LABELS Terrain)
   gosurvey_target_warnings(GoSurveyTerrainTests TEST)
+
+  add_executable(GoSurveyPdfTests
+    tests/PdfViewerTests.cpp
+    tests/PdfSplitTests.cpp
+    tests/PdfAnnotateTests.cpp
+    tests/PdfLeaderTests.cpp
+    tests/PdfMeasureTests.cpp
+    tests/PdfDimensionTests.cpp
+    tests/PdfSnapTests.cpp
+    tests/PdfScaleCheckTests.cpp
+    tests/PdfDimAuditTests.cpp
+    tests/PdfDimAuditPdfTests.cpp
+    tests/PdfAlignTests.cpp
+    tests/PdfDiffTests.cpp
+    tests/PdfCoordExtractTests.cpp)
+  target_include_directories(GoSurveyPdfTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  set_target_properties(GoSurveyPdfTests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyPdfTests PRIVATE GoSurvey::Pdf Catch2::Catch2WithMain)
+  catch_discover_tests(GoSurveyPdfTests PROPERTIES LABELS Pdf DISCOVERY_MODE PRE_TEST)
+  gosurvey_target_warnings(GoSurveyPdfTests TEST)
+  if(WIN32)
+    add_custom_command(TARGET GoSurveyPdfTests POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:pdfium>" "$<TARGET_FILE_DIR:GoSurveyPdfTests>/pdfium.dll"
+      COMMENT "Copy pdfium.dll beside GoSurveyPdfTests")
+  endif()
+
+  # Check the advertised Pdf target without the private roots used by legacy fixtures.
+  add_executable(GoSurveyPdfPublicConsumer tests/Pdf/PublicConsumer.cpp)
+  set_target_properties(GoSurveyPdfPublicConsumer PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyPdfPublicConsumer PRIVATE GoSurvey::Pdf)
+  gosurvey_target_warnings(GoSurveyPdfPublicConsumer TEST)
+  add_test(NAME Pdf.public-consumer COMMAND GoSurveyPdfPublicConsumer)
+  set_tests_properties(Pdf.public-consumer PROPERTIES LABELS Pdf)
+  if(WIN32)
+    add_custom_command(TARGET GoSurveyPdfPublicConsumer POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:pdfium>" "$<TARGET_FILE_DIR:GoSurveyPdfPublicConsumer>/pdfium.dll")
+  endif()
 
   # GoSurvey::Debug tests (#1243). The capture fixtures use Geometry to validate splines;
   # the Debug library itself links Core only. Neither target needs Qt or OpenGL.
@@ -1601,7 +1647,7 @@ if(GOSURVEY_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/terrain/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests"
     ${NLOHMANN_JSON_INCLUDE})
-  target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug GoSurvey::Geometry GoSurvey::PointCloud Catch2::Catch2WithMain)
+  target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug GoSurvey::Geometry GoSurvey::PointCloud GoSurvey::Pdf Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyDebugTests PROPERTIES LABELS Debug)
   gosurvey_target_warnings(GoSurveyDebugTests TEST)
 
