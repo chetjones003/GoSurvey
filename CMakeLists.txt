@@ -531,6 +531,8 @@ gosurvey_target_warnings(gosurvey_geometry)
 
 # GoSurvey::Survey — T2 domain library. Alignment is a public Survey model used by Terrain;
 # its legacy declarations stay at their existing paths until the move-only follow-up.
+set(GOSURVEY_COORDINATE_SOURCES
+  src/geo/CoordinateSystems.cpp)
 add_library(gosurvey_survey STATIC
   src/alignment/Alignment.cpp
   src/alignment/Clothoid.cpp
@@ -543,7 +545,7 @@ add_library(gosurvey_survey STATIC
   src/alignment/AlignmentProfile.cpp
   src/alignment/AlignmentDesign.cpp
   src/alignment/AlignmentTables.cpp
-  src/geo/CoordinateSystems.cpp
+  ${GOSURVEY_COORDINATE_SOURCES}
   src/geo/DrawingConversion.cpp
   src/geo/LocalGridTransform.cpp
   src/geo/EcefTransform.cpp
@@ -932,11 +934,11 @@ endif()
 
 # ADR-063 (c): CoordinateSystems.cpp is the only source that sees CS-MAP headers. Keep its
 # platform macros and C header out of the shared precompiled header.
-set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/geo/CoordinateSystems.cpp"
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/${GOSURVEY_COORDINATE_SOURCES}"
   APPEND PROPERTY INCLUDE_DIRECTORIES "${GOSURVEY_CSMAP_DIR}/include")
-set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/geo/CoordinateSystems.cpp"
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/${GOSURVEY_COORDINATE_SOURCES}"
   PROPERTY SKIP_PRECOMPILE_HEADERS ON)
-set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/geo/CoordinateSystems.cpp"
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/${GOSURVEY_COORDINATE_SOURCES}"
   APPEND PROPERTY COMPILE_DEFINITIONS WIN32 _WINDOWS)
 if(TARGET libredwg)
   set_property(SOURCE
