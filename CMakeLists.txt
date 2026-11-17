@@ -609,10 +609,18 @@ gosurvey_target_warnings(gosurvey_core_shx_font)
 # GoSurvey::Pdf (issue #1247). The public include tree is a compatibility facade for legacy
 # declarations; physical source/header relocation is a separate follow-up.
 add_library(gosurvey_pdf STATIC
-  src/pdf/src/PdfDocument.cpp src/pdf/src/PdfSplit.cpp src/pdf/src/PdfAnnotate.cpp
-  src/pdf/src/PdfRaw.cpp src/pdf/src/PdfMeasure.cpp src/pdf/src/PdfScaleCheck.cpp
-  src/pdf/src/PdfDimAudit.cpp src/pdf/src/PdfCoordExtract.cpp src/pdf/src/PdfAlign.cpp
-  src/pdf/src/PdfDiff.cpp src/pdf/src/PdfViewerCore.cpp src/pdf/src/PdfSnap.cpp)
+  src/pdf/src/PdfDocument.cpp
+  src/pdf/src/PdfSplit.cpp
+  src/pdf/src/PdfAnnotate.cpp
+  src/pdf/src/PdfRaw.cpp
+  src/pdf/src/PdfMeasure.cpp
+  src/pdf/src/PdfScaleCheck.cpp
+  src/pdf/src/PdfDimAudit.cpp
+  src/pdf/src/PdfCoordExtract.cpp
+  src/pdf/src/PdfAlign.cpp
+  src/pdf/src/PdfDiff.cpp
+  src/pdf/src/PdfViewerCore.cpp
+  src/pdf/src/PdfSnap.cpp)
 add_library(GoSurvey::Pdf ALIAS gosurvey_pdf)
 target_include_directories(gosurvey_pdf PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/pdf/include>"
@@ -1579,10 +1587,18 @@ if(GOSURVEY_BUILD_TESTS)
   gosurvey_target_warnings(GoSurveyTerrainTests TEST)
 
   add_executable(GoSurveyPdfTests
-    tests/Pdf/PdfViewerTests.cpp tests/Pdf/PdfSplitTests.cpp tests/Pdf/PdfAnnotateTests.cpp
-    tests/Pdf/PdfLeaderTests.cpp tests/Pdf/PdfMeasureTests.cpp tests/Pdf/PdfDimensionTests.cpp
-    tests/Pdf/PdfSnapTests.cpp tests/Pdf/PdfScaleCheckTests.cpp tests/Pdf/PdfDimAuditTests.cpp
-    tests/Pdf/PdfDimAuditPdfTests.cpp tests/Pdf/PdfAlignTests.cpp tests/Pdf/PdfDiffTests.cpp
+    tests/Pdf/PdfViewerTests.cpp
+    tests/Pdf/PdfSplitTests.cpp
+    tests/Pdf/PdfAnnotateTests.cpp
+    tests/Pdf/PdfLeaderTests.cpp
+    tests/Pdf/PdfMeasureTests.cpp
+    tests/Pdf/PdfDimensionTests.cpp
+    tests/Pdf/PdfSnapTests.cpp
+    tests/Pdf/PdfScaleCheckTests.cpp
+    tests/Pdf/PdfDimAuditTests.cpp
+    tests/Pdf/PdfDimAuditPdfTests.cpp
+    tests/Pdf/PdfAlignTests.cpp
+    tests/Pdf/PdfDiffTests.cpp
     tests/Pdf/PdfCoordExtractTests.cpp)
   target_include_directories(GoSurveyPdfTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
   set_target_properties(GoSurveyPdfTests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
