@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "CadCommands.hpp"
-#include "util/docinvariants.hpp"
+#include "headless/DocumentDiagnostics.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -27,7 +27,7 @@ namespace {
 /// Names of the invariants that fired, for order-independent assertions.
 std::vector<std::string> Fired(const AppCommandState& st) {
   std::vector<InvariantViolation> v;
-  CheckDocumentInvariants(st, &v);
+  CheckDocumentInvariants(CaptureDocumentDiagnosticSnapshot(st), &v);
   std::vector<std::string> names;
   names.reserve(v.size());
   for (const InvariantViolation& iv : v)
@@ -83,7 +83,7 @@ TEST_CASE("A well-formed drawing violates nothing", "[docinvariants]") {
   const std::vector<std::string> names = Fired(st);
   INFO("unexpected findings: " << FormatInvariantViolations([&] {
          std::vector<InvariantViolation> v;
-         CheckDocumentInvariants(st, &v);
+         CheckDocumentInvariants(CaptureDocumentDiagnosticSnapshot(st), &v);
          return v;
        }()));
   REQUIRE(names.empty());
@@ -429,7 +429,7 @@ TEST_CASE("FormatInvariantViolations names the invariant and the specifics", "[d
   st.userLinesFlat.push_back(1.f);
 
   std::vector<InvariantViolation> v;
-  CheckDocumentInvariants(st, &v);
+  CheckDocumentInvariants(CaptureDocumentDiagnosticSnapshot(st), &v);
   REQUIRE_FALSE(v.empty());
 
   const std::string s = FormatInvariantViolations(v);
@@ -512,4 +512,17 @@ TEST_CASE("entity-ids fires when a feature line reuses a polyline's id", "[docin
   REQUIRE(!st.userPolylineAttrs.empty());
   st.featureLineAttrs[0].id = st.userPolylineAttrs[0].id;
   REQUIRE(Contains(Fired(st), docinv::kEntityIds));
+}
+
+TEST_CASE("Document diagnostic capture owns the data it checks", "[docinvariants][snapshot]") {
+  auto st = GoodDrawing();
+  const auto snapshot = CaptureDocumentDiagnosticSnapshot(st);
+  st.userLinesFlat[0] = std::numeric_limits<double>::quiet_NaN();
+  st.userLineAttrs[0].id = st.nextEntityId;
+  std::vector<InvariantViolation> captured;
+  CheckDocumentInvariants(snapshot, &captured);
+  CHECK(captured.empty());
+  const auto changed = Fired(st);
+  CHECK(Contains(changed, docinv::kFiniteCoords));
+  CHECK(Contains(changed, docinv::kEntityIds));
 }

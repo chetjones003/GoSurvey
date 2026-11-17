@@ -3334,13 +3334,6 @@
       "message": "src/util/cadpiperun.hpp includes \"cadsolid.hpp\": Document may not depend on Renderer (forbidden dependency)"
     },
     {
-      "file": "src/util/docinvariants.cpp",
-      "include": "CadCommands.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/util/docinvariants.cpp includes \"CadCommands.hpp\": Debug may not depend on Commands (forbidden dependency)"
-    },
-    {
       "file": "src/util/pointcloudcache.cpp",
       "include": "io/CadPointCloudE57.hpp",
       "target": "IO",

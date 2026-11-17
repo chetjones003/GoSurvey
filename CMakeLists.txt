@@ -550,10 +550,11 @@ target_link_libraries(gosurvey_ui INTERFACE GoSurvey::Core GoSurvey::Events)
 
 # GoSurvey::Debug — Foundation library for developer diagnostics (carve-out ticket #1243). Its
 # public include root is src/debug/include/ (headers under GoSurvey/Debug/), with a private source
-# tree at src/debug/src/. The sources keep their current paths until the move-only follow-up.
+# tree at src/debug/src/. Physical relocation is isolated from diagnostic boundary changes.
 add_library(gosurvey_debug STATIC
   src/util/benchscene.cpp
-  src/util/SaveTrace.cpp)
+  src/util/SaveTrace.cpp
+  src/util/docinvariants.cpp)
 add_library(GoSurvey::Debug ALIAS gosurvey_debug)
 target_include_directories(gosurvey_debug PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/debug/include>")
 target_compile_features(gosurvey_debug PUBLIC cxx_std_17)
@@ -808,8 +809,6 @@ set(GOSURVEY_DOMAIN_SOURCES
   # a cylinder axis via PCA + radial least squares, no file IO and no GL calls.
   src/util/cylinderfit.cpp
 
-  # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
-  src/util/docinvariants.cpp
 )
 
 # One static library so CadCommands.cpp (and the rest of the domain list) is compiled
@@ -1400,11 +1399,6 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/CrashBuildInfo.cpp
     tests/GsMigrateTests.cpp
     tests/GpuPreferenceTests.cpp
-    # REQ-204: one deliberately-broken fixture per document invariant. This is the second present-day
-    # concrete use of util/docinvariants (the headless driver is the first), which is what lets the
-    # module exist at all under architecture §11.4.
-    tests/DocInvariantsTests.cpp
-    src/util/docinvariants.cpp
     # REQ-069: the background rebuild worker's lifetime. Header-only against CadCommands.hpp (the
     # struct and its destructor), so it needs no extra domain source on the link line.
     tests/SurfaceRebuildLifetimeTests.cpp
@@ -1609,13 +1603,29 @@ if(GOSURVEY_BUILD_TESTS)
   catch_discover_tests(GoSurveyGeometryTests PROPERTIES LABELS Geometry)
   gosurvey_target_warnings(GoSurveyGeometryTests TEST)
 
-  # GoSurvey::Debug tests (#1243). These are pure and link only Debug, Core and Catch2.
+  # GoSurvey::Debug tests (#1243). The capture fixtures use Geometry to validate splines;
+  # the Debug library itself links Core only. Neither target needs Qt or OpenGL.
   add_executable(GoSurveyDebugTests
     tests/Debug/BenchSceneTests.cpp
-    tests/Debug/FrameWatchTests.cpp)
+    tests/Debug/FrameWatchTests.cpp
+    tests/Debug/DocumentSnapshotTests.cpp
+    tests/DocInvariantsTests.cpp)
   set_target_properties(GoSurveyDebugTests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
-  target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug Catch2::Catch2WithMain)
+  target_include_directories(GoSurveyDebugTests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/commands"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/io"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/util"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/survey"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/render"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/pdf"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/network/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+    ${NLOHMANN_JSON_INCLUDE})
+  target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug GoSurvey::Geometry Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyDebugTests PROPERTIES LABELS Debug)
   gosurvey_target_warnings(GoSurveyDebugTests TEST)
 
