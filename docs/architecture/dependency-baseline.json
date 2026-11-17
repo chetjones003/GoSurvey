@@ -688,20 +688,6 @@
       "message": "src/commands/TraverseActions.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
     },
     {
-      "file": "src/commands/TraverseActions.hpp",
-      "include": "traverse/TraverseCalc.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/TraverseActions.hpp includes \"traverse/TraverseCalc.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/TraverseActions.hpp",
-      "include": "traverse/TraverseLeastSquares.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/TraverseActions.hpp includes \"traverse/TraverseLeastSquares.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
       "file": "src/commands/ViewportZoomScale.cpp",
       "include": "util/PlotScales.hpp",
       "target": "Document",
@@ -1281,48 +1267,6 @@
       "target": "Survey",
       "rule": "forbidden dependency",
       "message": "src/qt/AdjustmentWindow.cpp includes \"traverse/TraverseIo.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/AdjustmentWindow.cpp",
-      "include": "traverse/TraverseReport.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/AdjustmentWindow.cpp includes \"traverse/TraverseReport.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/AdjustmentWindow.cpp",
-      "include": "traverse/TraverseCommandLang.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/AdjustmentWindow.cpp includes \"traverse/TraverseCommandLang.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/AdjustmentWindow.cpp",
-      "include": "traverse/FbkImport.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/AdjustmentWindow.cpp includes \"traverse/FbkImport.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/AdjustmentWindow.cpp",
-      "include": "traverse/StarNetImport.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/AdjustmentWindow.cpp includes \"traverse/StarNetImport.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/AdjustmentWindow.cpp",
-      "include": "traverse/Rw5Import.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/AdjustmentWindow.cpp includes \"traverse/Rw5Import.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/AdjustmentWindow.cpp",
-      "include": "traverse/JobXmlImport.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/AdjustmentWindow.cpp includes \"traverse/JobXmlImport.hpp\": Qt may not depend on Survey (forbidden dependency)"
     },
     {
       "file": "src/qt/AdjustmentWindow.hpp",
@@ -2940,13 +2884,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/render/ViewportRenderer.hpp includes \"CadOnlineMap.hpp\": Renderer may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/render/ViewportRenderer.hpp",
-      "include": "alignment/AlignmentDisplayCache.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/render/ViewportRenderer.hpp includes \"alignment/AlignmentDisplayCache.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
     },
     {
       "file": "src/survey/SurveyPoints.cpp",

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "alignment/Alignment.hpp"
+#include <GoSurvey/Survey/Alignment.hpp>
 
 #include <cstddef>
 #include <cstdint>

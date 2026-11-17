@@ -137,6 +137,10 @@
     {
       "path": "src/document/include/",
       "system": "Document"
+    },
+    {
+      "path": "src/renderer/include/",
+      "system": "Renderer"
     }
   ],
   "fileMappings": [
@@ -631,6 +635,96 @@
       "system": "Survey",
       "status": "audited",
       "note": "Survey entity-facing adapters after extraction of numerical integration to Geometry."
+    },
+    {
+      "path": "src/traverse/FbkImport.cpp",
+      "system": "IO",
+      "status": "audited",
+      "note": "Approved whole-file section owner made explicit for the Survey move manifest; physical relocation belongs to the owning system ticket."
+    },
+    {
+      "path": "src/traverse/FbkImport.hpp",
+      "system": "IO",
+      "status": "audited",
+      "note": "Approved whole-file section owner made explicit for the Survey move manifest; physical relocation belongs to the owning system ticket."
+    },
+    {
+      "path": "src/traverse/JobXmlImport.cpp",
+      "system": "IO",
+      "status": "audited",
+      "note": "Approved whole-file section owner made explicit for the Survey move manifest; physical relocation belongs to the owning system ticket."
+    },
+    {
+      "path": "src/traverse/JobXmlImport.hpp",
+      "system": "IO",
+      "status": "audited",
+      "note": "Approved whole-file section owner made explicit for the Survey move manifest; physical relocation belongs to the owning system ticket."
+    },
+    {
+      "path": "src/traverse/Rw5Import.cpp",
+      "system": "IO",
+      "status": "audited",
+      "note": "Approved whole-file section owner made explicit for the Survey move manifest; physical relocation belongs to the owning system ticket."
+    },
+    {
+      "path": "src/traverse/Rw5Import.hpp",
+      "system": "IO",
+      "status": "audited",
+      "note": "Approved whole-file section owner made explicit for the Survey move manifest; physical relocation belongs to the owning system ticket."
+    },
+    {
+      "path": "src/traverse/StarNetImport.cpp",
+      "system": "IO",
+      "status": "audited",
+      "note": "Approved whole-file section owner made explicit for the Survey move manifest; physical relocation belongs to the owning system ticket."
+    },
+    {
+      "path": "src/traverse/StarNetImport.hpp",
+      "system": "IO",
+      "status": "audited",
+      "note": "Approved whole-file section owner made explicit for the Survey move manifest; physical relocation belongs to the owning system ticket."
+    },
+    {
+      "path": "src/traverse/TraverseIo.cpp",
+      "system": "IO",
+      "status": "audited",
+      "note": "Approved whole-file section owner made explicit for the Survey move manifest; physical relocation belongs to the owning system ticket."
+    },
+    {
+      "path": "src/traverse/TraverseIo.hpp",
+      "system": "IO",
+      "status": "audited",
+      "note": "Approved whole-file section owner made explicit for the Survey move manifest; physical relocation belongs to the owning system ticket."
+    },
+    {
+      "path": "src/traverse/TraverseCommandLang.cpp",
+      "system": "IO",
+      "status": "audited",
+      "note": "Approved whole-file section owner made explicit for the Survey move manifest; physical relocation belongs to the owning system ticket."
+    },
+    {
+      "path": "src/traverse/TraverseCommandLang.hpp",
+      "system": "IO",
+      "status": "audited",
+      "note": "Approved whole-file section owner made explicit for the Survey move manifest; physical relocation belongs to the owning system ticket."
+    },
+    {
+      "path": "src/alignment/AlignmentGrips.cpp",
+      "system": "Interaction",
+      "status": "audited",
+      "note": "Approved whole-file section owner made explicit for the Survey move manifest; physical relocation belongs to the owning system ticket."
+    },
+    {
+      "path": "src/alignment/AlignmentDisplayCache.cpp",
+      "system": "Renderer",
+      "status": "audited",
+      "note": "Approved whole-file section owner made explicit for the Survey move manifest; physical relocation belongs to the owning system ticket."
+    },
+    {
+      "path": "src/alignment/AlignmentDisplayCache.hpp",
+      "system": "Renderer",
+      "status": "audited",
+      "note": "Approved whole-file section owner made explicit for the Survey move manifest; physical relocation belongs to the owning system ticket."
     }
   ],
   "unmappedPaths": [],

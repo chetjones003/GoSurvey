@@ -6,8 +6,8 @@
 // tangent keeping its bearing. GoSurvey adds the curve's centre (along the bisector). Every drag goes through the
 // constraint solver (Alignment::EditEntity / MovePi / MoveTangent), so a locked or impossible edit simply does not move.
 
-#include "alignment/Alignment.hpp"
-#include "alignment/Clothoid.hpp"
+#include <GoSurvey/Survey/Alignment.hpp>
+#include <GoSurvey/Survey/ClothoidPublic.hpp>
 
 #include <cassert>
 #include <cmath>

@@ -11,7 +11,7 @@
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
 #include "alignment/Alignment.hpp"
-#include "alignment/AlignmentDisplayCache.hpp"
+#include <GoSurvey/Renderer/AlignmentDisplayCachePublic.hpp>
 #include "alignment/AlignmentTables.hpp"
 
 #include <catch2/catch_approx.hpp>

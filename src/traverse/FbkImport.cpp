@@ -1,5 +1,5 @@
-#include "FbkImport.hpp"
-#include "TraverseCalc.hpp"
+#include <GoSurvey/IO/FbkImportPublic.hpp>
+#include <GoSurvey/Survey/TraverseCalcPublic.hpp>
 
 #include <algorithm>
 #include <cctype>

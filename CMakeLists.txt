@@ -574,6 +574,15 @@ gosurvey_target_warnings(gosurvey_survey)
 # GoSurvey::Terrain — T2 Domain library (issue #1245). The pure surface/TIN and grading
 # algorithms compile independently of the application layer. Physical relocation is isolated
 # from library creation and the public Survey alignment seam.
+# Real backend-neutral Renderer cache provider over the Survey alignment model.
+add_library(gosurvey_renderer_alignment_cache STATIC src/alignment/AlignmentDisplayCache.cpp)
+add_library(GoSurvey::RendererAlignmentCache ALIAS gosurvey_renderer_alignment_cache)
+target_include_directories(gosurvey_renderer_alignment_cache PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include>")
+target_compile_features(gosurvey_renderer_alignment_cache PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_renderer_alignment_cache PUBLIC GoSurvey::Survey)
+gosurvey_target_warnings(gosurvey_renderer_alignment_cache)
+
 add_library(gosurvey_terrain STATIC
   src/terrain/src/AlignmentFeatureLine.cpp
   src/terrain/src/contourgen.cpp
@@ -709,6 +718,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/CadField.cpp
   src/commands/TraverseActions.cpp
   src/commands/TraverseReportActions.cpp
+  src/commands/TraverseFileActions.cpp
   # Cohesive slices split out of the CadCommands.cpp mega-TU (TASK-150 Phase 2,
   # issue #142). Same TU rules; entry points declared in CadCommands.hpp.
   src/commands/CadCommands_Align.cpp
@@ -837,7 +847,6 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Civil alignments (REQ-480..484, ADR-075, issue #121): exact tangent/curve geometry, stationing, queries
   src/alignment/AlignmentGrips.cpp
   src/alignment/AlignmentSampleLines.cpp
-  src/alignment/AlignmentDisplayCache.cpp
   src/util/gltfimport.cpp
   src/util/stlimport.cpp
   # BENCH scene/statistics implementation is compiled by GoSurvey::Debug.
@@ -914,7 +923,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
-target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf GoSurvey::IOTraverseReport)
+target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf GoSurvey::IOTraverseReport GoSurvey::RendererAlignmentCache)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
