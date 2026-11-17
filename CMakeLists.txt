@@ -1582,7 +1582,7 @@ if(GOSURVEY_BUILD_TESTS)
     ${NLOHMANN_JSON_INCLUDE})
   set_target_properties(GoSurveyTerrainTests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
-  target_link_libraries(GoSurveyTerrainTests PRIVATE GoSurvey::Terrain GoSurvey::Debug GoSurvey::PointCloud Catch2::Catch2WithMain)
+  target_link_libraries(GoSurveyTerrainTests PRIVATE GoSurvey::Terrain GoSurvey::Debug GoSurvey::PointCloud GoSurvey::Pdf Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyTerrainTests PROPERTIES LABELS Terrain)
   gosurvey_target_warnings(GoSurveyTerrainTests TEST)
 
@@ -1647,7 +1647,7 @@ if(GOSURVEY_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/terrain/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests"
     ${NLOHMANN_JSON_INCLUDE})
-  target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug GoSurvey::Geometry GoSurvey::PointCloud Catch2::Catch2WithMain)
+  target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug GoSurvey::Geometry GoSurvey::PointCloud GoSurvey::Pdf Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyDebugTests PROPERTIES LABELS Debug)
   gosurvey_target_warnings(GoSurveyDebugTests TEST)
 
