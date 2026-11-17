@@ -510,6 +510,8 @@ target_link_libraries(gosurvey_math INTERFACE GoSurvey::Core)
 add_library(gosurvey_geometry STATIC
   # Planar geometry math: bulge arcs, extents, revision clouds.
   src/geometry/src/geom2d.cpp
+  # Uniform-grid broad phase shared by Geometry, Survey and Terrain.
+  src/geometry/src/TriangleGridIndex.cpp
   # REQ-443 SPLINE mathematics (NURBS curve: fit / control-vertex construction, evaluation, tessellation).
   src/geometry/src/spline.cpp
   # Intersection math behind the INT/APPINT snaps (REQ-062). Pure and dependency-free on purpose.
@@ -541,6 +543,7 @@ add_library(gosurvey_survey STATIC
   src/alignment/AlignmentEdit.cpp
   src/alignment/AlignmentLayout.cpp
   src/alignment/AlignmentGround.cpp
+  src/alignment/AlignmentSampleLines.cpp
   src/alignment/AlignmentViewFrames.cpp
   src/alignment/AlignmentProfile.cpp
   src/alignment/AlignmentDesign.cpp
@@ -828,7 +831,6 @@ set(GOSURVEY_DOMAIN_SOURCES
 
   # Civil alignments (REQ-480..484, ADR-075, issue #121): exact tangent/curve geometry, stationing, queries
   src/alignment/AlignmentGrips.cpp
-  src/alignment/AlignmentSampleLines.cpp
   src/alignment/AlignmentDisplayCache.cpp
   src/util/gltfimport.cpp
   src/util/stlimport.cpp
