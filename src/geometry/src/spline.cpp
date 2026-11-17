@@ -1,4 +1,4 @@
-#include "spline.hpp"
+#include <GoSurvey/Geometry/spline.hpp>
 
 #include <algorithm>
 #include <cmath>

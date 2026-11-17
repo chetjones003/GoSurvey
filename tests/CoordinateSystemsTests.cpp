@@ -13,7 +13,7 @@
 
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
-#include "geo/CoordinateSystems.hpp"
+#include <GoSurvey/Survey/CoordinateSystems.hpp>
 
 namespace {
 

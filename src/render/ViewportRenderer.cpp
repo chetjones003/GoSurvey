@@ -3,7 +3,7 @@
 #include "CadLinetype.hpp"
 #include "CadSnap.hpp"
 #include "PaperSpace.hpp"
-#include "geom2d.hpp"
+#include <GoSurvey/Geometry/geom2d.hpp>
 
 #include <GL/glew.h>
 

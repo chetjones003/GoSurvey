@@ -3,7 +3,7 @@
 // analytically, pick the candidate nearest both picks), tangent-point extraction, the arc
 // endpoint-to-newLength conversion FILLET's trim/extend step feeds into the reused
 // ApplyLengthenToArc, and the parallel-lines semicircle special case. Header-only/inline
-// (CadCommands.hpp), so this is testable without linking the whole command layer — the same
+// (GoSurvey/Geometry/FilletChamfer.hpp), so this is testable without linking the whole command layer — the same
 // reasoning tests/StretchGeomTests.cpp already follows for STRETCH's own new geometry.
 //
 // Every expected value below was hand-derived (see the comment above each case) before being
@@ -13,7 +13,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include "CadCommands.hpp"
+#include <GoSurvey/Geometry/FilletChamfer.hpp>
 
 using Catch::Approx;
 

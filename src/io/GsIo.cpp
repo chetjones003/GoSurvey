@@ -10,8 +10,8 @@
 #include "DimensionStyle.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
-#include "util/meshgeom.hpp"
-#include "util/geom2d.hpp"
+#include <GoSurvey/Geometry/meshgeom.hpp>
+#include <GoSurvey/Geometry/geom2d.hpp>
 #include "util/pointcloudcache.hpp"
 #include "BrepJson.hpp"
 

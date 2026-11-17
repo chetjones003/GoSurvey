@@ -20,9 +20,9 @@
 #include "io/SurveyCsv.hpp"
 #include <GoSurvey/Math/ucs.hpp>
 #include "util/AcisSatParser.hpp"
-#include "util/brep.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
 #include "util/cadpiperun.hpp"
-#include "util/spline.hpp"
+#include <GoSurvey/Geometry/spline.hpp>
 #include "io/RasterImage.hpp"
 
 #include "SolidMeasure.hpp"

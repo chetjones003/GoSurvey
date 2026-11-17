@@ -6,7 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "commands/CadCommands.hpp"
-#include "util/brep.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
 
 #include <algorithm>
 #include <string>

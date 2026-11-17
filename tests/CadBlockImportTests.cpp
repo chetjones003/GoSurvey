@@ -3,7 +3,7 @@
 #include "CadRubberPreview.hpp"
 #include "HeadlessFileDialogs.hpp"
 #include "io/GsIo.hpp"
-#include "util/brep.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
 #include <GoSurvey/Math/ucs.hpp>
 
 #include <catch2/catch_approx.hpp>

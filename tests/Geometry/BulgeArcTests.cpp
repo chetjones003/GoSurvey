@@ -3,7 +3,7 @@
 
 #include <cmath>
 
-#include "../../src/util/geom2d.hpp"
+#include <GoSurvey/Geometry/geom2d.hpp>
 
 using Catch::Approx;
 

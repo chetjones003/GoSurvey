@@ -11,11 +11,12 @@
 #include "CadCoordinateFrame.hpp"
 #include "CadLinetype.hpp"
 #include "HatchGeom.hpp"
-#include "HatchBoundary.hpp"
-#include "geom2d.hpp"
+#include <GoSurvey/Geometry/HatchBoundary.hpp>
+#include <GoSurvey/Geometry/FilletChamfer.hpp>
+#include <GoSurvey/Geometry/geom2d.hpp>
 #include "util/benchscene.hpp"
 #include "util/cadpiperun.hpp"  // CadPipeRun solid generation (issue #486 increment B1 / REQ-345)
-#include "util/meshgeom.hpp"
+#include <GoSurvey/Geometry/meshgeom.hpp>
 #include "util/pointcloudoctree.hpp"  // REQ-171/172 out-of-core octree (ADR-060)
 #include "util/pointcloudcache.hpp"   // ADR-060 .gscloud out-of-core cache (streams the E57 internally)
 #include "util/cylinderfit.hpp"       // REQ-347 EXTRACTCENTERLINE's least-squares cylinder-axis fit
@@ -36,7 +37,6 @@
 #include "util/gridsurface.hpp"    // REQ-137
 #include "util/surfacequery.hpp"   // REQ-137
 #include "util/daylight.hpp"       // REQ-398 side slope grading — the daylight solver
-#include "util/curveintersect.hpp"  // REQ-062 analytic intersections; EXTEND (TASK-096) reuses this over TRIM's tessellation
 #include "io/LandXmlIo.hpp"  // issue #1002: EXPORTLANDXML
 #include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
 #include "util/gltfimport.hpp"
@@ -22090,7 +22090,7 @@ void StartStretchCommand(AppCommandState& st, std::vector<std::string>& log) {
 
 // ================================================================================================
 // FILLET (REQ-103 step 6a, TASK-102). Two picked curves (Line, non-full-circle Arc, or a Polyline
-// segment) get a tangent arc between them (SolveFilletCenter et al., CadCommands.hpp — inline/pure
+// segment) get a tangent arc between them (SolveFilletCenter et al., GoSurvey/Geometry/FilletChamfer.hpp — inline/pure
 // so it's unit-tested independently of this command layer, tests/FilletGeomTests.cpp), then each
 // curve is trimmed/extended to its own tangent point. Two different curves (Case B) reuses
 // LENGTHEN's ApplyLengthenToLine/ToArc/ToPolylineEnd UNCHANGED, converting the known tangent point
@@ -23623,7 +23623,7 @@ bool ApplyFilletToPaperEntities(AppCommandState& st, const PaperEntityRef& first
 // type and simply never see an Arc, since CHAMFER refuses it upstream), the same Case A/B split,
 // the same `cornerTrimMode` toggle, `SolveFilletCenter(c1,c2,0.f,...)` for the two curves'
 // intersection point (FILLET's own radius-0 path). Only the corner-point construction is new
-// (`ChamferPointAtDistance`/`ChamferRayIntersect`, CadCommands.hpp) and the connector is an
+// (`ChamferPointAtDistance`/`ChamferRayIntersect`, GoSurvey/Geometry/FilletChamfer.hpp) and the connector is an
 // ordinary Line, not an Arc.
 // ================================================================================================
 

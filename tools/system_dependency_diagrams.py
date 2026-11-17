@@ -171,7 +171,7 @@ def pairs(sources, targets):
     return tuple((source, target) for source in sources for target in targets if source != target)
 
 
-DOMAIN = members("T2")
+DOMAIN = set(members("T2"))
 SERVICES = members("T3")
 ENGINE = members("T4", "T3", "T2", "T1", "T0")
 PLATFORM = members("PLATFORM")
@@ -181,8 +181,8 @@ PLATFORM = members("PLATFORM")
 # allow); the generator fails if the table contradicts the printed reason.
 Forbidden = collections.namedtuple("Forbidden", "source target why forbids requires")
 FORBIDDEN = [
-    Forbidden("editor", "document", "reaches Domain only through Commands / Interaction",
-              pairs(["editor"], DOMAIN), (("editor", "commands"), ("editor", "interaction"))),
+    Forbidden("editor", "document", "does not access drawing storage directly",
+              pairs(["editor"], DOMAIN - {"survey", "geometry"}), (("editor", "commands"), ("editor", "interaction"))),
     Forbidden("editor", "phead", "Headless is for tests and batch runs", (), ()),
     Forbidden("commands", "interaction", "one-way: Interaction may use Commands",
               (), (("interaction", "commands"),)),
@@ -208,11 +208,12 @@ GAPS = [
     (lambda allowed: all("debug" not in targets for targets in allowed.values()),
      "**Debug has no consumers.** No system lists Debug as an allowed dependency, so nothing may\n"
      "  call the profiler, tracer or invariant checks."),
-    (lambda allowed: "geometry" not in allowed["commands"]
-     and "math" in allowed["commands"]
+    (lambda allowed: {"geometry", "math"} <= allowed["commands"]
+     and {"geometry", "survey"} <= allowed["editor"]
+     and "geometry" not in allowed["pqt"]
      and all({"geometry", "math"} <= allowed[s] for s in ("interaction", "renderer", "io")),
-     "**Commands may not include Geometry.** Math is allowed for general primitives; Interaction,\n"
-     "  Renderer and IO may include both Geometry and Math."),
+     "**Commands and GoSurveyEditor may use Geometry's public kernel interface.** Geometry remains\n"
+     "  a lower-tier library with only Math and Core dependencies; Qt remains independent of Geometry."),
     (lambda allowed: "pdf" not in allowed["interaction"]
      and all(d in allowed["interaction"] for d in DOMAIN if d != "pdf"),
      "**Interaction may not include Pdf**, though it may include every other Domain system."),

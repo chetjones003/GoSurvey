@@ -3,38 +3,6 @@
   "status": "approved",
   "mappedFolders": [
     {
-      "path": "src/core/include/",
-      "system": "Core"
-    },
-    {
-      "path": "src/core/src/",
-      "system": "Core"
-    },
-    {
-      "path": "src/math/include/",
-      "system": "Math"
-    },
-    {
-      "path": "src/geometry/include/",
-      "system": "Geometry"
-    },
-    {
-      "path": "src/geometry/src/",
-      "system": "Geometry"
-    },
-    {
-      "path": "src/events/include/",
-      "system": "Events"
-    },
-    {
-      "path": "src/events/src/",
-      "system": "Events"
-    },
-    {
-      "path": "src/ui/include/",
-      "system": "UI"
-    },
-    {
       "path": "src/alignment/",
       "system": "Survey"
     },
@@ -47,16 +15,48 @@
       "system": "Commands"
     },
     {
+      "path": "src/core/include/",
+      "system": "Core"
+    },
+    {
+      "path": "src/core/src/",
+      "system": "Core"
+    },
+    {
+      "path": "src/events/include/",
+      "system": "Events"
+    },
+    {
+      "path": "src/events/src/",
+      "system": "Events"
+    },
+    {
       "path": "src/font/",
       "system": "Core"
     },
     {
       "path": "src/geo/",
+      "system": "Survey"
+    },
+    {
+      "path": "src/geometry/include/",
+      "system": "Geometry"
+    },
+    {
+      "path": "src/geometry/src/",
       "system": "Geometry"
     },
     {
       "path": "src/io/",
       "system": "IO"
+    },
+    {
+      "path": "src/math/include/",
+      "system": "Math"
+    },
+    {
+      "path": "src/network/include/",
+      "system": "Network"
     },
     {
       "path": "src/pdf/",
@@ -79,6 +79,10 @@
       "system": "Survey"
     },
     {
+      "path": "src/survey/include/",
+      "system": "Survey"
+    },
+    {
       "path": "src/telemetry/",
       "system": "Network"
     },
@@ -91,6 +95,10 @@
       "system": "Qt"
     },
     {
+      "path": "src/ui/include/",
+      "system": "UI"
+    },
+    {
       "path": "src/update/",
       "system": "Network"
     },
@@ -100,6 +108,121 @@
     }
   ],
   "fileMappings": [
+    {
+      "path": "src/geo/CoordinateSystems.cpp",
+      "system": "Survey",
+      "status": "audited"
+    },
+    {
+      "path": "src/geo/DrawingConversion.cpp",
+      "system": "Survey",
+      "status": "audited"
+    },
+    {
+      "path": "src/geo/EcefTransform.cpp",
+      "system": "Survey",
+      "status": "audited"
+    },
+    {
+      "path": "src/geo/EcefTransform.hpp",
+      "system": "Survey",
+      "status": "audited"
+    },
+    {
+      "path": "src/geo/LocalGridTransform.cpp",
+      "system": "Survey",
+      "status": "audited"
+    },
+    {
+      "path": "src/geo/WebMercator.cpp",
+      "system": "Network",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/include/GoSurvey/Geometry/brep.hpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/include/GoSurvey/Geometry/curveintersect.hpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/include/GoSurvey/Geometry/geom2d.hpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/include/GoSurvey/Geometry/meshgeom.hpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/include/GoSurvey/Geometry/nurbs.hpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/include/GoSurvey/Geometry/spline.hpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/brep.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/curveintersect.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/geom2d.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/meshgeom.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/nurbs.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/geometry/src/spline.cpp",
+      "system": "Geometry",
+      "status": "audited"
+    },
+    {
+      "path": "src/qt/EditorDialogs.cpp",
+      "system": "GoSurveyEditor",
+      "status": "audited"
+    },
+    {
+      "path": "src/qt/EditorPipePalette.cpp",
+      "system": "GoSurveyEditor",
+      "status": "audited"
+    },
+    {
+      "path": "src/qt/EditorProjectSettings.cpp",
+      "system": "GoSurveyEditor",
+      "status": "audited"
+    },
+    {
+      "path": "src/qt/EditorProperties.cpp",
+      "system": "GoSurveyEditor",
+      "status": "audited"
+    },
+    {
+      "path": "src/qt/EditorWindow.cpp",
+      "system": "GoSurveyEditor",
+      "status": "audited"
+    },
     {
       "path": "src/ui/CadUiStyleWidgets.hpp",
       "system": "Document",
@@ -211,16 +334,6 @@
       "status": "audited"
     },
     {
-      "path": "src/util/brep.cpp",
-      "system": "Geometry",
-      "status": "audited"
-    },
-    {
-      "path": "src/util/brep.hpp",
-      "system": "Geometry",
-      "status": "audited"
-    },
-    {
       "path": "src/util/cadblock.hpp",
       "system": "Document",
       "status": "audited"
@@ -253,16 +366,6 @@
     {
       "path": "src/util/contourgen.hpp",
       "system": "Terrain",
-      "status": "audited"
-    },
-    {
-      "path": "src/util/curveintersect.cpp",
-      "system": "Geometry",
-      "status": "audited"
-    },
-    {
-      "path": "src/util/curveintersect.hpp",
-      "system": "Geometry",
       "status": "audited"
     },
     {
@@ -301,16 +404,6 @@
       "status": "audited"
     },
     {
-      "path": "src/util/geom2d.cpp",
-      "system": "Geometry",
-      "status": "audited"
-    },
-    {
-      "path": "src/util/geom2d.hpp",
-      "system": "Geometry",
-      "status": "audited"
-    },
-    {
       "path": "src/util/gizmooverlay.hpp",
       "system": "Renderer",
       "status": "audited"
@@ -346,28 +439,8 @@
       "status": "audited"
     },
     {
-      "path": "src/util/meshgeom.cpp",
-      "system": "Geometry",
-      "status": "audited"
-    },
-    {
-      "path": "src/util/meshgeom.hpp",
-      "system": "Geometry",
-      "status": "audited"
-    },
-    {
       "path": "src/util/modelimport.hpp",
       "system": "IO",
-      "status": "audited"
-    },
-    {
-      "path": "src/util/nurbs.cpp",
-      "system": "Geometry",
-      "status": "audited"
-    },
-    {
-      "path": "src/util/nurbs.hpp",
-      "system": "Geometry",
       "status": "audited"
     },
     {
@@ -403,16 +476,6 @@
     {
       "path": "src/util/solidpick.hpp",
       "system": "Interaction",
-      "status": "audited"
-    },
-    {
-      "path": "src/util/spline.cpp",
-      "system": "Geometry",
-      "status": "audited"
-    },
-    {
-      "path": "src/util/spline.hpp",
-      "system": "Geometry",
       "status": "audited"
     },
     {
@@ -518,7 +581,7 @@
     "Debug audit (issue #1224): benchmark scene/statistics, document-invariant diagnostics, and frame-stall watch are assigned in auditedEntries.Debug and sections. framewatch is mapped to Debug; benchmark and invariant files retain advisory Debug ownership in fileMappings until their forbidden cross-system dependencies are resolved. SaveTrace sections formerly marked Core are reassigned to Debug per this ticket, with IO/Win32 boundaries pending; crash-report trigger spans were already assigned to Debug. No code moved.",
     "Debug audit sweep (issue #1224): performance counters and PIPEPERF/PERFHUD surfaces are recorded as mixed Debug/Commands sections. BENCH command orchestration stays Commands and consumes Debug benchmark helpers. SaveTrace belongs to Debug; mapping waits on IO/Win32 seams.",
     "Document audit (issue #1226): Document file and section ownership is in auditedEntries.Document and sections. fileMappings gains Document as the advisory owner for cadblock.hpp, cadtable.hpp and PlotScales.hpp, all still ambiguous, so the ratchet and baseline do not move. Folder-mapped files get section entries only, because folder precedence would otherwise override them. The DrawingDocument god struct and CadEntities.hpp's PointCloud include are recorded in auditFindings.",
-    "Survey audit (issue #1227): Survey file and section ownership is in auditedEntries.Survey and sections. Folder-mapped src/survey, src/traverse and src/alignment files are Survey through mappedFolders. src/geo files are assigned to Survey by section, following the Geometry audit, while the folder stays Geometry. No fileMappings changed, so the ratchet and baseline do not move. The Survey -> Terrain (alignment ground sampling) and Survey -> Commands (SurveyPoints.cpp) edges are recorded in forbiddenDependencies. No code moved.",
+    "Survey audit (#1227) and Geometry boundary seal (#1289): coordinate-system and ECEF transforms are Survey-owned; their public headers live under src/survey/include/GoSurvey/Survey. Drawing unit conversion is Core-owned. Web Mercator tile math is Network-owned with a public Network header. The legacy src/geo folder is now mapped to Survey, with the WebMercator.cpp file assignment mapped to Network. Geometry algorithms live under src/geometry and use public includes.",
     "Terrain audit (issue #1228): Terrain file and section ownership is recorded in auditedEntries.Terrain and sections. The 20 mixed src/util surface files carry advisory Terrain ownership but remain ambiguous so the dependency ratchet and baseline do not change. Command god-file and Survey-folder sections are assigned by symbol; user-interface, persistence, and command orchestration remain with their systems. No code moved.",
     "Renderer audit (issue #1231): Renderer file and section ownership is in auditedEntries.Renderer and sections. The src/render folder mapping, fileMappings and the ratchet baseline are unchanged, so the baseline does not move. GL device calls outside src/render (EditorViewport.cpp, FailureReport.cpp) are recorded as OpenGL sections with pending moves. GL-layout display caches in Commands state are recorded as Renderer sections. No code moved.",
     "IO audit (issue #1232): IO file and section ownership is recorded in auditedEntries.IO and sections. The eleven format/helper files in src/util receive advisory IO ownership in fileMappings and remain ambiguous so the dependency ratchet does not change; src/util/PointFileExt.hpp is called by the Windows backend, modelimport.hpp is a shared transfer contract, and SHX parsing is sectioned under IO in src/font/. Current cross-system and platform couplings are recorded in forbiddenDependencies and auditFindings. No code moved.",
@@ -1534,7 +1597,7 @@
       "note": "Numeric T*R*S composition only (body of MatrixFromTrs, lines 83-91). Lines 63-82 of MatrixFromTrs read glTF JSON with contains and is_array checks, so they are an IO adapter; the move ticket must split the reader from the composer."
     },
     {
-      "path": "src/util/brep.cpp",
+      "path": "src/geometry/src/brep.cpp",
       "lines": [
         2433,
         2438
@@ -1560,7 +1623,7 @@
       "note": "Duplicate of brep.cpp:2433. Keep both until the move ticket."
     },
     {
-      "path": "src/util/curveintersect.hpp",
+      "path": "src/geometry/include/GoSurvey/Geometry/curveintersect.hpp",
       "lines": [
         19,
         22
@@ -1573,7 +1636,7 @@
       "note": "Duplicate 2D point type. Math or Geometry owns it; the final map decides (see auditFindings)."
     },
     {
-      "path": "src/util/curveintersect.cpp",
+      "path": "src/geometry/src/curveintersect.cpp",
       "lines": [
         12,
         13
@@ -1797,7 +1860,7 @@
       "note": "Closed-form inverse of a 3x3 matrix with a singularity test. Pure math in the traverse adjustment."
     },
     {
-      "path": "src/util/brep.cpp",
+      "path": "src/geometry/src/brep.cpp",
       "lines": [
         6425,
         6430
@@ -1810,7 +1873,7 @@
       "note": "Same formula as ray3d::RotateVectorAboutAxis, in brep's anonymous namespace. Duplicate."
     },
     {
-      "path": "src/util/brep.cpp",
+      "path": "src/geometry/src/brep.cpp",
       "lines": [
         16300,
         16322
@@ -1826,7 +1889,7 @@
       "note": "P2 scalar multiply, dot, cross and length for the profile sweep. Duplicate of the 2D cross in curveintersect.cpp."
     },
     {
-      "path": "src/util/brep.cpp",
+      "path": "src/geometry/src/brep.cpp",
       "lines": [
         16338,
         16340
@@ -1839,7 +1902,7 @@
       "note": "atan2 of a point about a centre, in [-pi, pi]. Pure angle math."
     },
     {
-      "path": "src/util/brep.cpp",
+      "path": "src/geometry/src/brep.cpp",
       "lines": [
         2551,
         2556
@@ -1852,7 +1915,7 @@
       "note": "Reflects a frame across a plane, negating its Y axis. Sibling of RotateFrameInPlace; both belong with the frame math."
     },
     {
-      "path": "src/util/curveintersect.cpp",
+      "path": "src/geometry/src/curveintersect.cpp",
       "lines": [
         16,
         21
@@ -1865,7 +1928,7 @@
       "note": "Wraps an angle to [0, 2pi). Duplicates the wrap helpers listed in couplings."
     },
     {
-      "path": "src/util/curveintersect.cpp",
+      "path": "src/geometry/src/curveintersect.cpp",
       "lines": [
         308,
         310
@@ -1891,17 +1954,17 @@
       "note": "Tests whether an angle lies in a sweep, with wrap-around. Pure angle predicate; lives in an Interaction file."
     },
     {
-      "path": "src/commands/HatchBoundary.hpp",
+      "path": "src/geometry/include/GoSurvey/Geometry/HatchBoundary.hpp",
       "lines": [
         33,
         38
       ],
-      "system": "Math",
-      "concern": "angle wrap to (0, 2pi]",
+      "system": "Geometry",
+      "concern": "private angular turn normalization for planar face tracing",
       "symbols": [
         "NormalizeTwoPi"
       ],
-      "note": "Wraps an angle into (0, 2pi]. Duplicates the wrap helpers listed in couplings."
+      "note": "Implementation detail of Geometry-owned boundary tracing; not a public Math primitive."
     },
     {
       "path": "src/commands/CadCommands.cpp",
@@ -1986,7 +2049,7 @@
       "note": "Wraps a float angle into [-pi, pi]. Duplicates the wrap helpers listed in couplings."
     },
     {
-      "path": "src/util/brep.cpp",
+      "path": "src/geometry/src/brep.cpp",
       "lines": [
         16343,
         16350
@@ -3251,7 +3314,7 @@
       ]
     },
     {
-      "path": "src/commands/HatchBoundary.hpp",
+      "path": "src/geometry/include/GoSurvey/Geometry/HatchBoundary.hpp",
       "lines": [
         1,
         197
@@ -3265,7 +3328,7 @@
       "note": "Dependency-free planar subdivision and enclosing-loop algorithm. It is geometry kernel work currently placed in the Commands folder; leave the folder mapping unchanged until the final-map/move ticket."
     },
     {
-      "path": "src/util/geom2d.hpp",
+      "path": "src/geometry/include/GoSurvey/Geometry/geom2d.hpp",
       "lines": [
         10,
         16
@@ -3281,7 +3344,7 @@
       "note": "Reusable planar curve and box predicates; consumed by Commands, Renderer, Interaction and IO, so the owning file remains advisory until the allowed dependency graph is resolved."
     },
     {
-      "path": "src/util/geom2d.hpp",
+      "path": "src/geometry/include/GoSurvey/Geometry/geom2d.hpp",
       "lines": [
         32,
         78
@@ -3300,7 +3363,7 @@
       "note": "Analytic circular-arc and bulge operations; view-relative narrowing and GL line-buffer helpers are not included in this Geometry section."
     },
     {
-      "path": "src/util/geom2d.hpp",
+      "path": "src/geometry/include/GoSurvey/Geometry/geom2d.hpp",
       "lines": [
         90,
         90
@@ -3313,7 +3376,7 @@
       "note": "Geometry extent accumulation, independent of rendering."
     },
     {
-      "path": "src/util/geom2d.hpp",
+      "path": "src/geometry/include/GoSurvey/Geometry/geom2d.hpp",
       "lines": [
         93,
         107
@@ -3329,13 +3392,13 @@
       "note": "Constructs a closed bulged-arc outline; the command that requests and stores the resulting entity remains Commands/Document."
     },
     {
-      "path": "src/commands/CadCommands.hpp",
+      "path": "src/geometry/include/GoSurvey/Geometry/FilletChamfer.hpp",
       "lines": [
-        437,
-        846
+        1,
+        0
       ],
       "system": "Geometry",
-      "concern": "fillet and chamfer construction geometry",
+      "concern": "public planar fillet and chamfer construction algorithms",
       "symbols": [
         "FilletCurve",
         "FilletLongLine",
@@ -3350,7 +3413,7 @@
         "ChamferPointAtDistance",
         "ChamferRayIntersect"
       ],
-      "note": "Pure curve-offset, intersection, tangent, and corner-point calculations used by FILLET/CHAMFER. The command workflows remain Commands; this section is advisory because the header is under src/commands/ and has not been split."
+      "note": "Extracted from the mixed Commands header into the public Geometry interface by issue #1289."
     },
     {
       "path": "src/commands/CadEntities.hpp",
@@ -4833,7 +4896,7 @@
       ]
     },
     {
-      "path": "src/geo/CoordinateSystems.hpp",
+      "path": "src/survey/include/GoSurvey/Survey/CoordinateSystems.hpp",
       "lines": [
         1,
         102
@@ -4865,7 +4928,7 @@
       "ownershipKind": "whole"
     },
     {
-      "path": "src/geo/LocalGridTransform.hpp",
+      "path": "src/survey/include/GoSurvey/Survey/LocalGridTransform.hpp",
       "lines": [
         1,
         51
@@ -4926,7 +4989,7 @@
       "ownershipKind": "whole"
     },
     {
-      "path": "src/geo/DrawingConversion.hpp",
+      "path": "src/survey/include/GoSurvey/Survey/DrawingConversion.hpp",
       "lines": [
         1,
         59
@@ -4954,7 +5017,7 @@
       "ownershipKind": "whole"
     },
     {
-      "path": "src/geo/WebMercator.hpp",
+      "path": "src/network/include/GoSurvey/Network/WebMercator.hpp",
       "lines": [
         1,
         50
@@ -4974,7 +5037,7 @@
         1,
         74
       ],
-      "system": "Survey",
+      "system": "Network",
       "concern": "Web Mercator tile math",
       "symbols": [],
       "note": "Whole file. See the WebMercator.hpp note.",
@@ -6845,7 +6908,7 @@
       "note": "Plain data carrier for the selection and hover highlight channel, like CadGizmoOverlay. Mapped ambiguous."
     },
     {
-      "path": "src/util/geom2d.hpp",
+      "path": "src/geometry/include/GoSurvey/Geometry/geom2d.hpp",
       "lines": [
         19,
         29
@@ -6860,7 +6923,7 @@
       "note": "Outputs depend on the view anchor or the framebuffer height (VIEWRES). Geometry keeps the analytic curve helpers in its own sections."
     },
     {
-      "path": "src/util/geom2d.hpp",
+      "path": "src/geometry/include/GoSurvey/Geometry/geom2d.hpp",
       "lines": [
         81,
         89
@@ -6875,7 +6938,7 @@
       "note": "Emit six-float GL_LINES segments for the renderer (couplings). Geometry keeps the curve maths these call."
     },
     {
-      "path": "src/util/geom2d.cpp",
+      "path": "src/geometry/src/geom2d.cpp",
       "lines": [
         74,
         78
@@ -6888,7 +6951,7 @@
       "note": "Implementation of the view-relative conversion declared in geom2d.hpp."
     },
     {
-      "path": "src/util/geom2d.cpp",
+      "path": "src/geometry/src/geom2d.cpp",
       "lines": [
         80,
         88
@@ -6901,7 +6964,7 @@
       "note": "Implementation of the view-relative circle point declared in geom2d.hpp."
     },
     {
-      "path": "src/util/geom2d.cpp",
+      "path": "src/geometry/src/geom2d.cpp",
       "lines": [
         90,
         103
@@ -6914,7 +6977,7 @@
       "note": "Implementation of the VIEWRES segment count declared in geom2d.hpp."
     },
     {
-      "path": "src/util/geom2d.cpp",
+      "path": "src/geometry/src/geom2d.cpp",
       "lines": [
         207,
         214
@@ -6927,7 +6990,7 @@
       "note": "Implementation declared in geom2d.hpp."
     },
     {
-      "path": "src/util/geom2d.cpp",
+      "path": "src/geometry/src/geom2d.cpp",
       "lines": [
         216,
         233
@@ -6940,7 +7003,7 @@
       "note": "Implementation declared in geom2d.hpp."
     },
     {
-      "path": "src/util/geom2d.cpp",
+      "path": "src/geometry/src/geom2d.cpp",
       "lines": [
         235,
         259
@@ -13777,7 +13840,7 @@
         "issue": 1225,
         "parent": 1207,
         "commit": "b3c543bc",
-        "codeMoved": false
+        "codeMoved": true
       },
       "responsibility": "Provides reusable planar and spatial geometry algorithms: 2D curves and intersections, splines and NURBS, boundary and mesh operations, and B-rep construction, validation, measurement, and sectioning.",
       "doesNotOwn": [
@@ -13793,69 +13856,24 @@
         "Math",
         "Core"
       ],
-      "dependencyNote": "Geometry may use Math primitives and Core numeric or unit utilities. Current Geometry implementation files use Math via ray3d; Core is allowed by the draft but is not currently used.",
+      "dependencyNote": "Geometry uses Math primitives for geometric calculations and may use Core numeric or unit utilities. Its public API is consumed through GoSurvey/Geometry headers; it does not depend on Domain, Services, Application, or platform systems.",
       "currentFiles": [
-        "src/util/brep.cpp",
-        "src/util/brep.hpp",
-        "src/util/curveintersect.cpp",
-        "src/util/curveintersect.hpp",
-        "src/util/geom2d.cpp",
-        "src/util/geom2d.hpp",
-        "src/util/meshgeom.cpp",
-        "src/util/meshgeom.hpp",
-        "src/util/nurbs.cpp",
-        "src/util/nurbs.hpp",
-        "src/util/spline.cpp",
-        "src/util/spline.hpp",
-        "src/commands/HatchBoundary.hpp (section only)",
-        "src/commands/CadCommands.hpp (section only)"
+        "src/geometry/include/GoSurvey/Geometry/brep.hpp",
+        "src/geometry/src/brep.cpp",
+        "src/geometry/include/GoSurvey/Geometry/curveintersect.hpp",
+        "src/geometry/src/curveintersect.cpp",
+        "src/geometry/include/GoSurvey/Geometry/geom2d.hpp",
+        "src/geometry/src/geom2d.cpp",
+        "src/geometry/include/GoSurvey/Geometry/meshgeom.hpp",
+        "src/geometry/src/meshgeom.cpp",
+        "src/geometry/include/GoSurvey/Geometry/nurbs.hpp",
+        "src/geometry/src/nurbs.cpp",
+        "src/geometry/include/GoSurvey/Geometry/spline.hpp",
+        "src/geometry/src/spline.cpp",
+        "src/geometry/include/GoSurvey/Geometry/HatchBoundary.hpp",
+        "src/geometry/include/GoSurvey/Geometry/FilletChamfer.hpp"
       ],
-      "pendingAssignment": [
-        {
-          "files": [
-            "src/util/brep.cpp",
-            "src/util/brep.hpp",
-            "src/util/curveintersect.cpp",
-            "src/util/curveintersect.hpp",
-            "src/util/geom2d.cpp",
-            "src/util/geom2d.hpp",
-            "src/util/meshgeom.cpp",
-            "src/util/meshgeom.hpp",
-            "src/util/nurbs.cpp",
-            "src/util/nurbs.hpp",
-            "src/util/spline.cpp",
-            "src/util/spline.hpp"
-          ],
-          "reason": "These files implement Geometry algorithms, but must remain advisory (system=Geometry, status=ambiguous) while the ratchet uses the current dependency table: Commands directly includes geom2d.hpp, curveintersect.hpp, meshgeom.hpp and spline.hpp; CadEntities.hpp includes spline.hpp; Qt directly includes brep.hpp and geom2d.hpp. Commands and Qt do not currently allow a Geometry dependency. The final-map/move ticket must resolve these public seams and allowed edges before changing the status to audited."
-        },
-        {
-          "files": [
-            "src/commands/HatchBoundary.hpp"
-          ],
-          "reason": "The dependency-free planar boundary tracer is Geometry, but it is under src/commands/, whose folder mapping takes precedence in the ratchet. Recorded as a Geometry section pending its move to the kernel or a file-level mapping design."
-        },
-        {
-          "files": [
-            "src/geo/CoordinateSystems.cpp",
-            "src/geo/CoordinateSystems.hpp",
-            "src/geo/DrawingConversion.cpp",
-            "src/geo/DrawingConversion.hpp",
-            "src/geo/EcefTransform.cpp",
-            "src/geo/EcefTransform.hpp",
-            "src/geo/LocalGridTransform.cpp",
-            "src/geo/LocalGridTransform.hpp",
-            "src/geo/WebMercator.cpp",
-            "src/geo/WebMercator.hpp"
-          ],
-          "reason": "These files are currently swept into Geometry by the src/geo/ folder mapping, but the folder is not Geometry-owned: coordinate-system selection, local survey grids, ECEF/Web Mercator transforms, and geodetic conversion policy belong with Survey coordinate systems; the drawing-unit conversion section in DrawingConversion.cpp belongs to Core and is already recorded. The final map should reassign the folder by file and retain that Core section."
-        },
-        {
-          "files": [
-            "src/commands/CadCommands.hpp"
-          ],
-          "reason": "The FILLET/CHAMFER solver helpers are pure planar geometry, but are embedded in the src/commands/ folder mapping and share a header with command state/interfaces. Record their Geometry ownership as a section until the final-map/move ticket extracts them behind a legal Geometry interface."
-        }
-      ],
+      "pendingAssignment": [],
       "draftPublicInterface": {
         "planar geometry": [
           "BulgeArcSpan",
@@ -13922,12 +13940,23 @@
         ],
         "planar boundary tracing": [
           "hatchboundary::Seg",
-          "TraceEnclosingLoop (currently in src/commands/HatchBoundary.hpp)"
+          "hatchboundary::TraceEnclosingLoop (GoSurvey/Geometry/HatchBoundary.hpp)"
         ],
         "internal, not public": [
           "CadSolidTessellation and CadSolidDisplayBatch (drawing/render cache seam)",
           "solidpick::PickSubObject (Interaction policy)",
           "SAT parser/writer types (IO format boundary)"
+        ],
+        "fillet and chamfer construction": [
+          "FilletCurve",
+          "SolveFilletCenter",
+          "FilletCandidateCenters",
+          "FilletTangentPointOnLine",
+          "FilletTangentPointOnCircle",
+          "FilletArcTangentPointToNewLength",
+          "FilletParallelSemicircle",
+          "ChamferPointAtDistance",
+          "ChamferRayIntersect (GoSurvey/Geometry/FilletChamfer.hpp)"
         ]
       },
       "existingTests": [
@@ -13954,8 +13983,7 @@
         "tests/ExtendedGeometryGateTests.cpp (Renderer predicate for whether committed extended geometry is drawable)"
       ],
       "testGaps": [
-        "No standalone public Geometry include tree exists yet; current tests include legacy util headers directly.",
-        "No ratchet-enforced ownership test exists for Geometry while its util file mappings remain advisory."
+        "B-rep serialization and SAT import tests remain in IO-owned test suites because those tests cover format conversion, not Geometry ownership."
       ]
     },
     "Document": {
@@ -14235,7 +14263,7 @@
         },
         {
           "files": [
-            "src/geo/WebMercator.hpp",
+            "src/network/include/GoSurvey/Network/WebMercator.hpp",
             "src/geo/WebMercator.cpp"
           ],
           "reason": "Assigned to Survey by the Geometry audit, but map tile math is the Network online-map concern. The final map decides."
@@ -15131,7 +15159,7 @@
         "src/render/ViewportRenderer.cpp (4256 lines and grandfathered in .github/file-size-baseline.json. Device init, shader, framebuffer and multisample setup from line 827; RenderScene from about line 1250 to 3855; GPU release for solids, meshes and point clouds; part thumbnails and BMP capture from 3889. Calls GL directly.)",
         "src/util/gizmooverlay.hpp (CadGizmoOverlay, the translate-gizmo draw channel; mapped ambiguous, see sections)",
         "src/util/cadsolid.hpp lines 43-117 and 131-152 (solid display tessellation, batch and overlay carriers; the rest of the file is Document, see sections)",
-        "src/util/geom2d.hpp and src/util/geom2d.cpp (section only: view-relative conversion, framebuffer-dependent tessellation and GL_LINES emitters; the rest is Geometry)",
+        "src/geometry/include/GoSurvey/Geometry/geom2d.hpp and src/geometry/src/geom2d.cpp (section only: view-relative conversion, framebuffer-dependent tessellation and GL_LINES emitters; the rest is Geometry)",
         "src/util/watershed.hpp and src/util/watershed.cpp (section only: GL_LINES display builders; the analysis is Terrain)",
         "src/viewport/TransformPreview.cpp (section only: AppendSolidEdge; the folder is Interaction)",
         "src/commands/CadEntities.hpp (section only: display batch carriers, lines 473-532)",
@@ -15459,7 +15487,7 @@
         "src/update/UpdateService.cpp, src/update/UpdateService.hpp: startup check, download and hash worker, and the phase machine (folder-mapped Network). LaunchInstallerAndExit and its UAC bootstrap call ShellExecuteW and are pending a Windows adapter.",
         "src/platform/MapTileService.cpp, src/platform/MapTileService.hpp: tile fetch worker, disk cache, cache prune, and image decode. Network-owned, but in the Windows-mapped platform folder. The fetch function is injected.",
         "src/commands/CadOnlineMap.cpp, src/commands/CadOnlineMap.hpp: online-map controller (wanted tiles, retry, message latch, capture job, draw list). Network-owned, but in the Commands folder. PlaceMapTile and LocalRectToMercator are pending separation (see pendingAssignment).",
-        "src/geo/WebMercator.hpp, src/geo/WebMercator.cpp: Web Mercator tile index math. Its only consumers are CadOnlineMap.* and tests/OnlineMapTests.cpp. The Survey section in sections assigns it to Survey, so the final map must decide."
+        "src/network/include/GoSurvey/Network/WebMercator.hpp, src/geo/WebMercator.cpp: Web Mercator tile index math. Its only consumers are CadOnlineMap.* and tests/OnlineMapTests.cpp. The Network section in sections assigns it to Network."
       ],
       "platformImplementations": [
         "src/platform/HttpFetch.cpp: WinHTTP, BCrypt and Network List Manager implementation of the transport (Windows).",
@@ -15471,7 +15499,7 @@
         "src/telemetry/TelemetryService.cpp reads and writes the install ID through UserPrefs (GetTelemetryIds, io/UserPrefs.cpp). Inject the ID from the caller.",
         "src/commands/CadOnlineMap.cpp: separate the Network tile controller (planning, cache requests, retry, latch) from the placement and capture-to-drawing code (PlaceMapTile, LocalRectToMercator, and the CaptureJob writes). Placement uses the Survey WGS 84 frame and Document drawing settings.",
         "src/platform/MapTileService.*: move to a Network folder once one exists. The constructor and MapTileFetch are already injected, so the move should need no interface change.",
-        "src/geo/WebMercator.*: final map decides Network or Survey. Only the online map uses it.",
+        "src/geo/WebMercator.cpp is mapped to Network; its public header is in the Network include tree. Only online-map workflows use it.",
         "src/commands/CadCommands.hpp:46 includes update/UpdateCheck.hpp for update::UpdatePrefs. The command state needs the persisted prefs type without a Network private-header include."
       ],
       "draftPublicInterface": [
@@ -15585,7 +15613,7 @@
         "src/commands/DimensionStyle.hpp",
         "src/commands/EntityId.cpp",
         "src/commands/EntityId.hpp",
-        "src/commands/HatchBoundary.hpp",
+        "src/geometry/include/GoSurvey/Geometry/HatchBoundary.hpp",
         "src/commands/HatchGeom.hpp",
         "src/commands/HatchPat.hpp",
         "src/commands/HatchPattern.hpp",
@@ -16154,7 +16182,7 @@
       "Profiling interface: measurements are stored in AppCommandState and exposed through Commands PIPEPERF/PERFHUD surfaces; the final map must decide whether Debug owns a reusable collector or only diagnostic algorithms.",
       "FrameWatch has no production call site yet; it is a tested diagnostic utility whose integration owner and lifecycle remain to be decided.",
       "The 2D vector vocabulary is split between curveisect::Vec2, Alignment Point2, geo::Pt, and TraverseCalc Point. Geometry owns its intersection vector today; the final map should decide whether Math supplies one shared 2D primitive.",
-      "Geodetic transformations and coordinate-system definitions are mixed under src/geo/ and currently mapped to Geometry. Survey owns coordinate-system policy; DrawingConversion.cpp has a separate Core-owned unit conversion section. The final map must assign the geodetic algorithms and coordinate-system data by concept.",
+      "Coordinate-system definitions and ECEF/local-grid transforms in src/geo are mapped to Survey. WebMercator.cpp is mapped to Network. Drawing-unit conversion is Core-owned.",
       "Piping: CadPipeRun, CadPipingSystem, CadPipePartType, CadBlockConnection and cadpiperun.hpp (NPS table and fillet rules) belong to no system. They are stored as Document data, so Document either owns a piping module or a separate Piping system is needed before the final map.",
       "Imported lighting: CadDwgImportedLight, CadDwgImportedSun and CadDwgImportedLightList (CadEntities.hpp 1636-1672) are drawing-stored records with no owner. Document storage with a Renderer consumer is the likely answer.",
       "Named views: NamedView (CadCommands.hpp 1488-1503) pairs camera state with a drawing name. It is stored in DrawingDocument but is view state, so the final map must decide where saved views live.",
@@ -16244,7 +16272,7 @@
       "SAT parser/writer, STL and glTF import code are format adapters (IO) that consume Geometry APIs; cylinderfit is a point-cloud neighborhood algorithm (PointCloud), and solidpick is selection policy (Interaction), despite all living under src/util/.",
       "geom2d.hpp/.cpp mixes reusable planar predicates and bulge-arc math with view-anchor narrowing, framebuffer-dependent arc tessellation, and GL_LINES buffer construction. Geometry owns the analytic curve/predicate helpers; view/pixel policy and GPU-facing vertex generation belong to Renderer.",
       "HatchGeom.hpp and CadDimGeom.hpp operate on Document-owned CadFilledRegion and CadAnnotation data, so their domain-specific containment and dimension-frame calculations stay with Document. HatchBoundary.hpp is independent of those entity types and its planar subdivision algorithm is the Geometry section recorded above.",
-      "FILLET/CHAMFER geometric solving (CadCommands.hpp:437-846: offset candidates, exact line/conic intersections, tangency and chamfer-point construction) is embedded in the Commands header. Geometry owns these calculations; command selection, option policy, and entity mutation stay Commands. Extract the solver during the final-map/move ticket.",
+      "FILLET/CHAMFER geometric solving is exposed from GoSurvey/Geometry/FilletChamfer.hpp. Geometry owns candidate generation, intersections, tangency, and chamfer points; Commands owns selection, option policy, and entity mutation.",
       "DrawingDocument (CadCommands.hpp 1513-1660) is a composition of every system's storage: Survey (surveyPoints, alignments, viewFrameGroups, sampleLines, profiles, surfaceProfiles), Terrain (cadSurfaces), PointCloud (cadPointClouds), Pdf (pdfAttachments), and Renderer and Interaction (viewport camera, section clip and projection at 1516-1531). Document cannot own the type without depending on Survey, Terrain, PointCloud and Pdf. The final map must split the struct or move those members behind interfaces.",
       "CadEntities.hpp includes util/pointcloudoctree.hpp. That is a PointCloud dependency in an entity header that Document will own, and Document is not allowed to depend on PointCloud. CadEntities.hpp also includes util/spline.hpp (Geometry, allowed) and util/ucs.hpp (Math, allowed).",
       "Per-drawing data exists twice: AppCommandState holds live copies of tableStyles (3690), blockDefs (3762), textStyles (5030), dimensionStyles (5048) and paperLayouts (5700), and DrawingDocument holds the stored copy (1592, 1618, 1633, 1640, 1651). SaveDocumentToSnapshot and RestoreDocumentFromSnapshot (CadCommands.cpp 88-367) copy between them. The owner of the live copy is unresolved.",
@@ -16316,10 +16344,10 @@
       "src/commands/OrthoConstrain.hpp sits in the Commands folder. The file is assigned to Math here; the move ticket relocates it.",
       "src/ui/ is mapped to Qt, but it holds toolkit-neutral code: CommandBar.hpp, MtextToolbar.hpp, and RichTextLayout.hpp are UI; ModelingRibbon.hpp is GoSurveyEditor (ribbon tables); MtextRichSpans.hpp, MtextRichFormat.*, and MtextTextOps.hpp are Document (wire format and text operations); CadUiStyleWidgets.hpp is homeless. fileMappings are unchanged here, so the ratchet baseline does not move; the final-map ticket reassigns them.",
       "src/platform/ is mapped wholesale to Windows, but WinFileDialogs.hpp is the UI file-dialog interface and HeadlessFileDialogs.* is the Headless backend. Assign per file in the final map.",
-      "src/geo/ is currently mapped wholesale to Geometry, but the files implement geodetic coordinate-system selection, local survey grids, and ECEF/Web Mercator transforms, which belong with Survey coordinate systems. DrawingConversion.cpp also contains a Core-owned unit-conversion section. Reassign by file in the final map.",
+      "src/geo now maps to Survey, with the exact WebMercator.cpp file mapping to Network. Drawing-unit conversion is provided by Core.",
       "src/commands/ is mapped to Commands but holds Document data: CadEntities.hpp, PaperSpace.hpp, TextStyle.hpp, DimensionStyle.hpp, MultileaderStyle.hpp, EntityId.*, CadLinetype.*, CadColor.hpp, and the DrawingDocument and undo code in CadCommands.hpp and CadCommands.cpp. _system_for gives folder mappings precedence over fileMappings, so file-level Document mappings cannot take effect inside this folder until the move.",
       "src/ui/MtextRichSpans.hpp, MtextRichFormat.* and MtextTextOps.hpp are Document under the Qt folder mapping, as the UI audit already noted.",
-      "src/geo/ is mapped to Geometry, but the Geometry audit assigns its coordinate-system files to Survey. The folder mapping stays until the final map; section entries record per-file ownership.",
+      "src/geo maps to Survey. WebMercator.cpp is assigned to Network by exact file mapping.",
       "src/platform/ holds Network-owned MapTileService.* and the HttpFetch.hpp transport interface, both mapped to Windows. src/commands/CadOnlineMap.* is a Network controller under the Commands folder mapping. The update and telemetry folders are correctly mapped to Network.",
       "src/platform/CrashReporter.cpp and StartupFailure.cpp: the upload functions are Network, while the containing files are Windows (folder) and Debug (crash reporting). Split the upload functions out.",
       "src/qt/ is mapped to Qt, but most of its files are GoSurveyEditor window, dialog, panel and palette workflow (see the GoSurveyEditor sections). Only the presentation adapters (QtAnnotations, QtAppearance, QtSplash, QtText, QtViewCube, QtAccent, NonDismissableDialog, PdfCanvas) and the DrawingDocumentTabBar widget are Qt; the tab lifecycle decisions are GoSurveyEditor (EditorWindow). Map the folder per file before enforcement."
@@ -16606,7 +16634,7 @@
         "home": "Math supplies a shared primitive; Geometry and Survey adapt domain types during later moves"
       },
       {
-        "finding": "Geodetic transformations and coordinate-system definitions are mixed under src/geo/ and currently mapped to Geometry. Survey owns coordinate-system policy; DrawingConversion.cpp has a separate Core-owned unit conversion section. The final map must assign the geodetic algorithms and coordinate-system data by concept.",
+        "finding": "Coordinate-system definitions and ECEF/local-grid transforms in src/geo are mapped to Survey. WebMercator.cpp is mapped to Network. Drawing-unit conversion is Core-owned.",
         "status": "approved",
         "home": "Survey owns geodetic algorithms and coordinate-system definitions; Core owns unit conversion"
       },

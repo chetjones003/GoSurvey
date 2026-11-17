@@ -13,7 +13,7 @@
 #include "EditorViewport.hpp"
 #include "EditorWindow.hpp"
 #include "ViewportRenderer.hpp"
-#include "util/brep.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
 
 #include <QDialog>
 #include <QHBoxLayout>

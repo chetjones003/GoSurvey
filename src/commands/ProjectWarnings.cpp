@@ -1,8 +1,10 @@
+#include <GoSurvey/Core/Units.hpp>
+
 #include "ProjectWarnings.hpp"
 
 #include "ConvertDrawing.hpp"
 #include "ProjectPoints.hpp"
-#include "geo/DrawingConversion.hpp"
+#include <GoSurvey/Survey/DrawingConversion.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -46,7 +48,7 @@ const PointGroupRule* GroupRuleOf(const std::vector<PointGroup>& groups, const p
 }
 
 double MetersPerUnitOf(const AppCommandState& st) {
-  return geo::MetersPerInsUnit(st.drawingInsUnits,
+  return GoSurvey::Core::MetersPerInsUnit(st.drawingInsUnits,
                                st.drawingSettings.footDefinition == DrawingSettings::FootDefinition::UsSurvey);
 }
 

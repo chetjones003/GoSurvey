@@ -12,7 +12,7 @@
 #include <cmath>
 #include <vector>
 
-#include "../../src/util/curveintersect.hpp"
+#include <GoSurvey/Geometry/curveintersect.hpp>
 
 using Catch::Approx;
 using namespace curveisect;

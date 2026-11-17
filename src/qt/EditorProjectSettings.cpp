@@ -2,7 +2,7 @@
 #include "QtAccent.hpp"
 
 #include "ProjectSettings.hpp"
-#include "geo/CoordinateSystems.hpp"
+#include <GoSurvey/Survey/CoordinateSystems.hpp>
 #include "io/Project.hpp"
 #include "platform/AppPaths.hpp"
 #include "util/PlotScales.hpp"

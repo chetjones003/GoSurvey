@@ -1,4 +1,4 @@
-#include "curveintersect.hpp"
+#include <GoSurvey/Geometry/curveintersect.hpp>
 
 #include <algorithm>
 #include <cmath>

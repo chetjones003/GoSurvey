@@ -1,7 +1,7 @@
 #include "AcisSatParser.hpp"
 
-#include "brep.hpp"
-#include "nurbs.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
+#include <GoSurvey/Geometry/nurbs.hpp>
 #include <GoSurvey/Math/ray3d.hpp>
 
 #include <algorithm>

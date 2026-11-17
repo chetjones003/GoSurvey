@@ -1,4 +1,4 @@
-#include "brep.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
 
 #include <algorithm>
 #include <array>

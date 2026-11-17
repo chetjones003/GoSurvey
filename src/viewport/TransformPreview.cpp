@@ -1,7 +1,7 @@
 #include "TransformPreview.hpp"
 
 #include "CadCommands.hpp"
-#include "geom2d.hpp"
+#include <GoSurvey/Geometry/geom2d.hpp>
 #include "gizmooverlay.hpp"
 
 #include <algorithm>

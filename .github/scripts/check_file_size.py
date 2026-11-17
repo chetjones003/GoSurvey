@@ -19,7 +19,7 @@ SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".i
 EXCLUDED_PREFIXES = ("third_party/",)
 
 
-def find_violations(current, baseline, base_baseline):
+def find_violations(current, baseline, base_baseline, renamed_paths=()):
     """Return human-readable violations.
 
     current: {path: line_count} for every in-scope source file.
@@ -28,11 +28,24 @@ def find_violations(current, baseline, base_baseline):
     the base, this is derived from the base commit's oversized files (see base_oversized_caps).
     """
     problems = []
+    # Transfer an existing cap only when git identifies a rename, so a move does not
+    # create a new oversized-file exception or allow the cap to increase.
+    transferred_caps = {
+        new_path: base_baseline[old_path]
+        for old_path, new_path in renamed_paths
+        if old_path in base_baseline
+        and new_path not in base_baseline
+        and old_path not in current
+        and baseline.get(new_path) == base_baseline[old_path]
+    }
+    transferred_old_paths = {
+        old_path for old_path, new_path in renamed_paths if new_path in transferred_caps
+    }
 
     for path, value in sorted(baseline.items()):
-        if path not in base_baseline:
+        if path not in base_baseline and path not in transferred_caps:
             problems.append(f"{path}: baseline entry added; the baseline may only shrink")
-        elif value > base_baseline[path]:
+        elif path in base_baseline and value > base_baseline[path]:
             problems.append(
                 f"{path}: baseline raised from {base_baseline[path]} to {value}; "
                 "the baseline may only shrink")
@@ -44,6 +57,8 @@ def find_violations(current, baseline, base_baseline):
             problems.append(f"{path}: grew from {baseline[path]} to {lines} lines (limit {LIMIT})")
 
     for path, value in sorted(baseline.items()):
+        if path in transferred_old_paths:
+            continue
         lines = current.get(path)
         if lines is None:
             problems.append(f"{path}: baseline entry for a file that no longer exists; remove it")
@@ -53,6 +68,20 @@ def find_violations(current, baseline, base_baseline):
             problems.append(f"{path}: shrank from {value} to {lines}; lower its baseline entry to {lines}")
 
     return problems
+
+
+def read_renamed_paths(root, base_ref):
+    """Return source-file renames between base_ref and the checked-out tree."""
+    result = subprocess.run(
+        ["git", "-C", str(root), "diff", "--name-status", "--find-renames", base_ref, "--"],
+        check=True, capture_output=True, text=True,
+    )
+    renamed = []
+    for line in result.stdout.splitlines():
+        fields = line.split("\t")
+        if len(fields) == 3 and fields[0].startswith("R"):
+            renamed.append((fields[1], fields[2]))
+    return renamed
 
 
 def count_lines(text):
@@ -167,7 +196,8 @@ def main(argv=None):
         print(f"Note: base {args.base_ref} has no {BASELINE_PATH}; bootstrap caps derived from "
               f"{len(base_baseline)} oversized file(s) at the base commit.")
 
-    problems = find_violations(current, baseline, base_baseline)
+    renamed_paths = read_renamed_paths(args.root, args.base_ref)
+    problems = find_violations(current, baseline, base_baseline, renamed_paths)
     for problem in problems:
         print(f"::error::{problem}")
     if problems:

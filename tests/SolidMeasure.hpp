@@ -1,6 +1,6 @@
 #pragma once
 
-#include "util/brep.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
 #include <GoSurvey/Math/ray3d.hpp>
 
 #include <cmath>

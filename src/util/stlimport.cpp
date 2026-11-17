@@ -1,6 +1,6 @@
 #include "stlimport.hpp"
 
-#include "meshgeom.hpp"
+#include <GoSurvey/Geometry/meshgeom.hpp>
 
 #include <cctype>
 #include <cmath>

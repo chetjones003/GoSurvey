@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-// Planar boundary tracing for the HATCH command (REQ-043, ADR-017). Given a set of boundary segments
+// Planar boundary tracing for hatch-region construction (REQ-043, ADR-017). Given a set of boundary segments
 // (lines, polyline edges, and tessellated arcs/circles supplied by the caller) and an internal seed
 // point, find the SMALLEST closed loop that encloses the seed by walking the planar subdivision face
 // that contains it. Returns false when no closed region contains the point (REQ-201 — the command then

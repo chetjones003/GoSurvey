@@ -2,7 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "CadDimGeom.hpp"
-#include "geom2d.hpp"
+#include <GoSurvey/Geometry/geom2d.hpp>
 
 #include <cassert>
 #include <chrono>

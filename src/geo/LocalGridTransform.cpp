@@ -1,6 +1,6 @@
 // Local ↔ grid transformation (REQ-360). See LocalGridTransform.hpp.
 
-#include "LocalGridTransform.hpp"
+#include <GoSurvey/Survey/LocalGridTransform.hpp>
 
 #include <cmath>
 

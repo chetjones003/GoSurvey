@@ -150,13 +150,6 @@
     },
     {
       "file": "src/commands/CadCommands.cpp",
-      "include": "geom2d.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands.cpp includes \"geom2d.hpp\": Commands may not depend on Geometry (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
       "include": "util/benchscene.hpp",
       "target": "Debug",
       "rule": "forbidden dependency",
@@ -168,13 +161,6 @@
       "target": "Document",
       "rule": "private-header include",
       "message": "src/commands/CadCommands.cpp includes \"util/cadpiperun.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "util/meshgeom.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands.cpp includes \"util/meshgeom.hpp\": Commands may not depend on Geometry (forbidden dependency)"
     },
     {
       "file": "src/commands/CadCommands.cpp",
@@ -315,13 +301,6 @@
       "target": "Terrain",
       "rule": "private-header include",
       "message": "src/commands/CadCommands.cpp includes \"util/daylight.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "util/curveintersect.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands.cpp includes \"util/curveintersect.hpp\": Commands may not depend on Geometry (forbidden dependency)"
     },
     {
       "file": "src/commands/CadCommands.cpp",
@@ -472,20 +451,6 @@
     },
     {
       "file": "src/commands/CadCommands.hpp",
-      "include": "geo/CoordinateSystems.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands.hpp includes \"geo/CoordinateSystems.hpp\": Commands may not depend on Geometry (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "geo/LocalGridTransform.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands.hpp includes \"geo/LocalGridTransform.hpp\": Commands may not depend on Geometry (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
       "include": "util/pointcloudcache.hpp",
       "target": "PointCloud",
       "rule": "private-header include",
@@ -581,20 +546,6 @@
       "target": "Terrain",
       "rule": "private-header include",
       "message": "src/commands/CadCommands.hpp includes \"util/watershed.hpp\": cross-system include must use GoSurvey/Terrain/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "util/curveintersect.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands.hpp includes \"util/curveintersect.hpp\": Commands may not depend on Geometry (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "util/geom2d.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands.hpp includes \"util/geom2d.hpp\": Commands may not depend on Geometry (forbidden dependency)"
     },
     {
       "file": "src/commands/CadCommands.hpp",
@@ -807,27 +758,6 @@
       "message": "src/commands/CadCommands_DrawInquiry.cpp includes \"platform/WinFileDialogs.hpp\": Commands may not depend on Windows (forbidden dependency)"
     },
     {
-      "file": "src/commands/CadCommands_DrawInquiry.cpp",
-      "include": "util/geom2d.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands_DrawInquiry.cpp includes \"util/geom2d.hpp\": Commands may not depend on Geometry (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands_DrawInquiry.cpp",
-      "include": "util/spline.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands_DrawInquiry.cpp includes \"util/spline.hpp\": Commands may not depend on Geometry (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands_Geo.cpp",
-      "include": "geo/LocalGridTransform.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands_Geo.cpp includes \"geo/LocalGridTransform.hpp\": Commands may not depend on Geometry (forbidden dependency)"
-    },
-    {
       "file": "src/commands/CadCommands_Mleader.cpp",
       "include": "util/styleproperty.hpp",
       "target": "Document",
@@ -849,27 +779,6 @@
       "message": "src/commands/CadEntities.hpp includes \"util/pointcloudoctree.hpp\": cross-system include must use GoSurvey/PointCloud/ public headers (private-header include)"
     },
     {
-      "file": "src/commands/CadEntities.hpp",
-      "include": "util/spline.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadEntities.hpp includes \"util/spline.hpp\": Commands may not depend on Geometry (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadField.cpp",
-      "include": "geom2d.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadField.cpp includes \"geom2d.hpp\": Commands may not depend on Geometry (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadOnlineMap.cpp",
-      "include": "geo/WebMercator.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadOnlineMap.cpp includes \"geo/WebMercator.hpp\": Commands may not depend on Geometry (forbidden dependency)"
-    },
-    {
       "file": "src/commands/CadOnlineMap.hpp",
       "include": "MapTileService.hpp",
       "target": "Windows",
@@ -877,25 +786,11 @@
       "message": "src/commands/CadOnlineMap.hpp includes \"MapTileService.hpp\": Commands may not depend on Windows (forbidden dependency)"
     },
     {
-      "file": "src/commands/CadOnlineMap.hpp",
-      "include": "geo/WebMercator.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadOnlineMap.hpp includes \"geo/WebMercator.hpp\": Commands may not depend on Geometry (forbidden dependency)"
-    },
-    {
       "file": "src/commands/ConvertDrawing.cpp",
       "include": "SurveyPoints.hpp",
       "target": "Survey",
       "rule": "private-header include",
       "message": "src/commands/ConvertDrawing.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/ConvertDrawing.hpp",
-      "include": "geo/DrawingConversion.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/ConvertDrawing.hpp includes \"geo/DrawingConversion.hpp\": Commands may not depend on Geometry (forbidden dependency)"
     },
     {
       "file": "src/commands/DimensionStyle.hpp",
@@ -919,13 +814,6 @@
       "message": "src/commands/PaperSpace.hpp includes \"util/cadtable.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
     },
     {
-      "file": "src/commands/PaperSpace.hpp",
-      "include": "util/geom2d.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/PaperSpace.hpp includes \"util/geom2d.hpp\": Commands may not depend on Geometry (forbidden dependency)"
-    },
-    {
       "file": "src/commands/ProjectAddFlow.cpp",
       "include": "DwgIo.hpp",
       "target": "IO",
@@ -945,13 +833,6 @@
       "target": "IO",
       "rule": "private-header include",
       "message": "src/commands/ProjectAddFlow.cpp includes \"io/ProjectPointDb.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/ProjectAddFlow.hpp",
-      "include": "geo/DrawingConversion.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/ProjectAddFlow.hpp includes \"geo/DrawingConversion.hpp\": Commands may not depend on Geometry (forbidden dependency)"
     },
     {
       "file": "src/commands/ProjectAddFlow.hpp",
@@ -1010,13 +891,6 @@
       "message": "src/commands/ProjectSettings.cpp includes \"GsIo.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
     },
     {
-      "file": "src/commands/ProjectWarnings.cpp",
-      "include": "geo/DrawingConversion.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/commands/ProjectWarnings.cpp includes \"geo/DrawingConversion.hpp\": Commands may not depend on Geometry (forbidden dependency)"
-    },
-    {
       "file": "src/commands/TraverseActions.cpp",
       "include": "SurveyPoints.hpp",
       "target": "Survey",
@@ -1043,13 +917,6 @@
       "target": "Document",
       "rule": "private-header include",
       "message": "src/commands/ViewportZoomScale.cpp includes \"util/PlotScales.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/BrepJson.hpp",
-      "include": "util/brep.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/io/BrepJson.hpp includes \"util/brep.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
     },
     {
       "file": "src/io/DwgIo.cpp",
@@ -1190,20 +1057,6 @@
       "target": "Survey",
       "rule": "private-header include",
       "message": "src/io/GsIo.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/GsIo.cpp",
-      "include": "util/meshgeom.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/io/GsIo.cpp includes \"util/meshgeom.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/GsIo.cpp",
-      "include": "util/geom2d.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/io/GsIo.cpp includes \"util/geom2d.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
     },
     {
       "file": "src/io/GsIo.cpp",
@@ -1409,13 +1262,6 @@
       "message": "src/io/LibreDwgMaterial.cpp includes \"CadEntities.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgPlant.hpp",
-      "include": "util/brep.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/io/LibreDwgPlant.hpp includes \"util/brep.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
       "file": "src/io/LibreDwgVisualStyle.hpp",
       "include": "CadEntities.hpp",
       "target": "Commands",
@@ -1533,13 +1379,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/PolylineTiltedArc.hpp includes \"CadCoordinateFrame.hpp\": IO may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/io/PolylineTiltedArc.hpp",
-      "include": "util/geom2d.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/io/PolylineTiltedArc.hpp includes \"util/geom2d.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
     },
     {
       "file": "src/io/ProjectPointDb.hpp",
@@ -1844,52 +1683,122 @@
     },
     {
       "file": "src/qt/EditorDialogs.cpp",
+      "include": "EditorWindow.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorDialogs.cpp includes \"EditorWindow.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorDialogs.cpp",
+      "include": "QtAccent.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorDialogs.cpp includes \"QtAccent.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorDialogs.cpp",
+      "include": "EditorViewport.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorDialogs.cpp includes \"EditorViewport.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorDialogs.cpp",
+      "include": "EditorPointGroups.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorDialogs.cpp includes \"EditorPointGroups.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorDialogs.cpp",
+      "include": "EditorAlignmentLayout.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorDialogs.cpp includes \"EditorAlignmentLayout.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorDialogs.cpp",
+      "include": "EditorAlignmentStyle.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorDialogs.cpp includes \"EditorAlignmentStyle.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorDialogs.cpp",
+      "include": "EditorPointTableDialog.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorDialogs.cpp includes \"EditorPointTableDialog.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorDialogs.cpp",
+      "include": "EditorLayerManager.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorDialogs.cpp includes \"EditorLayerManager.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorDialogs.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorDialogs.cpp includes \"CadCommands.hpp\": Qt may not depend on Commands (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorDialogs.cpp includes \"CadCommands.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorDialogs.cpp",
       "include": "CadColor.hpp",
       "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorDialogs.cpp includes \"CadColor.hpp\": Qt may not depend on Commands (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorDialogs.cpp includes \"CadColor.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorDialogs.cpp",
+      "include": "NonDismissableDialog.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorDialogs.cpp includes \"NonDismissableDialog.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorDialogs.cpp",
       "include": "platform/AppPaths.hpp",
       "target": "Windows",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorDialogs.cpp includes \"platform/AppPaths.hpp\": Qt may not depend on Windows (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorDialogs.cpp includes \"platform/AppPaths.hpp\": cross-system include must use GoSurvey/Windows/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorDialogs.cpp",
       "include": "update/UpdateService.hpp",
       "target": "Network",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorDialogs.cpp includes \"update/UpdateService.hpp\": Qt may not depend on Network (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorDialogs.cpp includes \"update/UpdateService.hpp\": cross-system include must use GoSurvey/Network/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorDialogs.cpp",
       "include": "UserPrefs.hpp",
       "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorDialogs.cpp includes \"UserPrefs.hpp\": Qt may not depend on IO (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorDialogs.cpp",
-      "include": "geo/CoordinateSystems.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorDialogs.cpp includes \"geo/CoordinateSystems.hpp\": Qt may not depend on Geometry (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorDialogs.cpp includes \"UserPrefs.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorDialogs.cpp",
       "include": "util/PlotScales.hpp",
       "target": "Document",
       "rule": "forbidden dependency",
-      "message": "src/qt/EditorDialogs.cpp includes \"util/PlotScales.hpp\": Qt may not depend on Document (forbidden dependency)"
+      "message": "src/qt/EditorDialogs.cpp includes \"util/PlotScales.hpp\": GoSurveyEditor may not depend on Document (forbidden dependency)"
+    },
+    {
+      "file": "src/qt/EditorDialogs.cpp",
+      "include": "StylePreview.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorDialogs.cpp includes \"StylePreview.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorDialogs.cpp",
+      "include": "StyleEditors.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorDialogs.cpp includes \"StyleEditors.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorInput.cpp",
@@ -1935,31 +1844,45 @@
     },
     {
       "file": "src/qt/EditorPipePalette.cpp",
+      "include": "EditorPipePalette.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorPipePalette.cpp includes \"EditorPipePalette.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorPipePalette.cpp",
       "include": "CadBlocks.hpp",
       "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorPipePalette.cpp includes \"CadBlocks.hpp\": Qt may not depend on Commands (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorPipePalette.cpp includes \"CadBlocks.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorPipePalette.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorPipePalette.cpp includes \"CadCommands.hpp\": Qt may not depend on Commands (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorPipePalette.cpp includes \"CadCommands.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorPipePalette.cpp",
+      "include": "EditorViewport.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorPipePalette.cpp includes \"EditorViewport.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorPipePalette.cpp",
+      "include": "EditorWindow.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorPipePalette.cpp includes \"EditorWindow.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorPipePalette.cpp",
       "include": "ViewportRenderer.hpp",
       "target": "Renderer",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorPipePalette.cpp includes \"ViewportRenderer.hpp\": Qt may not depend on Renderer (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorPipePalette.cpp",
-      "include": "util/brep.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorPipePalette.cpp includes \"util/brep.hpp\": Qt may not depend on Geometry (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorPipePalette.cpp includes \"ViewportRenderer.hpp\": cross-system include must use GoSurvey/Renderer/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorPointClouds.cpp",
@@ -2173,101 +2096,143 @@
     },
     {
       "file": "src/qt/EditorProjectSettings.cpp",
-      "include": "ProjectSettings.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorProjectSettings.cpp includes \"ProjectSettings.hpp\": Qt may not depend on Commands (forbidden dependency)"
+      "include": "EditorWindow.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorProjectSettings.cpp includes \"EditorWindow.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorProjectSettings.cpp",
-      "include": "geo/CoordinateSystems.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorProjectSettings.cpp includes \"geo/CoordinateSystems.hpp\": Qt may not depend on Geometry (forbidden dependency)"
+      "include": "QtAccent.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorProjectSettings.cpp includes \"QtAccent.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorProjectSettings.cpp",
+      "include": "ProjectSettings.hpp",
+      "target": "Commands",
+      "rule": "private-header include",
+      "message": "src/qt/EditorProjectSettings.cpp includes \"ProjectSettings.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorProjectSettings.cpp",
       "include": "io/Project.hpp",
       "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorProjectSettings.cpp includes \"io/Project.hpp\": Qt may not depend on IO (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorProjectSettings.cpp includes \"io/Project.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorProjectSettings.cpp",
       "include": "platform/AppPaths.hpp",
       "target": "Windows",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorProjectSettings.cpp includes \"platform/AppPaths.hpp\": Qt may not depend on Windows (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorProjectSettings.cpp includes \"platform/AppPaths.hpp\": cross-system include must use GoSurvey/Windows/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorProjectSettings.cpp",
       "include": "util/PlotScales.hpp",
       "target": "Document",
       "rule": "forbidden dependency",
-      "message": "src/qt/EditorProjectSettings.cpp includes \"util/PlotScales.hpp\": Qt may not depend on Document (forbidden dependency)"
+      "message": "src/qt/EditorProjectSettings.cpp includes \"util/PlotScales.hpp\": GoSurveyEditor may not depend on Document (forbidden dependency)"
+    },
+    {
+      "file": "src/qt/EditorProperties.cpp",
+      "include": "EditorWindow.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorProperties.cpp includes \"EditorWindow.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorProperties.cpp",
+      "include": "EditorChrome.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorProperties.cpp includes \"EditorChrome.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorProperties.cpp",
+      "include": "EditorViewport.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorProperties.cpp includes \"EditorViewport.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorProperties.cpp",
+      "include": "QtAccent.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorProperties.cpp includes \"QtAccent.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorProperties.cpp",
+      "include": "TopographicArtwork.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorProperties.cpp includes \"TopographicArtwork.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorProperties.cpp",
       "include": "AlignmentStyle.hpp",
       "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorProperties.cpp includes \"AlignmentStyle.hpp\": Qt may not depend on Commands (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorProperties.cpp includes \"AlignmentStyle.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorProperties.cpp",
       "include": "alignment/AlignmentDesign.hpp",
       "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorProperties.cpp includes \"alignment/AlignmentDesign.hpp\": Qt may not depend on Survey (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorProperties.cpp includes \"alignment/AlignmentDesign.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorProperties.cpp",
       "include": "CadColor.hpp",
       "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorProperties.cpp includes \"CadColor.hpp\": Qt may not depend on Commands (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorProperties.cpp includes \"CadColor.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorProperties.cpp",
       "include": "CadCoordinateFrame.hpp",
       "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorProperties.cpp includes \"CadCoordinateFrame.hpp\": Qt may not depend on Commands (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorProperties.cpp includes \"CadCoordinateFrame.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorProperties.cpp",
       "include": "CadLinetype.hpp",
       "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorProperties.cpp includes \"CadLinetype.hpp\": Qt may not depend on Commands (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorProperties.cpp includes \"CadLinetype.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorProperties.cpp",
       "include": "CadPropertyEdit.hpp",
       "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorProperties.cpp includes \"CadPropertyEdit.hpp\": Qt may not depend on Commands (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorProperties.cpp includes \"CadPropertyEdit.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorProperties.cpp",
       "include": "CadUiStyleWidgets.hpp",
       "target": "Document",
       "rule": "forbidden dependency",
-      "message": "src/qt/EditorProperties.cpp includes \"CadUiStyleWidgets.hpp\": Qt may not depend on Document (forbidden dependency)"
+      "message": "src/qt/EditorProperties.cpp includes \"CadUiStyleWidgets.hpp\": GoSurveyEditor may not depend on Document (forbidden dependency)"
     },
     {
       "file": "src/qt/EditorProperties.cpp",
-      "include": "util/brep.hpp",
-      "target": "Geometry",
+      "include": "GoSurvey/Core/AngleFormat.hpp",
+      "target": "Core",
       "rule": "forbidden dependency",
-      "message": "src/qt/EditorProperties.cpp includes \"util/brep.hpp\": Qt may not depend on Geometry (forbidden dependency)"
+      "message": "src/qt/EditorProperties.cpp includes \"GoSurvey/Core/AngleFormat.hpp\": GoSurveyEditor may not depend on Core (forbidden dependency)"
     },
     {
       "file": "src/qt/EditorProperties.cpp",
-      "include": "util/geom2d.hpp",
-      "target": "Geometry",
+      "include": "GoSurvey/Core/NumFormat.hpp",
+      "target": "Core",
       "rule": "forbidden dependency",
-      "message": "src/qt/EditorProperties.cpp includes \"util/geom2d.hpp\": Qt may not depend on Geometry (forbidden dependency)"
+      "message": "src/qt/EditorProperties.cpp includes \"GoSurvey/Core/NumFormat.hpp\": GoSurveyEditor may not depend on Core (forbidden dependency)"
     },
     {
       "file": "src/qt/EditorRibbon.cpp",
@@ -2677,150 +2642,241 @@
     },
     {
       "file": "src/qt/EditorWindow.cpp",
+      "include": "EditorWindow.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"EditorWindow.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorWindow.cpp",
+      "include": "EditorViewFrameDialog.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"EditorViewFrameDialog.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorWindow.cpp",
+      "include": "EditorSheetsDialog.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"EditorSheetsDialog.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorWindow.cpp",
+      "include": "EditorSampleLinesDialog.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"EditorSampleLinesDialog.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorWindow.cpp",
+      "include": "EditorSectionSheetsDialog.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"EditorSectionSheetsDialog.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorWindow.cpp",
+      "include": "DrawingDocumentTabBar.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"DrawingDocumentTabBar.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorWindow.cpp",
+      "include": "StylePreview.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"StylePreview.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorWindow.cpp",
+      "include": "QtAccent.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"QtAccent.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorWindow.cpp",
+      "include": "EditorChrome.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"EditorChrome.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorWindow.cpp",
+      "include": "QtAppearance.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"QtAppearance.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorWindow.cpp",
+      "include": "TopographicArtwork.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"TopographicArtwork.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorWindow.cpp",
+      "include": "EditorViewport.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"EditorViewport.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorWindow.cpp",
+      "include": "AdjustmentWindow.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"AdjustmentWindow.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorWindow.cpp",
+      "include": "QtText.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"QtText.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorWindow.cpp",
+      "include": "PdfWindow.hpp",
+      "target": "Qt",
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"PdfWindow.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorWindow.cpp",
       "include": "PdfPlot.hpp",
       "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"PdfPlot.hpp\": Qt may not depend on IO (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"PdfPlot.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "SurveyPoints.hpp",
       "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"SurveyPoints.hpp\": Qt may not depend on Survey (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "CadBlocks.hpp",
       "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"CadBlocks.hpp\": Qt may not depend on Commands (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"CadBlocks.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "DwgIo.hpp",
       "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"DwgIo.hpp\": Qt may not depend on IO (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"DwgIo.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "GsIo.hpp",
       "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"GsIo.hpp\": Qt may not depend on IO (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"GsIo.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "AppPaths.hpp",
       "target": "Windows",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"AppPaths.hpp\": Qt may not depend on Windows (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorWindow.cpp",
-      "include": "geo/CoordinateSystems.hpp",
-      "target": "Geometry",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"geo/CoordinateSystems.hpp\": Qt may not depend on Geometry (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"AppPaths.hpp\": cross-system include must use GoSurvey/Windows/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "UserPrefs.hpp",
       "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"UserPrefs.hpp\": Qt may not depend on IO (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"UserPrefs.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "ViewportZoomScale.hpp",
       "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"ViewportZoomScale.hpp\": Qt may not depend on Commands (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"ViewportZoomScale.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "RecentDrawings.hpp",
       "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"RecentDrawings.hpp\": Qt may not depend on IO (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"RecentDrawings.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "ThumbnailCache.hpp",
       "target": "Windows",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"ThumbnailCache.hpp\": Qt may not depend on Windows (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorWindow.cpp",
-      "include": "WhatsNewLogic.hpp",
-      "target": "GoSurveyEditor",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"WhatsNewLogic.hpp\": Qt may not depend on GoSurveyEditor (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"ThumbnailCache.hpp\": cross-system include must use GoSurvey/Windows/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "Project.hpp",
       "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"Project.hpp\": Qt may not depend on IO (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"Project.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "update/UpdateService.hpp",
       "target": "Network",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"update/UpdateService.hpp\": Qt may not depend on Network (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"update/UpdateService.hpp\": cross-system include must use GoSurvey/Network/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "telemetry/TelemetryService.hpp",
       "target": "Network",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"telemetry/TelemetryService.hpp\": Qt may not depend on Network (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"telemetry/TelemetryService.hpp\": cross-system include must use GoSurvey/Network/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "platform/HttpFetch.hpp",
       "target": "Windows",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"platform/HttpFetch.hpp\": Qt may not depend on Windows (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"platform/HttpFetch.hpp\": cross-system include must use GoSurvey/Windows/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "ProjectPoints.hpp",
       "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"ProjectPoints.hpp\": Qt may not depend on Commands (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"ProjectPoints.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "ProjectWarnings.hpp",
       "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"ProjectWarnings.hpp\": Qt may not depend on Commands (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"ProjectWarnings.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "util/PlotScales.hpp",
       "target": "Document",
       "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"util/PlotScales.hpp\": Qt may not depend on Document (forbidden dependency)"
+      "message": "src/qt/EditorWindow.cpp includes \"util/PlotScales.hpp\": GoSurveyEditor may not depend on Document (forbidden dependency)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "MtextRichFormat.hpp",
       "target": "Document",
       "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"MtextRichFormat.hpp\": Qt may not depend on Document (forbidden dependency)"
+      "message": "src/qt/EditorWindow.cpp includes \"MtextRichFormat.hpp\": GoSurveyEditor may not depend on Document (forbidden dependency)"
     },
     {
       "file": "src/qt/EditorWindow.cpp",
       "include": "ToolspaceCatalog.hpp",
       "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorWindow.cpp includes \"ToolspaceCatalog.hpp\": Qt may not depend on Commands (forbidden dependency)"
+      "rule": "private-header include",
+      "message": "src/qt/EditorWindow.cpp includes \"ToolspaceCatalog.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorWindow.hpp",
@@ -3159,13 +3215,6 @@
       "message": "src/render/ViewportRenderer.cpp includes \"PaperSpace.hpp\": Renderer may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/render/ViewportRenderer.cpp",
-      "include": "geom2d.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/render/ViewportRenderer.cpp includes \"geom2d.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
       "file": "src/render/ViewportRenderer.hpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
@@ -3229,20 +3278,6 @@
       "message": "src/telemetry/TelemetryService.cpp includes \"HttpFetch.hpp\": Network may not depend on Windows (forbidden dependency)"
     },
     {
-      "file": "src/traverse/TraverseCalc.cpp",
-      "include": "../geo/EcefTransform.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/traverse/TraverseCalc.cpp includes \"../geo/EcefTransform.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
-      "file": "src/traverse/TraverseLeastSquares.cpp",
-      "include": "../geo/EcefTransform.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/traverse/TraverseLeastSquares.cpp includes \"../geo/EcefTransform.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
       "file": "src/traverse/TraverseReport.cpp",
       "include": "../io/PlotFont.hpp",
       "target": "IO",
@@ -3271,34 +3306,6 @@
       "message": "src/update/UpdateService.cpp includes \"HttpFetch.hpp\": Network may not depend on Windows (forbidden dependency)"
     },
     {
-      "file": "src/util/AcisSatParser.cpp",
-      "include": "nurbs.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/util/AcisSatParser.cpp includes \"nurbs.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
-      "file": "src/util/AcisSatParser.hpp",
-      "include": "brep.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/util/AcisSatParser.hpp includes \"brep.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
-      "file": "src/util/AcisSatWriter.cpp",
-      "include": "brep.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/util/AcisSatWriter.cpp includes \"brep.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
-      "file": "src/util/AcisSatWriter.cpp",
-      "include": "nurbs.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/util/AcisSatWriter.cpp includes \"nurbs.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
       "file": "src/util/cadblock.hpp",
       "include": "CadEntities.hpp",
       "target": "Commands",
@@ -3321,24 +3328,10 @@
     },
     {
       "file": "src/util/cadpiperun.hpp",
-      "include": "brep.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/util/cadpiperun.hpp includes \"brep.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
-      "file": "src/util/cadpiperun.hpp",
       "include": "cadsolid.hpp",
       "target": "Renderer",
       "rule": "forbidden dependency",
       "message": "src/util/cadpiperun.hpp includes \"cadsolid.hpp\": Document may not depend on Renderer (forbidden dependency)"
-    },
-    {
-      "file": "src/util/cadsolid.hpp",
-      "include": "brep.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/util/cadsolid.hpp includes \"brep.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
     },
     {
       "file": "src/util/docinvariants.cpp",
@@ -3346,13 +3339,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/util/docinvariants.cpp includes \"CadCommands.hpp\": Debug may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/util/gltfimport.cpp",
-      "include": "meshgeom.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/util/gltfimport.cpp includes \"meshgeom.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
     },
     {
       "file": "src/util/pointcloudcache.cpp",
@@ -3390,20 +3376,6 @@
       "message": "src/util/pointcloudcache.cpp includes \"io/CadPointCloudLaz.hpp\": PointCloud may not depend on IO (forbidden dependency)"
     },
     {
-      "file": "src/util/solidpick.hpp",
-      "include": "brep.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/util/solidpick.hpp includes \"brep.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
-      "file": "src/util/stlimport.cpp",
-      "include": "meshgeom.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/util/stlimport.cpp includes \"meshgeom.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
       "file": "src/viewport/CadRubberPreview.cpp",
       "include": "CadBlocks.hpp",
       "target": "Commands",
@@ -3433,13 +3405,6 @@
     },
     {
       "file": "src/viewport/CadRubberPreview.cpp",
-      "include": "geom2d.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/viewport/CadRubberPreview.cpp includes \"geom2d.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
-      "file": "src/viewport/CadRubberPreview.cpp",
       "include": "util/cadpiperun.hpp",
       "target": "Document",
       "rule": "private-header include",
@@ -3461,13 +3426,6 @@
     },
     {
       "file": "src/viewport/CadSnap.cpp",
-      "include": "geom2d.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/viewport/CadSnap.cpp includes \"geom2d.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
-    },
-    {
-      "file": "src/viewport/CadSnap.cpp",
       "include": "util/cadblock.hpp",
       "target": "Document",
       "rule": "private-header include",
@@ -3479,13 +3437,6 @@
       "target": "Document",
       "rule": "private-header include",
       "message": "src/viewport/CadSnap.cpp includes \"util/cadpiperun.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/viewport/CadSnap.cpp",
-      "include": "util/curveintersect.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/viewport/CadSnap.cpp includes \"util/curveintersect.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
     },
     {
       "file": "src/viewport/CadSnap.cpp",
@@ -3521,13 +3472,6 @@
       "target": "Commands",
       "rule": "private-header include",
       "message": "src/viewport/TransformPreview.cpp includes \"CadCommands.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
-    },
-    {
-      "file": "src/viewport/TransformPreview.cpp",
-      "include": "geom2d.hpp",
-      "target": "Geometry",
-      "rule": "private-header include",
-      "message": "src/viewport/TransformPreview.cpp includes \"geom2d.hpp\": cross-system include must use GoSurvey/Geometry/ public headers (private-header include)"
     },
     {
       "file": "src/viewport/TransformPreview.cpp",
