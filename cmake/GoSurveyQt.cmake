@@ -90,17 +90,6 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/FailureReport.cpp
   src/render/ViewportRenderer.cpp
   src/pdf/PdfAttach.cpp
-  src/pdf/PdfDocument.cpp
-  src/pdf/PdfDimAudit.cpp
-  src/pdf/PdfAlign.cpp
-  src/pdf/PdfDiff.cpp
-  src/pdf/PdfViewerCore.cpp
-  src/pdf/PdfAnnotate.cpp
-  src/pdf/PdfMeasure.cpp
-  src/pdf/PdfScaleCheck.cpp
-  src/pdf/PdfCoordExtract.cpp
-  src/pdf/PdfRaw.cpp
-  src/pdf/PdfSplit.cpp
   src/io/PdfPlot.cpp
   src/io/PlotStyleTable.cpp
   src/traverse/TraverseReport.cpp
@@ -118,7 +107,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/platform/FailureReportUi.cpp
 )
 target_link_libraries(gosurvey_qt_frontend PUBLIC
-  gosurvey_domain Qt6::Widgets Qt6::OpenGLWidgets OpenGL::GL glew_static pdfium
+  gosurvey_domain GoSurvey::Pdf Qt6::Widgets Qt6::OpenGLWidgets OpenGL::GL glew_static pdfium
   comdlg32 ole32 shell32 Windowscodecs winhttp bcrypt ws2_32 advapi32)
 target_include_directories(gosurvey_qt_frontend PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/qt")
 target_include_directories(gosurvey_qt_frontend PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry")
