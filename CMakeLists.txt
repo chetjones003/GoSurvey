@@ -529,6 +529,18 @@ target_compile_features(gosurvey_geometry PUBLIC cxx_std_17)
 target_link_libraries(gosurvey_geometry PUBLIC GoSurvey::Math GoSurvey::Core)
 gosurvey_target_warnings(gosurvey_geometry)
 
+# The existing Survey alignment model is the concrete provider for Terrain's public sampling
+# API. Keep this small provider independently linkable until Survey's full carve-out is complete.
+add_library(gosurvey_survey_alignment_model STATIC
+  src/alignment/Alignment.cpp
+  src/alignment/Clothoid.cpp)
+add_library(GoSurvey::SurveyAlignmentModel ALIAS gosurvey_survey_alignment_model)
+target_include_directories(gosurvey_survey_alignment_model
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include>"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_features(gosurvey_survey_alignment_model PUBLIC cxx_std_17)
+gosurvey_target_warnings(gosurvey_survey_alignment_model)
+
 # GoSurvey::Terrain — T2 Domain library (issue #1245). The pure surface/TIN and grading
 # algorithms compile independently of the application layer. Physical relocation is isolated
 # from library creation and the public Survey alignment seam.
@@ -546,10 +558,9 @@ add_library(gosurvey_terrain STATIC
   src/util/watershed.cpp)
 add_library(GoSurvey::Terrain ALIAS gosurvey_terrain)
 target_include_directories(gosurvey_terrain
-  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/terrain/include>"
-  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include")
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/terrain/include>")
 target_compile_features(gosurvey_terrain PUBLIC cxx_std_17)
-target_link_libraries(gosurvey_terrain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry)
+target_link_libraries(gosurvey_terrain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::SurveyAlignmentModel)
 gosurvey_target_warnings(gosurvey_terrain)
 
 # GoSurvey::Events — toolkit-neutral Foundation library (boundary seal #1287). The public
@@ -759,7 +770,6 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/update/UpdateCheck.cpp
 
   # Civil alignments (REQ-480..484, ADR-075, issue #121): exact tangent/curve geometry, stationing, queries
-  src/alignment/Alignment.cpp
   src/alignment/AlignmentLabels.cpp
   src/alignment/AlignmentReport.cpp
   src/alignment/AlignmentEdit.cpp
@@ -772,7 +782,6 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/alignment/AlignmentDesign.cpp
   src/alignment/AlignmentTables.cpp
   src/alignment/AlignmentDisplayCache.cpp
-  src/alignment/Clothoid.cpp
   src/util/gltfimport.cpp
   src/util/stlimport.cpp
   # BENCH scene/statistics implementation is compiled by GoSurvey::Debug.
@@ -1574,11 +1583,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/SurfaceProfileTests.cpp
     tests/SurfaceStyleTests.cpp
     tests/SurfaceRebuildLifetimeTests.cpp
-    tests/FeatureLineStationsTests.cpp
-    # Real Survey geometry builds the fixture for the existing feature-line sampling test.
-    # Survey's library is introduced by its later carve-out; no application/Qt code is needed.
-    src/alignment/Alignment.cpp
-    src/alignment/Clothoid.cpp)
+    tests/FeatureLineStationsTests.cpp)
   target_include_directories(GoSurveyTerrainTests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/util"
@@ -1588,7 +1593,6 @@ if(GOSURVEY_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/render"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/pdf"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/network/include"
     ${NLOHMANN_JSON_INCLUDE})
   set_target_properties(GoSurveyTerrainTests PROPERTIES
