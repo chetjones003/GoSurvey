@@ -37,7 +37,6 @@
 #include "util/gridsurface.hpp"    // REQ-137
 #include "util/surfacequery.hpp"   // REQ-137
 #include "util/daylight.hpp"       // REQ-398 side slope grading — the daylight solver
-#include <GoSurvey/Geometry/curveintersect.hpp>  // REQ-062 analytic intersections; EXTEND (TASK-096) reuses this over TRIM's tessellation
 #include "io/LandXmlIo.hpp"  // issue #1002: EXPORTLANDXML
 #include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
 #include "util/gltfimport.hpp"

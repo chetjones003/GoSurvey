@@ -88,6 +88,29 @@ class FindViolationsTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertIn("raised", result[0])
 
+    def test_baseline_cap_can_transfer_with_a_pure_rename(self):
+        current = {"src/new/big.cpp": 3500}
+        baseline = {"src/new/big.cpp": 3500}
+        base_baseline = {"src/old/big.cpp": 3500}
+        renamed = [("src/old/big.cpp", "src/new/big.cpp")]
+        self.assertEqual(gate.find_violations(current, baseline, base_baseline, renamed), [])
+
+    def test_rename_cannot_raise_the_transferred_cap(self):
+        current = {"src/new/big.cpp": 3600}
+        baseline = {"src/new/big.cpp": 3500}
+        base_baseline = {"src/old/big.cpp": 3500}
+        renamed = [("src/old/big.cpp", "src/new/big.cpp")]
+        result = gate.find_violations(current, baseline, base_baseline, renamed)
+        self.assertTrue(any("grew" in item for item in result))
+
+    def test_rename_cannot_raise_baseline_entry(self):
+        current = {"src/new/big.cpp": 3600}
+        baseline = {"src/new/big.cpp": 3600}
+        base_baseline = {"src/old/big.cpp": 3500}
+        renamed = [("src/old/big.cpp", "src/new/big.cpp")]
+        result = gate.find_violations(current, baseline, base_baseline, renamed)
+        self.assertTrue(any("baseline entry added" in item for item in result))
+
 
 def _write(root, relative, lines):
     path = root / relative
@@ -182,6 +205,14 @@ class FixtureTreeTests(unittest.TestCase):
         self._write_baseline({"src/big.cpp": 3500, "src/new.cpp": 3001})
         self._commit("pr")
         self.assertEqual(self._gate(), 1)
+
+    def test_pure_rename_transfers_existing_oversized_cap(self):
+        new_file = self.root / "src" / "geometry" / "big.cpp"
+        new_file.parent.mkdir(parents=True)
+        (self.root / "src" / "big.cpp").rename(new_file)
+        self._write_baseline({"src/geometry/big.cpp": 3500})
+        self._commit("move oversized file")
+        self.assertEqual(self._gate(), 0)
 
     def _bootstrap_base(self):
         """Make the base commit have no baseline file, as beta does before this gate merges."""
