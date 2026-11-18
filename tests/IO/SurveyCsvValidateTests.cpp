@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "io/SurveyCsvValidate.hpp"
+#include "io/src/SurveyCsvValidate.hpp"
 
 #include <string>
 #include <unordered_set>

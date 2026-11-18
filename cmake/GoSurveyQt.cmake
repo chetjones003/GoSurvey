@@ -90,8 +90,8 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/FailureReport.cpp
   src/renderer/src/ViewportRenderer.cpp
   src/pdf/src/PdfAttach.cpp
-  src/io/PdfPlot.cpp
-  src/io/PlotStyleTable.cpp
+  src/io/src/PdfPlot.cpp
+  src/io/src/PlotStyleTable.cpp
   src/platform/WinFileDialogs.cpp
   src/platform/MapTilePlatform.cpp
   src/platform/HttpFetch.cpp

@@ -16,7 +16,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "util/gltfimport.hpp"
+#include "io/src/gltfimport.hpp"
 
 using Catch::Approx;
 using json = nlohmann::json;

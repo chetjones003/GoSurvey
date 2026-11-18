@@ -15,7 +15,7 @@
 #include <thread>
 #include <vector>
 
-#include "io/CadPointCloudPts.hpp"
+#include "io/src/CadPointCloudPts.hpp"
 
 using Catch::Approx;
 

@@ -6,7 +6,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "util/PointFileExt.hpp"
+#include "io/src/PointFileExt.hpp"
 
 #include <string_view>
 

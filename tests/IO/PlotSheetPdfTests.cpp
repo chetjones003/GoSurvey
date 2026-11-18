@@ -8,9 +8,9 @@
 
 #include "commands/CadCommands.hpp"
 #include "commands/PaperSpace.hpp"
-#include "io/PdfPlot.hpp"
-#include "io/PlotSheetTransform.hpp"
-#include "io/PlotStyleTable.hpp"
+#include "io/src/PdfPlot.hpp"
+#include "io/src/PlotSheetTransform.hpp"
+#include "io/src/PlotStyleTable.hpp"
 
 #include <fpdf_edit.h>
 #include <fpdfview.h>

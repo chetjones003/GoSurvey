@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "io/PlotFont.hpp"
+#include "io/src/PlotFont.hpp"
 
 // REQ-049: pure font-name/encoding helpers behind the plot's TrueType text path.
 

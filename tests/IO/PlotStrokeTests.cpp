@@ -7,7 +7,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "commands/CadLinetype.hpp"
-#include "io/PlotStroke.hpp"
+#include "io/src/PlotStroke.hpp"
 
 #include <cmath>
 #include <vector>

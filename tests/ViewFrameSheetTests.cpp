@@ -18,8 +18,8 @@
 #include "PaperSpace.hpp"
 #include "GoSurvey/Survey/AlignmentModel.hpp"
 #include "GoSurvey/Survey/AlignmentViewFrames.hpp"
-#include "io/DwgIo.hpp"
-#include "io/PdfPlot.hpp"
+#include "io/src/DwgIo.hpp"
+#include "io/src/PdfPlot.hpp"
 #include <GoSurvey/Renderer/ViewportProjection.hpp>
 
 // PDFium last, as the other PDF readback tests do: its headers must not precede the project's own.

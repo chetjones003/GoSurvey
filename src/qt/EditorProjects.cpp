@@ -10,9 +10,9 @@
 #include "ProjectPack.hpp"
 #include "ProjectTurnover.hpp"
 #include "ProjectWarnings.hpp"
-#include "io/ProjectFiles.hpp"
-#include "io/ProjectPack.hpp"
-#include "io/ProjectTurnover.hpp"
+#include "io/src/ProjectFiles.hpp"
+#include "io/src/ProjectPack.hpp"
+#include "io/src/ProjectTurnover.hpp"
 #include "RecentDrawings.hpp"
 #include "AppPaths.hpp"
 #include <QApplication>

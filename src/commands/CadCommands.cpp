@@ -20,12 +20,12 @@
 #include "GoSurvey/PointCloud/Octree.hpp"  // REQ-171/172 out-of-core octree (ADR-060)
 #include "GoSurvey/IO/PointCloudCacheImport.hpp"   // ADR-060 .gscloud out-of-core cache (streams the E57 internally)
 #include "GoSurvey/PointCloud/CylinderFit.hpp"       // REQ-347 EXTRACTCENTERLINE's least-squares cylinder-axis fit
-#include "io/CadPointCloudE57.hpp"    // QuickPointCountEstimate, for the import progress bar's total
-#include "io/CadPointCloudPts.hpp"    // REQ-172 PTS increment — reader/writer, same contract as E57
-#include "io/CadPointCloudPtx.hpp"    // REQ-172 PTX increment — reader/writer, same contract as E57
-#include "io/CadPointCloudLas.hpp"    // REQ-172 LAS increment — reader/writer, same contract as E57
-#include "io/CadPointCloudLaz.hpp"    // REQ-172 LAZ increment — reader/writer, same contract as E57
-#include "io/RasterImage.hpp"        // REQ-511 readable model-space raster attachments
+#include "io/src/CadPointCloudE57.hpp"    // QuickPointCountEstimate, for the import progress bar's total
+#include "io/src/CadPointCloudPts.hpp"    // REQ-172 PTS increment — reader/writer, same contract as E57
+#include "io/src/CadPointCloudPtx.hpp"    // REQ-172 PTX increment — reader/writer, same contract as E57
+#include "io/src/CadPointCloudLas.hpp"    // REQ-172 LAS increment — reader/writer, same contract as E57
+#include "io/src/CadPointCloudLaz.hpp"    // REQ-172 LAZ increment — reader/writer, same contract as E57
+#include "io/src/RasterImage.hpp"        // REQ-511 readable model-space raster attachments
 #include <GoSurvey/Terrain/tinbuild.hpp>
 #include <GoSurvey/Terrain/contourgen.hpp>  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
 #include <GoSurvey/Terrain/surfaceanalysis.hpp>  // REQ-072 banding + slope arrows (ADR-036 (g)) — pure, like contourgen
@@ -37,10 +37,10 @@
 #include <GoSurvey/Terrain/gridsurface.hpp>    // REQ-137
 #include <GoSurvey/Terrain/surfacequery.hpp>   // REQ-137
 #include <GoSurvey/Terrain/daylight.hpp>       // REQ-398 side slope grading — the daylight solver
-#include "io/LandXmlIo.hpp"  // issue #1002: EXPORTLANDXML
-#include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
-#include "util/gltfimport.hpp"
-#include "util/stlimport.hpp"
+#include "io/src/LandXmlIo.hpp"  // issue #1002: EXPORTLANDXML
+#include "io/src/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
+#include "io/src/gltfimport.hpp"
+#include "io/src/stlimport.hpp"
 #include "DwgMeshConvert.hpp"
 #include "DwgIo.hpp"
 #include "WinFileDialogs.hpp"

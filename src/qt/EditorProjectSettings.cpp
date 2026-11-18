@@ -3,7 +3,7 @@
 
 #include "ProjectSettings.hpp"
 #include <GoSurvey/Survey/CoordinateSystems.hpp>
-#include "io/Project.hpp"
+#include "io/src/Project.hpp"
 #include "platform/AppPaths.hpp"
 #include "GoSurvey/Document/PlotScales.hpp"
 

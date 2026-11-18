@@ -1,4 +1,4 @@
-#include "io/CadPointCloudLaz.hpp"
+#include "io/src/CadPointCloudLaz.hpp"
 
 #include "laszip_api.h"  // third_party/laszip/dll/laszip_api.h — vendored LASzip's public C API
 

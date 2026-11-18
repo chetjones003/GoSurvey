@@ -1,6 +1,6 @@
 #include <GoSurvey/IO/TraverseReportExport.hpp>
 #include <GoSurvey/Pdf/PdfDocument.hpp>
-#include "io/PlotFont.hpp"
+#include "io/src/PlotFont.hpp"
 
 #include <fpdf_edit.h>
 #include <fpdf_save.h>

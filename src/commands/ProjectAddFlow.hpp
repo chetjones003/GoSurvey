@@ -12,7 +12,7 @@
 
 #include "CadCommands.hpp"
 #include <GoSurvey/Survey/DrawingConversion.hpp>
-#include "io/ProjectAddDrawing.hpp"
+#include "io/src/ProjectAddDrawing.hpp"
 
 #include <map>
 #include <memory>

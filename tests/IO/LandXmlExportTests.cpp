@@ -10,8 +10,8 @@
 #include <pugixml.hpp>
 
 #include "CadCommands.hpp"
-#include "io/DwgIo.hpp"
-#include "io/LandXmlIo.hpp"
+#include "io/src/DwgIo.hpp"
+#include "io/src/LandXmlIo.hpp"
 
 #include <cmath>
 #include <filesystem>
