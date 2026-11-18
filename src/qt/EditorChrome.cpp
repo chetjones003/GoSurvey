@@ -2,7 +2,7 @@
 #include <QEnterEvent>
 #include <QMouseEvent>
 #include "EditorWindow.hpp"
-#include "CommandBar.hpp"
+#include <GoSurvey/UI/CommandBar.hpp>
 #include "TopographicArtwork.hpp"
 #include <QApplication>
 #include <QMetaObject>

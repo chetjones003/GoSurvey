@@ -1,4 +1,4 @@
-#include "FailureReportUi.hpp"
+#include <GoSurvey/UI/FailureReportDialog.hpp>
 
 #include "Version.hpp"
 

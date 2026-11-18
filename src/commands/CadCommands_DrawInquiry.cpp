@@ -8,7 +8,7 @@
 #include "io/src/DataExtract.hpp"
 #include "GoSurvey/Document/cadtablestyle.hpp"
 #include "SpreadsheetIo.hpp"
-#include "platform/WinFileDialogs.hpp"
+#include <GoSurvey/UI/FileDialogs.hpp>
 #include <GoSurvey/Geometry/geom2d.hpp>
 #include <GoSurvey/Geometry/spline.hpp>
 

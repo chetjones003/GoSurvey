@@ -2,7 +2,7 @@
 #include "FailureReport.hpp"
 #include "QtAccent.hpp"
 #include "EditorWindow.hpp"  // QtAsset
-#include "FailureReportUi.hpp"
+#include <GoSurvey/UI/FailureReportDialog.hpp>
 #include "StartupFailure.hpp"
 #include <GoSurvey/Renderer/ViewportRenderer.hpp>
 #include <QApplication>

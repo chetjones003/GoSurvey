@@ -29,7 +29,7 @@
 #include "GoSurvey/Document/cadtable.hpp"
 #include "GoSurvey/Document/cadtablestyle.hpp"
 #include "SpreadsheetIo.hpp"
-#include "WinFileDialogs.hpp"
+#include <GoSurvey/UI/FileDialogs.hpp>
 #include <GoSurvey/Core/StringUtil.hpp>
 #include <GoSurvey/Core/NumFormat.hpp>
 

@@ -43,7 +43,7 @@
 #include "io/src/stlimport.hpp"
 #include "DwgMeshConvert.hpp"
 #include "DwgIo.hpp"
-#include "WinFileDialogs.hpp"
+#include <GoSurvey/UI/FileDialogs.hpp>
 #include <GoSurvey/Core/NumFormat.hpp>
 #include "GoSurvey/Document/PlotScales.hpp"  // VPSCALE (REQ-027): PlotScaleLabel / metric-ratio helpers
 #include "GoSurvey/Document/MtextRichFormat.hpp"

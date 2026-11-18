@@ -2,7 +2,7 @@
 
 #include "AppPaths.hpp"
 #include "CrashBuildInfo.hpp"
-#include "FailureReportUi.hpp"
+#include <GoSurvey/UI/FailureReportDialog.hpp>
 #include "HttpFetch.hpp"
 #include "TelemetryPing.hpp"
 #include "UserPrefs.hpp"

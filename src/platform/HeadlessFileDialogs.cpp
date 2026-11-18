@@ -17,7 +17,7 @@
 // implemented anyway, because a seam that covers most of a header is a link error waiting for
 // whichever command grows a new call.
 
-#include "WinFileDialogs.hpp"
+#include <GoSurvey/UI/FileDialogs.hpp>
 
 #include "HeadlessFileDialogs.hpp"
 
