@@ -150,61 +150,13 @@ def _proven_source_renames(reference_root, candidate_root):
     return renames
 
 
-def _changed_source_paths(reference_root, candidate_root):
-    """Return candidate source paths edited since the reference, or None on error."""
-    try:
-        reference_head = subprocess.check_output(
-            ["git", "-C", str(reference_root), "rev-parse", "HEAD"],
-            text=True, stderr=subprocess.DEVNULL).strip()
-        candidate_head = subprocess.check_output(
-            ["git", "-C", str(candidate_root), "rev-parse", "HEAD"],
-            text=True, stderr=subprocess.DEVNULL).strip()
-        changes = subprocess.check_output(
-            ["git", "-C", str(candidate_root), "diff", "--name-status", "-z",
-             "--find-renames=100%", reference_head, candidate_head],
-            text=True, encoding="utf-8", errors="surrogateescape", stderr=subprocess.DEVNULL)
-        working_changes = subprocess.check_output(
-            ["git", "-C", str(candidate_root), "diff", "--name-only", "-z", "HEAD"],
-            text=True, encoding="utf-8", errors="surrogateescape", stderr=subprocess.DEVNULL)
-        untracked = subprocess.check_output(
-            ["git", "-C", str(candidate_root), "ls-files", "--others", "-z"],
-            text=True, encoding="utf-8", errors="surrogateescape", stderr=subprocess.DEVNULL)
-    except (OSError, subprocess.CalledProcessError):
-        return None
-
-    changed = set()
-    fields = changes.split("\0")
-    index = 0
-    while index < len(fields) - 1:
-        status = fields[index]
-        index += 1
-        if status.startswith("R"):
-            if index + 1 >= len(fields):
-                return None
-            _, new_path = fields[index:index + 2]
-            index += 2
-            # --find-renames=100% ensures this is an unchanged move.
-            continue
-        if status.startswith("C"):
-            if index + 1 >= len(fields):
-                return None
-            index += 1
-            changed.add(fields[index])
-        else:
-            changed.add(fields[index])
-        index += 1
-    changed.update(path for path in working_changes.split("\0") if path)
-    changed.update(path for path in untracked.split("\0") if path)
-    candidate_sources = {
-        path.relative_to(candidate_root).as_posix()
-        for path in (candidate_root / "src").rglob("*")
-        if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES
-    }
-    return changed & candidate_sources
+def _include_key(match):
+    include = match.group("quoted") or match.group("angled") or match.group("macro")
+    delimiter = '"' if match.group("quoted") else "<" if match.group("angled") else None
+    return delimiter, include
 
 
-def check(root, mapping_root=None, source_renames=None, changed_sources=None,
-          reference_root=None):
+def check(root, mapping_root=None, source_renames=None, reference_root=None):
     root = Path(root).resolve()
     mapping_root = Path(mapping_root or root).resolve()
     mapping_path = mapping_root / "docs/architecture/system-map.json"
@@ -220,9 +172,20 @@ def check(root, mapping_root=None, source_renames=None, changed_sources=None,
         if owner is None:
             unmapped.append(relative)
         clean = INVENTORY._strip_cpp_comments(source.read_text(encoding="utf-8", errors="replace"))
+        reference_source = None
+        reference_include_counts = Counter()
+        if source_renames and reference_root:
+            old_relative = next((old for old, new in source_renames.items()
+                                 if new == relative), relative)
+            possible_reference_source = reference_root / old_relative
+            if possible_reference_source.is_file():
+                reference_source = possible_reference_source
+                reference_clean = INVENTORY._strip_cpp_comments(
+                    reference_source.read_text(encoding="utf-8", errors="replace"))
+                reference_include_counts = Counter(
+                    _include_key(match) for match in INCLUDE.finditer(reference_clean))
         for include_match in INCLUDE.finditer(clean):
-            include = include_match.group("quoted") or include_match.group("angled") or include_match.group("macro")
-            delimiter = '"' if include_match.group("quoted") else '<' if include_match.group("angled") else None
+            delimiter, include = _include_key(include_match)
             if delimiter is None:
                 includes.append({"file": relative, "include": include, "classification": "unmapped"})
                 continue
@@ -240,15 +203,11 @@ def check(root, mapping_root=None, source_renames=None, changed_sources=None,
                 includes.append(result)
                 continue
             include_renames = source_renames
-            reference_source = None
-            if changed_sources is not None and relative in changed_sources:
+            include_key = (delimiter, include)
+            if reference_include_counts[include_key] > 0:
+                reference_include_counts[include_key] -= 1
+            else:
                 include_renames = None
-            if include_renames and reference_root:
-                old_relative = next((old for old, new in include_renames.items()
-                                     if new == relative), relative)
-                possible_reference_source = reference_root / old_relative
-                if possible_reference_source.is_file():
-                    reference_source = possible_reference_source
             target_path = _resolve_include(root, source, include, mapping, include_renames,
                                            reference_root, reference_source)
             result = {"file": relative, "include": include, "classification": "allowed"}
@@ -303,16 +262,11 @@ def main():
     args = parser.parse_args()
     root = args.root.resolve()
     baseline_path = args.baseline if args.baseline.is_absolute() else root / args.baseline
-    changed_sources = None
     path_renames = {}
     if args.reference_root:
         reference_root = args.reference_root.resolve()
-        changed_sources = _changed_source_paths(reference_root, root)
         path_renames = _proven_source_renames(reference_root, root)
-        if changed_sources is None:
-            # Without a trustworthy source diff, do not suppress include growth.
-            path_renames = {}
-    result = check(root, source_renames=path_renames, changed_sources=changed_sources,
+    result = check(root, source_renames=path_renames,
                    reference_root=args.reference_root.resolve() if args.reference_root else None)
     if args.write_baseline:
         baseline_path.parent.mkdir(parents=True, exist_ok=True)
