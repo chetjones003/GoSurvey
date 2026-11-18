@@ -12,7 +12,7 @@
 
 #include "CadEntities.hpp"
 #include <GoSurvey/Geometry/brep.hpp>
-#include "cadsolid.hpp"
+#include <GoSurvey/Document/CadSolidPtr.hpp>
 #include <GoSurvey/Math/ray3d.hpp>
 #include <GoSurvey/Math/ucs.hpp>
 
