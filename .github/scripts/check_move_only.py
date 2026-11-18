@@ -327,8 +327,16 @@ def path_is_under_root(path, root):
     return path.startswith(root.rstrip("/") + "/")
 
 
-def is_cmake_include_root_rewrite(old_line, new_line, old_line_number, new_line_number,
-                                  old_text, new_text, moves):
+def is_cmake_include_root_rewrite(
+    old_line,
+    new_line,
+    old_line_number,
+    new_line_number,
+    old_build_file,
+    old_text,
+    new_text,
+    moves,
+):
     """Allow a target include root to follow a moved public header tree."""
     if old_line_number not in cmake_include_directory_lines(old_text) or (
         new_line_number not in cmake_include_directory_lines(new_text)
@@ -345,9 +353,14 @@ def is_cmake_include_root_rewrite(old_line, new_line, old_line_number, new_line_
     ):
         return False
 
-    old_root = posixpath.normpath(old_match.group("path").replace("\\", "/"))
-    new_root = posixpath.normpath(new_match.group("path").replace("\\", "/"))
-    if old_root == new_root or not new_root.endswith("/include"):
+    cmake_directory = posixpath.dirname(old_build_file) or "."
+    old_root = posixpath.normpath(
+        posixpath.join(cmake_directory, old_match.group("path").replace("\\", "/"))
+    )
+    new_root = posixpath.normpath(
+        posixpath.join(cmake_directory, new_match.group("path").replace("\\", "/"))
+    )
+    if old_root == new_root or posixpath.basename(new_root) != "include":
         return False
     return any(
         path_is_under_root(old_path, old_root) and path_is_under_root(new_path, new_root)
@@ -581,6 +594,7 @@ def check_move_only(root, base_ref, head_ref):
                     new_line,
                     old_line_number,
                     new_line_number,
+                    build_path,
                     old_text,
                     new_text,
                     moves,

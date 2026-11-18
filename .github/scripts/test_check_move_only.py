@@ -394,6 +394,72 @@ class MoveOnlyFixtureTests(unittest.TestCase):
             "src/old/Widget.hpp -> src/new/include/GoSurvey/New/Widget.hpp",
         ])
 
+    def test_cmake_top_level_include_directory_is_public(self):
+        self.write("CMakeLists.txt", (
+            "add_library(app src/old/Widget.cpp)\n"
+            "target_include_directories(app PRIVATE\n"
+            '  "${CMAKE_CURRENT_SOURCE_DIR}/src/old")\n'
+        ))
+        self.commit("configure old public header root")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        self.move("src/old/Widget.hpp", "include/GoSurvey/Widget.hpp")
+        self.write("CMakeLists.txt", (
+            "add_library(app src/old/Widget.cpp)\n"
+            "target_include_directories(app PRIVATE\n"
+            '  "${CMAKE_CURRENT_SOURCE_DIR}/include")\n'
+        ))
+        self.commit("move header under top-level include root")
+
+        self.assertEqual(self.check(), [
+            "src/old/Widget.hpp -> include/GoSurvey/Widget.hpp",
+        ])
+
+    def test_nested_cmake_paths_resolve_from_the_cmake_directory(self):
+        self.write("lib/src/old/Widget.hpp", "#pragma once\n")
+        self.write("lib/CMakeLists.txt", (
+            "add_library(lib src/old/Widget.cpp)\n"
+            "target_include_directories(lib PRIVATE\n"
+            '  "${CMAKE_CURRENT_SOURCE_DIR}/src/old")\n'
+        ))
+        self.commit("configure nested public header root")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        self.move("lib/src/old/Widget.hpp", "lib/src/new/include/GoSurvey/Widget.hpp")
+        self.write("lib/CMakeLists.txt", (
+            "add_library(lib src/old/Widget.cpp)\n"
+            "target_include_directories(lib PRIVATE\n"
+            '  "${CMAKE_CURRENT_SOURCE_DIR}/src/new/include")\n'
+        ))
+        self.commit("move nested public header and include root")
+
+        self.assertEqual(self.check(), [
+            "lib/src/old/Widget.hpp -> lib/src/new/include/GoSurvey/Widget.hpp",
+        ])
+
+    def test_nested_cmake_root_cannot_be_authorized_by_repository_root_move(self):
+        self.write("lib/CMakeLists.txt", (
+            "add_library(lib src/old/Widget.cpp)\n"
+            "target_include_directories(lib PRIVATE\n"
+            '  "${CMAKE_CURRENT_SOURCE_DIR}/src/old")\n'
+        ))
+        self.commit("configure nested public header root")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        self.move("src/old/Widget.hpp", "src/new/include/GoSurvey/Widget.hpp")
+        self.write("lib/CMakeLists.txt", (
+            "add_library(lib src/old/Widget.cpp)\n"
+            "target_include_directories(lib PRIVATE\n"
+            '  "${CMAKE_CURRENT_SOURCE_DIR}/src/new/include")\n'
+        ))
+        self.commit("move root header and update nested include root")
+
+        with self.assertRaisesRegex(ValueError, "moved-file build entry path rewrite"):
+            self.check()
+
     def test_cmake_include_root_cannot_move_to_unrelated_tree(self):
         self.write("CMakeLists.txt", (
             "add_library(app src/old/Widget.cpp)\n"
