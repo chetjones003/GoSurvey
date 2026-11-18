@@ -4572,8 +4572,8 @@
     {
       "path": "src/document/include/GoSurvey/Document/CadSolidPtr.hpp",
       "lines": [
-        9,
-        10
+        27,
+        27
       ],
       "system": "Document",
       "concern": "solid entity storage pointer",
