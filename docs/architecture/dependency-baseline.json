@@ -2,62 +2,6 @@
   "generatedFrom": "beta",
   "violations": [
     {
-      "file": "src/alignment/AlignmentGround.cpp",
-      "include": "util/surfacequery.hpp",
-      "target": "Terrain",
-      "rule": "forbidden dependency",
-      "message": "src/alignment/AlignmentGround.cpp includes \"util/surfacequery.hpp\": Survey may not depend on Terrain (forbidden dependency)"
-    },
-    {
-      "file": "src/alignment/AlignmentReport.hpp",
-      "include": "util/SheetGrid.hpp",
-      "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/alignment/AlignmentReport.hpp includes \"util/SheetGrid.hpp\": Survey may not depend on IO (forbidden dependency)"
-    },
-    {
-      "file": "src/alignment/AlignmentSampleLines.cpp",
-      "include": "util/surfacequery.hpp",
-      "target": "Terrain",
-      "rule": "forbidden dependency",
-      "message": "src/alignment/AlignmentSampleLines.cpp includes \"util/surfacequery.hpp\": Survey may not depend on Terrain (forbidden dependency)"
-    },
-    {
-      "file": "src/alignment/AlignmentSampleLines.cpp",
-      "include": "util/surfacevolume.hpp",
-      "target": "Terrain",
-      "rule": "forbidden dependency",
-      "message": "src/alignment/AlignmentSampleLines.cpp includes \"util/surfacevolume.hpp\": Survey may not depend on Terrain (forbidden dependency)"
-    },
-    {
-      "file": "src/alignment/AlignmentSampleLines.hpp",
-      "include": "util/surfacevolume.hpp",
-      "target": "Terrain",
-      "rule": "forbidden dependency",
-      "message": "src/alignment/AlignmentSampleLines.hpp includes \"util/surfacevolume.hpp\": Survey may not depend on Terrain (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/AlignmentLabelSet.hpp",
-      "include": "alignment/Alignment.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/AlignmentLabelSet.hpp includes \"alignment/Alignment.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/AlignmentLabelSet.hpp",
-      "include": "alignment/AlignmentLabels.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/AlignmentLabelSet.hpp includes \"alignment/AlignmentLabels.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/AlignmentStyle.hpp",
-      "include": "alignment/Alignment.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/AlignmentStyle.hpp includes \"alignment/Alignment.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
       "file": "src/commands/CadBlocks.cpp",
       "include": "CadRubberPreview.hpp",
       "target": "Interaction",
@@ -378,13 +322,6 @@
       "target": "IO",
       "rule": "private-header include",
       "message": "src/commands/CadCommands.hpp includes \"ProjectPack.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
     },
     {
       "file": "src/commands/CadCommands.hpp",
@@ -723,20 +660,6 @@
       "message": "src/commands/TraverseActions.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
     },
     {
-      "file": "src/commands/TraverseActions.hpp",
-      "include": "traverse/TraverseCalc.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/TraverseActions.hpp includes \"traverse/TraverseCalc.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/TraverseActions.hpp",
-      "include": "traverse/TraverseLeastSquares.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/TraverseActions.hpp includes \"traverse/TraverseLeastSquares.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
       "file": "src/commands/ViewportZoomScale.cpp",
       "include": "util/PlotScales.hpp",
       "target": "Document",
@@ -861,20 +784,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/GsIo.cpp includes \"TextStyle.hpp\": IO may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/io/GsIo.cpp",
-      "include": "DimensionStyle.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/io/GsIo.cpp includes \"DimensionStyle.hpp\": IO may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/io/GsIo.cpp",
-      "include": "CadCoordinateFrame.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/io/GsIo.cpp includes \"CadCoordinateFrame.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
       "file": "src/io/GsIo.cpp",
@@ -1164,13 +1073,6 @@
       "message": "src/io/PdfPlot.cpp includes \"util/cadtable.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
     },
     {
-      "file": "src/io/PdfPlot.cpp",
-      "include": "AlignmentStyle.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/io/PdfPlot.cpp includes \"AlignmentStyle.hpp\": IO may not depend on Commands (forbidden dependency)"
-    },
-    {
       "file": "src/io/PlotStyleTable.cpp",
       "include": "CadColor.hpp",
       "target": "Commands",
@@ -1339,48 +1241,6 @@
       "message": "src/qt/AdjustmentWindow.cpp includes \"traverse/TraverseIo.hpp\": Qt may not depend on Survey (forbidden dependency)"
     },
     {
-      "file": "src/qt/AdjustmentWindow.cpp",
-      "include": "traverse/TraverseReport.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/AdjustmentWindow.cpp includes \"traverse/TraverseReport.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/AdjustmentWindow.cpp",
-      "include": "traverse/TraverseCommandLang.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/AdjustmentWindow.cpp includes \"traverse/TraverseCommandLang.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/AdjustmentWindow.cpp",
-      "include": "traverse/FbkImport.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/AdjustmentWindow.cpp includes \"traverse/FbkImport.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/AdjustmentWindow.cpp",
-      "include": "traverse/StarNetImport.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/AdjustmentWindow.cpp includes \"traverse/StarNetImport.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/AdjustmentWindow.cpp",
-      "include": "traverse/Rw5Import.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/AdjustmentWindow.cpp includes \"traverse/Rw5Import.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/AdjustmentWindow.cpp",
-      "include": "traverse/JobXmlImport.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/AdjustmentWindow.cpp includes \"traverse/JobXmlImport.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
       "file": "src/qt/AdjustmentWindow.hpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
@@ -1416,13 +1276,6 @@
       "message": "src/qt/EditorAlignmentLayout.cpp includes \"alignment/AlignmentDesign.hpp\": Qt may not depend on Survey (forbidden dependency)"
     },
     {
-      "file": "src/qt/EditorAlignmentLayout.cpp",
-      "include": "AlignmentStyle.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorAlignmentLayout.cpp includes \"AlignmentStyle.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
       "file": "src/qt/EditorAlignmentLayout.hpp",
       "include": "alignment/AlignmentDesign.hpp",
       "target": "Survey",
@@ -1442,13 +1295,6 @@
       "target": "Survey",
       "rule": "forbidden dependency",
       "message": "src/qt/EditorAlignmentStyle.cpp includes \"alignment/AlignmentDesign.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorAlignmentStyle.cpp",
-      "include": "CadCommands.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorAlignmentStyle.cpp includes \"CadCommands.hpp\": Qt may not depend on Commands (forbidden dependency)"
     },
     {
       "file": "src/qt/EditorBlockAuthoring.cpp",
@@ -2002,13 +1848,6 @@
       "target": "Commands",
       "rule": "private-header include",
       "message": "src/qt/EditorProperties.cpp includes \"CadLinetype.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
-    },
-    {
-      "file": "src/qt/EditorProperties.cpp",
-      "include": "CadPropertyEdit.hpp",
-      "target": "Commands",
-      "rule": "private-header include",
-      "message": "src/qt/EditorProperties.cpp includes \"CadPropertyEdit.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorProperties.cpp",
@@ -2880,20 +2719,6 @@
     },
     {
       "file": "src/qt/QtAnnotations.cpp",
-      "include": "AlignmentLabelSet.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/QtAnnotations.cpp includes \"AlignmentLabelSet.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/QtAnnotations.cpp",
-      "include": "AlignmentStyle.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/QtAnnotations.cpp includes \"AlignmentStyle.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/QtAnnotations.cpp",
       "include": "alignment/AlignmentLabels.hpp",
       "target": "Survey",
       "rule": "forbidden dependency",
@@ -3033,20 +2858,6 @@
       "message": "src/render/ViewportRenderer.hpp includes \"CadOnlineMap.hpp\": Renderer may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/render/ViewportRenderer.hpp",
-      "include": "alignment/AlignmentDisplayCache.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/render/ViewportRenderer.hpp includes \"alignment/AlignmentDisplayCache.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/survey/SurveyPoints.cpp",
-      "include": "CadCommands.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/survey/SurveyPoints.cpp includes \"CadCommands.hpp\": Survey may not depend on Commands (forbidden dependency)"
-    },
-    {
       "file": "src/telemetry/TelemetryService.cpp",
       "include": "UserPrefs.hpp",
       "target": "IO",
@@ -3059,13 +2870,6 @@
       "target": "Windows",
       "rule": "forbidden dependency",
       "message": "src/telemetry/TelemetryService.cpp includes \"HttpFetch.hpp\": Network may not depend on Windows (forbidden dependency)"
-    },
-    {
-      "file": "src/traverse/TraverseReport.cpp",
-      "include": "../io/PlotFont.hpp",
-      "target": "IO",
-      "rule": "forbidden dependency",
-      "message": "src/traverse/TraverseReport.cpp includes \"../io/PlotFont.hpp\": Survey may not depend on IO (forbidden dependency)"
     },
     {
       "file": "src/ui/CadUiStyleWidgets.hpp",

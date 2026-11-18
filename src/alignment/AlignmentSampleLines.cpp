@@ -1,8 +1,6 @@
 #include "alignment/AlignmentSampleLines.hpp"
 
 #include "alignment/AlignmentViewFrames.hpp"
-#include <GoSurvey/Terrain/surfacequery.hpp>
-#include <GoSurvey/Terrain/surfacevolume.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -99,17 +97,19 @@ bool ComputeSampleLines(const Alignment& a, const SampleLineSettings& s, const S
   return true;
 }
 
-void SampleSection(const std::vector<double>& verts, const std::vector<std::uint32_t>& idx, const ISurfaceQuery& surface,
+void SampleSection(const std::vector<double>& verts, const std::vector<std::uint32_t>& idx,
+                   const survey::ElevationSampler& sampleElevation,
                    SampleLine& line) {
-  const TinSpatialIndex index = BuildTinSpatialIndex(verts, idx);
-  SampleSection(verts, idx, index, surface, line);
+  const geometry::TriangleGridIndex index = geometry::BuildTriangleGridIndex(verts, idx);
+  SampleSection(verts, idx, index, sampleElevation, line);
 }
 
 namespace {
 
 // The triangle ordinals in the cells the box from (x0, y0) to (x1, y1) touches, each once. A triangle that crosses the
 // box has its own box in one of these cells, because the index stores a triangle in every cell its box touches.
-std::vector<std::uint32_t> CandidateTriangles(const TinSpatialIndex& index, double x0, double y0, double x1, double y1) {
+std::vector<std::uint32_t> CandidateTriangles(const geometry::TriangleGridIndex& index, double x0, double y0, double x1,
+                                              double y1) {
   std::vector<std::uint32_t> out;
   if (index.empty()) return out;
   // Clamp in floating point before the cast, so a station far off the TIN cannot overflow the cell index.
@@ -133,8 +133,9 @@ std::vector<std::uint32_t> CandidateTriangles(const TinSpatialIndex& index, doub
 
 }  // namespace
 
-void SampleSection(const std::vector<double>& verts, const std::vector<std::uint32_t>& idx, const TinSpatialIndex& index,
-                   const ISurfaceQuery& surface, SampleLine& line) {
+void SampleSection(const std::vector<double>& verts, const std::vector<std::uint32_t>& idx,
+                   const geometry::TriangleGridIndex& index, const survey::ElevationSampler& sampleElevation,
+                   SampleLine& line) {
   line.section.clear();
   const double left = line.leftWidth, right = line.rightWidth;
   const double ox = line.origin.x, oy = line.origin.y;
@@ -190,7 +191,8 @@ void SampleSection(const std::vector<double>& verts, const std::vector<std::uint
       line.section.push_back({pick->t, pick->ground});
     } else {
       double z = 0.0;
-      if (surface.elevationAt(ox + pick->t * nx, oy + pick->t * ny, &z)) line.section.push_back({pick->t, z});
+      if (sampleElevation && sampleElevation(ox + pick->t * nx, oy + pick->t * ny, &z))
+        line.section.push_back({pick->t, z});
     }
     i = j;
   }
@@ -200,7 +202,7 @@ void SampleSection(const std::vector<double>& verts, const std::vector<std::uint
   for (size_t p = 0; p + 1 < line.section.size(); ++p) {
     const double mid = 0.5 * (line.section[p].offset + line.section[p + 1].offset);
     double z = 0.0;
-    line.section[p].gapAfter = !surface.elevationAt(ox + mid * nx, oy + mid * ny, &z);
+    line.section[p].gapAfter = !(sampleElevation && sampleElevation(ox + mid * nx, oy + mid * ny, &z));
   }
 }
 

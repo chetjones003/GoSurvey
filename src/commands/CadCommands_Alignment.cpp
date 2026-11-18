@@ -12,8 +12,8 @@
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
 #include "CadCoordinateFrame.hpp"
-#include "AlignmentStyle.hpp"
-#include "AlignmentLabelSet.hpp"
+#include <GoSurvey/Survey/AlignmentStylePublic.hpp>
+#include <GoSurvey/Survey/AlignmentLabelSetPublic.hpp>
 #include "CadColor.hpp"
 #include "TextStyle.hpp"
 #include "alignment/AlignmentReport.hpp"

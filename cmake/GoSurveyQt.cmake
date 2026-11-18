@@ -92,7 +92,6 @@ add_library(gosurvey_qt_frontend STATIC
   src/pdf/src/PdfAttach.cpp
   src/io/PdfPlot.cpp
   src/io/PlotStyleTable.cpp
-  src/traverse/TraverseReport.cpp
   src/platform/WinFileDialogs.cpp
   src/platform/MapTilePlatform.cpp
   src/platform/HttpFetch.cpp

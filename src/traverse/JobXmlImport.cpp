@@ -1,4 +1,4 @@
-#include "JobXmlImport.hpp"
+#include <GoSurvey/IO/JobXmlImportPublic.hpp>
 
 #include <pugixml.hpp>
 

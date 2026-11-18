@@ -3,10 +3,10 @@
 #include <string>
 #include <vector>
 
-#include "AlignmentStyle.hpp"
-#include "CadEntities.hpp"
-#include "alignment/Alignment.hpp"
-#include "alignment/AlignmentLabels.hpp"
+#include <GoSurvey/Survey/AlignmentStylePublic.hpp>
+#include <GoSurvey/Survey/AlignmentStyleData.hpp>
+#include <GoSurvey/Survey/Alignment.hpp>
+#include <GoSurvey/Survey/AlignmentLabelsPublic.hpp>
 
 #include <algorithm>
 

@@ -7,7 +7,7 @@
 #include "gizmooverlay.hpp"
 #include "render/SectionClip.hpp"
 #include "GoSurvey/PointCloud/CacheStorage.hpp"
-#include "alignment/AlignmentDisplayCache.hpp"
+#include <GoSurvey/Renderer/AlignmentDisplayCachePublic.hpp>
 
 #include <chrono>
 #include <condition_variable>

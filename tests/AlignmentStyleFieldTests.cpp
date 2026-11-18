@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "AlignmentStyle.hpp"
+#include <GoSurvey/Survey/AlignmentStylePublic.hpp>
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
 #include "alignment/Alignment.hpp"

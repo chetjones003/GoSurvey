@@ -1,4 +1,4 @@
-#include "StarNetImport.hpp"
+#include <GoSurvey/IO/StarNetImportPublic.hpp>
 
 #include <algorithm>
 #include <cctype>

@@ -15,6 +15,7 @@ BUILD_FILE_NAMES = {"CMakeLists.txt", "CMakePresets.json"}
 BUILD_FILE_SUFFIXES = (".cmake", ".vcxproj", ".vcxproj.filters", ".props", ".targets", ".sln")
 SOURCE_FILE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx")
 DEPENDENCY_BASELINE = "docs/architecture/dependency-baseline.json"
+FILE_SIZE_BASELINE = ".github/file-size-baseline.json"
 INCLUDE_LINE = re.compile(r'^(\s*#\s*include\s*)([<"])([^>"\n]+)([>"])(\s*(?://.*|/\*.*\*/)?\s*)$')
 CMAKE_SOURCE_COMMANDS = {"add_executable", "add_library", "target_sources", "source_group"}
 CMAKE_SOURCE_VARIABLE = re.compile(r"^\s*([A-Za-z_]\w*)", re.IGNORECASE)
@@ -50,6 +51,7 @@ def classify_changed_files(root, base_ref, head_ref):
     build_edits = []
     include_edits = []
     baseline_edits = []
+    file_size_baseline_edits = []
     index = 0
     while index < len(fields):
         status = fields[index]
@@ -70,15 +72,19 @@ def classify_changed_files(root, base_ref, head_ref):
             # The dependency baseline may only lose entries in a move-only PR.
             baseline_edits.append(fields[index])
             index += 1
+        elif status == "M" and fields[index] == FILE_SIZE_BASELINE:
+            # File-size metadata may only transfer existing caps along proven renames.
+            file_size_baseline_edits.append(fields[index])
+            index += 1
         else:
             raise ValueError(
                 f"{status} {fields[index]}: changed files must be renames, build-file path entries, "
                 "or source files whose only edits are include paths of moved files, "
-                "or a dependency baseline with entries removed"
+                "a dependency baseline with entries removed, or a file-size baseline path rewrite"
             )
     if not moves:
         raise ValueError("no renamed files found")
-    return moves, build_edits, include_edits, baseline_edits
+    return moves, build_edits, include_edits, baseline_edits, file_size_baseline_edits
 
 
 def changed_hunks(root, base_ref, head_ref, old_path, new_path):
@@ -241,7 +247,7 @@ def cmake_statements(text):
         depth = 0
         quote = False
         escaped = False
-        cursor = cursor
+        arguments_start = cursor + 1
         while cursor < len(text):
             character = text[cursor]
             if quote:
@@ -275,7 +281,7 @@ def cmake_statements(text):
                 depth -= 1
                 if depth == 0:
                     end = cursor + 1
-                    yield name, text[index + command.end():cursor], start, end
+                    yield name, text[arguments_start:cursor], start, end
                     index = end
                     break
             cursor += 1
@@ -429,8 +435,31 @@ def check_baseline_only_shrinks(root, base_ref, head_ref, path):
         raise ValueError(f"{path}: a move-only PR may remove baseline entries but not add them")
 
 
+def check_file_size_baseline_moves(root, base_ref, head_ref, path, moves):
+    old = json.loads(git_text(root, base_ref, path))
+    new = json.loads(git_text(root, head_ref, path))
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        raise ValueError(f"{path}: expected a path-to-cap JSON object")
+
+    expected = dict(old)
+    for old_path, new_path in moves:
+        if old_path not in old:
+            continue
+        if new_path in expected and new_path != old_path:
+            raise ValueError(f"{path}: rename would collide with existing baseline path {new_path}")
+        expected.pop(old_path)
+        expected[new_path] = old[old_path]
+
+    if json.dumps(new, sort_keys=True) != json.dumps(expected, sort_keys=True):
+        raise ValueError(
+            f"{path}: entries may only be rewritten from proven rename paths, with caps unchanged"
+        )
+
+
 def check_move_only(root, base_ref, head_ref):
-    moves, build_edits, include_edits, baseline_edits = classify_changed_files(root, base_ref, head_ref)
+    moves, build_edits, include_edits, baseline_edits, file_size_baseline_edits = (
+        classify_changed_files(root, base_ref, head_ref)
+    )
     details = []
     for old_path, new_path in moves:
         verify_rename_metadata(root, base_ref, head_ref, old_path, new_path)
@@ -472,6 +501,9 @@ def check_move_only(root, base_ref, head_ref):
 
     for baseline_path in baseline_edits:
         check_baseline_only_shrinks(root, base_ref, head_ref, baseline_path)
+
+    for baseline_path in file_size_baseline_edits:
+        check_file_size_baseline_moves(root, base_ref, head_ref, baseline_path, moves)
 
     for build_path in build_edits:
         old_text = git_text(root, base_ref, build_path)

@@ -126,8 +126,8 @@
 // observation sets (src/traverse/FbkImport.cpp import detail) are not represented
 // here, since they have no manual-entry counterpart in the form panel either.
 
-#include "TraverseCalc.hpp"
-#include "TraverseLeastSquares.hpp"
+#include <GoSurvey/Survey/TraverseCalcPublic.hpp>
+#include <GoSurvey/Survey/TraverseLeastSquaresPublic.hpp>
 
 #include <string>
 

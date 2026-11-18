@@ -382,7 +382,7 @@ unset(_lasz)
 # --- CS-MAP: vendored headers + prebuilt static lib + dictionaries (REQ-358 / ADR-063) ---
 # OSGeo MetaCRS CS-MAP, the coordinate-system catalogue and projection engine. Prebuilt MSVC x64
 # Release /MD static lib, like LibreDWG. Its headers are NOT an interface include directory: only
-# src/geo/CoordinateSystems.cpp may include them (ADR-063 (c)), so they are added to that one source
+# the coordinate implementation may include them (ADR-063 (c)), so they are added to that source
 # below. The compiled dictionaries and the US grid files (D-2026-09-29-d) are staged beside the
 # executable as resources/csmap/ — installer payload and what the tests load.
 set(GOSURVEY_CSMAP_DIR "${GOSURVEY_TP}/csmap")
@@ -510,8 +510,11 @@ target_link_libraries(gosurvey_math INTERFACE GoSurvey::Core)
 add_library(gosurvey_geometry STATIC
   # Planar geometry math: bulge arcs, extents, revision clouds.
   src/geometry/src/geom2d.cpp
+  # Uniform-grid broad phase shared by Geometry, Survey and Terrain.
+  src/geometry/src/TriangleGridIndex.cpp
   # REQ-443 SPLINE mathematics (NURBS curve: fit / control-vertex construction, evaluation, tessellation).
   src/geometry/src/spline.cpp
+  src/geometry/src/ClothoidIntegration.cpp
   # Intersection math behind the INT/APPINT snaps (REQ-062). Pure and dependency-free on purpose.
   src/geometry/src/curveintersect.cpp
   # REQ-063 mesh validation + bounds + normals.
@@ -529,17 +532,59 @@ target_compile_features(gosurvey_geometry PUBLIC cxx_std_17)
 target_link_libraries(gosurvey_geometry PUBLIC GoSurvey::Math GoSurvey::Core)
 gosurvey_target_warnings(gosurvey_geometry)
 
-# The existing Survey alignment model is the concrete provider for Terrain's public sampling
-# API. Keep this small provider independently linkable until Survey's full carve-out is complete.
-add_library(gosurvey_survey_alignment_model STATIC
+# Shared persisted appearance values, used by Surface and Survey style records.
+add_library(gosurvey_document_appearance INTERFACE)
+add_library(GoSurvey::DocumentAppearance ALIAS gosurvey_document_appearance)
+target_include_directories(gosurvey_document_appearance INTERFACE
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/document/include>")
+target_compile_features(gosurvey_document_appearance INTERFACE cxx_std_17)
+
+# GoSurvey::Survey — T2 domain library. Alignment is a public Survey model used by Terrain;
+# its legacy declarations stay at their existing paths until the move-only follow-up.
+set(GOSURVEY_COORDINATE_SOURCES
+  src/geo/CoordinateSystems.cpp)
+add_library(gosurvey_survey STATIC
   src/alignment/Alignment.cpp
-  src/alignment/Clothoid.cpp)
-add_library(GoSurvey::SurveyAlignmentModel ALIAS gosurvey_survey_alignment_model)
-target_include_directories(gosurvey_survey_alignment_model
+  src/alignment/Clothoid.cpp
+  src/alignment/AlignmentLabels.cpp
+  src/alignment/AlignmentReport.cpp
+  src/alignment/AlignmentEdit.cpp
+  src/alignment/AlignmentLayout.cpp
+  src/alignment/AlignmentGround.cpp
+  src/alignment/AlignmentSampleLines.cpp
+  src/alignment/AlignmentViewFrames.cpp
+  src/alignment/AlignmentProfile.cpp
+  src/alignment/AlignmentDesign.cpp
+  src/alignment/AlignmentTables.cpp
+  ${GOSURVEY_COORDINATE_SOURCES}
+  src/geo/DrawingConversion.cpp
+  src/geo/LocalGridTransform.cpp
+  src/geo/EcefTransform.cpp
+  src/traverse/TraverseCalc.cpp
+  src/traverse/TraverseLeastSquares.cpp
+  src/traverse/TraverseReport.cpp
+  src/survey/PointGroupRule.cpp
+  src/survey/SurveyPoints.cpp)
+add_library(GoSurvey::Survey ALIAS gosurvey_survey)
+target_include_directories(gosurvey_survey
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include>"
-  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_compile_features(gosurvey_survey_alignment_model PUBLIC cxx_std_17)
-gosurvey_target_warnings(gosurvey_survey_alignment_model)
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/alignment"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/traverse"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/util")
+target_compile_features(gosurvey_survey PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_survey PUBLIC GoSurvey::DocumentAppearance GoSurvey::Geometry GoSurvey::Math GoSurvey::Core
+  PRIVATE CsMap::csmap)
+gosurvey_target_warnings(gosurvey_survey)
+
+# Real backend-neutral Renderer cache provider over the Survey alignment model.
+add_library(gosurvey_renderer_alignment_cache STATIC src/alignment/AlignmentDisplayCache.cpp)
+add_library(GoSurvey::RendererAlignmentCache ALIAS gosurvey_renderer_alignment_cache)
+target_include_directories(gosurvey_renderer_alignment_cache PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include>")
+target_compile_features(gosurvey_renderer_alignment_cache PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_renderer_alignment_cache PUBLIC GoSurvey::Survey)
+gosurvey_target_warnings(gosurvey_renderer_alignment_cache)
 
 # GoSurvey::Terrain — T2 Domain library (issue #1245). The pure surface/TIN and grading
 # algorithms compile independently of the application layer. Physical relocation is isolated
@@ -560,7 +605,7 @@ add_library(GoSurvey::Terrain ALIAS gosurvey_terrain)
 target_include_directories(gosurvey_terrain
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/terrain/include>")
 target_compile_features(gosurvey_terrain PUBLIC cxx_std_17)
-target_link_libraries(gosurvey_terrain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::SurveyAlignmentModel)
+target_link_libraries(gosurvey_terrain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey)
 gosurvey_target_warnings(gosurvey_terrain)
 
 # GoSurvey::Events — toolkit-neutral Foundation library (boundary seal #1287). The public
@@ -631,6 +676,16 @@ target_link_libraries(gosurvey_pdf PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey
   PRIVATE GoSurvey::CoreShxFont)
 gosurvey_target_warnings(gosurvey_pdf)
 
+# IO owns report file formats; Survey owns the report text and adjustment data.
+add_library(gosurvey_io_traverse_report STATIC src/io/src/TraverseReportExport.cpp)
+add_library(GoSurvey::IOTraverseReport ALIAS gosurvey_io_traverse_report)
+target_include_directories(gosurvey_io_traverse_report
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/io/include>"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_features(gosurvey_io_traverse_report PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_io_traverse_report PRIVATE GoSurvey::Pdf)
+gosurvey_target_warnings(gosurvey_io_traverse_report)
+
 # --- OpenXLSX (vendored, third_party/OpenXLSX, approved D-2026-10-30-a): .xlsx read/write for
 # Extract Data and Link Data (REQ-467 / REQ-468). Compiled into gosurvey_domain with the pugixml
 # copy above; zip support comes from the vendored miniz.
@@ -668,6 +723,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/CadCommands.cpp
   src/commands/CadField.cpp
   src/commands/TraverseActions.cpp
+  src/commands/TraverseReportActions.cpp
+  src/commands/TraverseFileActions.cpp
   # Cohesive slices split out of the CadCommands.cpp mega-TU (TASK-150 Phase 2,
   # issue #142). Same TU rules; entry points declared in CadCommands.hpp.
   src/commands/CadCommands_Align.cpp
@@ -690,7 +747,6 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/CadBlocks.cpp
   src/commands/CadLinetype.cpp
   src/commands/EntityId.cpp
-  src/survey/PointGroupRule.cpp
   src/commands/CadCoordinateFrame.cpp
   src/commands/ViewportZoomScale.cpp
   src/commands/CadColor.cpp
@@ -718,11 +774,9 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Fonts (shared lower layer — SHX stroke geometry, ADR-022)
 
   # Survey / COGO
-  src/survey/SurveyPoints.cpp
+  src/commands/SurveyPointActions.cpp
 
   # Traverse engine
-  src/traverse/TraverseCalc.cpp
-  src/traverse/TraverseLeastSquares.cpp
   src/traverse/FbkImport.cpp
   src/traverse/TraverseIo.cpp
   src/traverse/TraverseCommandLang.cpp
@@ -736,14 +790,6 @@ set(GOSURVEY_DOMAIN_SOURCES
 
   # I/O
   src/io/GsIo.cpp
-  # Coordinate systems — the one CS-MAP wrapper (REQ-358 / ADR-063)
-  src/geo/CoordinateSystems.cpp
-  # REQ-378 (#696 P5): the pure similarity-transform plan for Convert
-  src/geo/DrawingConversion.cpp
-  # REQ-360: the pure local <-> grid transformation (no CS-MAP)
-  src/geo/LocalGridTransform.cpp
-  # Issue #847: WGS84 ECEF <-> geodetic + local ENU rotation (pure, no CS-MAP)
-  src/geo/EcefTransform.cpp
   # REQ-363 / ADR-064: Web Mercator tile maths (pure)
   src/geo/WebMercator.cpp
   # REQ-363 / ADR-064 (c): online map tile fetch + disk cache (fetch injected; no WinHTTP here)
@@ -803,19 +849,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Update check (REQ-077/078, ADR-029) — UpdatePrefs is reachable from AppCommandState
   src/update/UpdateCheck.cpp
 
-  # Civil alignments (REQ-480..484, ADR-075, issue #121): exact tangent/curve geometry, stationing, queries
-  src/alignment/AlignmentLabels.cpp
-  src/alignment/AlignmentReport.cpp
-  src/alignment/AlignmentEdit.cpp
-  src/alignment/AlignmentLayout.cpp
+  # Application alignment grip operations; model and display-cache implementations have their own providers.
   src/alignment/AlignmentGrips.cpp
-  src/alignment/AlignmentGround.cpp
-  src/alignment/AlignmentViewFrames.cpp
-  src/alignment/AlignmentSampleLines.cpp
-  src/alignment/AlignmentProfile.cpp  # REQ-521 (issue #1163)
-  src/alignment/AlignmentDesign.cpp
-  src/alignment/AlignmentTables.cpp
-  src/alignment/AlignmentDisplayCache.cpp
   src/util/gltfimport.cpp
   src/util/stlimport.cpp
   # BENCH scene/statistics implementation is compiled by GoSurvey::Debug.
@@ -892,7 +927,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
-target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf)
+target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf GoSurvey::IOTraverseReport GoSurvey::RendererAlignmentCache)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
@@ -904,7 +939,7 @@ gosurvey_enable_pch(gosurvey_domain)
 # Stable umbrella for application consumers; individual systems remain linkable in isolation.
 add_library(gosurvey_engine INTERFACE)
 add_library(GoSurvey::Engine ALIAS gosurvey_engine)
-target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Events GoSurvey::UI GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf)
+target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey GoSurvey::Events GoSurvey::UI GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
@@ -920,11 +955,11 @@ endif()
 
 # ADR-063 (c): CoordinateSystems.cpp is the only source that sees CS-MAP headers. Keep its
 # platform macros and C header out of the shared precompiled header.
-set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/geo/CoordinateSystems.cpp"
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/${GOSURVEY_COORDINATE_SOURCES}"
   APPEND PROPERTY INCLUDE_DIRECTORIES "${GOSURVEY_CSMAP_DIR}/include")
-set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/geo/CoordinateSystems.cpp"
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/${GOSURVEY_COORDINATE_SOURCES}"
   PROPERTY SKIP_PRECOMPILE_HEADERS ON)
-set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/geo/CoordinateSystems.cpp"
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/${GOSURVEY_COORDINATE_SOURCES}"
   APPEND PROPERTY COMPILE_DEFINITIONS WIN32 _WINDOWS)
 if(TARGET libredwg)
   set_property(SOURCE
@@ -1201,7 +1236,6 @@ if(GOSURVEY_BUILD_TESTS)
     tests/TestSoundGuard.cpp
     tests/TestSoundGuardTests.cpp
     tests/TraverseTests.cpp
-    tests/EcefTransformTests.cpp
     tests/PaperSpaceTests.cpp
     tests/PaperLeaderTests.cpp
     tests/PaperTableTests.cpp
@@ -1313,20 +1347,16 @@ if(GOSURVEY_BUILD_TESTS)
     tests/GltfImportTests.cpp
     tests/StlImportTests.cpp
     tests/EntityIdTests.cpp
-    tests/PointGroupTests.cpp
     tests/CadTableTests.cpp
     tests/CadBlockTests.cpp
     tests/CadPipeRunTests.cpp
-    tests/AlignmentTests.cpp
     tests/AlignmentCommandTests.cpp
     tests/AlignmentViewFrameTests.cpp
     tests/ViewFrameSheetTests.cpp
-    tests/AlignmentSampleLineTests.cpp
     tests/AlignmentProfileTests.cpp  # REQ-521 (issue #1163)
     tests/SectionSheetTests.cpp
     tests/AlignmentStyleTests.cpp
     tests/AlignmentLabelTests.cpp
-    tests/AlignmentReportTests.cpp
     tests/AlignmentGroundTests.cpp
     tests/AlignmentTableTests.cpp
     tests/AlignmentLabelOffsetTests.cpp
@@ -1415,16 +1445,12 @@ if(GOSURVEY_BUILD_TESTS)
     # BUG-013 per-application GPU preference. Win32 registry only — no GL, no window — so the value
     # the user's choice actually turns into is testable without the application running.
     src/platform/GpuPreference.cpp
-    src/traverse/TraverseCalc.cpp
-    src/traverse/TraverseLeastSquares.cpp
-    src/traverse/TraverseReport.cpp
     src/traverse/FbkImport.cpp
     src/traverse/TraverseIo.cpp
     src/traverse/TraverseCommandLang.cpp
     src/traverse/StarNetImport.cpp
     src/traverse/Rw5Import.cpp
     src/traverse/JobXmlImport.cpp
-    src/geo/EcefTransform.cpp
     ${GOSURVEY_TP}/pugixml/src/pugixml.cpp
     # DWG version detection + converter discovery. Deliberately its own TU (see DwgProbe.cpp):
     # it depends only on <filesystem>, so tests link it without DxfIo and the GUI stack.
@@ -1442,7 +1468,6 @@ if(GOSURVEY_BUILD_TESTS)
     src/commands/EntityId.cpp
     # REQ-067 point-group membership rules. Pure like EntityId.cpp: the union-vs-intersection
     # semantics are a recorded user decision and must be testable without the GUI stack.
-    src/survey/PointGroupRule.cpp
     # REQ-077/078 version ordering + manifest parse. Pure by ADR-029 (g) — no network, no window.
     # Wrong version ordering has NO symptom (the user is simply never offered an update), which is
     # exactly why it must be pinned by a test rather than noticed in use.
@@ -1647,7 +1672,7 @@ if(GOSURVEY_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/terrain/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests"
     ${NLOHMANN_JSON_INCLUDE})
-  target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug GoSurvey::Geometry GoSurvey::PointCloud GoSurvey::Pdf Catch2::Catch2WithMain)
+  target_link_libraries(GoSurveyDebugTests PRIVATE GoSurvey::Debug GoSurvey::Geometry GoSurvey::PointCloud GoSurvey::Pdf GoSurvey::Survey Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyDebugTests PROPERTIES LABELS Debug)
   gosurvey_target_warnings(GoSurveyDebugTests TEST)
 
@@ -1832,6 +1857,28 @@ if(GOSURVEY_BUILD_TESTS)
   add_test(NAME PointCloud.public-consumer COMMAND GoSurveyPointCloudPublicConsumer)
   set_tests_properties(PointCloud.public-consumer PROPERTIES LABELS PointCloud)
 
+  # Pure Survey algorithms and Terrain sampling integration run without Qt or OpenGL.
+  add_executable(GoSurveySurveyTests
+    tests/PointGroupTests.cpp
+    tests/AlignmentReportTests.cpp
+    tests/AlignmentTests.cpp
+    tests/AlignmentSampleLineTests.cpp
+    tests/EcefTransformTests.cpp)
+  set_target_properties(GoSurveySurveyTests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_include_directories(GoSurveySurveyTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" ${NLOHMANN_JSON_INCLUDE})
+  target_link_libraries(GoSurveySurveyTests PRIVATE GoSurvey::Survey GoSurvey::Terrain Catch2::Catch2WithMain)
+  gosurvey_target_warnings(GoSurveySurveyTests TEST)
+  catch_discover_tests(GoSurveySurveyTests PROPERTIES LABELS Survey)
+
+  # Verify Survey's real public header and transitive provider closure without application-private roots.
+  add_executable(GoSurveySurveyPublicConsumer tests/Survey/SurveyPublicConsumer.cpp)
+  set_target_properties(GoSurveySurveyPublicConsumer PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveySurveyPublicConsumer PRIVATE GoSurvey::Survey)
+  gosurvey_target_warnings(GoSurveySurveyPublicConsumer TEST)
+  add_test(NAME Survey.public-consumer COMMAND GoSurveySurveyPublicConsumer)
+  set_tests_properties(Survey.public-consumer PROPERTIES LABELS Survey)
+
   target_compile_definitions(GoSurveyTests PRIVATE
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
     GOSURVEY_CSMAP_DICTIONARY_DIR="$<TARGET_FILE_DIR:GoSurveyQt>/resources/csmap")
@@ -1861,7 +1908,7 @@ if(GOSURVEY_BUILD_TESTS)
         -ShardIndex ${_shard} -ShardCount ${GOSURVEY_CATCH_TEST_SHARDS}
         -WorkingDirectory "$<TARGET_FILE_DIR:GoSurveyQt>"
         -OutputDirectory "${CMAKE_BINARY_DIR}/../../artifacts/catch")
-    set_tests_properties(unit.catch.shard-${_shard} PROPERTIES TIMEOUT 900 COST 100 LABELS "Integration;Terrain")
+    set_tests_properties(unit.catch.shard-${_shard} PROPERTIES TIMEOUT 900 COST 100 LABELS "Integration;Terrain;Survey")
   endforeach()
 
   # Register the independent, isolated Qt shards before the transcript cases so CTest can run both

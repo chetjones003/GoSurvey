@@ -1,13 +1,12 @@
 #pragma once
 
-#include "alignment/Alignment.hpp"
-#include <GoSurvey/Terrain/surfacevolume.hpp>  // TinSpatialIndex
+#include <GoSurvey/Survey/Alignment.hpp>
+#include <GoSurvey/Geometry/TriangleGridIndex.hpp>
+#include <GoSurvey/Survey/ElevationSampler.hpp>
 
 #include <cstdint>
 #include <string>
 #include <vector>
-
-class ISurfaceQuery;
 
 namespace alignment {
 
@@ -62,13 +61,30 @@ inline constexpr int kMaxSampleLinesPerRun = 2000;
 /// inside coverage, and each point where the swath crosses a triangle edge or vertex. Each point is kept only when the
 /// surface covers it, and its ground comes from `surface` (REQ-497). A surface without triangles gives no points.
 void SampleSection(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
-                   const ISurfaceQuery& surface, SampleLine& line);
+                   const survey::ElevationSampler& sampleElevation, SampleLine& line);
+template <typename Surface>
+void SampleSection(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
+                   const Surface& surface, SampleLine& line) {
+  const survey::ElevationSampler sample = [&surface](double x, double y, double* z) {
+    return surface.elevationAt(x, y, z);
+  };
+  SampleSection(vertsXyz, indices, sample, line);
+}
 
-/// The same, testing only the triangles that `index` (built once for the TIN by BuildTinSpatialIndex) places in the cells
+/// The same, testing only the triangles that `index` (built once for the TIN by geometry::BuildTriangleGridIndex) places in the cells
 /// the swath's plan box touches. Every triangle that crosses the swath is among them, so the result is the same, and a long
 /// station range over a large TIN no longer scans every triangle for every line (REQ-519.2).
 void SampleSection(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
-                   const TinSpatialIndex& index, const ISurfaceQuery& surface, SampleLine& line);
+                   const geometry::TriangleGridIndex& index, const survey::ElevationSampler& sampleElevation,
+                   SampleLine& line);
+template <typename Surface>
+void SampleSection(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
+                   const geometry::TriangleGridIndex& index, const Surface& surface, SampleLine& line) {
+  const survey::ElevationSampler sample = [&surface](double x, double y, double* z) {
+    return surface.elevationAt(x, y, z);
+  };
+  SampleSection(vertsXyz, indices, index, sample, line);
+}
 
 /// Drops every sample line whose alignment is gone (REQ-519.13). Called after an alignment is removed and on load.
 void SyncSampleLines(const std::vector<Alignment>& alignments, std::vector<SampleLine>& lines);

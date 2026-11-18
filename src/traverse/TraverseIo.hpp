@@ -10,8 +10,8 @@
 // caller reruns ComputeTraverse() after Load() and gets back exactly the closure that was showing
 // when the file was saved, with nothing stored twice.
 
-#include "TraverseCalc.hpp"
-#include "TraverseLeastSquares.hpp"
+#include <GoSurvey/Survey/TraverseCalcPublic.hpp>
+#include <GoSurvey/Survey/TraverseLeastSquaresPublic.hpp>
 
 #include <string>
 

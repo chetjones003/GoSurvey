@@ -1,4 +1,4 @@
-#include "alignment/AlignmentDisplayCache.hpp"
+#include <GoSurvey/Renderer/AlignmentDisplayCachePublic.hpp>
 
 #include <algorithm>
 #include <array>

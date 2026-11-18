@@ -11,10 +11,22 @@
 
 #include "alignment/Alignment.hpp"
 #include "alignment/AlignmentSampleLines.hpp"
+#include <GoSurvey/Geometry/TriangleGridIndex.hpp>
+#include <GoSurvey/Survey/SampleLines.hpp>
 #include <GoSurvey/Terrain/surfacequery.hpp>
 #include <GoSurvey/Terrain/surfacevolume.hpp>
 
 using Catch::Approx;
+
+TEST_CASE("geometry triangle grid: buckets retain triangle ordinals in input order", "[req1248][geometry]") {
+  const std::vector<double> verts = {0, 0, 1, 2, 0, 2, 2, 2, 3, 0, 2, 4};
+  const std::vector<std::uint32_t> indices = {0, 1, 2, 0, 2, 3};
+  const geometry::TriangleGridIndex grid = geometry::BuildTriangleGridIndex(verts, indices);
+  REQUIRE_FALSE(grid.empty());
+  REQUIRE(grid.cells.size() == static_cast<size_t>(grid.cols * grid.rows));
+  CHECK(grid.cells.front() == std::vector<std::uint32_t>{0, 1});
+  CHECK(geometry::BuildTriangleGridIndex({}, {}).empty());
+}
 
 namespace {
 
@@ -279,4 +291,23 @@ TEST_CASE("sample sections: a station far off the surface is no data, not an ove
   alignment::SampleLine line = EastLine(1.0e12, 1.0e12, 50.0, 50.0);
   alignment::SampleSection(verts, idx, index, surface, line);
   CHECK(line.section.empty());
+}
+
+TEST_CASE("sample sections: Survey callback keeps covered edge elevations and uncovered gaps", "[req1248][samplelines]") {
+  const std::vector<double> verts = {-10, -10, 5, 10, -10, 5, 10, 10, 5, -10, 10, 5};
+  const std::vector<std::uint32_t> indices = {0, 1, 2, 0, 2, 3};
+  const survey::ElevationSampler sampler = [](double x, double y, double* z) {
+    if (x < -10 || x > 10 || y < -10 || y > 10) return false;
+    *z = 5.0;
+    return true;
+  };
+  alignment::SampleLine line = EastLine(0, 0, 20, 20);
+  const auto grid = geometry::BuildTriangleGridIndex(verts, indices);
+  survey::sample_lines::SampleSection(verts, indices, grid, sampler, line);
+  REQUIRE(line.section.size() == 3);
+  CHECK(line.section[0].offset == Approx(-10));
+  CHECK(line.section[1].offset == Approx(0));
+  CHECK(line.section[2].offset == Approx(10));
+  CHECK_FALSE(line.section[0].gapAfter);
+  CHECK_FALSE(line.section[1].gapAfter);
 }

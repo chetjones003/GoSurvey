@@ -1,4 +1,4 @@
-#include "AlignmentStyle.hpp"
+#include <GoSurvey/Survey/AlignmentStylePublic.hpp>
 #include "alignment/AlignmentDesign.hpp"
 #include <GoSurvey/Core/NumFormat.hpp>
 #include "AdjustmentWindow.hpp"
@@ -20,9 +20,9 @@
 #include "TopographicArtwork.hpp"
 #include "RibbonCatalog.hpp"
 #include "TraverseActions.hpp"
-#include "traverse/TraverseIo.hpp"
-#include "traverse/FbkImport.hpp"
-#include "traverse/TraverseCommandLang.hpp"
+#include <GoSurvey/IO/TraverseIoPublic.hpp>
+#include <GoSurvey/IO/FbkImportPublic.hpp>
+#include <GoSurvey/IO/TraverseCommandLangPublic.hpp>
 #include "GoSurvey/Pdf/PdfAttach.hpp"
 #include "PdfWindow.hpp"
 #include "PdfCanvas.hpp"
