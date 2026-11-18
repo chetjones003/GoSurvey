@@ -127,6 +127,10 @@
       "system": "PointCloud"
     },
     {
+      "path": "tests/IO/",
+      "system": "IO"
+    },
+    {
       "path": "src/terrain/include/",
       "system": "Terrain"
     },
