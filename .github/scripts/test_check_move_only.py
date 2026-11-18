@@ -350,6 +350,49 @@ class MoveOnlyFixtureTests(unittest.TestCase):
 
         self.assertEqual(len(self.check()), 2)
 
+    def test_cmake_public_include_root_follows_moved_header_tree(self):
+        self.write("CMakeLists.txt", (
+            "add_library(app src/old/Widget.cpp)\n"
+            "target_include_directories(app PRIVATE\n"
+            '  "${CMAKE_CURRENT_SOURCE_DIR}/src/old")\n'
+        ))
+        self.commit("configure old public header root")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        self.move("src/old/Widget.hpp", "src/new/include/GoSurvey/New/Widget.hpp")
+        self.write("CMakeLists.txt", (
+            "add_library(app src/old/Widget.cpp)\n"
+            "target_include_directories(app PRIVATE\n"
+            '  "${CMAKE_CURRENT_SOURCE_DIR}/src/new/include")\n'
+        ))
+        self.commit("move public header and its include root")
+
+        self.assertEqual(self.check(), [
+            "src/old/Widget.hpp -> src/new/include/GoSurvey/New/Widget.hpp",
+        ])
+
+    def test_cmake_include_root_cannot_move_to_unrelated_tree(self):
+        self.write("CMakeLists.txt", (
+            "add_library(app src/old/Widget.cpp)\n"
+            "target_include_directories(app PRIVATE\n"
+            '  "${CMAKE_CURRENT_SOURCE_DIR}/src/old")\n'
+        ))
+        self.commit("configure old public header root")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        self.move("src/old/Widget.hpp", "src/new/include/GoSurvey/New/Widget.hpp")
+        self.write("CMakeLists.txt", (
+            "add_library(app src/old/Widget.cpp)\n"
+            "target_include_directories(app PRIVATE\n"
+            '  "${CMAKE_CURRENT_SOURCE_DIR}/src/unrelated/include")\n'
+        ))
+        self.commit("point public include root at unrelated tree")
+
+        with self.assertRaisesRegex(ValueError, "moved-file build entry path rewrite"):
+            self.check()
+
     def test_multiline_cmake_source_entry_path_rewrite_is_allowed(self):
         self.write("CMakeLists.txt", (
             "add_library(\n"
