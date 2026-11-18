@@ -573,7 +573,8 @@ target_include_directories(gosurvey_survey
           "${CMAKE_CURRENT_SOURCE_DIR}/src/traverse"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/util")
 target_compile_features(gosurvey_survey PUBLIC cxx_std_17)
-target_link_libraries(gosurvey_survey PUBLIC GoSurvey::DocumentAppearance GoSurvey::Geometry GoSurvey::Math GoSurvey::Core CsMap::csmap)
+target_link_libraries(gosurvey_survey PUBLIC GoSurvey::DocumentAppearance GoSurvey::Geometry GoSurvey::Math GoSurvey::Core
+  PRIVATE CsMap::csmap)
 gosurvey_target_warnings(gosurvey_survey)
 
 # Real backend-neutral Renderer cache provider over the Survey alignment model.
