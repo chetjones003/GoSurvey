@@ -10,7 +10,7 @@
 #include "DxfIo.hpp"
 #include "DwgIo.hpp"
 #include "AppPaths.hpp"
-#include "WinFileDialogs.hpp"
+#include <GoSurvey/UI/FileDialogs.hpp>
 #include "io/src/AcisSatParser.hpp"
 
 #include <nlohmann/json.hpp>

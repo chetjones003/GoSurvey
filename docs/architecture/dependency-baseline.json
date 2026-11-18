@@ -45,13 +45,6 @@
     },
     {
       "file": "src/commands/CadBlocks.cpp",
-      "include": "WinFileDialogs.hpp",
-      "target": "Windows",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadBlocks.cpp includes \"WinFileDialogs.hpp\": Commands may not depend on Windows (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadBlocks.cpp",
       "include": "AcisSatParser.hpp",
       "target": "IO",
       "rule": "private-header include",
@@ -164,13 +157,6 @@
     },
     {
       "file": "src/commands/CadCommands.cpp",
-      "include": "WinFileDialogs.hpp",
-      "target": "Windows",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands.cpp includes \"WinFileDialogs.hpp\": Commands may not depend on Windows (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
       "include": "AppPaths.hpp",
       "target": "Windows",
       "rule": "forbidden dependency",
@@ -262,13 +248,6 @@
     },
     {
       "file": "src/commands/CadCommands_Alignment.cpp",
-      "include": "WinFileDialogs.hpp",
-      "target": "Windows",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands_Alignment.cpp includes \"WinFileDialogs.hpp\": Commands may not depend on Windows (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands_Alignment.cpp",
       "include": "io/DwgIo.hpp",
       "target": "IO",
       "rule": "private-header include",
@@ -301,13 +280,6 @@
       "target": "IO",
       "rule": "private-header include",
       "message": "src/commands/CadCommands_DrawInquiry.cpp includes \"SpreadsheetIo.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands_DrawInquiry.cpp",
-      "include": "platform/WinFileDialogs.hpp",
-      "target": "Windows",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands_DrawInquiry.cpp includes \"platform/WinFileDialogs.hpp\": Commands may not depend on Windows (forbidden dependency)"
     },
     {
       "file": "src/commands/CadOnlineMap.hpp",
@@ -2100,13 +2072,6 @@
       "target": "Pdf",
       "rule": "forbidden dependency",
       "message": "src/qt/EditorWindow.hpp includes \"PdfCoordExtract.hpp\": Qt may not depend on Pdf (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/FailureReport.cpp",
-      "include": "FailureReportUi.hpp",
-      "target": "Windows",
-      "rule": "forbidden dependency",
-      "message": "src/qt/FailureReport.cpp includes \"FailureReportUi.hpp\": Qt may not depend on Windows (forbidden dependency)"
     },
     {
       "file": "src/qt/FailureReport.cpp",

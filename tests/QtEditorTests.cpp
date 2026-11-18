@@ -54,7 +54,7 @@
 #include "CrashReporter.hpp"
 #include "DwgIo.hpp"
 #include "FailureReport.hpp"
-#include "FailureReportUi.hpp"
+#include <GoSurvey/UI/FailureReportDialog.hpp>
 #include "GsIo.hpp"
 #include "GsMigrate.hpp"
 #include "GoSurvey/Pdf/PdfViewerCore.hpp"

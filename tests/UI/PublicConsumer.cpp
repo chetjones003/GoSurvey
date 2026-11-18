@@ -1,8 +1,11 @@
 #include <GoSurvey/UI/CommandBar.hpp>
+#include <GoSurvey/UI/FailureReportDialog.hpp>
+#include <GoSurvey/UI/FileDialogs.hpp>
 #include <GoSurvey/UI/MtextToolbar.hpp>
 #include <GoSurvey/UI/RichTextLayout.hpp>
 
-#if __has_include("CommandBar.hpp") || __has_include("MtextToolbar.hpp") || __has_include("RichTextLayout.hpp")
+#if __has_include("CommandBar.hpp") || __has_include("FailureReportUi.hpp") || __has_include("FileDialogs.hpp") || \
+    __has_include("MtextToolbar.hpp") || __has_include("RichTextLayout.hpp") || __has_include("WinFileDialogs.hpp")
 #error UI public consumers must not inherit UI private include roots
 #endif
 

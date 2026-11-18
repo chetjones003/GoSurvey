@@ -757,6 +757,16 @@
       "path": "src/document/include/GoSurvey/Document/Appearance.hpp",
       "system": "Document",
       "status": "audited"
+    },
+    {
+      "path": "src/ui/include/GoSurvey/UI/FileDialogs.hpp",
+      "system": "UI",
+      "status": "audited"
+    },
+    {
+      "path": "src/ui/include/GoSurvey/UI/FailureReportDialog.hpp",
+      "system": "UI",
+      "status": "audited"
     }
   ],
   "unmappedPaths": [],
@@ -13847,17 +13857,18 @@
         "Core",
         "Events"
       ],
-      "dependencyNote": "The public UI headers depend only on the standard library and the allowed Core/Events interfaces. RichTextLayout consumes UI-owned SpanRange values; callers adapt Document parser spans at the boundary. The audited file mappings assign the public headers to UI, overriding the legacy src/ui folder mapping.",
+      "dependencyNote": "The public UI headers depend only on the standard library and the allowed Core/Events interfaces. RichTextLayout consumes UI-owned SpanRange values; callers adapt Document parser spans at the boundary. The audited file mappings assign the public headers to UI, overriding the legacy src/ui and src/platform folder mappings.",
       "currentFiles": [
         "src/ui/include/GoSurvey/UI/CommandBar.hpp (public UI command-bar helpers; TrimAscii remains Core-owned per sections)",
+        "src/ui/include/GoSurvey/UI/FileDialogs.hpp (public file-dialog declarations; platform adapters stay in Windows and Headless)",
+        "src/ui/include/GoSurvey/UI/FailureReportDialog.hpp (public report-dialog service declaration; implementations stay in Windows and Qt)",
         "src/ui/include/GoSurvey/UI/MtextToolbar.hpp",
-        "src/ui/include/GoSurvey/UI/RichTextLayout.hpp (uses UI SpanRange; Document parser adapts its ranges at the call site)",
-        "src/platform/WinFileDialogs.hpp (declarations only; the implementation stays Windows; see sections)"
+        "src/ui/include/GoSurvey/UI/RichTextLayout.hpp (uses UI SpanRange; Document parser adapts its ranges at the call site)"
       ],
       "pendingAssignment": [],
       "currentSections": [
-        "src/platform/WinFileDialogs.hpp: all Browse* declarations, the file-dialog interface",
-        "src/platform/FailureReportUi.hpp: ShowReportDialog declaration (lines 344-403 are the Windows implementation), the report-dialog service shape",
+        "src/ui/include/GoSurvey/UI/FileDialogs.hpp: all Browse* declarations, the file-dialog interface",
+        "src/ui/include/GoSurvey/UI/FailureReportDialog.hpp: ShowReportDialog declaration (lines 344-403 are the Windows implementation), the report-dialog service shape",
         "src/ui/include/GoSurvey/UI/CommandBar.hpp: lines 64-72 TrimAscii are Core (Core audit); the rest is UI",
         "src/platform/FailureReportUi.cpp:134 and :384: MessageBoxW calls, Windows implementation of the UI message-dialog interface",
         "src/platform/CrashReporter.cpp:723: calls ShowReportDialog; the trigger is Debug, the dialog is UI",
