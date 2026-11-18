@@ -46,17 +46,49 @@ def _read_systems(mapping_root):
     return systems
 
 
-def _resolve_include(root, source, include, mapping):
-    candidate_paths = [source.parent / include, root / include, root / "src" / include]
-    include_directories = {root / entry["path"] for entry in mapping.get("mappedFolders", [])}
-    include_directories.update(root / Path(entry["path"]).parent for entry in mapping.get("fileMappings", []))
-    candidate_paths.extend(directory / include for directory in include_directories)
+def _resolve_include(root, source, include, mapping, source_renames=None,
+                     reference_root=None, reference_source=None):
+    candidate_paths = _include_candidate_paths(root, source, include, mapping)
     found = {candidate.resolve() for candidate in candidate_paths if candidate.is_file()}
+    if source_renames and reference_root and reference_source:
+        reference_candidates = _include_candidate_paths(
+            reference_root, reference_source, include, mapping)
+        reference_paths = set()
+        for candidate in reference_candidates:
+            try:
+                relative = candidate.resolve().relative_to(reference_root).as_posix()
+            except ValueError:
+                continue
+            if candidate.is_file():
+                reference_paths.add(relative)
+
+        mapped_reference = {source_renames.get(path, path) for path in reference_paths}
+        renamed_destinations = {source_renames[path] for path in reference_paths
+                                if path in source_renames}
+        mapped_destinations = {root / path for path in mapped_reference}
+        moved_destinations = {root / path for path in renamed_destinations}
+        if (len(mapped_destinations) == len(mapped_reference)
+                and all(path.is_file() for path in mapped_destinations)):
+            expanded = set(found)
+            expanded.update(moved_destinations)
+            # Preserve the old resolution only when the candidate's entire set is
+            # exactly the reference set after proven moves. A newly added header
+            # therefore cannot make a previously unique include look ambiguous.
+            if expanded == {path.resolve() for path in mapped_destinations}:
+                found = expanded
     if len(found) == 1:
         return next(iter(found))
     if len(found) > 1:
         return "ambiguous"
     return None
+
+
+def _include_candidate_paths(root, source, include, mapping):
+    candidate_paths = [source.parent / include, root / include, root / "src" / include]
+    include_directories = {root / entry["path"] for entry in mapping.get("mappedFolders", [])}
+    include_directories.update(root / Path(entry["path"]).parent for entry in mapping.get("fileMappings", []))
+    candidate_paths.extend(directory / include for directory in include_directories)
+    return candidate_paths
 
 
 def _identity(item):
@@ -118,7 +150,61 @@ def _proven_source_renames(reference_root, candidate_root):
     return renames
 
 
-def check(root, mapping_root=None):
+def _changed_source_paths(reference_root, candidate_root):
+    """Return candidate source paths edited since the reference, or None on error."""
+    try:
+        reference_head = subprocess.check_output(
+            ["git", "-C", str(reference_root), "rev-parse", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL).strip()
+        candidate_head = subprocess.check_output(
+            ["git", "-C", str(candidate_root), "rev-parse", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL).strip()
+        changes = subprocess.check_output(
+            ["git", "-C", str(candidate_root), "diff", "--name-status", "-z",
+             "--find-renames=100%", reference_head, candidate_head],
+            text=True, encoding="utf-8", errors="surrogateescape", stderr=subprocess.DEVNULL)
+        working_changes = subprocess.check_output(
+            ["git", "-C", str(candidate_root), "diff", "--name-only", "-z", "HEAD"],
+            text=True, encoding="utf-8", errors="surrogateescape", stderr=subprocess.DEVNULL)
+        untracked = subprocess.check_output(
+            ["git", "-C", str(candidate_root), "ls-files", "--others", "-z"],
+            text=True, encoding="utf-8", errors="surrogateescape", stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+    changed = set()
+    fields = changes.split("\0")
+    index = 0
+    while index < len(fields) - 1:
+        status = fields[index]
+        index += 1
+        if status.startswith("R"):
+            if index + 1 >= len(fields):
+                return None
+            _, new_path = fields[index:index + 2]
+            index += 2
+            # --find-renames=100% ensures this is an unchanged move.
+            continue
+        if status.startswith("C"):
+            if index + 1 >= len(fields):
+                return None
+            index += 1
+            changed.add(fields[index])
+        else:
+            changed.add(fields[index])
+        index += 1
+    changed.update(path for path in working_changes.split("\0") if path)
+    changed.update(path for path in untracked.split("\0") if path)
+    candidate_sources = {
+        path.relative_to(candidate_root).as_posix()
+        for path in (candidate_root / "src").rglob("*")
+        if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES
+    }
+    return changed & candidate_sources
+
+
+def check(root, mapping_root=None, source_renames=None, changed_sources=None,
+          reference_root=None):
     root = Path(root).resolve()
     mapping_root = Path(mapping_root or root).resolve()
     mapping_path = mapping_root / "docs/architecture/system-map.json"
@@ -153,7 +239,18 @@ def check(root, mapping_root=None):
                                        "rule": result["rule"], "message": result["message"]})
                 includes.append(result)
                 continue
-            target_path = _resolve_include(root, source, include, mapping)
+            include_renames = source_renames
+            reference_source = None
+            if changed_sources is not None and relative in changed_sources:
+                include_renames = None
+            if include_renames and reference_root:
+                old_relative = next((old for old, new in include_renames.items()
+                                     if new == relative), relative)
+                possible_reference_source = reference_root / old_relative
+                if possible_reference_source.is_file():
+                    reference_source = possible_reference_source
+            target_path = _resolve_include(root, source, include, mapping, include_renames,
+                                           reference_root, reference_source)
             result = {"file": relative, "include": include, "classification": "allowed"}
             if target_path is None:
                 if delimiter == '"' or include.startswith("src/"):
@@ -206,7 +303,17 @@ def main():
     args = parser.parse_args()
     root = args.root.resolve()
     baseline_path = args.baseline if args.baseline.is_absolute() else root / args.baseline
-    result = check(root)
+    changed_sources = None
+    path_renames = {}
+    if args.reference_root:
+        reference_root = args.reference_root.resolve()
+        changed_sources = _changed_source_paths(reference_root, root)
+        path_renames = _proven_source_renames(reference_root, root)
+        if changed_sources is None:
+            # Without a trustworthy source diff, do not suppress include growth.
+            path_renames = {}
+    result = check(root, source_renames=path_renames, changed_sources=changed_sources,
+                   reference_root=args.reference_root.resolve() if args.reference_root else None)
     if args.write_baseline:
         baseline_path.parent.mkdir(parents=True, exist_ok=True)
         baseline_document = {"generatedFrom": "beta", "violations": result["violations"]}
@@ -221,7 +328,6 @@ def main():
             # A mapping-only change can reveal violations already present in base source. Use
             # the candidate ownership table for both scans so only source changes grow the ratchet.
             reference_violations = check(args.reference_root.resolve(), mapping_root=root)["violations"]
-            path_renames = _proven_source_renames(args.reference_root.resolve(), root)
             baseline_growth = compare_baseline(
                 baseline, reference_violations, path_renames)["new_violations"]
             comparison["ok"] = comparison["ok"] and not baseline_growth
