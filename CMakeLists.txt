@@ -590,7 +590,7 @@ target_include_directories(gosurvey_renderer PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include>"
   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/src")
 target_compile_features(gosurvey_renderer PUBLIC cxx_std_17)
-target_link_libraries(gosurvey_renderer PUBLIC GoSurvey::Survey)
+target_link_libraries(gosurvey_renderer PUBLIC GoSurvey::Document GoSurvey::Geometry GoSurvey::Survey)
 gosurvey_target_warnings(gosurvey_renderer)
 
 # GoSurvey::Terrain — T2 Domain library (issue #1245). The pure surface/TIN and grading

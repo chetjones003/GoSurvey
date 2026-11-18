@@ -2515,25 +2515,11 @@
       "message": "src/util/cadblock.hpp includes \"CadEntities.hpp\": Document may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/document/include/GoSurvey/Document/cadblock.hpp",
-      "include": "cadsolid.hpp",
-      "target": "Renderer",
-      "rule": "forbidden dependency",
-      "message": "src/util/cadblock.hpp includes \"cadsolid.hpp\": Document may not depend on Renderer (forbidden dependency)"
-    },
-    {
       "file": "src/document/include/GoSurvey/Document/cadpiperun.hpp",
       "include": "CadEntities.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/util/cadpiperun.hpp includes \"CadEntities.hpp\": Document may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/document/include/GoSurvey/Document/cadpiperun.hpp",
-      "include": "cadsolid.hpp",
-      "target": "Renderer",
-      "rule": "forbidden dependency",
-      "message": "src/util/cadpiperun.hpp includes \"cadsolid.hpp\": Document may not depend on Renderer (forbidden dependency)"
     },
     {
       "file": "src/viewport/CadRubberPreview.cpp",

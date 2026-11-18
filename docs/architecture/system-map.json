@@ -4570,17 +4570,17 @@
       ]
     },
     {
-      "path": "src/util/cadsolid.hpp",
+      "path": "src/document/include/GoSurvey/Document/CadSolidPtr.hpp",
       "lines": [
-        34,
-        34
+        27,
+        27
       ],
       "system": "Document",
       "concern": "solid entity storage pointer",
       "symbols": [
         "CadSolidPtr"
       ],
-      "note": "Only the alias is Document. Tessellation and display types are Renderer caches; the sub-object overlay is Interaction."
+      "note": "Document-owned immutable B-rep storage handle, separated from Renderer display caches."
     },
     {
       "path": "src/util/PlotScales.hpp",
@@ -7051,7 +7051,7 @@
         "CadSolidDisplayBatch",
         "CadSolidDisplayGeometry"
       ],
-      "note": "Derived display caches in storage coordinates (triangles, normals, edges) that the renderer consumes. The solid model is Document (section at line 34). Mapped ambiguous."
+      "note": "Derived display caches in storage coordinates (triangles, normals, edges) that the renderer consumes. The solid model is Document-owned through CadSolidPtr. Mapped ambiguous."
     },
     {
       "path": "src/util/cadsolid.hpp",
@@ -14194,7 +14194,7 @@
         "src/util/cadtable.hpp (system Document, ambiguous)",
         "src/util/PlotScales.hpp (system Document, ambiguous)",
         "src/util/cadtablestyle.hpp (section only; point-table rows and cells are Survey)",
-        "src/util/cadsolid.hpp (section only: CadSolidPtr)",
+        "src/document/include/GoSurvey/Document/CadSolidPtr.hpp (Document-owned immutable solid storage handle)",
         "src/commands/EntityId.hpp, src/commands/EntityId.cpp (section only; folder is Commands)",
         "src/commands/TextStyle.hpp, src/commands/DimensionStyle.hpp, src/commands/MultileaderStyle.hpp (section only; folder is Commands)",
         "src/commands/CadLinetype.hpp, src/commands/CadLinetype.cpp, src/commands/CadColor.hpp (section only; folder is Commands)",
@@ -15404,7 +15404,7 @@
         "src/render/ViewportRenderer.hpp (RenderTuning and the ViewportRenderer class with its GL-handle members; includes CadCommands.hpp, CadSnap.hpp and CadOnlineMap.hpp, which the map forbids)",
         "src/render/ViewportRenderer.cpp (4256 lines and grandfathered in .github/file-size-baseline.json. Device init, shader, framebuffer and multisample setup from line 827; RenderScene from about line 1250 to 3855; GPU release for solids, meshes and point clouds; part thumbnails and BMP capture from 3889. Calls GL directly.)",
         "src/util/gizmooverlay.hpp (CadGizmoOverlay, the translate-gizmo draw channel; mapped ambiguous, see sections)",
-        "src/util/cadsolid.hpp lines 43-117 and 131-152 (solid display tessellation, batch and overlay carriers; the rest of the file is Document, see sections)",
+        "src/util/cadsolid.hpp lines 43-117 and 131-152 (Renderer solid display tessellation, batch and overlay carriers)",
         "src/geometry/include/GoSurvey/Geometry/geom2d.hpp and src/geometry/src/geom2d.cpp (section only: view-relative conversion, framebuffer-dependent tessellation and GL_LINES emitters; the rest is Geometry)",
         "src/util/watershed.hpp and src/util/watershed.cpp (section only: GL_LINES display builders; the analysis is Terrain)",
         "src/viewport/TransformPreview.cpp (section only: AppendSolidEdge; the folder is Interaction)",
@@ -15632,7 +15632,7 @@
           "src/renderer/include/GoSurvey/Renderer/SectionClipPublic.hpp",
           "src/renderer/include/GoSurvey/Renderer/ViewportProjectionPublic.hpp"
         ],
-        "stagingBoundary": "Five pure Renderer contracts and cache provider compile through the standalone target. ViewportRenderer remains composed by existing Qt/OpenGL application code; GL calls, Qt widgets, backend handles, app-coupled state, mixed source sections, and file output remain with approved owners/tickets. No device seam or OpenGL backend is created. cadsolid.hpp remains mixed until its approved split.",
+        "stagingBoundary": "Five pure Renderer contracts and cache provider compile through the standalone target. ViewportRenderer remains composed by existing Qt/OpenGL application code; GL calls, Qt widgets, backend handles, app-coupled state, mixed source sections, and file output remain with approved owners/tickets. No device seam or OpenGL backend is created. CadSolidPtr is Document-owned through its public header; the Renderer display carriers remain in cadsolid.hpp for the history-preserving move.",
         "fixtures": {
           "rendererTarget": [
             "tests/CameraTests.cpp",

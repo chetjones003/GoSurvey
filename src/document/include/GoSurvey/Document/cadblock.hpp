@@ -4,7 +4,8 @@
 /// Header-only so Catch2 can cover transforms, nesting, and cycle detection without GL.
 
 #include "CadEntities.hpp"
-#include "cadsolid.hpp"
+#include <GoSurvey/Document/CadSolidPtr.hpp>
+#include <GoSurvey/Geometry/brep.hpp>
 #include <GoSurvey/Math/ray3d.hpp>
 
 #include <algorithm>
