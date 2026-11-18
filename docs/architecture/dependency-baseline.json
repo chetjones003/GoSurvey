@@ -2513,6 +2513,13 @@
       "target": "Commands",
       "rule": "private-header include",
       "message": "src/viewport/ViewportPickPolicy.hpp includes \"CadCommands.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
+    },
+    {
+      "file": "src/qt/EditorViewport.cpp",
+      "include": "util/gizmooverlay.hpp",
+      "target": "Renderer",
+      "rule": "forbidden dependency",
+      "message": "src/qt/EditorViewport.cpp includes \"util/gizmooverlay.hpp\": Qt may not depend on Renderer (forbidden dependency)"
     }
   ]
 }
