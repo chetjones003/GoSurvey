@@ -1,0 +1,8 @@
+title = "GoSurvey gitleaks configuration"
+
+[[allowlists]]
+description = "Auth0 client ID is public browser configuration"
+condition = "AND"
+paths = ['''site/account\.html''']
+regexTarget = "line"
+regexes = ['''AUTH0_CLIENT_ID\s*=\s*"[A-Za-z0-9_-]+"''']

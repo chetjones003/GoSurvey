@@ -1,0 +1,492 @@
+# Release notes
+
+These notes are shown **to users inside GoSurvey**, in the update dialog, before they accept an
+update. Write them for surveyors, not for developers.
+
+- Say what changed **in the program**, in the words a user would use: commands, drawings, points,
+  surfaces, plotting.
+- Leave out anything a user cannot see: refactors, build changes, CI, test counts, requirement
+  and task numbers, file and function names, compiler behaviour.
+- One line per change. If a change needs a paragraph to explain, it probably needs a shorter one.
+- Keep the newest version at the top.
+
+The heading must be the plain three-part version (`## 0.5.0`). Every beta in that cycle shows the
+same section, because a beta is a preview of that release. A version with no section here shows a
+short fallback message instead — which is a missed opportunity, not a failure.
+
+Older release sections below are historical; format names in them describe the builds of that
+time. Current GoSurvey drawings use DWG.
+
+---
+
+## 0.7.8
+
+**Updating GoSurvey**
+- Fixed the Start Menu still opening an old version after an update. The installer and install command now ask Windows for permission to remove an older Program Files copy, keep your settings, and stop with a clear message if it can't be removed.
+
+---
+
+## 0.7.7
+
+**Updating GoSurvey**
+- When moving an older Program Files installation to your user profile, GoSurvey now recognizes and removes the old version so the Start Menu opens the updated copy.
+- The install command and installer skip reinstalling GoSurvey when the same or a newer version is already installed.
+
+---
+
+## 0.7.6
+
+**Paper-space viewport state**
+- Paper-space viewports now keep their camera, UCS, layer color overrides, and independent annotation
+  scale when you save and reopen R2018 DWG or DXF drawings. Set a viewport's scale independently
+  from zoom; new viewports start with the drawing's current annotation scale.
+
+**Installer**
+- The PowerShell install command now recognizes published stable releases and continues with setup.
+
+---
+
+## 0.7.5
+
+**Moving GoSurvey to your user profile**
+- GoSurvey now installs under `%LOCALAPPDATA%\Programs\GoSurvey`. Updating from Program Files moves
+  the old copy after one Windows approval and keeps your settings and user data. Future updates use
+  the per-user install and do not need elevation.
+
+## 0.7.4
+
+**Traverse Editor: unit scaling, ground-to-grid, curvature and refraction, and a new LSA
+adjuster — new**
+- The Traverse Editor now always shows and works in your drawing's own linear unit (feet or
+  meters, set in Drawing Settings) — every distance field, standard-error entry, and report is
+  labeled with that unit, so there's no more guessing which unit a number is in.
+- New "Apply scale factor" option reduces field-measured ground distances to grid before they
+  drive coordinates, closure, and the adjustment — using the projection already set on your
+  drawing (e.g. MGA56/GDA2020). Choose **Combined** (grid × sea-level factor) or **Grid only**.
+  Off by default; your existing traverses are unaffected until you turn it on.
+- Traverse elevations now allow for earth curvature and refraction: the editor applies the
+  standard combined curvature-and-refraction correction to each leg's elevation difference —
+  worth about 7 cm on a 1 km leg, so long sights no longer drift the way plain trigonometry left
+  them. The "Curv + Refr" option is on by default, with the refraction coefficient (Refr k)
+  beside it (0.14 suits average conditions; the editor warns if k is set outside its typical
+  −2 to +2 range). Legs with no vertical angle are unchanged, and turning the option off restores
+  the previous plain-trigonometry elevations.
+- The Traverse Editor has a new least-squares adjustment (LSA) engine and editor: a standalone
+  window with syntax highlighting, line numbers, inline error messages, and a plan-view preview
+  with error ellipses. Importing more than one raw-data file now merges them into one continuous
+  traverse instead of replacing what you already imported. Real Trimble Access JobXML files are
+  now read correctly, and open (non-closed-loop) traverses can be adjusted too, not just closed
+  loops. Project-wide adjustment settings (instrument standard errors, centering error, 2D/3D,
+  convergence) now live in one Project Settings dialog and are saved with the traverse. The
+  adjustment report opens with a summary of the files and settings used, and exports to .txt,
+  .pdf, or .rtf.
+
+**Point cloud file formats — new**
+- GoSurvey can now import and export laser-scan point clouds in **E57**, **LAS**, **LAZ**,
+  **PTS**, and **PTX**, all through the Point Cloud ribbon's **Attach** command.
+- LAS and LAZ support every point format the format defines (0 through 10), including the
+  GPS-time and extended-classification formats modern scanners and government lidar deliverables
+  (e.g. USGS) commonly use — not just the older, simpler ones.
+- **Confirmed working against real-world files: E57 and LAS/LAZ.** PTS and PTX are implemented
+  and tested against hand-built sample files, but we don't yet have real-world PTS/PTX files to
+  confirm against — if you hit an issue importing one, please send us the file.
+
+- Fixed a second case of the command line running a different command than what was typed.
+- GoSurvey no longer asks you to sign in. Anonymous install and open pings run in the background
+  and never block the app, including when you are offline.
+
+## 0.7.3
+
+- The Pipe Network ribbon button now starts a pipe run directly.
+- Feature Line ribbon buttons now start the Feature Line command.
+- Removed ribbon buttons for features that weren't implemented yet (Parcel, Assembly,
+  Intersections, Pond, Underground Storage, Channel).
+- Added a Survey Point Database grid panel for browsing and editing points in a table.
+- New LAYOUT, PAGESETUP, and VPSCALE commands for setting up paper space layouts and viewport
+  scale.
+- A line-endpoint grip now shows a Lengthen/Stretch hover menu, and the Perpendicular snap
+  override works correctly during a grip drag.
+- Fixed the command line sometimes running a different command than what was typed.
+
+## 0.7.2
+
+**Extract Coordinates from a PDF — new**
+- Drag a box over coordinate text on a PDF sheet — a monument block, a point table, or a bare
+  northing/easting — and GoSurvey reads it for you.
+- Review what it read next to the source text and accept or deny each one, or accept or deny them
+  all at once, before anything is created.
+- An accepted point becomes a survey point (auto-numbered, or matched to a conflicting number
+  through the usual overwrite/offset prompt) or a circle when there is no description or
+  elevation. Accepting brings you straight to the drawing.
+- A region with no selectable text — a scanned page — says so plainly instead of pretending to
+  find something.
+
+**Paste and drawing exchange**
+- Paste between projects now offers to convert the pasted content to the destination's
+  coordinate system and units.
+- Paper space content (viewports and sheet geometry) now survives DXF export and a DWG round
+  trip.
+
+**Plant 3D / DWG**
+- More Plant 3D piping solids import correctly, verified against AutoCAD's own geometry.
+- Plant fittings are written back out on save; DWG save now defaults to AutoCAD 2018.
+
+**Fixes**
+- Deleting a paper layout no longer leaves the drawing pointing at stale state.
+- Several ribbon wiring gaps on paper-space tools fixed.
+- MOVE/COPY/ROTATE/MIRROR on paper-space points, and a real paper-space SCALE.
+
+---
+
+## 0.7.1
+
+**Installation and startup**
+- The installer now includes the **Visual C++ runtime** GoSurvey needs, so it starts on a fresh PC without extra downloads.
+- If GoSurvey cannot start, a **startup problem dialog** explains what went wrong, and **Send This Report** opens a pre-filled support issue.
+
+**Updates**
+- The **Software Update** dialog now uses the same illustrated look as What's New.
+## 0.7.0
+
+**Projects — start here**
+- Organize a job as a **project**: one folder, one shared **survey point database**, and every
+  drawing tab that belongs to the job.
+- **Recent Projects** on the start screen; open several projects at once when you need to.
+- **Add drawing to project** with a preview; align units and coordinate system when a drawing
+  comes from outside the project.
+- Track DWG, PDF, and point cloud files; **pack project** into a single archive to email or archive.
+- Project settings enforce zone and units; per-drawing overrides where you need them.
+- Turnover records and warnings when files are missing, out of date, or edited elsewhere.
+
+**Coordinate systems and maps**
+- Work in named **coordinate systems** (state plane and other zones) with project-wide enforcement.
+- Show **USGS aerial imagery** as an online map under your linework.
+- **Capture** a map extent into the drawing so the background stays with the file offline.
+- Geographic marker and geodata travel through save, reopen, and DWG exchange where supported.
+
+**Built-in PDF viewer**
+- Open PDFs with **PDFVIEW** or from the project file list — no external viewer required.
+- Dedicated PDF window with zoom, pan, and fast page rendering.
+- Mark up sheets; measure length, area, and angle; set drawing scale on the PDF.
+- Compare two revisions side by side and see what changed.
+- Split a PDF into pages; add PDFs to a project file list without placing them on a layout.
+
+**Point clouds**
+- Attach point cloud scans (including **E57**); control display density and color.
+- Clip and style clouds; use them with surfaces and linework in the same drawing.
+- Project file tracking includes cloud paths when you pack a job.
+
+**Piping and fittings**
+- Route **pipe runs** with size, elevation, and fitting-aware geometry.
+- Place standard **fittings** from the built-in library (for example flanges).
+- Snap to pipe run ends; move and copy runs like other model objects.
+- Export pipe geometry in DWG with the rest of the drawing.
+
+**Surfaces, grading, and 3D**
+- Build and edit TIN **surfaces**; volumes, contours, and surface styles.
+- **DRAPE** linework onto a surface; linked geometry can follow surface rebuilds.
+- **GRADING** side slopes from a feature line to a **daylight line** on existing ground.
+- **PADSOLID** models cut and fill for building pads.
+- **3D solids**, meshes, sections, and improved DWG import/export for civil and piping models.
+
+**Drawing, exchange, and polish**
+- Dynamic blocks, fields, materials, and visual styles in DWG round trip (where supported).
+- Multileaders, improved dimensions, box selection preview, and object-layer rules.
+- Press **F1** for the updated in-app manual and command reference.
+
+---
+
+## 0.6.0
+
+**3D solids — new**
+- Draw and edit **3D solids** — boxes, cylinders, spheres, cones, tori, wedges, pyramids, and
+  polysolids — with **FILLET**, **CHAMFER**, **SECTION**, and **SOLIDCHECK**.
+- **Rotate** and **scale** a solid about any axis; **move** a vertex or edge with grips and the
+  gizmo.
+- **UCS Object** aligns the working plane to a flat face on a solid.
+- Import standalone **ACIS `.sat`** files as solid blocks.
+
+**Precision and coordinates**
+- Survey coordinates and drawing geometry are stored at **full double precision** (±0.002 ft),
+  so state-plane work and large-coordinate imports stay exact through save and reopen.
+
+**Modify commands in 3D**
+- **MOVE**, **COPY**, **ROTATE**, **SCALE**, **MIRROR**, **STRETCH**, **OFFSET**, and **ARRAY**
+  honour the active UCS and work in 3D model space.
+- **TRIM** drawn-line mode resolves cuts in true 3D.
+- **EXPLODE** breaks a polyline into its individual segments.
+
+**Snapping and inquiry**
+- **Quadrant** object snap for circles and arcs.
+- **DIST** reports horizontal distance and grade between two picks.
+
+**Help and interface**
+- Press **F1** (or type **HELP**) for the full in-app user manual with command reference.
+- Refreshed **start screen**, splash, and **What's New** billboard; blue theme across dialogs
+  and the viewport chrome.
+- **Multi Selection** disambiguates overlapping picks at the cursor.
+- Improved ribbon layout and a clearer launch flow with update check on startup.
+
+**Drawing exchange**
+- **Save As** no longer crashes or drops you off the drawing tab.
+- DWG import skips Civil 3D parts-catalog solids that cannot be represented, keeping the rest
+  of the drawing.
+
+---
+
+## 0.5.6
+
+**A tabbed ribbon**
+- The toolbar is now organised into tabs — Home, Insert, Annotate, View, Manage, Output, Survey —
+  and rearranges itself to fit the window when you make it narrower.
+- Where a command has options, the option words in the prompt are now clickable instead of
+  needing to be typed.
+- The cursor's input box grows and shrinks to fit what you are typing.
+
+**Drawing**
+- **ARRAY** — copy an object into a rectangular grid or a polar ring.
+- **POLYLINE** now closes when you click its start point, and finishes when you press Enter.
+- Object selection is its own visible mode, so it is clear when the program is waiting for you
+  to pick things.
+
+**Dimensions**
+- A single place to set dimension appearance, edited through the new **DIMSTY** dialog.
+- Angular dimensions (**DIMANGULAR**) place and measure correctly.
+
+**Snapping and zoom**
+- Snapping picks the nearest candidate more reliably, and Shift + right-click locks a snap.
+- Double-tap the middle mouse button to zoom to extents.
+- **ZOOM EXTENTS** no longer misframes; inside an activated viewport it frames that viewport
+  rather than the whole sheet.
+
+**Paper space**
+- MOVE, COPY and DELETE on a sheet now ask you to select objects first.
+- Circles, arcs, ellipses and polylines drawn on a sheet stay on that sheet.
+
+**DXF**
+- Arcs and ellipses survive a save-and-reopen through DXF unchanged.
+- Exported DXF files use unique handles and declare every layer they reference.
+- Arc angles and the saved view no longer drift on export.
+
+---
+
+## 0.5.5
+
+**FILLET and CHAMFER — new**
+- **FILLET** rounds a corner between two lines, arcs, or polyline segments with a tangent arc,
+  trimming or extending each one to meet it. Pick two objects; type `R` first to set the radius,
+  `T` to toggle Trim/No trim.
+- **CHAMFER** connects two lines or polyline segments with a straight bevel instead of a curve.
+  Type `D` to set two distances, or `A` for a distance and an angle.
+- A radius or distance the picked objects can't actually support is refused with a clear message,
+  instead of drawing something wrong.
+- Both remember your last-used radius, distances, and Trim/No-trim setting the next time you use
+  them, and work the same way in paper space as in model space.
+
+---
+
+## 0.5.4
+
+**Contours you can keep — new**
+- **EXTRACT** turns a surface's contours into ordinary polylines. Type `EXTRACT <surface>`, or
+  `EXTRACT <surface>, <layer>` to put them on a layer of your choosing — the layer is created if it
+  does not exist yet.
+- You get exactly the contours you can see: the minor and major intervals set in the surface's
+  style. If one of the two is switched off it is not extracted, and GoSurvey says which one it
+  skipped rather than leaving you to count.
+- The result is **ordinary drawing geometry, not linked to the surface**. Rebuilding the surface,
+  restyling it, or erasing it altogether leaves the polylines exactly as they are — so you can edit
+  them, label them, and send them out.
+- It reports how many contours it made, at which interval, and on which layer. One undo removes the
+  whole lot.
+- A surface that has never been built, or whose style is showing no contours, creates nothing and
+  tells you why instead of quietly doing nothing.
+
+---
+
+**Also new since you last looked**
+
+These arrived in 0.5.3, but its notes never described them.
+
+**Surfaces**
+- **Surfaces** on the Survey ribbon opens the surface list: every surface in the drawing with its
+  point count, triangle count and elevation range, and whether it is out of date or rebuilding right
+  now. Create, rename, delete, rebuild and restyle from the same place.
+- **Breaklines.** Designate an existing line or polyline as a breakline (`DBL`) and no triangle will
+  cross it — ridges, toes and swales hold their shape instead of being triangulated through.
+- **Boundaries.** Designate a closed polyline as an **outer** boundary to clip the surface to it, a
+  **hide** boundary to punch a void, or a **show** boundary to bring surface back inside a void
+  (`DBD`). They apply in the order you add them.
+- **Surfaces keep themselves up to date.** Move or delete a point the surface is built from, or edit
+  a breakline, and it retriangulates on its own — there is nothing to press. The work happens in the
+  background, so your edit finishes straight away and the surface is marked out of date until the
+  new one lands.
+- **Surface styles** (`SURFSTYLE`, or `SS`) — a named, reusable style controlling minor and major
+  contour interval, each with its own colour, linetype and lineweight, plus triangles, border and
+  points. Editing a style changes every surface using it, and changing how a surface looks never
+  re-triangulates it.
+- **Build a surface straight from a point file.** Link a `.csv` or `.txt` into a surface and its
+  points feed the triangulation **without becoming drawing points** — so a large point delivery does
+  not have to land in your drawing first. Edit the file and the surface follows it. You can import
+  it into the drawing later, which creates the points and a point group and breaks the link. A file
+  that has gone missing is named, and the surface keeps its last good shape rather than quietly
+  shrinking.
+
+**Grading**
+- **Feature lines — a new kind of object.** Named 3D linework carrying an elevation at every point.
+  Draw one with `FEATURELINE` (`FL`): click for position, then type the elevation for each point. It
+  selects, moves, copies, rotates, scales and erases like any other object, and it can be added to a
+  surface as a breakline, after which the surface follows it.
+- **Feature line elevations** (`FLELEVEDIT`) — a table showing, for every point, its station,
+  elevation, length to the next point, grade back and grade ahead. Type an elevation and the
+  neighbouring grades update; type a grade ahead and the next point's elevation moves instead. Raise
+  or lower the whole line by an amount. **Elevation points** let you set a grade break without
+  adding a bend in plan.
+- Feature lines are still new: TRIM, OFFSET, JOIN and copy-to-clipboard turn them down for now, and
+  say so rather than doing something surprising.
+- **3DPOLY** draws a polyline whose vertices **each carry their own elevation**, typed or taken from
+  a snap, instead of every vertex landing flat on the current ELEV plane. This is what a breakline
+  drawn by hand should be drawn with — an ordinary POLYLINE drawn free-hand put the whole line at
+  elevation 0 and tore the surface down along its length.
+
+**Fixes worth knowing about**
+- **Deleting a circle no longer damages every other circle in the drawing.** It used to shift them
+  all, so each one took the previous circle's radius as its centre — three circles became one, in
+  the wrong place — with no warning, and saving wrote the damage to the file.
+- **Polylines survive DXF.** A polyline sent out to DXF came back as a heap of unrelated lines, and
+  so did every polyline in a DXF from Civil 3D — parcel boundaries, breaklines and alignments
+  arrived already broken apart. They now arrive as polylines.
+- A DXF now records the drawing extents in the same coordinates as the objects, so the file no
+  longer changes depending on where the drawing origin sits, and a state-plane DXF that GoSurvey
+  wrote re-opens in the right place.
+- **Ctrl+S saves.** The File menu had advertised the shortcut all along, but nothing was listening
+  for it.
+- A drawing opened by double-clicking a `.gs` now knows its own file, so the first save no longer
+  asks where to put a drawing you just opened.
+- **Survey point labels stay clear of their points.** A long description used to grow the label
+  westward across the point marker it was labelling; the label now grows east, away from it.
+- A point label no longer wraps its last word onto a second line at some zoom levels and back again
+  at others, without the text having changed.
+- A label given its own typeface is now measured in that typeface, so the text stays inside its box
+  and clicking the text actually selects it.
+- A drawing containing a feature line and nothing else now draws it.
+
+---
+
+## 0.5.3
+
+**Right-click now does what you tell it to**
+- **Settings → User Preferences → Right-click Customization…** opens a dialog where you set what
+  right-click means in each situation: with nothing selected, with objects selected, and part-way
+  through a command. Each one is either "repeat the last command" or "open the shortcut menu".
+- These choices already existed, but were buried in three unlabelled drop-downs. They are now
+  spelled out, and **Cancel** puts everything back the way it was when you opened the dialog.
+- New: **time-sensitive right-click**. Turn it on and a quick right-click acts as ENTER, while
+  holding the button a moment longer opens the shortcut menu — so you can finish a command and
+  reach the menu with the same button. You set how long "a moment" is, in milliseconds.
+- It is switched **off** to begin with, so right-click keeps behaving exactly as it does today
+  until you decide otherwise. With it on, the "no selection" and "during a command" choices grey
+  out, because the length of the click is deciding those instead.
+
+**A fuller right-click menu in the drawing**
+- **Recent Input** lists what you last typed at the command line, newest first. Pick one to run it
+  again.
+- **Isolate Objects** — see below.
+- **Clipboard** for cut, copy and paste, and **Basic Modify Tools** for move, copy, rotate, scale,
+  erase, offset, trim and join, without going back to the ribbon.
+- **Pan**, **Zoom** and **Free Orbit**, plus **Quick Select** and **Options**.
+
+**Isolate Objects — new**
+- Select what you are working on and choose **Isolate Objects**: everything else disappears until
+  you choose **End Object Isolation**. **Hide Objects** does the opposite and hides just what you
+  picked.
+- Hidden objects cannot be picked while they are hidden — a window drag across where they used to
+  be will not quietly pull them into your selection.
+- Nothing is deleted, and nothing is saved: a drawing always opens showing everything.
+
+**Free Orbit**
+- Orbiting the model is now a command as well as a shortcut. Choose **Free Orbit** from the
+  right-click menu (or type ORBIT) and drag with the left mouse button; Esc, Enter or a right-click
+  ends it. Shift and the middle mouse button still orbit as before.
+
+---
+
+## 0.5.2
+
+**Point files can be .txt as well as .csv**
+- Import points and Export points now accept both. A points file that came off your data collector
+  named `.txt` shows up in the file browser straight away, instead of only appearing once you
+  switch the file type to "All files".
+- The two are the same thing to GoSurvey. The file still has to be comma-separated, and the column
+  order you choose still decides how it is read.
+- When exporting, a name you type ending in `.csv` or `.txt` is saved exactly as you typed it. A
+  name with no ending gets the one you picked in the file type list.
+- A `.txt` whose columns are separated by spaces or tabs is **not** read. It lists the rows it
+  could not understand and adds nothing to the drawing, rather than guessing where the columns
+  are — save it comma-separated and import it again.
+
+---
+
+## 0.5.1
+
+**Fixes worth knowing about**
+- Loading a points file from the survey points table no longer closes GoSurvey. It used to shut
+  the program down without warning, losing anything unsaved in the drawing.
+- The **Groups** button on the Survey toolbar now appears. It was missing, so point groups could
+  only be opened by typing the command.
+
+**A new look**
+- The dark theme has been rebuilt. Panels and dialogs now sit clearly in front of the drawing
+  instead of blending into it, and boxed areas inside a window read as their own panel.
+- The light theme is unchanged, and switching between them under Settings → Display still works
+  as before.
+
+**Points and layers tables**
+- Both tables now behave like a spreadsheet: click a column heading to sort by it, drag to resize
+  or reorder columns, and the heading row stays put while you scroll.
+- Rows are the height of one line, so many more points fit on screen at once.
+- Sorting only changes what you see. It never reorders the points in your drawing or in a saved
+  file, and editing or deleting a row always acts on the row you are looking at.
+- Coordinate rows in Properties now carry a coloured X, Y or Z marker.
+
+**Anonymous usage reporting — new in this release**
+- GoSurvey now reports anonymous usage, so development can be aimed at what people actually run
+  rather than at guesses. This exists only to guide work on the program.
+- What it sends: a random ID that identifies this installation and nothing else, the version you
+  are running, whether you are on stable or beta, and that you are on Windows. It sends this once
+  when installed, and at most once a day after that.
+- What it never sends: your name, email, company, computer name, file names, drawings, survey
+  data, or location. The random ID is not built from anything about you or your machine, and it
+  cannot be traced back to either.
+- Nothing you draw or measure ever leaves your computer.
+- You can read all of this inside the program, under Settings → System → Anonymous Usage Data.
+
+**Surfaces**
+- New **Elev/Grade** tool: pick a point to read its elevation on the surface, pick a second to get
+  the grade, slope and distance between them.
+- Where two surfaces overlap — existing and proposed — you get a named line for each, so you can
+  read both without switching anything.
+- A pick outside the surface says so instead of inventing a number.
+
+**Fixes**
+- Offsetting an object no longer produces a copy that shares the original's identity, which could
+  make later edits act on the wrong object.
+- On laptops with two graphics cards, GoSurvey now asks for the faster one instead of taking
+  whichever Windows offered.
+
+## 0.5.0
+
+**Surfaces and points**
+- Build TIN surfaces from your survey points to model existing ground.
+- Group points by rule — number range, description, or hand-picked — and reuse the group anywhere.
+- Points now keep a separate raw description alongside the description you edit.
+
+**Staying up to date**
+- GoSurvey checks for a new version each time it opens and asks before installing anything.
+- Choose between stable releases and beta previews in Settings → System → Updates.
+- Updates download, verify themselves, prompt you to save open work, then install and reopen.
+
+**Drawings**
+- Double-clicking a `.gs` file now opens that drawing instead of an empty one.
+- Drawings saved by older versions of GoSurvey keep opening; they are converted as they load, and
+  the file on disk is not changed until you save.
