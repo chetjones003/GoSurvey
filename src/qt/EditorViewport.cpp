@@ -1,8 +1,8 @@
 // GLEW must precede Qt's OpenGL headers.
 #include <GL/glew.h>
 #include "EditorViewport.hpp"
-#include "ViewportRenderer.hpp"
-#include "render/ViewportProjection.hpp"  // REQ-061/REQ-518: viewport overlay through its camera
+#include <GoSurvey/Renderer/ViewportRenderer.hpp>
+#include <GoSurvey/Renderer/ViewportProjection.hpp>  // REQ-061/REQ-518: viewport overlay through its camera
 #include "CadRubberPreview.hpp"
 #include "CadDynInput.hpp"
 #include "TransformPreview.hpp"
@@ -10,10 +10,10 @@
 #include "CadColor.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "QtAnnotations.hpp"
-#include "SectionClip.hpp"
+#include <GoSurvey/Renderer/SectionClip.hpp>
 #include "QtViewCube.hpp"
 #include "ViewportPickPolicy.hpp"
-#include "util/gizmooverlay.hpp"
+#include <GoSurvey/Renderer/GizmoOverlay.hpp>
 #include "AppPaths.hpp"
 #include "RecentDrawings.hpp"
 #include "ThumbnailCache.hpp"

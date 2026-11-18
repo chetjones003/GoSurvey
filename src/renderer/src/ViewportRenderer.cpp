@@ -1,4 +1,4 @@
-#include "ViewportRenderer.hpp"
+#include <GoSurvey/Renderer/ViewportRenderer.hpp>
 
 #include "CadLinetype.hpp"
 #include "CadSnap.hpp"

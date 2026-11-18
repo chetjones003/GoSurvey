@@ -2,7 +2,7 @@
 
 #include "CadCommands.hpp"
 #include <GoSurvey/Geometry/geom2d.hpp>
-#include "gizmooverlay.hpp"
+#include <GoSurvey/Renderer/GizmoOverlay.hpp>
 
 #include <algorithm>
 #include <cmath>

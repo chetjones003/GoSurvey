@@ -44,7 +44,7 @@
 #include <functional>
 #include <filesystem>
 #include "io/DwgIo.hpp"  // REQ-518.8: the title block DWG
-#include "render/ViewportProjection.hpp"  // REQ-518.9: the north arrow follows the view
+#include <GoSurvey/Renderer/ViewportProjection.hpp>  // REQ-518.9: the north arrow follows the view
 #include <fstream>
 #include <iterator>
 #include <limits>

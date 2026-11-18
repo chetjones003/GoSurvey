@@ -23,8 +23,8 @@
 #include "DimensionStyle.hpp"
 #include "MultileaderStyle.hpp"
 #include "GoSurvey/Document/cadtablestyle.hpp"
-#include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
-#include "render/SectionClip.hpp"  // GL-free; the pick and snap paths honour the live clip (REQ-341)
+#include <GoSurvey/Renderer/Camera.hpp>  // Commands -> Renderer is a downward dependency (architecture §2)
+#include <GoSurvey/Renderer/SectionClip.hpp>  // GL-free; the pick and snap paths honour the live clip (REQ-341)
 // The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
 // util/ray3d beside it, so the coordinate-system rules are testable without a window.
 #include <GoSurvey/Math/ucs.hpp>
@@ -57,12 +57,12 @@
 #include "GoSurvey/Document/cadtable.hpp"   // CadTable entity (REQ-148 / D-2026-08-28-i)
 #include "GoSurvey/Document/cadtablestyle.hpp"  // table styles and point rows (REQ-474, REQ-475)
 #include "GoSurvey/Document/cadblock.hpp"   // Block definitions + INSERT refs (GitHub issue #124)
-#include "util/cadsolid.hpp"   // B-rep solids + their tessellation cache (REQ-313 / ADR-045)
+#include <GoSurvey/Renderer/CadSolidDisplay.hpp>   // B-rep solids + their tessellation cache (REQ-313 / ADR-045)
 #include "util/solidpick.hpp"  // solidpick::Kind, for SelectedSubObject (REQ-318 / ADR-049)
 // SectionPlaneExtent / SectionPlaneGrip, for the section plane's stored size and handles
 // (REQ-342/339). GL-free and header-only, like every other header in this list — the reason
 // `SectionClip.hpp` was written that way (ADR-002).
-#include "render/SectionClip.hpp"
+#include <GoSurvey/Renderer/SectionClip.hpp>
 // zoomframing::FrameWorldRect, the one camera-framing implementation behind ZOOMEXTENTS, the REQ-120
 // gesture, ZOOM WINDOW and the post-import fit (REQ-122). Pure and dependency-free, like the headers
 // above it.

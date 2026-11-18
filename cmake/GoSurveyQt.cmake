@@ -88,7 +88,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/PdfWindowCompare.cpp
   src/qt/PdfScaleUi.cpp
   src/qt/FailureReport.cpp
-  src/render/ViewportRenderer.cpp
+  src/renderer/src/ViewportRenderer.cpp
   src/pdf/src/PdfAttach.cpp
   src/io/PdfPlot.cpp
   src/io/PlotStyleTable.cpp
