@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -17,17 +17,25 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+          targets: x86_64-pc-windows-msvc
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Format check
         run: cargo fmt --all -- --check
 
-      - name: Build (includes the layer rule check)
+      - name: Build for Linux (includes the layer rule check)
         run: cargo build --workspace --locked
 
-      - name: Clippy
+      - name: Clippy for Linux
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: Test
+      - name: Test for Linux
         run: cargo test --workspace --locked
+
+      # Compile-only check for Windows. It does not link or run Windows binaries.
+      - name: Check for Windows (MSVC target)
+        run: cargo check --workspace --all-targets --locked --target x86_64-pc-windows-msvc
+
+      - name: Clippy for Windows (MSVC target)
+        run: cargo clippy --workspace --all-targets --locked --target x86_64-pc-windows-msvc -- -D warnings
