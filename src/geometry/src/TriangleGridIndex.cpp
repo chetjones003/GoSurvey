@@ -4,12 +4,6 @@
 #include <cmath>
 
 namespace geometry {
-namespace {
-
-struct PlanBounds {
-  double minX = 0.0, maxX = 0.0, minY = 0.0, maxY = 0.0;
-  bool hasAny = false;
-};
 
 PlanBounds ComputePlanBounds(const std::vector<double>& vertsXyz) {
   PlanBounds b;
@@ -29,6 +23,8 @@ PlanBounds ComputePlanBounds(const std::vector<double>& vertsXyz) {
   }
   return b;
 }
+
+namespace {
 
 constexpr double kTargetTrianglesPerCell = 4.0;
 constexpr long long kMaxIndexCells = 4'000'000;

@@ -5,6 +5,14 @@
 
 namespace geometry {
 
+struct PlanBounds {
+  double minX = 0.0, maxX = 0.0, minY = 0.0, maxY = 0.0;
+  bool hasAny = false;
+};
+
+// XY bounds of packed XYZ vertices; empty input has hasAny == false.
+[[nodiscard]] PlanBounds ComputePlanBounds(const std::vector<double>& vertsXyz);
+
 /// Triangle ordinals bucketed by plan bounding box into a uniform grid.
 /// The index keeps its cell layout so existing Terrain callers can adapt without a copy.
 struct TriangleGridIndex {

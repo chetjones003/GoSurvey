@@ -7,35 +7,6 @@
 #include <algorithm>
 #include <cmath>
 
-namespace {
-
-/// Plan bounds remain part of volume computation; triangle-grid construction lives in Geometry.
-struct PlanBounds {
-  double minX = 0.0, maxX = 0.0, minY = 0.0, maxY = 0.0;
-  bool hasAny = false;
-};
-
-PlanBounds ComputePlanBounds(const std::vector<double>& vertsXyz) {
-  PlanBounds b;
-  for (size_t v = 0; v + 1 < vertsXyz.size(); v += 3) {
-    const double x = vertsXyz[v];
-    const double y = vertsXyz[v + 1];
-    if (!b.hasAny) {
-      b.minX = b.maxX = x;
-      b.minY = b.maxY = y;
-      b.hasAny = true;
-    } else {
-      b.minX = std::min(b.minX, x);
-      b.maxX = std::max(b.maxX, x);
-      b.minY = std::min(b.minY, y);
-      b.maxY = std::max(b.maxY, y);
-    }
-  }
-  return b;
-}
-
-}  // namespace
-
 TinSpatialIndex BuildTinSpatialIndex(const std::vector<double>& vertsXyz,
                                      const std::vector<std::uint32_t>& indices) {
   return geometry::BuildTriangleGridIndex(vertsXyz, indices);
@@ -81,8 +52,8 @@ SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<double>& baseVertsXyz
   if (baseIndices.size() < 3 || compIndices.size() < 3 || baseVertsXyz.size() < 9 || compVertsXyz.size() < 9)
     return out;  // no triangulation on one side: nothing to compare, reported as no overlap
 
-  const PlanBounds a = ComputePlanBounds(baseVertsXyz);
-  const PlanBounds b = ComputePlanBounds(compVertsXyz);
+  const geometry::PlanBounds a = geometry::ComputePlanBounds(baseVertsXyz);
+  const geometry::PlanBounds b = geometry::ComputePlanBounds(compVertsXyz);
   if (!a.hasAny || !b.hasAny)
     return out;
 
