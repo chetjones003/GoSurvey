@@ -1,6 +1,6 @@
 # GoSurvey Rust workspace
 
-Port of GoSurvey to Rust and Tauri, tracked by issue #1403. The Qt/C++ app in the repo root is unchanged and stays releasable until cutover.
+Rust and Tauri replacement for GoSurvey, tracked by issue #1403. This branch holds only this workspace: the original Qt/C++ app was removed from the tree, and it remains in the git history before this branch's first commit.
 
 ## Layers
 

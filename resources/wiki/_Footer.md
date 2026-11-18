@@ -1,1 +1,0 @@
-[GoSurvey on GitHub](https://github.com/chetjones003/GoSurvey) · [Releases](https://github.com/chetjones003/GoSurvey/releases) · [Report an issue](https://github.com/chetjones003/GoSurvey/issues) · Manual for GoSurvey 0.6.0
