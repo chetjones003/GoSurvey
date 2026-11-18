@@ -781,70 +781,16 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Survey / COGO
   src/commands/SurveyPointActions.cpp
 
-  # Traverse engine
-  src/traverse/FbkImport.cpp
-  src/traverse/TraverseIo.cpp
-  src/traverse/TraverseCommandLang.cpp
-  src/traverse/StarNetImport.cpp
-  src/traverse/Rw5Import.cpp
-  src/traverse/JobXmlImport.cpp
   ${GOSURVEY_TP}/pugixml/src/pugixml.cpp
   ${GOSURVEY_OPENXLSX_SOURCES}
-  # REQ-467 / REQ-468 (#804): spreadsheet read/write over OpenXLSX and hand-written CSV.
-  src/io/SpreadsheetIo.cpp
-
-  # I/O
-  src/io/GsIo.cpp
   # REQ-363 / ADR-064: Web Mercator tile maths (pure)
   src/geo/WebMercator.cpp
   # REQ-363 / ADR-064 (c): online map tile fetch + disk cache (fetch injected; no WinHTTP here)
   src/platform/MapTileService.cpp
   src/platform/StbImage.cpp
-  # REQ-457 / issue #1010: probe and place sheet raster images (JPEG/PNG/BMP)
-  src/io/RasterImage.cpp
   # REQ-363: the online map controller (GL-free; the app injects texture upload)
   src/commands/CadOnlineMap.cpp
-  # User preferences. In the domain set for UserDataDirectory(), which the BENCH command writes its
-  # results through — pure <filesystem>, no window.
-  src/io/UserPrefs.cpp
-  # REQ-308 recent-drawings MRU store (D-2026-08-30-b). Pure — <filesystem>/<fstream>/json, path
-  # and clock passed in by the caller — so the shared test executable exercises it through gosurvey_domain.
-  src/io/RecentDrawings.cpp
-  # REQ-373/374/382 (#696 P1) project file, join detection, lock file. Pure <filesystem>/json.
-  src/io/Project.cpp
-  src/io/ProjectPointDb.cpp
-  src/io/ProjectPointRules.cpp
-  src/io/ProjectAddDrawing.cpp
-  # REQ-379 (#696 P6): tracked files - attach, record, find, health. Pure <filesystem>/json.
-  src/io/ProjectFiles.cpp
-  # REQ-380 (#696 P7): Pack Project / Open Packed Project (.gspack = ZIP via miniz)
-  src/io/ProjectPack.cpp
-  # REQ-381 (#696 P8): turnover records. Pure <filesystem>/json + miniz CRC.
-  src/io/ProjectTurnover.cpp
-  # REQ-336 — What's New markdown load (path resolve + read); dismiss predicates in WhatsNewLogic.
-  src/io/WhatsNewContent.cpp
-  src/io/WikiContent.cpp
-  src/io/WikiHelp.cpp
   src/util/WhatsNewLogic.cpp
-  src/io/SurveyCsv.cpp
-  src/io/LandXmlIo.cpp
-  src/io/DxfIo.cpp
-  src/io/DwgIo.cpp
-  src/io/DwgProbe.cpp
-  src/io/LibreDwg.cpp
-  src/io/LibreDwgCad.cpp
-  src/io/LibreDwgCivil.cpp
-  src/io/LibreDwgField.cpp
-  src/io/LibreDwgDynamicBlock.cpp
-  src/io/LibreDwgMaterial.cpp
-  src/io/LibreDwgAnnotContext.cpp
-  src/io/LibreDwgVisualStyle.cpp
-  src/io/LibreDwgLights.cpp
-  src/io/LibreDwgPlant.cpp
-  src/io/DxfColors.cpp
-  src/io/DwgMeshConvert.cpp
-  src/io/GsMigrate.cpp
-
   # Platform (OS process launch for the DWG converter — no window)
   src/platform/ProcessRun.cpp
   # Executable / user-data / bundled-asset paths. Split out of AppIcon.cpp (TASK-056) so resolving
@@ -856,14 +802,7 @@ set(GOSURVEY_DOMAIN_SOURCES
 
   # Application alignment grip operations; model and display-cache implementations have their own providers.
   src/alignment/AlignmentGrips.cpp
-  src/util/gltfimport.cpp
-  src/util/stlimport.cpp
   # BENCH scene/statistics implementation is compiled by GoSurvey::Debug.
-  # REQ-320 / ADR-051: the ACIS SAT record parser feeding 3DSOLID import (GitHub issue #299). Pure
-  # and dependency-free like brep.cpp itself — no LibreDWG, no GL — so a malformed or unsupported
-  # record is caught against a hand-authored SAT fixture rather than a real vendor block library.
-  src/util/AcisSatParser.cpp
-  src/util/AcisSatWriter.cpp
   # REQ-318 sub-object picking (ADR-049, GitHub issue #148). Pure for the same reason the kernel
   # above it is: the precedence between a face, an edge and a vertex, and the refusal to report a
   # pick it cannot justify, are decided without a window.
@@ -899,6 +838,92 @@ target_include_directories(gosurvey_io_pointcloud
 target_compile_features(gosurvey_io_pointcloud PUBLIC cxx_std_17)
 target_link_libraries(gosurvey_io_pointcloud PUBLIC GoSurvey::PointCloud PRIVATE E57Format::E57Format Laszip::laszip)
 gosurvey_target_warnings(gosurvey_io_pointcloud)
+
+
+# File-format and persistence implementations share the IO ownership boundary. Legacy Commands
+# call-ins remain represented in the existing dependency baseline during this migration.
+add_library(gosurvey_io STATIC
+  src/traverse/FbkImport.cpp
+  src/traverse/TraverseIo.cpp
+  src/traverse/TraverseCommandLang.cpp
+  src/traverse/StarNetImport.cpp
+  src/traverse/Rw5Import.cpp
+  src/traverse/JobXmlImport.cpp
+  src/io/SpreadsheetIo.cpp
+  src/io/GsIo.cpp
+  src/io/RasterImage.cpp
+  src/io/UserPrefs.cpp
+  src/io/RecentDrawings.cpp
+  src/io/Project.cpp
+  src/io/ProjectPointDb.cpp
+  src/io/ProjectPointRules.cpp
+  src/io/ProjectAddDrawing.cpp
+  src/io/ProjectFiles.cpp
+  src/io/ProjectPack.cpp
+  src/io/ProjectTurnover.cpp
+  src/io/WhatsNewContent.cpp
+  src/io/WikiContent.cpp
+  src/io/WikiHelp.cpp
+  src/io/SurveyCsv.cpp
+  src/io/LandXmlIo.cpp
+  src/io/DxfIo.cpp
+  src/io/DwgIo.cpp
+  src/io/DwgProbe.cpp
+  src/io/LibreDwg.cpp
+  src/io/LibreDwgCad.cpp
+  src/io/LibreDwgCivil.cpp
+  src/io/LibreDwgField.cpp
+  src/io/LibreDwgDynamicBlock.cpp
+  src/io/LibreDwgMaterial.cpp
+  src/io/LibreDwgAnnotContext.cpp
+  src/io/LibreDwgVisualStyle.cpp
+  src/io/LibreDwgLights.cpp
+  src/io/LibreDwgPlant.cpp
+  src/io/DxfColors.cpp
+  src/io/DwgMeshConvert.cpp
+  src/io/GsMigrate.cpp
+  src/util/gltfimport.cpp
+  src/util/stlimport.cpp
+  src/util/AcisSatParser.cpp
+  src/util/AcisSatWriter.cpp
+)
+add_library(GoSurvey::IO ALIAS gosurvey_io)
+target_include_directories(gosurvey_io
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/io/include>"
+  PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/app"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/commands"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/viewport"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/ui"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/util"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/io"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/io/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/debug/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/survey"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/network/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/pdf"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/font"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/update"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
+    ${NLOHMANN_JSON_INCLUDE}
+    ${PUGIXML_INCLUDE}
+    "${GOSURVEY_TP}/OpenXLSX"
+    "${GOSURVEY_TP}/OpenXLSX/headers"
+    "${GOSURVEY_TP}/OpenXLSX/generated"
+    "${GOSURVEY_TP}/OpenXLSX/shims"
+    "${CMAKE_BINARY_DIR}/generated"
+)
+target_compile_features(gosurvey_io PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_io
+  PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Document
+    GoSurvey::Survey GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::Pdf
+    GoSurvey::IOPointCloud GoSurvey::IOTraverseReport
+  PRIVATE LibreDWG::libredwg E57Format::E57Format miniz Laszip::laszip GoSurvey::CoreShxFont)
+gosurvey_target_warnings(gosurvey_io)
 # The application aggregate compiles the remaining command/domain sources once.
 add_library(gosurvey_domain STATIC ${GOSURVEY_DOMAIN_SOURCES})
 # CadCommands.cpp exceeds MSVC's default COFF section limit on current hosted toolchains.
@@ -932,7 +957,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
-target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf GoSurvey::IOTraverseReport GoSurvey::Renderer)
+target_link_libraries(gosurvey_domain PUBLIC GoSurvey::IO GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf GoSurvey::IOTraverseReport GoSurvey::Renderer)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
@@ -944,7 +969,7 @@ gosurvey_enable_pch(gosurvey_domain)
 # Stable umbrella for application consumers; individual systems remain linkable in isolation.
 add_library(gosurvey_engine INTERFACE)
 add_library(GoSurvey::Engine ALIAS gosurvey_engine)
-target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Document GoSurvey::Survey GoSurvey::Events GoSurvey::UI GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf GoSurvey::Renderer)
+target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::IO GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Document GoSurvey::Survey GoSurvey::Events GoSurvey::UI GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf GoSurvey::Renderer)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
@@ -1945,9 +1970,9 @@ if(GOSURVEY_BUILD_TESTS)
         -ShardIndex ${_shard} -ShardCount ${GOSURVEY_CATCH_TEST_SHARDS}
         -WorkingDirectory "$<TARGET_FILE_DIR:GoSurveyQt>"
         -OutputDirectory "${CMAKE_BINARY_DIR}/../../artifacts/catch")
-    # The shared application shards retain legacy cross-system fixtures, including Document's
-    # command/workflow behavior. The isolated public consumer below provides the Document-only seam.
-    set_tests_properties(unit.catch.shard-${_shard} PROPERTIES TIMEOUT 900 COST 100 LABELS "Integration;Terrain;Survey;Document;Renderer")
+    # Shared application shards retain cross-system fixtures during the carve-outs; labels let
+    # each system's tests remain discoverable until its fixtures move to their own targets.
+    set_tests_properties(unit.catch.shard-${_shard} PROPERTIES TIMEOUT 900 COST 100 LABELS "Integration;Terrain;Survey;Document;Renderer;IO")
   endforeach()
 
   # Register the independent, isolated Qt shards before the transcript cases so CTest can run both
