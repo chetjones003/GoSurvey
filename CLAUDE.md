@@ -14,16 +14,19 @@ it is done.
 
 ## Git
 
-- `master` = latest release, always release-ready. `beta` = development.
-- Never commit to `master` or `beta`. Branch from `beta` as `feat/`, `fix/`, `docs/`, `refactor/`,
-  `test/` or `chore/<name>`, one new worktree per task.
-- Branch → PR → `beta` → release PR → `master`. Never merge a dev branch into `master`.
-- After a merge into `beta`: delete the branch locally and on `origin`, and remove its worktree
-  (`pwsh scripts/cleanup-merged-worktrees.ps1`, or `git worktree remove` + `git remote prune origin`).
-  If `git cherry origin/beta <branch>` shows unmerged commits, tag them `archive/<name>` first.
+- `master` = latest release, always release-ready. `beta` = development. `feat/rust-port` = the
+  Rust rewrite (issue #1403), where all Rust work lives and where the owner tests releases.
+- Never commit to `master`, `beta` or `feat/rust-port`. Branch from `feat/rust-port` as `feat/`, `fix/`,
+  `docs/`, `refactor/`, `test/` or `chore/<name>`, one new worktree per task.
+- Rust work: branch → PR → `feat/rust-port`. Non-Rust work: branch → PR → `beta`.
+  Release path: `feat/rust-port` → release PR → `master`. Never merge a dev branch into `master`.
+- After a merge into its base branch (`feat/rust-port` or `beta`): delete the branch locally and on
+  `origin`, and remove its worktree (`pwsh scripts/cleanup-merged-worktrees.ps1`, or
+  `git worktree remove` + `git remote prune origin`).
+  If `git cherry origin/<base> <branch>` shows unmerged commits, tag them `archive/<name>` first.
   Leave the `fork` remote alone.
 - **Emergency bypass:** only when the admin explicitly orders it (urgency alone is not enough), the
-  admin may push or merge directly to `beta`/`master`. Record it in the PR or issue.
+  admin may push or merge directly to `feat/rust-port`, `beta` or `master`. Record it in the PR or issue.
 
 ### Labels
 
@@ -105,7 +108,7 @@ GoSurvey process from another worktree. If a build is blocked, check the process
 4. **Verify:** build, run the relevant tests, run `code-review`.
 5. **Record** hard-to-reverse decisions as an ADR in `docs/adr/` and new terms in `GLOSSARY.md`
    (`domain-modeling`). Skip routine choices.
-6. **Open the PR** against `beta` with `Closes #N`.
+6. **Open the PR** against its base (`feat/rust-port` for Rust work, `beta` otherwise) with `Closes #N`.
 
 ### Qt UI changes: Civil 3D comparison
 
