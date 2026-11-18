@@ -26,9 +26,7 @@ struct ViewportValue {
   float safeScale() const { return scaleModelPerPaperIn > 1.0e-6f ? scaleModelPerPaperIn : 1.0e-6f; }
 };
 
-#if __has_include(<commands/CadCommands.hpp>) || __has_include(<QtWidgets/QWidget>) || __has_include(<GL/glew.h>)
-#error Renderer consumer must not inherit application, Qt, or OpenGL private include roots
-#endif
+// The standalone consumer links only GoSurvey::Renderer; its CMake target defines its include and link closure.
 
 int main() {
   Camera camera = Camera::Plan(12.0, -4.0, 25.0f);
