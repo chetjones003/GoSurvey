@@ -81,7 +81,7 @@ class ArchitectureDependencyTests(unittest.TestCase):
         ordinary = checker.check(self.root)["violations"]
         moved = checker.check(
             self.root, source_renames={"src/b/Private.hpp": "src/d/Private.hpp"},
-            changed_sources=set(), reference_root=reference_root)["violations"]
+            reference_root=reference_root)["violations"]
 
         self.assertEqual(ordinary[0]["target"], "Commands")
         self.assertEqual(moved, [])
@@ -110,7 +110,7 @@ class ArchitectureDependencyTests(unittest.TestCase):
         candidate = checker.check(
             self.root, source_renames={
                 "src/b/Private.hpp": "src/d/Private.hpp"},
-            changed_sources=set(), reference_root=reference_root)["violations"]
+            reference_root=reference_root)["violations"]
 
         self.assertEqual(candidate[0]["target"], "Commands")
         self.assertEqual(candidate[0]["rule"], "forbidden dependency")
@@ -137,8 +137,35 @@ class ArchitectureDependencyTests(unittest.TestCase):
 
         result = checker.check(
             self.root, source_renames={"src/b/Private.hpp": "src/d/Private.hpp"},
-            changed_sources=set(), reference_root=reference_root)["violations"]
+            reference_root=reference_root)["violations"]
 
+        self.assertEqual(result[0]["target"], "Commands")
+        self.assertEqual(result[0]["rule"], "forbidden dependency")
+
+    def test_added_include_in_edited_source_does_not_use_rename_context(self):
+        (self.root / "src/a/A.cpp").write_text('#include "Other.hpp"\n', encoding="utf-8")
+        (self.root / "src/c").mkdir()
+        (self.root / "src/c/Private.hpp").write_text("#pragma once\n", encoding="utf-8")
+        mapping_path = self.root / "docs/architecture/system-map.json"
+        mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+        mapping["mappedFolders"].append({"path": "src/c/", "system": "Commands"})
+        mapping_path.write_text(json.dumps(mapping), encoding="utf-8")
+        reference_root = self.root / "reference"
+        shutil.copytree(self.root / "src", reference_root / "src")
+
+        # This uncommitted include edit must be compared with the on-disk reference
+        # source, even though the same file has an existing include line.
+        with (self.root / "src/a/A.cpp").open("a", encoding="utf-8") as source:
+            source.write('#include "Private.hpp"\n')
+        (self.root / "src/b/Private.hpp").unlink()
+        (self.root / "src/d").mkdir()
+        (self.root / "src/d/Private.hpp").write_text("#pragma once\n", encoding="utf-8")
+
+        result = checker.check(
+            self.root, source_renames={"src/b/Private.hpp": "src/d/Private.hpp"},
+            reference_root=reference_root)["violations"]
+
+        self.assertEqual(result[0]["include"], "Private.hpp")
         self.assertEqual(result[0]["target"], "Commands")
         self.assertEqual(result[0]["rule"], "forbidden dependency")
 
@@ -282,22 +309,17 @@ class ArchitectureDependencyTests(unittest.TestCase):
         git(candidate_root, "commit", "-qm", "rename source")
 
         renames = checker._proven_source_renames(reference_root, candidate_root)
-        changed_sources = checker._changed_source_paths(reference_root, candidate_root)
         reference = checker.check(reference_root, mapping_root=candidate_root)["violations"]
-        candidate = checker.check(candidate_root)["violations"]
+        candidate = checker.check(candidate_root, source_renames=renames,
+                                  reference_root=reference_root)["violations"]
         self.assertEqual(renames, {"src/a/A.cpp": "src/a/Über.cpp"})
-        self.assertEqual(changed_sources, set())
         self.assertTrue(checker.compare_baseline(candidate, reference, renames)["ok"])
 
         source = candidate_root / "src/a/Über.cpp"
         source.write_text(source.read_text(encoding="utf-8") + '#include "b/Private.hpp"\n',
                           encoding="utf-8")
-        self.assertEqual(checker._changed_source_paths(reference_root, candidate_root),
-                         {"src/a/Über.cpp"})
         git(candidate_root, "add", "-A")
         git(candidate_root, "commit", "-qm", "add a new include")
-        self.assertEqual(checker._changed_source_paths(reference_root, candidate_root),
-                         {"src/a/Über.cpp"})
         grown = checker.check(candidate_root)["violations"]
         self.assertEqual(
             checker.compare_baseline(grown, candidate)["new_violations"],
@@ -305,8 +327,10 @@ class ArchitectureDependencyTests(unittest.TestCase):
         )
         untracked = candidate_root / "src/a/Untracked.cpp"
         untracked.write_text('#include "b/Private.hpp"\n', encoding="utf-8")
-        self.assertEqual(checker._changed_source_paths(reference_root, candidate_root),
-                         {"src/a/Über.cpp", "src/a/Untracked.cpp"})
+        untracked_result = checker.check(
+            candidate_root, source_renames=renames, reference_root=reference_root)["violations"]
+        self.assertIn(("src/a/Untracked.cpp", "forbidden dependency", "B"),
+                      list(map(checker._identity, untracked_result)))
 
     def test_git_rename_fields_preserve_tabs_and_newlines(self):
         moved_path = "src/a/with\ttab\nline.cpp"
