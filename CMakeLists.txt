@@ -582,14 +582,16 @@ target_link_libraries(gosurvey_survey PUBLIC GoSurvey::Document GoSurvey::Geomet
   PRIVATE CsMap::csmap)
 gosurvey_target_warnings(gosurvey_survey)
 
-# Real backend-neutral Renderer cache provider over the Survey alignment model.
-add_library(gosurvey_renderer_alignment_cache STATIC src/alignment/AlignmentDisplayCache.cpp)
-add_library(GoSurvey::RendererAlignmentCache ALIAS gosurvey_renderer_alignment_cache)
-target_include_directories(gosurvey_renderer_alignment_cache PUBLIC
-  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include>")
-target_compile_features(gosurvey_renderer_alignment_cache PUBLIC cxx_std_17)
-target_link_libraries(gosurvey_renderer_alignment_cache PUBLIC GoSurvey::Survey)
-gosurvey_target_warnings(gosurvey_renderer_alignment_cache)
+# Renderer owns the backend-neutral alignment display cache. Legacy rendering implementation
+# remains composed by the existing Qt/OpenGL frontend until the separate device ticket.
+add_library(gosurvey_renderer STATIC src/alignment/AlignmentDisplayCache.cpp)
+add_library(GoSurvey::Renderer ALIAS gosurvey_renderer)
+target_include_directories(gosurvey_renderer PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include>"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/src")
+target_compile_features(gosurvey_renderer PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_renderer PUBLIC GoSurvey::Survey)
+gosurvey_target_warnings(gosurvey_renderer)
 
 # GoSurvey::Terrain — T2 Domain library (issue #1245). The pure surface/TIN and grading
 # algorithms compile independently of the application layer. Physical relocation is isolated
@@ -930,7 +932,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
-target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf GoSurvey::IOTraverseReport GoSurvey::RendererAlignmentCache)
+target_link_libraries(gosurvey_domain PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf GoSurvey::IOTraverseReport GoSurvey::Renderer)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
@@ -942,7 +944,7 @@ gosurvey_enable_pch(gosurvey_domain)
 # Stable umbrella for application consumers; individual systems remain linkable in isolation.
 add_library(gosurvey_engine INTERFACE)
 add_library(GoSurvey::Engine ALIAS gosurvey_engine)
-target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Document GoSurvey::Survey GoSurvey::Events GoSurvey::UI GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf)
+target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Document GoSurvey::Survey GoSurvey::Events GoSurvey::UI GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf GoSurvey::Renderer)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
@@ -1254,14 +1256,12 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PointFileExtTests.cpp
     tests/HatchGeomTests.cpp
     tests/ZStoreTests.cpp
-    tests/CameraTests.cpp
     # REQ-059 / #1034: the ViewCube is header-only and pure, like Camera.
     tests/ViewCubeTests.cpp
     # REQ-341 live section clip (GitHub #149 acceptance 6). Header-only and pure for the same reason
     # Camera is, and for one more: the plane the shader receives is NOT in world coordinates, and a
     # version that forgets that is exact at the origin and 2,196,000 ft out at state-plane
     # coordinates. That cannot be checked by looking at a window.
-    tests/SectionClipTests.cpp
     # REQ-310 3D crosshair (GitHub #144). Header-only and pure for the same reason Camera is: an
     # axis arm drawn along the wrong screen direction still looks like a 3D cursor, so the sign
     # conventions need a test that does not depend on a window.
@@ -1584,6 +1584,25 @@ if(GOSURVEY_BUILD_TESTS)
   target_link_libraries(GoSurveyDocumentTests PRIVATE GoSurvey::Document Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyDocumentTests PROPERTIES LABELS Document)
   gosurvey_target_warnings(GoSurveyDocumentTests TEST)
+
+  # Renderer arithmetic fixtures run against the same public headers and real cache provider
+  # exposed to consumers; no application-private roots, Qt, or OpenGL are added.
+  add_executable(GoSurveyRendererTests
+    tests/CameraTests.cpp
+    tests/SectionClipTests.cpp)
+  set_target_properties(GoSurveyRendererTests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyRendererTests PRIVATE GoSurvey::Renderer Catch2::Catch2WithMain)
+  catch_discover_tests(GoSurveyRendererTests PROPERTIES LABELS Renderer)
+  gosurvey_target_warnings(GoSurveyRendererTests TEST)
+
+  add_executable(GoSurveyRendererPublicConsumer tests/Renderer/PublicConsumer.cpp)
+  set_target_properties(GoSurveyRendererPublicConsumer PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyRendererPublicConsumer PRIVATE GoSurvey::Renderer)
+  gosurvey_target_warnings(GoSurveyRendererPublicConsumer TEST)
+  add_test(NAME Renderer.public-consumer COMMAND GoSurveyRendererPublicConsumer)
+  set_tests_properties(Renderer.public-consumer PROPERTIES LABELS Renderer)
 
   # Document's isolated public consumer: deliberately has no legacy source-private include roots.
   add_executable(GoSurveyDocumentPublicConsumer tests/Document/PublicConsumer.cpp)
@@ -1928,7 +1947,7 @@ if(GOSURVEY_BUILD_TESTS)
         -OutputDirectory "${CMAKE_BINARY_DIR}/../../artifacts/catch")
     # The shared application shards retain legacy cross-system fixtures, including Document's
     # command/workflow behavior. The isolated public consumer below provides the Document-only seam.
-    set_tests_properties(unit.catch.shard-${_shard} PROPERTIES TIMEOUT 900 COST 100 LABELS "Integration;Terrain;Survey;Document")
+    set_tests_properties(unit.catch.shard-${_shard} PROPERTIES TIMEOUT 900 COST 100 LABELS "Integration;Terrain;Survey;Document;Renderer")
   endforeach()
 
   # Register the independent, isolated Qt shards before the transcript cases so CTest can run both

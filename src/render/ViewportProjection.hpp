@@ -1,7 +1,6 @@
 #pragma once
 
-#include "commands/PaperSpace.hpp"
-#include "render/Camera.hpp"
+#include <GoSurvey/Renderer/CameraPublic.hpp>
 
 /// REQ-061: project model-space geometry onto a paper-space sheet through a `Viewport`'s own camera.
 ///
@@ -16,7 +15,8 @@
 
 /// The `Camera` a viewport views model space through. In plan orientation this composes to the
 /// identity rotation, so `ModelToPaperInThroughCamera` below reproduces `ModelToPaperIn` exactly.
-[[nodiscard]] inline Camera CameraForViewport(const Viewport& vp) {
+template <typename ViewportValue>
+[[nodiscard]] inline Camera CameraForViewport(const ViewportValue& vp) {
   Camera c;
   c.targetX = vp.modelCenterX;
   c.targetY = vp.modelCenterY;
@@ -40,12 +40,17 @@
 /// **Plan view is delegated to `ModelToPaperIn` unchanged** — the parity a legacy `internal document payload` depends on.
 /// For a rotated camera the viewport rect's aspect (`paperWIn/paperHIn`) is the camera aspect, so a
 /// square model feature stays square on the sheet.
-inline void ModelToPaperInThroughCamera(const Viewport& vp, double mx, double my, double mz,
+template <typename ViewportValue>
+inline void ModelToPaperInThroughCamera(const ViewportValue& vp, double mx, double my, double mz,
                                         float* outPaperX, float* outPaperY) {
   if (!outPaperX || !outPaperY)
     return;
   if (vp.cameraIsPlan()) {
-    ModelToPaperIn(vp, mx, my, outPaperX, outPaperY);
+    const float scale = vp.safeScale();
+    const float centerX = vp.paperXIn + vp.paperWIn * 0.5f;
+    const float centerY = vp.paperYIn + vp.paperHIn * 0.5f;
+    *outPaperX = centerX + static_cast<float>((mx - vp.modelCenterX) / static_cast<double>(scale));
+    *outPaperY = centerY + static_cast<float>((my - vp.modelCenterY) / static_cast<double>(scale));
     return;
   }
   const Camera c = CameraForViewport(vp);
