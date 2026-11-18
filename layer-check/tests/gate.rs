@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use gs_layer_check::{load_workspace, parse_metadata, violations, Crate, LAYERS};
+use gs_layer_check::{Crate, LAYERS, load_workspace, parse_metadata, violations};
 
 fn krate(name: &str, deps: &[&str]) -> Crate {
     Crate {
