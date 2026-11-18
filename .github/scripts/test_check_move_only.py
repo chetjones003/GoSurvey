@@ -460,6 +460,115 @@ class MoveOnlyFixtureTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "moved-file build entry path rewrite"):
             self.check()
 
+    def test_cmake_private_include_root_can_narrow_to_moved_subtree(self):
+        self.write("src/io/Widget.hpp", "#pragma once\n")
+        self.write("CMakeLists.txt", (
+            'target_include_directories(io PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/io")\n'
+        ))
+        self.commit("configure private IO root")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        self.move("src/io/Widget.hpp", "src/io/src/Widget.hpp")
+        self.write("CMakeLists.txt", (
+            'target_include_directories(io PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/io/src")\n'
+        ))
+        self.commit("narrow IO root after moving implementation")
+
+        self.assertEqual(self.check(), [
+            "src/io/Widget.hpp -> src/io/src/Widget.hpp",
+        ])
+
+    def test_cmake_private_include_root_cannot_widen(self):
+        self.write("src/io/src/Widget.hpp", "#pragma once\n")
+        self.write("CMakeLists.txt", (
+            'target_include_directories(io PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/io/src")\n'
+        ))
+        self.commit("configure narrow private IO root")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        self.move("src/io/src/Widget.hpp", "src/io/Widget.hpp")
+        self.write("CMakeLists.txt", (
+            'target_include_directories(io PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/io")\n'
+        ))
+        self.commit("widen IO root while moving implementation")
+
+        with self.assertRaisesRegex(ValueError, "moved-file build entry path rewrite"):
+            self.check()
+
+    def test_cmake_public_scope_is_preserved_while_root_narrows_to_source_subtree(self):
+        self.write("src/io/Widget.hpp", "#pragma once\n")
+        self.write("CMakeLists.txt", (
+            'target_include_directories(io PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/io")\n'
+        ))
+        self.commit("configure public IO root")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        self.move("src/io/Widget.hpp", "src/io/src/Widget.hpp")
+        self.write("CMakeLists.txt", (
+            'target_include_directories(io PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/io/src")\n'
+        ))
+        self.commit("narrow public IO root")
+
+        self.assertEqual(self.check(), [
+            "src/io/Widget.hpp -> src/io/src/Widget.hpp",
+        ])
+
+    def test_cmake_include_root_rewrite_cannot_change_visibility_scope(self):
+        self.write("src/io/Widget.hpp", "#pragma once\n")
+        self.write("CMakeLists.txt", (
+            'target_include_directories(io PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/io")\n'
+        ))
+        self.commit("configure private IO root")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        self.move("src/io/Widget.hpp", "src/io/src/Widget.hpp")
+        self.write("CMakeLists.txt", (
+            'target_include_directories(io PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/io/src")\n'
+        ))
+        self.commit("change include visibility while moving implementation")
+
+        with self.assertRaisesRegex(ValueError, "moved-file build entry path rewrite"):
+            self.check()
+
+    def test_cmake_source_property_path_can_follow_proven_move(self):
+        self.write("CMakeLists.txt", (
+            'set_source_files_properties("src/old/Widget.cpp" PROPERTIES COMPILE_OPTIONS "/W4")\n'
+        ))
+        self.commit("configure test source property")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        self.move("src/old/Widget.cpp", "tests/WidgetTests.cpp")
+        self.write("CMakeLists.txt", (
+            'set_source_files_properties("tests/WidgetTests.cpp" PROPERTIES COMPILE_OPTIONS "/W4")\n'
+        ))
+        self.commit("move source carrying its property")
+
+        self.assertEqual(self.check(), [
+            "src/old/Widget.cpp -> tests/WidgetTests.cpp",
+        ])
+
+    def test_cmake_source_property_rejects_other_statement_changes(self):
+        self.write("CMakeLists.txt", (
+            'set_source_files_properties("src/old/Widget.cpp" PROPERTIES COMPILE_OPTIONS "/W4")\n'
+        ))
+        self.commit("configure source property")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        self.move("src/old/Widget.cpp", "src/new/Widget.cpp")
+        self.write("CMakeLists.txt", (
+            'set_source_files_properties("src/new/Widget.cpp" PROPERTIES COMPILE_DEFINITIONS "OTHER")\n'
+        ))
+        self.commit("change property while moving source")
+
+        with self.assertRaisesRegex(ValueError, "moved-file build entry path rewrite"):
+            self.check()
+
     def test_cmake_include_root_cannot_move_to_unrelated_tree(self):
         self.write("CMakeLists.txt", (
             "add_library(app src/old/Widget.cpp)\n"
