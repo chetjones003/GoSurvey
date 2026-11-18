@@ -25,6 +25,9 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          # Rename-aware debt comparison needs the PR base commit in this repository.
+          fetch-depth: 0
 
       - name: Check out PR base for the ratchet reference
         uses: actions/checkout@v4
