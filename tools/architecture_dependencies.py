@@ -5,6 +5,7 @@ import argparse
 import importlib.util
 import json
 import re
+import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
@@ -65,8 +66,14 @@ def _identity(item):
     return (item["file"], item["rule"], item["target"])
 
 
-def compare_baseline(current, baseline):
-    now, old = Counter(map(_identity, current)), Counter(map(_identity, baseline))
+def compare_baseline(current, baseline, file_renames=None):
+    file_renames = file_renames or {}
+    normalized_baseline = []
+    for item in baseline:
+        normalized = dict(item)
+        normalized["file"] = file_renames.get(normalized["file"], normalized["file"])
+        normalized_baseline.append(normalized)
+    now, old = Counter(map(_identity, current)), Counter(map(_identity, normalized_baseline))
     added = now - old
     removed = old - now
     return {
@@ -74,6 +81,41 @@ def compare_baseline(current, baseline):
         "new_violations": [list(item) for item, count in sorted(added.items()) for _ in range(count)],
         "baseline_entries_to_remove": [list(item) for item, count in sorted(removed.items()) for _ in range(count)],
     }
+
+
+def _proven_source_renames(reference_root, candidate_root):
+    """Map reference paths to candidate paths only for Git-detected source renames."""
+    try:
+        reference_head = subprocess.check_output(
+            ["git", "-C", str(reference_root), "rev-parse", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL).strip()
+        candidate_head = subprocess.check_output(
+            ["git", "-C", str(candidate_root), "rev-parse", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL).strip()
+        changes = subprocess.check_output(
+            ["git", "-C", str(candidate_root), "diff", "--name-status", "-z", "--find-renames=20%",
+             reference_head, candidate_head], text=True, encoding="utf-8", errors="surrogateescape",
+            stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.CalledProcessError):
+        return {}
+
+    renames = {}
+    fields = changes.split("\0")
+    index = 0
+    while index < len(fields) - 1:
+        status = fields[index]
+        index += 1
+        if status.startswith(("R", "C")):
+            if index + 1 >= len(fields):
+                return {}
+            old_path, new_path = fields[index:index + 2]
+            index += 2
+            if (status.startswith("R") and Path(old_path).suffix.lower() in SOURCE_SUFFIXES
+                    and Path(new_path).suffix.lower() in SOURCE_SUFFIXES):
+                renames[old_path] = new_path
+        else:
+            index += 1
+    return renames
 
 
 def check(root, mapping_root=None):
@@ -179,7 +221,9 @@ def main():
             # A mapping-only change can reveal violations already present in base source. Use
             # the candidate ownership table for both scans so only source changes grow the ratchet.
             reference_violations = check(args.reference_root.resolve(), mapping_root=root)["violations"]
-            baseline_growth = compare_baseline(baseline, reference_violations)["new_violations"]
+            path_renames = _proven_source_renames(args.reference_root.resolve(), root)
+            baseline_growth = compare_baseline(
+                baseline, reference_violations, path_renames)["new_violations"]
             comparison["ok"] = comparison["ok"] and not baseline_growth
             comparison["baseline_growth"] = baseline_growth
         result["baseline"] = comparison

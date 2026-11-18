@@ -152,6 +152,60 @@ class MoveOnlyFixtureTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.check()
 
+    def test_baseline_entry_file_path_may_follow_a_proven_source_rename(self):
+        self.write("docs/architecture/dependency-baseline.json", json.dumps({"violations": [
+            {"file": "src/old/Widget.cpp", "rule": "forbidden dependency", "target": "Math",
+             "message": "src/old/Widget.cpp includes private Math header"},
+        ]}))
+        self.commit("baseline before source rename")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True).strip()
+        self.move("src/old/Widget.cpp", "src/new/Widget.cpp")
+        self.write("docs/architecture/dependency-baseline.json", json.dumps({"violations": [
+            {"file": "src/new/Widget.cpp", "rule": "forbidden dependency", "target": "Math",
+             "message": "src/old/Widget.cpp includes private Math header"},
+        ]}))
+        self.commit("rename source and baseline path")
+
+        self.assertEqual(self.check(), ["src/old/Widget.cpp -> src/new/Widget.cpp"])
+
+    def test_baseline_rename_path_does_not_allow_new_target_or_multiplicity(self):
+        self.write("docs/architecture/dependency-baseline.json", json.dumps({"violations": [
+            {"file": "src/old/Widget.cpp", "rule": "forbidden dependency", "target": "Math",
+             "message": "original"},
+        ]}))
+        self.commit("baseline before source rename")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True).strip()
+        self.move("src/old/Widget.cpp", "src/new/Widget.cpp")
+        self.write("docs/architecture/dependency-baseline.json", json.dumps({"violations": [
+            {"file": "src/new/Widget.cpp", "rule": "forbidden dependency", "target": "Renderer",
+             "message": "original"},
+            {"file": "src/new/Widget.cpp", "rule": "forbidden dependency", "target": "Math",
+             "message": "original"},
+        ]}))
+        self.commit("rename source with changed baseline edge")
+
+        with self.assertRaises(ValueError):
+            self.check()
+
+    def test_renamed_baseline_allows_no_additions_targets_multiplicity_or_unrelated_files(self):
+        old = [{"file": "src/old/Widget.cpp", "rule": "forbidden dependency", "target": "Math",
+                "message": "original"}]
+        rewritten = dict(old[0], file="src/new/Widget.cpp")
+        cases = [
+            [rewritten, dict(rewritten, target="Renderer")],
+            [rewritten, dict(rewritten)],
+            [rewritten, dict(rewritten, file="src/other.cpp")],
+        ]
+        baseline = proof.baseline_entry_keys(json.dumps({"violations": old}),
+                                             [("src/old/Widget.cpp", "src/new/Widget.cpp")])
+        for entries in cases:
+            with self.subTest(entries=entries):
+                actual = proof.baseline_entry_keys(json.dumps({"violations": entries}),
+                                                   [("src/old/Widget.cpp", "src/new/Widget.cpp")])
+                self.assertTrue(actual - baseline)
+
     def prepare_file_size_baseline_move(self):
         self.write(".github/file-size-baseline.json", json.dumps({
             "src/old/Widget.cpp": 3200,

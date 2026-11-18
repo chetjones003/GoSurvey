@@ -421,14 +421,21 @@ def validate_pair(
     raise ValueError(f"{new_file}: edit is not an include or moved-file build-entry path rewrite")
 
 
-def baseline_entry_keys(text):
+def baseline_entry_keys(text, moves=()):
     document = json.loads(text)
     entries = document.get("violations", document) if isinstance(document, dict) else document
-    return Counter(json.dumps(entry, sort_keys=True) for entry in entries)
+    old_to_new = dict(moves)
+    normalized = []
+    for entry in entries:
+        normalized_entry = dict(entry)
+        if normalized_entry.get("file") in old_to_new:
+            normalized_entry["file"] = old_to_new[normalized_entry["file"]]
+        normalized.append(json.dumps(normalized_entry, sort_keys=True))
+    return Counter(normalized)
 
 
-def check_baseline_only_shrinks(root, base_ref, head_ref, path):
-    old = baseline_entry_keys(git_text(root, base_ref, path))
+def check_baseline_only_shrinks(root, base_ref, head_ref, path, moves):
+    old = baseline_entry_keys(git_text(root, base_ref, path), moves)
     new = baseline_entry_keys(git_text(root, head_ref, path))
     added = new - old
     if added:
@@ -500,7 +507,7 @@ def check_move_only(root, base_ref, head_ref):
                 )
 
     for baseline_path in baseline_edits:
-        check_baseline_only_shrinks(root, base_ref, head_ref, baseline_path)
+        check_baseline_only_shrinks(root, base_ref, head_ref, baseline_path, moves)
 
     for baseline_path in file_size_baseline_edits:
         check_file_size_baseline_moves(root, base_ref, head_ref, baseline_path, moves)

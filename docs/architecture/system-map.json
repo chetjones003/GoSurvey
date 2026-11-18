@@ -141,6 +141,10 @@
     {
       "path": "src/renderer/include/",
       "system": "Renderer"
+    },
+    {
+      "path": "src/document/src/",
+      "system": "Document"
     }
   ],
   "fileMappings": [
@@ -14352,7 +14356,8 @@
         "tests/headless/transcripts/undo-redo-identity.txt",
         "tests/headless/transcripts/regression-56-text-entity-id.txt",
         "tests/headless/transcripts/regression-58-offset-entity-id.txt",
-        "tests/headless/transcripts/regression-62-delete-circle-stride.txt"
+        "tests/headless/transcripts/regression-62-delete-circle-stride.txt",
+        "tests/Document/PublicConsumer.cpp (isolated public seam; CTest label Document)"
       ],
       "testsCoveringDocumentNotOwned": [
         "tests/CadBlockImportTests.cpp (block import is IO parsing reached from Commands)",
@@ -14378,7 +14383,79 @@
         "The undo snapshot covers Survey, Terrain and Pdf members, but no test in this audit checks that scope.",
         "Selection-list storage (selection, hiddenEntityIds) was not checked for isolated unit coverage in this audit.",
         "Layer rename reassigns entity layer strings across every attribute vector; coverage of that path was not verified in this audit."
-      ]
+      ],
+      "preparation": {
+        "issue": 1249,
+        "branchBase": "e38d3f84e76dc5f6e3e05af31c12777b5b4b23ed",
+        "stagingPublicHeader": "<GoSurvey/Document/PlotScalesPublic.hpp>",
+        "publicConsumer": "tests/Document/PublicConsumer.cpp",
+        "target": "GoSurvey::Document",
+        "allowedDependencies": [
+          "Geometry",
+          "Math",
+          "Core",
+          "Events"
+        ],
+        "wholeFileOwnership": [
+          "src/ui/CadUiStyleWidgets.hpp",
+          "src/ui/MtextRichFormat.cpp",
+          "src/ui/MtextRichFormat.hpp",
+          "src/ui/MtextRichSpans.hpp",
+          "src/ui/MtextTextOps.hpp",
+          "src/util/cadblock.hpp",
+          "src/util/cadpiperun.hpp",
+          "src/util/cadtable.hpp",
+          "src/util/cadtablestyle.hpp",
+          "src/util/PlotScales.hpp",
+          "src/util/styleproperty.hpp"
+        ],
+        "stagedSeam": "Public entry points forward to the original single declarations and inline policies until their history-preserving physical move; no duplicate types, parser, or plot-scale API.",
+        "deferredWholeFiles": "The listed audited declarations/implementations and their fixtures remain at original paths in preparation. Physical relocation is reserved for the pure-move follow-up. CadEntities.hpp and CadCommands.hpp remain mixed god headers; their Document sections are deferred to dedicated expansion/migration/contraction tickets.",
+        "runtimeOwnership": "GoSurvey::Document compiles the audited MTEXT normalization/flattening provider and exports its public staging headers. GoSurvey::DocumentAppearance is now an alias to the concrete Document target. The engine umbrella includes Document.",
+        "knownSeamLimit": "Block, piping and appearance headers retain their recorded mixed-header dependencies until the dedicated boundary/type migrations; this ticket relocates whole files only.",
+        "providerSource": "src/ui/MtextRichFormat.cpp compiles once in GoSurvey::Document; the original source stays in place for the move-only follow-up.",
+        "publicMtextHeaders": [
+          "<GoSurvey/Document/MtextRichSpansPublic.hpp>",
+          "<GoSurvey/Document/MtextRichFormatPublic.hpp>",
+          "<GoSurvey/Document/MtextTextOpsPublic.hpp>"
+        ],
+        "sharedFixtures": {
+          "target": "GoSurveyTests",
+          "ctestPattern": "unit.catch.shard-*",
+          "labels": [
+            "Integration",
+            "Terrain",
+            "Survey",
+            "Document"
+          ],
+          "reason": "Existing command/workflow fixtures exercise Document behavior within the shared application harness; preserve the target and sources for the later pure-move ticket."
+        },
+        "pureFixtures": {
+          "target": "GoSurveyDocumentTests",
+          "sources": [
+            "tests/MtextTextOpsTests.cpp"
+          ],
+          "label": "Document",
+          "privateIncludeRoots": false
+        },
+        "fixtureMoves": [
+          "tests/CadBlockTests.cpp",
+          "tests/CadTableTests.cpp",
+          "tests/TableStyleTests.cpp",
+          "tests/TextStyleTests.cpp",
+          "tests/EntityIdTests.cpp",
+          "tests/ObjectLayersTests.cpp",
+          "tests/PaperSpaceTests.cpp",
+          "tests/PaperTableTests.cpp",
+          "tests/PaperTypedPointsTests.cpp",
+          "tests/PaperLeaderTests.cpp",
+          "tests/CadFontNameTests.cpp",
+          "tests/MtextTextOpsTests.cpp",
+          "tests/DrawingSettingsTests.cpp",
+          "tests/SolidLayerColorTests.cpp",
+          "tests/ViewportZoomScaleTests.cpp"
+        ]
+      }
     },
     "Survey": {
       "tier": "T2 Domain",
