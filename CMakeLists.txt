@@ -1346,7 +1346,6 @@ if(GOSURVEY_BUILD_TESTS)
     tests/GltfImportTests.cpp
     tests/StlImportTests.cpp
     tests/EntityIdTests.cpp
-    tests/PointGroupTests.cpp
     tests/CadTableTests.cpp
     tests/CadBlockTests.cpp
     tests/CadPipeRunTests.cpp
@@ -1859,12 +1858,13 @@ if(GOSURVEY_BUILD_TESTS)
 
   # Pure Survey algorithms and Terrain sampling integration run without Qt or OpenGL.
   add_executable(GoSurveySurveyTests
+    tests/PointGroupTests.cpp
     tests/AlignmentReportTests.cpp
     tests/AlignmentTests.cpp
     tests/AlignmentSampleLineTests.cpp
     tests/EcefTransformTests.cpp)
   set_target_properties(GoSurveySurveyTests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
-  target_include_directories(GoSurveySurveyTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  target_include_directories(GoSurveySurveyTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" ${NLOHMANN_JSON_INCLUDE})
   target_link_libraries(GoSurveySurveyTests PRIVATE GoSurvey::Survey GoSurvey::Terrain Catch2::Catch2WithMain)
   gosurvey_target_warnings(GoSurveySurveyTests TEST)
   catch_discover_tests(GoSurveySurveyTests PROPERTIES LABELS Survey)
