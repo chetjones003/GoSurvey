@@ -7,5 +7,6 @@ publish.workspace = true
 [dependencies]
 gs-foundation = { path = "../foundation" }
 
+
 [lints]
 workspace = true

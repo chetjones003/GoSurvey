@@ -4,36 +4,36 @@ Rust and Tauri replacement for GoSurvey, tracked by issue #1403. The Qt/C++ sour
 
 ## Layers
 
-Dependencies point strictly downward. A layer crate may depend on any lower layer, never on its own layer or a higher one. The real workspace uses a chain, where each crate depends on the one directly below it.
-
 | Crate | Rank | Layer |
 | --- | --- | --- |
-| `gs-foundation` | 0 | Core services, math, events, UI interfaces, debugging, crash reporting |
+| `gs-foundation` | 0 | Core services, math, events, toolkit-neutral UI interfaces, debugging, crash reporting |
 | `gs-kernel` | 1 | Geometry: 2D geometry, curves, NURBS, B-rep, meshes |
 | `gs-domain` | 2 | Drawing, Project, Survey, Terrain, PointCloud, PDF |
 | `gs-services` | 3 | Renderer, IO, Network |
 | `gs-application` | 4 | Command registry and interaction |
 | `gs-editor` | 5 | Tauri shell and ui-sdk front end |
 
-`layer-check` is the gate. It is a tool, not a layer, and it is not checked for direction.
+## How the rule is enforced
 
-Limits of the gate, for now:
+Each layer crate depends on the crate directly below it, and that chain reaches every lower layer. Cargo rejects dependency cycles at load time. So any dependency on a higher layer closes a cycle and `cargo build` fails with `cyclic package dependency`. This is the standard cargo check, with no custom tooling.
 
-- It runs as a test (`cargo test --workspace`), not as a plain `cargo build` step. Nothing in CI runs it yet.
-- It counts every declared dependency, including dev and build dependencies.
-- The layer crates declare the layer below before they use it. `Cargo.toml` allows `unused_dependencies` for this reason. Remove the allowance once each layer uses its dependency.
-- Every workspace crate must be listed in `LAYERS` (or be `gs-layer-check`). A new crate that is not listed fails the real-workspace test.
+Verified by hand: adding `gs-domain` to `foundation/Cargo.toml` makes `cargo build --workspace` fail with that error. Removing the line restores the build.
+
+## Known gaps
+
+- A new crate that is not added to the chain is not checked. Add every new crate to the chain.
+- Dev-dependencies may point upward without a cycle error, because cargo permits dev-dependency cycles. Keep dev-dependencies at or below the crate's own layer by review.
+- Skip-level dependencies (for example `gs-editor` depending directly on `gs-foundation`) are allowed by cargo and match the spec's "downward only".
+- The `unused_dependencies = "allow"` lint in `Cargo.toml` stays until each layer uses its dependency.
 
 ## Commands
 
-Run from the repository root:
+From the repository root:
 
 ```
-cargo test --workspace      # includes the layer gate
+cargo build --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
-
-The gate test (`layer-check/tests/gate.rs`) fails if any layer crate depends on a crate at the same or a higher rank, and it checks the real workspace graph through `cargo metadata`.
 
 Build output goes to `target/`, which is git-ignored.

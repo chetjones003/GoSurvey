@@ -7,5 +7,6 @@ publish.workspace = true
 [dependencies]
 gs-application = { path = "../application" }
 
+
 [lints]
 workspace = true

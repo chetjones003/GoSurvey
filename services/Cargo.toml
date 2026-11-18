@@ -7,5 +7,6 @@ publish.workspace = true
 [dependencies]
 gs-domain = { path = "../domain" }
 
+
 [lints]
 workspace = true

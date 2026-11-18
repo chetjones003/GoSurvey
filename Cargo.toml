@@ -1,7 +1,6 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
-    "layer-check",
     "foundation",
     "kernel",
     "domain",
@@ -16,6 +15,6 @@ version = "0.1.0"
 publish = false
 
 [workspace.lints.cargo]
-# Layer crates declare the layer below as a dependency before they use it, so the
-# layer gate sees the real graph. Remove this once each layer uses its dependency.
+# Layer crates declare the layer below as a dependency before they use it.
+# Remove this once each layer uses its dependency.
 unused_dependencies = "allow"
