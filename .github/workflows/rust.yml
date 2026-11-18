@@ -39,3 +39,21 @@ jobs:
 
       - name: Clippy for Windows (MSVC target)
         run: cargo clippy --workspace --all-targets --locked --target x86_64-pc-windows-msvc -- -D warnings
+
+  # Critical Windows checks only: a native build and test run. Routine checks
+  # (formatting, clippy, cross-compile) run on the Ubuntu job above.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build for Windows
+        run: cargo build --workspace --locked
+
+      - name: Test for Windows
+        run: cargo test --workspace --locked
