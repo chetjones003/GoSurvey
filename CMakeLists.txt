@@ -536,7 +536,6 @@ gosurvey_target_warnings(gosurvey_geometry)
 # tree under staging names while original headers and implementations stay at their audited paths
 # for the later history-preserving move. Keep the dependency list identical to the approved map.
 add_library(gosurvey_document STATIC
-  src/document/src/PreparedPlotScaleAdapter.cpp
   src/ui/MtextRichFormat.cpp)
 add_library(GoSurvey::Document ALIAS gosurvey_document)
 add_library(GoSurvey::DocumentAppearance ALIAS gosurvey_document)
@@ -1284,7 +1283,6 @@ if(GOSURVEY_BUILD_TESTS)
     tests/CutClipboardTests.cpp
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
-    tests/MtextTextOpsTests.cpp
     tests/DxfEntityEmitTests.cpp
     tests/DwgProbeTests.cpp
     tests/LibreDwgTests.cpp
@@ -1578,6 +1576,14 @@ if(GOSURVEY_BUILD_TESTS)
   target_link_libraries(GoSurveyGeometryTests PRIVATE GoSurvey::Geometry Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyGeometryTests PROPERTIES LABELS Geometry)
   gosurvey_target_warnings(GoSurveyGeometryTests TEST)
+
+  # Pure Document text operations use the real public provider without private roots or Qt/GL.
+  add_executable(GoSurveyDocumentTests
+    tests/MtextTextOpsTests.cpp)
+  set_target_properties(GoSurveyDocumentTests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyDocumentTests PRIVATE GoSurvey::Document Catch2::Catch2WithMain)
+  catch_discover_tests(GoSurveyDocumentTests PROPERTIES LABELS Document)
+  gosurvey_target_warnings(GoSurveyDocumentTests TEST)
 
   # Document's isolated public consumer: deliberately has no legacy source-private include roots.
   add_executable(GoSurveyDocumentPublicConsumer tests/Document/PublicConsumer.cpp)
