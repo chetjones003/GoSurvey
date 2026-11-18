@@ -241,7 +241,7 @@ def cmake_statements(text):
         depth = 0
         quote = False
         escaped = False
-        cursor = cursor
+        arguments_start = cursor + 1
         while cursor < len(text):
             character = text[cursor]
             if quote:
@@ -275,7 +275,7 @@ def cmake_statements(text):
                 depth -= 1
                 if depth == 0:
                     end = cursor + 1
-                    yield name, text[index + command.end():cursor], start, end
+                    yield name, text[arguments_start:cursor], start, end
                     index = end
                     break
             cursor += 1

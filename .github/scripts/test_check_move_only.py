@@ -219,6 +219,16 @@ class MoveOnlyFixtureTests(unittest.TestCase):
 
         self.assertEqual(self.check(), ["src/old/Widget.cpp -> src/new/Widget.cpp"])
 
+    def test_source_variable_move_is_allowed_but_display_variable_is_not(self):
+        for variable, allowed in [("APP_SOURCES", True), ("APP_DISPLAY_NAME", False)]:
+            with self.subTest(variable=variable):
+                old = f"set ({variable}\n  src/old/Widget.cpp)\n"
+                new = f"set ({variable}\n  src/new/Widget.cpp)\n"
+                self.assertEqual(proof.is_build_path_rewrite(
+                    old.splitlines()[1], new.splitlines()[1],
+                    "CMakeLists.txt", "CMakeLists.txt", 2, 2, old, new,
+                    [("src/old/Widget.cpp", "src/new/Widget.cpp")]), allowed)
+
     def test_binary_content_change_fails(self):
         self.move("src/old/Widget.hpp", "src/new/Widget.hpp")
         self.move("src/old/Widget.cpp", "src/new/Widget.cpp")
