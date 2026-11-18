@@ -61,6 +61,87 @@ class ArchitectureDependencyTests(unittest.TestCase):
         self.assertEqual(result["violations"][0]["rule"], "forbidden dependency")
         self.assertEqual(result["violations"][0]["include"], "Header.hpp")
 
+    def test_proven_renamed_include_candidate_preserves_ambiguity(self):
+        # Before the move, both mapped roots contained this basename. After moving
+        # one file outside the mapped roots, its Git-proven destination must still
+        # participate in resolution so the include does not acquire a new owner.
+        (self.root / "src/a/A.cpp").write_text('#include "Private.hpp"\n', encoding="utf-8")
+        (self.root / "src/c").mkdir()
+        (self.root / "src/c/Private.hpp").write_text("#pragma once\n", encoding="utf-8")
+        (self.root / "src/d").mkdir()
+        (self.root / "src/d/Private.hpp").write_text("#pragma once\n", encoding="utf-8")
+        mapping_path = self.root / "docs/architecture/system-map.json"
+        mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+        mapping["mappedFolders"].append({"path": "src/c/", "system": "Commands"})
+        mapping_path.write_text(json.dumps(mapping), encoding="utf-8")
+        reference_root = self.root / "reference"
+        shutil.copytree(self.root / "src", reference_root / "src")
+        (self.root / "src/b/Private.hpp").unlink()
+
+        ordinary = checker.check(self.root)["violations"]
+        moved = checker.check(
+            self.root, source_renames={"src/b/Private.hpp": "src/d/Private.hpp"},
+            changed_sources=set(), reference_root=reference_root)["violations"]
+
+        self.assertEqual(ordinary[0]["target"], "Commands")
+        self.assertEqual(moved, [])
+
+    def test_new_forbidden_include_does_not_gain_rename_ambiguity(self):
+        (self.root / "src/a/A.cpp").write_text('#include "Private.hpp"\n', encoding="utf-8")
+        (self.root / "src/d").mkdir()
+        (self.root / "src/d/Private.hpp").write_text("#pragma once\n", encoding="utf-8")
+        mapping_path = self.root / "docs/architecture/system-map.json"
+        mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+        mapping["mappedFolders"].append({"path": "src/c/", "system": "Commands"})
+        mapping_path.write_text(json.dumps(mapping), encoding="utf-8")
+        mapping_path_md = self.root / "docs/architecture/system-map.md"
+        mapping_path_md.write_text(
+            "| System | Tier | Responsibility | Does not own | Allowed dependencies |\n"
+            "|---|---|---|---|---|\n"
+            "| A | T2 Domain | A system | Nothing | B |\n"
+            "| B | T1 Kernel | B system | Nothing | None |\n"
+            "| Commands | T2 Domain | Commands | Nothing | None |\n", encoding="utf-8")
+        reference_root = self.root / "reference"
+        shutil.copytree(self.root / "src", reference_root / "src")
+
+        (self.root / "src/b/Private.hpp").unlink()
+        (self.root / "src/c").mkdir()
+        (self.root / "src/c/Private.hpp").write_text("#pragma once\n", encoding="utf-8")
+        candidate = checker.check(
+            self.root, source_renames={
+                "src/b/Private.hpp": "src/d/Private.hpp"},
+            changed_sources=set(), reference_root=reference_root)["violations"]
+
+        self.assertEqual(candidate[0]["target"], "Commands")
+        self.assertEqual(candidate[0]["rule"], "forbidden dependency")
+
+    def test_rename_preservation_does_not_restore_removed_reference_candidate(self):
+        (self.root / "src/a/A.cpp").write_text('#include "Private.hpp"\n', encoding="utf-8")
+        (self.root / "src/c").mkdir()
+        (self.root / "src/c/Private.hpp").write_text("#pragma once\n", encoding="utf-8")
+        mapping_path = self.root / "docs/architecture/system-map.json"
+        mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+        mapping["mappedFolders"].append({"path": "src/c/", "system": "Commands"})
+        mapping_path.write_text(json.dumps(mapping), encoding="utf-8")
+        reference_root = self.root / "reference"
+        shutil.copytree(self.root / "src", reference_root / "src")
+
+        (self.root / "src/b/Private.hpp").unlink()
+        (self.root / "src/c/Private.hpp").unlink()
+        (self.root / "src/d").mkdir()
+        (self.root / "src/d/Private.hpp").write_text("#pragma once\n", encoding="utf-8")
+        (self.root / "src/e").mkdir()
+        (self.root / "src/e/Private.hpp").write_text("#pragma once\n", encoding="utf-8")
+        mapping["mappedFolders"].append({"path": "src/e/", "system": "Commands"})
+        mapping_path.write_text(json.dumps(mapping), encoding="utf-8")
+
+        result = checker.check(
+            self.root, source_renames={"src/b/Private.hpp": "src/d/Private.hpp"},
+            changed_sources=set(), reference_root=reference_root)["violations"]
+
+        self.assertEqual(result[0]["target"], "Commands")
+        self.assertEqual(result[0]["rule"], "forbidden dependency")
+
     def test_file_mapping_overrides_its_folder_owner(self):
         public_header = self.root / "src/b/GoSurvey/B/Api.hpp"
         public_header.parent.mkdir(parents=True)
@@ -201,19 +282,31 @@ class ArchitectureDependencyTests(unittest.TestCase):
         git(candidate_root, "commit", "-qm", "rename source")
 
         renames = checker._proven_source_renames(reference_root, candidate_root)
+        changed_sources = checker._changed_source_paths(reference_root, candidate_root)
         reference = checker.check(reference_root, mapping_root=candidate_root)["violations"]
         candidate = checker.check(candidate_root)["violations"]
         self.assertEqual(renames, {"src/a/A.cpp": "src/a/Über.cpp"})
+        self.assertEqual(changed_sources, set())
         self.assertTrue(checker.compare_baseline(candidate, reference, renames)["ok"])
 
         source = candidate_root / "src/a/Über.cpp"
         source.write_text(source.read_text(encoding="utf-8") + '#include "b/Private.hpp"\n',
                           encoding="utf-8")
+        self.assertEqual(checker._changed_source_paths(reference_root, candidate_root),
+                         {"src/a/Über.cpp"})
+        git(candidate_root, "add", "-A")
+        git(candidate_root, "commit", "-qm", "add a new include")
+        self.assertEqual(checker._changed_source_paths(reference_root, candidate_root),
+                         {"src/a/Über.cpp"})
         grown = checker.check(candidate_root)["violations"]
         self.assertEqual(
             checker.compare_baseline(grown, candidate)["new_violations"],
             [["src/a/Über.cpp", "forbidden dependency", "B"]],
         )
+        untracked = candidate_root / "src/a/Untracked.cpp"
+        untracked.write_text('#include "b/Private.hpp"\n', encoding="utf-8")
+        self.assertEqual(checker._changed_source_paths(reference_root, candidate_root),
+                         {"src/a/Über.cpp", "src/a/Untracked.cpp"})
 
     def test_git_rename_fields_preserve_tabs_and_newlines(self):
         moved_path = "src/a/with\ttab\nline.cpp"
