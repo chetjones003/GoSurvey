@@ -911,6 +911,7 @@ target_include_directories(gosurvey_io
     "${CMAKE_CURRENT_SOURCE_DIR}/src/viewport"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/ui"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/util"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/io"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/io/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/debug/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/survey"
