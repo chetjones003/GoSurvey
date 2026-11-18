@@ -135,7 +135,7 @@ different report directory. Fixture coverage is in
 Run `python3 tools/architecture_dependencies.py` to classify source includes against the system
 map and compare current violations with `dependency-baseline.json`. The PR check also scans the
 base branch and rejects baseline entries that are not present there, so the baseline can only
-shrink. New violations fail the check; removed violations also fail until their entries are
+shrink. A Git-proven source rename may transfer an existing record by rewriting only its file path; all other fields and edge multiplicities remain unchanged. The move-only proof validates the same exact path transfer, so relocation cannot create an exception or hide a new dependency. New violations fail the check; removed violations also fail until their entries are
 removed from the baseline. Unmapped source files and includes are reported for mapping work.
 Generate an updated baseline deliberately with
 `python3 tools/architecture_dependencies.py --write-baseline`. Fixture coverage is in
