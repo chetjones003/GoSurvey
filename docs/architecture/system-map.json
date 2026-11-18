@@ -141,6 +141,10 @@
     {
       "path": "src/renderer/include/",
       "system": "Renderer"
+    },
+    {
+      "path": "src/document/src/",
+      "system": "Document"
     }
   ],
   "fileMappings": [
@@ -916,7 +920,7 @@
       "symbols": [
         "CadFormatBearingCwNorthDegMinSec"
       ],
-      "note": "Divergent from Core FormatBearing, not a duplicate: prints 0\u00c2\u00b00'0.0\" where Core prints 0\u00c2\u00b000'00.0\" (asserted in tests/Core/AngleFormatTests.cpp). AngleFormat.hpp claims parity; that claim is false."
+      "note": "Divergent from Core FormatBearing, not a duplicate: prints 0Â°0'0.0\" where Core prints 0Â°00'00.0\" (asserted in tests/Core/AngleFormatTests.cpp). AngleFormat.hpp claims parity; that claim is false."
     },
     {
       "path": "src/commands/CadCommands.cpp",
@@ -7363,7 +7367,7 @@
         "gfxVideoMemoryCachingLevel",
         "gfx3dFastShadedMode"
       ],
-      "note": "Settings \u00e2\u2020\u2019 Graphics Performance values. gfxSmoothLineDisplay is wired into RenderTuning; the other two are documented placeholders."
+      "note": "Settings â†’ Graphics Performance values. gfxSmoothLineDisplay is wired into RenderTuning; the other two are documented placeholders."
     },
     {
       "path": "src/commands/PaperSpace.hpp",
@@ -13985,7 +13989,7 @@
             "src/util/benchscene.cpp",
             "src/util/benchscene.hpp"
           ],
-          "reason": "Debug owns deterministic benchmark scenes and statistics, but Commands currently includes benchscene.hpp in CadCommands.cpp and CadCommands_Bench.cpp. The dependency table does not allow Commands \u00e2\u2020\u2019 Debug, so keep the ownership advisory until the final-map/move ticket chooses a legal benchmark interface or reassigns the command-facing concept."
+          "reason": "Debug owns deterministic benchmark scenes and statistics, but Commands currently includes benchscene.hpp in CadCommands.cpp and CadCommands_Bench.cpp. The dependency table does not allow Commands â†’ Debug, so keep the ownership advisory until the final-map/move ticket chooses a legal benchmark interface or reassigns the command-facing concept."
         },
         {
           "files": [
@@ -14352,7 +14356,8 @@
         "tests/headless/transcripts/undo-redo-identity.txt",
         "tests/headless/transcripts/regression-56-text-entity-id.txt",
         "tests/headless/transcripts/regression-58-offset-entity-id.txt",
-        "tests/headless/transcripts/regression-62-delete-circle-stride.txt"
+        "tests/headless/transcripts/regression-62-delete-circle-stride.txt",
+        "tests/Document/PublicConsumer.cpp (isolated public seam; CTest label Document)"
       ],
       "testsCoveringDocumentNotOwned": [
         "tests/CadBlockImportTests.cpp (block import is IO parsing reached from Commands)",
@@ -14378,7 +14383,53 @@
         "The undo snapshot covers Survey, Terrain and Pdf members, but no test in this audit checks that scope.",
         "Selection-list storage (selection, hiddenEntityIds) was not checked for isolated unit coverage in this audit.",
         "Layer rename reassigns entity layer strings across every attribute vector; coverage of that path was not verified in this audit."
-      ]
+      ],
+      "preparation": {
+        "issue": 1249,
+        "branchBase": "e38d3f84e76dc5f6e3e05af31c12777b5b4b23ed",
+        "stagingPublicHeader": "<GoSurvey/Document/PreparedPlotScales.hpp>",
+        "publicConsumer": "tests/Document/PublicConsumer.cpp",
+        "target": "GoSurvey::Document",
+        "allowedDependencies": [
+          "Geometry",
+          "Math",
+          "Core",
+          "Events"
+        ],
+        "wholeFileOwnership": [
+          "src/ui/CadUiStyleWidgets.hpp",
+          "src/ui/MtextRichFormat.cpp",
+          "src/ui/MtextRichFormat.hpp",
+          "src/ui/MtextRichSpans.hpp",
+          "src/ui/MtextTextOps.hpp",
+          "src/util/cadblock.hpp",
+          "src/util/cadpiperun.hpp",
+          "src/util/cadtable.hpp",
+          "src/util/cadtablestyle.hpp",
+          "src/util/PlotScales.hpp",
+          "src/util/styleproperty.hpp"
+        ],
+        "stagedSeam": "PreparedPlotScales exposes Document-prefixed value types through a compiled adapter that delegates to the unchanged legacy PlotScales policy; original declarations remain in place for the history-preserving move.",
+        "deferredWholeFiles": "The listed audited declarations/implementations and their fixtures remain at original paths in preparation. Physical relocation is reserved for the pure-move follow-up. CadEntities.hpp and CadCommands.hpp remain mixed god headers; their Document sections are deferred to dedicated expansion/migration/contraction tickets.",
+        "runtimeOwnership": "GoSurvey::Document compiles the audited MTEXT normalization/flattening provider and exports its public staging headers. GoSurvey::DocumentAppearance is now an alias to the concrete Document target. The engine umbrella includes Document.",
+        "knownSeamLimit": "PreparedMtextRichFormat uses the existing provider symbols and is backed by the original audited implementation source. PreparedPlotScales uses an adapter to avoid a second policy implementation. Other assigned files remain at original paths until physical relocation/caller integration.",
+        "providerSource": "src/ui/MtextRichFormat.cpp is compiled by GoSurvey::Document and removed from gosurvey_domain; its original bytes/path remain for the later history-preserving move. src/document/src/PreparedPlotScaleAdapter.cpp delegates the public staging plot-scale seam to the legacy policy.",
+        "publicMtextHeaders": [
+          "<GoSurvey/Document/PreparedMtextRichSpans.hpp>",
+          "<GoSurvey/Document/PreparedMtextRichFormat.hpp>"
+        ],
+        "sharedFixtures": {
+          "target": "GoSurveyTests",
+          "ctestPattern": "unit.catch.shard-*",
+          "labels": [
+            "Integration",
+            "Terrain",
+            "Survey",
+            "Document"
+          ],
+          "reason": "Existing command/workflow fixtures exercise Document behavior within the shared application harness; preserve the target and sources for the later pure-move ticket."
+        }
+      }
     },
     "Survey": {
       "tier": "T2 Domain",

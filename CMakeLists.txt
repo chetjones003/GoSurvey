@@ -532,12 +532,18 @@ target_compile_features(gosurvey_geometry PUBLIC cxx_std_17)
 target_link_libraries(gosurvey_geometry PUBLIC GoSurvey::Math GoSurvey::Core)
 gosurvey_target_warnings(gosurvey_geometry)
 
-# Shared persisted appearance values, used by Surface and Survey style records.
-add_library(gosurvey_document_appearance INTERFACE)
-add_library(GoSurvey::DocumentAppearance ALIAS gosurvey_document_appearance)
-target_include_directories(gosurvey_document_appearance INTERFACE
-  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/document/include>")
-target_compile_features(gosurvey_document_appearance INTERFACE cxx_std_17)
+# GoSurvey::Document — the compiled owner target. Preparation facades live in the public include
+# tree under staging names while original headers and implementations stay at their audited paths
+# for the later history-preserving move. Keep the dependency list identical to the approved map.
+add_library(gosurvey_document STATIC
+  src/document/src/PreparedPlotScaleAdapter.cpp
+  src/ui/MtextRichFormat.cpp)
+add_library(GoSurvey::Document ALIAS gosurvey_document)
+add_library(GoSurvey::DocumentAppearance ALIAS gosurvey_document)
+target_include_directories(gosurvey_document PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/document/include>")
+target_compile_features(gosurvey_document PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_document PUBLIC GoSurvey::Geometry GoSurvey::Math GoSurvey::Core GoSurvey::Events)
+gosurvey_target_warnings(gosurvey_document)
 
 # GoSurvey::Survey — T2 domain library. Alignment is a public Survey model used by Terrain;
 # its legacy declarations stay at their existing paths until the move-only follow-up.
@@ -573,7 +579,7 @@ target_include_directories(gosurvey_survey
           "${CMAKE_CURRENT_SOURCE_DIR}/src/traverse"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/util")
 target_compile_features(gosurvey_survey PUBLIC cxx_std_17)
-target_link_libraries(gosurvey_survey PUBLIC GoSurvey::DocumentAppearance GoSurvey::Geometry GoSurvey::Math GoSurvey::Core
+target_link_libraries(gosurvey_survey PUBLIC GoSurvey::Document GoSurvey::Geometry GoSurvey::Math GoSurvey::Core
   PRIVATE CsMap::csmap)
 gosurvey_target_warnings(gosurvey_survey)
 
@@ -769,8 +775,6 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/viewport/CadRubberPreview.cpp
 
   # MTEXT rich-wire normalisation (pure; rendered by the Qt frontend)
-  src/ui/MtextRichFormat.cpp
-
   # Fonts (shared lower layer — SHX stroke geometry, ADR-022)
 
   # Survey / COGO
@@ -939,7 +943,7 @@ gosurvey_enable_pch(gosurvey_domain)
 # Stable umbrella for application consumers; individual systems remain linkable in isolation.
 add_library(gosurvey_engine INTERFACE)
 add_library(GoSurvey::Engine ALIAS gosurvey_engine)
-target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Survey GoSurvey::Events GoSurvey::UI GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf)
+target_link_libraries(gosurvey_engine INTERFACE gosurvey_domain GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Document GoSurvey::Survey GoSurvey::Events GoSurvey::UI GoSurvey::Debug GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::IOPointCloud GoSurvey::Pdf)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
@@ -1575,6 +1579,14 @@ if(GOSURVEY_BUILD_TESTS)
   catch_discover_tests(GoSurveyGeometryTests PROPERTIES LABELS Geometry)
   gosurvey_target_warnings(GoSurveyGeometryTests TEST)
 
+  # Document's isolated public consumer: deliberately has no legacy source-private include roots.
+  add_executable(GoSurveyDocumentPublicConsumer tests/Document/PublicConsumer.cpp)
+  set_target_properties(GoSurveyDocumentPublicConsumer PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyDocumentPublicConsumer PRIVATE GoSurvey::Document)
+  gosurvey_target_warnings(GoSurveyDocumentPublicConsumer TEST)
+  add_test(NAME Document.public-consumer COMMAND GoSurveyDocumentPublicConsumer)
+  set_tests_properties(Document.public-consumer PROPERTIES LABELS Document)
+
   # Terrain algorithms run with the isolated library and Catch2. SurfaceVolumeTests also links
   # the toolkit-neutral Debug benchmark scene fixture; neither test dependency uses Qt or OpenGL.
   add_executable(GoSurveyTerrainTests
@@ -1908,7 +1920,9 @@ if(GOSURVEY_BUILD_TESTS)
         -ShardIndex ${_shard} -ShardCount ${GOSURVEY_CATCH_TEST_SHARDS}
         -WorkingDirectory "$<TARGET_FILE_DIR:GoSurveyQt>"
         -OutputDirectory "${CMAKE_BINARY_DIR}/../../artifacts/catch")
-    set_tests_properties(unit.catch.shard-${_shard} PROPERTIES TIMEOUT 900 COST 100 LABELS "Integration;Terrain;Survey")
+    # The shared application shards retain legacy cross-system fixtures, including Document's
+    # command/workflow behavior. The isolated public consumer below provides the Document-only seam.
+    set_tests_properties(unit.catch.shard-${_shard} PROPERTIES TIMEOUT 900 COST 100 LABELS "Integration;Terrain;Survey;Document")
   endforeach()
 
   # Register the independent, isolated Qt shards before the transcript cases so CTest can run both
