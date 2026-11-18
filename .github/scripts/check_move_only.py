@@ -308,6 +308,66 @@ def cmake_source_entry_lines(text):
     return lines
 
 
+def cmake_include_directory_lines(text):
+    """Return lines inside target_include_directories commands."""
+    lines = set()
+    for command, _arguments, start, end in cmake_statements(text):
+        if command == "target_include_directories":
+            first_line = text.count("\n", 0, start) + 1
+            last_line = text.count("\n", 0, end) + 1
+            lines.update(range(first_line, last_line + 1))
+    return lines
+
+
+def path_is_under_root(path, root):
+    """Test a repository-relative path against a normalized CMake source root."""
+    root = posixpath.normpath(root)
+    if root == ".":
+        return not path.startswith(("../", "/"))
+    return path.startswith(root.rstrip("/") + "/")
+
+
+def is_cmake_include_root_rewrite(
+    old_line,
+    new_line,
+    old_line_number,
+    new_line_number,
+    old_build_file,
+    old_text,
+    new_text,
+    moves,
+):
+    """Allow a target include root to follow a moved public header tree."""
+    if old_line_number not in cmake_include_directory_lines(old_text) or (
+        new_line_number not in cmake_include_directory_lines(new_text)
+    ):
+        return False
+
+    path_token = re.compile(r"(?P<prefix>\$\{CMAKE_CURRENT_SOURCE_DIR\}/)(?P<path>[^\s\"()]+)")
+    old_match = path_token.search(old_line)
+    new_match = path_token.search(new_line)
+    if not old_match or not new_match:
+        return False
+    if old_line[:old_match.start()] != new_line[:new_match.start()] or (
+        old_line[old_match.end():] != new_line[new_match.end():]
+    ):
+        return False
+
+    cmake_directory = posixpath.dirname(old_build_file) or "."
+    old_root = posixpath.normpath(
+        posixpath.join(cmake_directory, old_match.group("path").replace("\\", "/"))
+    )
+    new_root = posixpath.normpath(
+        posixpath.join(cmake_directory, new_match.group("path").replace("\\", "/"))
+    )
+    if old_root == new_root or posixpath.basename(new_root) != "include":
+        return False
+    return any(
+        path_is_under_root(old_path, old_root) and path_is_under_root(new_path, new_root)
+        for old_path, new_path in moves
+    )
+
+
 def is_build_entry(path, line_number, line, text):
     if not is_build_file(path):
         return False
@@ -526,6 +586,15 @@ def check_move_only(root, base_ref, head_ref):
                     build_path,
                     old_line_number,
                     new_line_number,
+                    old_text,
+                    new_text,
+                    moves,
+                ) and not is_cmake_include_root_rewrite(
+                    old_line,
+                    new_line,
+                    old_line_number,
+                    new_line_number,
+                    build_path,
                     old_text,
                     new_text,
                     moves,
