@@ -16,8 +16,8 @@
 
 #include "CadCommands.hpp"
 #include "PaperSpace.hpp"
-#include "alignment/Alignment.hpp"
-#include "alignment/AlignmentViewFrames.hpp"
+#include "GoSurvey/Survey/AlignmentModel.hpp"
+#include "GoSurvey/Survey/AlignmentViewFrames.hpp"
 #include "io/DwgIo.hpp"
 #include "io/PdfPlot.hpp"
 #include "render/ViewportProjection.hpp"

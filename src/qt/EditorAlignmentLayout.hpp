@@ -1,6 +1,6 @@
 #pragma once
 
-#include "alignment/AlignmentDesign.hpp"
+#include "GoSurvey/Survey/AlignmentDesign.hpp"
 
 #include <QStringList>
 #include <QWidget>

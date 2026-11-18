@@ -14,7 +14,7 @@
 // origins, so the shared database must hold the one coordinate every drawing agrees on. The tab glue
 // (src/commands/ProjectPoints.cpp) converts at the boundary.
 
-#include "SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
 
 #include <cstdint>
 #include <filesystem>

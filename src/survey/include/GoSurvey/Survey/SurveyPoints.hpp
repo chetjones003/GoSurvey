@@ -2,4 +2,4 @@
 
 // Survey point records, rule vocabulary, and pure marker/label formatting API.
 // Physical relocation of the declarations remains part of the Survey carve-out.
-#include "../../../SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"

@@ -4,7 +4,7 @@
 #include "QtText.hpp"
 #include "ProjectFiles.hpp"
 #include "QtAccent.hpp"
-#include "traverse/TraverseReport.hpp"
+#include "GoSurvey/Survey/TraverseReport.hpp"
 #include <QAction>
 #include <QColor>
 #include <QFile>

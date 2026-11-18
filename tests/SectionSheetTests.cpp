@@ -14,8 +14,8 @@
 
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
-#include "alignment/Alignment.hpp"
-#include "alignment/AlignmentSampleLines.hpp"
+#include "GoSurvey/Survey/AlignmentModel.hpp"
+#include "GoSurvey/Survey/AlignmentSampleLines.hpp"
 
 using Catch::Approx;
 

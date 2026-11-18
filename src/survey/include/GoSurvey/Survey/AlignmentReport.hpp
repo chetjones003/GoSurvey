@@ -1,3 +1,3 @@
 #pragma once
 
-#include "../../../../alignment/AlignmentReport.hpp"
+#include "GoSurvey/Survey/AlignmentReportModel.hpp"

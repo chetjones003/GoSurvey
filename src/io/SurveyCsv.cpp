@@ -3,7 +3,7 @@
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "SurveyCsvValidate.hpp"
-#include "SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
 
 #include <algorithm>
 #include <atomic>

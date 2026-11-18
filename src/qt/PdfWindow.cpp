@@ -6,7 +6,7 @@
 #include "GoSurvey/Pdf/PdfSplit.hpp"
 #include "GoSurvey/Pdf/PdfScaleCheck.hpp"
 #include "GoSurvey/Pdf/PdfDimAudit.hpp"
-#include "SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
 #include <QAction>
 #include <QFileDialog>
 #include <QImage>

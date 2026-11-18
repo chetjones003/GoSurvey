@@ -5,7 +5,7 @@
 #include "ConvertDrawing.hpp"
 #include "DwgIo.hpp"
 #include "ProjectSettings.hpp"
-#include "SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
 #include "io/ProjectPointDb.hpp"
 
 #include <cstdio>

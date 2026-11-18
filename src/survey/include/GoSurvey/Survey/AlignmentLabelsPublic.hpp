@@ -1,3 +1,3 @@
 #pragma once
 
-#include "../../../../alignment/AlignmentLabels.hpp"
+#include "GoSurvey/Survey/AlignmentLabels.hpp"

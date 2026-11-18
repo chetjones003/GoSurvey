@@ -10,8 +10,8 @@
 #include <vector>
 
 #include "CadCommands.hpp"
-#include "alignment/Alignment.hpp"
-#include "alignment/AlignmentGround.hpp"
+#include "GoSurvey/Survey/AlignmentModel.hpp"
+#include "GoSurvey/Survey/AlignmentGroundModel.hpp"
 #include <GoSurvey/Terrain/surfacequery.hpp>
 
 using alignment::Alignment;

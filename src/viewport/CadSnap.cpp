@@ -1,7 +1,7 @@
 #include "CadSnap.hpp"
 
-#include "SurveyPoints.hpp"
-#include "alignment/Alignment.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
+#include "GoSurvey/Survey/AlignmentModel.hpp"
 #include <GoSurvey/Geometry/geom2d.hpp>
 #include "util/cadblock.hpp"
 #include "util/cadpiperun.hpp"

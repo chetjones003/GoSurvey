@@ -3,7 +3,7 @@
 #include "CadCommands.hpp"
 #include "EditorViewport.hpp"
 #include "EditorWindow.hpp"
-#include "alignment/Alignment.hpp"
+#include "GoSurvey/Survey/AlignmentModel.hpp"
 
 #include <QAction>
 #include <QApplication>

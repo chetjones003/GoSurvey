@@ -16,7 +16,7 @@
 #include "EditorSurfaceUi.hpp"
 #include "EditorViewport.hpp"
 #include "SurfaceStyle.hpp"
-#include "SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
 
 
 #include <QCheckBox>

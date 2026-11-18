@@ -2,8 +2,8 @@
 // REQ-431: the reading aids of the Qt least-squares adjustment window - a command editor with
 // colours, line numbers and an inline error, and a plan preview with error ellipses. They only
 // display; the traverse, the results and the files stay owned by AdjustmentWindow.
-#include "traverse/TraverseCalc.hpp"
-#include "traverse/TraverseLeastSquares.hpp"
+#include "GoSurvey/Survey/TraverseCalc.hpp"
+#include "GoSurvey/Survey/TraverseLeastSquares.hpp"
 #include <QColor>
 #include <QPlainTextEdit>
 #include <QPointF>

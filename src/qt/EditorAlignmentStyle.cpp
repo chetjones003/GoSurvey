@@ -1,6 +1,6 @@
 #include "EditorAlignmentStyle.hpp"
 
-#include "alignment/AlignmentDesign.hpp"
+#include "GoSurvey/Survey/AlignmentDesign.hpp"
 #include "CadCommands.hpp"
 
 #include <QCheckBox>

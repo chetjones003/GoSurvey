@@ -1,5 +1,5 @@
 #include <GoSurvey/Survey/AlignmentStylePublic.hpp>
-#include "alignment/AlignmentDesign.hpp"
+#include "GoSurvey/Survey/AlignmentDesign.hpp"
 #include <GoSurvey/Core/NumFormat.hpp>
 #include "AdjustmentWindow.hpp"
 #include "EditorWindow.hpp"

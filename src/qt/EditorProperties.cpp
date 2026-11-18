@@ -11,7 +11,7 @@
 #include <QApplication>
 #include <QPainter>
 
-#include "alignment/AlignmentDesign.hpp"
+#include "GoSurvey/Survey/AlignmentDesign.hpp"
 #include "CadColor.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadLinetype.hpp"

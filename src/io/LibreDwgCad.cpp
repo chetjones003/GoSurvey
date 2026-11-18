@@ -25,7 +25,7 @@
 #include "MtextRichFormat.hpp"
 #include "DwgIo.hpp"
 #include "LibreDwg.hpp"
-#include "SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
 #include "TextStyle.hpp"
 #include "util/cadtable.hpp"
 #include <GoSurvey/Debug/SaveTrace.hpp>
