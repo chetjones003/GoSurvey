@@ -1,6 +1,21 @@
-[package]
-name = "gosurvey"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "2"
+members = [
+    "layer-check",
+    "foundation",
+    "kernel",
+    "domain",
+    "services",
+    "application",
+    "editor",
+]
 
-[dependencies]
+[workspace.package]
+edition = "2021"
+version = "0.0.0"
+publish = false
+
+[workspace.lints.cargo]
+# Layer crates declare the layer below as a dependency before they use it, so the
+# layer gate sees the real graph. Remove this once each layer uses its dependency.
+unused_dependencies = "allow"

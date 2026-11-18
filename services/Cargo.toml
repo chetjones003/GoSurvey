@@ -1,0 +1,11 @@
+[package]
+name = "gs-services"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+gs-domain = { path = "../domain" }
+
+[lints]
+workspace = true

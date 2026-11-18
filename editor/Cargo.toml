@@ -1,0 +1,11 @@
+[package]
+name = "gs-editor"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+gs-application = { path = "../application" }
+
+[lints]
+workspace = true
