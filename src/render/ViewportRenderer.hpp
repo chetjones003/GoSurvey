@@ -4,7 +4,7 @@
 #include "CadSnap.hpp"
 #include "GoSurvey/Pdf/PdfAttach.hpp"
 #include "CadOnlineMap.hpp"
-#include "gizmooverlay.hpp"
+#include "../util/gizmooverlay.hpp"
 #include "render/SectionClip.hpp"
 #include "GoSurvey/PointCloud/CacheStorage.hpp"
 #include <GoSurvey/Renderer/AlignmentDisplayCachePublic.hpp>
