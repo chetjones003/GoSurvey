@@ -694,8 +694,8 @@ target_link_libraries(gosurvey_io_traverse_report PRIVATE GoSurvey::Pdf)
 gosurvey_target_warnings(gosurvey_io_traverse_report)
 
 # --- OpenXLSX (vendored, third_party/OpenXLSX, approved D-2026-10-30-a): .xlsx read/write for
-# Extract Data and Link Data (REQ-467 / REQ-468). Compiled into gosurvey_domain with the pugixml
-# copy above; zip support comes from the vendored miniz.
+# Extract Data and Link Data (REQ-467 / REQ-468). These private provider libraries let IO own its
+# spreadsheet and XML callers without relying on the application aggregate to supply implementations.
 set(GOSURVEY_OPENXLSX_SOURCES
   ${GOSURVEY_TP}/OpenXLSX/sources/XLCell.cpp
   ${GOSURVEY_TP}/OpenXLSX/sources/XLCellIterator.cpp
@@ -725,6 +725,22 @@ set(GOSURVEY_OPENXLSX_SOURCES
   ${GOSURVEY_TP}/OpenXLSX/sources/XLXmlParser.cpp
   ${GOSURVEY_TP}/OpenXLSX/sources/XLZipArchive.cpp
 )
+add_library(gosurvey_pugixml STATIC ${GOSURVEY_TP}/pugixml/src/pugixml.cpp)
+target_include_directories(gosurvey_pugixml PUBLIC "${PUGIXML_INCLUDE}")
+target_compile_features(gosurvey_pugixml PUBLIC cxx_std_17)
+gosurvey_target_warnings(gosurvey_pugixml)
+
+add_library(gosurvey_openxlsx STATIC ${GOSURVEY_OPENXLSX_SOURCES})
+target_include_directories(gosurvey_openxlsx PRIVATE
+  "${GOSURVEY_TP}/OpenXLSX"
+  "${GOSURVEY_TP}/OpenXLSX/headers"
+  "${GOSURVEY_TP}/OpenXLSX/generated"
+  "${GOSURVEY_TP}/OpenXLSX/shims"
+  "${PUGIXML_INCLUDE}")
+target_compile_features(gosurvey_openxlsx PUBLIC cxx_std_17)
+target_link_libraries(gosurvey_openxlsx PRIVATE gosurvey_pugixml miniz)
+gosurvey_target_warnings(gosurvey_openxlsx)
+
 set(GOSURVEY_DOMAIN_SOURCES
   # Command system
   src/commands/CadCommands.cpp
@@ -781,8 +797,6 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Survey / COGO
   src/commands/SurveyPointActions.cpp
 
-  ${GOSURVEY_TP}/pugixml/src/pugixml.cpp
-  ${GOSURVEY_OPENXLSX_SOURCES}
   # REQ-363 / ADR-064: Web Mercator tile maths (pure)
   src/geo/WebMercator.cpp
   # REQ-363 / ADR-064 (c): online map tile fetch + disk cache (fetch injected; no WinHTTP here)
@@ -922,7 +936,8 @@ target_link_libraries(gosurvey_io
   PUBLIC GoSurvey::Core GoSurvey::Math GoSurvey::Geometry GoSurvey::Document
     GoSurvey::Survey GoSurvey::Terrain GoSurvey::PointCloud GoSurvey::Pdf
     GoSurvey::IOPointCloud GoSurvey::IOTraverseReport
-  PRIVATE LibreDWG::libredwg E57Format::E57Format miniz Laszip::laszip GoSurvey::CoreShxFont)
+  PRIVATE LibreDWG::libredwg E57Format::E57Format miniz Laszip::laszip GoSurvey::CoreShxFont
+    gosurvey_openxlsx gosurvey_pugixml)
 gosurvey_target_warnings(gosurvey_io)
 # The application aggregate compiles the remaining command/domain sources once.
 add_library(gosurvey_domain STATIC ${GOSURVEY_DOMAIN_SOURCES})
@@ -949,11 +964,6 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src/update
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party
   ${NLOHMANN_JSON_INCLUDE}
-  ${PUGIXML_INCLUDE}
-  ${GOSURVEY_TP}/OpenXLSX
-  ${GOSURVEY_TP}/OpenXLSX/headers
-  ${GOSURVEY_TP}/OpenXLSX/generated
-  ${GOSURVEY_TP}/OpenXLSX/shims
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
@@ -1478,7 +1488,6 @@ if(GOSURVEY_BUILD_TESTS)
     src/traverse/StarNetImport.cpp
     src/traverse/Rw5Import.cpp
     src/traverse/JobXmlImport.cpp
-    ${GOSURVEY_TP}/pugixml/src/pugixml.cpp
     # DWG version detection + converter discovery. Deliberately its own TU (see DwgProbe.cpp):
     # it depends only on <filesystem>, so tests link it without DxfIo and the GUI stack.
     src/io/DwgProbe.cpp
