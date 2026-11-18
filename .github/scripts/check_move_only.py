@@ -319,6 +319,14 @@ def cmake_include_directory_lines(text):
     return lines
 
 
+def path_is_under_root(path, root):
+    """Test a repository-relative path against a normalized CMake source root."""
+    root = posixpath.normpath(root)
+    if root == ".":
+        return not path.startswith(("../", "/"))
+    return path.startswith(root.rstrip("/") + "/")
+
+
 def is_cmake_include_root_rewrite(old_line, new_line, old_line_number, new_line_number,
                                   old_text, new_text, moves):
     """Allow a target include root to follow a moved public header tree."""
@@ -342,7 +350,7 @@ def is_cmake_include_root_rewrite(old_line, new_line, old_line_number, new_line_
     if old_root == new_root or not new_root.endswith("/include"):
         return False
     return any(
-        old_path.startswith(old_root + "/") and new_path.startswith(new_root + "/")
+        path_is_under_root(old_path, old_root) and path_is_under_root(new_path, new_root)
         for old_path, new_path in moves
     )
 
