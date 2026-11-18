@@ -57,7 +57,7 @@
 #include "GoSurvey/Document/cadtablestyle.hpp"
 #include "StylePreview.hpp"
 #include "CadColor.hpp"
-#include "font/ShxFont.hpp"
+#include <GoSurvey/Core/ShxFont.hpp>
 #include <algorithm>
 #include <numeric>
 #include <vector>

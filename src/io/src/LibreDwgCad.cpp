@@ -15,7 +15,7 @@
 #include "GoSurvey/Document/cadpiperun.hpp"
 #include "GoSurvey/Document/cadtablestyle.hpp"
 #include "GoSurvey/Document/styleproperty.hpp"
-#include "font/ShxFont.hpp"
+#include <GoSurvey/Core/ShxFont.hpp>
 #include "CadCoordinateFrame.hpp"
 #include "ViewportZoomScale.hpp"
 #include "CadDimGeom.hpp"

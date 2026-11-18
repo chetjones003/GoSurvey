@@ -9,8 +9,8 @@
 #include "GoSurvey/Survey/AlignmentLabels.hpp"
 #include "GoSurvey/Survey/AlignmentDesign.hpp"
 #include "GoSurvey/Survey/AlignmentTables.hpp"
-#include "font/CadFontName.hpp"
-#include "font/ShxFont.hpp"
+#include <GoSurvey/Core/CadFontName.hpp>
+#include <GoSurvey/Core/ShxFont.hpp>
 #include "GoSurvey/Document/MtextRichFormat.hpp"
 #include <QPainter>
 #include <QPainterPath>

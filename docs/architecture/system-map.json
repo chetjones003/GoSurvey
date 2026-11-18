@@ -13605,7 +13605,8 @@
         "src/core/include/GoSurvey/Core/AngleFormat.hpp",
         "src/core/include/GoSurvey/Core/NumFormat.hpp",
         "src/core/include/GoSurvey/Core/StringUtil.hpp",
-        "src/core/src/Core.cpp"
+        "src/core/src/Core.cpp",
+        "src/core/include/GoSurvey/Core/Units.hpp"
       ],
       "pendingAssignment": [],
       "outsideScan": [
@@ -16300,9 +16301,10 @@
         "Network",
         "Qt",
         "OpenGL",
-        "Windows"
+        "Windows",
+        "Core"
       ],
-      "dependencyNote": "Advisory union of application composition and required backend edges in system-map.md; it does not change enforced mappings or the dependency baseline.",
+      "dependencyNote": "Advisory union of application composition and required backend edges in system-map.md; GoSurveyEditor may call Core display-formatting APIs directly. It does not change enforced mappings or the dependency baseline.",
       "currentFiles": [
         "src/app/*: application composition and startup.",
         "src/qt/*: editor windows, dialogs, ribbon, panels, hotkeys and UI workflow. The detailed Qt/PlatformBackends audit sections remain authoritative where files mix ownership.",
