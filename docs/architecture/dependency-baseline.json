@@ -1423,13 +1423,6 @@
       "message": "src/qt/EditorSurfaces.cpp includes \"SurfaceStyle.hpp\": Qt may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/qt/EditorSurfaces.cpp",
-      "include": "util/surfacestats.hpp",
-      "target": "Terrain",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorSurfaces.cpp includes \"util/surfacestats.hpp\": Qt may not depend on Terrain (forbidden dependency)"
-    },
-    {
       "file": "src/qt/EditorSurfaceStyles.cpp",
       "include": "CadSurfaceEdit.hpp",
       "target": "Commands",

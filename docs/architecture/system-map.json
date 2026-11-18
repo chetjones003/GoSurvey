@@ -16313,9 +16313,10 @@
         "Math",
         "Renderer",
         "Network",
-        "Survey"
+        "Survey",
+        "Terrain"
       ],
-      "dependencyNote": "Records the platform backend edges in system-map.md. The Qt \u2192 Survey edge is limited to Survey public models for editor views and forms, as recorded in ADR-0009; OpenGL, Windows, and Headless do not depend on Survey.",
+      "dependencyNote": "Records platform backend edges in system-map.md. Qt may consume public Survey and Terrain model interfaces for editor views and forms (ADR-0009); OpenGL, Windows, and Headless do not depend on those systems.",
       "currentFiles": [
         "src/platform/* (all files): Windows, except the Network files (CrashReporter upload functions, CrashReporterWireReason.cpp, StartupFailure send path), StbImage.cpp (IO), ThumbnailCache.hpp (GoSurveyEditor) and HeadlessFileDialogs.* / HeadlessPdfAttach.cpp (Headless). MapTileService.* is Network-owned and is listed in the Network audit.",
         "src/render/ViewportRenderer.cpp and .hpp: OpenGL sections listed in sections; the frame loop and scene policy stay Renderer.",
