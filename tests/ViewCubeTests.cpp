@@ -9,7 +9,7 @@
 #include <cmath>
 #include <string>
 
-#include "render/Camera.hpp"
+#include <GoSurvey/Renderer/Camera.hpp>
 #include "viewport/ViewCube.hpp"
 
 using Catch::Approx;

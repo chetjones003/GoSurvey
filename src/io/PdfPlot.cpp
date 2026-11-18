@@ -15,7 +15,7 @@
 #include "PlotStyleTable.hpp"
 #include "CadLinetype.hpp"       // dash tessellation shared with the on-screen viewport (REQ-446)
 #include "CadDimStroke.hpp"
-#include "render/ViewportProjection.hpp"  // REQ-061: per-viewport camera projection
+#include <GoSurvey/Renderer/ViewportProjection.hpp>  // REQ-061: per-viewport camera projection
 #include "GoSurvey/Document/cadtable.hpp"
 #include <GoSurvey/Survey/AlignmentStylePublic.hpp>  // REQ-495.1: alignments plot in their style
 

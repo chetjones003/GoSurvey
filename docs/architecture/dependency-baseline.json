@@ -10,13 +10,6 @@
     },
     {
       "file": "src/commands/CadBlocks.cpp",
-      "include": "util/cadsolid.hpp",
-      "target": "Renderer",
-      "rule": "private-header include",
-      "message": "src/commands/CadBlocks.cpp includes \"util/cadsolid.hpp\": cross-system include must use GoSurvey/Renderer/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadBlocks.cpp",
       "include": "util/solidpick.hpp",
       "target": "Interaction",
       "rule": "forbidden dependency",
@@ -199,20 +192,6 @@
     },
     {
       "file": "src/commands/CadCommands.hpp",
-      "include": "render/Camera.hpp",
-      "target": "Renderer",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"render/Camera.hpp\": cross-system include must use GoSurvey/Renderer/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "render/SectionClip.hpp",
-      "target": "Renderer",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"render/SectionClip.hpp\": cross-system include must use GoSurvey/Renderer/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
       "include": "DwgIo.hpp",
       "target": "IO",
       "rule": "private-header include",
@@ -262,24 +241,10 @@
     },
     {
       "file": "src/commands/CadCommands.hpp",
-      "include": "util/cadsolid.hpp",
-      "target": "Renderer",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"util/cadsolid.hpp\": cross-system include must use GoSurvey/Renderer/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
       "include": "util/solidpick.hpp",
       "target": "Interaction",
       "rule": "forbidden dependency",
       "message": "src/commands/CadCommands.hpp includes \"util/solidpick.hpp\": Commands may not depend on Interaction (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "render/SectionClip.hpp",
-      "target": "Renderer",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"render/SectionClip.hpp\": cross-system include must use GoSurvey/Renderer/ public headers (private-header include)"
     },
     {
       "file": "src/commands/CadCommands_Alignment.cpp",
@@ -308,13 +273,6 @@
       "target": "IO",
       "rule": "private-header include",
       "message": "src/commands/CadCommands_Alignment.cpp includes \"io/DwgIo.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands_Alignment.cpp",
-      "include": "render/ViewportProjection.hpp",
-      "target": "Renderer",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands_Alignment.cpp includes \"render/ViewportProjection.hpp\": cross-system include must use GoSurvey/Renderer/ public headers (private-header include)"
     },
     {
       "file": "src/commands/CadCommands_Bench.cpp",
@@ -1157,13 +1115,6 @@
       "message": "src/qt/EditorPipePalette.cpp includes \"EditorWindow.hpp\": cross-system include must use GoSurvey/Qt/ public headers (private-header include)"
     },
     {
-      "file": "src/qt/EditorPipePalette.cpp",
-      "include": "ViewportRenderer.hpp",
-      "target": "Renderer",
-      "rule": "private-header include",
-      "message": "src/qt/EditorPipePalette.cpp includes \"ViewportRenderer.hpp\": cross-system include must use GoSurvey/Renderer/ public headers (private-header include)"
-    },
-    {
       "file": "src/qt/EditorPointClouds.cpp",
       "include": "io/CadPointCloudE57.hpp",
       "target": "IO",
@@ -1830,13 +1781,6 @@
     },
     {
       "file": "src/qt/EditorViewport.cpp",
-      "include": "util/gizmooverlay.hpp",
-      "target": "Renderer",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorViewport.cpp includes \"util/gizmooverlay.hpp\": Qt may not depend on Renderer (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorViewport.cpp",
       "include": "AppPaths.hpp",
       "target": "Windows",
       "rule": "forbidden dependency",
@@ -2431,42 +2375,42 @@
       "message": "src/qt/StyleEditors.hpp includes \"cadtablestyle.hpp\": Qt may not depend on Document (forbidden dependency)"
     },
     {
-      "file": "src/render/ViewportRenderer.cpp",
+      "file": "src/renderer/src/ViewportRenderer.cpp",
       "include": "CadLinetype.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/render/ViewportRenderer.cpp includes \"CadLinetype.hpp\": Renderer may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/render/ViewportRenderer.cpp",
+      "file": "src/renderer/src/ViewportRenderer.cpp",
       "include": "CadSnap.hpp",
       "target": "Interaction",
       "rule": "forbidden dependency",
       "message": "src/render/ViewportRenderer.cpp includes \"CadSnap.hpp\": Renderer may not depend on Interaction (forbidden dependency)"
     },
     {
-      "file": "src/render/ViewportRenderer.cpp",
+      "file": "src/renderer/src/ViewportRenderer.cpp",
       "include": "PaperSpace.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/render/ViewportRenderer.cpp includes \"PaperSpace.hpp\": Renderer may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/render/ViewportRenderer.hpp",
+      "file": "src/renderer/include/GoSurvey/Renderer/ViewportRenderer.hpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/render/ViewportRenderer.hpp includes \"CadCommands.hpp\": Renderer may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/render/ViewportRenderer.hpp",
+      "file": "src/renderer/include/GoSurvey/Renderer/ViewportRenderer.hpp",
       "include": "CadSnap.hpp",
       "target": "Interaction",
       "rule": "forbidden dependency",
       "message": "src/render/ViewportRenderer.hpp includes \"CadSnap.hpp\": Renderer may not depend on Interaction (forbidden dependency)"
     },
     {
-      "file": "src/render/ViewportRenderer.hpp",
+      "file": "src/renderer/include/GoSurvey/Renderer/ViewportRenderer.hpp",
       "include": "CadOnlineMap.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
@@ -2557,32 +2501,11 @@
       "message": "src/viewport/CadSnap.hpp includes \"CadCommands.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
     },
     {
-      "file": "src/viewport/Crosshair3d.hpp",
-      "include": "render/Camera.hpp",
-      "target": "Renderer",
-      "rule": "private-header include",
-      "message": "src/viewport/Crosshair3d.hpp includes \"render/Camera.hpp\": cross-system include must use GoSurvey/Renderer/ public headers (private-header include)"
-    },
-    {
       "file": "src/viewport/TransformPreview.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "private-header include",
       "message": "src/viewport/TransformPreview.cpp includes \"CadCommands.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
-    },
-    {
-      "file": "src/viewport/TransformPreview.cpp",
-      "include": "gizmooverlay.hpp",
-      "target": "Renderer",
-      "rule": "private-header include",
-      "message": "src/viewport/TransformPreview.cpp includes \"gizmooverlay.hpp\": cross-system include must use GoSurvey/Renderer/ public headers (private-header include)"
-    },
-    {
-      "file": "src/viewport/ViewCube.hpp",
-      "include": "Camera.hpp",
-      "target": "Renderer",
-      "rule": "private-header include",
-      "message": "src/viewport/ViewCube.hpp includes \"Camera.hpp\": cross-system include must use GoSurvey/Renderer/ public headers (private-header include)"
     },
     {
       "file": "src/viewport/ViewportPickPolicy.hpp",

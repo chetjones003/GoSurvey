@@ -584,7 +584,7 @@ gosurvey_target_warnings(gosurvey_survey)
 
 # Renderer owns the backend-neutral alignment display cache. Legacy rendering implementation
 # remains composed by the existing Qt/OpenGL frontend until the separate device ticket.
-add_library(gosurvey_renderer STATIC src/alignment/AlignmentDisplayCache.cpp)
+add_library(gosurvey_renderer STATIC src/renderer/src/AlignmentDisplayCache.cpp)
 add_library(GoSurvey::Renderer ALIAS gosurvey_renderer)
 target_include_directories(gosurvey_renderer PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include>"
@@ -917,7 +917,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
   ${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include
   ${CMAKE_CURRENT_SOURCE_DIR}/src/network/include
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/render
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include
   ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
   ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
   ${CMAKE_CURRENT_SOURCE_DIR}/src/font
@@ -1129,7 +1129,7 @@ if(GOSURVEY_BUILD_HEADLESS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util
     ${CMAKE_CURRENT_SOURCE_DIR}/src/io
     ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/render
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
     ${CMAKE_CURRENT_SOURCE_DIR}/src/font
@@ -1179,7 +1179,7 @@ if(GOSURVEY_BUILD_HEADLESS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/io
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util
     ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/render
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
     ${CMAKE_CURRENT_SOURCE_DIR}/src/font
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
@@ -1247,7 +1247,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/DimViewportTests.cpp
     tests/SpreadsheetIoTests.cpp
     tests/Document/TableStyleTests.cpp
-    tests/ViewportCameraTests.cpp
+    tests/Renderer/ViewportCameraTests.cpp
     tests/CommandLineTests.cpp
     tests/RightClickTests.cpp
     tests/SurveyCsvValidateTests.cpp
@@ -1288,7 +1288,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/LibreDwgTests.cpp
     tests/LinetypeTessellationTests.cpp
     # BenchSceneTests moved to GoSurveyDebugTests.
-    tests/VisualStyleTests.cpp
+    tests/Renderer/VisualStyleTests.cpp
     # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). The whole point of the kernel being
     # graphics-free is that this suite can exist: every primitive's topology, its closed-form volume
     # and surface area, its refusals, and its behaviour at state-plane coordinate magnitudes are all
@@ -1498,7 +1498,7 @@ if(GOSURVEY_BUILD_TESTS)
     # the test target still links no viewport translation unit and needs no GL.
     ${CMAKE_CURRENT_SOURCE_DIR}/src/viewport
     ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/render
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include
     # REQ-308 StartScreenTests: ThumbnailCache.hpp (header-only, pure — <filesystem> only).
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
@@ -1588,8 +1588,8 @@ if(GOSURVEY_BUILD_TESTS)
   # Renderer arithmetic fixtures run against the same public headers and real cache provider
   # exposed to consumers; no application-private roots, Qt, or OpenGL are added.
   add_executable(GoSurveyRendererTests
-    tests/CameraTests.cpp
-    tests/SectionClipTests.cpp)
+    tests/Renderer/CameraTests.cpp
+    tests/Renderer/SectionClipTests.cpp)
   set_target_properties(GoSurveyRendererTests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
   target_link_libraries(GoSurveyRendererTests PRIVATE GoSurvey::Renderer Catch2::Catch2WithMain)
@@ -1637,7 +1637,7 @@ if(GOSURVEY_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/commands"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/io"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/survey"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/render"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/pdf"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/network/include"
@@ -1700,7 +1700,7 @@ if(GOSURVEY_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/io"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/util"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/survey"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/render"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/pdf"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include"
@@ -1749,13 +1749,13 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-341 (code review on #478): the section clip's command-layer half — per-tab state, picks
     # and snaps that honour it, SECTION's selection guard, and the indicator's sizing. Needs
     # gosurvey_domain, like SubObjectSelectionTests above.
-    tests/SectionClipStateTests.cpp
+    tests/Renderer/SectionClipStateTests.cpp
     # REQ-060 (issue #148 Phase 5 slice 4b) — the TRANSLATE gizmo: the skew-line solve, the anchor,
     # and the two negatives (a click that misses every handle, an empty selection). Needs
     # gosurvey_domain for SubmitGizmoClick / ApplyTranslationToSelection.
     tests/GizmoTranslateTests.cpp
     # GitHub issue #564 s1: orbited ZOOM EXTENTS, driven through ProcessPendingViewportZoom (domain).
-    tests/ZoomExtents3dTests.cpp
+    tests/Renderer/ZoomExtents3dTests.cpp
     # GitHub issue #564 s2: depth-ordered hover/click resolution (ResolveViewportPick, domain).
     tests/ViewportPickDepthTests.cpp
     # REQ-060 rotate/scale handles (TASK-232, slice 4c). Its own file because its subject is the
@@ -1862,7 +1862,7 @@ if(GOSURVEY_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util
     ${CMAKE_CURRENT_SOURCE_DIR}/src/io
     ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/render
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
     ${CMAKE_CURRENT_SOURCE_DIR}/src/font

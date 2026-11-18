@@ -11,7 +11,7 @@
 #include "EditorPointTableDialog.hpp"
 #include "StyleEditors.hpp"
 #include "ViewportZoomScale.hpp"
-#include "ViewportRenderer.hpp"
+#include <GoSurvey/Renderer/ViewportRenderer.hpp>
 #include "TransformPreview.hpp"
 #include "EditorChrome.hpp"
 #include "QtAppearance.hpp"
@@ -36,7 +36,7 @@
 #include "GoSurvey/Pdf/PdfViewerCore.hpp"
 #include "QtAnnotations.hpp"
 #include "QtText.hpp"
-#include "util/gizmooverlay.hpp"
+#include <GoSurvey/Renderer/GizmoOverlay.hpp>
 #include "GsIo.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectFiles.hpp"
@@ -78,7 +78,7 @@
 #include "io/ProjectPointDb.hpp"
 #include "platform/HttpFetch.hpp"
 #include "update/UpdateService.hpp"
-#include "util/gizmooverlay.hpp"
+#include <GoSurvey/Renderer/GizmoOverlay.hpp>
 #include <GoSurvey/Terrain/surfacevolume.hpp>
 #include "GoSurvey/Document/PlotScales.hpp"
 #include <E57SimpleData.h>

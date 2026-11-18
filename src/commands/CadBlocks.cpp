@@ -3,7 +3,7 @@
 #include "CadRubberPreview.hpp"
 #include "ProjectWarnings.hpp"  // REQ-383: CheckClipboardPaste, the paste guard PASTEBLOCK shares with PASTE
 #include <GoSurvey/Core/StringUtil.hpp>
-#include "util/cadsolid.hpp"
+#include <GoSurvey/Renderer/CadSolidDisplay.hpp>
 #include "GoSurvey/Document/cadpiperun.hpp"  // CadPipeRunEndPorts (issue #486, "pipe end" connection port)
 #include "util/solidpick.hpp"
 #include "GsIo.hpp"

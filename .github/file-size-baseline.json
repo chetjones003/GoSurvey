@@ -8,7 +8,7 @@
   "src/io/LibreDwgCad.cpp": 9338,
   "src/qt/EditorWindow.cpp": 3694,
   "src/qt/PdfWindow.cpp": 3296,
-  "src/render/ViewportRenderer.cpp": 4256,
+  "src/renderer/src/ViewportRenderer.cpp": 4256,
   "src/util/AcisSatParser.cpp": 3189,
   "src/geometry/src/brep.cpp": 19848,
   "tests/BrepTests.cpp": 9427,

@@ -4,7 +4,7 @@
 #include "EditorWindow.hpp"  // QtAsset
 #include "FailureReportUi.hpp"
 #include "StartupFailure.hpp"
-#include "ViewportRenderer.hpp"
+#include <GoSurvey/Renderer/ViewportRenderer.hpp>
 #include <QApplication>
 #include <QClipboard>
 #include <QDesktopServices>

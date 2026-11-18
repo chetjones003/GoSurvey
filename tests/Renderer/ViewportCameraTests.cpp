@@ -8,7 +8,7 @@
 #include <cmath>
 
 #include "commands/PaperSpace.hpp"
-#include "render/ViewportProjection.hpp"
+#include <GoSurvey/Renderer/ViewportProjection.hpp>
 
 using Catch::Approx;
 

@@ -12,7 +12,7 @@
 #include "CadCommands.hpp"
 #include "EditorViewport.hpp"
 #include "EditorWindow.hpp"
-#include "ViewportRenderer.hpp"
+#include <GoSurvey/Renderer/ViewportRenderer.hpp>
 #include <GoSurvey/Geometry/brep.hpp>
 
 #include <QDialog>

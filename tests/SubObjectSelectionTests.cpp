@@ -19,7 +19,7 @@
 
 #include "CadCommands.hpp"
 #include "viewport/TransformPreview.hpp"  // BuildSubObjectHighlight
-#include "render/SectionClip.hpp"       // SectionClipPlane, for REQ-342's keep-side check
+#include <GoSurvey/Renderer/SectionClip.hpp>       // SectionClipPlane, for REQ-342's keep-side check
 #include "viewport/CadSnap.hpp"         // CadSnap::SnapClass, for REQ-344's named-feature rule
 
 namespace {
