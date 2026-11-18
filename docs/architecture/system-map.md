@@ -6,7 +6,7 @@ The starting source-tree metrics captured for the audit are in [audit-starting-i
 
 ## Dependency rules
 
-Dependencies point only downward through the tier order shown in the diagram, with two explicit ordering rules. Within Foundation (T0), the dependency order is Core → Math → Events → UI, where each item may depend on items to its left; Debug may depend on Core only. Within Domain (T2), peer dependencies are allowed only through public headers and must be acyclic. The only Domain peer edges allowed by this draft are Survey → Document, Terrain → Document, Terrain → Survey, and Pdf → Document; all other Domain dependencies must point downward to Kernel or Foundation. No other same-tier dependency is allowed. Platform backends implement lower-tier interfaces and are selected by GoSurveyEditor composition/startup; engine systems do not depend on platform implementations. `GoSurveyEditor` may use Qt and OpenGL backends.
+Dependencies point only downward through the tier order shown in the diagram, with two explicit ordering rules. Within Foundation (T0), the dependency order is Core → Math → Events → UI, where each item may depend on items to its left; Debug may depend on Core only. Within Domain (T2), peer dependencies are allowed only through public headers and must be acyclic. The only Domain peer edges allowed by this draft are Survey → Document, Terrain → Document, Terrain → Survey, and Pdf → Document; all other Domain dependencies must point downward to Kernel or Foundation. No other same-tier dependency is allowed. Platform backends implement lower-tier interfaces and are selected by GoSurveyEditor composition/startup. Qt may consume public domain-model interfaces for editor-facing presentation; domain rules remain with their owning systems, and engine systems do not depend on platform implementations. `GoSurveyEditor` may use Qt and OpenGL backends.
 
 ## Decision records
 
@@ -20,6 +20,7 @@ The rationale behind the architecture boundaries is recorded in these ADRs:
 - [System-qualified C++ namespaces](../adr/0006-system-qualified-cpp-namespaces.md)
 - [Commands may use Math primitives](../adr/0007-commands-may-use-math-primitives.md)
 - [Geometry public kernel interface](../adr/0008-geometry-public-kernel-interface.md)
+- [Qt may present Survey public models](../adr/0009-qt-survey-view-dependency.md)
 
 ## Systems
 
@@ -41,7 +42,7 @@ The rationale behind the architecture boundaries is recorded in these ADRs:
 | Network | T3 Services | Provides map tiles, update checks, and telemetry behind replaceable interfaces. | UI presentation and OS transport implementation. | Core, Events |
 | Commands | T4 Application | Coordinates command registration and user-requested operations. | Persistent domain data, toolkit widgets, GPU APIs. | Renderer, IO, Network, Document, Survey, Terrain, PointCloud, Pdf, Geometry, UI, Events, Math, Core, Debug |
 | Interaction | T4 Application | Coordinates snapping, grips, previews, picking, and transient user interaction. | Persistent document ownership, concrete widgets, GPU APIs. | Commands, Renderer, Document, Survey, Terrain, PointCloud, Geometry, Math, Events, UI, Core |
-| Qt | Platform backend | Implements UI and event interfaces using Qt. | Domain rules, command behavior, application ownership. | Core, Events, UI |
+| Qt | Platform backend | Implements UI and event interfaces using Qt; presents public Survey models in editor views and forms. | Survey domain rules, command behavior, application ownership. | Core, Events, UI, Survey |
 | OpenGL | Platform backend | Implements renderer device interfaces using OpenGL. | Draw-list policy and domain state. | Core, Math, Renderer |
 | Windows | Platform backend | Implements OS paths, HTTP, crash reporting, process and native dialog services. | Domain behavior and cross-platform interfaces. | Core, UI, Network |
 | Headless | Platform backend | Implements null render and scripted UI services for tests and batch operation. | Product UI and domain behavior. | Core, Events, UI, Renderer |

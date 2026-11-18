@@ -16312,9 +16312,10 @@
         "UI",
         "Math",
         "Renderer",
-        "Network"
+        "Network",
+        "Survey"
       ],
-      "dependencyNote": "Records the union of the four Platform backend rows in system-map.md as drawn today: Qt (Core, Events, UI), OpenGL (Core, Math, Renderer), Windows (Core, UI, Network), Headless (Core, Events, UI, Renderer). This entry does not widen any row. Current code breaks the rules in several places (see couplings); those are not permission to add edges.",
+      "dependencyNote": "Records the platform backend edges in system-map.md. The Qt \u2192 Survey edge is limited to Survey public models for editor views and forms, as recorded in ADR-0009; OpenGL, Windows, and Headless do not depend on Survey.",
       "currentFiles": [
         "src/platform/* (all files): Windows, except the Network files (CrashReporter upload functions, CrashReporterWireReason.cpp, StartupFailure send path), StbImage.cpp (IO), ThumbnailCache.hpp (GoSurveyEditor) and HeadlessFileDialogs.* / HeadlessPdfAttach.cpp (Headless). MapTileService.* is Network-owned and is listed in the Network audit.",
         "src/render/ViewportRenderer.cpp and .hpp: OpenGL sections listed in sections; the frame loop and scene policy stay Renderer.",

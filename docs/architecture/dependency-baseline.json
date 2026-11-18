@@ -730,32 +730,11 @@
       "message": "src/platform/WinFileDialogs.cpp includes \"util/PointFileExt.hpp\": Windows may not depend on IO (forbidden dependency)"
     },
     {
-      "file": "src/qt/AdjustmentEditor.hpp",
-      "include": "traverse/TraverseCalc.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/AdjustmentEditor.hpp includes \"traverse/TraverseCalc.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/AdjustmentEditor.hpp",
-      "include": "traverse/TraverseLeastSquares.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/AdjustmentEditor.hpp includes \"traverse/TraverseLeastSquares.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
       "file": "src/qt/AdjustmentWindow.cpp",
       "include": "TraverseActions.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/qt/AdjustmentWindow.cpp includes \"TraverseActions.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/AdjustmentWindow.cpp",
-      "include": "traverse/TraverseIo.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/AdjustmentWindow.cpp includes \"traverse/TraverseIo.hpp\": Qt may not depend on Survey (forbidden dependency)"
     },
     {
       "file": "src/qt/AdjustmentWindow.hpp",
@@ -772,13 +751,6 @@
       "message": "src/qt/EditorAlignmentCreate.cpp includes \"CadCommands.hpp\": Qt may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/qt/EditorAlignmentCreate.cpp",
-      "include": "alignment/Alignment.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorAlignmentCreate.cpp includes \"alignment/Alignment.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
       "file": "src/qt/EditorAlignmentLayout.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
@@ -786,32 +758,11 @@
       "message": "src/qt/EditorAlignmentLayout.cpp includes \"CadCommands.hpp\": Qt may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/qt/EditorAlignmentLayout.cpp",
-      "include": "alignment/AlignmentDesign.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorAlignmentLayout.cpp includes \"alignment/AlignmentDesign.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorAlignmentLayout.hpp",
-      "include": "alignment/AlignmentDesign.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorAlignmentLayout.hpp includes \"alignment/AlignmentDesign.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
       "file": "src/qt/EditorAlignmentStyle.cpp",
       "include": "AlignmentStyle.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/qt/EditorAlignmentStyle.cpp includes \"AlignmentStyle.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorAlignmentStyle.cpp",
-      "include": "alignment/AlignmentDesign.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorAlignmentStyle.cpp includes \"alignment/AlignmentDesign.hpp\": Qt may not depend on Survey (forbidden dependency)"
     },
     {
       "file": "src/qt/EditorBlockAuthoring.cpp",
@@ -1073,13 +1024,6 @@
       "message": "src/qt/EditorPointGroups.cpp includes \"CadCommands.hpp\": Qt may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/qt/EditorPointGroups.cpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorPointGroups.cpp includes \"SurveyPoints.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
       "file": "src/qt/EditorPoints.cpp",
       "include": "ProjectPoints.hpp",
       "target": "Commands",
@@ -1106,13 +1050,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/qt/EditorPointTableDialog.cpp includes \"CadCommands.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorPointTableDialog.cpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorPointTableDialog.cpp includes \"SurveyPoints.hpp\": Qt may not depend on Survey (forbidden dependency)"
     },
     {
       "file": "src/qt/EditorPointTableDialog.cpp",
@@ -1444,20 +1381,6 @@
       "message": "src/qt/EditorSampleLinesDialog.cpp includes \"CadCommands.hpp\": Qt may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/qt/EditorSampleLinesDialog.cpp",
-      "include": "alignment/Alignment.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorSampleLinesDialog.cpp includes \"alignment/Alignment.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorSampleLinesDialog.cpp",
-      "include": "alignment/AlignmentSampleLines.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorSampleLinesDialog.cpp includes \"alignment/AlignmentSampleLines.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
       "file": "src/qt/EditorSectionSheetsDialog.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
@@ -1465,32 +1388,11 @@
       "message": "src/qt/EditorSectionSheetsDialog.cpp includes \"CadCommands.hpp\": Qt may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/qt/EditorSectionSheetsDialog.cpp",
-      "include": "alignment/Alignment.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorSectionSheetsDialog.cpp includes \"alignment/Alignment.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorSectionSheetsDialog.cpp",
-      "include": "alignment/AlignmentSampleLines.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorSectionSheetsDialog.cpp includes \"alignment/AlignmentSampleLines.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
       "file": "src/qt/EditorSheetsDialog.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/qt/EditorSheetsDialog.cpp includes \"CadCommands.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorSheetsDialog.cpp",
-      "include": "alignment/AlignmentViewFrames.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorSheetsDialog.cpp includes \"alignment/AlignmentViewFrames.hpp\": Qt may not depend on Survey (forbidden dependency)"
     },
     {
       "file": "src/qt/EditorSurfaceManager.cpp",
@@ -1505,13 +1407,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/qt/EditorSurfaceManager.cpp includes \"SurfaceStyle.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorSurfaceManager.cpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorSurfaceManager.cpp includes \"SurveyPoints.hpp\": Qt may not depend on Survey (forbidden dependency)"
     },
     {
       "file": "src/qt/EditorSurfaces.cpp",
@@ -1596,13 +1491,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/qt/EditorViewFrameDialog.cpp includes \"ViewportZoomScale.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorViewFrameDialog.cpp",
-      "include": "alignment/Alignment.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorViewFrameDialog.cpp includes \"alignment/Alignment.hpp\": Qt may not depend on Survey (forbidden dependency)"
     },
     {
       "file": "src/qt/EditorViewport.cpp",
@@ -2081,13 +1969,6 @@
       "message": "src/qt/PdfWindow.cpp includes \"PdfDimAudit.hpp\": Qt may not depend on Pdf (forbidden dependency)"
     },
     {
-      "file": "src/qt/PdfWindow.cpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/PdfWindow.cpp includes \"SurveyPoints.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
       "file": "src/qt/PdfWindow.hpp",
       "include": "PdfDocument.hpp",
       "target": "Pdf",
@@ -2170,27 +2051,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/qt/QtAnnotations.cpp includes \"TextStyle.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/QtAnnotations.cpp",
-      "include": "alignment/AlignmentLabels.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/QtAnnotations.cpp includes \"alignment/AlignmentLabels.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/QtAnnotations.cpp",
-      "include": "alignment/AlignmentDesign.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/QtAnnotations.cpp includes \"alignment/AlignmentDesign.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/QtAnnotations.cpp",
-      "include": "alignment/AlignmentTables.hpp",
-      "target": "Survey",
-      "rule": "forbidden dependency",
-      "message": "src/qt/QtAnnotations.cpp includes \"alignment/AlignmentTables.hpp\": Qt may not depend on Survey (forbidden dependency)"
     },
     {
       "file": "src/qt/QtAnnotations.cpp",
