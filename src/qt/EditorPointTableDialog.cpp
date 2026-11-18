@@ -3,7 +3,7 @@
 
 #include "CadCommands.hpp"
 #include "GoSurvey/Survey/SurveyPointRecords.hpp"
-#include "util/cadtablestyle.hpp"
+#include "GoSurvey/Document/cadtablestyle.hpp"
 
 #include <QAbstractItemView>
 #include <QComboBox>

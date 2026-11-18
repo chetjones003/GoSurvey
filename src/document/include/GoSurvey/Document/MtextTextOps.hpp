@@ -1,6 +1,6 @@
 #pragma once
 
-#include "MtextRichSpans.hpp"
+#include "GoSurvey/Document/MtextRichSpans.hpp"
 
 #include <cstddef>
 #include <string>

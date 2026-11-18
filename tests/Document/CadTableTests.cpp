@@ -1,5 +1,5 @@
-#include "util/cadtable.hpp"
-#include "util/cadtablestyle.hpp"
+#include "GoSurvey/Document/cadtable.hpp"
+#include "GoSurvey/Document/cadtablestyle.hpp"
 
 #include "GsAnnotationJson.hpp"
 

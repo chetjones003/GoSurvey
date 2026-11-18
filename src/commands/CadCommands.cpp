@@ -15,7 +15,7 @@
 #include <GoSurvey/Geometry/FilletChamfer.hpp>
 #include <GoSurvey/Geometry/geom2d.hpp>
 #include <GoSurvey/Debug/BenchScene.hpp>
-#include "util/cadpiperun.hpp"  // CadPipeRun solid generation (issue #486 increment B1 / REQ-345)
+#include "GoSurvey/Document/cadpiperun.hpp"  // CadPipeRun solid generation (issue #486 increment B1 / REQ-345)
 #include <GoSurvey/Geometry/meshgeom.hpp>
 #include "GoSurvey/PointCloud/Octree.hpp"  // REQ-171/172 out-of-core octree (ADR-060)
 #include "GoSurvey/IO/PointCloudCacheImport.hpp"   // ADR-060 .gscloud out-of-core cache (streams the E57 internally)
@@ -45,8 +45,8 @@
 #include "DwgIo.hpp"
 #include "WinFileDialogs.hpp"
 #include <GoSurvey/Core/NumFormat.hpp>
-#include "util/PlotScales.hpp"  // VPSCALE (REQ-027): PlotScaleLabel / metric-ratio helpers
-#include "MtextRichFormat.hpp"
+#include "GoSurvey/Document/PlotScales.hpp"  // VPSCALE (REQ-027): PlotScaleLabel / metric-ratio helpers
+#include "GoSurvey/Document/MtextRichFormat.hpp"
 #include "AppPaths.hpp"
 
 #include <chrono>

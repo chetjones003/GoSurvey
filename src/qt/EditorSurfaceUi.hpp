@@ -3,7 +3,7 @@
 // banner, and the dialog look. Internal to src/qt — the dialogs themselves live in EditorSurfaces.cpp,
 // EditorSurfaceManager.cpp and EditorSurfaceStyles.cpp.
 
-#include "CadUiStyleWidgets.hpp"
+#include "GoSurvey/Document/CadUiStyleWidgets.hpp"
 #include "QtAccent.hpp"
 
 #include <QColor>

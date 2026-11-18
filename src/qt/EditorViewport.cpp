@@ -6,7 +6,7 @@
 #include "CadRubberPreview.hpp"
 #include "CadDynInput.hpp"
 #include "TransformPreview.hpp"
-#include "MtextRichFormat.hpp"
+#include "GoSurvey/Document/MtextRichFormat.hpp"
 #include "CadColor.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "QtAnnotations.hpp"

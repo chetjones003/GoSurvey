@@ -1,8 +1,8 @@
 #pragma once
 
 #include "CadEntities.hpp"
-#include "util/cadblock.hpp"
-#include "util/cadtable.hpp"
+#include "GoSurvey/Document/cadblock.hpp"
+#include "GoSurvey/Document/cadtable.hpp"
 #include <GoSurvey/Geometry/geom2d.hpp>  // the shared segment/circle-vs-box tests the model-space fence uses
 #include <GoSurvey/Math/ucs.hpp>  // REQ-155: per-viewport active UCS frame (pure value type, ray3d only)
 

@@ -1,4 +1,4 @@
 #pragma once
 
 // Document public entry point; declarations retain history in the separate physical move.
-#include "../../../../ui/MtextRichSpans.hpp"
+#include "GoSurvey/Document/MtextRichSpans.hpp"

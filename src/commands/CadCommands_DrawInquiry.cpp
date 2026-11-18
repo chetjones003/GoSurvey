@@ -6,7 +6,7 @@
 #include <GoSurvey/Core/NumFormat.hpp>
 #include <GoSurvey/Core/StringUtil.hpp>
 #include "util/DataExtract.hpp"
-#include "util/cadtablestyle.hpp"
+#include "GoSurvey/Document/cadtablestyle.hpp"
 #include "SpreadsheetIo.hpp"
 #include "platform/WinFileDialogs.hpp"
 #include <GoSurvey/Geometry/geom2d.hpp>

@@ -1,5 +1,5 @@
 #include "QtText.hpp"
-#include "MtextRichSpans.hpp"
+#include "GoSurvey/Document/MtextRichSpans.hpp"
 #include <QFont>
 #include <QFontDatabase>
 #include <QFontMetricsF>

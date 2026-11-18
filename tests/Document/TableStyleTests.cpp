@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include "util/cadtablestyle.hpp"
+#include "GoSurvey/Document/cadtablestyle.hpp"
 
 // REQ-466, REQ-474, REQ-475, REQ-476 (GitHub issue #804, D-2026-10-30-b): table styles, point table cells, sizing,
 // and cell hit-testing.

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "util/cadblock.hpp"
+#include "GoSurvey/Document/cadblock.hpp"
 
 #include <string>
 #include <vector>

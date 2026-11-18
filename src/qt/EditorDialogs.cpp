@@ -14,7 +14,7 @@
 #include "update/UpdateService.hpp"
 #include "UserPrefs.hpp"
 #include <GoSurvey/Survey/CoordinateSystems.hpp>
-#include "util/PlotScales.hpp"
+#include "GoSurvey/Document/PlotScales.hpp"
 #include "StylePreview.hpp"
 #include "StyleEditors.hpp"
 #include <QDialog>

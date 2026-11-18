@@ -1,7 +1,7 @@
 #include "util/AcisSatParser.hpp"
 
 #include <GoSurvey/Geometry/brep.hpp>
-#include "util/cadpiperun.hpp"
+#include "GoSurvey/Document/cadpiperun.hpp"
 
 #include "SolidMeasure.hpp"
 

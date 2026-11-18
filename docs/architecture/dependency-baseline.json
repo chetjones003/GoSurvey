@@ -17,13 +17,6 @@
     },
     {
       "file": "src/commands/CadBlocks.cpp",
-      "include": "util/cadpiperun.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/CadBlocks.cpp includes \"util/cadpiperun.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadBlocks.cpp",
       "include": "util/solidpick.hpp",
       "target": "Interaction",
       "rule": "forbidden dependency",
@@ -73,13 +66,6 @@
     },
     {
       "file": "src/commands/CadBlocks.hpp",
-      "include": "util/cadblock.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/CadBlocks.hpp includes \"util/cadblock.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadBlocks.hpp",
       "include": "util/solidpick.hpp",
       "target": "Interaction",
       "rule": "forbidden dependency",
@@ -98,13 +84,6 @@
       "target": "Debug",
       "rule": "forbidden dependency",
       "message": "src/commands/CadCommands.cpp includes \"util/benchscene.hpp\": Commands may not depend on Debug (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "util/cadpiperun.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"util/cadpiperun.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
     },
     {
       "file": "src/commands/CadCommands.cpp",
@@ -199,20 +178,6 @@
     },
     {
       "file": "src/commands/CadCommands.cpp",
-      "include": "util/PlotScales.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"util/PlotScales.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
-      "include": "MtextRichFormat.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"MtextRichFormat.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
       "include": "AppPaths.hpp",
       "target": "Windows",
       "rule": "forbidden dependency",
@@ -231,13 +196,6 @@
       "target": "Interaction",
       "rule": "forbidden dependency",
       "message": "src/commands/CadCommands.cpp includes \"CadSnap.hpp\": Commands may not depend on Interaction (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "util/cadtablestyle.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"util/cadtablestyle.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
     },
     {
       "file": "src/commands/CadCommands.hpp",
@@ -304,27 +262,6 @@
     },
     {
       "file": "src/commands/CadCommands.hpp",
-      "include": "util/cadtable.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"util/cadtable.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "util/cadtablestyle.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"util/cadtablestyle.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "util/cadblock.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"util/cadblock.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
       "include": "util/cadsolid.hpp",
       "target": "Renderer",
       "rule": "private-header include",
@@ -350,20 +287,6 @@
       "target": "IO",
       "rule": "private-header include",
       "message": "src/commands/CadCommands_Alignment.cpp includes \"GsIo.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands_Alignment.cpp",
-      "include": "util/cadtable.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands_Alignment.cpp includes \"util/cadtable.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands_Alignment.cpp",
-      "include": "util/cadtablestyle.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands_Alignment.cpp includes \"util/cadtablestyle.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
     },
     {
       "file": "src/commands/CadCommands_Alignment.cpp",
@@ -416,13 +339,6 @@
     },
     {
       "file": "src/commands/CadCommands_DrawInquiry.cpp",
-      "include": "util/cadtablestyle.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands_DrawInquiry.cpp includes \"util/cadtablestyle.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands_DrawInquiry.cpp",
       "include": "SpreadsheetIo.hpp",
       "target": "IO",
       "rule": "private-header include",
@@ -436,39 +352,11 @@
       "message": "src/commands/CadCommands_DrawInquiry.cpp includes \"platform/WinFileDialogs.hpp\": Commands may not depend on Windows (forbidden dependency)"
     },
     {
-      "file": "src/commands/CadCommands_Mleader.cpp",
-      "include": "util/styleproperty.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands_Mleader.cpp includes \"util/styleproperty.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
       "file": "src/commands/CadOnlineMap.hpp",
       "include": "MapTileService.hpp",
       "target": "Windows",
       "rule": "forbidden dependency",
       "message": "src/commands/CadOnlineMap.hpp includes \"MapTileService.hpp\": Commands may not depend on Windows (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/DimensionStyle.hpp",
-      "include": "util/styleproperty.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/DimensionStyle.hpp includes \"util/styleproperty.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/PaperSpace.hpp",
-      "include": "util/cadblock.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/PaperSpace.hpp includes \"util/cadblock.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/PaperSpace.hpp",
-      "include": "util/cadtable.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/PaperSpace.hpp includes \"util/cadtable.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
     },
     {
       "file": "src/commands/ProjectAddFlow.cpp",
@@ -527,13 +415,6 @@
       "message": "src/commands/ProjectSettings.cpp includes \"GsIo.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
     },
     {
-      "file": "src/commands/ViewportZoomScale.cpp",
-      "include": "util/PlotScales.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/commands/ViewportZoomScale.cpp includes \"util/PlotScales.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
       "file": "src/io/DwgIo.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
@@ -584,24 +465,10 @@
     },
     {
       "file": "src/io/DxfIo.cpp",
-      "include": "MtextRichFormat.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/io/DxfIo.cpp includes \"MtextRichFormat.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/DxfIo.cpp",
       "include": "TextStyle.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/DxfIo.cpp includes \"TextStyle.hpp\": IO may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/io/DxfIo.cpp",
-      "include": "util/cadtable.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/io/DxfIo.cpp includes \"util/cadtable.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
     },
     {
       "file": "src/io/GsAnnotationJson.hpp",
@@ -609,13 +476,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/GsAnnotationJson.hpp includes \"CadEntities.hpp\": IO may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/io/GsAnnotationJson.hpp",
-      "include": "util/cadtable.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/io/GsAnnotationJson.hpp includes \"util/cadtable.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
     },
     {
       "file": "src/io/GsIo.cpp",
@@ -696,27 +556,6 @@
     },
     {
       "file": "src/io/LibreDwgCad.cpp",
-      "include": "util/cadpiperun.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/io/LibreDwgCad.cpp includes \"util/cadpiperun.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/LibreDwgCad.cpp",
-      "include": "util/cadtablestyle.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/io/LibreDwgCad.cpp includes \"util/cadtablestyle.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/LibreDwgCad.cpp",
-      "include": "util/styleproperty.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/io/LibreDwgCad.cpp includes \"util/styleproperty.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/LibreDwgCad.cpp",
       "include": "font/ShxFont.hpp",
       "target": "Core",
       "rule": "private-header include",
@@ -752,24 +591,10 @@
     },
     {
       "file": "src/io/LibreDwgCad.cpp",
-      "include": "MtextRichFormat.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/io/LibreDwgCad.cpp includes \"MtextRichFormat.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/LibreDwgCad.cpp",
       "include": "TextStyle.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgCad.cpp includes \"TextStyle.hpp\": IO may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/io/LibreDwgCad.cpp",
-      "include": "util/cadtable.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/io/LibreDwgCad.cpp includes \"util/cadtable.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
     },
     {
       "file": "src/io/LibreDwgCad.cpp",
@@ -791,13 +616,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgDynamicBlock.cpp includes \"CadCommands.hpp\": IO may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/io/LibreDwgDynamicBlock.hpp",
-      "include": "util/cadblock.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/io/LibreDwgDynamicBlock.hpp includes \"util/cadblock.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
     },
     {
       "file": "src/io/LibreDwgField.cpp",
@@ -871,13 +689,6 @@
     },
     {
       "file": "src/io/PdfPlot.cpp",
-      "include": "MtextRichFormat.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/io/PdfPlot.cpp includes \"MtextRichFormat.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/PdfPlot.cpp",
       "include": "ColorContrast.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
@@ -917,13 +728,6 @@
       "target": "Renderer",
       "rule": "forbidden dependency",
       "message": "src/io/PdfPlot.cpp includes \"render/ViewportProjection.hpp\": IO may not depend on Renderer (forbidden dependency)"
-    },
-    {
-      "file": "src/io/PdfPlot.cpp",
-      "include": "util/cadtable.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/io/PdfPlot.cpp includes \"util/cadtable.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
     },
     {
       "file": "src/io/PlotStyleTable.cpp",
@@ -2690,7 +2494,7 @@
       "message": "src/telemetry/TelemetryService.cpp includes \"HttpFetch.hpp\": Network may not depend on Windows (forbidden dependency)"
     },
     {
-      "file": "src/ui/CadUiStyleWidgets.hpp",
+      "file": "src/document/include/GoSurvey/Document/CadUiStyleWidgets.hpp",
       "include": "CadEntities.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
@@ -2711,28 +2515,28 @@
       "message": "src/update/UpdateService.cpp includes \"HttpFetch.hpp\": Network may not depend on Windows (forbidden dependency)"
     },
     {
-      "file": "src/util/cadblock.hpp",
+      "file": "src/document/include/GoSurvey/Document/cadblock.hpp",
       "include": "CadEntities.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/util/cadblock.hpp includes \"CadEntities.hpp\": Document may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/util/cadblock.hpp",
+      "file": "src/document/include/GoSurvey/Document/cadblock.hpp",
       "include": "cadsolid.hpp",
       "target": "Renderer",
       "rule": "forbidden dependency",
       "message": "src/util/cadblock.hpp includes \"cadsolid.hpp\": Document may not depend on Renderer (forbidden dependency)"
     },
     {
-      "file": "src/util/cadpiperun.hpp",
+      "file": "src/document/include/GoSurvey/Document/cadpiperun.hpp",
       "include": "CadEntities.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/util/cadpiperun.hpp includes \"CadEntities.hpp\": Document may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/util/cadpiperun.hpp",
+      "file": "src/document/include/GoSurvey/Document/cadpiperun.hpp",
       "include": "cadsolid.hpp",
       "target": "Renderer",
       "rule": "forbidden dependency",
@@ -2765,27 +2569,6 @@
       "target": "Commands",
       "rule": "private-header include",
       "message": "src/viewport/CadRubberPreview.cpp includes \"CadCoordinateFrame.hpp\": cross-system include must use GoSurvey/Commands/ public headers (private-header include)"
-    },
-    {
-      "file": "src/viewport/CadRubberPreview.cpp",
-      "include": "util/cadpiperun.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/viewport/CadRubberPreview.cpp includes \"util/cadpiperun.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/viewport/CadSnap.cpp",
-      "include": "util/cadblock.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/viewport/CadSnap.cpp includes \"util/cadblock.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/viewport/CadSnap.cpp",
-      "include": "util/cadpiperun.hpp",
-      "target": "Document",
-      "rule": "private-header include",
-      "message": "src/viewport/CadSnap.cpp includes \"util/cadpiperun.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
     },
     {
       "file": "src/viewport/CadSnap.hpp",

@@ -1,7 +1,7 @@
 #include "ViewportZoomScale.hpp"
 
 #include "CadCommands.hpp"
-#include "util/PlotScales.hpp"
+#include "GoSurvey/Document/PlotScales.hpp"
 
 #include <algorithm>
 #include <cmath>
