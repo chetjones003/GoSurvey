@@ -347,16 +347,6 @@
       "status": "audited"
     },
     {
-      "path": "src/util/SaveTrace.cpp",
-      "system": "Debug",
-      "status": "audited"
-    },
-    {
-      "path": "src/util/SaveTrace.hpp",
-      "system": "Debug",
-      "status": "audited"
-    },
-    {
       "path": "src/util/SheetGrid.hpp",
       "system": "IO",
       "status": "audited"
@@ -372,12 +362,12 @@
       "status": "audited"
     },
     {
-      "path": "src/util/benchscene.cpp",
+      "path": "src/debug/src/BenchScene.cpp",
       "system": "Debug",
       "status": "audited"
     },
     {
-      "path": "src/util/benchscene.hpp",
+      "path": "src/debug/include/GoSurvey/Debug/BenchScene.hpp",
       "system": "Debug",
       "status": "audited"
     },
@@ -437,17 +427,17 @@
       "status": "audited"
     },
     {
-      "path": "src/util/docinvariants.cpp",
+      "path": "src/debug/src/DocumentInvariants.cpp",
       "system": "Debug",
       "status": "audited"
     },
     {
-      "path": "src/util/docinvariants.hpp",
+      "path": "src/debug/include/GoSurvey/Debug/DocumentInvariants.hpp",
       "system": "Debug",
       "status": "audited"
     },
     {
-      "path": "src/util/framewatch.hpp",
+      "path": "src/debug/include/GoSurvey/Debug/FrameWatch.hpp",
       "system": "Debug",
       "status": "audited"
     },
@@ -1076,34 +1066,6 @@
         "Trimmed"
       ],
       "note": "%.6g. Duplicate of TrimNumber."
-    },
-    {
-      "path": "src/util/SaveTrace.hpp",
-      "lines": [
-        1,
-        6
-      ],
-      "system": "Debug",
-      "concern": "logging",
-      "symbols": [
-        "ClearSaveTrace",
-        "AppendSaveTrace"
-      ],
-      "note": "Diagnostic save trace belongs to Debug. The IO call sites include this private header, and the implementation calls Win32 temp-path, file-delete, and OutputDebugString APIs; resolve these boundaries before mapping/enforcement."
-    },
-    {
-      "path": "src/util/SaveTrace.cpp",
-      "lines": [
-        1,
-        45
-      ],
-      "system": "Debug",
-      "concern": "logging",
-      "symbols": [
-        "ClearSaveTrace",
-        "AppendSaveTrace"
-      ],
-      "note": "Diagnostic save trace belongs to Debug. The IO call sites include this private header, and the implementation calls Win32 temp-path, file-delete, and OutputDebugString APIs; resolve these boundaries before mapping/enforcement."
     },
     {
       "path": "src/commands/CadColor.cpp",
@@ -13933,28 +13895,26 @@
         "commit": "70120847",
         "codeMoved": false
       },
-      "responsibility": "Provides developer diagnostics: profiling and frame-stall measurements, diagnostic save traces, reproducible benchmark scenes and statistics, document-invariant checks, and crash-report triggers.",
+      "responsibility": "Provides developer diagnostics: profiling, frame-stall measurements, reproducible benchmark scenes and statistics, document-invariant checks, and crash-report triggers.",
       "doesNotOwn": [
         "product workflows or command orchestration (Commands)",
         "persistent document state or document mutation (Document/Commands)",
         "widgets and presentation (UI/Qt)",
         "platform APIs and OS services (Windows)",
-        "general application logging facade and product logging sinks (Core; diagnostic SaveTrace belongs to Debug)"
+        "general application logging facade and product logging sinks (Core)"
       ],
       "allowedDependencies": [
         "Core"
       ],
       "currentFiles": [
-        "src/util/benchscene.cpp",
-        "src/util/benchscene.hpp",
-        "src/util/docinvariants.cpp",
-        "src/util/docinvariants.hpp",
-        "src/util/framewatch.hpp",
+        "src/debug/src/BenchScene.cpp",
+        "src/debug/include/GoSurvey/Debug/BenchScene.hpp",
+        "src/debug/src/DocumentInvariants.cpp",
+        "src/debug/include/GoSurvey/Debug/DocumentInvariants.hpp",
+        "src/debug/include/GoSurvey/Debug/FrameWatch.hpp",
         "src/platform/CrashReporter.cpp::ShowReportDialog trigger (section only)",
         "src/platform/CrashReporter.hpp::TakeCrashReportFromCommandLine (section only)",
-        "src/platform/StartupFailure.cpp::ShowReportDialog trigger (section only)",
-        "src/util/SaveTrace.cpp",
-        "src/util/SaveTrace.hpp"
+        "src/platform/StartupFailure.cpp::ShowReportDialog trigger (section only)"
       ],
       "currentSections": [
         "src/commands/CadCommands.hpp: PipeRunPerfStat, PipeRunPerf and performance HUD measurement fields (diagnostic values only; storage is mixed with Commands-owned AppCommandState)",
@@ -13963,8 +13923,7 @@
         "src/viewport/CadRubberPreview.cpp: ghost-preview timing collection (mixed with Commands/Interaction viewport workflow)",
         "src/platform/CrashReporter.cpp::ShowReportDialog",
         "src/platform/CrashReporter.hpp::TakeCrashReportFromCommandLine",
-        "src/platform/StartupFailure.cpp::ShowReportDialog",
-        "src/util/SaveTrace.cpp/.hpp: ClearSaveTrace and AppendSaveTrace (diagnostic save tracing; IO callers and Win32 temp-file/output APIs remain coupled)"
+        "src/platform/StartupFailure.cpp::ShowReportDialog"
       ],
       "draftPublicInterface": {
         "benchmark": [
@@ -13993,10 +13952,6 @@
         ],
         "internal, not public": [
           "Commands command parsing and output, UI overlay rendering, state storage, and platform crash/report implementations"
-        ],
-        "tracing": [
-          "ClearSaveTrace",
-          "AppendSaveTrace"
         ]
       },
       "existingTests": [
@@ -14012,29 +13967,7 @@
         "No dedicated tests cover crash-report trigger policy.",
         "SaveTrace has no direct test."
       ],
-      "pendingAssignment": [
-        {
-          "files": [
-            "src/util/benchscene.cpp",
-            "src/util/benchscene.hpp"
-          ],
-          "reason": "Debug owns deterministic benchmark scenes and statistics, but Commands currently includes benchscene.hpp in CadCommands.cpp and CadCommands_Bench.cpp. The dependency table does not allow Commands \u00e2\u2020\u2019 Debug, so keep the ownership advisory until the final-map/move ticket chooses a legal benchmark interface or reassigns the command-facing concept."
-        },
-        {
-          "files": [
-            "src/util/docinvariants.cpp",
-            "src/util/docinvariants.hpp"
-          ],
-          "reason": "Debug owns invariant diagnostics, but docinvariants.cpp includes Commands-owned CadCommands.hpp to inspect AppCommandState. Debug may depend only on Core; keep the ownership advisory until the final-map/move ticket adds a Document-owned public diagnostic view or revises the boundary."
-        },
-        {
-          "files": [
-            "src/util/SaveTrace.cpp",
-            "src/util/SaveTrace.hpp"
-          ],
-          "reason": "Debug owns diagnostic save tracing per issue #1224. IO (DwgIo.cpp and LibreDwgCad.cpp) includes SaveTrace.hpp directly, but IO does not currently allow a Debug dependency; SaveTrace.cpp also calls Win32 GetTempPathW, DeleteFileW and OutputDebugStringA despite Debug allowing only Core. Keep the Debug ownership advisory until the final-map/move ticket supplies legal IO and Windows seams."
-        }
-      ]
+      "pendingAssignment": []
     },
     "Geometry": {
       "tier": "T1 Kernel",
@@ -15784,7 +15717,6 @@
       "forbiddenDependencies": [
         "IO -> Commands: IO implementations include Commands-owned CadCommands.hpp and consume AppCommandState (for example DxfIo, DwgIo, SurveyCsv, ProjectFiles, and project-point DB code). Commands -> IO is allowed, but the reverse dependency is forbidden.",
         "IO -> Windows: src/io/Project.cpp and related project/file code use Win32 process/path APIs; platform operations need a Windows adapter.",
-        "IO -> Debug private header: IO save paths call SaveTrace from src/util/SaveTrace.hpp, assigned to Debug; Debug also currently reaches Win32 APIs. A narrow diagnostic interface or caller-side tracing is needed.",
         "IO -> Pdf private implementation: src/io/PdfPlot.cpp includes PdfDocument.hpp for the PDFium mutex; replace this with a narrow backend interface."
       ],
       "testGaps": [
@@ -15904,9 +15836,10 @@
         "Pdf",
         "UI",
         "Events",
-        "Core"
+        "Core",
+        "Debug"
       ],
-      "dependencyNote": "Matches the Commands row in system-map.md. Commands may not depend on Interaction, Geometry or Math. Existing forbidden edges remain in dependency-baseline.json; this audit does not change enforced mappings or the baseline.",
+      "dependencyNote": "Matches the Commands row in system-map.md. Commands may depend on Debug for deterministic benchmark helpers, but Debug does not depend on Commands. Commands may not depend on Interaction, Geometry or Math. Existing unrelated forbidden edges remain in dependency-baseline.json.",
       "currentFiles": [
         "src/commands/AlignmentLabelSet.hpp",
         "src/commands/AlignmentStyle.hpp",
@@ -16488,7 +16421,7 @@
   },
   "auditFindings": {
     "homelessConcepts": [
-      "Logging facade: none. Sinks are scattered: EditorWindow::m_Log (command line, Qt), SaveTrace (Debug diagnostic sink), UpdateService LogSilently (Network), StartupFailure startup-failure.log (Windows), and Qt qWarning/qDebug calls in src/qt. The final map must decide whether Core owns one facade or only the file sink.",
+      "Logging facade: none. Sinks are scattered: EditorWindow::m_Log (command line, Qt), the temporary SaveTrace sink (retired by #1288), UpdateService LogSilently (Network), StartupFailure startup-failure.log (Windows), and Qt qWarning/qDebug calls in src/qt. The final map must decide whether Core owns one facade or only the file sink.",
       "Settings store: AppCommandState holds nearly all settings in one god struct. There is no Settings system. Core owns the value vocabulary; the holder and its consumers belong to the final map.",
       "Duration and ETA text: FormatEtaRemaining is pure formatting used only by a progress UI. Core or UI?",
       "Lat/long DMS label: FormatLatLongLabel and CadCommands_Geo FormatDms. Geo or Core formatting?",
@@ -16564,8 +16497,6 @@
       "AppCommandState stores angle display as raw ints (angleDisplayType). CadAngleDisplaySettings (Commands) converts them to the typed Core AngleDisplaySettings on every call.",
       "DrawingSettings (Document, per-drawing) embeds the AngularUnits and FootDefinition enums that Core units should own.",
       "io/UserPrefs.cpp reads and writes AppCommandState settings fields directly, so the IO system depends on Commands state.",
-      "SaveTrace (Debug) calls Win32 GetTempPathW, DeleteFileW and OutputDebugStringA directly. Debug may depend only on Core, so path, deletion and debugger output must use a Windows seam or be injected.",
-      "SaveTrace is called from io/DwgIo.cpp and io/LibreDwgCad.cpp. IO does not currently allow a Debug dependency, and SaveTrace is temporary diagnostics for issue #167; add a legal seam or remove the trace when that issue closes.",
       "Commands uses the public ray3d and ucs primitives from Math. ADR-0007 records Math as an allowed Commands dependency; the moved public headers and baseline now enforce that edge. OrthoConstrain remains a Commands-owned helper.",
       "RotateFrameInPlace is duplicated with identical bodies in brep.cpp:2433 and AcisSatParser.cpp:541.",
       "The 2D rotation-about-base helper is copied at least 6 times: RotateAroundBase (CadCommands.cpp:10623), RotatePtForAnnotationPreview (:24425), RotateSurveyCoords (SurveyPoints.cpp:361), RotatePdfInsertAroundBase (EditorViewport.cpp:101), Xf2::apply and Xf::P (IO and ConvertDrawing), and Affine2D. Replace callers with one Math helper; do not move code in this audit.",
@@ -16654,7 +16585,6 @@
       "brep.hpp (1330-1332, solid edges as GL_LINES) and geom2d.hpp (81-89) are Geometry headers that emit GL_LINES. geom2d's emitters are assigned to Renderer above; brep's edge export follows the same pattern. The final map should decide both together.",
       "IO implementations in src/io include Commands-owned CadCommands.hpp and read/mutate AppCommandState; this reverses the intended Commands -> IO dependency.",
       "Project persistence code in src/io calls Win32 process/path APIs directly, coupling IO to the Windows backend.",
-      "IO save paths call the Debug-owned SaveTrace API, whose implementation uses Win32 APIs; diagnostics cross both system and platform boundaries.",
       "PdfPlot includes PdfDocument.hpp to access the PDFium mutex, coupling IO to Pdf internals and its third-party backend.",
       "Network-to-Windows transport: platform/HttpFetch.hpp is the only HTTP transport and is WinHTTP-specific. Telemetry, update, startup and crash reports, and the online map all depend on it. Network needs an injected transport interface before it can build without Windows.",
       "Qt reaches Network directly: EditorWindow, EditorUpdate, EditorDialogs, EditorProjects and EditorViewport include update, telemetry or tile headers (ratchet: Qt may not depend on Network). The Qt layer needs a neutral update and telemetry view model.",
@@ -16824,9 +16754,9 @@
     },
     "ownershipDecisions": [
       {
-        "finding": "Logging facade: none. Sinks are scattered: EditorWindow::m_Log (command line, Qt), SaveTrace (Debug diagnostic sink), UpdateService LogSilently (Network), StartupFailure startup-failure.log (Windows), and Qt qWarning/qDebug calls in src/qt. The final map must decide whether Core owns one facade or only the file sink.",
+        "finding": "The temporary SaveTrace diagnostic API was retired after issue #167 closed.",
         "status": "approved",
-        "home": "Core logging facade; sinks remain owned by their callers/backends"
+        "home": "Removed by #1288; IO save paths no longer emit temporary trace markers."
       },
       {
         "finding": "Settings store: AppCommandState holds nearly all settings in one god struct. There is no Settings system. Core owns the value vocabulary; the holder and its consumers belong to the final map.",
@@ -17094,9 +17024,9 @@
         "home": "IO"
       },
       {
-        "finding": "SaveTrace is a Debug diagnostic API used by IO save paths, but its implementation reaches Win32 temp-file and debugger APIs. Define a boundary that lets IO report save outcomes without depending on Debug and Windows implementation details.",
+        "finding": "The temporary SaveTrace diagnostic API was retired after issue #167 closed.",
         "status": "approved",
-        "home": "Debug owns save-trace policy; IO reports outcomes through an approved diagnostics seam; Windows owns OS-specific sinks"
+        "home": "Removed by #1288; IO save paths no longer emit temporary trace markers."
       },
       {
         "finding": "IO has no format-neutral public interface directory. Import/export entry points expose a mixture of AppCommandState, domain storage, and format-specific result structures; the final map/move work must choose stable seams.",

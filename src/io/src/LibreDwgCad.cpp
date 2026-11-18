@@ -28,7 +28,6 @@
 #include "GoSurvey/Survey/SurveyPointRecords.hpp"
 #include "TextStyle.hpp"
 #include "GoSurvey/Document/cadtable.hpp"
-#include <GoSurvey/Debug/SaveTrace.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -8709,14 +8708,12 @@ bool WriteDwgFile(const char* pathUtf8, Dwg_Data* dwg, std::vector<std::string>&
   std::error_code ec;
   std::filesystem::remove(tmp, ec);
   const std::string tmpUtf8 = tmp.u8string();
-  AppendSaveTrace("export: dwg_write_file");
   const int err = dwg_write_file(tmpUtf8.c_str(), dwg);
   if (err != DWG_NOERR) {
     log.push_back("DWG export — LibreDWG encode failed.");
     std::filesystem::remove(tmp, ec);
     return false;
   }
-  AppendSaveTrace("export: dwg rename staged");
   std::filesystem::rename(tmp, dst, ec);
   if (ec) {
     std::filesystem::copy_file(tmp, dst, std::filesystem::copy_options::overwrite_existing, ec);
@@ -9279,7 +9276,6 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
     dwg->header_vars.LUNITS = 2;
     dwg->header_vars.AUNITS = static_cast<BITCODE_BS>(DrawingAunitsCode(st.drawingSettings.angularUnits));
   }
-  AppendSaveTrace("export: fill from state");
   FillFromState(st, dwg, hdr, log, outputVersion, asDxf);
   dwg_resolve_objectrefs_silent(dwg);
   if (!asDxf) {  // REQ-362 item 2: the map pin other programs read (DWG only)
@@ -9300,8 +9296,6 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
   if (!asDxf && !WriteNativeCannoscale(st, dwg) && !st.annotationScales.empty())
     log.push_back("DWG export — AutoCAD's CANNOSCALE could not be written; GoSurvey scale metadata was retained.");
   WriteGosurveyCannoscaleOnModelSpace(st, dwg);
-  AppendSaveTrace("export: encode to disk");
-
   bool ok = false;
   if (asDxf) {
     const std::string currentTab =

@@ -66,13 +66,6 @@
     },
     {
       "file": "src/commands/CadCommands.cpp",
-      "include": "util/benchscene.hpp",
-      "target": "Debug",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands.cpp includes \"util/benchscene.hpp\": Commands may not depend on Debug (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
       "include": "io/CadPointCloudE57.hpp",
       "target": "IO",
       "rule": "private-header include",
@@ -255,13 +248,6 @@
     },
     {
       "file": "src/commands/CadCommands_Bench.cpp",
-      "include": "util/benchscene.hpp",
-      "target": "Debug",
-      "rule": "forbidden dependency",
-      "message": "src/commands/CadCommands_Bench.cpp includes \"util/benchscene.hpp\": Commands may not depend on Debug (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/CadCommands_Bench.cpp",
       "include": "AppPaths.hpp",
       "target": "Windows",
       "rule": "forbidden dependency",
@@ -350,13 +336,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/DwgIo.cpp includes \"CadCommands.hpp\": IO may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/io/src/DwgIo.cpp",
-      "include": "util/SaveTrace.hpp",
-      "target": "Debug",
-      "rule": "forbidden dependency",
-      "message": "src/io/DwgIo.cpp includes \"util/SaveTrace.hpp\": IO may not depend on Debug (forbidden dependency)"
     },
     {
       "file": "src/io/src/DwgMeshConvert.cpp",
@@ -518,13 +497,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgCad.cpp includes \"TextStyle.hpp\": IO may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/io/src/LibreDwgCad.cpp",
-      "include": "util/SaveTrace.hpp",
-      "target": "Debug",
-      "rule": "forbidden dependency",
-      "message": "src/io/LibreDwgCad.cpp includes \"util/SaveTrace.hpp\": IO may not depend on Debug (forbidden dependency)"
     },
     {
       "file": "src/io/src/LibreDwgCivil.hpp",

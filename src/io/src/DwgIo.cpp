@@ -3,7 +3,6 @@
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
 #include "LibreDwgCad.hpp"
-#include <GoSurvey/Debug/SaveTrace.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -74,9 +73,7 @@ bool AppendGoSurveyPayloadToDwgFile(const char* pathUtf8, const AppCommandState&
     log.push_back("DWG save — no path for GoSurvey document append.");
     return false;
   }
-  AppendSaveTrace("append: serialize json");
   const std::string json = SerializeGoSurveyJson(st);
-  AppendSaveTrace("append: json ready");
   // The file was just written by LibreDWG; a sync client / antivirus can still hold it open
   // briefly (issue #167). Retry the append open with a short bounded backoff before giving up.
   //
@@ -188,28 +185,22 @@ bool ExportDwgFile(const AppCommandState& st, const char* pathUtf8, std::vector<
   // Build the complete file (LibreDWG bytes + GoSurvey trailer) beside the target, then replace the
   // target in one step. The final path may be a OneDrive placeholder that briefly locks after a
   // write (issue #167); staging avoids an export-then-reopen race on it.
-  AppendSaveTrace("export: begin");
   std::error_code ec;
   const std::filesystem::path dst = std::filesystem::u8path(pathUtf8);
   const std::filesystem::path staged = std::filesystem::path(dst.u8string() + ".gosurvey-save.tmp");
   std::filesystem::remove(staged, ec);
   const std::string stagedUtf8 = staged.u8string();
 
-  AppendSaveTrace("export: libredwg write");
   if (!ExportLibreCadFile(st, stagedUtf8.c_str(), log, /*asDxf=*/false)) {
     std::filesystem::remove(staged, ec);
-    AppendSaveTrace("export: libredwg failed");
     return false;
   }
-  AppendSaveTrace("export: append trailer");
   if (!AppendGoSurveyPayloadToDwgFile(stagedUtf8.c_str(), st, log)) {
     std::filesystem::remove(staged, ec);
     log.push_back("DWG save — file was NOT written; the GoSurvey document could not be embedded.");
-    AppendSaveTrace("export: append failed");
     return false;
   }
 
-  AppendSaveTrace("export: rename staged file");
   std::filesystem::rename(staged, dst, ec);
   if (ec) {
     ec.clear();
@@ -220,10 +211,8 @@ bool ExportDwgFile(const AppCommandState& st, const char* pathUtf8, std::vector<
   if (ec) {
     std::filesystem::remove(staged, ec);
     log.push_back(std::string("DWG save — could not replace ") + pathUtf8 + " with the new drawing.");
-    AppendSaveTrace("export: rename failed");
     return false;
   }
-  AppendSaveTrace("export: done");
   return true;
 }
 
