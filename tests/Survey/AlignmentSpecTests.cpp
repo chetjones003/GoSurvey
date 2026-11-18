@@ -19,7 +19,7 @@
 #include "GoSurvey/Survey/AlignmentModel.hpp"
 #include "GoSurvey/Survey/AlignmentDesign.hpp"
 #include "GoSurvey/Survey/AlignmentReportModel.hpp"
-#include "io/SpreadsheetIo.hpp"
+#include "io/src/SpreadsheetIo.hpp"
 
 using alignment::Alignment;
 using alignment::Point2;

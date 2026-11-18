@@ -34,7 +34,7 @@
 #include <thread>
 #include <vector>
 
-#include "io/CadPointCloudLaz.hpp"
+#include "io/src/CadPointCloudLaz.hpp"
 
 using Catch::Approx;
 

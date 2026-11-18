@@ -373,392 +373,392 @@
       "message": "src/commands/ProjectSettings.cpp includes \"GsIo.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
     },
     {
-      "file": "src/io/DwgIo.cpp",
+      "file": "src/io/src/DwgIo.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/DwgIo.cpp includes \"CadCommands.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/DwgIo.cpp",
+      "file": "src/io/src/DwgIo.cpp",
       "include": "util/SaveTrace.hpp",
       "target": "Debug",
       "rule": "forbidden dependency",
       "message": "src/io/DwgIo.cpp includes \"util/SaveTrace.hpp\": IO may not depend on Debug (forbidden dependency)"
     },
     {
-      "file": "src/io/DwgMeshConvert.cpp",
+      "file": "src/io/src/DwgMeshConvert.cpp",
       "include": "ProcessRun.hpp",
       "target": "Windows",
       "rule": "forbidden dependency",
       "message": "src/io/DwgMeshConvert.cpp includes \"ProcessRun.hpp\": IO may not depend on Windows (forbidden dependency)"
     },
     {
-      "file": "src/io/DxfIo.cpp",
+      "file": "src/io/src/DxfIo.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/DxfIo.cpp includes \"CadCommands.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/DxfIo.cpp",
+      "file": "src/io/src/DxfIo.cpp",
       "include": "CadCoordinateFrame.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/DxfIo.cpp includes \"CadCoordinateFrame.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/DxfIo.cpp",
+      "file": "src/io/src/DxfIo.cpp",
       "include": "CadDimStroke.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/DxfIo.cpp includes \"CadDimStroke.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/DxfIo.cpp",
+      "file": "src/io/src/DxfIo.cpp",
       "include": "CadLinetype.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/DxfIo.cpp includes \"CadLinetype.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/DxfIo.cpp",
+      "file": "src/io/src/DxfIo.cpp",
       "include": "TextStyle.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/DxfIo.cpp includes \"TextStyle.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/GsAnnotationJson.hpp",
+      "file": "src/io/src/GsAnnotationJson.hpp",
       "include": "CadEntities.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/GsAnnotationJson.hpp includes \"CadEntities.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/GsIo.cpp",
+      "file": "src/io/src/GsIo.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/GsIo.cpp includes \"CadCommands.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/GsIo.cpp",
+      "file": "src/io/src/GsIo.cpp",
       "include": "AlignmentLabelSet.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/GsIo.cpp includes \"AlignmentLabelSet.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/GsIo.cpp",
+      "file": "src/io/src/GsIo.cpp",
       "include": "AlignmentStyle.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/GsIo.cpp includes \"AlignmentStyle.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/GsIo.cpp",
+      "file": "src/io/src/GsIo.cpp",
       "include": "ProjectPoints.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/GsIo.cpp includes \"ProjectPoints.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/GsIo.cpp",
+      "file": "src/io/src/GsIo.cpp",
       "include": "TextStyle.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/GsIo.cpp includes \"TextStyle.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LandXmlIo.cpp",
+      "file": "src/io/src/LandXmlIo.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LandXmlIo.cpp includes \"CadCommands.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgAnnotContext.cpp",
+      "file": "src/io/src/LibreDwgAnnotContext.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgAnnotContext.cpp includes \"CadCommands.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgAnnotContext.cpp",
+      "file": "src/io/src/LibreDwgAnnotContext.cpp",
       "include": "CadEntities.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgAnnotContext.cpp includes \"CadEntities.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgCad.cpp",
+      "file": "src/io/src/LibreDwgCad.cpp",
       "include": "ProjectPoints.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgCad.cpp includes \"ProjectPoints.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgCad.cpp",
+      "file": "src/io/src/LibreDwgCad.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgCad.cpp includes \"CadCommands.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgCad.cpp",
+      "file": "src/io/src/LibreDwgCad.cpp",
       "include": "CadField.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgCad.cpp includes \"CadField.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgCad.cpp",
+      "file": "src/io/src/LibreDwgCad.cpp",
       "include": "font/ShxFont.hpp",
       "target": "Core",
       "rule": "private-header include",
       "message": "src/io/LibreDwgCad.cpp includes \"font/ShxFont.hpp\": cross-system include must use GoSurvey/Core/ public headers (private-header include)"
     },
     {
-      "file": "src/io/LibreDwgCad.cpp",
+      "file": "src/io/src/LibreDwgCad.cpp",
       "include": "CadCoordinateFrame.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgCad.cpp includes \"CadCoordinateFrame.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgCad.cpp",
+      "file": "src/io/src/LibreDwgCad.cpp",
       "include": "ViewportZoomScale.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgCad.cpp includes \"ViewportZoomScale.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgCad.cpp",
+      "file": "src/io/src/LibreDwgCad.cpp",
       "include": "CadDimGeom.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgCad.cpp includes \"CadDimGeom.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgCad.cpp",
+      "file": "src/io/src/LibreDwgCad.cpp",
       "include": "CadDimStroke.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgCad.cpp includes \"CadDimStroke.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgCad.cpp",
+      "file": "src/io/src/LibreDwgCad.cpp",
       "include": "TextStyle.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgCad.cpp includes \"TextStyle.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgCad.cpp",
+      "file": "src/io/src/LibreDwgCad.cpp",
       "include": "util/SaveTrace.hpp",
       "target": "Debug",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgCad.cpp includes \"util/SaveTrace.hpp\": IO may not depend on Debug (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgCivil.hpp",
+      "file": "src/io/src/LibreDwgCivil.hpp",
       "include": "commands/CadEntities.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgCivil.hpp includes \"commands/CadEntities.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgDynamicBlock.cpp",
+      "file": "src/io/src/LibreDwgDynamicBlock.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgDynamicBlock.cpp includes \"CadCommands.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgField.cpp",
+      "file": "src/io/src/LibreDwgField.cpp",
       "include": "CadField.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgField.cpp includes \"CadField.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgField.cpp",
+      "file": "src/io/src/LibreDwgField.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgField.cpp includes \"CadCommands.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgLights.cpp",
+      "file": "src/io/src/LibreDwgLights.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgLights.cpp includes \"CadCommands.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgLights.cpp",
+      "file": "src/io/src/LibreDwgLights.cpp",
       "include": "CadEntities.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgLights.cpp includes \"CadEntities.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgMaterial.cpp",
+      "file": "src/io/src/LibreDwgMaterial.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgMaterial.cpp includes \"CadCommands.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgMaterial.cpp",
+      "file": "src/io/src/LibreDwgMaterial.cpp",
       "include": "CadEntities.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgMaterial.cpp includes \"CadEntities.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/LibreDwgVisualStyle.hpp",
+      "file": "src/io/src/LibreDwgVisualStyle.hpp",
       "include": "CadEntities.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/LibreDwgVisualStyle.hpp includes \"CadEntities.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/PdfPlot.cpp",
+      "file": "src/io/src/PdfPlot.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/PdfPlot.cpp includes \"CadCommands.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/PdfPlot.cpp",
+      "file": "src/io/src/PdfPlot.cpp",
       "include": "PaperSpace.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/PdfPlot.cpp includes \"PaperSpace.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/PdfPlot.cpp",
+      "file": "src/io/src/PdfPlot.cpp",
       "include": "ShxFont.hpp",
       "target": "Core",
       "rule": "private-header include",
       "message": "src/io/PdfPlot.cpp includes \"ShxFont.hpp\": cross-system include must use GoSurvey/Core/ public headers (private-header include)"
     },
     {
-      "file": "src/io/PdfPlot.cpp",
+      "file": "src/io/src/PdfPlot.cpp",
       "include": "ColorContrast.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/PdfPlot.cpp includes \"ColorContrast.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/PdfPlot.cpp",
+      "file": "src/io/src/PdfPlot.cpp",
       "include": "CadFontName.hpp",
       "target": "Core",
       "rule": "private-header include",
       "message": "src/io/PdfPlot.cpp includes \"CadFontName.hpp\": cross-system include must use GoSurvey/Core/ public headers (private-header include)"
     },
     {
-      "file": "src/io/PdfPlot.cpp",
+      "file": "src/io/src/PdfPlot.cpp",
       "include": "CadColor.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/PdfPlot.cpp includes \"CadColor.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/PdfPlot.cpp",
+      "file": "src/io/src/PdfPlot.cpp",
       "include": "CadLinetype.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/PdfPlot.cpp includes \"CadLinetype.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/PdfPlot.cpp",
+      "file": "src/io/src/PdfPlot.cpp",
       "include": "CadDimStroke.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/PdfPlot.cpp includes \"CadDimStroke.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/PdfPlot.cpp",
+      "file": "src/io/src/PdfPlot.cpp",
       "include": "render/ViewportProjection.hpp",
       "target": "Renderer",
       "rule": "forbidden dependency",
       "message": "src/io/PdfPlot.cpp includes \"render/ViewportProjection.hpp\": IO may not depend on Renderer (forbidden dependency)"
     },
     {
-      "file": "src/io/PlotStyleTable.cpp",
+      "file": "src/io/src/PlotStyleTable.cpp",
       "include": "CadColor.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/PlotStyleTable.cpp includes \"CadColor.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/PolylineTiltedArc.hpp",
+      "file": "src/io/src/PolylineTiltedArc.hpp",
       "include": "commands/CadEntities.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/PolylineTiltedArc.hpp includes \"commands/CadEntities.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/PolylineTiltedArc.hpp",
+      "file": "src/io/src/PolylineTiltedArc.hpp",
       "include": "CadCoordinateFrame.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/PolylineTiltedArc.hpp includes \"CadCoordinateFrame.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/RasterImage.hpp",
+      "file": "src/io/src/RasterImage.hpp",
       "include": "commands/PaperSpace.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/RasterImage.hpp includes \"commands/PaperSpace.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/SurveyCsv.cpp",
+      "file": "src/io/src/SurveyCsv.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/SurveyCsv.cpp includes \"CadCommands.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/SurveyCsv.cpp",
+      "file": "src/io/src/SurveyCsv.cpp",
       "include": "CadCoordinateFrame.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/SurveyCsv.cpp includes \"CadCoordinateFrame.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/UserPrefs.cpp",
+      "file": "src/io/src/UserPrefs.cpp",
       "include": "AppPaths.hpp",
       "target": "Windows",
       "rule": "forbidden dependency",
       "message": "src/io/UserPrefs.cpp includes \"AppPaths.hpp\": IO may not depend on Windows (forbidden dependency)"
     },
     {
-      "file": "src/io/UserPrefs.cpp",
+      "file": "src/io/src/UserPrefs.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/UserPrefs.cpp includes \"CadCommands.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/WhatsNewContent.cpp",
+      "file": "src/io/src/WhatsNewContent.cpp",
       "include": "AppPaths.hpp",
       "target": "Windows",
       "rule": "forbidden dependency",
       "message": "src/io/WhatsNewContent.cpp includes \"AppPaths.hpp\": IO may not depend on Windows (forbidden dependency)"
     },
     {
-      "file": "src/io/WikiContent.cpp",
+      "file": "src/io/src/WikiContent.cpp",
       "include": "AppPaths.hpp",
       "target": "Windows",
       "rule": "forbidden dependency",
       "message": "src/io/WikiContent.cpp includes \"AppPaths.hpp\": IO may not depend on Windows (forbidden dependency)"
     },
     {
-      "file": "src/io/WikiHelp.cpp",
+      "file": "src/io/src/WikiHelp.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",

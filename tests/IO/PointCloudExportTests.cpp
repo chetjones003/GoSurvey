@@ -17,10 +17,10 @@
 
 #include "CadCommands.hpp"
 #include "HeadlessFileDialogs.hpp"
-#include "io/CadPointCloudLas.hpp"
-#include "io/CadPointCloudLaz.hpp"
-#include "io/CadPointCloudPts.hpp"
-#include "io/CadPointCloudPtx.hpp"
+#include "io/src/CadPointCloudLas.hpp"
+#include "io/src/CadPointCloudLaz.hpp"
+#include "io/src/CadPointCloudPts.hpp"
+#include "io/src/CadPointCloudPtx.hpp"
 
 using Catch::Approx;
 

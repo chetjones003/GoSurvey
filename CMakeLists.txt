@@ -840,11 +840,11 @@ gosurvey_target_warnings(gosurvey_pointcloud)
 
 add_library(gosurvey_io_pointcloud STATIC
   src/io/src/PointCloudCacheImport.cpp
-  src/io/CadPointCloudE57.cpp
-  src/io/CadPointCloudPts.cpp
-  src/io/CadPointCloudPtx.cpp
-  src/io/CadPointCloudLas.cpp
-  src/io/CadPointCloudLaz.cpp)
+  src/io/src/CadPointCloudE57.cpp
+  src/io/src/CadPointCloudPts.cpp
+  src/io/src/CadPointCloudPtx.cpp
+  src/io/src/CadPointCloudLas.cpp
+  src/io/src/CadPointCloudLaz.cpp)
 add_library(GoSurvey::IOPointCloud ALIAS gosurvey_io_pointcloud)
 target_include_directories(gosurvey_io_pointcloud
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/io/include>"
@@ -857,49 +857,49 @@ gosurvey_target_warnings(gosurvey_io_pointcloud)
 # File-format and persistence implementations share the IO ownership boundary. Legacy Commands
 # call-ins remain represented in the existing dependency baseline during this migration.
 add_library(gosurvey_io STATIC
-  src/traverse/FbkImport.cpp
-  src/traverse/TraverseIo.cpp
-  src/traverse/TraverseCommandLang.cpp
-  src/traverse/StarNetImport.cpp
-  src/traverse/Rw5Import.cpp
-  src/traverse/JobXmlImport.cpp
-  src/io/SpreadsheetIo.cpp
-  src/io/GsIo.cpp
-  src/io/RasterImage.cpp
-  src/io/UserPrefs.cpp
-  src/io/RecentDrawings.cpp
-  src/io/Project.cpp
-  src/io/ProjectPointDb.cpp
-  src/io/ProjectPointRules.cpp
-  src/io/ProjectAddDrawing.cpp
-  src/io/ProjectFiles.cpp
-  src/io/ProjectPack.cpp
-  src/io/ProjectTurnover.cpp
-  src/io/WhatsNewContent.cpp
-  src/io/WikiContent.cpp
-  src/io/WikiHelp.cpp
-  src/io/SurveyCsv.cpp
-  src/io/LandXmlIo.cpp
-  src/io/DxfIo.cpp
-  src/io/DwgIo.cpp
-  src/io/DwgProbe.cpp
-  src/io/LibreDwg.cpp
-  src/io/LibreDwgCad.cpp
-  src/io/LibreDwgCivil.cpp
-  src/io/LibreDwgField.cpp
-  src/io/LibreDwgDynamicBlock.cpp
-  src/io/LibreDwgMaterial.cpp
-  src/io/LibreDwgAnnotContext.cpp
-  src/io/LibreDwgVisualStyle.cpp
-  src/io/LibreDwgLights.cpp
-  src/io/LibreDwgPlant.cpp
-  src/io/DxfColors.cpp
-  src/io/DwgMeshConvert.cpp
-  src/io/GsMigrate.cpp
-  src/util/gltfimport.cpp
-  src/util/stlimport.cpp
-  src/util/AcisSatParser.cpp
-  src/util/AcisSatWriter.cpp
+  src/io/src/FbkImport.cpp
+  src/io/src/TraverseIo.cpp
+  src/io/src/TraverseCommandLang.cpp
+  src/io/src/StarNetImport.cpp
+  src/io/src/Rw5Import.cpp
+  src/io/src/JobXmlImport.cpp
+  src/io/src/SpreadsheetIo.cpp
+  src/io/src/GsIo.cpp
+  src/io/src/RasterImage.cpp
+  src/io/src/UserPrefs.cpp
+  src/io/src/RecentDrawings.cpp
+  src/io/src/Project.cpp
+  src/io/src/ProjectPointDb.cpp
+  src/io/src/ProjectPointRules.cpp
+  src/io/src/ProjectAddDrawing.cpp
+  src/io/src/ProjectFiles.cpp
+  src/io/src/ProjectPack.cpp
+  src/io/src/ProjectTurnover.cpp
+  src/io/src/WhatsNewContent.cpp
+  src/io/src/WikiContent.cpp
+  src/io/src/WikiHelp.cpp
+  src/io/src/SurveyCsv.cpp
+  src/io/src/LandXmlIo.cpp
+  src/io/src/DxfIo.cpp
+  src/io/src/DwgIo.cpp
+  src/io/src/DwgProbe.cpp
+  src/io/src/LibreDwg.cpp
+  src/io/src/LibreDwgCad.cpp
+  src/io/src/LibreDwgCivil.cpp
+  src/io/src/LibreDwgField.cpp
+  src/io/src/LibreDwgDynamicBlock.cpp
+  src/io/src/LibreDwgMaterial.cpp
+  src/io/src/LibreDwgAnnotContext.cpp
+  src/io/src/LibreDwgVisualStyle.cpp
+  src/io/src/LibreDwgLights.cpp
+  src/io/src/LibreDwgPlant.cpp
+  src/io/src/DxfColors.cpp
+  src/io/src/DwgMeshConvert.cpp
+  src/io/src/GsMigrate.cpp
+  src/io/src/gltfimport.cpp
+  src/io/src/stlimport.cpp
+  src/io/src/AcisSatParser.cpp
+  src/io/src/AcisSatWriter.cpp
 )
 add_library(GoSurvey::IO ALIAS gosurvey_io)
 target_include_directories(gosurvey_io
@@ -944,7 +944,7 @@ add_library(gosurvey_domain STATIC ${GOSURVEY_DOMAIN_SOURCES})
 # CadCommands.cpp exceeds MSVC's default COFF section limit on current hosted toolchains.
 if(MSVC)
   set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/commands/CadCommands.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj")
-  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/tests/LibreDwgCadTests.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/tests/IO/LibreDwgCadTests.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj")
 endif()
 target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -953,7 +953,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src/viewport
   ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
   ${CMAKE_CURRENT_SOURCE_DIR}/src/util
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/io
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/io/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
   ${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include
   ${CMAKE_CURRENT_SOURCE_DIR}/src/network/include
@@ -1003,8 +1003,8 @@ set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/${GOSURVEY_COORDINATE_SOURCES}"
   APPEND PROPERTY COMPILE_DEFINITIONS WIN32 _WINDOWS)
 if(TARGET libredwg)
   set_property(SOURCE
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/io/LibreDwgCad.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/io/LibreDwg.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/io/src/LibreDwgCad.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/io/src/LibreDwg.cpp"
     APPEND PROPERTY INCLUDE_DIRECTORIES
     "${libredwg_SOURCE_DIR}/src"
     "${libredwg_BINARY_DIR}/src")
@@ -1162,7 +1162,7 @@ if(GOSURVEY_BUILD_HEADLESS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/viewport
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/io
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/io/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
     ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
@@ -1211,7 +1211,7 @@ if(GOSURVEY_BUILD_HEADLESS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/qt
     ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/io
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/io/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util
     ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
     ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include
@@ -1280,15 +1280,15 @@ if(GOSURVEY_BUILD_TESTS)
     tests/Document/PaperLeaderTests.cpp
     tests/Document/PaperTableTests.cpp
     tests/DimViewportTests.cpp
-    tests/SpreadsheetIoTests.cpp
+    tests/IO/SpreadsheetIoTests.cpp
     tests/Document/TableStyleTests.cpp
     tests/Renderer/ViewportCameraTests.cpp
     tests/CommandLineTests.cpp
     tests/RightClickTests.cpp
-    tests/SurveyCsvValidateTests.cpp
+    tests/IO/SurveyCsvValidateTests.cpp
     # REQ-083: the save dialog's default-extension rule. Header-only and pure, because
     # WinFileDialogs.cpp is Win32-only and cannot be linked here.
-    tests/PointFileExtTests.cpp
+    tests/IO/PointFileExtTests.cpp
     tests/HatchGeomTests.cpp
     tests/ZStoreTests.cpp
     # REQ-059 / #1034: the ViewCube is header-only and pure, like Camera.
@@ -1309,18 +1309,18 @@ if(GOSURVEY_BUILD_TESTS)
     tests/Document/TextStyleTests.cpp
     tests/OrthoConstrainTests.cpp
     tests/ColorContrastTests.cpp
-    tests/PlotFontTests.cpp
+    tests/IO/PlotFontTests.cpp
     # REQ-446 PDF plot lineweights and linetypes: pure width/dash-unit helpers and the dash runs the plot lays.
-    tests/PlotStrokeTests.cpp
+    tests/IO/PlotStrokeTests.cpp
     # REQ-445 PDF plot Page Setup options: pure sheet placement rules and the measured PDF output.
     tests/PlotSheetTests.cpp
     tests/Document/CadFontNameTests.cpp
     tests/CutClipboardTests.cpp
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
-    tests/DxfEntityEmitTests.cpp
-    tests/DwgProbeTests.cpp
-    tests/LibreDwgTests.cpp
+    tests/IO/DxfEntityEmitTests.cpp
+    tests/IO/DwgProbeTests.cpp
+    tests/IO/LibreDwgTests.cpp
     tests/LinetypeTessellationTests.cpp
     # BenchSceneTests moved to GoSurveyDebugTests.
     tests/Renderer/VisualStyleTests.cpp
@@ -1346,43 +1346,43 @@ if(GOSURVEY_BUILD_TESTS)
     tests/MirrorSolidTests.cpp
     # REQ-320 / ADR-051 — the ACIS SAT parser (GitHub issue #299). Pure, so a hand-authored SAT
     # fixture pins the supported plane/cylinder/cone shapes and every refusal without a DWG file.
-    tests/AcisSatParserTests.cpp
-    src/util/AcisSatParser.cpp
-  src/util/AcisSatWriter.cpp
+    tests/IO/AcisSatParserTests.cpp
+    src/io/src/AcisSatParser.cpp
+  src/io/src/AcisSatWriter.cpp
     # REQ-315 acceptance: a solid survives document-payload JSON save/reopen with topology counts identical and
     # volume/area stable. BrepJson.hpp is header-only and pulls in only nlohmann/json + brep.hpp, so
     # the serializer the saver actually runs is exercised directly here (GsIo.cpp is not linkable).
-    tests/BrepJsonTests.cpp
+    tests/IO/BrepJsonTests.cpp
     tests/SolidPickTests.cpp
     src/util/solidpick.cpp
     # REQ-172 — E57 reader round-trip (writes a tiny fixture E57 with libE57Format's own Simple
     # Writer, then reads it back) and malformed/missing-file refusal. Pinned directly, same as
     # AcisSatParserTests pins its own reader above.
-    tests/CadPointCloudE57Tests.cpp
+    tests/IO/CadPointCloudE57Tests.cpp
     # REQ-172 PTS increment (delivered after E57, `spec/file-format-specs.md` §6) — in-tree ASCII
     # reader/writer round-trip (3/4/7-token line shapes) and malformed/truncated/missing-file
     # refusal. Pinned directly, same as the E57 reader above.
-    tests/CadPointCloudPtsTests.cpp
+    tests/IO/CadPointCloudPtsTests.cpp
     # REQ-172 PTX increment (issue #825 increment 2, delivered after PTS, `spec/file-format-specs.md`
     # §6) — in-tree ASCII reader/writer round-trip (per-scan-setup 4x4 transform, including a
     # hand-checked non-identity case), "no return" filtering, and malformed/truncated/missing-file
     # refusal. Pinned directly, same as the E57 reader above.
-    tests/CadPointCloudPtxTests.cpp
+    tests/IO/CadPointCloudPtxTests.cpp
     # REQ-172 LAS increment (delivered after PTX, `spec/file-format-specs.md` §6) — in-tree binary
     # reader/writer round-trip (point formats 0/2, hand-checked scale+offset decode) and
     # malformed/truncated/unsupported-format/missing-file refusal. Pinned directly, same as the
     # E57 reader above.
-    tests/CadPointCloudLasTests.cpp
+    tests/IO/CadPointCloudLasTests.cpp
     # REQ-172 LAZ increment (issue #825 increment 4, the last of REQ-172's four remaining
     # formats) — LASzip-compressed LAS round-trip (point formats 0/2, matching the uncompressed
     # LAS convention), the LAS/LAZ cross-check (same points import equal counts and XYZ from
     # either format), and malformed/truncated/corrupt-compressed-stream/missing-file refusal.
     # Pinned directly, same as the E57 reader above.
-    tests/CadPointCloudLazTests.cpp
+    tests/IO/CadPointCloudLazTests.cpp
     tests/MeshPayloadRoundTripTests.cpp
-    tests/GsAnnotationJsonTests.cpp
-    tests/GltfImportTests.cpp
-    tests/StlImportTests.cpp
+    tests/IO/GsAnnotationJsonTests.cpp
+    tests/IO/GltfImportTests.cpp
+    tests/IO/StlImportTests.cpp
     tests/Document/EntityIdTests.cpp
     tests/Document/CadTableTests.cpp
     tests/Document/CadBlockTests.cpp
@@ -1436,31 +1436,31 @@ if(GOSURVEY_BUILD_TESTS)
     tests/WhatsNewLogicTests.cpp
     src/util/WhatsNewLogic.cpp
     tests/StartScreenTests.cpp
-    src/io/RecentDrawings.cpp
+    src/io/src/RecentDrawings.cpp
     # REQ-373/374/382 (#696 P1)
     tests/ProjectTests.cpp
-    src/io/Project.cpp
-    src/io/ProjectPointDb.cpp
-    src/io/ProjectPointRules.cpp
+    src/io/src/Project.cpp
+    src/io/src/ProjectPointDb.cpp
+    src/io/src/ProjectPointRules.cpp
     tests/Survey/ProjectPointRulesTests.cpp
     tests/ProjectPointDbTests.cpp
     # REQ-378 (#696 P5): the pure database-merge half of Add Drawing to Project
     tests/ProjectAddDrawingTests.cpp
-    src/io/ProjectAddDrawing.cpp
+    src/io/src/ProjectAddDrawing.cpp
     # REQ-379 (#696 P6): the pure tracked-file rules
-    tests/ProjectFilesTests.cpp
-    src/io/ProjectFiles.cpp
+    tests/IO/ProjectFilesTests.cpp
+    src/io/src/ProjectFiles.cpp
     # REQ-380 (#696 P7): the pure pack / unpack
-    tests/ProjectPackTests.cpp
-    src/io/ProjectPack.cpp
+    tests/IO/ProjectPackTests.cpp
+    src/io/src/ProjectPack.cpp
     # REQ-381 (#696 P8): the pure turnover records
     tests/ProjectTurnoverTests.cpp
-    src/io/ProjectTurnover.cpp
+    src/io/src/ProjectTurnover.cpp
     tests/TelemetryPingTests.cpp
     tests/CrashReporterTests.cpp
     src/platform/CrashReporterWireReason.cpp
     src/platform/CrashBuildInfo.cpp
-    tests/GsMigrateTests.cpp
+    tests/IO/GsMigrateTests.cpp
     tests/GpuPreferenceTests.cpp
     # REQ-103 STRETCH (TASK-098). Header-only against CadCommands.hpp — RecomputeArcFromEndpoints
     # is inline and pure (<cmath> + CadArc only), the same reasoning as the gate test above.
@@ -1482,22 +1482,22 @@ if(GOSURVEY_BUILD_TESTS)
     # BUG-013 per-application GPU preference. Win32 registry only — no GL, no window — so the value
     # the user's choice actually turns into is testable without the application running.
     src/platform/GpuPreference.cpp
-    src/traverse/FbkImport.cpp
-    src/traverse/TraverseIo.cpp
-    src/traverse/TraverseCommandLang.cpp
-    src/traverse/StarNetImport.cpp
-    src/traverse/Rw5Import.cpp
-    src/traverse/JobXmlImport.cpp
+    src/io/src/FbkImport.cpp
+    src/io/src/TraverseIo.cpp
+    src/io/src/TraverseCommandLang.cpp
+    src/io/src/StarNetImport.cpp
+    src/io/src/Rw5Import.cpp
+    src/io/src/JobXmlImport.cpp
     # DWG version detection + converter discovery. Deliberately its own TU (see DwgProbe.cpp):
     # it depends only on <filesystem>, so tests link it without DxfIo and the GUI stack.
-    src/io/DwgProbe.cpp
-    src/io/LibreDwg.cpp
+    src/io/src/DwgProbe.cpp
+    src/io/src/LibreDwg.cpp
     # Linetype dash tessellation, including per-vertex Z (REQ-058). Standalone like DwgProbe.cpp —
     # only <string>/<vector>/<cmath>/<cctype> — so it links without the GUI stack.
     src/commands/CadLinetype.cpp
     # REQ-065 glTF reader. Pure and GL-free by design (ADR-026 (d)) so it is tested without a window.
-    src/util/gltfimport.cpp
-    src/util/stlimport.cpp
+    src/io/src/gltfimport.cpp
+    src/io/src/stlimport.cpp
     # REQ-076 stable entity identity. Standalone like DwgProbe.cpp — only <cstdint>/<vector> and the
     # POD attribute struct — so the never-reuse and resolve-to-nothing rules are tested without the
     # GUI stack that AppCommandState drags in.
@@ -1510,7 +1510,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/update/UpdateCheck.cpp
     # REQ-079 document-payload schema migration. Pure by ADR-030 (d) — JSON in, JSON out — so the composition
     # logic is testable without the command layer that GsIo.cpp drags in.
-    src/io/GsMigrate.cpp
+    src/io/src/GsMigrate.cpp
     # REQ-080 telemetry. Pure by ADR-032 (b) — payload building and event decision —
     # no network, so the timing logic is testable without HttpFetch or WinHTTP.
     src/telemetry/TelemetryPing.cpp
@@ -1518,7 +1518,7 @@ if(GOSURVEY_BUILD_TESTS)
   target_include_directories(GoSurveyTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/traverse
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/io
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/io/src
     # For the REQ-063 payload round-trip test: GsIo.cpp itself is not linkable here (it pulls the
     # whole command layer), but the serializer it relies on is, and that is where the precision
     # risk actually lives.
@@ -1550,9 +1550,9 @@ if(GOSURVEY_BUILD_TESTS)
   # REQ-387: the PDF viewer's pure core and its PDFium wrapper (opened against generated PDFs).
   target_sources(GoSurveyTests PRIVATE
     # REQ-445: the PDF plot's Page Setup placement, measured on the PDF it writes.
-    tests/PlotSheetPdfTests.cpp
-    src/io/PdfPlot.cpp
-    src/io/PlotStyleTable.cpp)
+    tests/IO/PlotSheetPdfTests.cpp
+    src/io/src/PdfPlot.cpp
+    src/io/src/PlotStyleTable.cpp)
   target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz Laszip::laszip GoSurvey::IOPointCloud GoSurvey::Pdf)
   if(WIN32)
     add_custom_command(TARGET GoSurveyTests POST_BUILD
@@ -1669,7 +1669,7 @@ if(GOSURVEY_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/util"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/commands"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/io"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/io/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/survey"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/platform"
@@ -1731,7 +1731,7 @@ if(GOSURVEY_BUILD_TESTS)
   target_include_directories(GoSurveyDebugTests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/commands"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/io"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/io/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/util"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/survey"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include"
@@ -1760,16 +1760,16 @@ if(GOSURVEY_BUILD_TESTS)
     # so it rides with GoSurveyTests like the other command tests above.
     tests/DrapeCommandTests.cpp
     # Issue #916: shared point-cloud export and import-progress behavior.
-    tests/PointCloudExportTests.cpp
-    tests/LandXmlExportTests.cpp
+    tests/IO/PointCloudExportTests.cpp
+    tests/IO/LandXmlExportTests.cpp
     # Issue #1003: LandXML import (REQ-506) reads what the export writes.
-    tests/LandXmlImportTests.cpp
+    tests/IO/LandXmlImportTests.cpp
     # PADSOLID needs the surface stores, the brep kernel and ProcessCommandLineSubmit, so it rides
     # with GoSurveyTests like the other command tests above.
     tests/PadSolidCommandTests.cpp
-    tests/GsIoDimAngularTests.cpp
-    tests/GsIoPipeRunTests.cpp
-    tests/GsIoViewportCameraTests.cpp
+    tests/IO/GsIoDimAngularTests.cpp
+    tests/IO/GsIoPipeRunTests.cpp
+    tests/IO/GsIoViewportCameraTests.cpp
     tests/GsMigrateLegacyBreaklineTests.cpp
     tests/ViewportUcsTests.cpp
     # REQ-154 / issue #371 — ORTHO squaring to a vertical (Front/Left/Right-style) UCS. Needs
@@ -1800,7 +1800,7 @@ if(GOSURVEY_BUILD_TESTS)
     # the handle COUNTS (each a statement about degrees of freedom) and the rule that no handle is
     # drawn where the kernel would refuse the drag.
     tests/GizmoSubObjectMoveTests.cpp
-    tests/LibreDwgCadTests.cpp
+    tests/IO/LibreDwgCadTests.cpp
     tests/CadBlockImportTests.cpp
     tests/Survey/SurveyLabelMeasureTests.cpp
     # REQ-375 (#696 P2): project settings resolve against AppCommandState (EnforceProjectSettings), so
@@ -1853,7 +1853,7 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-361 / D-2026-09-29-f: the Object Layers tab and every creation path that uses it.
     tests/Document/ObjectLayersTests.cpp
     # REQ-362 / D-2026-09-29-g: reading an AutoCAD / Civil 3D GEODATA (write deferred to #590).
-    tests/GeoDataReadTests.cpp
+    tests/IO/GeoDataReadTests.cpp
     # REQ-363 / D-2026-09-30-b / ADR-064: the online base map (issue #583 increment 1).
     tests/OnlineMapTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
@@ -1894,7 +1894,7 @@ if(GOSURVEY_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/viewport
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/io
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/io/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
     ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform

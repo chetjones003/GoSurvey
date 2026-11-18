@@ -1,4 +1,4 @@
-#include "io/CadPointCloudE57.hpp"
+#include "io/src/CadPointCloudE57.hpp"
 
 #include <E57SimpleData.h>
 #include <E57SimpleReader.h>

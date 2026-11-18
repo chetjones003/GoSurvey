@@ -8,7 +8,7 @@
 // io/ProjectFiles; this is the glue that reads and writes AppCommandState. No window here.
 
 #include "CadCommands.hpp"
-#include "io/ProjectFiles.hpp"
+#include "io/src/ProjectFiles.hpp"
 
 #include <string>
 #include <vector>

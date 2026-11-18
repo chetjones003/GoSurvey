@@ -6,7 +6,7 @@
 #include "DwgIo.hpp"
 #include "ProjectSettings.hpp"
 #include "GoSurvey/Survey/SurveyPointRecords.hpp"
-#include "io/ProjectPointDb.hpp"
+#include "io/src/ProjectPointDb.hpp"
 
 #include <cstdio>
 #include <filesystem>

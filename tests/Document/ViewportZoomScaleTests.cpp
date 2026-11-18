@@ -5,8 +5,8 @@
 #include "ViewportZoomScale.hpp"
 #include "GsIo.hpp"
 #include "CadCommandsInternal.hpp"
-#include "io/GsAnnotationJson.hpp"
-#include "io/LibreDwgCad.hpp"
+#include "io/src/GsAnnotationJson.hpp"
+#include "io/src/LibreDwgCad.hpp"
 
 #include <algorithm>
 #include <limits>

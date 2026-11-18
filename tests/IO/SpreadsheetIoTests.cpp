@@ -2,7 +2,7 @@
 #include <catch2/catch_approx.hpp>
 
 #include "SpreadsheetIo.hpp"
-#include "util/DataExtract.hpp"
+#include "io/src/DataExtract.hpp"
 
 #include <cstdio>
 #include <filesystem>

@@ -2,7 +2,7 @@
 #include "CadCommands.hpp"
 #include "CadRubberPreview.hpp"
 #include "HeadlessFileDialogs.hpp"
-#include "io/GsIo.hpp"
+#include "io/src/GsIo.hpp"
 #include <GoSurvey/Geometry/brep.hpp>
 #include <GoSurvey/Math/ucs.hpp>
 

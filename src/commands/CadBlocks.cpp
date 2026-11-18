@@ -11,7 +11,7 @@
 #include "DwgIo.hpp"
 #include "AppPaths.hpp"
 #include "WinFileDialogs.hpp"
-#include "AcisSatParser.hpp"
+#include "io/src/AcisSatParser.hpp"
 
 #include <nlohmann/json.hpp>
 

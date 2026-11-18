@@ -6,7 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "CadCommands.hpp"
-#include "io/LandXmlIo.hpp"
+#include "io/src/LandXmlIo.hpp"
 
 #include <cmath>
 #include <filesystem>
