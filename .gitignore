@@ -100,3 +100,6 @@ __pycache__/
 /devshell-activity.log
 /devshell-command.log
 /devshell-testengine.log
+
+# Rust workspace build output
+/rust/target/

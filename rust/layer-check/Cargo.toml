@@ -1,0 +1,11 @@
+[package]
+name = "gs-layer-check"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true
