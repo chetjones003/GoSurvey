@@ -152,6 +152,107 @@ class MoveOnlyFixtureTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.check()
 
+    def prepare_file_size_baseline_move(self):
+        self.write(".github/file-size-baseline.json", json.dumps({
+            "src/old/Widget.cpp": 3200,
+            "src/old/Other.hpp": 3100,
+        }))
+        self.commit("file-size baseline before move")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        self.move("src/old/Widget.cpp", "src/new/Widget.cpp")
+        self.write("src/new/Widget.cpp", (
+            '#include "Widget.hpp"\n'
+            "void Widget::reset() {}\n"
+            "void Widget::run() { --counter; }\n"
+        ))
+        self.write("CMakeLists.txt", (
+            "add_library(app src/new/Widget.cpp)\n"
+            'set(APP_DISPLAY_NAME "Widget.cpp viewer")\n'
+        ))
+
+    def test_file_size_baseline_path_rewrite_for_proven_rename_passes(self):
+        self.prepare_file_size_baseline_move()
+        self.write(".github/file-size-baseline.json", json.dumps({
+            "src/new/Widget.cpp": 3200,
+            "src/old/Other.hpp": 3100,
+        }))
+        self.commit("transfer file-size baseline path")
+
+        self.assertEqual(self.check(), ["src/old/Widget.cpp -> src/new/Widget.cpp"])
+
+    def test_file_size_baseline_cap_increase_fails(self):
+        self.prepare_file_size_baseline_move()
+        self.write(".github/file-size-baseline.json", json.dumps({
+            "src/new/Widget.cpp": 3201,
+            "src/old/Other.hpp": 3100,
+        }))
+        self.commit("raise transferred file-size cap")
+
+        with self.assertRaisesRegex(ValueError, "proven rename paths"):
+            self.check()
+
+    def test_file_size_baseline_new_entry_fails(self):
+        self.prepare_file_size_baseline_move()
+        self.write(".github/file-size-baseline.json", json.dumps({
+            "src/new/Widget.cpp": 3200,
+            "src/old/Other.hpp": 3100,
+            "src/new/Extra.cpp": 3001,
+        }))
+        self.commit("add unrelated file-size baseline entry")
+
+        with self.assertRaisesRegex(ValueError, "proven rename paths"):
+            self.check()
+
+    def test_file_size_baseline_unrelated_remap_fails(self):
+        self.prepare_file_size_baseline_move()
+        self.write(".github/file-size-baseline.json", json.dumps({
+            "src/new/Widget.cpp": 3200,
+            "src/unrelated/Other.hpp": 3100,
+        }))
+        self.commit("remap unrelated file-size baseline entry")
+
+        with self.assertRaisesRegex(ValueError, "proven rename paths"):
+            self.check()
+
+    def test_file_size_baseline_rename_collision_fails(self):
+        self.write(".github/file-size-baseline.json", json.dumps({
+            "src/old/Widget.cpp": 3200,
+            "src/new/Widget.cpp": 3150,
+        }))
+        self.commit("file-size baseline with destination already present")
+        self.base = subprocess.check_output(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        self.move("src/old/Widget.cpp", "src/new/Widget.cpp")
+        self.write("src/new/Widget.cpp", (
+            '#include "Widget.hpp"\n'
+            "void Widget::reset() {}\n"
+            "void Widget::run() { --counter; }\n"
+        ))
+        self.write("CMakeLists.txt", (
+            "add_library(app src/new/Widget.cpp)\n"
+            'set(APP_DISPLAY_NAME "Widget.cpp viewer")\n'
+        ))
+        self.write(".github/file-size-baseline.json", json.dumps({
+            "src/new/Widget.cpp": 3200,
+        }))
+        self.commit("collide file-size baseline rename")
+
+        with self.assertRaisesRegex(ValueError, "collide"):
+            self.check()
+
+    def test_file_size_baseline_entry_drop_fails(self):
+        self.prepare_file_size_baseline_move()
+        self.write(".github/file-size-baseline.json", json.dumps({
+            "src/new/Widget.cpp": 3200,
+        }))
+        self.commit("drop unrelated file-size baseline entry")
+
+        with self.assertRaisesRegex(ValueError, "proven rename paths"):
+            self.check()
+
     def test_real_source_edit_fails(self):
         self.move("src/old/Widget.cpp", "src/new/Widget.cpp")
         self.write("src/new/Widget.cpp", (
