@@ -17,6 +17,13 @@ Dependencies point strictly downward. Each layer crate depends only on the layer
 
 `layer-check` is the gate. It is a tool, not a layer, and it is not checked for direction.
 
+Limits of the gate, for now:
+
+- It runs as a test (`cargo test --workspace`), not as a plain `cargo build` step. Nothing in CI runs it yet.
+- It counts every declared dependency, including dev and build dependencies.
+- The layer crates declare the layer below before they use it. `rust/Cargo.toml` allows `unused_dependencies` for this reason. Remove the allowance once each layer uses its dependency.
+- Every workspace crate must be listed in `LAYERS` (or be `gs-layer-check`). A new crate that is not listed fails the real-workspace test.
+
 ## Commands
 
 Run from this directory:

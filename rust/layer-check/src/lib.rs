@@ -53,20 +53,26 @@ pub fn parse_metadata(json: &str) -> Result<Vec<Crate>, String> {
     let packages = value["packages"]
         .as_array()
         .ok_or_else(|| "cargo metadata has no packages array".to_string())?;
-    Ok(packages
+    packages
         .iter()
-        .map(|package| Crate {
-            name: package["name"].as_str().unwrap_or_default().to_string(),
-            deps: package["dependencies"]
+        .map(|package| {
+            let name = package["name"]
+                .as_str()
+                .ok_or_else(|| "cargo metadata package has no name".to_string())?;
+            let deps = package["dependencies"]
                 .as_array()
                 .map(|deps| {
                     deps.iter()
                         .filter_map(|d| d["name"].as_str().map(str::to_string))
                         .collect()
                 })
-                .unwrap_or_default(),
+                .unwrap_or_default();
+            Ok(Crate {
+                name: name.to_string(),
+                deps,
+            })
         })
-        .collect())
+        .collect()
 }
 
 pub fn load_workspace(manifest: &Path) -> Result<Vec<Crate>, String> {

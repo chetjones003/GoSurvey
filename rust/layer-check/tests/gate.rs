@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use gs_layer_check::{load_workspace, parse_metadata, violations, Crate};
+use gs_layer_check::{load_workspace, parse_metadata, violations, Crate, LAYERS};
 
 fn krate(name: &str, deps: &[&str]) -> Crate {
     Crate {
@@ -66,24 +66,26 @@ fn parse_metadata_reads_package_names_and_declared_dependencies() {
 }
 
 #[test]
-fn real_workspace_has_one_crate_per_layer_and_no_upward_dependencies() {
+fn parse_metadata_rejects_a_package_without_a_name() {
+    let json = r#"{"packages": [{"dependencies": []}]}"#;
+
+    assert!(parse_metadata(json).is_err());
+}
+
+#[test]
+fn real_workspace_is_exactly_the_layer_crates_plus_the_gate_and_has_no_upward_dependencies() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../Cargo.toml");
 
     let crates = load_workspace(&manifest).expect("cargo metadata succeeds");
 
-    for layer in [
-        "gs-foundation",
-        "gs-kernel",
-        "gs-domain",
-        "gs-services",
-        "gs-application",
-        "gs-editor",
-    ] {
-        assert_eq!(
-            crates.iter().filter(|c| c.name == layer).count(),
-            1,
-            "expected exactly one crate named {layer}"
-        );
-    }
+    let mut names: Vec<&str> = crates.iter().map(|c| c.name.as_str()).collect();
+    names.sort_unstable();
+    let mut expected: Vec<&str> = LAYERS.iter().map(|(name, _)| *name).collect();
+    expected.push("gs-layer-check");
+    expected.sort_unstable();
+    assert_eq!(
+        names, expected,
+        "every workspace crate must be a layer or the gate"
+    );
     assert_eq!(violations(&crates), Vec::<String>::new());
 }
