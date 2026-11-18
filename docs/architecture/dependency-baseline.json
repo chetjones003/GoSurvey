@@ -486,13 +486,6 @@
     },
     {
       "file": "src/io/src/LibreDwgCad.cpp",
-      "include": "font/ShxFont.hpp",
-      "target": "Core",
-      "rule": "private-header include",
-      "message": "src/io/LibreDwgCad.cpp includes \"font/ShxFont.hpp\": cross-system include must use GoSurvey/Core/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/src/LibreDwgCad.cpp",
       "include": "CadCoordinateFrame.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
@@ -612,24 +605,10 @@
     },
     {
       "file": "src/io/src/PdfPlot.cpp",
-      "include": "ShxFont.hpp",
-      "target": "Core",
-      "rule": "private-header include",
-      "message": "src/io/PdfPlot.cpp includes \"ShxFont.hpp\": cross-system include must use GoSurvey/Core/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/src/PdfPlot.cpp",
       "include": "ColorContrast.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/PdfPlot.cpp includes \"ColorContrast.hpp\": IO may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/io/src/PdfPlot.cpp",
-      "include": "CadFontName.hpp",
-      "target": "Core",
-      "rule": "private-header include",
-      "message": "src/io/PdfPlot.cpp includes \"CadFontName.hpp\": cross-system include must use GoSurvey/Core/ public headers (private-header include)"
     },
     {
       "file": "src/io/src/PdfPlot.cpp",
@@ -1402,20 +1381,6 @@
       "message": "src/qt/EditorProperties.cpp includes \"CadUiStyleWidgets.hpp\": GoSurveyEditor may not depend on Document (forbidden dependency)"
     },
     {
-      "file": "src/qt/EditorProperties.cpp",
-      "include": "GoSurvey/Core/AngleFormat.hpp",
-      "target": "Core",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorProperties.cpp includes \"GoSurvey/Core/AngleFormat.hpp\": GoSurveyEditor may not depend on Core (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorProperties.cpp",
-      "include": "GoSurvey/Core/NumFormat.hpp",
-      "target": "Core",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorProperties.cpp includes \"GoSurvey/Core/NumFormat.hpp\": GoSurveyEditor may not depend on Core (forbidden dependency)"
-    },
-    {
       "file": "src/qt/EditorRibbon.cpp",
       "include": "ModelingRibbon.hpp",
       "target": "GoSurveyEditor",
@@ -1498,13 +1463,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/qt/EditorRibbon.cpp includes \"CadColor.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorRibbon.cpp",
-      "include": "font/ShxFont.hpp",
-      "target": "Core",
-      "rule": "private-header include",
-      "message": "src/qt/EditorRibbon.cpp includes \"font/ShxFont.hpp\": cross-system include must use GoSurvey/Core/ public headers (private-header include)"
     },
     {
       "file": "src/qt/EditorSampleLinesDialog.cpp",
@@ -2261,20 +2219,6 @@
       "target": "Survey",
       "rule": "forbidden dependency",
       "message": "src/qt/QtAnnotations.cpp includes \"alignment/AlignmentTables.hpp\": Qt may not depend on Survey (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/QtAnnotations.cpp",
-      "include": "font/CadFontName.hpp",
-      "target": "Core",
-      "rule": "private-header include",
-      "message": "src/qt/QtAnnotations.cpp includes \"font/CadFontName.hpp\": cross-system include must use GoSurvey/Core/ public headers (private-header include)"
-    },
-    {
-      "file": "src/qt/QtAnnotations.cpp",
-      "include": "font/ShxFont.hpp",
-      "target": "Core",
-      "rule": "private-header include",
-      "message": "src/qt/QtAnnotations.cpp includes \"font/ShxFont.hpp\": cross-system include must use GoSurvey/Core/ public headers (private-header include)"
     },
     {
       "file": "src/qt/QtAnnotations.cpp",

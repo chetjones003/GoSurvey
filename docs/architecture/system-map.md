@@ -45,7 +45,7 @@ The rationale behind the architecture boundaries is recorded in these ADRs:
 | OpenGL | Platform backend | Implements renderer device interfaces using OpenGL. | Draw-list policy and domain state. | Core, Math, Renderer |
 | Windows | Platform backend | Implements OS paths, HTTP, crash reporting, process and native dialog services. | Domain behavior and cross-platform interfaces. | Core, UI, Network |
 | Headless | Platform backend | Implements null render and scripted UI services for tests and batch operation. | Product UI and domain behavior. | Core, Events, UI, Renderer |
-| GoSurveyEditor | Application | Composes the engine and owns startup, windows, dialogs, ribbon, panels, and hotkeys. | Engine domain logic and backend implementation details beyond composition. | Commands, Interaction, Renderer, IO, Network, Survey, Geometry, Qt, OpenGL, Windows |
+| GoSurveyEditor | Application | Composes the engine and owns startup, windows, dialogs, ribbon, panels, and hotkeys. | Engine domain logic and backend implementation details beyond composition. | Commands, Interaction, Renderer, IO, Network, Survey, Geometry, Core, Qt, OpenGL, Windows |
 
 ## Target architecture diagram
 

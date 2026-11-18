@@ -4,13 +4,13 @@
 
 #include "CadCommands.hpp"
 #include "PaperSpace.hpp"
-#include "ShxFont.hpp"           // shared lower-layer SHX stroke geometry (ADR-022)
+#include <GoSurvey/Core/ShxFont.hpp>  // shared lower-layer SHX stroke geometry (ADR-022)
 #include "GoSurvey/Document/MtextRichFormat.hpp"   // MtextRichFlattenToPlain (already used by DxfIo)
 #include "ColorContrast.hpp"     // background-adaptive white/black (REQ-048 refinement)
 #include "PlotFont.hpp"          // pure font-name/encoding helpers for TTF plot text (REQ-049)
 #include "PlotStroke.hpp"        // pure lineweight/dash-unit helpers for the plot strokes (REQ-446)
 #include "PlotSheetTransform.hpp"  // pure sheet placement: fit, centre, offset and plot ratio (REQ-445)
-#include "CadFontName.hpp"
+#include <GoSurvey/Core/CadFontName.hpp>
 #include "CadColor.hpp"
 #include "PlotStyleTable.hpp"
 #include "CadLinetype.hpp"       // dash tessellation shared with the on-screen viewport (REQ-446)
