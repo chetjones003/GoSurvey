@@ -14,6 +14,6 @@
   "tests/BrepTests.cpp": 9427,
   "tests/LibreDwgCadTests.cpp": 9310,
   "tests/QtEditorTests.cpp": 17518,
-  "tests/TraverseTests.cpp": 3120,
+  "tests/Survey/TraverseTests.cpp": 3120,
   "tests/headless/HeadlessDriver.cpp": 3235
 }
