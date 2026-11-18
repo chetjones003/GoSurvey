@@ -25,7 +25,7 @@
 
 #include <cmath>
 
-#include "render/SectionClip.hpp"
+#include <GoSurvey/Renderer/SectionClipPublic.hpp>
 #include <GoSurvey/Math/ucs.hpp>
 
 using Catch::Approx;

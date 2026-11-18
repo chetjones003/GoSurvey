@@ -2431,13 +2431,6 @@
       "message": "src/qt/StyleEditors.hpp includes \"cadtablestyle.hpp\": Qt may not depend on Document (forbidden dependency)"
     },
     {
-      "file": "src/render/ViewportProjection.hpp",
-      "include": "commands/PaperSpace.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/render/ViewportProjection.hpp includes \"commands/PaperSpace.hpp\": Renderer may not depend on Commands (forbidden dependency)"
-    },
-    {
       "file": "src/render/ViewportRenderer.cpp",
       "include": "CadLinetype.hpp",
       "target": "Commands",

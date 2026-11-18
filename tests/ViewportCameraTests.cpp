@@ -7,6 +7,7 @@
 
 #include <cmath>
 
+#include "commands/PaperSpace.hpp"
 #include "render/ViewportProjection.hpp"
 
 using Catch::Approx;

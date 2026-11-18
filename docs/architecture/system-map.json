@@ -15596,7 +15596,61 @@
         "No device interface and no headless null device exist, and no test calls ViewportRenderer::RenderScene. Renderer behaviour is reached only through Qt tests and the headless batch dump.",
         "tests/CameraTests.cpp:50 reproduces the renderer's orthographic matrix in the test, because ViewportRenderer::Ortho is private (ViewportRenderer.hpp:270). No test compares the two matrix builders.",
         "RenderScene is one method of about 2,600 lines (1250-3855). No test covers the order of its passes (surfaces, solids, point clouds, section clip, map tiles, gizmo)."
-      ]
+      ],
+      "preparation": {
+        "issue": 1250,
+        "target": "GoSurvey::Renderer (gosurvey_renderer)",
+        "publicIncludeRoot": "src/renderer/include/",
+        "privateSourceRoot": "src/renderer/src/ (reserved for move follow-up; no production files moved)",
+        "allowedDependencies": [
+          "Geometry",
+          "Math",
+          "Core",
+          "Document",
+          "Survey",
+          "Terrain",
+          "PointCloud",
+          "Pdf"
+        ],
+        "compiledProvider": "src/alignment/AlignmentDisplayCache.cpp remains the single provider translation unit and compiles once through AlignmentDisplayCachePublic.hpp. GoSurvey::RendererAlignmentCache is removed without an adapter or duplicate implementation.",
+        "wholeFileMoveManifest": [
+          "src/alignment/AlignmentDisplayCache.cpp",
+          "src/alignment/AlignmentDisplayCache.hpp",
+          "src/render/Camera.hpp",
+          "src/render/SectionClip.hpp",
+          "src/render/ViewportProjection.hpp",
+          "src/render/ViewportRenderer.cpp",
+          "src/render/ViewportRenderer.hpp",
+          "src/util/cadsolid.hpp",
+          "src/util/gizmooverlay.hpp"
+        ],
+        "publicForwarders": [
+          "src/renderer/include/GoSurvey/Renderer/AlignmentDisplayCachePublic.hpp",
+          "src/renderer/include/GoSurvey/Renderer/CadSolidDisplayPublic.hpp",
+          "src/renderer/include/GoSurvey/Renderer/CameraPublic.hpp",
+          "src/renderer/include/GoSurvey/Renderer/GizmoOverlayPublic.hpp",
+          "src/renderer/include/GoSurvey/Renderer/SectionClipPublic.hpp",
+          "src/renderer/include/GoSurvey/Renderer/ViewportProjectionPublic.hpp"
+        ],
+        "stagingBoundary": "Five pure Renderer contracts and cache provider compile through the standalone target. ViewportRenderer remains composed by existing Qt/OpenGL application code; GL calls, Qt widgets, backend handles, app-coupled state, mixed source sections, and file output remain with approved owners/tickets. No device seam or OpenGL backend is created. cadsolid.hpp remains mixed until its approved split.",
+        "fixtures": {
+          "rendererTarget": [
+            "tests/CameraTests.cpp",
+            "tests/SectionClipTests.cpp",
+            "tests/Renderer/PublicConsumer.cpp"
+          ],
+          "rendererTargetLinks": "GoSurvey::Renderer and Catch2 for pure fixtures; no Qt/OpenGL/application-private roots.",
+          "sharedIntegrationLabel": "Renderer added to shared application shard labels; application workflow/backend fixtures retain current targets pending physical test moves.",
+          "remainingExistingRendererFixtures": [
+            "tests/CameraTests.cpp",
+            "tests/ViewportCameraTests.cpp",
+            "tests/SectionClipTests.cpp",
+            "tests/SectionClipStateTests.cpp",
+            "tests/VisualStyleTests.cpp",
+            "tests/ZoomExtents3dTests.cpp"
+          ]
+        }
+      }
     },
     "IO": {
       "tier": "T3 Services",
