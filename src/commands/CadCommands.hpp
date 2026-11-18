@@ -22,7 +22,7 @@
 #include <GoSurvey/Survey/AlignmentLabelSetPublic.hpp>
 #include "DimensionStyle.hpp"
 #include "MultileaderStyle.hpp"
-#include "util/cadtablestyle.hpp"
+#include "GoSurvey/Document/cadtablestyle.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
 #include "render/SectionClip.hpp"  // GL-free; the pick and snap paths honour the live clip (REQ-341)
 // The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
@@ -54,9 +54,9 @@
 // AppCommandState, and Commands may not include a UI header (architecture §11.1).
 #include "util/hoverdwell.hpp"
 #include "util/hoverpickgate.hpp"  // per-frame viewport hover-pick throttle (GitHub issue #166)
-#include "util/cadtable.hpp"   // CadTable entity (REQ-148 / D-2026-08-28-i)
-#include "util/cadtablestyle.hpp"  // table styles and point rows (REQ-474, REQ-475)
-#include "util/cadblock.hpp"   // Block definitions + INSERT refs (GitHub issue #124)
+#include "GoSurvey/Document/cadtable.hpp"   // CadTable entity (REQ-148 / D-2026-08-28-i)
+#include "GoSurvey/Document/cadtablestyle.hpp"  // table styles and point rows (REQ-474, REQ-475)
+#include "GoSurvey/Document/cadblock.hpp"   // Block definitions + INSERT refs (GitHub issue #124)
 #include "util/cadsolid.hpp"   // B-rep solids + their tessellation cache (REQ-313 / ADR-045)
 #include "util/solidpick.hpp"  // solidpick::Kind, for SelectedSubObject (REQ-318 / ADR-049)
 // SectionPlaneExtent / SectionPlaneGrip, for the section plane's stored size and handles

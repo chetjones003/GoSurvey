@@ -3,8 +3,8 @@
 #include "GoSurvey/Survey/SurveyPointRecords.hpp"
 #include "GoSurvey/Survey/AlignmentModel.hpp"
 #include <GoSurvey/Geometry/geom2d.hpp>
-#include "util/cadblock.hpp"
-#include "util/cadpiperun.hpp"
+#include "GoSurvey/Document/cadblock.hpp"
+#include "GoSurvey/Document/cadpiperun.hpp"
 #include <GoSurvey/Geometry/curveintersect.hpp>
 #include "GoSurvey/PointCloud/CacheStorage.hpp"
 #include "GoSurvey/PointCloud/OctreeIndex.hpp"

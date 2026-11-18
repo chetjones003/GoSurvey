@@ -18,7 +18,7 @@
 #include "CadCommands.hpp"
 #include "DxfIo.hpp"
 #include "GsIo.hpp"
-#include "util/PlotScales.hpp"
+#include "GoSurvey/Document/PlotScales.hpp"
 
 namespace {
 

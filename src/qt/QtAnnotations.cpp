@@ -11,7 +11,7 @@
 #include "GoSurvey/Survey/AlignmentTables.hpp"
 #include "font/CadFontName.hpp"
 #include "font/ShxFont.hpp"
-#include "MtextRichFormat.hpp"
+#include "GoSurvey/Document/MtextRichFormat.hpp"
 #include <QPainter>
 #include <QPainterPath>
 #include <QPolygonF>

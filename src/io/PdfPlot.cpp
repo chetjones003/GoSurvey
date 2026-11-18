@@ -5,7 +5,7 @@
 #include "CadCommands.hpp"
 #include "PaperSpace.hpp"
 #include "ShxFont.hpp"           // shared lower-layer SHX stroke geometry (ADR-022)
-#include "MtextRichFormat.hpp"   // MtextRichFlattenToPlain (already used by DxfIo)
+#include "GoSurvey/Document/MtextRichFormat.hpp"   // MtextRichFlattenToPlain (already used by DxfIo)
 #include "ColorContrast.hpp"     // background-adaptive white/black (REQ-048 refinement)
 #include "PlotFont.hpp"          // pure font-name/encoding helpers for TTF plot text (REQ-049)
 #include "PlotStroke.hpp"        // pure lineweight/dash-unit helpers for the plot strokes (REQ-446)
@@ -16,7 +16,7 @@
 #include "CadLinetype.hpp"       // dash tessellation shared with the on-screen viewport (REQ-446)
 #include "CadDimStroke.hpp"
 #include "render/ViewportProjection.hpp"  // REQ-061: per-viewport camera projection
-#include "util/cadtable.hpp"
+#include "GoSurvey/Document/cadtable.hpp"
 #include <GoSurvey/Survey/AlignmentStylePublic.hpp>  // REQ-495.1: alignments plot in their style
 
 #include <cctype>

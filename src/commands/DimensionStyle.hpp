@@ -8,7 +8,7 @@
 #include <map>
 
 #include "CadEntities.hpp"
-#include "util/styleproperty.hpp"
+#include "GoSurvey/Document/styleproperty.hpp"
 
 // Centralized dimension style (issue #99) — one style object used by DIMALIGNED, DIMLINEAR and
 // DIMANGULAR.  Pure value type, dependency-free so it is unit-testable and can be stored on

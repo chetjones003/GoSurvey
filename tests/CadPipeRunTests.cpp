@@ -1,4 +1,4 @@
-#include "util/cadpiperun.hpp"
+#include "GoSurvey/Document/cadpiperun.hpp"
 #include <GoSurvey/Geometry/brep.hpp>
 
 #include <catch2/catch_approx.hpp>

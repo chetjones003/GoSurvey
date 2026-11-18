@@ -4,7 +4,7 @@
 #include <string>
 
 #include "CadEntities.hpp"
-#include "util/cadtable.hpp"
+#include "GoSurvey/Document/cadtable.hpp"
 
 #include <nlohmann/json.hpp>
 

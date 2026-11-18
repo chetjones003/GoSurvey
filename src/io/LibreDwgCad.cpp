@@ -12,9 +12,9 @@
 #include "LibreDwgMaterial.hpp"
 #include "LibreDwgPlant.hpp"
 #include "LibreDwgVisualStyle.hpp"
-#include "util/cadpiperun.hpp"
-#include "util/cadtablestyle.hpp"
-#include "util/styleproperty.hpp"
+#include "GoSurvey/Document/cadpiperun.hpp"
+#include "GoSurvey/Document/cadtablestyle.hpp"
+#include "GoSurvey/Document/styleproperty.hpp"
 #include "font/ShxFont.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "ViewportZoomScale.hpp"
@@ -22,12 +22,12 @@
 #include "CadDimStroke.hpp"
 #include "PolylineTiltedArc.hpp"
 #include "DxfColors.hpp"
-#include "MtextRichFormat.hpp"
+#include "GoSurvey/Document/MtextRichFormat.hpp"
 #include "DwgIo.hpp"
 #include "LibreDwg.hpp"
 #include "GoSurvey/Survey/SurveyPointRecords.hpp"
 #include "TextStyle.hpp"
-#include "util/cadtable.hpp"
+#include "GoSurvey/Document/cadtable.hpp"
 #include <GoSurvey/Debug/SaveTrace.hpp>
 
 #include <algorithm>

@@ -536,7 +536,7 @@ gosurvey_target_warnings(gosurvey_geometry)
 # tree under staging names while original headers and implementations stay at their audited paths
 # for the later history-preserving move. Keep the dependency list identical to the approved map.
 add_library(gosurvey_document STATIC
-  src/ui/MtextRichFormat.cpp)
+  src/document/src/MtextRichFormat.cpp)
 add_library(GoSurvey::Document ALIAS gosurvey_document)
 add_library(GoSurvey::DocumentAppearance ALIAS gosurvey_document)
 target_include_directories(gosurvey_document PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/document/include>")
@@ -1239,12 +1239,12 @@ if(GOSURVEY_BUILD_TESTS)
     tests/TestSoundGuard.cpp
     tests/TestSoundGuardTests.cpp
     tests/Survey/TraverseTests.cpp
-    tests/PaperSpaceTests.cpp
-    tests/PaperLeaderTests.cpp
-    tests/PaperTableTests.cpp
+    tests/Document/PaperSpaceTests.cpp
+    tests/Document/PaperLeaderTests.cpp
+    tests/Document/PaperTableTests.cpp
     tests/DimViewportTests.cpp
     tests/SpreadsheetIoTests.cpp
-    tests/TableStyleTests.cpp
+    tests/Document/TableStyleTests.cpp
     tests/ViewportCameraTests.cpp
     tests/CommandLineTests.cpp
     tests/RightClickTests.cpp
@@ -1271,7 +1271,7 @@ if(GOSURVEY_BUILD_TESTS)
     # never a NaN camera) is decided entirely in this arithmetic, and the deferred consumer that calls
     # it cannot be reached from any test target (TASK-113 DEBT-1).
     tests/ZoomFramingTests.cpp
-    tests/TextStyleTests.cpp
+    tests/Document/TextStyleTests.cpp
     tests/OrthoConstrainTests.cpp
     tests/ColorContrastTests.cpp
     tests/PlotFontTests.cpp
@@ -1279,7 +1279,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PlotStrokeTests.cpp
     # REQ-445 PDF plot Page Setup options: pure sheet placement rules and the measured PDF output.
     tests/PlotSheetTests.cpp
-    tests/CadFontNameTests.cpp
+    tests/Document/CadFontNameTests.cpp
     tests/CutClipboardTests.cpp
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
@@ -1348,9 +1348,9 @@ if(GOSURVEY_BUILD_TESTS)
     tests/GsAnnotationJsonTests.cpp
     tests/GltfImportTests.cpp
     tests/StlImportTests.cpp
-    tests/EntityIdTests.cpp
-    tests/CadTableTests.cpp
-    tests/CadBlockTests.cpp
+    tests/Document/EntityIdTests.cpp
+    tests/Document/CadTableTests.cpp
+    tests/Document/CadBlockTests.cpp
     tests/CadPipeRunTests.cpp
     tests/Survey/AlignmentCommandTests.cpp
     tests/Survey/AlignmentViewFrameTests.cpp
@@ -1579,7 +1579,7 @@ if(GOSURVEY_BUILD_TESTS)
 
   # Pure Document text operations use the real public provider without private roots or Qt/GL.
   add_executable(GoSurveyDocumentTests
-    tests/MtextTextOpsTests.cpp)
+    tests/Document/MtextTextOpsTests.cpp)
   set_target_properties(GoSurveyDocumentTests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
   target_link_libraries(GoSurveyDocumentTests PRIVATE GoSurvey::Document Catch2::Catch2WithMain)
   catch_discover_tests(GoSurveyDocumentTests PROPERTIES LABELS Document)
@@ -1774,7 +1774,7 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-351 / D-2026-09-28-f — MOVE / ROTATE / SCALE / MIRROR / COPY / ARRAY on a pipe run.
     tests/ModifyPipeRunTests.cpp
     # REQ-352 / D-2026-09-28-g — layer and colour edits on solids and pipe runs.
-    tests/SolidLayerColorTests.cpp
+    tests/Document/SolidLayerColorTests.cpp
     # REQ-353 / D-2026-09-28-i — pipe colour by nominal size (issue #564 section 7).
     tests/PipeSizePaletteTests.cpp
     # REQ-354 / D-2026-09-28-j — the dynamic input shows its mode (issue #564 section 5).
@@ -1786,11 +1786,11 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PropertyCommandTests.cpp
     # TASK-0.7.8 — modify selection accumulate, annotation MOVE preview, REQ-121 prompt.
     tests/Task078InteractionTests.cpp
-    tests/ViewportZoomScaleTests.cpp
+    tests/Document/ViewportZoomScaleTests.cpp
     # REQ-370 / D-2026-10-05-a — box-selection live preview.
     tests/BoxSelectionPreviewTests.cpp
     # REQ-357 / D-2026-09-29-b,c — the Drawing Settings window (issue #582 increment 1).
-    tests/DrawingSettingsTests.cpp
+    tests/Document/DrawingSettingsTests.cpp
     # REQ-358: the CS-MAP wrapper + the zone as drawing data (loads the staged dictionary).
     tests/Survey/CoordinateSystemsTests.cpp
     # REQ-359 / D-2026-09-29-e: the Geolocation tab's commands and the Position Marker.
@@ -1798,7 +1798,7 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-360: the Drawing Settings Transformation tab (local <-> grid).
     tests/TransformationTests.cpp
     # REQ-361 / D-2026-09-29-f: the Object Layers tab and every creation path that uses it.
-    tests/ObjectLayersTests.cpp
+    tests/Document/ObjectLayersTests.cpp
     # REQ-362 / D-2026-09-29-g: reading an AutoCAD / Civil 3D GEODATA (write deferred to #590).
     tests/GeoDataReadTests.cpp
     # REQ-363 / D-2026-09-30-b / ADR-064: the online base map (issue #583 increment 1).

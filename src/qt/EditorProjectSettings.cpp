@@ -5,7 +5,7 @@
 #include <GoSurvey/Survey/CoordinateSystems.hpp>
 #include "io/Project.hpp"
 #include "platform/AppPaths.hpp"
-#include "util/PlotScales.hpp"
+#include "GoSurvey/Document/PlotScales.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>

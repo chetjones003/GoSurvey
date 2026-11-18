@@ -2,7 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
-#include "util/styleproperty.hpp"
+#include "GoSurvey/Document/styleproperty.hpp"
 
 #include <cmath>
 #include <optional>

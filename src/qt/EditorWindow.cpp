@@ -47,8 +47,8 @@
 #include "ProjectFiles.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectWarnings.hpp"
-#include "util/PlotScales.hpp"
-#include "MtextRichFormat.hpp"
+#include "GoSurvey/Document/PlotScales.hpp"
+#include "GoSurvey/Document/MtextRichFormat.hpp"
 #include "ToolspaceCatalog.hpp"
 #include "Version.hpp"
 #include <QAction>

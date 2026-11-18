@@ -6,7 +6,7 @@
 #include "CadEntities.hpp"
 #include "DimensionStyle.hpp"
 #include "MultileaderStyle.hpp"
-#include "cadtablestyle.hpp"
+#include "GoSurvey/Document/cadtablestyle.hpp"
 
 class QWidget;
 

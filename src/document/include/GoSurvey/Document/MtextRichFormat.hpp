@@ -1,6 +1,6 @@
 #pragma once
 
-#include "MtextRichSpans.hpp"  // MtextRichSpan + MtextRichBuildSpans (pure; ADR-023)
+#include "GoSurvey/Document/MtextRichSpans.hpp"  // MtextRichSpan + MtextRichBuildSpans (pure; ADR-023)
 
 #include <cstdint>
 #include <string>

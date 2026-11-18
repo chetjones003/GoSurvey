@@ -26,8 +26,8 @@
 #include "GoSurvey/Survey/AlignmentViewFrames.hpp"  // REQ-517
 #include "PaperSpace.hpp"  // REQ-517: paper sizes for sheets
 #include "ViewportZoomScale.hpp"  // REQ-517: named scales
-#include "util/cadtable.hpp"
-#include "util/cadtablestyle.hpp"
+#include "GoSurvey/Document/cadtable.hpp"
+#include "GoSurvey/Document/cadtablestyle.hpp"
 #include "SpreadsheetIo.hpp"
 #include "WinFileDialogs.hpp"
 #include <GoSurvey/Core/StringUtil.hpp>

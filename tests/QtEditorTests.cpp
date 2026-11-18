@@ -80,7 +80,7 @@
 #include "update/UpdateService.hpp"
 #include "util/gizmooverlay.hpp"
 #include <GoSurvey/Terrain/surfacevolume.hpp>
-#include "util/PlotScales.hpp"
+#include "GoSurvey/Document/PlotScales.hpp"
 #include <E57SimpleData.h>
 #include <E57SimpleWriter.h>
 #include <array>

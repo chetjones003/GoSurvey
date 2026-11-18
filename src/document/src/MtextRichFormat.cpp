@@ -1,4 +1,4 @@
-#include "MtextRichFormat.hpp"
+#include "GoSurvey/Document/MtextRichFormat.hpp"
 
 #include <algorithm>
 #include <cctype>

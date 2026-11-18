@@ -16,7 +16,7 @@
 #include "CadCoordinateFrame.hpp"
 #include "CadLinetype.hpp"
 #include "CadPropertyEdit.hpp"
-#include "CadUiStyleWidgets.hpp"
+#include "GoSurvey/Document/CadUiStyleWidgets.hpp"
 #include <GoSurvey/Core/AngleFormat.hpp>
 #include <GoSurvey/Geometry/brep.hpp>
 #include <GoSurvey/Geometry/geom2d.hpp>

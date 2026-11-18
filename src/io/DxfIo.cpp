@@ -9,9 +9,9 @@
 #include "CadLinetype.hpp"
 #include "DxfColors.hpp"
 #include "DxfEntityEmit.hpp"
-#include "MtextRichFormat.hpp"
+#include "GoSurvey/Document/MtextRichFormat.hpp"
 #include "TextStyle.hpp"
-#include "util/cadtable.hpp"
+#include "GoSurvey/Document/cadtable.hpp"
 #include <GoSurvey/Math/ucs.hpp>
 
 #include <algorithm>

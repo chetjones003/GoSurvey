@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cadtable.hpp"
+#include "GoSurvey/Document/cadtable.hpp"
 
 #include <cctype>
 #include <cstdint>

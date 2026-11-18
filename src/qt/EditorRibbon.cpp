@@ -10,7 +10,7 @@
 #include "GoSurvey/Pdf/PdfAttach.hpp"
 #include "PdfPlot.hpp"
 #include "ProjectFiles.hpp"
-#include "cadpiperun.hpp"
+#include "GoSurvey/Document/cadpiperun.hpp"
 #include "HatchPat.hpp"
 #include <QColorDialog>
 #include <QAction>
@@ -54,7 +54,7 @@
 #include <QTemporaryFile>
 #include "DimensionStyle.hpp"
 #include "MultileaderStyle.hpp"
-#include "cadtablestyle.hpp"
+#include "GoSurvey/Document/cadtablestyle.hpp"
 #include "StylePreview.hpp"
 #include "CadColor.hpp"
 #include "font/ShxFont.hpp"
