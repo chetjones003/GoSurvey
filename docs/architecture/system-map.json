@@ -272,12 +272,12 @@
       "status": "audited"
     },
     {
-      "path": "src/ui/CadUiStyleWidgets.hpp",
+      "path": "src/document/include/GoSurvey/Document/CadUiStyleWidgets.hpp",
       "system": "Document",
       "status": "audited"
     },
     {
-      "path": "src/ui/CommandBar.hpp",
+      "path": "src/ui/include/GoSurvey/UI/CommandBar.hpp",
       "system": "UI",
       "status": "audited"
     },
@@ -307,12 +307,12 @@
       "status": "audited"
     },
     {
-      "path": "src/ui/MtextToolbar.hpp",
+      "path": "src/ui/include/GoSurvey/UI/MtextToolbar.hpp",
       "system": "UI",
       "status": "audited"
     },
     {
-      "path": "src/ui/RichTextLayout.hpp",
+      "path": "src/ui/include/GoSurvey/UI/RichTextLayout.hpp",
       "system": "UI",
       "status": "audited"
     },
@@ -737,6 +737,26 @@
       "system": "Renderer",
       "status": "audited",
       "note": "Approved whole-file section owner made explicit for the Survey move manifest; physical relocation belongs to the owning system ticket."
+    },
+    {
+      "path": "src/ui/include/GoSurvey/UI/CommandBar.hpp",
+      "system": "UI",
+      "status": "audited"
+    },
+    {
+      "path": "src/ui/include/GoSurvey/UI/MtextToolbar.hpp",
+      "system": "UI",
+      "status": "audited"
+    },
+    {
+      "path": "src/ui/include/GoSurvey/UI/RichTextLayout.hpp",
+      "system": "UI",
+      "status": "audited"
+    },
+    {
+      "path": "src/document/include/GoSurvey/Document/Appearance.hpp",
+      "system": "Document",
+      "status": "audited"
     }
   ],
   "unmappedPaths": [],
@@ -13827,18 +13847,18 @@
         "Core",
         "Events"
       ],
-      "dependencyNote": "The UI candidates include only the standard library and Core, except RichTextLayout.hpp, which includes MtextRichSpans.hpp (Document). That edge is recorded in forbiddenDependencies. Auditing ownership does not change the ratchet: it reads fileMappings, which still leaves src/ui files as Qt.",
+      "dependencyNote": "The public UI headers depend only on the standard library and the allowed Core/Events interfaces. RichTextLayout consumes UI-owned SpanRange values; callers adapt Document parser spans at the boundary. The audited file mappings assign the public headers to UI, overriding the legacy src/ui folder mapping.",
       "currentFiles": [
-        "src/ui/CommandBar.hpp (all except TrimAscii, which is Core; see sections)",
-        "src/ui/MtextToolbar.hpp",
-        "src/ui/RichTextLayout.hpp (caret and wrap layout; its Document include is tracked in forbiddenDependencies)",
+        "src/ui/include/GoSurvey/UI/CommandBar.hpp (public UI command-bar helpers; TrimAscii remains Core-owned per sections)",
+        "src/ui/include/GoSurvey/UI/MtextToolbar.hpp",
+        "src/ui/include/GoSurvey/UI/RichTextLayout.hpp (uses UI SpanRange; Document parser adapts its ranges at the call site)",
         "src/platform/WinFileDialogs.hpp (declarations only; the implementation stays Windows; see sections)"
       ],
       "pendingAssignment": [],
       "currentSections": [
         "src/platform/WinFileDialogs.hpp: all Browse* declarations, the file-dialog interface",
         "src/platform/FailureReportUi.hpp: ShowReportDialog declaration (lines 344-403 are the Windows implementation), the report-dialog service shape",
-        "src/ui/CommandBar.hpp: lines 64-72 TrimAscii are Core (Core audit); the rest is UI",
+        "src/ui/include/GoSurvey/UI/CommandBar.hpp: lines 64-72 TrimAscii are Core (Core audit); the rest is UI",
         "src/platform/FailureReportUi.cpp:134 and :384: MessageBoxW calls, Windows implementation of the UI message-dialog interface",
         "src/platform/CrashReporter.cpp:723: calls ShowReportDialog; the trigger is Debug, the dialog is UI",
         "src/commands/CadCommands.hpp:7045-7053: PointCloudImportProgress and UpdatePointCloudImportProgress, progress presentation candidates"
@@ -13874,9 +13894,9 @@
         ]
       },
       "existingTests": [
-        "tests/CommandLineTests.cpp: cmdbar helpers (34 references)",
-        "tests/MtextToolbarTests.cpp: mtexttoolbar helpers (25 references)",
-        "tests/RichTextLayoutTests.cpp: richtext layout and caret math (37 references; see forbiddenDependencies)",
+        "tests/CommandLineTests.cpp: command-bar helpers (34 references), run in GoSurveyUITests",
+        "tests/MtextToolbarTests.cpp: toolbar helpers (25 references), run in GoSurveyUITests",
+        "tests/RichTextLayoutTests.cpp: layout and caret math (37 references), run in GoSurveyUITests",
         "tests/headless/HeadlessDriver.cpp: queues headless file-dialog answers from DIALOG transcript lines",
         "tests/CadBlockImportTests.cpp and tests/PointCloudExportTests.cpp: queue headless file-dialog answers through the seam"
       ],
@@ -13884,7 +13904,6 @@
         "No toolkit-neutral UI interface, dispatcher, or test double exists yet for file dialogs, progress, clipboard, or timers. Only the headless free-function queue exists.",
         "No test covers WinFileDialogs.cpp filter-to-FileKind mapping or the Windows Browse* functions; the Windows implementation is only reachable on a real desktop.",
         "No focused test covers the GitHubIssueUrlForReport URL cut or the report clipboard outcome; coverage is inside QtEditorTests.cpp, which mixes Qt and report logic.",
-        "The dependency between RichTextLayout and MtextRichSpans is not tested as an edge; auditedEntries is advisory, so the ratchet does not enforce it.",
         "No test covers the MessageBoxW confirmation or error paths in FailureReportUi.cpp; they run only on a real Windows desktop."
       ],
       "testsCoveringUiNotOwned": [
@@ -13892,17 +13911,7 @@
         "tests/QtEditorTests.cpp: QtSplash and the broader Qt viewport integration (Qt implementation; not UI-owned)",
         "tests/WhatsNewLogicTests.cpp: What's New version-gating rules (not UI-owned; see notUiDecisions)"
       ],
-      "forbiddenDependencies": [
-        {
-          "files": [
-            "src/ui/RichTextLayout.hpp",
-            "src/ui/MtextRichSpans.hpp"
-          ],
-          "edge": "UI -> Document (RichTextLayout.hpp includes MtextRichSpans.hpp)",
-          "status": "assigned to UI; the edge is not in the UI allowed dependencies, so it is recorded here rather than hidden",
-          "resolution": "final-map ticket: move the span parser to Document, or move the layout to Document, or add an explicit edge in the map"
-        }
-      ]
+      "forbiddenDependencies": []
     },
     "Debug": {
       "tier": "T0 Foundation",
@@ -14211,7 +14220,8 @@
         "src/commands/CadCommands.cpp (section only; undo, layers, entity lookup, tab swap)",
         "src/commands/CadBlocks.cpp (section only; block capture and placement)",
         "src/font/CadFontName.hpp (section only; folder is Core)",
-        "src/ui/MtextRichSpans.hpp, src/ui/MtextRichFormat.hpp, src/ui/MtextRichFormat.cpp, src/ui/MtextTextOps.hpp (section only; folder is Qt)"
+        "src/ui/MtextRichSpans.hpp, src/ui/MtextRichFormat.hpp, src/ui/MtextRichFormat.cpp, src/ui/MtextTextOps.hpp (section only; folder is Qt)",
+        "src/document/include/GoSurvey/Document/Appearance.hpp (entity linetype and lineweight values shared with Commands and editor presentation)"
       ],
       "pendingAssignment": [
         {
@@ -14343,6 +14353,10 @@
           "Block dynamics and grip drag helpers, until a public seam is chosen",
           "undo history log writer (Debug and Core)",
           "SelectedSubObject (Interaction policy coupling)"
+        ],
+        "appearance vocabulary": [
+          "kEntityLinetypeStorage",
+          "kEntityLineweightMmPresets"
         ]
       },
       "existingTests": [

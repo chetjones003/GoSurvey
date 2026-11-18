@@ -905,13 +905,6 @@
       "message": "src/qt/EditorBlockAuthoring.cpp includes \"CadCommands.hpp\": Qt may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/qt/EditorChrome.cpp",
-      "include": "CommandBar.hpp",
-      "target": "UI",
-      "rule": "private-header include",
-      "message": "src/qt/EditorChrome.cpp includes \"CommandBar.hpp\": cross-system include must use GoSurvey/UI/ public headers (private-header include)"
-    },
-    {
       "file": "src/qt/EditorContextMenu.cpp",
       "include": "UserPrefs.hpp",
       "target": "IO",
@@ -2436,13 +2429,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/ui/CadUiStyleWidgets.hpp includes \"CadEntities.hpp\": Document may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/ui/RichTextLayout.hpp",
-      "include": "MtextRichSpans.hpp",
-      "target": "Document",
-      "rule": "forbidden dependency",
-      "message": "src/ui/RichTextLayout.hpp includes \"MtextRichSpans.hpp\": UI may not depend on Document (forbidden dependency)"
     },
     {
       "file": "src/update/UpdateService.cpp",

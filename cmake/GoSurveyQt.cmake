@@ -106,7 +106,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/platform/FailureReportUi.cpp
 )
 target_link_libraries(gosurvey_qt_frontend PUBLIC
-  gosurvey_domain GoSurvey::Pdf Qt6::Widgets Qt6::OpenGLWidgets OpenGL::GL glew_static pdfium
+  gosurvey_domain GoSurvey::Pdf GoSurvey::UI Qt6::Widgets Qt6::OpenGLWidgets OpenGL::GL glew_static pdfium
   comdlg32 ole32 shell32 Windowscodecs winhttp bcrypt ws2_32 advapi32)
 target_include_directories(gosurvey_qt_frontend PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/qt")
 target_include_directories(gosurvey_qt_frontend PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry")

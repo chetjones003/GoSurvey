@@ -1283,7 +1283,6 @@ if(GOSURVEY_BUILD_TESTS)
     tests/IO/SpreadsheetIoTests.cpp
     tests/Document/TableStyleTests.cpp
     tests/Renderer/ViewportCameraTests.cpp
-    tests/CommandLineTests.cpp
     tests/RightClickTests.cpp
     tests/IO/SurveyCsvValidateTests.cpp
     # REQ-083: the save dialog's default-extension rule. Header-only and pure, because
@@ -1316,8 +1315,6 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PlotSheetTests.cpp
     tests/Document/CadFontNameTests.cpp
     tests/CutClipboardTests.cpp
-    tests/MtextToolbarTests.cpp
-    tests/RichTextLayoutTests.cpp
     tests/IO/DxfEntityEmitTests.cpp
     tests/IO/DwgProbeTests.cpp
     tests/IO/LibreDwgTests.cpp
@@ -1907,6 +1904,21 @@ if(GOSURVEY_BUILD_TESTS)
     ${CMAKE_BINARY_DIR}/generated
   )
   target_link_libraries(GoSurveyTests PRIVATE gosurvey_domain Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format GoSurvey::IOPointCloud)
+  add_executable(GoSurveyUITests
+    tests/CommandLineTests.cpp
+    tests/MtextToolbarTests.cpp
+    tests/RichTextLayoutTests.cpp)
+  set_target_properties(GoSurveyUITests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyUITests PRIVATE GoSurvey::UI GoSurvey::Document Catch2::Catch2WithMain)
+  gosurvey_target_warnings(GoSurveyUITests TEST)
+  catch_discover_tests(GoSurveyUITests PROPERTIES LABELS UI)
+
+  add_executable(GoSurveyUIPublicConsumer tests/UI/PublicConsumer.cpp)
+  set_target_properties(GoSurveyUIPublicConsumer PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(GoSurveyUIPublicConsumer PRIVATE GoSurvey::UI)
+  gosurvey_target_warnings(GoSurveyUIPublicConsumer TEST)
+  add_test(NAME UI.public-consumer COMMAND GoSurveyUIPublicConsumer)
+  set_tests_properties(UI.public-consumer PROPERTIES LABELS UI)
   add_executable(GoSurveyPointCloudTests
     tests/PointCloud/PointCloudOctreeTests.cpp
     tests/PointCloud/PointCloudCacheTests.cpp

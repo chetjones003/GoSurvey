@@ -1,7 +1,5 @@
 #pragma once
 
-#include "GoSurvey/Document/MtextRichSpans.hpp"
-
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -11,6 +9,13 @@
 // word wrapping, the visible-index ↔ raw-byte-offset mapping, and caret hit-testing — unit-testable, with
 // the font-dependent drawing left in RichTextEdit.cpp.
 namespace richtext {
+
+/// The byte range of one visible span. The Document parser adapts its parsed runs at the call site;
+/// the UI layout owns caret geometry and does not depend on the MTEXT wire-format model.
+struct SpanRange {
+  size_t rawBegin = 0;
+  size_t rawEnd = 0;
+};
 
 /// One visible character. \c rawBegin/rawEnd bound it in the wire string, so a caret expressed as an
 /// index into the cell vector converts back to a byte position the buffer can be edited at. Tag bytes are
@@ -44,11 +49,11 @@ inline size_t Utf8CharLen(const std::string& s, size_t i) {
 
 /// Enumerate every visible character of \p spans into cells, in wire order. Widths are left at 0 for the
 /// caller to measure; \ref WrapCells then assigns lines and x offsets.
-inline void BuildCells(const std::string& wire, const std::vector<MtextRichSpan>& spans,
+inline void BuildCells(const std::string& wire, const std::vector<SpanRange>& spans,
                        std::vector<Cell>* out) {
   out->clear();
   for (size_t si = 0; si < spans.size(); ++si) {
-    const MtextRichSpan& sp = spans[si];
+    const SpanRange& sp = spans[si];
     size_t i = sp.rawBegin;
     while (i < sp.rawEnd && i < wire.size()) {
       const size_t n = Utf8CharLen(wire, i);

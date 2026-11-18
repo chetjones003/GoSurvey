@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "ui/RichTextLayout.hpp"
+#include <GoSurvey/Document/MtextRichSpans.hpp>
+#include <GoSurvey/UI/RichTextLayout.hpp>
 
 #include <string>
 #include <vector>
@@ -14,8 +15,12 @@ namespace {
 std::vector<richtext::Cell> CellsFor(const std::string& wire, float charW = 10.f) {
   std::vector<MtextRichSpan> spans;
   MtextRichBuildSpans(wire, &spans);
+  std::vector<richtext::SpanRange> ranges;
+  ranges.reserve(spans.size());
+  for (const auto& span : spans)
+    ranges.push_back({span.rawBegin, span.rawEnd});
   std::vector<richtext::Cell> cells;
-  richtext::BuildCells(wire, spans, &cells);
+  richtext::BuildCells(wire, ranges, &cells);
   for (auto& c : cells)
     c.w = charW;
   return cells;
