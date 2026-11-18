@@ -7,7 +7,7 @@
   "src/io/src/AcisSatParser.cpp": 3189,
   "src/io/src/DxfIo.cpp": 6688,
   "src/io/src/GsIo.cpp": 6000,
-  "src/io/src/LibreDwgCad.cpp": 9338,
+  "src/io/src/LibreDwgCad.cpp": 9332,
   "src/qt/EditorWindow.cpp": 3694,
   "src/qt/PdfWindow.cpp": 3296,
   "src/renderer/src/ViewportRenderer.cpp": 4256,

@@ -639,7 +639,6 @@ target_link_libraries(gosurvey_ui INTERFACE GoSurvey::Core GoSurvey::Events)
 # tree at src/debug/src/. Physical relocation is isolated from diagnostic boundary changes.
 add_library(gosurvey_debug STATIC
   src/debug/src/BenchScene.cpp
-  src/debug/src/SaveTrace.cpp
   src/debug/src/DocumentInvariants.cpp)
 add_library(GoSurvey::Debug ALIAS gosurvey_debug)
 target_include_directories(gosurvey_debug PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/debug/include>")
