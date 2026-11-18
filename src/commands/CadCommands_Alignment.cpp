@@ -16,14 +16,14 @@
 #include <GoSurvey/Survey/AlignmentLabelSetPublic.hpp>
 #include "CadColor.hpp"
 #include "TextStyle.hpp"
-#include "alignment/AlignmentReport.hpp"
-#include "alignment/AlignmentGround.hpp"
+#include "GoSurvey/Survey/AlignmentReportModel.hpp"
+#include "GoSurvey/Survey/AlignmentGroundModel.hpp"
 #include <GoSurvey/Terrain/FeatureLineStations.hpp>
 #include <memory>
-#include "alignment/AlignmentTables.hpp"
-#include "alignment/AlignmentLabels.hpp"
-#include "alignment/AlignmentDesign.hpp"  // REQ-502
-#include "alignment/AlignmentViewFrames.hpp"  // REQ-517
+#include "GoSurvey/Survey/AlignmentTables.hpp"
+#include "GoSurvey/Survey/AlignmentLabels.hpp"
+#include "GoSurvey/Survey/AlignmentDesign.hpp"  // REQ-502
+#include "GoSurvey/Survey/AlignmentViewFrames.hpp"  // REQ-517
 #include "PaperSpace.hpp"  // REQ-517: paper sizes for sheets
 #include "ViewportZoomScale.hpp"  // REQ-517: named scales
 #include "util/cadtable.hpp"

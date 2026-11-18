@@ -15,7 +15,7 @@
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
 #include "SurveyCsv.hpp"
-#include "SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
 
 
 namespace {

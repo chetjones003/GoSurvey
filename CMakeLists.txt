@@ -542,29 +542,29 @@ target_compile_features(gosurvey_document_appearance INTERFACE cxx_std_17)
 # GoSurvey::Survey — T2 domain library. Alignment is a public Survey model used by Terrain;
 # its legacy declarations stay at their existing paths until the move-only follow-up.
 set(GOSURVEY_COORDINATE_SOURCES
-  src/geo/CoordinateSystems.cpp)
+  src/survey/src/CoordinateSystems.cpp)
 add_library(gosurvey_survey STATIC
-  src/alignment/Alignment.cpp
-  src/alignment/Clothoid.cpp
-  src/alignment/AlignmentLabels.cpp
-  src/alignment/AlignmentReport.cpp
-  src/alignment/AlignmentEdit.cpp
-  src/alignment/AlignmentLayout.cpp
-  src/alignment/AlignmentGround.cpp
-  src/alignment/AlignmentSampleLines.cpp
-  src/alignment/AlignmentViewFrames.cpp
-  src/alignment/AlignmentProfile.cpp
-  src/alignment/AlignmentDesign.cpp
-  src/alignment/AlignmentTables.cpp
+  src/survey/src/Alignment.cpp
+  src/survey/src/Clothoid.cpp
+  src/survey/src/AlignmentLabels.cpp
+  src/survey/src/AlignmentReport.cpp
+  src/survey/src/AlignmentEdit.cpp
+  src/survey/src/AlignmentLayout.cpp
+  src/survey/src/AlignmentGround.cpp
+  src/survey/src/AlignmentSampleLines.cpp
+  src/survey/src/AlignmentViewFrames.cpp
+  src/survey/src/AlignmentProfile.cpp
+  src/survey/src/AlignmentDesign.cpp
+  src/survey/src/AlignmentTables.cpp
   ${GOSURVEY_COORDINATE_SOURCES}
-  src/geo/DrawingConversion.cpp
-  src/geo/LocalGridTransform.cpp
-  src/geo/EcefTransform.cpp
-  src/traverse/TraverseCalc.cpp
-  src/traverse/TraverseLeastSquares.cpp
-  src/traverse/TraverseReport.cpp
-  src/survey/PointGroupRule.cpp
-  src/survey/SurveyPoints.cpp)
+  src/survey/src/DrawingConversion.cpp
+  src/survey/src/LocalGridTransform.cpp
+  src/survey/src/EcefTransform.cpp
+  src/survey/src/TraverseCalc.cpp
+  src/survey/src/TraverseLeastSquares.cpp
+  src/survey/src/TraverseReport.cpp
+  src/survey/src/PointGroupRule.cpp
+  src/survey/src/SurveyPoints.cpp)
 add_library(GoSurvey::Survey ALIAS gosurvey_survey)
 target_include_directories(gosurvey_survey
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/survey/include>"
@@ -1235,7 +1235,7 @@ if(GOSURVEY_BUILD_TESTS)
   add_executable(GoSurveyTests
     tests/TestSoundGuard.cpp
     tests/TestSoundGuardTests.cpp
-    tests/TraverseTests.cpp
+    tests/Survey/TraverseTests.cpp
     tests/PaperSpaceTests.cpp
     tests/PaperLeaderTests.cpp
     tests/PaperTableTests.cpp
@@ -1350,28 +1350,28 @@ if(GOSURVEY_BUILD_TESTS)
     tests/CadTableTests.cpp
     tests/CadBlockTests.cpp
     tests/CadPipeRunTests.cpp
-    tests/AlignmentCommandTests.cpp
-    tests/AlignmentViewFrameTests.cpp
+    tests/Survey/AlignmentCommandTests.cpp
+    tests/Survey/AlignmentViewFrameTests.cpp
     tests/ViewFrameSheetTests.cpp
-    tests/AlignmentProfileTests.cpp  # REQ-521 (issue #1163)
+    tests/Survey/AlignmentProfileTests.cpp  # REQ-521 (issue #1163)
     tests/SectionSheetTests.cpp
-    tests/AlignmentStyleTests.cpp
-    tests/AlignmentLabelTests.cpp
+    tests/Survey/AlignmentStyleTests.cpp
+    tests/Survey/AlignmentLabelTests.cpp
     tests/AlignmentGroundTests.cpp
-    tests/AlignmentTableTests.cpp
-    tests/AlignmentLabelOffsetTests.cpp
-    tests/AlignmentStyleFieldTests.cpp
+    tests/Survey/AlignmentTableTests.cpp
+    tests/Survey/AlignmentLabelOffsetTests.cpp
+    tests/Survey/AlignmentStyleFieldTests.cpp
     tests/Terrain/AlignmentFeatureLineTests.cpp
-    tests/AlignmentProfileSeamTests.cpp
-    tests/AlignmentCogoTests.cpp
-    tests/AlignmentDesignTests.cpp
-    tests/AlignmentSpiralCommandTests.cpp
-    tests/AlignmentEditTests.cpp
-    tests/AlignmentCreateTests.cpp
+    tests/Survey/AlignmentProfileSeamTests.cpp
+    tests/Survey/AlignmentCogoTests.cpp
+    tests/Survey/AlignmentDesignTests.cpp
+    tests/Survey/AlignmentSpiralCommandTests.cpp
+    tests/Survey/AlignmentEditTests.cpp
+    tests/Survey/AlignmentCreateTests.cpp
     tests/AlignmentDwgTests.cpp
-    tests/AlignmentSpecTests.cpp
-    tests/AlignmentAnnotationTests.cpp
-    tests/AlignmentGripTests.cpp
+    tests/Survey/AlignmentSpecTests.cpp
+    tests/Survey/AlignmentAnnotationTests.cpp
+    tests/Survey/AlignmentGripTests.cpp
     tests/ToolspaceCatalogTests.cpp
     # REQ-089 surface rollover dwell. Header-only and pure, like the style table above. It is the
     # feature's ONLY new logic — the readout's numbers come from TinQueryTests' and
@@ -1405,7 +1405,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/io/Project.cpp
     src/io/ProjectPointDb.cpp
     src/io/ProjectPointRules.cpp
-    tests/ProjectPointRulesTests.cpp
+    tests/Survey/ProjectPointRulesTests.cpp
     tests/ProjectPointDbTests.cpp
     # REQ-378 (#696 P5): the pure database-merge half of Add Drawing to Project
     tests/ProjectAddDrawingTests.cpp
@@ -1731,7 +1731,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/GizmoSubObjectMoveTests.cpp
     tests/LibreDwgCadTests.cpp
     tests/CadBlockImportTests.cpp
-    tests/SurveyLabelMeasureTests.cpp
+    tests/Survey/SurveyLabelMeasureTests.cpp
     # REQ-375 (#696 P2): project settings resolve against AppCommandState (EnforceProjectSettings), so
     # this rides with gosurvey_domain like CadBlockImportTests.
     tests/ProjectSettingsTests.cpp
@@ -1774,7 +1774,7 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-357 / D-2026-09-29-b,c — the Drawing Settings window (issue #582 increment 1).
     tests/DrawingSettingsTests.cpp
     # REQ-358: the CS-MAP wrapper + the zone as drawing data (loads the staged dictionary).
-    tests/CoordinateSystemsTests.cpp
+    tests/Survey/CoordinateSystemsTests.cpp
     # REQ-359 / D-2026-09-29-e: the Geolocation tab's commands and the Position Marker.
     tests/GeolocationTests.cpp
     # REQ-360: the Drawing Settings Transformation tab (local <-> grid).
@@ -1859,11 +1859,11 @@ if(GOSURVEY_BUILD_TESTS)
 
   # Pure Survey algorithms and Terrain sampling integration run without Qt or OpenGL.
   add_executable(GoSurveySurveyTests
-    tests/PointGroupTests.cpp
-    tests/AlignmentReportTests.cpp
-    tests/AlignmentTests.cpp
-    tests/AlignmentSampleLineTests.cpp
-    tests/EcefTransformTests.cpp)
+    tests/Survey/PointGroupTests.cpp
+    tests/Survey/AlignmentReportTests.cpp
+    tests/Survey/AlignmentTests.cpp
+    tests/Survey/AlignmentSampleLineTests.cpp
+    tests/Survey/EcefTransformTests.cpp)
   set_target_properties(GoSurveySurveyTests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
   target_include_directories(GoSurveySurveyTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" ${NLOHMANN_JSON_INCLUDE})
   target_link_libraries(GoSurveySurveyTests PRIVATE GoSurvey::Survey GoSurvey::Terrain Catch2::Catch2WithMain)

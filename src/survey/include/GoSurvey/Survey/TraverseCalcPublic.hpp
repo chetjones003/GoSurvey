@@ -1,4 +1,4 @@
 #pragma once
 
 // Public bridge; the legacy declaration file retains history until the Survey move.
-#include "../../../../traverse/TraverseCalc.hpp"
+#include "GoSurvey/Survey/TraverseCalc.hpp"

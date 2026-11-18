@@ -9,7 +9,7 @@
 #include "TextStyle.hpp"
 #include "DimensionStyle.hpp"
 #include "CadCoordinateFrame.hpp"
-#include "SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
 #include <GoSurvey/Geometry/meshgeom.hpp>
 #include <GoSurvey/Geometry/geom2d.hpp>
 #include "GoSurvey/PointCloud/CacheStorage.hpp"

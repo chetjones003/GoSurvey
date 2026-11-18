@@ -1,7 +1,7 @@
 #include "ConvertDrawing.hpp"
 
 #include "CadCoordinateFrame.hpp"
-#include "SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
 
 #include <algorithm>
 #include <cmath>

@@ -11,7 +11,7 @@
 
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
-#include "alignment/Alignment.hpp"
+#include "GoSurvey/Survey/AlignmentModel.hpp"
 #include <GoSurvey/Terrain/AlignmentFeatureLine.hpp>
 
 using Catch::Approx;

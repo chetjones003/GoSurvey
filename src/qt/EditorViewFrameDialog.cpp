@@ -3,7 +3,7 @@
 #include "CadCommands.hpp"
 #include "PaperSpace.hpp"
 #include "ViewportZoomScale.hpp"
-#include "alignment/Alignment.hpp"
+#include "GoSurvey/Survey/AlignmentModel.hpp"
 
 #include <QComboBox>
 #include <QDialog>

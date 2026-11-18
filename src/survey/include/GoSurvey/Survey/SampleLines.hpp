@@ -3,7 +3,7 @@
 // Public Survey bridge for the sample-line model. The canonical declarations remain at their
 // legacy path until the history-preserving move; this namespace gives standalone consumers a
 // stable Survey-facing API without declaring the same functions twice.
-#include "../../../../alignment/AlignmentSampleLines.hpp"
+#include "GoSurvey/Survey/AlignmentSampleLines.hpp"
 
 namespace survey::sample_lines {
 

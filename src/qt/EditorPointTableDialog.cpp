@@ -2,7 +2,7 @@
 #include "StyleEditors.hpp"
 
 #include "CadCommands.hpp"
-#include "SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
 #include "util/cadtablestyle.hpp"
 
 #include <QAbstractItemView>

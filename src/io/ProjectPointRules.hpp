@@ -11,7 +11,7 @@
 //
 // Pure like ProjectPointDb.hpp: no window, no drawing, nothing global.
 
-#include "PointGroupRule.hpp"
+#include "GoSurvey/Survey/PointGroupRule.hpp"
 #include "ProjectPointDb.hpp"
 
 #include <string>

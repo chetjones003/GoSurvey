@@ -9,7 +9,7 @@
 #include "CadCommands.hpp"
 #include "CadDimGeom.hpp"
 #include "CadDimStroke.hpp"
-#include "SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
 
 #include <algorithm>
 #include <cmath>

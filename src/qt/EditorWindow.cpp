@@ -28,7 +28,7 @@
 #include "QtText.hpp"
 #include "PdfWindow.hpp"
 #include "PdfPlot.hpp"
-#include "SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
 #include "CadBlocks.hpp"
 #include "DwgIo.hpp"
 #include "GsIo.hpp"

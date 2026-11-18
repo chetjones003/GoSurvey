@@ -17,7 +17,7 @@
 #include "GsAnnotationJson.hpp"
 #include "HeadlessFileDialogs.hpp"
 #include "SurveyCsv.hpp"
-#include "SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
 #include "TransformPreview.hpp"
 #include "viewport/CadSnap.hpp"  // WorldToleranceFromPixels, for the GIZMO verb's screen-derived aperture
 #include "ViewportPickPolicy.hpp"

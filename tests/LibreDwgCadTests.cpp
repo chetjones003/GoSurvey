@@ -16,7 +16,7 @@
 #include "CadField.hpp"
 #include "CadDimStroke.hpp"
 #include "CadRubberPreview.hpp"
-#include "SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
 #include "io/SurveyCsv.hpp"
 #include <GoSurvey/Math/ucs.hpp>
 #include "util/AcisSatParser.hpp"

@@ -1,8 +1,8 @@
 #include "EditorSectionSheetsDialog.hpp"
 
 #include "CadCommands.hpp"
-#include "alignment/Alignment.hpp"
-#include "alignment/AlignmentSampleLines.hpp"
+#include "GoSurvey/Survey/AlignmentModel.hpp"
+#include "GoSurvey/Survey/AlignmentSampleLines.hpp"
 
 #include <QComboBox>
 #include <QDialog>

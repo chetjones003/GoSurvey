@@ -1,6 +1,6 @@
 #include "TraverseActions.hpp"
 #include "CadCommands.hpp"
-#include "SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
 #include <cmath>
 #include <algorithm>
 #include <unordered_set>

@@ -1,7 +1,7 @@
 #include "EditorSheetsDialog.hpp"
 
 #include "CadCommands.hpp"
-#include "alignment/AlignmentViewFrames.hpp"
+#include "GoSurvey/Survey/AlignmentViewFrames.hpp"
 
 #include <QComboBox>
 #include <QDialog>

@@ -32,7 +32,7 @@
 #include <GoSurvey/Terrain/surfacevolume.hpp>  // REQ-073 surface-to-surface volumes (TASK-095) — pure, like surfaceanalysis
 #include <GoSurvey/Terrain/surfacestats.hpp>   // REQ-125
 #include <GoSurvey/Terrain/watershed.hpp>      // REQ-132…134
-#include "alignment/AlignmentGround.hpp" // REQ-513 surface profiles
+#include "GoSurvey/Survey/AlignmentGroundModel.hpp" // REQ-513 surface profiles
 #include <GoSurvey/Terrain/tinvolume.hpp>      // REQ-136
 #include <GoSurvey/Terrain/gridsurface.hpp>    // REQ-137
 #include <GoSurvey/Terrain/surfacequery.hpp>   // REQ-137

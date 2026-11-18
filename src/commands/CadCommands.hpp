@@ -5,11 +5,11 @@
 
 #include "CadEntities.hpp"
 #include <GoSurvey/Terrain/surfacequery.hpp>  // ISurfaceQuery, for MakeSurfaceQueryForCommands (REQ-497)
-#include "alignment/Alignment.hpp"  // REQ-480 / ADR-075: per-drawing alignment store
-#include "alignment/AlignmentViewFrames.hpp"  // REQ-517: view frame groups that follow an alignment
-#include "alignment/AlignmentSampleLines.hpp"  // REQ-519: sample lines and their sections
-#include "alignment/AlignmentProfile.hpp"  // REQ-521: design vertical profiles along alignments
-#include "alignment/AlignmentDesign.hpp"  // REQ-502: check sets
+#include "GoSurvey/Survey/AlignmentModel.hpp"  // REQ-480 / ADR-075: per-drawing alignment store
+#include "GoSurvey/Survey/AlignmentViewFrames.hpp"  // REQ-517: view frame groups that follow an alignment
+#include "GoSurvey/Survey/AlignmentSampleLines.hpp"  // REQ-519: sample lines and their sections
+#include "GoSurvey/Survey/AlignmentProfile.hpp"  // REQ-521: design vertical profiles along alignments
+#include "GoSurvey/Survey/AlignmentDesign.hpp"  // REQ-502: check sets
 #include "CadDimGeom.hpp"
 #include "EntityId.hpp"
 // TextStyles::DefaultTextStyles, for the textStyles member's initializer (issue #57). Pure and
@@ -41,8 +41,8 @@
 #include "PaperSpace.hpp"
 #include "SurveyPointActions.hpp"
 #include <GoSurvey/Core/AngleFormat.hpp>
-#include "traverse/TraverseCalc.hpp"
-#include "traverse/TraverseLeastSquares.hpp"
+#include "GoSurvey/Survey/TraverseCalc.hpp"
+#include "GoSurvey/Survey/TraverseLeastSquares.hpp"
 #include "update/UpdateCheck.hpp"  // update::UpdatePrefs only — pure, no network, no <thread>
 #include <GoSurvey/Terrain/tinbuild.hpp>       // TinBuildResult, for AppCommandState::SurfaceRebuildAsync (REQ-069)
 #include <GoSurvey/Terrain/surfacevolume.hpp>  // SurfaceVolumeResult, for AppCommandState::VolumeDashboardState (REQ-073)

@@ -150,13 +150,6 @@
     },
     {
       "file": "src/commands/CadCommands.cpp",
-      "include": "alignment/AlignmentGround.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.cpp includes \"alignment/AlignmentGround.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.cpp",
       "include": "io/LandXmlIo.hpp",
       "target": "IO",
       "rule": "private-header include",
@@ -241,41 +234,6 @@
     },
     {
       "file": "src/commands/CadCommands.hpp",
-      "include": "alignment/Alignment.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"alignment/Alignment.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "alignment/AlignmentViewFrames.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"alignment/AlignmentViewFrames.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "alignment/AlignmentSampleLines.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"alignment/AlignmentSampleLines.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "alignment/AlignmentProfile.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"alignment/AlignmentProfile.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "alignment/AlignmentDesign.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"alignment/AlignmentDesign.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
       "include": "util/cadtablestyle.hpp",
       "target": "Document",
       "rule": "private-header include",
@@ -322,20 +280,6 @@
       "target": "IO",
       "rule": "private-header include",
       "message": "src/commands/CadCommands.hpp includes \"ProjectPack.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "traverse/TraverseCalc.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"traverse/TraverseCalc.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands.hpp",
-      "include": "traverse/TraverseLeastSquares.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands.hpp includes \"traverse/TraverseLeastSquares.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
     },
     {
       "file": "src/commands/CadCommands.hpp",
@@ -401,60 +345,11 @@
       "message": "src/commands/CadCommands.hpp includes \"render/SectionClip.hpp\": cross-system include must use GoSurvey/Renderer/ public headers (private-header include)"
     },
     {
-      "file": "src/commands/CadCommands_Align.cpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands_Align.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
       "file": "src/commands/CadCommands_Alignment.cpp",
       "include": "GsIo.hpp",
       "target": "IO",
       "rule": "private-header include",
       "message": "src/commands/CadCommands_Alignment.cpp includes \"GsIo.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands_Alignment.cpp",
-      "include": "alignment/AlignmentReport.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands_Alignment.cpp includes \"alignment/AlignmentReport.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands_Alignment.cpp",
-      "include": "alignment/AlignmentGround.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands_Alignment.cpp includes \"alignment/AlignmentGround.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands_Alignment.cpp",
-      "include": "alignment/AlignmentTables.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands_Alignment.cpp includes \"alignment/AlignmentTables.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands_Alignment.cpp",
-      "include": "alignment/AlignmentLabels.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands_Alignment.cpp includes \"alignment/AlignmentLabels.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands_Alignment.cpp",
-      "include": "alignment/AlignmentDesign.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands_Alignment.cpp includes \"alignment/AlignmentDesign.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/CadCommands_Alignment.cpp",
-      "include": "alignment/AlignmentViewFrames.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCommands_Alignment.cpp includes \"alignment/AlignmentViewFrames.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
     },
     {
       "file": "src/commands/CadCommands_Alignment.cpp",
@@ -548,25 +443,11 @@
       "message": "src/commands/CadCommands_Mleader.cpp includes \"util/styleproperty.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
     },
     {
-      "file": "src/commands/CadCoordinateFrame.cpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/CadCoordinateFrame.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
       "file": "src/commands/CadOnlineMap.hpp",
       "include": "MapTileService.hpp",
       "target": "Windows",
       "rule": "forbidden dependency",
       "message": "src/commands/CadOnlineMap.hpp includes \"MapTileService.hpp\": Commands may not depend on Windows (forbidden dependency)"
-    },
-    {
-      "file": "src/commands/ConvertDrawing.cpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/ConvertDrawing.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
     },
     {
       "file": "src/commands/DimensionStyle.hpp",
@@ -595,13 +476,6 @@
       "target": "IO",
       "rule": "private-header include",
       "message": "src/commands/ProjectAddFlow.cpp includes \"DwgIo.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/ProjectAddFlow.cpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/ProjectAddFlow.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
     },
     {
       "file": "src/commands/ProjectAddFlow.cpp",
@@ -651,13 +525,6 @@
       "target": "IO",
       "rule": "private-header include",
       "message": "src/commands/ProjectSettings.cpp includes \"GsIo.hpp\": cross-system include must use GoSurvey/IO/ public headers (private-header include)"
-    },
-    {
-      "file": "src/commands/TraverseActions.cpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/commands/TraverseActions.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
     },
     {
       "file": "src/commands/ViewportZoomScale.cpp",
@@ -786,13 +653,6 @@
       "message": "src/io/GsIo.cpp includes \"TextStyle.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/GsIo.cpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/io/GsIo.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
       "file": "src/io/LandXmlIo.cpp",
       "include": "CadCommands.hpp",
       "target": "Commands",
@@ -896,13 +756,6 @@
       "target": "Document",
       "rule": "private-header include",
       "message": "src/io/LibreDwgCad.cpp includes \"MtextRichFormat.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/LibreDwgCad.cpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/io/LibreDwgCad.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
     },
     {
       "file": "src/io/LibreDwgCad.cpp",
@@ -1094,20 +947,6 @@
       "message": "src/io/PolylineTiltedArc.hpp includes \"CadCoordinateFrame.hpp\": IO may not depend on Commands (forbidden dependency)"
     },
     {
-      "file": "src/io/ProjectPointDb.hpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/io/ProjectPointDb.hpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/io/ProjectPointRules.hpp",
-      "include": "PointGroupRule.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/io/ProjectPointRules.hpp includes \"PointGroupRule.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
       "file": "src/io/RasterImage.hpp",
       "include": "commands/PaperSpace.hpp",
       "target": "Commands",
@@ -1127,13 +966,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/io/SurveyCsv.cpp includes \"CadCoordinateFrame.hpp\": IO may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/io/SurveyCsv.cpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/io/SurveyCsv.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
     },
     {
       "file": "src/io/UserPrefs.cpp",
@@ -1823,13 +1655,6 @@
     },
     {
       "file": "src/qt/EditorProperties.cpp",
-      "include": "alignment/AlignmentDesign.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/qt/EditorProperties.cpp includes \"alignment/AlignmentDesign.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/qt/EditorProperties.cpp",
       "include": "CadColor.hpp",
       "target": "Commands",
       "rule": "private-header include",
@@ -2390,13 +2215,6 @@
     },
     {
       "file": "src/qt/EditorWindow.cpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/qt/EditorWindow.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/qt/EditorWindow.cpp",
       "include": "CadBlocks.hpp",
       "target": "Commands",
       "rule": "private-header include",
@@ -2954,20 +2772,6 @@
       "target": "Document",
       "rule": "private-header include",
       "message": "src/viewport/CadRubberPreview.cpp includes \"util/cadpiperun.hpp\": cross-system include must use GoSurvey/Document/ public headers (private-header include)"
-    },
-    {
-      "file": "src/viewport/CadSnap.cpp",
-      "include": "SurveyPoints.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/viewport/CadSnap.cpp includes \"SurveyPoints.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
-    },
-    {
-      "file": "src/viewport/CadSnap.cpp",
-      "include": "alignment/Alignment.hpp",
-      "target": "Survey",
-      "rule": "private-header include",
-      "message": "src/viewport/CadSnap.cpp includes \"alignment/Alignment.hpp\": cross-system include must use GoSurvey/Survey/ public headers (private-header include)"
     },
     {
       "file": "src/viewport/CadSnap.cpp",
