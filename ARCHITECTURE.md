@@ -19,12 +19,14 @@ Each layer crate depends on the crate directly below it, and that chain reaches 
 
 Verified by hand: adding `gs-domain` to `foundation/Cargo.toml` makes `cargo build --workspace` fail with that error. Removing the line restores the build.
 
+The check runs only when someone builds the workspace. No CI workflow runs it yet, so a violation is caught on a developer's machine, not automatically on push.
+
 ## Intentional allowances
 
-These are allowed on purpose. Cargo does not check them, so review is the check.
+These are allowed on purpose. Cargo does not check them, and nothing in this repo checks them either. Only review does.
 
-- **Independent crates.** A new crate may sit outside the chain. Cargo does not check it. Its header comment must say which layer it belongs to, and it must not depend on a higher layer.
-- **Dev-dependencies that point upward.** Cargo permits dev-dependency cycles, so a test may use a higher layer. Such a dev-dependency must be intentional and noted in the crate's manifest.
+- **Independent crates.** A new crate may sit outside the chain. Cargo does not check it. Its header comment should say which layer it belongs to, and reviewers should confirm it does not depend on a higher layer.
+- **Dev-dependencies that point upward.** Cargo permits dev-dependency cycles, so a test may use a higher layer. Reviewers should confirm each one is intentional.
 - **Skip-level dependencies.** For example, `gs-editor` may depend directly on `gs-foundation`. This matches the spec's "downward only".
 - **`unused_dependencies = "allow"`** in `Cargo.toml`. It stays until each layer uses the crate below it.
 
