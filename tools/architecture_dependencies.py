@@ -93,18 +93,28 @@ def _proven_source_renames(reference_root, candidate_root):
             ["git", "-C", str(candidate_root), "rev-parse", "HEAD"],
             text=True, stderr=subprocess.DEVNULL).strip()
         changes = subprocess.check_output(
-            ["git", "-C", str(candidate_root), "diff", "--name-status", "--find-renames=20%",
-             reference_head, candidate_head], text=True, stderr=subprocess.DEVNULL)
+            ["git", "-C", str(candidate_root), "diff", "--name-status", "-z", "--find-renames=20%",
+             reference_head, candidate_head], text=True, encoding="utf-8", errors="surrogateescape",
+            stderr=subprocess.DEVNULL)
     except (OSError, subprocess.CalledProcessError):
         return {}
 
     renames = {}
-    for line in changes.splitlines():
-        fields = line.split("\t")
-        if len(fields) == 3 and fields[0].startswith("R"):
-            old_path, new_path = fields[1:]
-            if Path(old_path).suffix.lower() in SOURCE_SUFFIXES and Path(new_path).suffix.lower() in SOURCE_SUFFIXES:
+    fields = changes.split("\0")
+    index = 0
+    while index < len(fields) - 1:
+        status = fields[index]
+        index += 1
+        if status.startswith(("R", "C")):
+            if index + 1 >= len(fields):
+                return {}
+            old_path, new_path = fields[index:index + 2]
+            index += 2
+            if (status.startswith("R") and Path(old_path).suffix.lower() in SOURCE_SUFFIXES
+                    and Path(new_path).suffix.lower() in SOURCE_SUFFIXES):
                 renames[old_path] = new_path
+        else:
+            index += 1
     return renames
 
 

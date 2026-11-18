@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("architecture_dependencies.py")
@@ -195,24 +196,31 @@ class ArchitectureDependencyTests(unittest.TestCase):
                        check=True, capture_output=True)
         git(candidate_root, "config", "user.email", "architecture@example.test")
         git(candidate_root, "config", "user.name", "Architecture Test")
-        (candidate_root / "src/a/A.cpp").replace(candidate_root / "src/a/Renamed.cpp")
+        (candidate_root / "src/a/A.cpp").replace(candidate_root / "src/a/Über.cpp")
         git(candidate_root, "add", "-A")
         git(candidate_root, "commit", "-qm", "rename source")
 
         renames = checker._proven_source_renames(reference_root, candidate_root)
         reference = checker.check(reference_root, mapping_root=candidate_root)["violations"]
         candidate = checker.check(candidate_root)["violations"]
-        self.assertEqual(renames, {"src/a/A.cpp": "src/a/Renamed.cpp"})
+        self.assertEqual(renames, {"src/a/A.cpp": "src/a/Über.cpp"})
         self.assertTrue(checker.compare_baseline(candidate, reference, renames)["ok"])
 
-        source = candidate_root / "src/a/Renamed.cpp"
+        source = candidate_root / "src/a/Über.cpp"
         source.write_text(source.read_text(encoding="utf-8") + '#include "b/Private.hpp"\n',
                           encoding="utf-8")
         grown = checker.check(candidate_root)["violations"]
         self.assertEqual(
             checker.compare_baseline(grown, candidate)["new_violations"],
-            [["src/a/Renamed.cpp", "forbidden dependency", "B"]],
+            [["src/a/Über.cpp", "forbidden dependency", "B"]],
         )
+
+    def test_git_rename_fields_preserve_tabs_and_newlines(self):
+        moved_path = "src/a/with\ttab\nline.cpp"
+        output = "R100\0src/a/A.cpp\0" + moved_path + "\0M\0src/a/Other.cpp\0"
+        with patch.object(checker.subprocess, "check_output", side_effect=["base\n", "head\n", output]):
+            self.assertEqual(checker._proven_source_renames(Path("base"), Path("head")),
+                             {"src/a/A.cpp": moved_path})
 
     def test_renamed_include_for_the_same_edge_is_not_growth(self):
         reference = [{"file": "src/a/A.cpp", "include": "util/ucs.hpp", "target": "Math",
