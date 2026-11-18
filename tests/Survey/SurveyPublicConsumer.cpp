@@ -7,6 +7,7 @@
 #include <GoSurvey/Survey/AlignmentLabelSetPublic.hpp>
 #include <GoSurvey/Survey/CoordinateSystems.hpp>
 #include <GoSurvey/Survey/EcefTransformPublic.hpp>
+#include <GoSurvey/Survey/SampleLines.hpp>
 
 #include <cmath>
 #include <iostream>
@@ -64,5 +65,13 @@ int main() {
   std::vector<float> marker;
   AppendAllSurveyPointMarkers(0.1f, {point}, &marker);
   if (marker.size() != 12) return 16;
+  alignment::SampleLine section;
+  section.origin = {0.0, 0.0};
+  section.direction = {1.0, 0.0};
+  section.leftWidth = 0.25;
+  section.rightWidth = 0.25;
+  const survey::ElevationSampler flat = [](double, double, double* out) { *out = 0.0; return true; };
+  alignment::SampleSection({-1.0, -1.0, 0.0, 1.0, -1.0, 0.0, 0.0, 1.0, 0.0}, {0, 1, 2}, flat, section);
+  if (section.section.empty()) return 17;
   return 0;
 }
