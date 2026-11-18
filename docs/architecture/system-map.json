@@ -143,6 +143,10 @@
       "system": "Renderer"
     },
     {
+      "path": "src/renderer/src/",
+      "system": "Renderer"
+    },
+    {
       "path": "src/document/src/",
       "system": "Document"
     }
@@ -15601,7 +15605,7 @@
         "issue": 1250,
         "target": "GoSurvey::Renderer (gosurvey_renderer)",
         "publicIncludeRoot": "src/renderer/include/",
-        "privateSourceRoot": "src/renderer/src/ (reserved for move follow-up; no production files moved)",
+        "privateSourceRoot": "src/renderer/src/",
         "allowedDependencies": [
           "Geometry",
           "Math",
