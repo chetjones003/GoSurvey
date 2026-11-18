@@ -1,10 +1,10 @@
 # GoSurvey layer architecture
 
-Rust and Tauri replacement for GoSurvey, tracked by issue #1403. This branch holds the Rust workspace only; the original Qt/C++ app stays in git history.
+Rust and Tauri replacement for GoSurvey, tracked by issue #1403. The Qt/C++ source, build and tests are removed from this tree and stay in git history. The kept root files (README.md, PRIVACY.md, RELEASE_NOTES.md, CLAUDE.md, AGENTS.md) still describe the Qt app until the rewrite updates them.
 
 ## Layers
 
-Dependencies point strictly downward. Each layer crate depends only on the layer directly below it.
+Dependencies point strictly downward. A layer crate may depend on any lower layer, never on its own layer or a higher one. The real workspace uses a chain, where each crate depends on the one directly below it.
 
 | Crate | Rank | Layer |
 | --- | --- | --- |

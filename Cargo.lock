@@ -4,46 +4,46 @@ version = 4
 
 [[package]]
 name = "gs-application"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "gs-services",
 ]
 
 [[package]]
 name = "gs-domain"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "gs-kernel",
 ]
 
 [[package]]
 name = "gs-editor"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "gs-application",
 ]
 
 [[package]]
 name = "gs-foundation"
-version = "0.0.0"
+version = "0.1.0"
 
 [[package]]
 name = "gs-kernel"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "gs-foundation",
 ]
 
 [[package]]
 name = "gs-layer-check"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "gs-services"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "gs-domain",
 ]
