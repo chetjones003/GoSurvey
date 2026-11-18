@@ -17,7 +17,14 @@ SOURCE_FILE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"
 DEPENDENCY_BASELINE = "docs/architecture/dependency-baseline.json"
 FILE_SIZE_BASELINE = ".github/file-size-baseline.json"
 INCLUDE_LINE = re.compile(r'^(\s*#\s*include\s*)([<"])([^>"\n]+)([>"])(\s*(?://.*|/\*.*\*/)?\s*)$')
-CMAKE_SOURCE_COMMANDS = {"add_executable", "add_library", "target_sources", "source_group"}
+CMAKE_SOURCE_COMMANDS = {
+    "add_executable",
+    "add_library",
+    "set_property",
+    "set_source_files_properties",
+    "source_group",
+    "target_sources",
+}
 CMAKE_SOURCE_VARIABLE = re.compile(r"^\s*([A-Za-z_]\w*)", re.IGNORECASE)
 HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 PATH_TOKEN_CHARS = "_.-/\\"
@@ -337,7 +344,7 @@ def is_cmake_include_root_rewrite(
     new_text,
     moves,
 ):
-    """Allow a target include root to follow a moved public header tree."""
+    """Allow a target include root to follow a proven public or private move."""
     if old_line_number not in cmake_include_directory_lines(old_text) or (
         new_line_number not in cmake_include_directory_lines(new_text)
     ):
@@ -360,7 +367,9 @@ def is_cmake_include_root_rewrite(
     new_root = posixpath.normpath(
         posixpath.join(cmake_directory, new_match.group("path").replace("\\", "/"))
     )
-    if old_root == new_root or posixpath.basename(new_root) != "include":
+    narrows_private_root = new_root.startswith(old_root.rstrip("/") + "/")
+    moves_into_public_root = posixpath.basename(new_root) == "include"
+    if old_root == new_root or not (narrows_private_root or moves_into_public_root):
         return False
     return any(
         path_is_under_root(old_path, old_root) and path_is_under_root(new_path, new_root)
@@ -394,6 +403,10 @@ def build_path_variants(old_build_file, new_build_file, moves):
             (
                 posixpath.relpath(old_path, old_build_dir),
                 posixpath.relpath(new_path, new_build_dir),
+            ),
+            (
+                "${CMAKE_CURRENT_SOURCE_DIR}/" + posixpath.relpath(old_path, old_build_dir),
+                "${CMAKE_CURRENT_SOURCE_DIR}/" + posixpath.relpath(new_path, new_build_dir),
             ),
         )
         for old_value, new_value in candidates:
