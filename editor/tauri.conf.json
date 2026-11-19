@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "GoSurvey",
+  "version": "0.1.0",
+  "identifier": "com.gosurvey.editor",
+  "build": {
+    "beforeDevCommand": "npm --prefix ui run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm --prefix ui run build",
+    "frontendDist": "ui/dist"
+  },
+  "app": {
+    "windows": [
+      { "title": "GoSurvey", "width": 1280, "height": 800, "minWidth": 800, "minHeight": 500 }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": { "active": false, "icon": ["icons/icon.ico"] }
+}

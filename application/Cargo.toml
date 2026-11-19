@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+gs-domain = { path = "../domain" }
 gs-services = { path = "../services" }
 
 

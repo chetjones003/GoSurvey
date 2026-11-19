@@ -6,7 +6,18 @@ publish.workspace = true
 
 [dependencies]
 gs-application = { path = "../application" }
+serde = { version = "1", features = ["derive"] }
 
+[dev-dependencies]
+serde_json = "1"
+
+# The desktop shell is Windows-only, so Tauri and its system libraries are
+# pulled in for Windows targets alone. Other targets build an empty shell.
+[target.'cfg(windows)'.dependencies]
+tauri = "2"
+
+[target.'cfg(windows)'.build-dependencies]
+tauri-build = "2"
 
 [lints]
 workspace = true

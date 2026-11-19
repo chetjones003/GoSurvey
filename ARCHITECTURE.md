@@ -40,4 +40,21 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
+The Editor front end lives in `editor/ui`. From that folder:
+
+```
+npm ci
+npm run build
+npm test
+```
+
+Run the app on Windows from the repository root:
+
+```
+npm run dev       # debug: Vite dev server, then the app. Ctrl+C stops both.
+npm run release   # release: builds the front end, embeds it, then runs the app
+```
+
+`npm run dev` runs the app without `custom-protocol`, so the window loads the Vite server at `http://127.0.0.1:1420`. `npm run release` builds with `tauri/custom-protocol`, which embeds the built front end.
+
 Build output goes to `target/`, which is git-ignored.
