@@ -52,7 +52,7 @@ critical decode error (`LoadDwgData`). Issue #1442 asks for the refusal and is s
 | Solid primitives BOX, WEDGE, PYRAMID, CYLINDER, CONE, SPHERE, TORUS | No (read as 3DSOLID) | Yes | Write: **#1531** (new). |
 | IMAGE, WIPEOUT, PDF/DWF/DGN underlays | Reported as skipped ("reference not imported") | No | Parity means keep the report. No new ticket. |
 | VIEWPORT, LAYOUT, paper-space entities | Yes (paper space read via `ImportPaperEntity`) | Yes (LAYOUT, VIEWPORT) | Child: **#1530** (new). |
-| Plant 3D custom objects (AcPp*) | Refused, reported with the Plant class name | No | Refusal: #1458. Reading AcDs ASM bodies: #786. |
+| Plant 3D custom objects (AcPp*) | Model-space parts placed by `ImportPlantParts`. Parts inside blocks reported as not placed. Others refused with a report. | No | Refusal: #1458. Reading AcDs ASM bodies: #786. |
 | Anything else (REGION, BODY, OLE2FRAME, RAY, XLINE, PROXY objects, unknown types) | Skipped and reported by DXF name | No | Keep as reported skips. |
 
 ### Objects and tables
@@ -73,12 +73,12 @@ critical decode error (`LoadDwgData`). Issue #1442 asks for the refusal and is s
 | FIELDLIST | No | Yes (R2004+) | Child: **#1526** (new). |
 | CONTEXTDATA (annotation context objects) | Not checked | Yes (R2010+) | Child: **#1528** (new). |
 | Survey points (XDATA on POINT, `GOSURVEY`) | Yes | Yes | Child: #1470. |
-| Unknown objects | Preserved on save | Preserved | Child: #1468. |
+| Unknown objects | Not confirmed preserved on save (no code found) | Not confirmed | Child: #1468. |
 
 ### Import behaviour that must survive the port
 
 - Every skipped object is reported by name (`NoteSkip`). A silent skip is a bug (REQ-201 history).
-- Plant 3D objects are refused with a message, not read.
+- Plant 3D model-space parts are placed; Plant objects inside blocks, and any other Plant objects, are reported and not placed.
 - Civil 3D AECC catalog parts keep their 2D content and refuse the 3DSOLID with a named reason.
 
 ## Gaps
