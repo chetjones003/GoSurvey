@@ -13,6 +13,11 @@ Rust and Tauri replacement for GoSurvey, tracked by issue #1403. The Qt/C++ sour
 | `gs-application` | 4 | Command registry and interaction |
 | `gs-editor` | 5 | Tauri shell and ui-sdk front end |
 
+Command handlers and their active sessions live in `gs-application`. They publish typed
+`EngineEvent`s through the synchronous, toolkit-neutral `EventBus` in `gs-foundation`; Application
+event handlers apply drawing changes and collect command output. The Editor submits command-line
+entries and renders the returned prompt, messages, and drawing snapshot.
+
 ## How the rule is enforced
 
 Each layer crate depends on the crate directly below it, and that chain reaches every lower layer. Cargo rejects dependency cycles at load time. So any dependency on a higher layer closes a cycle and `cargo build` fails with `cyclic package dependency`. This is the standard cargo check, with no custom tooling.

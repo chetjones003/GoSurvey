@@ -6,15 +6,19 @@ import { Input } from "@/components/ui/input";
 
 type CommandLineProps = {
   history: string[];
+  prompt: { text: string; acceptsBlank: boolean; acceptsPoint: boolean } | null;
   onSubmit: (command: string) => void;
 };
 
-export default function CommandLine({ history, onSubmit }: CommandLineProps) {
+export default function CommandLine({ history, prompt, onSubmit }: CommandLineProps) {
   const [command, setCommand] = useState("");
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const input = command.trim();
-    if (!input) return;
+    if (!input) {
+      if (prompt?.acceptsBlank) onSubmit("");
+      return;
+    }
     onSubmit(input);
     setCommand("");
   };
@@ -37,7 +41,7 @@ export default function CommandLine({ history, onSubmit }: CommandLineProps) {
           </p>
         ))}
       </div>
-      <p className="text-xs text-muted-foreground">Type a command or select linework</p>
+      <p aria-live="polite" className="text-xs text-muted-foreground">{prompt?.text ?? "Type a command or select linework"}</p>
       <form onSubmit={submit} className="flex items-center gap-2 rounded-md border px-3">
         <ChevronRight className="size-4 text-muted-foreground" aria-hidden="true" />
         <Input
@@ -46,6 +50,13 @@ export default function CommandLine({ history, onSubmit }: CommandLineProps) {
           className="h-9 border-0 bg-transparent px-0 font-mono shadow-none focus-visible:ring-0"
           value={command}
           onChange={(event) => setCommand(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && prompt !== null) {
+              event.preventDefault();
+              onSubmit("ESC");
+              setCommand("");
+            }
+          }}
         />
         <span className="text-[11px] text-muted-foreground">Enter</span>
       </form>

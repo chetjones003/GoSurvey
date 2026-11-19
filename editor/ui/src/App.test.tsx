@@ -20,7 +20,7 @@ describe("App", () => {
   it("shows the engine as ready and the drawing as empty", async () => {
     answer(
       { state: "ready", version: "0.1.0" },
-      { name: "Untitled", entityCount: 0 },
+      { name: "Untitled", entityCount: 0, lines: [] },
     );
 
     render(<App />);
@@ -44,7 +44,7 @@ describe("App", () => {
   });
 
   it("names the drawing region for assistive technology", async () => {
-    answer({ state: "ready", version: "0.1.0" }, { name: "Untitled", entityCount: 0 });
+    answer({ state: "ready", version: "0.1.0" }, { name: "Untitled", entityCount: 0, lines: [] });
 
     render(<App />);
 
@@ -54,11 +54,17 @@ describe("App", () => {
 
   it("draws and logs a line entered in the command line", async () => {
     let hasLine = false;
-    invoke.mockImplementation((command: string) => {
+    invoke.mockImplementation((command: string, args?: { input: string }) => {
       if (command === "engine_status") return Promise.resolve({ state: "ready", version: "0.1.0" });
       if (command === "execute_command") {
+        if (args?.input === "ESC") {
+          return Promise.resolve({ messages: ["> ESC", "Command finished."], prompt: null });
+        }
         hasLine = true;
-        return Promise.resolve("Line created.");
+        return Promise.resolve({
+          messages: ["> LINE, 0,0, 20,10,", "Line created."],
+          prompt: { text: "LINE: Next point — click; X,Y; @dx,dy; A bearing; 2P direction. Esc ends.", acceptsBlank: false, acceptsPoint: true },
+        });
       }
       return Promise.resolve(hasLine
         ? { name: "Untitled", entityCount: 1, lines: [{ start: { x: 0, y: 0 }, end: { x: 20, y: 10 } }] }
@@ -74,5 +80,10 @@ describe("App", () => {
     expect(await screen.findByText("1 entities")).toBeTruthy();
     expect(screen.getByRole("img", { name: "Drawing with linework" })).toBeTruthy();
     expect(invoke).toHaveBeenCalledWith("execute_command", { input: "LINE, 0,0, 20,10," });
+    expect(screen.getByText("LINE: Next point — click; X,Y; @dx,dy; A bearing; 2P direction. Esc ends.")).toBeTruthy();
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(await screen.findByText("Command finished.")).toBeTruthy();
+    expect(invoke).toHaveBeenCalledWith("execute_command", { input: "ESC" });
   });
 });

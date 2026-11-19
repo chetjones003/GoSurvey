@@ -14,12 +14,15 @@ type DrawingSnapshot = {
   entityCount: number;
   lines: { start: { x: number; y: number }; end: { x: number; y: number } }[];
 };
+type CommandPrompt = { text: string; acceptsBlank: boolean; acceptsPoint: boolean };
+type CommandResult = { messages: string[]; prompt: CommandPrompt | null };
 
 export default function App() {
   const [status, setStatus] = useState<EngineStatus | null>(null);
   const [drawing, setDrawing] = useState<DrawingSnapshot | null>(null);
   const [error, setError] = useState("");
   const [history, setHistory] = useState<string[]>(["GoSurvey Rust engine ready. Type HELP for commands."]);
+  const [commandPrompt, setCommandPrompt] = useState<CommandPrompt | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -45,11 +48,18 @@ export default function App() {
 
   const execute = async (command: string) => {
     try {
-      const message = await invoke<string>("execute_command", { input: command });
-      setHistory((entries) => [...entries, `> ${command}`, message]);
+      const result = await invoke<CommandResult>("execute_command", { input: command });
+      setHistory((entries) => [...entries, ...result.messages]);
+      setCommandPrompt(result.prompt);
       await load();
     } catch (reason) {
       setHistory((entries) => [...entries, `> ${command}`, String(reason)]);
+    }
+  };
+
+  const submitViewportPoint = (point: { x: number; y: number }) => {
+    if (commandPrompt?.acceptsPoint) {
+      void execute(`${point.x},${point.y}`);
     }
   };
 
@@ -59,10 +69,16 @@ export default function App() {
       <Ribbon />
       <div className="grid min-h-0 grid-cols-[240px_minmax(0,1fr)_280px]">
         <Toolspace entityCount={drawing?.entityCount} />
-        <Viewport name={drawing?.name} entityCount={drawing?.entityCount} lines={drawing?.lines ?? []} />
+        <Viewport
+          name={drawing?.name}
+          entityCount={drawing?.entityCount}
+          lines={drawing?.lines ?? []}
+          acceptsPoint={commandPrompt?.acceptsPoint ?? false}
+          onPoint={submitViewportPoint}
+        />
         <PropertiesPanel />
       </div>
-      <CommandLine history={history} onSubmit={execute} />
+      <CommandLine history={history} prompt={commandPrompt} onSubmit={execute} />
       <StatusBar engineMessage={engineMessage} engineError={error !== ""} />
     </div>
   );

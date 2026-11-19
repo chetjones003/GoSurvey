@@ -29,6 +29,15 @@ The Application-layer object that owns the open Drawing and accepts commands for
 **Command seam**
 The boundary where the front end sends a command and reads back the Engine's status and a snapshot. Tests drive the seam, not the internals.
 
+**Command**
+A named action the user invokes, such as LINE. A command may request additional input before it finishes.
+
+**Command session**
+A Command that is still collecting input and retains the context needed to continue, such as LINE between points.
+
+**Command prompt**
+The message describing what the active Command currently accepts as input.
+
 **Engine status**
 Whether the Engine can accept commands, and the version of the engine. The front end shows it as "Engine ready".
 

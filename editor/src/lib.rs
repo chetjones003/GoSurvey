@@ -5,7 +5,9 @@
 
 use std::sync::Mutex;
 
-use gs_application::{DrawingSnapshot, Engine, EngineState, EngineStatus};
+use gs_application::{
+    CommandPrompt, CommandResult, DrawingSnapshot, Engine, EngineState, EngineStatus,
+};
 use serde::Serialize;
 
 /// Shown to the user when the engine's lock is poisoned by a panic.
@@ -30,6 +32,31 @@ pub struct WireDrawingSnapshot {
     pub name: String,
     pub entity_count: usize,
     pub lines: Vec<WireLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireCommandResult {
+    pub messages: Vec<String>,
+    pub prompt: Option<WireCommandPrompt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireCommandPrompt {
+    pub text: String,
+    pub accepts_blank: bool,
+    pub accepts_point: bool,
+}
+
+impl From<CommandPrompt> for WireCommandPrompt {
+    fn from(prompt: CommandPrompt) -> Self {
+        Self {
+            text: prompt.text,
+            accepts_blank: prompt.accepts_blank,
+            accepts_point: prompt.accepts_point,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -77,6 +104,15 @@ impl From<DrawingSnapshot> for WireDrawingSnapshot {
                     },
                 })
                 .collect(),
+        }
+    }
+}
+
+impl From<CommandResult> for WireCommandResult {
+    fn from(result: CommandResult) -> Self {
+        Self {
+            messages: result.messages,
+            prompt: result.prompt.map(WireCommandPrompt::from),
         }
     }
 }
@@ -130,5 +166,18 @@ mod tests {
         assert_eq!(json["entityCount"], 0);
         assert_eq!(json["name"], "Untitled");
         assert_eq!(json["lines"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn command_result_serialises_messages_and_prompt() {
+        let wire = WireCommandResult::from(Engine::new().execute_command("LINE"));
+        let json = serde_json::to_value(wire).unwrap();
+        assert_eq!(json["messages"], serde_json::json!(["> LINE"]));
+        assert_eq!(
+            json["prompt"]["text"],
+            "LINE: First point — click or type X,Y / X Y. Esc cancels."
+        );
+        assert_eq!(json["prompt"]["acceptsBlank"], false);
+        assert_eq!(json["prompt"]["acceptsPoint"], true);
     }
 }

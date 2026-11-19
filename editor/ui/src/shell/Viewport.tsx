@@ -5,9 +5,11 @@ type ViewportProps = {
   name?: string;
   entityCount?: number;
   lines: { start: { x: number; y: number }; end: { x: number; y: number } }[];
+  acceptsPoint?: boolean;
+  onPoint?: (point: { x: number; y: number }) => void;
 };
 
-export default function Viewport({ name, entityCount, lines }: ViewportProps) {
+export default function Viewport({ name, entityCount, lines, acceptsPoint = false, onPoint }: ViewportProps) {
   const coordinates = lines.flatMap(({ start, end }) => [start, end]);
   const minX = coordinates.length ? Math.min(...coordinates.map(({ x }) => x)) : 0;
   const maxX = coordinates.length ? Math.max(...coordinates.map(({ x }) => x)) : 100;
@@ -17,7 +19,23 @@ export default function Viewport({ name, entityCount, lines }: ViewportProps) {
   const viewBox = `${minX - padding} ${-maxY - padding} ${maxX - minX + padding * 2 || 1} ${maxY - minY + padding * 2 || 1}`;
   return (
     <section aria-label="Drawing" className="relative min-h-0 min-w-0 overflow-hidden bg-zinc-950">
-      <svg className="absolute inset-0 size-full" role="img" aria-label={lines.length ? "Drawing with linework" : "Empty drawing grid"} viewBox={viewBox}>
+      <svg
+        className={`absolute inset-0 size-full ${acceptsPoint ? "cursor-crosshair" : ""}`}
+        role="img"
+        aria-label={lines.length ? "Drawing with linework" : "Empty drawing grid"}
+        viewBox={viewBox}
+        onClick={(event) => {
+          if (!acceptsPoint || !onPoint) return;
+          const svg = event.currentTarget;
+          const transform = svg.getScreenCTM();
+          if (!transform) return;
+          const screenPoint = svg.createSVGPoint();
+          screenPoint.x = event.clientX;
+          screenPoint.y = event.clientY;
+          const drawingPoint = screenPoint.matrixTransform(transform.inverse());
+          onPoint({ x: drawingPoint.x, y: -drawingPoint.y });
+        }}
+      >
         <defs>
           <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
             <path d="M 24 0 L 0 0 0 24" fill="none" className="stroke-zinc-800" strokeWidth="1" />
