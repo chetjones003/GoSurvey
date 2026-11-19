@@ -1,16 +1,30 @@
+//! Shared syntax parsing for command names, coordinates, bearings, and distances.
+//!
+//! Parsing validates and constructs typed inputs; coordinate arithmetic and geometry operations
+//! belong in `gs-kernel`. Command implementations should reuse this parser instead of splitting or
+//! interpreting coordinate text independently.
+
 use gs_domain::{Bearing, Point2};
 
+/// User-facing parse failures for normalized command input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandInputError {
+    /// Input did not contain exactly two coordinate values.
     ExpectedCoordinatePair,
+    /// A coordinate was not a finite number.
     InvalidCoordinate,
+    /// Relative coordinates were supplied without a previous point.
     RelativePointNeedsAnchor,
+    /// Resolving relative coordinates exceeded the supported floating-point range.
     CoordinateOverflow,
+    /// Bearing syntax or DMS fields were invalid.
     InvalidBearing,
+    /// A scalar distance was not finite or contained coordinate separators.
     InvalidDistance,
 }
 
 impl CommandInputError {
+    /// Returns a short message suitable for command history and prompt recovery.
     pub fn message(&self) -> &'static str {
         match self {
             Self::ExpectedCoordinatePair => "Enter a point as X,Y or X Y.",
@@ -23,9 +37,12 @@ impl CommandInputError {
     }
 }
 
+/// Parsed coordinate intent. Relative values stay as deltas until resolved against an anchor.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PointInput {
+    /// An explicit drawing-plane coordinate.
     Absolute(Point2),
+    /// An offset from the previous point.
     Relative { dx: f64, dy: f64 },
 }
 
@@ -42,15 +59,18 @@ impl PointInput {
     }
 }
 
+/// A command name and its already-tokenized initial arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedCommand {
     pub name: String,
     pub arguments: Vec<String>,
 }
 
+/// Stateless parsers shared by registered commands.
 pub struct CommandParser;
 
 impl CommandParser {
+    /// Splits command input on commas or whitespace and uppercases its command name.
     pub fn parse_command(input: &str) -> Option<ParsedCommand> {
         let input = input.trim();
         let name_end = input
@@ -72,6 +92,7 @@ impl CommandParser {
         })
     }
 
+    /// Parses `X,Y`, `X Y`, `@dx,dy`, or `@dx dy` without performing coordinate math.
     pub fn parse_point(
         input: &str,
         previous: Option<Point2>,
@@ -100,6 +121,7 @@ impl CommandParser {
         }
     }
 
+    /// Parses two already-separated coordinate arguments as one point expression.
     pub fn parse_point_fields(
         fields: &[String],
         previous: Option<Point2>,
@@ -108,6 +130,7 @@ impl CommandParser {
     }
 
     /// Parses decimal or DMS bearings, optionally preceded by `A` and followed by a turn.
+    /// Parses decimal or DMS bearings, optionally preceded by `A` and followed by a signed turn.
     pub fn parse_bearing(input: &str) -> Result<Bearing, CommandInputError> {
         let mut parts = input.split_whitespace().peekable();
         if parts
@@ -133,6 +156,7 @@ impl CommandParser {
     }
 
     /// Parses a finite scalar distance used by commands such as bearing-locked LINE.
+    /// Parses one finite scalar distance with no coordinate or relative-point syntax.
     pub fn parse_distance(input: &str) -> Result<f64, CommandInputError> {
         if input.contains(',') || input.starts_with('@') || input.chars().any(char::is_whitespace) {
             return Err(CommandInputError::InvalidDistance);

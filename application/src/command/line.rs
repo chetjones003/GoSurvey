@@ -338,19 +338,15 @@ impl ActiveCommand for LineSession {
                 } => self.submit_second_direction_point(input, first, restore_bearing),
                 LineMode::ConfirmBearing { bearing, .. } => self.confirm_bearing(input, bearing),
             },
-            CommandInputEvent::PointPicked { x, y } => match self.mode {
-                LineMode::Point => self.add_point(Point2 { x: *x, y: *y }),
+            CommandInputEvent::PointPicked(point) => match self.mode {
+                LineMode::Point => self.add_point(*point),
                 LineMode::DirectionFirst { restore_bearing } => {
-                    self.select_first_direction_point(Point2 { x: *x, y: *y }, restore_bearing)
+                    self.select_first_direction_point(*point, restore_bearing)
                 }
                 LineMode::DirectionSecond {
                     first,
                     restore_bearing,
-                } => self.select_second_direction_point(
-                    Point2 { x: *x, y: *y },
-                    first,
-                    restore_bearing,
-                ),
+                } => self.select_second_direction_point(*point, first, restore_bearing),
                 LineMode::Bearing | LineMode::ConfirmBearing { .. } => {
                     Err("A point cannot be picked while entering a bearing.".to_owned())
                 }

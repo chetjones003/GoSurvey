@@ -1,8 +1,14 @@
 //! Application systems layer (rank 4): command registry and interaction.
 //!
-//! The Engine is the command seam. It owns the current drawing, registered
-//! commands, active command session, and event handlers; the front end only
-//! submits normalized command input events and reads results and drawing snapshots.
+//! The Engine is the Application seam used by the Editor. It owns the current drawing, command
+//! registry and active session, and wires the input and output event buses. The Editor translates
+//! native interactions into [`CommandInputEvent`]s and reads [`CommandResult`]s plus a read-only
+//! [`DrawingSnapshot`]; commands never depend on UI or Tauri types.
+//!
+//! To add a command, implement [`RegisteredCommand`] and, for interactive behavior, [`ActiveCommand`].
+//! Register it with [`Engine::register_command`]. Shared parsing and lifecycle behavior live under
+//! `command/`; geometric calculations live in `gs-kernel`. The contributor guide is
+//! `docs/architecture/commands.md`.
 
 mod command;
 mod events;
@@ -22,7 +28,7 @@ use crate::events::{
     EngineContext,
 };
 
-/// Whether the engine can accept commands.
+/// Whether the Engine can accept commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineState {
     Ready,
@@ -34,7 +40,7 @@ pub struct EngineStatus {
     pub version: &'static str,
 }
 
-/// What the front end sees of the open Drawing.
+/// Read-only projection of the open Drawing returned across the Editor seam.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawingSnapshot {
     pub name: String,
@@ -54,13 +60,18 @@ pub struct LineSnapshot {
     pub end: PointSnapshot,
 }
 
-/// Output generated while processing one submitted command-line entry.
+/// Messages and current prompt produced while processing one command input event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandResult {
     pub messages: Vec<String>,
     pub prompt: Option<CommandPrompt>,
 }
 
+/// Application facade for command input, event dispatch, and read-only drawing access.
+///
+/// `dispatch_command_input` sends normalized input through the command-input EventBus, then
+/// publishes the resulting `EngineEvent`s through the drawing/output EventBus. Callers should use
+/// this seam rather than changing the Drawing or calling a command implementation directly.
 pub struct Engine {
     context: EngineContext,
     events: EventBus<EngineEvent, EngineContext>,
@@ -90,6 +101,7 @@ impl Engine {
         }
     }
 
+    /// Returns whether this Engine is ready and identifies its build version.
     pub fn status(&self) -> EngineStatus {
         EngineStatus {
             state: EngineState::Ready,
@@ -97,6 +109,7 @@ impl Engine {
         }
     }
 
+    /// Copies the visible drawing data into a read-only Editor-facing snapshot.
     pub fn snapshot(&self) -> DrawingSnapshot {
         DrawingSnapshot {
             name: self.context.drawing.name().to_owned(),
@@ -120,7 +133,7 @@ impl Engine {
         }
     }
 
-    /// Adds a command to the engine. Names and aliases are matched without case.
+    /// Registers a command. Its name and aliases are matched case-insensitively by the manager.
     pub fn register_command(
         &mut self,
         command: impl RegisteredCommand + 'static,
@@ -128,12 +141,16 @@ impl Engine {
         self.command_context.commands.register(command)
     }
 
-    /// Compatibility helper for submitting text through the command event handler.
+    /// Convenience helper for text-only callers; dispatches text through the command event bus.
     pub fn execute_command(&mut self, input: &str) -> CommandResult {
         self.dispatch_command_input(CommandInputEvent::TextSubmitted(input.to_owned()))
     }
 
-    /// Dispatches normalized text, point-pick, or cancellation input through the command event bus.
+    /// Dispatches normalized text, drawing-plane point-pick, or cancellation input through the
+    /// command event handler, then applies all resulting Engine events before returning.
+    ///
+    /// Editor adapters should map native input to this enum before calling the Engine. In
+    /// particular, point values must already be in drawing-plane coordinates.
     pub fn dispatch_command_input(&mut self, input: CommandInputEvent) -> CommandResult {
         let start = self.context.messages.len();
         self.command_events
@@ -511,11 +528,9 @@ mod tests {
         let mut engine = Engine::new();
         engine.execute_command("LINE");
 
-        let first =
-            engine.dispatch_command_input(CommandInputEvent::PointPicked { x: 4.0, y: 5.0 });
+        let first = engine.dispatch_command_input(CommandInputEvent::point_picked(4.0, 5.0));
         assert_eq!(first.messages, ["> 4,5"]);
-        let second =
-            engine.dispatch_command_input(CommandInputEvent::PointPicked { x: 9.0, y: 5.0 });
+        let second = engine.dispatch_command_input(CommandInputEvent::point_picked(9.0, 5.0));
 
         assert_eq!(second.messages, ["> 9,5", "Line created."]);
         assert_eq!(engine.snapshot().entity_count, 1);
@@ -532,10 +547,10 @@ mod tests {
     fn direction_pick_uses_point_events_and_kernel_bearing_math() {
         let mut engine = Engine::new();
         engine.execute_command("LINE");
-        engine.dispatch_command_input(CommandInputEvent::PointPicked { x: 10.0, y: 10.0 });
+        engine.dispatch_command_input(CommandInputEvent::point_picked(10.0, 10.0));
         engine.execute_command("2P");
-        engine.dispatch_command_input(CommandInputEvent::PointPicked { x: 0.0, y: 0.0 });
-        engine.dispatch_command_input(CommandInputEvent::PointPicked { x: 0.0, y: 10.0 });
+        engine.dispatch_command_input(CommandInputEvent::point_picked(0.0, 0.0));
+        engine.dispatch_command_input(CommandInputEvent::point_picked(0.0, 10.0));
         engine.execute_command("");
         engine.execute_command("5");
 

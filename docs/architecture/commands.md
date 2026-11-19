@@ -13,8 +13,10 @@ and lists registered commands automatically.
 
 The Editor owns native keyboard and pointer handling. It sends the Application `CommandInputEvent`
 variants `TextSubmitted`, `PointPicked`, and `Cancelled`; an Application `CommandEventHandler`
-routes them through the `CommandManager` and active session. Commands never receive DOM events,
-key codes, or pointer coordinates in screen space.
+routes them through the `CommandManager` and active session. For non-UI callers, submit text with
+`Engine::execute_command`, or dispatch typed events with `Engine::dispatch_command_input` and
+`CommandInputEvent::point_picked(x, y)`. Commands never receive DOM events, key codes, or
+pointer coordinates in screen space.
 
 ## Session lifecycle
 
@@ -57,9 +59,9 @@ keep the outer command active, as LINE does for a direction pick. Validate befor
 state when returning an error, so recovery retries from the same state.
 
 `ActiveCommand::handle_event` receives normalized `CommandInputEvent`s. Handle
-`TextSubmitted(text)` by parsing text with `CommandParser`; handle `PointPicked { x, y }` as a
-drawing-plane point selected by the Editor. The shared lifecycle handles `Cancelled` and invokes
-the command's cancellation policy.
+`TextSubmitted(text)` by parsing text with `CommandParser`; handle `PointPicked(point)` as a typed
+`Point2` in drawing-plane coordinates. The shared lifecycle handles `Cancelled` and invokes the
+command's cancellation policy.
 
 Use `CommandParser` for input syntax: `parse_command`, `parse_point`, `parse_point_fields`,
 `parse_bearing`, and `parse_distance`. `PointInput::resolve` applies absolute or relative input to

@@ -1,3 +1,11 @@
+//! Extensible command registry, input routing, parsing entry points, and interactive sessions.
+//!
+//! Add command implementations in this module tree, implement [`RegisteredCommand`], and register
+//! them through [`CommandManager`] or [`crate::Engine::register_command`]. Interactive commands
+//! return an [`ActiveCommand`] session. The shared lifecycle owns cancellation routing, recoverable
+//! error messages, and prompt updates; commands own only domain-specific state transitions.
+//! See `docs/architecture/commands.md` for the contributor recipe and event flow.
+
 mod line;
 pub mod parser;
 
@@ -5,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::events::{CommandPrompt, EngineEvent};
+use gs_domain::Point2;
 
 use self::line::LineCommand;
 use self::parser::CommandParser;
@@ -15,16 +24,30 @@ use self::parser::CommandParser;
 /// `CommandProgress::finish` for a one-shot command or `CommandProgress::start` for an interactive
 /// command session.
 pub trait RegisteredCommand: Send + Sync {
+    /// Canonical command name. Names are normalized and matched case-insensitively.
     fn name(&self) -> &'static str;
+
+    /// Short description shown by the built-in HELP command.
     fn description(&self) -> &'static str {
         ""
     }
+
+    /// Additional names that invoke the same implementation.
     fn aliases(&self) -> &'static [&'static str] {
         &[]
     }
+
+    /// Parses arguments after the command name and returns a one-shot result or active session.
     fn start(&self, arguments: &[String]) -> CommandProgress;
 }
 
+/// State machine for a command that requests additional user input.
+///
+/// Implement [`prompt`](Self::prompt) and [`handle_event`](Self::handle_event). Return
+/// `CommandOutcome::Continue` to keep the session active or `Finish` to end it. Returning
+/// `Err(message)` displays a message and retains the session; validate before mutating state so a
+/// retry starts from the same state. The shared lifecycle sends only normalized text and drawing
+/// points, and invokes [`cancel`](Self::cancel) for cancellation.
 pub trait ActiveCommand: Send {
     /// Describes the current input expected from the user.
     fn prompt(&self) -> CommandPrompt;
@@ -47,7 +70,7 @@ fn submit_active(mut active: Box<dyn ActiveCommand>, event: &CommandInputEvent) 
             active.as_mut(),
             &CommandInputEvent::TextSubmitted(text.trim().to_owned()),
         ),
-        CommandInputEvent::PointPicked { .. } => handle_active_event(active.as_mut(), event),
+        CommandInputEvent::PointPicked(_) => handle_active_event(active.as_mut(), event),
     };
     match outcome {
         CommandOutcome::Continue(events) => CommandProgress::continue_with(active, events),
@@ -65,25 +88,43 @@ fn handle_active_event(
 }
 
 /// Normalized input delivered to a command through the command event handler.
+/// Normalized user intent routed by the Application event handler.
+///
+/// The Editor translates platform input into these values. Commands receive submitted text or
+/// drawing-plane points, never keyboard codes, DOM events, or screen coordinates.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandInputEvent {
+    /// Text accepted from the command line by Enter. An empty string represents meaningful Enter.
     TextSubmitted(String),
-    PointPicked { x: f64, y: f64 },
+    /// A point already converted to drawing-plane coordinates by the Editor adapter.
+    PointPicked(Point2),
+    /// User requested cancellation, normally by pressing Esc.
     Cancelled,
+}
+
+impl CommandInputEvent {
+    /// Builds a typed point-pick event from drawing-plane coordinates.
+    pub fn point_picked(x: f64, y: f64) -> Self {
+        Self::PointPicked(Point2 { x, y })
+    }
 }
 
 /// The shared result of handling one command input.
 #[must_use]
 pub enum CommandOutcome {
+    /// Keep the active session and refresh its prompt after applying these events.
     Continue(Vec<EngineEvent>),
+    /// End the active session and clear its prompt after applying these events.
     Finish(Vec<EngineEvent>),
 }
 
 impl CommandOutcome {
+    /// Keeps the current session active and publishes these output events.
     pub fn continue_with(events: impl IntoIterator<Item = EngineEvent>) -> Self {
         Self::Continue(events.into_iter().collect())
     }
 
+    /// Ends the current session and publishes these output events.
     pub fn finish(events: impl IntoIterator<Item = EngineEvent>) -> Self {
         Self::Finish(events.into_iter().collect())
     }
@@ -101,6 +142,7 @@ impl CommandProgress {
         Self::finish([EngineEvent::CommandMessage(message.into())])
     }
 
+    /// Completes command execution and clears the current prompt.
     pub fn finish(events: impl IntoIterator<Item = EngineEvent>) -> Self {
         let mut events = events.into_iter().collect::<Vec<_>>();
         events.push(EngineEvent::PromptChanged(None));
@@ -122,6 +164,7 @@ impl CommandProgress {
         }
     }
 
+    /// Starts a command session and publishes its initial prompt plus any startup events.
     pub fn start(
         active: impl ActiveCommand + 'static,
         events: impl IntoIterator<Item = EngineEvent>,
@@ -130,18 +173,27 @@ impl CommandProgress {
     }
 }
 
+/// Error returned when a registered command name or alias conflicts with the registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandRegistrationError {
+    /// The canonical name or an alias contains no non-whitespace characters.
     EmptyName,
+    /// A canonical name or alias is already reserved by a command or the built-in HELP command.
     DuplicateName(String),
 }
 
+/// Stores command definitions and the one active interactive session.
+///
+/// Registration is atomic: if any name or alias is invalid, none of that command's names are
+/// installed. `HELP` is reserved. Input events enter through the Application command event handler;
+/// this manager resolves command names and forwards normalized input to the active session.
 pub struct CommandManager {
     commands: HashMap<String, Arc<dyn RegisteredCommand>>,
     active: Option<Box<dyn ActiveCommand>>,
 }
 
 impl CommandManager {
+    /// Creates a manager with the built-in LINE command registered.
     pub fn new() -> Self {
         let mut manager = Self {
             commands: HashMap::new(),
@@ -153,6 +205,7 @@ impl CommandManager {
         manager
     }
 
+    /// Registers a command and all its aliases, rejecting conflicts without partial registration.
     pub fn register(
         &mut self,
         command: impl RegisteredCommand + 'static,
@@ -178,13 +231,14 @@ impl CommandManager {
         Ok(())
     }
 
+    /// Applies one normalized input event and returns output events for the Engine event bus.
     pub(super) fn handle_event(&mut self, event: &CommandInputEvent) -> Vec<EngineEvent> {
         let log_entry = match event {
             CommandInputEvent::TextSubmitted(text) if !text.trim().is_empty() => {
                 Some(text.trim().to_owned())
             }
-            CommandInputEvent::PointPicked { x, y } if self.active.is_some() => {
-                Some(format!("{x},{y}"))
+            CommandInputEvent::PointPicked(point) if self.active.is_some() => {
+                Some(format!("{},{}", point.x, point.y))
             }
             CommandInputEvent::Cancelled if self.active.is_some() => Some("Esc".to_owned()),
             _ => None,

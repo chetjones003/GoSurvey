@@ -82,7 +82,9 @@ pub struct Line2 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GeometryError {
+    /// One or more coordinates are NaN or infinite.
     NonFinitePoint,
+    /// The segment endpoints are equal.
     DegenerateLine,
 }
 

@@ -54,8 +54,11 @@ pub struct WireCommandPrompt {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum WireCommandInput {
+    /// Text the user submitted by pressing Enter.
     TextSubmitted { text: String },
+    /// A viewport point already converted to drawing-plane coordinates.
     PointPicked { point: WirePoint },
+    /// A normalized request to end or cancel the active command step.
     Cancelled,
 }
 
@@ -63,10 +66,7 @@ impl From<WireCommandInput> for CommandInputEvent {
     fn from(input: WireCommandInput) -> Self {
         match input {
             WireCommandInput::TextSubmitted { text } => Self::TextSubmitted(text),
-            WireCommandInput::PointPicked { point } => Self::PointPicked {
-                x: point.x,
-                y: point.y,
-            },
+            WireCommandInput::PointPicked { point } => Self::point_picked(point.x, point.y),
             WireCommandInput::Cancelled => Self::Cancelled,
         }
     }
