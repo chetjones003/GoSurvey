@@ -5,8 +5,11 @@
 
 use std::sync::Mutex;
 
-use gs_application::{DrawingSnapshot, Engine, EngineState, EngineStatus};
-use serde::Serialize;
+use gs_application::{
+    CommandInputEvent, CommandPrompt, CommandResult, DrawingSnapshot, Engine, EngineState,
+    EngineStatus,
+};
+use serde::{Deserialize, Serialize};
 
 /// Shown to the user when the engine's lock is poisoned by a panic.
 pub const ENGINE_UNAVAILABLE: &str = "Drawing engine unavailable. Restart GoSurvey.";
@@ -24,11 +27,73 @@ pub struct WireEngineStatus {
     pub version: &'static str,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WireDrawingSnapshot {
     pub name: String,
     pub entity_count: usize,
+    pub lines: Vec<WireLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireCommandResult {
+    pub messages: Vec<String>,
+    pub prompt: Option<WireCommandPrompt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireCommandPrompt {
+    pub text: String,
+    pub accepts_blank: bool,
+    pub accepts_point: bool,
+}
+
+/// Platform-neutral user input sent from the Editor to the Application command event handler.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum WireCommandInput {
+    /// Text the user submitted by pressing Enter.
+    TextSubmitted { text: String },
+    /// A viewport point already converted to drawing-plane coordinates.
+    PointPicked { point: WirePoint },
+    /// A normalized request to end or cancel the active command step.
+    Cancelled,
+}
+
+impl From<WireCommandInput> for CommandInputEvent {
+    fn from(input: WireCommandInput) -> Self {
+        match input {
+            WireCommandInput::TextSubmitted { text } => Self::TextSubmitted(text),
+            WireCommandInput::PointPicked { point } => Self::point_picked(point.x, point.y),
+            WireCommandInput::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
+impl From<CommandPrompt> for WireCommandPrompt {
+    fn from(prompt: CommandPrompt) -> Self {
+        Self {
+            text: prompt.text,
+            accepts_blank: prompt.accepts_blank,
+            accepts_point: prompt.accepts_point,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WirePoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireLine {
+    pub start: WirePoint,
+    pub end: WirePoint,
 }
 
 impl From<EngineStatus> for WireEngineStatus {
@@ -48,6 +113,29 @@ impl From<DrawingSnapshot> for WireDrawingSnapshot {
         Self {
             name: snapshot.name,
             entity_count: snapshot.entity_count,
+            lines: snapshot
+                .lines
+                .into_iter()
+                .map(|line| WireLine {
+                    start: WirePoint {
+                        x: line.start.x,
+                        y: line.start.y,
+                    },
+                    end: WirePoint {
+                        x: line.end.x,
+                        y: line.end.y,
+                    },
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<CommandResult> for WireCommandResult {
+    fn from(result: CommandResult) -> Self {
+        Self {
+            messages: result.messages,
+            prompt: result.prompt.map(WireCommandPrompt::from),
         }
     }
 }
@@ -100,5 +188,44 @@ mod tests {
         let json = serde_json::to_value(wire).unwrap();
         assert_eq!(json["entityCount"], 0);
         assert_eq!(json["name"], "Untitled");
+        assert_eq!(json["lines"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn command_result_serialises_messages_and_prompt() {
+        let wire = WireCommandResult::from(Engine::new().execute_command("LINE"));
+        let json = serde_json::to_value(wire).unwrap();
+        assert_eq!(json["messages"], serde_json::json!(["> LINE"]));
+        assert_eq!(
+            json["prompt"]["text"],
+            "LINE: First point — click or type X,Y / X Y. Esc cancels."
+        );
+        assert_eq!(json["prompt"]["acceptsBlank"], false);
+        assert_eq!(json["prompt"]["acceptsPoint"], true);
+    }
+
+    #[test]
+    fn command_input_wire_events_are_tagged_and_platform_neutral() {
+        let json = serde_json::to_value(WireCommandInput::PointPicked {
+            point: WirePoint { x: 2.0, y: 3.0 },
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "pointPicked",
+                "point": { "x": 2.0, "y": 3.0 }
+            })
+        );
+
+        let input: WireCommandInput = serde_json::from_value(serde_json::json!({
+            "type": "textSubmitted",
+            "text": "LINE"
+        }))
+        .unwrap();
+        assert_eq!(
+            CommandInputEvent::from(input),
+            CommandInputEvent::TextSubmitted("LINE".to_owned())
+        );
     }
 }

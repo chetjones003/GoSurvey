@@ -21,6 +21,9 @@ A drawing's rules for which of the project's points it shows (for example, a poi
 **World coordinates**
 The state-plane coordinates shared by every drawing in a project. A drawing keeps its own points relative to its document origin and converts at the boundary.
 
+**Bearing**
+A direction in the drawing plane measured clockwise from north. The Kernel owns bearing, translation and geometry calculations; command code parses input and manages interaction state.
+
 ## Engine
 
 **Engine**
@@ -29,11 +32,26 @@ The Application-layer object that owns the open Drawing and accepts commands for
 **Command seam**
 The boundary where the front end sends a command and reads back the Engine's status and a snapshot. Tests drive the seam, not the internals.
 
+**Command**
+A named action the user invokes, such as LINE. A command may request additional input before it finishes.
+
+**Command session**
+A Command that is still collecting input and retains the context needed to continue, such as LINE between points.
+
+**Command input parser**
+The Application module that turns command-line text into named commands, coordinate inputs, bearings and distances. It parses syntax; geometric calculations belong to the Kernel.
+
+**Command input event**
+Normalized user intent delivered by the Editor to the Application, such as submitted text, a drawing-plane point pick or cancellation. It contains no platform keyboard or pointer event.
+
+**Command prompt**
+The message describing what the active Command currently accepts as input.
+
 **Engine status**
 Whether the Engine can accept commands, and the version of the engine. The front end shows it as "Engine ready".
 
 **Drawing snapshot**
-What the front end sees of the open Drawing: its name and its entity count. It is a read-only copy, never the Drawing itself.
+What the front end sees of the open Drawing: its name, entity count and line geometry. It is a read-only copy, never the Drawing itself.
 
 **Untitled drawing**
 The empty Drawing a new Engine opens with, named "Untitled" and holding no entities.

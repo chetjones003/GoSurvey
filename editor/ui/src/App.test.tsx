@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
@@ -20,7 +20,7 @@ describe("App", () => {
   it("shows the engine as ready and the drawing as empty", async () => {
     answer(
       { state: "ready", version: "0.1.0" },
-      { name: "Untitled", entityCount: 0 },
+      { name: "Untitled", entityCount: 0, lines: [] },
     );
 
     render(<App />);
@@ -44,11 +44,63 @@ describe("App", () => {
   });
 
   it("names the drawing region for assistive technology", async () => {
-    answer({ state: "ready", version: "0.1.0" }, { name: "Untitled", entityCount: 0 });
+    answer({ state: "ready", version: "0.1.0" }, { name: "Untitled", entityCount: 0, lines: [] });
 
     render(<App />);
 
     await waitFor(() => expect(screen.getByText("Engine ready")).toBeTruthy());
     expect(screen.getByRole("region", { name: "Drawing" })).toBeTruthy();
+  });
+
+  it("draws and logs a line entered in the command line", async () => {
+    let hasLine = false;
+    invoke.mockImplementation((command: string, args?: { input: { type: string; text?: string } }) => {
+      if (command === "engine_status") return Promise.resolve({ state: "ready", version: "0.1.0" });
+      if (command === "execute_command") {
+        if (args?.input?.type === "cancelled") {
+          return Promise.resolve({ messages: ["> ESC", "Command finished."], prompt: null });
+        }
+        if (args?.input?.type === "pointPicked") {
+          return Promise.resolve({
+            messages: ["> 23,11"],
+            prompt: { text: "LINE: Next point", acceptsBlank: false, acceptsPoint: true },
+          });
+        }
+        hasLine = true;
+        return Promise.resolve({
+          messages: ["> LINE, 0,0, 20,10,", "Line created."],
+          prompt: { text: "LINE: Next point — click; X,Y; @dx,dy; A bearing; 2P direction. Esc ends.", acceptsBlank: false, acceptsPoint: true },
+        });
+      }
+      return Promise.resolve(hasLine
+        ? { name: "Untitled", entityCount: 1, lines: [{ start: { x: 0, y: 0 }, end: { x: 20, y: 10 } }] }
+        : { name: "Untitled", entityCount: 0, lines: [] });
+    });
+
+    render(<App />);
+    const input = await screen.findByRole("textbox", { name: "Command" });
+    fireEvent.change(input, { target: { value: "LINE, 0,0, 20,10," } });
+    fireEvent.submit(input.closest("form")!);
+
+    expect(await screen.findByText("Line created.")).toBeTruthy();
+    expect(await screen.findByText("1 entities")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Drawing with linework" })).toBeTruthy();
+    expect(invoke).toHaveBeenCalledWith("execute_command", {
+      input: { type: "textSubmitted", text: "LINE, 0,0, 20,10," },
+    });
+    expect(screen.getByText("LINE: Next point — click; X,Y; @dx,dy; A bearing; 2P direction. Esc ends.")).toBeTruthy();
+
+    const svg = screen.getByRole("img", { name: "Drawing with linework" });
+    const point = { x: 0, y: 0, matrixTransform: vi.fn(() => ({ x: 23, y: -11 })) };
+    Object.defineProperty(svg, "getScreenCTM", { value: () => ({ inverse: () => ({}) }) });
+    Object.defineProperty(svg, "createSVGPoint", { value: () => point });
+    fireEvent.click(svg, { clientX: 300, clientY: 250 });
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("execute_command", {
+      input: { type: "pointPicked", point: { x: 23, y: 11 } },
+    }));
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(await screen.findByText("Command finished.")).toBeTruthy();
+    expect(invoke).toHaveBeenCalledWith("execute_command", { input: { type: "cancelled" } });
   });
 });

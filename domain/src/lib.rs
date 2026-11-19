@@ -1,9 +1,12 @@
 //! Domain layer (rank 2): Drawing, Project, Survey, Terrain, PointCloud, PDF.
 
+pub use gs_kernel::{Bearing, GeometryError, Line2, Point2};
+
 /// An open drawing. Holds model data only, never GPU-shaped buffers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Drawing {
     name: String,
+    lines: Vec<Line2>,
 }
 
 impl Drawing {
@@ -11,6 +14,7 @@ impl Drawing {
     pub fn new() -> Self {
         Self {
             name: "Untitled".to_owned(),
+            lines: Vec::new(),
         }
     }
 
@@ -19,7 +23,15 @@ impl Drawing {
     }
 
     pub fn entity_count(&self) -> usize {
-        0
+        self.lines.len()
+    }
+
+    pub fn lines(&self) -> &[Line2] {
+        &self.lines
+    }
+
+    pub fn add_line(&mut self, line: Line2) {
+        self.lines.push(line);
     }
 }
 
