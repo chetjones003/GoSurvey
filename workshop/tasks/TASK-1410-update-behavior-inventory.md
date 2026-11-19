@@ -50,6 +50,7 @@
 - 2026-11-18 — Issue #1410 fetched; title confirmed. Identified accepted REQ-077/078 and parent #1403's updater-parity question. No UI or code change planned.
 - 2026-11-18 — Plan verified: REQ-077/078 define the existing updater surface and ADR-029 assigns decision logic, transport, and UI to the modules listed above. The requested inventory stays inside those boundaries and makes implementation/spec differences visible.
 - 2026-11-18 — Added `docs/update-behavior-inventory.md`. Cross-checked startup and settings paths, decision/parser rules, transport and hash behavior, installer handoff, and pure tests against source. Documented the splash/dialog difference, timeout shape, and stale Not Now reuse comment. `git diff --check` passed; no code changed and no runtime tests were run.
+- 2026-11-18 — Pre-PR product documentation review: README reviewed; no update needed because this inventory does not change user-facing update behavior. PRIVACY.md reviewed; no update needed because data handling is unchanged. `resources/wiki/` reviewed; no update needed because this internal inventory does not change the documented product contract. Public GoSurvey manual wiki reviewed; no update needed for the same reason. The inventory records implementation/spec differences for the port without changing runtime behavior.
 
 ## 9. Self-verification
 - [ ] build-project        — n/a (documentation only)
