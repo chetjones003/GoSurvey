@@ -129,7 +129,6 @@ impl CommandParser {
         Self::parse_point(&fields.join(","), previous)
     }
 
-    /// Parses decimal or DMS bearings, optionally preceded by `A` and followed by a turn.
     /// Parses decimal or DMS bearings, optionally preceded by `A` and followed by a signed turn.
     pub fn parse_bearing(input: &str) -> Result<Bearing, CommandInputError> {
         let mut parts = input.split_whitespace().peekable();
@@ -155,7 +154,6 @@ impl CommandParser {
         }
     }
 
-    /// Parses a finite scalar distance used by commands such as bearing-locked LINE.
     /// Parses one finite scalar distance with no coordinate or relative-point syntax.
     pub fn parse_distance(input: &str) -> Result<f64, CommandInputError> {
         if input.contains(',') || input.starts_with('@') || input.chars().any(char::is_whitespace) {

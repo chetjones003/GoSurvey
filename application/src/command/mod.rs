@@ -87,7 +87,6 @@ fn handle_active_event(
     })
 }
 
-/// Normalized input delivered to a command through the command event handler.
 /// Normalized user intent routed by the Application event handler.
 ///
 /// The Editor translates platform input into these values. Commands receive submitted text or
