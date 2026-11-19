@@ -5,8 +5,12 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+gs-domain = { path = "../domain" }
 gs-services = { path = "../services" }
+serde = { version = "1", features = ["derive"] }
 
+[dev-dependencies]
+serde_json = "1"
 
 [lints]
 workspace = true

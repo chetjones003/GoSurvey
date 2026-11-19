@@ -7,6 +7,13 @@ publish.workspace = true
 [dependencies]
 gs-application = { path = "../application" }
 
+# The desktop shell is Windows-only, so Tauri and its system libraries are
+# pulled in for Windows targets alone. Other targets build an empty shell.
+[target.'cfg(windows)'.dependencies]
+tauri = "2"
+
+[target.'cfg(windows)'.build-dependencies]
+tauri-build = "2"
 
 [lints]
 workspace = true

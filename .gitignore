@@ -105,3 +105,8 @@ __pycache__/
 # Added by cargo
 
 /target
+
+# --- Tauri shell and ui-sdk front end (editor/) ---
+/editor/gen/
+/editor/ui/node_modules/
+/editor/ui/dist/
