@@ -224,6 +224,23 @@ mod tests {
     }
 
     #[test]
+    fn line_command_resolves_relative_endpoint_from_its_absolute_start() {
+        let mut engine = Engine::new();
+
+        let result = engine.execute_command("LINE 100,200 @10,-5");
+
+        assert!(result.messages.contains(&"Line created.".to_owned()));
+        assert!(result.prompt.is_some());
+        assert_eq!(
+            engine.snapshot().lines,
+            vec![LineSnapshot {
+                start: PointSnapshot { x: 100.0, y: 200.0 },
+                end: PointSnapshot { x: 110.0, y: 195.0 },
+            }]
+        );
+    }
+
+    #[test]
     fn line_session_draws_repeated_absolute_and_relative_segments_until_escape() {
         let mut engine = Engine::new();
 
