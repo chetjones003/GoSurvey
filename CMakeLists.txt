@@ -12,7 +12,7 @@ endif()
 
 # Stable releases use the checked-in version below. CI supplies a separately resolved plain
 # patch version for beta builds so beta numbering does not require a version-only source commit.
-set(GOSURVEY_STABLE_VERSION "0.7.8")
+set(GOSURVEY_STABLE_VERSION "0.8.0")
 set(_gosurvey_project_version "${GOSURVEY_STABLE_VERSION}")
 if(DEFINED GOSURVEY_BETA_VERSION AND NOT GOSURVEY_BETA_VERSION STREQUAL "")
   set(_gosurvey_project_version "${GOSURVEY_BETA_VERSION}")
