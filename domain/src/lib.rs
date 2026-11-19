@@ -1,6 +1,6 @@
 //! Domain layer (rank 2): Drawing, Project, Survey, Terrain, PointCloud, PDF.
 
-use gs_kernel::Line2;
+pub use gs_kernel::{Line2, Point2};
 
 /// An open drawing. Holds model data only, never GPU-shaped buffers.
 #[derive(Debug, Clone, PartialEq)]
@@ -30,14 +30,8 @@ impl Drawing {
         &self.lines
     }
 
-    pub fn add_line(&mut self, start: (f64, f64), end: (f64, f64)) {
-        self.lines.push(Line2 {
-            start: gs_kernel::Point2 {
-                x: start.0,
-                y: start.1,
-            },
-            end: gs_kernel::Point2 { x: end.0, y: end.1 },
-        });
+    pub fn add_line(&mut self, line: Line2) {
+        self.lines.push(line);
     }
 }
 

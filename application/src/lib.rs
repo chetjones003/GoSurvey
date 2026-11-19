@@ -2,7 +2,7 @@
 //!
 //! Wire formats for the front end live in the Editor, not here.
 
-use gs_domain::Drawing;
+use gs_domain::{Drawing, Line2, Point2};
 
 /// Whether the engine can accept commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,8 +37,7 @@ pub struct LineSnapshot {
 }
 
 struct ParsedLine {
-    start: (f64, f64),
-    end: (f64, f64),
+    line: Line2,
 }
 
 /// The command seam. The front end sends commands and reads snapshots.
@@ -86,7 +85,7 @@ impl Engine {
     pub fn execute_command(&mut self, input: &str) -> String {
         match parse_line_command(input) {
             Ok(line) => {
-                self.drawing.add_line(line.start, line.end);
+                self.drawing.add_line(line.line);
                 "Line created.".to_owned()
             }
             Err(message) => message,
@@ -117,8 +116,16 @@ fn parse_line_command(input: &str) -> Result<ParsedLine, String> {
         return Err("LINE expects four numeric coordinates: x1,y1, x2,y2,".to_owned());
     }
     Ok(ParsedLine {
-        start: (values[0], values[1]),
-        end: (values[2], values[3]),
+        line: Line2 {
+            start: Point2 {
+                x: values[0],
+                y: values[1],
+            },
+            end: Point2 {
+                x: values[2],
+                y: values[3],
+            },
+        },
     })
 }
 

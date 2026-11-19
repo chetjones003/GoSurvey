@@ -33,7 +33,7 @@ The boundary where the front end sends a command and reads back the Engine's sta
 Whether the Engine can accept commands, and the version of the engine. The front end shows it as "Engine ready".
 
 **Drawing snapshot**
-What the front end sees of the open Drawing: its name and its entity count. It is a read-only copy, never the Drawing itself.
+What the front end sees of the open Drawing: its name, entity count and line geometry. It is a read-only copy, never the Drawing itself.
 
 **Untitled drawing**
 The empty Drawing a new Engine opens with, named "Untitled" and holding no entities.
