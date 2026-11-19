@@ -18,10 +18,25 @@ fn drawing_snapshot(
     read_engine(&engine, |e| WireDrawingSnapshot::from(e.snapshot()))
 }
 
+#[tauri::command]
+fn execute_command(
+    engine: tauri::State<'_, Mutex<Engine>>,
+    input: String,
+) -> Result<String, String> {
+    let mut engine = engine
+        .lock()
+        .map_err(|_| super::ENGINE_UNAVAILABLE.to_owned())?;
+    Ok(engine.execute_command(&input))
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(Mutex::new(Engine::new()))
-        .invoke_handler(tauri::generate_handler![engine_status, drawing_snapshot])
+        .invoke_handler(tauri::generate_handler![
+            engine_status,
+            drawing_snapshot,
+            execute_command
+        ])
         .run(tauri::generate_context!())
         .expect("Unable to start GoSurvey");
 }

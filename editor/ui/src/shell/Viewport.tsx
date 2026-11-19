@@ -4,18 +4,39 @@ import { Button } from "@/components/ui/button";
 type ViewportProps = {
   name?: string;
   entityCount?: number;
+  lines: { start: { x: number; y: number }; end: { x: number; y: number } }[];
 };
 
-export default function Viewport({ name, entityCount }: ViewportProps) {
+export default function Viewport({ name, entityCount, lines }: ViewportProps) {
+  const coordinates = lines.flatMap(({ start, end }) => [start, end]);
+  const minX = coordinates.length ? Math.min(...coordinates.map(({ x }) => x)) : 0;
+  const maxX = coordinates.length ? Math.max(...coordinates.map(({ x }) => x)) : 100;
+  const minY = coordinates.length ? Math.min(...coordinates.map(({ y }) => y)) : 0;
+  const maxY = coordinates.length ? Math.max(...coordinates.map(({ y }) => y)) : 100;
+  const padding = Math.max(maxX - minX, maxY - minY, 1) * 0.1;
+  const viewBox = `${minX - padding} ${-maxY - padding} ${maxX - minX + padding * 2 || 1} ${maxY - minY + padding * 2 || 1}`;
   return (
     <section aria-label="Drawing" className="relative min-h-0 min-w-0 overflow-hidden bg-zinc-950">
-      <svg className="absolute inset-0 size-full" role="img" aria-label="Empty drawing grid">
+      <svg className="absolute inset-0 size-full" role="img" aria-label={lines.length ? "Drawing with linework" : "Empty drawing grid"} viewBox={viewBox}>
         <defs>
           <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
             <path d="M 24 0 L 0 0 0 24" fill="none" className="stroke-zinc-800" strokeWidth="1" />
           </pattern>
         </defs>
         <rect width="100%" height="100%" fill="url(#grid)" />
+        {lines.map((line, index) => (
+          <line
+            key={index}
+            x1={line.start.x}
+            y1={-line.start.y}
+            x2={line.end.x}
+            y2={-line.end.y}
+            stroke="#e4e4e7"
+            strokeWidth={2}
+            vectorEffect="non-scaling-stroke"
+            aria-label={`Line ${index + 1}`}
+          />
+        ))}
       </svg>
 
       {name !== undefined && (

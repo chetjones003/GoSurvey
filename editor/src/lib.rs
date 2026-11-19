@@ -24,11 +24,26 @@ pub struct WireEngineStatus {
     pub version: &'static str,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WireDrawingSnapshot {
     pub name: String,
     pub entity_count: usize,
+    pub lines: Vec<WireLine>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WirePoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireLine {
+    pub start: WirePoint,
+    pub end: WirePoint,
 }
 
 impl From<EngineStatus> for WireEngineStatus {
@@ -48,6 +63,20 @@ impl From<DrawingSnapshot> for WireDrawingSnapshot {
         Self {
             name: snapshot.name,
             entity_count: snapshot.entity_count,
+            lines: snapshot
+                .lines
+                .into_iter()
+                .map(|line| WireLine {
+                    start: WirePoint {
+                        x: line.start.x,
+                        y: line.start.y,
+                    },
+                    end: WirePoint {
+                        x: line.end.x,
+                        y: line.end.y,
+                    },
+                })
+                .collect(),
         }
     }
 }
@@ -100,5 +129,6 @@ mod tests {
         let json = serde_json::to_value(wire).unwrap();
         assert_eq!(json["entityCount"], 0);
         assert_eq!(json["name"], "Untitled");
+        assert_eq!(json["lines"], serde_json::json!([]));
     }
 }
