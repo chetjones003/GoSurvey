@@ -270,6 +270,42 @@ mod tests {
     }
 
     #[test]
+    fn line_session_draws_three_segments_and_enter_ends_the_chain() {
+        let mut engine = Engine::new();
+
+        engine.execute_command("LINE");
+        engine.execute_command("0,0");
+        engine.execute_command("10,0");
+        engine.execute_command("10,10");
+        let third_segment = engine.execute_command("20,10");
+        assert!(third_segment.prompt.is_some());
+        assert_eq!(engine.snapshot().entity_count, 3);
+
+        let finished = engine.execute_command("");
+
+        assert_eq!(finished.prompt, None);
+        assert_eq!(finished.messages, ["Command finished."]);
+        assert_eq!(engine.snapshot().entity_count, 3);
+        assert_eq!(
+            engine.snapshot().lines,
+            vec![
+                LineSnapshot {
+                    start: PointSnapshot { x: 0.0, y: 0.0 },
+                    end: PointSnapshot { x: 10.0, y: 0.0 },
+                },
+                LineSnapshot {
+                    start: PointSnapshot { x: 10.0, y: 0.0 },
+                    end: PointSnapshot { x: 10.0, y: 10.0 },
+                },
+                LineSnapshot {
+                    start: PointSnapshot { x: 10.0, y: 10.0 },
+                    end: PointSnapshot { x: 20.0, y: 10.0 },
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn invalid_point_is_reported_without_ending_the_line_command() {
         let mut engine = Engine::new();
         engine.execute_command("LINE");

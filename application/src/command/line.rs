@@ -123,6 +123,9 @@ impl LineSession {
 
     fn submit_point(&mut self, input: &str) -> Result<CommandOutcome, String> {
         if input.is_empty() {
+            if self.previous.is_some() {
+                return Ok(CommandOutcome::finish([message("Command finished.")]));
+            }
             return Ok(CommandOutcome::continue_with([]));
         }
         if input.eq_ignore_ascii_case("A") {
