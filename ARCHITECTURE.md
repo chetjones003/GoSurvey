@@ -48,6 +48,13 @@ npm run build
 npm test
 ```
 
-Run the app on Windows from the repository root with `npm --prefix editor/ui run build` and then `cargo run -p gs-editor --features tauri/custom-protocol`. The `custom-protocol` feature embeds the built front end. Without it, a debug build loads the Vite dev server instead.
+Run the app on Windows from the repository root:
+
+```
+npm run dev       # debug: Vite dev server, then the app. Ctrl+C stops both.
+npm run release   # release: builds the front end, embeds it, then runs the app
+```
+
+`npm run dev` runs the app without `custom-protocol`, so the window loads the Vite server at `http://127.0.0.1:1420`. `npm run release` builds with `tauri/custom-protocol`, which embeds the built front end.
 
 Build output goes to `target/`, which is git-ignored.
