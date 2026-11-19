@@ -567,8 +567,8 @@ jobs:
           # remains gsFormatVersion for compatibility with already deployed updater clients.
           # The CLIENT compares it against its own compiled-in value, so no release history has to
           # be consulted here and the comparison happens where the truth is actually known.
-          $fmtLine = Select-String -Path src\io\GsMigrate.hpp -Pattern 'kGsFormatVersion\s*=\s*(\d+)'
-          if (-not $fmtLine) { throw "Could not read kGsFormatVersion from src\io\GsMigrate.hpp" }
+          $fmtLine = Select-String -Path src\io\src\GsMigrate.hpp -Pattern 'kGsFormatVersion\s*=\s*(\d+)'
+          if (-not $fmtLine) { throw "Could not read kGsFormatVersion from src\io\src\GsMigrate.hpp" }
           $gsFormatVersion = [int]$fmtLine.Matches[0].Groups[1].Value
 
           # Stable release notes come from RELEASE_NOTES.md. Beta uses the generated artifact above.
