@@ -96,10 +96,11 @@ Not ticketed, on purpose: items the current app already reports as skipped (unde
 hatches, radial and ordinate dimensions, REGION, BODY, OLE, RAY, XLINE, PROXY). Parity means keeping
 the report, not reading them.
 
-## Open questions for the owner
+## Decisions
 
-1. **Which versions does the port read?** The app reads whatever LibreDWG decodes, from R10 up.
-   The user stories in #1403 name R2000 to R2018. Recommendation: read R2000 to R2018, and refuse
-   older versions with a message (this is what #1442 asks for). R2007 is read by the Qt app but not
-   saved; the port should match that.
-2. **Is R2007 save needed?** The Qt app does not write R2007. Recommendation: no, unless a user asks.
+Decided by the owner (issue #1407):
+
+1. **Versions the port reads:** R2000 (AC1015) through R2018 (AC1032). Older versions (R10 to R14)
+   are refused with a message. The refusal is tracked by #1442.
+2. **R2007 (AC1021):** not written. Read is in the R2000 to R2018 set, as the owner's list covers it
+   through the read tickets (#1451). Save stays out, as it is in the Qt app.
