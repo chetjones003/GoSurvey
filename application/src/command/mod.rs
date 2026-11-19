@@ -4,11 +4,16 @@ pub mod parser;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::events::EngineEvent;
+use crate::events::{CommandPrompt, EngineEvent};
 
 use self::line::LineCommand;
 use self::parser::CommandParser;
 
+/// A named command registered with the [`CommandManager`].
+///
+/// `start` receives whitespace/comma-separated arguments after the command name. Return
+/// `CommandProgress::finish` for a one-shot command or `CommandProgress::start` for an interactive
+/// command session.
 pub trait RegisteredCommand: Send + Sync {
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str {
@@ -21,30 +26,107 @@ pub trait RegisteredCommand: Send + Sync {
 }
 
 pub trait ActiveCommand: Send {
-    fn submit(self: Box<Self>, input: &str) -> CommandProgress;
+    /// Describes the current input expected from the user.
+    fn prompt(&self) -> CommandPrompt;
+
+    /// Handles one non-cancel input. Return an error to report it and keep the session active.
+    fn handle_event(&mut self, event: &CommandInputEvent) -> Result<CommandOutcome, String>;
+
+    /// Overrides shared cancellation handling when the command has a nested input mode.
+    fn cancel(&mut self) -> CommandOutcome {
+        CommandOutcome::finish([EngineEvent::CommandMessage("Command cancelled.".to_owned())])
+    }
 }
 
+/// Shared command lifecycle: normalize input, route cancellation, report recoverable errors,
+/// and refresh or clear the prompt after every submission.
+fn submit_active(mut active: Box<dyn ActiveCommand>, event: &CommandInputEvent) -> CommandProgress {
+    let outcome = match event {
+        CommandInputEvent::Cancelled => active.cancel(),
+        CommandInputEvent::TextSubmitted(text) => handle_active_event(
+            active.as_mut(),
+            &CommandInputEvent::TextSubmitted(text.trim().to_owned()),
+        ),
+        CommandInputEvent::PointPicked { .. } => handle_active_event(active.as_mut(), event),
+    };
+    match outcome {
+        CommandOutcome::Continue(events) => CommandProgress::continue_with(active, events),
+        CommandOutcome::Finish(events) => CommandProgress::finish(events),
+    }
+}
+
+fn handle_active_event(
+    active: &mut dyn ActiveCommand,
+    event: &CommandInputEvent,
+) -> CommandOutcome {
+    active.handle_event(event).unwrap_or_else(|message| {
+        CommandOutcome::continue_with([EngineEvent::CommandMessage(message)])
+    })
+}
+
+/// Normalized input delivered to a command through the command event handler.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CommandInputEvent {
+    TextSubmitted(String),
+    PointPicked { x: f64, y: f64 },
+    Cancelled,
+}
+
+/// The shared result of handling one command input.
+#[must_use]
+pub enum CommandOutcome {
+    Continue(Vec<EngineEvent>),
+    Finish(Vec<EngineEvent>),
+}
+
+impl CommandOutcome {
+    pub fn continue_with(events: impl IntoIterator<Item = EngineEvent>) -> Self {
+        Self::Continue(events.into_iter().collect())
+    }
+
+    pub fn finish(events: impl IntoIterator<Item = EngineEvent>) -> Self {
+        Self::Finish(events.into_iter().collect())
+    }
+}
+
+#[must_use]
 pub struct CommandProgress {
-    pub events: Vec<EngineEvent>,
-    pub active: Option<Box<dyn ActiveCommand>>,
+    events: Vec<EngineEvent>,
+    active: Option<Box<dyn ActiveCommand>>,
 }
 
 impl CommandProgress {
+    /// Reports an argument error and clears the active prompt.
+    pub fn error(message: impl Into<String>) -> Self {
+        Self::finish([EngineEvent::CommandMessage(message.into())])
+    }
+
     pub fn finish(events: impl IntoIterator<Item = EngineEvent>) -> Self {
+        let mut events = events.into_iter().collect::<Vec<_>>();
+        events.push(EngineEvent::PromptChanged(None));
         Self {
-            events: events.into_iter().collect(),
+            events,
             active: None,
         }
     }
 
-    pub fn continue_with(
+    fn continue_with(
+        active: Box<dyn ActiveCommand>,
+        events: impl IntoIterator<Item = EngineEvent>,
+    ) -> Self {
+        let mut events = events.into_iter().collect::<Vec<_>>();
+        events.push(EngineEvent::PromptChanged(Some(active.prompt())));
+        Self {
+            events,
+            active: Some(active),
+        }
+    }
+
+    pub fn start(
         active: impl ActiveCommand + 'static,
         events: impl IntoIterator<Item = EngineEvent>,
     ) -> Self {
-        Self {
-            events: events.into_iter().collect(),
-            active: Some(Box::new(active)),
-        }
+        Self::continue_with(Box::new(active), events)
     }
 }
 
@@ -96,24 +178,34 @@ impl CommandManager {
         Ok(())
     }
 
-    pub fn submit(&mut self, input: &str) -> Vec<EngineEvent> {
-        let input = input.trim();
-        if input.is_empty() && self.active.is_none() {
-            return Vec::new();
-        }
-        let mut events = if input.is_empty() {
-            Vec::new()
-        } else {
-            vec![EngineEvent::InputSubmitted(input.to_owned())]
+    pub(super) fn handle_event(&mut self, event: &CommandInputEvent) -> Vec<EngineEvent> {
+        let log_entry = match event {
+            CommandInputEvent::TextSubmitted(text) if !text.trim().is_empty() => {
+                Some(text.trim().to_owned())
+            }
+            CommandInputEvent::PointPicked { x, y } if self.active.is_some() => {
+                Some(format!("{x},{y}"))
+            }
+            CommandInputEvent::Cancelled if self.active.is_some() => Some("Esc".to_owned()),
+            _ => None,
         };
-
+        let mut events = log_entry
+            .map(|input| vec![EngineEvent::InputSubmitted(input)])
+            .unwrap_or_default();
         if let Some(active) = self.active.take() {
-            let progress = active.submit(input);
+            let progress = submit_active(active, event);
             self.active = progress.active;
             events.extend(progress.events);
             return events;
         }
 
+        let CommandInputEvent::TextSubmitted(input) = event else {
+            return events;
+        };
+        let input = input.trim();
+        if input.is_empty() {
+            return events;
+        }
         let Some(command_input) = CommandParser::parse_command(input) else {
             events.push(EngineEvent::CommandMessage(
                 "Enter a command name.".to_owned(),

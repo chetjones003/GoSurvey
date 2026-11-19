@@ -21,6 +21,9 @@ A drawing's rules for which of the project's points it shows (for example, a poi
 **World coordinates**
 The state-plane coordinates shared by every drawing in a project. A drawing keeps its own points relative to its document origin and converts at the boundary.
 
+**Bearing**
+A direction in the drawing plane measured clockwise from north. The Kernel owns bearing, translation and geometry calculations; command code parses input and manages interaction state.
+
 ## Engine
 
 **Engine**
@@ -34,6 +37,12 @@ A named action the user invokes, such as LINE. A command may request additional 
 
 **Command session**
 A Command that is still collecting input and retains the context needed to continue, such as LINE between points.
+
+**Command input parser**
+The Application module that turns command-line text into named commands, coordinate inputs, bearings and distances. It parses syntax; geometric calculations belong to the Kernel.
+
+**Command input event**
+Normalized user intent delivered by the Editor to the Application, such as submitted text, a drawing-plane point pick or cancellation. It contains no platform keyboard or pointer event.
 
 **Command prompt**
 The message describing what the active Command currently accepts as input.

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import CommandLine from "./shell/CommandLine";
+import { describeCommandInput, type CommandInput } from "./shell/commandInput";
 import PropertiesPanel from "./shell/PropertiesPanel";
 import Ribbon from "./shell/Ribbon";
 import StatusBar from "./shell/StatusBar";
@@ -46,20 +47,20 @@ export default function App() {
 
   const engineMessage = error || (status ? "Engine ready" : "Starting engine");
 
-  const execute = async (command: string) => {
+  const dispatchCommandInput = async (input: CommandInput) => {
     try {
-      const result = await invoke<CommandResult>("execute_command", { input: command });
+      const result = await invoke<CommandResult>("execute_command", { input });
       setHistory((entries) => [...entries, ...result.messages]);
       setCommandPrompt(result.prompt);
       await load();
     } catch (reason) {
-      setHistory((entries) => [...entries, `> ${command}`, String(reason)]);
+      setHistory((entries) => [...entries, `> ${describeCommandInput(input)}`, String(reason)]);
     }
   };
 
   const submitViewportPoint = (point: { x: number; y: number }) => {
     if (commandPrompt?.acceptsPoint) {
-      void execute(`${point.x},${point.y}`);
+      void dispatchCommandInput({ type: "pointPicked", point });
     }
   };
 
@@ -78,7 +79,7 @@ export default function App() {
         />
         <PropertiesPanel />
       </div>
-      <CommandLine history={history} prompt={commandPrompt} onSubmit={execute} />
+      <CommandLine history={history} prompt={commandPrompt} onSubmit={dispatchCommandInput} />
       <StatusBar engineMessage={engineMessage} engineError={error !== ""} />
     </div>
   );

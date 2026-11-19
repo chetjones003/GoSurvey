@@ -2,21 +2,25 @@
 //!
 //! The Engine is the command seam. It owns the current drawing, registered
 //! commands, active command session, and event handlers; the front end only
-//! submits text and reads command results and drawing snapshots.
+//! submits normalized command input events and reads results and drawing snapshots.
 
 mod command;
 mod events;
 
 pub use command::{
-    ActiveCommand, CommandManager, CommandProgress, CommandRegistrationError, RegisteredCommand,
-    parser::{CommandParser, ParsedCommand, PointInput, PointParseError},
+    ActiveCommand, CommandInputEvent, CommandManager, CommandOutcome, CommandProgress,
+    CommandRegistrationError, RegisteredCommand,
+    parser::{CommandInputError, CommandParser, ParsedCommand, PointInput},
 };
 pub use events::{CommandPrompt, EngineEvent};
 
 use gs_domain::Drawing;
 use gs_foundation::EventBus;
 
-use crate::events::{CommandOutputEventHandler, DrawingEventHandler, EngineContext};
+use crate::events::{
+    CommandEventContext, CommandEventHandler, CommandOutputEventHandler, DrawingEventHandler,
+    EngineContext,
+};
 
 /// Whether the engine can accept commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +64,8 @@ pub struct CommandResult {
 pub struct Engine {
     context: EngineContext,
     events: EventBus<EngineEvent, EngineContext>,
-    commands: CommandManager,
+    command_events: EventBus<CommandInputEvent, CommandEventContext>,
+    command_context: CommandEventContext,
 }
 
 impl Engine {
@@ -68,6 +73,8 @@ impl Engine {
         let mut events = EventBus::new();
         events.subscribe(DrawingEventHandler);
         events.subscribe(CommandOutputEventHandler);
+        let mut command_events = EventBus::new();
+        command_events.subscribe(CommandEventHandler);
         Self {
             context: EngineContext {
                 drawing: Drawing::new(),
@@ -75,7 +82,11 @@ impl Engine {
                 prompt: None,
             },
             events,
-            commands: CommandManager::new(),
+            command_events,
+            command_context: CommandEventContext {
+                commands: CommandManager::new(),
+                output: Vec::new(),
+            },
         }
     }
 
@@ -114,13 +125,20 @@ impl Engine {
         &mut self,
         command: impl RegisteredCommand + 'static,
     ) -> Result<(), CommandRegistrationError> {
-        self.commands.register(command)
+        self.command_context.commands.register(command)
     }
 
-    /// Submits a command-line entry and returns its messages and current prompt.
+    /// Compatibility helper for submitting text through the command event handler.
     pub fn execute_command(&mut self, input: &str) -> CommandResult {
-        let events = self.commands.submit(input);
+        self.dispatch_command_input(CommandInputEvent::TextSubmitted(input.to_owned()))
+    }
+
+    /// Dispatches normalized text, point-pick, or cancellation input through the command event bus.
+    pub fn dispatch_command_input(&mut self, input: CommandInputEvent) -> CommandResult {
         let start = self.context.messages.len();
+        self.command_events
+            .publish(&input, &mut self.command_context);
+        let events = std::mem::take(&mut self.command_context.output);
         for event in &events {
             self.events.publish(event, &mut self.context);
         }
@@ -215,7 +233,7 @@ mod tests {
                 .messages
                 .contains(&"Line created.".to_owned())
         );
-        let end = engine.execute_command("Esc");
+        let end = engine.dispatch_command_input(CommandInputEvent::Cancelled);
 
         assert_eq!(end.prompt, None);
         assert_eq!(end.messages, ["> Esc", "Command finished."]);
@@ -288,7 +306,7 @@ mod tests {
         assert!(bearing.prompt.as_ref().unwrap().text.contains("distance"));
 
         engine.execute_command("100");
-        engine.execute_command("ESC");
+        engine.dispatch_command_input(CommandInputEvent::Cancelled);
 
         let line = engine.snapshot().lines[0];
         assert!((line.end.x - 100.0).abs() < 1e-9);
@@ -302,7 +320,7 @@ mod tests {
         engine.execute_command("0,0");
         engine.execute_command("A 45d30m00s +44.5");
         engine.execute_command("100");
-        engine.execute_command("ESC");
+        engine.dispatch_command_input(CommandInputEvent::Cancelled);
 
         let line = engine.snapshot().lines[0];
         assert!((line.end.x - 100.0).abs() < 1e-9);
@@ -321,7 +339,7 @@ mod tests {
         assert!(lock.prompt.as_ref().unwrap().text.contains("distance"));
 
         engine.execute_command("10");
-        engine.execute_command("ESC");
+        engine.dispatch_command_input(CommandInputEvent::Cancelled);
 
         let line = engine.snapshot().lines[0];
         assert!((line.end.x - 10.0).abs() < 1e-9);
@@ -335,7 +353,7 @@ mod tests {
         engine.execute_command("0,0");
         engine.execute_command("2P");
 
-        let cancelled_pick = engine.execute_command("ESC");
+        let cancelled_pick = engine.dispatch_command_input(CommandInputEvent::Cancelled);
 
         assert!(
             cancelled_pick
@@ -351,7 +369,7 @@ mod tests {
                 .starts_with("LINE: Next point")
         );
         engine.execute_command("10,0");
-        engine.execute_command("ESC");
+        engine.dispatch_command_input(CommandInputEvent::Cancelled);
         assert_eq!(engine.snapshot().entity_count, 1);
     }
 
@@ -375,7 +393,7 @@ mod tests {
             result.messages,
             [
                 "> help",
-                "Commands: LINE (L) — draw repeated segments from typed points; HELP — list registered commands."
+                "Commands: LINE (L) — draw repeated segments from points and directions; HELP — list registered commands."
             ]
         );
         assert_eq!(result.prompt, None);
@@ -434,5 +452,99 @@ mod tests {
         let result = engine.execute_command("HELP");
 
         assert!(result.messages[1].contains("CIRCLE — draw a circle"));
+    }
+
+    #[test]
+    fn active_command_errors_and_cancellation_use_shared_session_lifecycle() {
+        struct Probe;
+
+        impl RegisteredCommand for Probe {
+            fn name(&self) -> &'static str {
+                "PROBE"
+            }
+
+            fn start(&self, _: &[String]) -> CommandProgress {
+                CommandProgress::start(ProbeSession, [])
+            }
+        }
+
+        struct ProbeSession;
+
+        impl ActiveCommand for ProbeSession {
+            fn prompt(&self) -> CommandPrompt {
+                CommandPrompt::new("PROBE: Enter a value", false, false)
+            }
+
+            fn handle_event(
+                &mut self,
+                event: &CommandInputEvent,
+            ) -> Result<CommandOutcome, String> {
+                if matches!(event, CommandInputEvent::TextSubmitted(input) if input.eq_ignore_ascii_case("bad"))
+                {
+                    Err("Invalid probe value.".to_owned())
+                } else {
+                    Ok(CommandOutcome::finish([EngineEvent::CommandMessage(
+                        "Probe finished.".to_owned(),
+                    )]))
+                }
+            }
+        }
+
+        let mut engine = Engine::new();
+        engine.register_command(Probe).unwrap();
+
+        assert_eq!(
+            engine.execute_command("PROBE").prompt.unwrap().text,
+            "PROBE: Enter a value"
+        );
+        let error = engine.execute_command("bad");
+        assert_eq!(error.messages, ["> bad", "Invalid probe value."]);
+        assert_eq!(error.prompt.unwrap().text, "PROBE: Enter a value");
+
+        let cancelled = engine.dispatch_command_input(CommandInputEvent::Cancelled);
+        assert_eq!(cancelled.messages, ["> Esc", "Command cancelled."]);
+        assert_eq!(cancelled.prompt, None);
+    }
+
+    #[test]
+    fn point_picks_are_routed_through_the_command_event_handler() {
+        let mut engine = Engine::new();
+        engine.execute_command("LINE");
+
+        let first =
+            engine.dispatch_command_input(CommandInputEvent::PointPicked { x: 4.0, y: 5.0 });
+        assert_eq!(first.messages, ["> 4,5"]);
+        let second =
+            engine.dispatch_command_input(CommandInputEvent::PointPicked { x: 9.0, y: 5.0 });
+
+        assert_eq!(second.messages, ["> 9,5", "Line created."]);
+        assert_eq!(engine.snapshot().entity_count, 1);
+        assert_eq!(
+            engine.snapshot().lines[0],
+            LineSnapshot {
+                start: PointSnapshot { x: 4.0, y: 5.0 },
+                end: PointSnapshot { x: 9.0, y: 5.0 },
+            }
+        );
+    }
+
+    #[test]
+    fn direction_pick_uses_point_events_and_kernel_bearing_math() {
+        let mut engine = Engine::new();
+        engine.execute_command("LINE");
+        engine.dispatch_command_input(CommandInputEvent::PointPicked { x: 10.0, y: 10.0 });
+        engine.execute_command("2P");
+        engine.dispatch_command_input(CommandInputEvent::PointPicked { x: 0.0, y: 0.0 });
+        engine.dispatch_command_input(CommandInputEvent::PointPicked { x: 0.0, y: 10.0 });
+        engine.execute_command("");
+        engine.execute_command("5");
+
+        assert_eq!(
+            engine.snapshot().lines[0],
+            LineSnapshot {
+                start: PointSnapshot { x: 10.0, y: 10.0 },
+                end: PointSnapshot { x: 10.0, y: 15.0 },
+            }
+        );
     }
 }

@@ -1,6 +1,6 @@
 //! Domain layer (rank 2): Drawing, Project, Survey, Terrain, PointCloud, PDF.
 
-pub use gs_kernel::{Line2, Point2};
+pub use gs_kernel::{Bearing, GeometryError, Line2, Point2};
 
 /// An open drawing. Holds model data only, never GPU-shaped buffers.
 #[derive(Debug, Clone, PartialEq)]

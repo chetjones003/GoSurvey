@@ -54,11 +54,17 @@ describe("App", () => {
 
   it("draws and logs a line entered in the command line", async () => {
     let hasLine = false;
-    invoke.mockImplementation((command: string, args?: { input: string }) => {
+    invoke.mockImplementation((command: string, args?: { input: { type: string; text?: string } }) => {
       if (command === "engine_status") return Promise.resolve({ state: "ready", version: "0.1.0" });
       if (command === "execute_command") {
-        if (args?.input === "ESC") {
+        if (args?.input?.type === "cancelled") {
           return Promise.resolve({ messages: ["> ESC", "Command finished."], prompt: null });
+        }
+        if (args?.input?.type === "pointPicked") {
+          return Promise.resolve({
+            messages: ["> 23,11"],
+            prompt: { text: "LINE: Next point", acceptsBlank: false, acceptsPoint: true },
+          });
         }
         hasLine = true;
         return Promise.resolve({
@@ -79,11 +85,22 @@ describe("App", () => {
     expect(await screen.findByText("Line created.")).toBeTruthy();
     expect(await screen.findByText("1 entities")).toBeTruthy();
     expect(screen.getByRole("img", { name: "Drawing with linework" })).toBeTruthy();
-    expect(invoke).toHaveBeenCalledWith("execute_command", { input: "LINE, 0,0, 20,10," });
+    expect(invoke).toHaveBeenCalledWith("execute_command", {
+      input: { type: "textSubmitted", text: "LINE, 0,0, 20,10," },
+    });
     expect(screen.getByText("LINE: Next point — click; X,Y; @dx,dy; A bearing; 2P direction. Esc ends.")).toBeTruthy();
+
+    const svg = screen.getByRole("img", { name: "Drawing with linework" });
+    const point = { x: 0, y: 0, matrixTransform: vi.fn(() => ({ x: 23, y: -11 })) };
+    Object.defineProperty(svg, "getScreenCTM", { value: () => ({ inverse: () => ({}) }) });
+    Object.defineProperty(svg, "createSVGPoint", { value: () => point });
+    fireEvent.click(svg, { clientX: 300, clientY: 250 });
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("execute_command", {
+      input: { type: "pointPicked", point: { x: 23, y: 11 } },
+    }));
 
     fireEvent.keyDown(input, { key: "Escape" });
     expect(await screen.findByText("Command finished.")).toBeTruthy();
-    expect(invoke).toHaveBeenCalledWith("execute_command", { input: "ESC" });
+    expect(invoke).toHaveBeenCalledWith("execute_command", { input: { type: "cancelled" } });
   });
 });

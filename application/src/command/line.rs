@@ -1,9 +1,9 @@
-use gs_domain::{Line2, Point2};
+use gs_domain::{Bearing, GeometryError, Line2, Point2};
 
 use crate::events::{CommandPrompt, EngineEvent};
 
 use super::parser::{CommandParser, PointInput};
-use super::{ActiveCommand, CommandProgress, RegisteredCommand};
+use super::{ActiveCommand, CommandInputEvent, CommandOutcome, CommandProgress, RegisteredCommand};
 
 const FIRST_POINT_PROMPT: &str = "LINE: First point — click or type X,Y / X Y. Esc cancels.";
 const NEXT_POINT_PROMPT: &str =
@@ -19,7 +19,7 @@ impl RegisteredCommand for LineCommand {
     }
 
     fn description(&self) -> &'static str {
-        "draw repeated segments from typed points"
+        "draw repeated segments from points and directions"
     }
 
     fn aliases(&self) -> &'static [&'static str] {
@@ -28,19 +28,15 @@ impl RegisteredCommand for LineCommand {
 
     fn start(&self, arguments: &[String]) -> CommandProgress {
         match arguments.len() {
-            0 => LineSession::first_point().keep(Vec::new()),
+            0 => CommandProgress::start(LineSession::new(None, 0), []),
             2 => match CommandParser::parse_point_fields(arguments, None) {
                 Ok(PointInput::Absolute(point)) => {
-                    LineSession::next_point(point, 0).keep(Vec::new())
+                    CommandProgress::start(LineSession::new(Some(point), 0), [])
                 }
-                Ok(PointInput::Relative { .. }) => {
-                    CommandProgress::finish([EngineEvent::CommandMessage(
-                        "The first LINE point must be absolute X,Y coordinates.".to_owned(),
-                    )])
-                }
-                Err(error) => CommandProgress::finish([EngineEvent::CommandMessage(
-                    error.message().to_owned(),
+                Ok(PointInput::Relative { .. }) => CommandProgress::finish([message(
+                    "The first LINE point must be absolute X,Y coordinates.",
                 )]),
+                Err(error) => CommandProgress::finish([message(error.message())]),
             },
             4 => {
                 let start = CommandParser::parse_point_fields(&arguments[..2], None);
@@ -52,34 +48,31 @@ impl RegisteredCommand for LineCommand {
                 };
                 match (start, end) {
                     (Ok(PointInput::Absolute(start)), Ok(end)) => {
-                        let end = match resolve_point(end, Some(start)) {
+                        let end = match end.resolve(Some(start)) {
                             Ok(end) => end,
                             Err(error) => {
-                                return CommandProgress::finish([EngineEvent::CommandMessage(
-                                    error.message().to_owned(),
-                                )]);
+                                return CommandProgress::finish([message(error.message())]);
                             }
                         };
-                        if start == end {
-                            return CommandProgress::finish([EngineEvent::CommandMessage(
-                                "LINE points must be different.".to_owned(),
-                            )]);
-                        }
-                        LineSession::next_point(end, 1)
-                            .keep(vec![EngineEvent::LineAdded(Line2 { start, end })])
+                        let line = match Line2::try_new(start, end) {
+                            Ok(line) => line,
+                            Err(error) => return CommandProgress::finish([geometry_error(error)]),
+                        };
+                        CommandProgress::start(
+                            LineSession::new(Some(end), 1),
+                            [EngineEvent::LineAdded(line)],
+                        )
                     }
                     (Err(error), _) | (_, Err(error)) => {
-                        CommandProgress::finish([EngineEvent::CommandMessage(
-                            error.message().to_owned(),
-                        )])
+                        CommandProgress::finish([message(error.message())])
                     }
-                    _ => CommandProgress::finish([EngineEvent::CommandMessage(
-                        "The first LINE point must be absolute X,Y coordinates.".to_owned(),
+                    _ => CommandProgress::finish([message(
+                        "The first LINE point must be absolute X,Y coordinates.",
                     )]),
                 }
             }
-            _ => CommandProgress::finish([EngineEvent::CommandMessage(
-                "LINE accepts zero, one, or two points after the command.".to_owned(),
+            _ => CommandProgress::finish([message(
+                "LINE accepts zero, one, or two points after the command.",
             )]),
         }
     }
@@ -90,58 +83,224 @@ enum LineMode {
     Point,
     Bearing,
     DirectionFirst {
-        restore_bearing: Option<f64>,
+        restore_bearing: Option<Bearing>,
     },
     DirectionSecond {
         first: Point2,
-        restore_bearing: Option<f64>,
+        restore_bearing: Option<Bearing>,
     },
     ConfirmBearing {
-        bearing: f64,
-        restore_bearing: Option<f64>,
+        bearing: Bearing,
+        restore_bearing: Option<Bearing>,
     },
 }
 
 struct LineSession {
     previous: Option<Point2>,
     created_segments: usize,
-    bearing: Option<f64>,
+    bearing: Option<Bearing>,
     mode: LineMode,
 }
 
 impl LineSession {
-    fn first_point() -> Self {
+    fn new(previous: Option<Point2>, created_segments: usize) -> Self {
         Self {
-            previous: None,
-            created_segments: 0,
-            bearing: None,
-            mode: LineMode::Point,
-        }
-    }
-
-    fn next_point(previous: Point2, created_segments: usize) -> Self {
-        Self {
-            previous: Some(previous),
+            previous,
             created_segments,
             bearing: None,
             mode: LineMode::Point,
         }
     }
 
-    fn keep(self, mut events: Vec<EngineEvent>) -> CommandProgress {
-        events.push(EngineEvent::PromptChanged(Some(self.prompt())));
-        CommandProgress::continue_with(self, events)
+    fn point_prompt(&self) -> CommandPrompt {
+        let text = match (self.previous, self.bearing) {
+            (None, _) => FIRST_POINT_PROMPT,
+            (Some(_), Some(_)) => LOCKED_POINT_PROMPT,
+            (Some(_), None) => NEXT_POINT_PROMPT,
+        };
+        CommandPrompt::new(text, false, true)
     }
 
+    fn submit_point(&mut self, input: &str) -> Result<CommandOutcome, String> {
+        if input.is_empty() {
+            return Ok(CommandOutcome::continue_with([]));
+        }
+        if input.eq_ignore_ascii_case("A") {
+            return self.change_bearing_lock();
+        }
+        if matches!(
+            input.to_ascii_uppercase().as_str(),
+            "2P" | "AP" | "ANGLEPICK"
+        ) {
+            return self.begin_direction_pick();
+        }
+        if input
+            .get(..1)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("A"))
+        {
+            self.bearing = Some(CommandParser::parse_bearing(input).map_err(|error| {
+                match error {
+                    super::parser::CommandInputError::InvalidBearing => {
+                        "Enter A followed by a bearing, such as A 45 or A 132d30m."
+                    }
+                    _ => error.message(),
+                }
+                .to_owned()
+            })?);
+            return Ok(CommandOutcome::continue_with([message("Bearing locked.")]));
+        }
+
+        if let (Some(bearing), Some(previous)) = (self.bearing, self.previous)
+            && let Ok(distance) = CommandParser::parse_distance(input)
+        {
+            let point = bearing
+                .project(previous, distance)
+                .ok_or_else(|| "The point is outside the supported coordinate range.".to_owned())?;
+            return self.add_point(point);
+        }
+
+        let point_input = CommandParser::parse_point(input, self.previous)
+            .map_err(|error| error.message().to_owned())?;
+        let point = point_input
+            .resolve(self.previous)
+            .map_err(|error| error.message().to_owned())?;
+        self.add_point(point)
+    }
+
+    fn submit_bearing(&mut self, input: &str) -> Result<CommandOutcome, String> {
+        if input.is_empty() {
+            self.mode = LineMode::Point;
+            return Ok(CommandOutcome::continue_with([message(
+                "Bearing entry cancelled.",
+            )]));
+        }
+        self.bearing =
+            Some(CommandParser::parse_bearing(input).map_err(|error| error.message().to_owned())?);
+        self.mode = LineMode::Point;
+        Ok(CommandOutcome::continue_with([message("Bearing locked.")]))
+    }
+
+    fn submit_first_direction_point(
+        &mut self,
+        input: &str,
+        restore_bearing: Option<Bearing>,
+    ) -> Result<CommandOutcome, String> {
+        let point = CommandParser::parse_point(input, self.previous)
+            .and_then(|point| point.resolve(self.previous))
+            .map_err(|_| "Enter the first direction point as X,Y or X Y.".to_owned())?;
+        self.select_first_direction_point(point, restore_bearing)
+    }
+
+    fn select_first_direction_point(
+        &mut self,
+        point: Point2,
+        restore_bearing: Option<Bearing>,
+    ) -> Result<CommandOutcome, String> {
+        self.mode = LineMode::DirectionSecond {
+            first: point,
+            restore_bearing,
+        };
+        Ok(CommandOutcome::continue_with([]))
+    }
+
+    fn submit_second_direction_point(
+        &mut self,
+        input: &str,
+        first: Point2,
+        restore_bearing: Option<Bearing>,
+    ) -> Result<CommandOutcome, String> {
+        let second = CommandParser::parse_point(input, self.previous)
+            .and_then(|point| point.resolve(self.previous))
+            .map_err(|_| "Enter the second direction point as X,Y or X Y.".to_owned())?;
+        self.select_second_direction_point(second, first, restore_bearing)
+    }
+
+    fn select_second_direction_point(
+        &mut self,
+        second: Point2,
+        first: Point2,
+        restore_bearing: Option<Bearing>,
+    ) -> Result<CommandOutcome, String> {
+        let bearing = Bearing::from_points(first, second)
+            .ok_or_else(|| "Direction points must be different and finite.".to_owned())?;
+        self.mode = LineMode::ConfirmBearing {
+            bearing,
+            restore_bearing,
+        };
+        Ok(CommandOutcome::continue_with([]))
+    }
+
+    fn confirm_bearing(&mut self, input: &str, bearing: Bearing) -> Result<CommandOutcome, String> {
+        if input.is_empty() {
+            self.bearing = Some(bearing);
+            self.mode = LineMode::Point;
+            return Ok(CommandOutcome::continue_with([message("Bearing locked.")]));
+        }
+        if !input.starts_with('+') && !input.starts_with('-') {
+            return Err("Press Enter to lock, or type a turn such as +90 or -45.".to_owned());
+        }
+        let turn = input
+            .parse::<f64>()
+            .ok()
+            .filter(|turn| turn.is_finite())
+            .ok_or_else(|| "Enter a finite turn such as +90 or -45.".to_owned())?;
+        self.bearing =
+            Some(bearing.turned_by(turn).ok_or_else(|| {
+                "The adjusted bearing is outside the supported range.".to_owned()
+            })?);
+        self.mode = LineMode::Point;
+        Ok(CommandOutcome::continue_with([message(
+            "Adjusted bearing locked.",
+        )]))
+    }
+
+    fn add_point(&mut self, point: Point2) -> Result<CommandOutcome, String> {
+        let Some(previous) = self.previous else {
+            self.previous = Some(point);
+            return Ok(CommandOutcome::continue_with([]));
+        };
+        let line = Line2::try_new(previous, point).map_err(|error| match error {
+            GeometryError::DegenerateLine => "LINE points must be different.".to_owned(),
+            GeometryError::NonFinitePoint => {
+                "The point is outside the supported coordinate range.".to_owned()
+            }
+        })?;
+        self.previous = Some(point);
+        self.created_segments += 1;
+        Ok(CommandOutcome::continue_with([EngineEvent::LineAdded(
+            line,
+        )]))
+    }
+
+    fn change_bearing_lock(&mut self) -> Result<CommandOutcome, String> {
+        if self.previous.is_none() {
+            return Err("Specify the first LINE point before entering a bearing.".to_owned());
+        }
+        if self.bearing.take().is_some() {
+            Ok(CommandOutcome::continue_with([message(
+                "Bearing lock cleared.",
+            )]))
+        } else {
+            self.mode = LineMode::Bearing;
+            Ok(CommandOutcome::continue_with([]))
+        }
+    }
+
+    fn begin_direction_pick(&mut self) -> Result<CommandOutcome, String> {
+        if self.previous.is_none() {
+            return Err("Specify the first LINE point before choosing a direction.".to_owned());
+        }
+        self.mode = LineMode::DirectionFirst {
+            restore_bearing: self.bearing,
+        };
+        Ok(CommandOutcome::continue_with([]))
+    }
+}
+
+impl ActiveCommand for LineSession {
     fn prompt(&self) -> CommandPrompt {
         match self.mode {
-            LineMode::Point if self.previous.is_none() => {
-                CommandPrompt::new(FIRST_POINT_PROMPT, false, true)
-            }
-            LineMode::Point if self.bearing.is_some() => {
-                CommandPrompt::new(LOCKED_POINT_PROMPT, false, true)
-            }
-            LineMode::Point => CommandPrompt::new(NEXT_POINT_PROMPT, false, true),
+            LineMode::Point => self.point_prompt(),
             LineMode::Bearing => CommandPrompt::new(
                 "LINE: Type a bearing in degrees clockwise from north. Enter cancels bearing entry.",
                 true,
@@ -165,266 +324,46 @@ impl LineSession {
         }
     }
 
-    fn submit(mut self, input: &str) -> CommandProgress {
-        let input = input.trim();
-        if input.eq_ignore_ascii_case("ESC") || input.eq_ignore_ascii_case("CANCEL") {
-            return self.cancel_input_mode();
-        }
-
-        match self.mode {
-            LineMode::Bearing => return self.submit_bearing(input),
-            LineMode::DirectionFirst { restore_bearing } => {
-                return self.submit_first_direction_point(input, restore_bearing);
-            }
-            LineMode::DirectionSecond {
-                first,
-                restore_bearing,
-            } => {
-                return self.submit_second_direction_point(input, first, restore_bearing);
-            }
-            LineMode::ConfirmBearing {
-                bearing,
-                restore_bearing,
-            } => {
-                return self.confirm_bearing(input, bearing, restore_bearing);
-            }
-            LineMode::Point => {}
-        }
-
-        if input.is_empty() {
-            return self.keep(Vec::new());
-        }
-        if input.eq_ignore_ascii_case("A") {
-            return self.change_bearing_lock();
-        }
-        if input.eq_ignore_ascii_case("2P")
-            || input.eq_ignore_ascii_case("AP")
-            || input.eq_ignore_ascii_case("ANGLEPICK")
-        {
-            return self.begin_direction_pick();
-        }
-        if input
-            .get(..1)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("A"))
-        {
-            if let Some(bearing) = parse_bearing_entry(input) {
-                self.bearing = Some(bearing);
-                return self.keep(vec![EngineEvent::CommandMessage(
-                    "Bearing locked.".to_owned(),
-                )]);
-            }
-            return self.keep(vec![EngineEvent::CommandMessage(
-                "Enter A followed by a bearing, such as A 45 or A 132d30m.".to_owned(),
-            )]);
-        }
-
-        if let (Some(bearing), Some(previous)) = (self.bearing, self.previous)
-            && let Some(distance) = parse_distance(input)
-        {
-            let radians = bearing.to_radians();
-            let point = Point2 {
-                x: previous.x + distance * radians.sin(),
-                y: previous.y + distance * radians.cos(),
-            };
-            if !point_is_finite(point) {
-                return self.keep(vec![EngineEvent::CommandMessage(
-                    "The point is outside the supported coordinate range.".to_owned(),
-                )]);
-            }
-            return self.add_segment(point);
-        }
-
-        match CommandParser::parse_point(input, self.previous) {
-            Ok(point) => match resolve_point(point, self.previous) {
-                Ok(point) => self.add_segment(point),
-                Err(error) => self.keep(vec![EngineEvent::CommandMessage(
-                    error.message().to_owned(),
-                )]),
-            },
-            Err(error) => self.keep(vec![EngineEvent::CommandMessage(
-                error.message().to_owned(),
-            )]),
-        }
-    }
-
-    fn submit_bearing(mut self, input: &str) -> CommandProgress {
-        if input.is_empty() {
-            self.mode = LineMode::Point;
-            return self.keep(vec![EngineEvent::CommandMessage(
-                "Bearing entry cancelled.".to_owned(),
-            )]);
-        }
-        match parse_bearing(input) {
-            Some(bearing) => {
-                self.bearing = Some(bearing);
-                self.mode = LineMode::Point;
-                self.keep(vec![EngineEvent::CommandMessage(
-                    "Bearing locked.".to_owned(),
-                )])
-            }
-            None => self.keep(vec![EngineEvent::CommandMessage(
-                "Enter a bearing in decimal degrees or DMS.".to_owned(),
-            )]),
-        }
-    }
-
-    fn change_bearing_lock(mut self) -> CommandProgress {
-        if self.previous.is_none() {
-            return self.keep(vec![EngineEvent::CommandMessage(
-                "Specify the first LINE point before entering a bearing.".to_owned(),
-            )]);
-        }
-        if self.bearing.take().is_some() {
-            self.keep(vec![EngineEvent::CommandMessage(
-                "Bearing lock cleared.".to_owned(),
-            )])
-        } else {
-            self.mode = LineMode::Bearing;
-            self.keep(Vec::new())
-        }
-    }
-
-    fn begin_direction_pick(mut self) -> CommandProgress {
-        if self.previous.is_none() {
-            return self.keep(vec![EngineEvent::CommandMessage(
-                "Specify the first LINE point before choosing a direction.".to_owned(),
-            )]);
-        }
-        self.mode = LineMode::DirectionFirst {
-            restore_bearing: self.bearing,
-        };
-        self.keep(Vec::new())
-    }
-
-    fn submit_first_direction_point(
-        mut self,
-        input: &str,
-        restore_bearing: Option<f64>,
-    ) -> CommandProgress {
-        match CommandParser::parse_point(input, self.previous) {
-            Ok(point) => match resolve_point(point, self.previous) {
-                Ok(first) => {
-                    self.mode = LineMode::DirectionSecond {
-                        first,
-                        restore_bearing,
-                    };
-                    self.keep(Vec::new())
+    fn handle_event(&mut self, event: &CommandInputEvent) -> Result<CommandOutcome, String> {
+        match event {
+            CommandInputEvent::TextSubmitted(input) => match self.mode {
+                LineMode::Point => self.submit_point(input),
+                LineMode::Bearing => self.submit_bearing(input),
+                LineMode::DirectionFirst { restore_bearing } => {
+                    self.submit_first_direction_point(input, restore_bearing)
                 }
-                Err(error) => self.keep(vec![EngineEvent::CommandMessage(
-                    error.message().to_owned(),
-                )]),
-            },
-            Err(_) => self.keep(vec![EngineEvent::CommandMessage(
-                "Enter the first direction point as X,Y or X Y.".to_owned(),
-            )]),
-        }
-    }
-
-    fn submit_second_direction_point(
-        mut self,
-        input: &str,
-        first: Point2,
-        restore_bearing: Option<f64>,
-    ) -> CommandProgress {
-        let second = match CommandParser::parse_point(input, self.previous) {
-            Ok(point) => match resolve_point(point, self.previous) {
-                Ok(second) => second,
-                Err(error) => {
-                    return self.keep(vec![EngineEvent::CommandMessage(
-                        error.message().to_owned(),
-                    )]);
-                }
-            },
-            Err(_) => {
-                return self.keep(vec![EngineEvent::CommandMessage(
-                    "Enter the second direction point as X,Y or X Y.".to_owned(),
-                )]);
-            }
-        };
-        if first == second {
-            return self.keep(vec![EngineEvent::CommandMessage(
-                "Direction points must be different.".to_owned(),
-            )]);
-        }
-        let dx = second.x - first.x;
-        let dy = second.y - first.y;
-        if !dx.is_finite() || !dy.is_finite() {
-            return self.keep(vec![EngineEvent::CommandMessage(
-                "Direction points are too far apart to calculate a bearing.".to_owned(),
-            )]);
-        }
-        let bearing = dx.atan2(dy).to_degrees().rem_euclid(360.0);
-        self.mode = LineMode::ConfirmBearing {
-            bearing,
-            restore_bearing,
-        };
-        self.keep(Vec::new())
-    }
-
-    fn confirm_bearing(
-        mut self,
-        input: &str,
-        bearing: f64,
-        restore_bearing: Option<f64>,
-    ) -> CommandProgress {
-        if input.is_empty() {
-            self.bearing = Some(bearing);
-            self.mode = LineMode::Point;
-            return self.keep(vec![EngineEvent::CommandMessage(
-                "Bearing locked.".to_owned(),
-            )]);
-        }
-        match input.parse::<f64>() {
-            Ok(turn) if turn.is_finite() && (input.starts_with('+') || input.starts_with('-')) => {
-                let adjusted = bearing + turn;
-                if !adjusted.is_finite() {
-                    return self.keep(vec![EngineEvent::CommandMessage(
-                        "The adjusted bearing is outside the supported range.".to_owned(),
-                    )]);
-                }
-                self.bearing = Some(adjusted);
-                self.mode = LineMode::Point;
-                self.keep(vec![EngineEvent::CommandMessage(
-                    "Adjusted bearing locked.".to_owned(),
-                )])
-            }
-            _ => {
-                self.mode = LineMode::ConfirmBearing {
-                    bearing,
+                LineMode::DirectionSecond {
+                    first,
                     restore_bearing,
-                };
-                self.keep(vec![EngineEvent::CommandMessage(
-                    "Press Enter to lock, or type a turn such as +90 or -45.".to_owned(),
-                )])
-            }
+                } => self.submit_second_direction_point(input, first, restore_bearing),
+                LineMode::ConfirmBearing { bearing, .. } => self.confirm_bearing(input, bearing),
+            },
+            CommandInputEvent::PointPicked { x, y } => match self.mode {
+                LineMode::Point => self.add_point(Point2 { x: *x, y: *y }),
+                LineMode::DirectionFirst { restore_bearing } => {
+                    self.select_first_direction_point(Point2 { x: *x, y: *y }, restore_bearing)
+                }
+                LineMode::DirectionSecond {
+                    first,
+                    restore_bearing,
+                } => self.select_second_direction_point(
+                    Point2 { x: *x, y: *y },
+                    first,
+                    restore_bearing,
+                ),
+                LineMode::Bearing | LineMode::ConfirmBearing { .. } => {
+                    Err("A point cannot be picked while entering a bearing.".to_owned())
+                }
+            },
+            CommandInputEvent::Cancelled => Ok(self.cancel()),
         }
     }
 
-    fn add_segment(mut self, point: Point2) -> CommandProgress {
-        let Some(previous) = self.previous else {
-            self.previous = Some(point);
-            return self.keep(Vec::new());
-        };
-        if previous == point {
-            return self.keep(vec![EngineEvent::CommandMessage(
-                "LINE points must be different.".to_owned(),
-            )]);
-        }
-        self.previous = Some(point);
-        self.created_segments += 1;
-        self.keep(vec![EngineEvent::LineAdded(Line2 {
-            start: previous,
-            end: point,
-        })])
-    }
-
-    fn cancel_input_mode(mut self) -> CommandProgress {
+    fn cancel(&mut self) -> CommandOutcome {
         match self.mode {
             LineMode::Bearing => {
                 self.mode = LineMode::Point;
-                self.keep(vec![EngineEvent::CommandMessage(
-                    "Bearing entry cancelled.".to_owned(),
-                )])
+                CommandOutcome::continue_with([message("Bearing entry cancelled.")])
             }
             LineMode::DirectionFirst { restore_bearing }
             | LineMode::DirectionSecond {
@@ -435,127 +374,24 @@ impl LineSession {
             } => {
                 self.bearing = restore_bearing;
                 self.mode = LineMode::Point;
-                self.keep(vec![EngineEvent::CommandMessage(
-                    "Direction pick cancelled.".to_owned(),
-                )])
+                CommandOutcome::continue_with([message("Direction pick cancelled.")])
             }
-            LineMode::Point => {
-                let message = if self.created_segments == 0 {
-                    "Command cancelled."
-                } else {
-                    "Command finished."
-                };
-                CommandProgress::finish([
-                    EngineEvent::PromptChanged(None),
-                    EngineEvent::CommandMessage(message.to_owned()),
-                ])
-            }
-        }
-    }
-}
-
-impl ActiveCommand for LineSession {
-    fn submit(self: Box<Self>, input: &str) -> CommandProgress {
-        LineSession::submit(*self, input)
-    }
-}
-
-fn resolve_point(
-    input: PointInput,
-    previous: Option<Point2>,
-) -> Result<Point2, super::parser::PointParseError> {
-    use super::parser::PointParseError;
-
-    let point = match input {
-        PointInput::Absolute(point) => point,
-        PointInput::Relative { dx, dy } => {
-            let previous = previous.ok_or(PointParseError::RelativePointNeedsAnchor)?;
-            Point2 {
-                x: previous.x + dx,
-                y: previous.y + dy,
-            }
-        }
-    };
-    if point_is_finite(point) {
-        Ok(point)
-    } else {
-        Err(PointParseError::CoordinateOverflow)
-    }
-}
-
-fn point_is_finite(point: Point2) -> bool {
-    point.x.is_finite() && point.y.is_finite()
-}
-
-fn parse_distance(input: &str) -> Option<f64> {
-    if input.contains(',') || input.chars().any(char::is_whitespace) || input.starts_with('@') {
-        return None;
-    }
-    let distance = input.parse::<f64>().ok()?;
-    distance.is_finite().then_some(distance)
-}
-
-fn parse_bearing_entry(input: &str) -> Option<f64> {
-    let mut parts = input.split_whitespace();
-    if !parts.next()?.eq_ignore_ascii_case("A") {
-        return None;
-    }
-    let bearing = parse_bearing(parts.next()?)?;
-    let turn = match parts.next() {
-        Some(turn) if turn.starts_with('+') || turn.starts_with('-') => {
-            let turn = turn.parse::<f64>().ok()?;
-            if !turn.is_finite() || parts.next().is_some() {
-                return None;
-            }
-            turn
-        }
-        Some(_) => return None,
-        None => 0.0,
-    };
-    let bearing = bearing + turn;
-    bearing.is_finite().then_some(bearing)
-}
-
-fn parse_bearing(input: &str) -> Option<f64> {
-    let input = input.trim().to_ascii_lowercase();
-    if let Ok(degrees) = input.parse::<f64>() {
-        return degrees.is_finite().then_some(degrees);
-    }
-    let (degrees, remainder) = input.split_once('d')?;
-    let degrees = degrees.parse::<f64>().ok()?;
-    if !degrees.is_finite() {
-        return None;
-    }
-    let sign = if degrees.is_sign_negative() {
-        -1.0
-    } else {
-        1.0
-    };
-    let remainder = remainder.trim_end_matches('s');
-    let (minutes, seconds) = match remainder.split_once('m') {
-        Some((minutes, seconds)) => {
-            let minutes = if minutes.is_empty() {
-                0.0
+            LineMode::Point => CommandOutcome::finish([message(if self.created_segments == 0 {
+                "Command cancelled."
             } else {
-                minutes.parse::<f64>().ok()?
-            };
-            let seconds = if seconds.is_empty() {
-                0.0
-            } else {
-                seconds.parse::<f64>().ok()?
-            };
-            (minutes, seconds)
+                "Command finished."
+            })]),
         }
-        None if remainder.is_empty() => (0.0, 0.0),
-        None => return None,
-    };
-    if !minutes.is_finite()
-        || !seconds.is_finite()
-        || minutes.abs() >= 60.0
-        || seconds.abs() >= 60.0
-    {
-        return None;
     }
-    let bearing = sign * (degrees.abs() + minutes / 60.0 + seconds / 3600.0);
-    bearing.is_finite().then_some(bearing)
+}
+
+fn message(text: &str) -> EngineEvent {
+    EngineEvent::CommandMessage(text.to_owned())
+}
+
+fn geometry_error(error: GeometryError) -> EngineEvent {
+    message(match error {
+        GeometryError::DegenerateLine => "LINE points must be different.",
+        GeometryError::NonFinitePoint => "The point is outside the supported coordinate range.",
+    })
 }

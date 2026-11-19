@@ -19,6 +19,6 @@ describe("CommandLine", () => {
     await user.click(screen.getByRole("textbox", { name: "Command" }));
     await user.keyboard("{Enter}");
 
-    expect(onSubmit).toHaveBeenCalledWith("");
+    expect(onSubmit).toHaveBeenCalledWith({ type: "textSubmitted", text: "" });
   });
 });

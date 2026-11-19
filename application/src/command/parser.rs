@@ -1,20 +1,24 @@
-use gs_domain::Point2;
+use gs_domain::{Bearing, Point2};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PointParseError {
+pub enum CommandInputError {
     ExpectedCoordinatePair,
     InvalidCoordinate,
     RelativePointNeedsAnchor,
     CoordinateOverflow,
+    InvalidBearing,
+    InvalidDistance,
 }
 
-impl PointParseError {
+impl CommandInputError {
     pub fn message(&self) -> &'static str {
         match self {
             Self::ExpectedCoordinatePair => "Enter a point as X,Y or X Y.",
             Self::InvalidCoordinate => "Coordinates must be finite numbers.",
             Self::RelativePointNeedsAnchor => "A relative point needs a previous point.",
             Self::CoordinateOverflow => "The point is outside the supported coordinate range.",
+            Self::InvalidBearing => "Enter a bearing in decimal degrees or DMS.",
+            Self::InvalidDistance => "Enter a finite distance.",
         }
     }
 }
@@ -23,6 +27,19 @@ impl PointParseError {
 pub enum PointInput {
     Absolute(Point2),
     Relative { dx: f64, dy: f64 },
+}
+
+impl PointInput {
+    /// Resolves typed absolute or relative coordinates without doing geometry in a command.
+    pub fn resolve(&self, previous: Option<Point2>) -> Result<Point2, CommandInputError> {
+        match *self {
+            Self::Absolute(point) => Ok(point),
+            Self::Relative { dx, dy } => previous
+                .ok_or(CommandInputError::RelativePointNeedsAnchor)?
+                .translated(dx, dy)
+                .ok_or(CommandInputError::CoordinateOverflow),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,7 +75,7 @@ impl CommandParser {
     pub fn parse_point(
         input: &str,
         previous: Option<Point2>,
-    ) -> Result<PointInput, PointParseError> {
+    ) -> Result<PointInput, CommandInputError> {
         let input = input.trim();
         let (relative, coordinates) = match input.strip_prefix('@') {
             Some(coordinates) => (true, coordinates),
@@ -69,13 +86,13 @@ impl CommandParser {
             .filter(|part| !part.trim().is_empty())
             .collect();
         if parts.len() != 2 {
-            return Err(PointParseError::ExpectedCoordinatePair);
+            return Err(CommandInputError::ExpectedCoordinatePair);
         }
         let x = parse_finite(parts[0])?;
         let y = parse_finite(parts[1])?;
         if relative {
             if previous.is_none() {
-                return Err(PointParseError::RelativePointNeedsAnchor);
+                return Err(CommandInputError::RelativePointNeedsAnchor);
             }
             Ok(PointInput::Relative { dx: x, dy: y })
         } else {
@@ -86,18 +103,80 @@ impl CommandParser {
     pub fn parse_point_fields(
         fields: &[String],
         previous: Option<Point2>,
-    ) -> Result<PointInput, PointParseError> {
+    ) -> Result<PointInput, CommandInputError> {
         Self::parse_point(&fields.join(","), previous)
+    }
+
+    /// Parses decimal or DMS bearings, optionally preceded by `A` and followed by a turn.
+    pub fn parse_bearing(input: &str) -> Result<Bearing, CommandInputError> {
+        let mut parts = input.split_whitespace().peekable();
+        if parts
+            .peek()
+            .is_some_and(|part| part.eq_ignore_ascii_case("A"))
+        {
+            parts.next();
+        }
+        let bearing = parse_dms_or_decimal(parts.next().ok_or(CommandInputError::InvalidBearing)?)?;
+        match parts.next() {
+            Some(turn) if turn.starts_with('+') || turn.starts_with('-') => {
+                let turn = parse_finite(turn).map_err(|_| CommandInputError::InvalidBearing)?;
+                if parts.next().is_some() {
+                    return Err(CommandInputError::InvalidBearing);
+                }
+                bearing
+                    .turned_by(turn)
+                    .ok_or(CommandInputError::InvalidBearing)
+            }
+            Some(_) => Err(CommandInputError::InvalidBearing),
+            None => Ok(bearing),
+        }
+    }
+
+    /// Parses a finite scalar distance used by commands such as bearing-locked LINE.
+    pub fn parse_distance(input: &str) -> Result<f64, CommandInputError> {
+        if input.contains(',') || input.starts_with('@') || input.chars().any(char::is_whitespace) {
+            return Err(CommandInputError::InvalidDistance);
+        }
+        parse_finite(input).map_err(|_| CommandInputError::InvalidDistance)
     }
 }
 
-fn parse_finite(input: &str) -> Result<f64, PointParseError> {
+fn parse_dms_or_decimal(input: &str) -> Result<Bearing, CommandInputError> {
+    if let Ok(degrees) = input.parse::<f64>() {
+        return Bearing::from_degrees(degrees).ok_or(CommandInputError::InvalidBearing);
+    }
+    let lowercase = input.to_ascii_lowercase();
+    let (degrees, remainder) = lowercase
+        .split_once('d')
+        .ok_or(CommandInputError::InvalidBearing)?;
+    let degrees = parse_finite(degrees).map_err(|_| CommandInputError::InvalidBearing)?;
+    let remainder = remainder.trim_end_matches('s');
+    let (minutes, seconds) = match remainder.split_once('m') {
+        Some((minutes, seconds)) => (
+            if minutes.is_empty() {
+                0.0
+            } else {
+                parse_finite(minutes).map_err(|_| CommandInputError::InvalidBearing)?
+            },
+            if seconds.is_empty() {
+                0.0
+            } else {
+                parse_finite(seconds).map_err(|_| CommandInputError::InvalidBearing)?
+            },
+        ),
+        None if remainder.is_empty() => (0.0, 0.0),
+        None => return Err(CommandInputError::InvalidBearing),
+    };
+    Bearing::from_dms(degrees, minutes, seconds).ok_or(CommandInputError::InvalidBearing)
+}
+
+fn parse_finite(input: &str) -> Result<f64, CommandInputError> {
     let value = input
         .parse::<f64>()
-        .map_err(|_| PointParseError::InvalidCoordinate)?;
+        .map_err(|_| CommandInputError::InvalidCoordinate)?;
     if value.is_finite() {
         Ok(value)
     } else {
-        Err(PointParseError::InvalidCoordinate)
+        Err(CommandInputError::InvalidCoordinate)
     }
 }

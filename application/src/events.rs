@@ -1,6 +1,8 @@
 use gs_domain::{Drawing, Line2};
 use gs_foundation::EventHandler;
 
+use crate::command::{CommandInputEvent, CommandManager};
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineEvent {
     InputSubmitted(String),
@@ -30,6 +32,19 @@ pub(crate) struct EngineContext {
     pub drawing: Drawing,
     pub messages: Vec<String>,
     pub prompt: Option<CommandPrompt>,
+}
+
+pub(crate) struct CommandEventContext {
+    pub commands: CommandManager,
+    pub output: Vec<EngineEvent>,
+}
+
+pub(crate) struct CommandEventHandler;
+
+impl EventHandler<CommandInputEvent, CommandEventContext> for CommandEventHandler {
+    fn handle(&mut self, event: &CommandInputEvent, context: &mut CommandEventContext) {
+        context.output.extend(context.commands.handle_event(event));
+    }
 }
 
 pub(crate) struct DrawingEventHandler;

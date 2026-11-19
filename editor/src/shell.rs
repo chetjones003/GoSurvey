@@ -4,7 +4,9 @@ use std::sync::Mutex;
 
 use gs_application::Engine;
 
-use crate::{WireCommandResult, WireDrawingSnapshot, WireEngineStatus, read_engine};
+use crate::{
+    WireCommandInput, WireCommandResult, WireDrawingSnapshot, WireEngineStatus, read_engine,
+};
 
 #[tauri::command]
 fn engine_status(engine: tauri::State<'_, Mutex<Engine>>) -> Result<WireEngineStatus, String> {
@@ -21,12 +23,14 @@ fn drawing_snapshot(
 #[tauri::command]
 fn execute_command(
     engine: tauri::State<'_, Mutex<Engine>>,
-    input: String,
+    input: WireCommandInput,
 ) -> Result<WireCommandResult, String> {
     let mut engine = engine
         .lock()
         .map_err(|_| super::ENGINE_UNAVAILABLE.to_owned())?;
-    Ok(WireCommandResult::from(engine.execute_command(&input)))
+    Ok(WireCommandResult::from(
+        engine.dispatch_command_input(input.into()),
+    ))
 }
 
 pub fn run() {

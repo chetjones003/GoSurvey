@@ -3,11 +3,12 @@ import { ChevronRight, Maximize2, Terminal } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import type { CommandInput } from "./commandInput";
 
 type CommandLineProps = {
   history: string[];
   prompt: { text: string; acceptsBlank: boolean; acceptsPoint: boolean } | null;
-  onSubmit: (command: string) => void;
+  onSubmit: (input: CommandInput) => void;
 };
 
 export default function CommandLine({ history, prompt, onSubmit }: CommandLineProps) {
@@ -16,10 +17,10 @@ export default function CommandLine({ history, prompt, onSubmit }: CommandLinePr
     event.preventDefault();
     const input = command.trim();
     if (!input) {
-      if (prompt?.acceptsBlank) onSubmit("");
+      if (prompt?.acceptsBlank) onSubmit({ type: "textSubmitted", text: "" });
       return;
     }
-    onSubmit(input);
+    onSubmit({ type: "textSubmitted", text: input });
     setCommand("");
   };
 
@@ -53,7 +54,7 @@ export default function CommandLine({ history, prompt, onSubmit }: CommandLinePr
           onKeyDown={(event) => {
             if (event.key === "Escape" && prompt !== null) {
               event.preventDefault();
-              onSubmit("ESC");
+              onSubmit({ type: "cancelled" });
               setCommand("");
             }
           }}
