@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Button } from "@ui-sdk/react/button";
 
 type EngineStatus = { state: "ready"; version: string };
 type DrawingSnapshot = { name: string; entityCount: number };
@@ -34,10 +33,7 @@ export default function App() {
     <main className="shell">
       <header className="status">
         {error ? (
-          <>
-            <p role="alert">{error}</p>
-            <Button onClick={load}>Retry</Button>
-          </>
+          <p role="alert">{error}</p>
         ) : (
           <p>{status ? "Engine ready" : "Starting engine"}</p>
         )}

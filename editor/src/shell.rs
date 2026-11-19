@@ -2,18 +2,20 @@
 
 use std::sync::Mutex;
 
-use gs_application::{DrawingSnapshot, Engine, EngineStatus};
+use gs_application::Engine;
 
-use crate::read_engine;
+use crate::{WireDrawingSnapshot, WireEngineStatus, read_engine};
 
 #[tauri::command]
-fn engine_status(engine: tauri::State<'_, Mutex<Engine>>) -> Result<EngineStatus, String> {
-    read_engine(&engine, |e| e.status())
+fn engine_status(engine: tauri::State<'_, Mutex<Engine>>) -> Result<WireEngineStatus, String> {
+    read_engine(&engine, |e| WireEngineStatus::from(e.status()))
 }
 
 #[tauri::command]
-fn drawing_snapshot(engine: tauri::State<'_, Mutex<Engine>>) -> Result<DrawingSnapshot, String> {
-    read_engine(&engine, |e| e.snapshot())
+fn drawing_snapshot(
+    engine: tauri::State<'_, Mutex<Engine>>,
+) -> Result<WireDrawingSnapshot, String> {
+    read_engine(&engine, |e| WireDrawingSnapshot::from(e.snapshot()))
 }
 
 pub fn run() {

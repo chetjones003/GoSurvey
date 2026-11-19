@@ -1,25 +1,23 @@
 //! Application systems layer (rank 4): command registry and interaction.
+//!
+//! Wire formats for the front end live in the Editor, not here.
 
 use gs_domain::Drawing;
-use serde::Serialize;
 
 /// Whether the engine can accept commands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineState {
     Ready,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineStatus {
     pub state: EngineState,
     pub version: &'static str,
 }
 
 /// What the front end sees of the open drawing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrawingSnapshot {
     pub name: String,
     pub entity_count: usize,
@@ -63,10 +61,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_engine_reports_ready() {
+    fn new_engine_reports_ready_with_this_crate_version() {
         let status = Engine::new().status();
         assert_eq!(status.state, EngineState::Ready);
-        assert_eq!(status.version, "0.1.0");
+        assert_eq!(status.version, env!("CARGO_PKG_VERSION"));
     }
 
     #[test]
@@ -79,18 +77,5 @@ mod tests {
                 entity_count: 0,
             }
         );
-    }
-
-    #[test]
-    fn snapshot_serialises_with_camel_case_keys() {
-        let json = serde_json::to_value(Engine::new().snapshot()).unwrap();
-        assert_eq!(json["entityCount"], 0);
-        assert_eq!(json["name"], "Untitled");
-    }
-
-    #[test]
-    fn status_serialises_state_in_lowercase() {
-        let json = serde_json::to_value(Engine::new().status()).unwrap();
-        assert_eq!(json["state"], "ready");
     }
 }

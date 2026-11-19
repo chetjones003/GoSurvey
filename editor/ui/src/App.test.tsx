@@ -1,5 +1,4 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
@@ -33,7 +32,7 @@ describe("App", () => {
     expect(invoke).toHaveBeenCalledWith("drawing_snapshot");
   });
 
-  it("names the engine error and offers a retry when the engine is unavailable", async () => {
+  it("names the engine error and says to restart when the engine is unavailable", async () => {
     invoke.mockRejectedValue("Drawing engine unavailable. Restart GoSurvey.");
 
     render(<App />);
@@ -41,11 +40,7 @@ describe("App", () => {
     expect(
       await screen.findByText("Drawing engine unavailable. Restart GoSurvey."),
     ).toBeTruthy();
-
-    answer({ state: "ready", version: "0.1.0" }, { name: "Untitled", entityCount: 0 });
-    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-
-    expect(await screen.findByText("Engine ready")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("names the drawing region for assistive technology", async () => {

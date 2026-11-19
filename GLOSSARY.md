@@ -20,3 +20,20 @@ A drawing's rules for which of the project's points it shows (for example, a poi
 
 **World coordinates**
 The state-plane coordinates shared by every drawing in a project. A drawing keeps its own points relative to its document origin and converts at the boundary.
+
+## Engine
+
+**Engine**
+The Application-layer object that owns the open Drawing and accepts commands for it. The front end never changes a Drawing directly.
+
+**Command seam**
+The boundary where the front end sends a command and reads back the Engine's status and a snapshot. Tests drive the seam, not the internals.
+
+**Engine status**
+Whether the Engine can accept commands, and the version of the engine. The front end shows it as "Engine ready".
+
+**Drawing snapshot**
+What the front end sees of the open Drawing: its name and its entity count. It is a read-only copy, never the Drawing itself.
+
+**Untitled drawing**
+The empty Drawing a new Engine opens with, named "Untitled" and holding no entities.

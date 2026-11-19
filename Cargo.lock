@@ -1179,8 +1179,6 @@ version = "0.1.0"
 dependencies = [
  "gs-domain",
  "gs-services",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -1195,6 +1193,8 @@ name = "gs-editor"
 version = "0.1.0"
 dependencies = [
  "gs-application",
+ "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
 ]
