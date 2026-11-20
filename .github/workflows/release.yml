@@ -275,6 +275,13 @@ jobs:
           ./tools/test-archive-release-pdb.ps1
           ./tools/test-prune-release-pdb.ps1
 
+      - name: Provide pinned AWS CLI for R2 symbol storage
+        if: github.ref_name == 'beta' || github.ref_name == 'master'
+        shell: pwsh
+        run: |
+          $aws = ./tools/ci-get-tool.ps1 -Name awscli
+          Split-Path -Parent $aws | Add-Content -LiteralPath $env:GITHUB_PATH
+
       - name: Archive private release PDB
         id: archive-pdb
         # REQ-425 / issue #1004: archive symbols from this exact build before any package

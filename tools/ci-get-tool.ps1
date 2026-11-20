@@ -3,7 +3,7 @@
 # the runner user's local tool cache. Prints the executable path. Nothing is stored in GitHub.
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory)][ValidateSet('gitleaks', 'trivy', 'innosetup')][string]$Name,
+  [Parameter(Mandatory)][ValidateSet('gitleaks', 'trivy', 'innosetup', 'awscli')][string]$Name,
   [string]$CacheRoot = (Join-Path $env:LOCALAPPDATA 'GoSurveyCI\tools')
 )
 $ErrorActionPreference = 'Stop'
@@ -19,6 +19,9 @@ $tools = @{
   innosetup = @{ Version = '6.7.4'; Exe = 'ISCC.exe'
     Url = 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_4/innosetup-6.7.4.exe'
     Sha256 = 'a549929319f9120716677c685535ca4671e4b937b5fdc87e2585f32d8eb30e8c' }
+  awscli    = @{ Version = '2.31.30'; Exe = 'Amazon\AWSCLIV2\aws.exe'
+    Url = 'https://awscli.amazonaws.com/AWSCLIV2-2.31.30.msi'
+    Sha256 = '9d582cb08f07369dd9f697913952c648df2e4682fa84566d62b3975a0fd29ed7' }
 }
 $tool = $tools[$Name]
 
@@ -44,9 +47,15 @@ if (-not (Test-Archive)) {
 }
 
 $jobRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
-$installDir = Join-Path $jobRoot "$Name-$($tool.Version)-$([Guid]::NewGuid().ToString('N'))"
+# Keep the per-job directory short: the AWS CLI tree is deep enough to hit MAX_PATH.
+$installDir = Join-Path $jobRoot "$Name-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
 if ($archive.EndsWith('.zip')) {
   Expand-Archive -LiteralPath $archive -DestinationPath $installDir
+} elseif ($archive.EndsWith('.msi')) {
+  # An administrative install only extracts the package, so it needs no elevation.
+  $process = Start-Process -FilePath msiexec.exe -Wait -PassThru -ArgumentList @(
+    '/a', "`"$archive`"", '/qn', "TARGETDIR=`"$installDir`"")
+  if ($process.ExitCode -ne 0) { throw "$Name extraction exited with $($process.ExitCode)." }
 } else {
   # Inno Setup installs per user without elevation.
   $process = Start-Process -FilePath $archive -Wait -PassThru -ArgumentList @(
