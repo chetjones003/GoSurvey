@@ -85,6 +85,15 @@ function Assert-PdbMatchesExecutable {
   $executableReportIdentity = Get-ReportPdbIdentity -Identity $ExecutableIdentity
   $pdbReportIdentity = Get-ReportPdbIdentity -Identity $PdbIdentity
   if ($pdbReportIdentity -cne $executableReportIdentity) {
+    # Some llvm-pdbutil builds print the PDB GUID in raw byte order (first three fields
+    # byte-swapped). Accept that rendering of the same 16 bytes; the canonical executable
+    # identity remains the archive key the crash reporter uses.
+    $rawOrderGuid = (([Guid]::ParseExact($ExecutableIdentity.Guid, 'N').ToByteArray() |
+      ForEach-Object { $_.ToString('X2') }) -join '')
+    if ($PdbIdentity.Guid -ceq $rawOrderGuid -and $PdbIdentity.Age -eq $ExecutableIdentity.Age) {
+      Write-Warning "llvm-pdbutil printed the PDB GUID in raw byte order; it matches the executable."
+      return $executableReportIdentity
+    }
     throw "The PDB identity does not match the executable (exe '$executableReportIdentity', PDB '$pdbReportIdentity')."
   }
   $executableReportIdentity
