@@ -24,7 +24,8 @@ Use **File → Export DXF…** when you need a text-based, diffable interchange 
 
 ## Drawing tabs
 
-Multiple drawings are open at once as tabs above the viewport (`Drawing 1`, `Drawing 2`, `+`).
+GoSurvey opens on Start without an active drawing. After you create or open one, drawings appear as
+tabs above the viewport (`Drawing 1`, `Drawing 2`, `+`). The first new drawing is named `Drawing 1`.
 
 **Each tab is a completely independent document.** Geometry, layers, survey points, paper layouts,
 plot scale, and undo history are all per-tab. Switching tabs switches all of it.
