@@ -10,6 +10,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'pdb-identity.ps1')
 
 function ConvertFrom-CodeViewOutput {
   param([Parameter(Mandatory)] [string[]] $Lines)
@@ -85,12 +86,7 @@ function Assert-PdbMatchesExecutable {
   $executableReportIdentity = Get-ReportPdbIdentity -Identity $ExecutableIdentity
   $pdbReportIdentity = Get-ReportPdbIdentity -Identity $PdbIdentity
   if ($pdbReportIdentity -cne $executableReportIdentity) {
-    # Some llvm-pdbutil builds print the PDB GUID in raw byte order (first three fields
-    # byte-swapped). Accept that rendering of the same 16 bytes; the canonical executable
-    # identity remains the archive key the crash reporter uses.
-    $rawOrderGuid = (([Guid]::ParseExact($ExecutableIdentity.Guid, 'N').ToByteArray() |
-      ForEach-Object { $_.ToString('X2') }) -join '')
-    if ($PdbIdentity.Guid -ceq $rawOrderGuid -and $PdbIdentity.Age -eq $ExecutableIdentity.Age) {
+    if (Test-PdbIdentityMatch -ExecutableIdentity $executableReportIdentity -PdbIdentity $pdbReportIdentity) {
       Write-Warning "llvm-pdbutil printed the PDB GUID in raw byte order; it matches the executable."
       return $executableReportIdentity
     }
