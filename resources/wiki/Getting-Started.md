@@ -74,7 +74,8 @@ drawings, **Open a Drawing**, and **New Drawing**.
 *The start screen when GoSurvey opens — recent drawings in the centre, account and feedback on the
 right. Open a drawing or start a new one to reach model space.*
 
-After you open or create a drawing, a tab such as **Drawing 1** becomes active. Take a moment with
+The start screen opens without an active drawing. Commands are available after you open or create
+one. The first drawing you create is **Drawing 1**. Take a moment with
 [[User Interface]] — the manual assumes you know where the ribbon, command line, Properties panel,
 and status bar are.
 
@@ -84,7 +85,7 @@ and status bar are.
 
 **File → New**
 
-A new tab appears named `Drawing 2`, `Drawing 3`, and so on. Each tab is a **completely independent
+A new tab appears named `Drawing 1` (then `Drawing 2`, `Drawing 3`, and so on). Each tab is a **completely independent
 document**: its own geometry, layers, survey points, paper layouts, plot scale, and undo history.
 Switching tabs switches all of it.
 

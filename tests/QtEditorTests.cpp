@@ -5392,6 +5392,24 @@ private Q_SLOTS:
 
   void qtStartScreenHasRecentDrawingSurfaceAndVersionGatedWhatsNew() {
     EditorWindow window;
+    QCOMPARE(window.State().drawingTabs.size(), std::size_t{1});
+    QCOMPARE(window.State().documents.size(), window.State().drawingTabs.size());
+    QCOMPARE(window.State().drawingTabs.front().name, std::string("Start"));
+    QDir().mkpath(QtTestArtifactDirectory());
+    window.show();
+    QApplication::processEvents();
+    QVERIFY(window.grab().save(QDir(QtTestArtifactDirectory()).filePath("issue1552-start-no-drawing.png")));
+    auto* commandInput = window.m_Command;
+    QVERIFY(commandInput);
+    commandInput->setText("LINE");
+    QTest::keyClick(commandInput, Qt::Key_Return);
+    QCOMPARE(window.State().drawingTabs.size(), std::size_t{1});
+    QVERIFY(window.m_CommandBar->Transcript()->toPlainText().contains("Open or create a drawing"));
+    QVERIFY(window.grab().save(QDir(QtTestArtifactDirectory()).filePath("issue1552-start-command-blocked.png")));
+    window.CreateDrawingFromTemplate();
+    QApplication::processEvents();
+    QCOMPARE(window.State().drawingTabs[1].name, std::string("Drawing 1"));
+    QVERIFY(window.grab().save(QDir(QtTestArtifactDirectory()).filePath("issue1552-first-drawing.png")));
     auto* tiles = window.findChild<QWidget*>("recentDrawingTiles");
     QVERIFY(tiles);
     QVERIFY(tiles->layout());
@@ -5434,22 +5452,8 @@ private Q_SLOTS:
     QVERIFY(whatsNew->findChild<QLabel*>("whatsNewVersion"));
     auto* notes = whatsNew->findChild<QTextBrowser*>("whatsNewReleaseNotes");
     QVERIFY(notes);
-    const QStringList imageNames = {"projects.png", "maps.png", "pdf-viewer.png",
-                                    "point-clouds.png", "piping.png", "surfaces-3d.png"};
-    for (const auto& name : imageNames) {
-      QVERIFY(QFile::exists(QtAsset("whats-new/" + name)));
-      const QVariant resource = notes->document()->resource(
-          QTextDocument::ImageResource, QUrl("whats-new:" + name));
-      QVERIFY2(resource.canConvert<QImage>(), qPrintable(name));
-      QVERIFY2(!resource.value<QImage>().isNull(), qPrintable(name));
-    }
-    notes->verticalScrollBar()->setValue(450);
-    QApplication::processEvents();
-    QVERIFY(notes->grab().save(
-        QDir(QtTestArtifactDirectory()).filePath("issue1029-whats-new-projects-image.png")));
-    notes->verticalScrollBar()->setValue(notes->verticalScrollBar()->maximum());
-    QApplication::processEvents();
-    QVERIFY(notes->toPlainText().contains("0.7.7"));
+    QVERIFY(notes->toPlainText().contains("GoSurvey 0.8.0"));
+    QVERIFY(!notes->toHtml().contains("<img", Qt::CaseInsensitive));
     QVERIFY(whatsNew->grab().save(
         QDir(QtTestArtifactDirectory()).filePath("issue-update-migration-whats-new-077.png")));
     QVERIFY(whatsNew->findChild<QLabel*>("whatsNewReleasesLink"));
@@ -15526,6 +15530,53 @@ private Q_SLOTS:
     QCOMPARE(st.userLinesFlat[3], 25.0);
     window.Submit("UNDO");
     QCOMPARE(st.userLinesFlat[3], 10.0);
+  }
+
+  void propertiesPanelIdentifiesAdditionalSelectableObjectTypes() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    st.userEllipses.push_back({});
+    EnsureAttrCounts(st);
+    st.selection = {{SelectedEntity::Type::Ellipse, 0}};
+    window.Refresh();
+    QCOMPARE(window.findChild<QLabel*>("propObjectKind")->text(), QString("1 selected"));
+    QCOMPARE(window.findChild<QLabel*>("propObjectIndex")->text(), QString("1"));
+    auto* details = window.findChild<QFrame*>("propertiesObjectDetails");
+    QVERIFY(details);
+    bool ellipseNamed = false;
+    for (auto* label : details->findChildren<QLabel*>("propertiesRowLabel"))
+      ellipseNamed |= label->text() == "Ellipse";
+    QVERIFY(ellipseNamed);
+    QDir().mkpath(QtTestArtifactDirectory());
+    window.show();
+    QApplication::processEvents();
+    QVERIFY(window.grab().save(QDir(QtTestArtifactDirectory()).filePath("issue1552-properties-ellipse.png")));
+  }
+
+  void propertiesPanelReportsSelectedSectionPlane() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    st.sectionPlaneSelected = true;
+    st.viewportSectionClip = true;
+    st.viewportSectionClipFrameValid = true;
+    st.viewportSectionClipFrame.origin = {12.0, 24.0, 6.0};
+    st.viewportSectionClipFrame.zAxis = {0.0, 0.0, 1.0};
+    st.viewportSectionClipOffset = 3.5;
+    st.viewportSectionClipExtent = {true, 0.0, 0.0, 10.0, 5.0};
+    window.Refresh();
+    QCOMPARE(window.findChild<QLabel*>("propertiesSummary")->text(),
+             QString("Selected: 1 object — Section plane"));
+    QVERIFY(!window.findChild<QLabel*>("propertiesEmptyState"));
+    QCOMPARE(window.findChild<QLabel*>("propSectionPlaneStatus")->text(), QString("Active"));
+    QCOMPARE(window.findChild<QLabel*>("propSectionPlaneOrigin")->text(), QString("12.0000, 24.0000, 6.0000"));
+    QCOMPARE(window.findChild<QLabel*>("propSectionPlaneOffset")->text(), QString("3.5000"));
+    QCOMPARE(window.findChild<QLabel*>("propSectionPlaneDimensions")->text(), QString("20.0000 × 10.0000"));
+    QDir().mkpath(QtTestArtifactDirectory());
+    window.show();
+    QApplication::processEvents();
+    QVERIFY(window.grab().save(QDir(QtTestArtifactDirectory()).filePath("issue1552-properties-section-plane.png")));
   }
 
   void propertiesPanelRefusesBadInputAndCorrectsRadiusWithAMessage() {
