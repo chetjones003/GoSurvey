@@ -184,6 +184,15 @@ def release_baseline_ref(root, base_ref):
             not os.environ.get("GITHUB_HEAD_REF", "").startswith("chore/release-")):
         return base_ref
 
+    remote = subprocess.run(
+        ["git", "-C", str(root), "remote", "get-url", "origin"],
+        capture_output=True, text=True,
+    )
+    if remote.returncode != 0:
+        # Unit-test fixture repositories have no remote; their supplied base commit is
+        # authoritative and must remain isolated from the workflow's environment variables.
+        return base_ref
+
     result = subprocess.run(
         ["git", "-C", str(root), "fetch", "--no-tags", "--depth=1", "origin",
          "+refs/heads/beta:refs/remotes/origin/beta"],
