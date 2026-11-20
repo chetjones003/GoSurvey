@@ -1401,6 +1401,9 @@ void EditorWindow::PickRibbonAnnotStyle(const QString& galleryObjectName, const 
   if (galleryObjectName == QStringLiteral("ribbonTextStyleGallery")) {
     if (TextStyles::Find(m_State.textStyles, name) == nullptr)
       return;
+    // The current text style is drawing content now (issue #1557 phase 1b), so the change is undoable.
+    if (name != m_State.activeTextStyleName)
+      PushUndoSnapshot(m_State, "Text style");
     SetActiveTextStyle(m_State, name);
     Refresh();
     return;

@@ -675,45 +675,6 @@ struct DrawingGeometrySnapshot {
 };
 
 
-/// A UCS saved under a name (`UCS Named Save`), persisted with the drawing (REQ-154).
-///
-/// Deliberately a plain name + frame pair: a named UCS *is* those two things, and giving it any
-/// more (a description, an id, a per-viewport binding) would be inventing scope the requirement
-/// does not have.
-struct NamedUcs {
-  std::string name;  ///< As typed, for display; matched case-insensitively.
-  ucs::Ucs frame;
-};
-
-/// One saved view (REQ-106): where the camera is, which way it looks, and which coordinate frame
-/// was active.
-///
-/// The UCS is part of the record, not an afterthought — REQ-106's acceptance says a named view
-/// "restores camera position/target/UCS exactly". A view saved while working to a lot line is
-/// useless if restoring it puts the camera back but leaves you in the world frame, because the
-/// coordinates you then type mean something different from the ones you typed when you saved it.
-///
-/// Pan/zoom/azimuth/elevation are exactly the four things `AppCommandState` uses to build a
-/// `Camera` (see CadViewCamera), so this stores the camera's inputs rather than a derived matrix —
-/// one source of truth, and a saved view cannot drift from what the live view would do with the
-/// same numbers.
-struct NamedView {
-  std::string name;  ///< As typed, for display; matched case-insensitively, like NamedUcs.
-  double panX = 0.0;
-  double panY = 0.0;
-  double panZ = 0.0;
-  float zoom = 1.f;
-  float azimuthDeg = 0.f;
-  float elevationDeg = 90.f;
-  float rollDeg = 0.f;  ///< Screen roll (#153); nonzero only for a view saved on a tilted-UCS PLAN.
-  /// Projection travels with the view (REQ-309). Without these a view saved in perspective would
-  /// restore as orthographic — the same silent-mismatch reason the UCS is stored here rather than
-  /// left to whatever happens to be active at restore time.
-  Camera::Projection projection = Camera::Projection::Orthographic;
-  float fovDeg = kDefaultFovDeg;
-  ucs::Ucs ucs;
-};
-
 /// How many previous UCSs `UCS Previous` can step back through.
 ///
 /// Bounded rather than unbounded because the stack is pushed on every UCS change and would
@@ -723,8 +684,8 @@ constexpr size_t kUcsPreviousDepth = 10;
 /// Snapshot of all per-drawing data.  AppCommandState holds the live (active-tab) copy directly;
 /// switching tabs saves the active fields here and restores the target tab's snapshot.
 struct DrawingDocument {
-  std::vector<CadAnnotationScale> viewportZoomScales;
-  int currentViewportZoomScaleIndex = -1;
+  int currentViewportZoomScaleIndex = -1;  ///< Tab-only: which zoom preset is showing (the list is drawing content).
+  int currentAnnotationScaleIndex = -1;    ///< Tab-only: which annotation scale is showing (the list is drawing content).
   double viewportPanX = 0.0;
   double viewportPanY = 0.0;
   float  viewportZoom = 1.f;
@@ -742,13 +703,16 @@ struct DrawingDocument {
   bool   viewportSectionClip = false;
   double viewportSectionClipOffset = 0.0;
   bool   viewportSectionClipFlip = false;
+  /// The face-derived section plane (REQ-343 amended) is per tab: it is not undone (only the undo
+  /// frame's copy of it is), so the live plane is carried here like the clip above.
+  bool viewportSectionClipFrameValid = false;
+  ucs::Ucs viewportSectionClipFrame{};
+  SectionPlaneExtent viewportSectionClipExtent{};
   /// The UCS is per drawing, not per session (REQ-154): switching tabs must not carry one drawing's
   /// coordinate frame into another's, which is the "UCS state does not leak between viewports"
   /// condition in as strong a form as a one-model-view-per-tab application can state it.
   ucs::Ucs activeUcs;
   std::vector<ucs::Ucs> ucsPrevious;
-  std::vector<NamedUcs> ucsNamed;
-  std::vector<NamedView> namedViews;
   std::string activeViewName;
   bool ucsFollow = false;
   /// Per-drawing entity-id counter (REQ-076). Saved/restored with the tab so two open drawings
@@ -758,17 +722,24 @@ struct DrawingDocument {
   /// The drawing content (ADR-0010), saved and restored whole on a tab switch.
   DrawingContent content;
 
+  /// Tab-only: the DWG import's lights and sun, carried per drawing and never undone.
+  std::vector<CadDwgImportedLight> dwgImportedLights;
+  CadDwgImportedSun dwgImportedSun{};
+  bool dwgImportedSunPresent = false;
+  CadDwgImportedLightList dwgImportedLightList{};
+  bool dwgImportedLightListPresent = false;
+  std::string dwgImportedLightListDictKey;
+  /// Tab-only: the block library's recent and favourite names, per drawing.
+  std::vector<std::string> blockRecent;
+  std::vector<std::string> blockFavorites;
+
   std::vector<int>              selectedSurveyPointIndices;
-  std::string                   currentColor = "ByLayer";  ///< Per tab (REQ-356): a new tab starts ByLayer.
-  projpts::Rules                pointVisibility;        ///< REQ-377: per tab, which project points this drawing shows
-  std::string                   activeTextStyleName = "Standard";  ///< Style for new TEXT/MTEXT.
   std::vector<SelectedEntity>   selection;
   /// Object isolation (REQ-084 (d)). PER TAB, and stored here for the same reason `selection` is:
   /// entity ids are unique **within a drawing**, so carrying one tab's hidden set into another
   /// would hide whatever objects happened to draw those numbers there. Never written to `internal document payload` —
   /// this struct is the in-memory tab store, not the file format.
   std::vector<std::uint64_t>    hiddenEntityIds;
-  std::vector<PageSetup>        savedPageSetups;         ///< Drawing-wide named page setups.
   int                           activeSpaceIndex = kModelSpaceIndex;  ///< -1 = model; else index into paperLayouts.
   uint32_t cadGpuRevision  = 0;
   uint32_t savedRevision   = 0;   ///< cadGpuRevision at last save; != cadGpuRevision means unsaved changes.
@@ -1468,12 +1439,10 @@ struct AppCommandState : DrawingContent {
   /// Right-Click Customization dialog open (Options → User Preferences). Not persisted.
   bool   showRightClickDialog    = false;
 
-  /// DWG SCALE object list (issue #622). Per-scale visibility/display is not wired yet; stored for fidelity.
-  std::vector<CadAnnotationScale> annotationScales;
-  /// Index into \ref annotationScales for model-space annotative display (-1 = drawing plot scale only).
+  /// Index into \ref annotationScales (drawing content) for model-space annotative display (-1 = drawing
+  /// plot scale only). Tab-only: the list is drawing content, the selection is per tab.
   int currentAnnotationScaleIndex = -1;
-  /// REQ-458: model editor viewport zoom ratio presets (separate from annotationScales).
-  std::vector<CadAnnotationScale> viewportZoomScales;
+  /// Index into \ref viewportZoomScales (drawing content). Tab-only, like the annotation index.
   int currentViewportZoomScaleIndex = -1;
   /// REQ-385: LIGHT entities and SUN object from DWG import (issue #624 lights slice).
   std::vector<CadDwgImportedLight> dwgImportedLights;
@@ -1483,11 +1452,6 @@ struct AppCommandState : DrawingContent {
   CadDwgImportedLightList dwgImportedLightList{};
   bool dwgImportedLightListPresent = false;
   std::string dwgImportedLightListDictKey;
-  float defaultPlottedTextHeightInches = 0.125f;
-
-  /// REQ-377 (#696 P4): which points of the project database this drawing shows. Per tab, saved in the
-  /// trailer; unused (and empty) in a standalone drawing.
-  projpts::Rules pointVisibility;
   /// Drawing Settings window open (REQ-357). Session-only.
   bool showDrawingSettingsWindow = false;
   /// Survey point X marker: horizontal span on paper (inches) → world half-extent = 0.5 × span × MUP (not zoom).
@@ -1740,8 +1704,6 @@ struct AppCommandState : DrawingContent {
   /// at a point prompt also resolves directly. While enabled, uses \ref objectSnapStationDisplayed when valid.
   bool objectSnapStation = false;
   bool objectSnapNode = true;  ///< REQ-490.2: drawing points and alignment PIs.
-  /// REQ-483.4: how this drawing writes and reads alignment stations (STATIONFORMAT).
-  alignment::StationFormat alignmentStationFormat;
   bool objectSnapStationDisplayedValid = false;
   double objectSnapStationDisplayed = 0.0;
   /// Set when a `STATION …` point entry fails; cleared after the active command logs it (REQ-490).
@@ -2041,13 +2003,10 @@ struct AppCommandState : DrawingContent {
   /// limited stack too, and an unbounded one would grow for the life of the session.
   std::vector<ucs::Ucs> ucsPrevious;
 
-  /// Saved UCS definitions (`UCS Named`), persisted with the drawing. "World" is reserved and is
-  /// never stored here — it is always available and can never be redefined or deleted.
-  std::vector<NamedUcs> ucsNamed;
-  /// Saved views for this drawing (REQ-106), and which one the view currently matches. The name is
-  /// empty whenever the camera has been moved since a restore — that is the "Unsaved View" the
-  /// ribbon shows, and it is a statement about the CAMERA, not about whether the drawing is dirty.
-  std::vector<NamedView> namedViews;
+  /// Saved UCSs (\ref DrawingContent::ucsNamed) and views (\ref DrawingContent::namedViews) live in
+  /// drawing content. "World" is reserved and is never stored there. \ref activeViewName is which
+  /// saved view the camera matches: empty whenever the camera has been moved since a restore — that
+  /// is the "Unsaved View" the ribbon shows, and a statement about the CAMERA, not about the drawing.
   std::string activeViewName;
 
   /// UCSFOLLOW: when set, any change to \ref activeUcs immediately switches the view to a PLAN view
@@ -3865,8 +3824,7 @@ struct AppCommandState : DrawingContent {
   bool chamferSolidAwaitingDistance = false;
 
   // --- Survey / COGO points (the points and their styles are DrawingContent) ---
-  CreatePointsOptions createPointsOpts;
-  int createPointsNextId = 1;
+  // createPointsOpts and createPointsNextId are drawing content (DrawingContent).
   bool showCreatePointsWindow = false;
   /// Status-bar toggle: when on, overlapping picks show a cursor marker and open a pick list on click.
   bool multiSelectionEnabled = false;
@@ -4013,16 +3971,7 @@ struct AppCommandState : DrawingContent {
   /// in the panel so that opening the editor from a selected feature line can aim it, and so it
   /// survives the window being closed and reopened.
   int featureLineElevIndex = 0;
-  /// Current layer for new geometry (ribbon combo + command defaults).
-  std::string currentLayer = "0";
-  /// Current colour for new geometry (REQ-356, AutoCAD's CECOLOR): colour storage ("ByLayer", an
-  /// ACI, `#RRGGBB`) stamped beside \ref currentLayer on every new object that takes the current
-  /// layer. Saved and reopened with the drawing exactly as \ref currentLayer is.
-  std::string currentColor = "ByLayer";
-  /// REQ-491 current style (the REQ-478 pattern): a new alignment uses it unless another style is named.
-  std::string alignmentStyleCurrent = "Standard";
-  /// Active text style for new TEXT/MTEXT (the STYLE dropdown). Empty resolves to "Standard".
-  std::string activeTextStyleName = "Standard";
+  // currentLayer, currentColor, alignmentStyleCurrent and activeTextStyleName are drawing content.
   DimensionStyle dimStyleDraft = DimensionStyles::Default();
   bool showDimStyleDialog = false;
   MultileaderStyle mleaderStyleDraft = MultileaderStyles::Default();
@@ -4796,7 +4745,7 @@ struct AppCommandState : DrawingContent {
   bool   modelViewSaved = false;
 
   // Page setups + layout-tab dialogs (right-click menu → Rename / Move-Copy / Page Setup Manager / Delete).
-  std::vector<PageSetup> savedPageSetups;        ///< drawing-wide named page setups; "Standard" ensured.
+  // savedPageSetups (drawing-wide named page setups; "Standard" ensured) is drawing content.
   bool showPageSetupManager = false;
   bool showNewPageSetup     = false;
   bool showPageSetupEditor  = false;             ///< the big "Modify" page-setup editor.

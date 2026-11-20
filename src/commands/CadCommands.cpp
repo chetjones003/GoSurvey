@@ -89,6 +89,10 @@ namespace {
 /// A stored tab or undo frame may hold an empty style table; a live drawing never does. Both
 /// restores refill the same tables (the tab restore also refills alignment styles).
 void FillEmptyDrawingContentTables(DrawingContent& c) {
+  if (c.textStyles.empty())
+    c.textStyles = TextStyles::DefaultTextStyles();
+  if (c.alignmentStyles.empty())
+    c.alignmentStyles = AlignmentStyles::DefaultAlignmentStyles();
   if (c.tableStyles.empty())
     c.tableStyles = CadTableBuiltinStyles();
   if (c.surveyPointStyles.empty())
@@ -103,14 +107,25 @@ void FillEmptyDrawingContentTables(DrawingContent& c) {
     c.dimensionStyles = DimensionStyles::DefaultStyles();
   if (c.multileaderStyles.empty())
     c.multileaderStyles = MultileaderStyles::DefaultStyles();
+  // The current layer, alignment style and text style are names into tables a restore may have
+  // just replaced. A name the restored drawing no longer has falls back to the built-in default,
+  // the same fallback the live drawing already uses for a missing style.
+  const bool layerExists = std::any_of(c.drawingLayerTable.begin(), c.drawingLayerTable.end(),
+                                       [&](const CadLayerRow& row) { return row.name == c.currentLayer; });
+  if (!layerExists)
+    c.currentLayer = "0";
+  if (AlignmentStyles::Find(c.alignmentStyles, c.alignmentStyleCurrent) == nullptr)
+    c.alignmentStyleCurrent = AlignmentStyles::kStandardName;
+  if (TextStyles::Find(c.textStyles, c.activeTextStyleName) == nullptr)
+    c.activeTextStyleName = TextStyles::kStandardName;
 }
 } // namespace
 
 void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   if (idx < 0 || static_cast<size_t>(idx) >= cmd.documents.size()) return;
   DrawingDocument& doc       = cmd.documents[static_cast<size_t>(idx)];
-  doc.viewportZoomScales = cmd.viewportZoomScales;
   doc.currentViewportZoomScaleIndex = cmd.currentViewportZoomScaleIndex;
+  doc.currentAnnotationScaleIndex   = cmd.currentAnnotationScaleIndex;
   doc.viewportPanX           = cmd.viewportPanX;
   doc.viewportPanY           = cmd.viewportPanY;
   doc.viewportZoom           = cmd.viewportZoom;
@@ -123,6 +138,9 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.viewportSectionClip       = cmd.viewportSectionClip;  // per tab, never to internal document payload (REQ-341)
   doc.viewportSectionClipOffset = cmd.viewportSectionClipOffset;
   doc.viewportSectionClipFlip   = cmd.viewportSectionClipFlip;
+  doc.viewportSectionClipFrameValid = cmd.viewportSectionClipFrameValid;  // the live plane, not its undo copy
+  doc.viewportSectionClipFrame      = cmd.viewportSectionClipFrame;
+  doc.viewportSectionClipExtent     = cmd.viewportSectionClipExtent;
   // The coordinate system is per-drawing (REQ-154). Without this, switching tabs would carry one
   // drawing's UCS into another's — and every coordinate typed afterwards would be read in a frame
   // belonging to a different drawing, with nothing on screen to say so.
@@ -131,17 +149,20 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   // floating viewport's frame into doc.content.paperLayouts below).
   doc.activeUcs              = CadDrawingScopedUcs(cmd);
   doc.ucsPrevious            = cmd.ucsPrevious;
-  doc.ucsNamed               = cmd.ucsNamed;
-  doc.namedViews             = cmd.namedViews;
   doc.activeViewName         = cmd.activeViewName;
   doc.ucsFollow              = cmd.ucsFollow;
   // ADR-0010: everything the drawing saves and the user edits, in one assignment.
   doc.content = static_cast<const DrawingContent&>(cmd);
+  doc.dwgImportedLights           = cmd.dwgImportedLights;
+  doc.dwgImportedSun              = cmd.dwgImportedSun;
+  doc.dwgImportedSunPresent       = cmd.dwgImportedSunPresent;
+  doc.dwgImportedLightList        = cmd.dwgImportedLightList;
+  doc.dwgImportedLightListPresent = cmd.dwgImportedLightListPresent;
+  doc.dwgImportedLightListDictKey = cmd.dwgImportedLightListDictKey;
+  doc.blockRecent                 = cmd.blockRecent;
+  doc.blockFavorites              = cmd.blockFavorites;
   doc.nextEntityId           = cmd.nextEntityId;  // per-drawing id counter (REQ-076)
   doc.selectedSurveyPointIndices = cmd.selectedSurveyPointIndices;
-  doc.currentColor           = cmd.currentColor;  // REQ-356
-  doc.pointVisibility        = cmd.pointVisibility;
-  doc.activeTextStyleName    = cmd.activeTextStyleName;
   doc.selection              = cmd.selection;
   doc.hiddenEntityIds        = cmd.hiddenEntityIds;  // isolation is per-drawing (REQ-084 (d))
   // REQ-155: fold the live floating-viewport UCS into the snapshot's copy of that viewport, so a
@@ -153,7 +174,6 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
         static_cast<size_t>(cmd.floatingViewportIndex) < dl.viewports.size())
       dl.viewports[static_cast<size_t>(cmd.floatingViewportIndex)].activeUcs = cmd.activeUcs;
   }
-  doc.savedPageSetups        = cmd.savedPageSetups;
   doc.activeSpaceIndex       = cmd.activeSpaceIndex;
   doc.cadGpuRevision         = cmd.cadGpuRevision;
   doc.savedRevision          = cmd.activeDocSavedRevision;
@@ -163,8 +183,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
 void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   if (idx < 0 || static_cast<size_t>(idx) >= cmd.documents.size()) return;
   const DrawingDocument& doc     = cmd.documents[static_cast<size_t>(idx)];
-  cmd.viewportZoomScales = doc.viewportZoomScales;
   cmd.currentViewportZoomScaleIndex = doc.currentViewportZoomScaleIndex;
+  cmd.currentAnnotationScaleIndex   = doc.currentAnnotationScaleIndex;
   cmd.viewportPanX               = doc.viewportPanX;
   cmd.viewportPanY               = doc.viewportPanY;
   cmd.viewportZoom               = doc.viewportZoom;
@@ -177,17 +197,24 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.viewportSectionClip        = doc.viewportSectionClip;  // per tab (REQ-341, D-2026-09-16-b)
   cmd.viewportSectionClipOffset  = doc.viewportSectionClipOffset;
   cmd.viewportSectionClipFlip    = doc.viewportSectionClipFlip;
+  cmd.viewportSectionClipFrameValid = doc.viewportSectionClipFrameValid;
+  cmd.viewportSectionClipFrame      = doc.viewportSectionClipFrame;
+  cmd.viewportSectionClipExtent     = doc.viewportSectionClipExtent;
   cmd.viewAnimActive             = false;  // never resume another tab's animation
   cmd.activeUcs                  = doc.activeUcs;  // per-drawing coordinate system (REQ-154)
   cmd.ucsPrevious                = doc.ucsPrevious;
-  cmd.ucsNamed                   = doc.ucsNamed;
-  cmd.namedViews                 = doc.namedViews;
   cmd.activeViewName             = doc.activeViewName;
   cmd.ucsFollow                  = doc.ucsFollow;
   static_cast<DrawingContent&>(cmd) = doc.content;  // ADR-0010
   FillEmptyDrawingContentTables(cmd);
-  if (cmd.alignmentStyles.empty())
-    cmd.alignmentStyles = AlignmentStyles::DefaultAlignmentStyles();
+  cmd.dwgImportedLights           = doc.dwgImportedLights;
+  cmd.dwgImportedSun              = doc.dwgImportedSun;
+  cmd.dwgImportedSunPresent       = doc.dwgImportedSunPresent;
+  cmd.dwgImportedLightList        = doc.dwgImportedLightList;
+  cmd.dwgImportedLightListPresent = doc.dwgImportedLightListPresent;
+  cmd.dwgImportedLightListDictKey = doc.dwgImportedLightListDictKey;
+  cmd.blockRecent                 = doc.blockRecent;
+  cmd.blockFavorites              = doc.blockFavorites;
   cmd.nextEntityId               = doc.nextEntityId;  // per-drawing id counter (REQ-076)
   // Force a re-sweep for the incoming drawing. The guard compares against cadGpuRevision, which is
   // per-document and restored just below — two tabs can legitimately sit at the same revision, and
@@ -201,13 +228,9 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.pipeRunWorldSolidOwnerIndex.clear();
   cmd.pipeRunWorldSolidsSig = 0;  // 0 is never a real signature — forces the next refresh to derive
   cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
-  cmd.currentColor               = doc.currentColor;
-  cmd.pointVisibility            = doc.pointVisibility;
   cmd.mleaderStyleDraft          = cmd.activeMultileaderStyle;
-  cmd.activeTextStyleName        = doc.activeTextStyleName;
   cmd.selection                  = doc.selection;
   cmd.hiddenEntityIds            = doc.hiddenEntityIds;  // isolation is per-drawing (REQ-084 (d))
-  cmd.savedPageSetups            = doc.savedPageSetups;
   cmd.activeSpaceIndex           = doc.activeSpaceIndex;
   cmd.lastPaperLayoutIndex       = doc.activeSpaceIndex >= 0 ? doc.activeSpaceIndex : 0;
   cmd.selectedViewports.clear();  // transient selection; indices don't carry across documents

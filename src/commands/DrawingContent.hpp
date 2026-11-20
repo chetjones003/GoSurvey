@@ -22,14 +22,58 @@
 #include "GoSurvey/Survey/AlignmentStyleData.hpp"
 #include "GoSurvey/Survey/AlignmentViewFrames.hpp"
 #include "GoSurvey/Survey/SurveyPointRecords.hpp"
+#include "ProjectPointRules.hpp"  // projpts::Rules (REQ-377)
+#include <GoSurvey/Math/ucs.hpp>
+#include <GoSurvey/Renderer/Camera.hpp>  // NamedView's projection and FOV
+
+/// A UCS saved under a name (`UCS Named Save`), persisted with the drawing (REQ-154).
+///
+/// Deliberately a plain name + frame pair: a named UCS *is* those two things, and giving it any
+/// more (a description, an id, a per-viewport binding) would be inventing scope the requirement
+/// does not have.
+struct NamedUcs {
+  std::string name;  ///< As typed, for display; matched case-insensitively.
+  ucs::Ucs frame;
+};
+
+/// One saved view (REQ-106): where the camera is, which way it looks, and which coordinate frame
+/// was active.
+///
+/// The UCS is part of the record, not an afterthought — REQ-106's acceptance says a named view
+/// "restores camera position/target/UCS exactly". A view saved while working to a lot line is
+/// useless if restoring it puts the camera back but leaves you in the world frame, because the
+/// coordinates you then type mean something different from the ones you typed when you saved it.
+///
+/// Pan/zoom/azimuth/elevation are exactly the four things `AppCommandState` uses to build a
+/// `Camera` (see CadViewCamera), so this stores the camera's inputs rather than a derived matrix —
+/// one source of truth, and a saved view cannot drift from what the live view would do with the
+/// same numbers.
+struct NamedView {
+  std::string name;  ///< As typed, for display; matched case-insensitively, like NamedUcs.
+  double panX = 0.0;
+  double panY = 0.0;
+  double panZ = 0.0;
+  float zoom = 1.f;
+  float azimuthDeg = 0.f;
+  float elevationDeg = 90.f;
+  float rollDeg = 0.f;  ///< Screen roll (#153); nonzero only for a view saved on a tilted-UCS PLAN.
+  /// Projection travels with the view (REQ-309). Without these a view saved in perspective would
+  /// restore as orthographic — the same silent-mismatch reason the UCS is stored here rather than
+  /// left to whatever happens to be active at restore time.
+  Camera::Projection projection = Camera::Projection::Orthographic;
+  float fovDeg = kDefaultFovDeg;
+  ucs::Ucs ucs;
+};
 
 /// Drawing content (GLOSSARY.md, ADR-0010): the fields an undo frame and a tab's stored document
 /// both hold, defined once. Undo stores it in \ref DrawingGeometrySnapshot, a tab stores it in
 /// \ref DrawingDocument, and \ref AppCommandState inherits it for the live drawing, so copying
 /// drawing content is one assignment instead of a hand-written field list.
 ///
-/// Phase 1a of issue #1557: exactly the fields those two structs shared, moved without behaviour
-/// change. The defaults are the snapshot's and the document's; `AppCommandState`'s constructor
+/// Phase 1a of issue #1557 moved the fields the two structs shared. Phase 1b adds the "current"
+/// settings, the named views and UCSs, the page setups, the annotation and viewport scale lists,
+/// the point visibility rules and the point-numbering state, so each one is undone and carried
+/// per tab. The defaults are the snapshot's and the document's; `AppCommandState`'s constructor
 /// seeds the tables a live drawing always has (layer "0", "Standard" styles).
 struct DrawingContent {
   // --- Model-space entities ---------------------------------------------------------------------
@@ -146,6 +190,10 @@ struct DrawingContent {
   /// because a swap leaves behind whatever it does not name (issue #486).
   std::vector<CadPipeRun> cadPipeRuns;
   std::vector<EntityAttributes> cadPipeRunAttrs;
+  /// Annotation scales (issue #622): the DWG SCALE object list. Per-scale display is not wired yet.
+  std::vector<CadAnnotationScale> annotationScales;
+  /// REQ-458: model editor viewport zoom ratio presets (separate from annotationScales).
+  std::vector<CadAnnotationScale> viewportZoomScales;
   std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
   std::vector<alignment::ViewFrameGroup> viewFrameGroups;  ///< REQ-517: view frame groups that follow an alignment
   std::vector<alignment::SampleLine> sampleLines;  ///< REQ-519: sample lines and their sections (persist with the drawing)
@@ -169,13 +217,33 @@ struct DrawingContent {
   /// Named point groups (REQ-067) — drawing-owned rules, resolved on demand, never cached.
   /// Undoable, like textStyles: creating or editing one is a single-step undo.
   std::vector<PointGroup> pointGroups;
+  /// REQ-377 (#696 P4): which points of the project database this drawing shows. Undoable with the
+  /// drawing (ProjectAddFlow and HIDE set it); empty in a standalone drawing.
+  projpts::Rules pointVisibility;
+  /// Point numbering (REQ-067 / issue #1557 phase 1b): the Create Points options and the next free
+  /// number. Undoable, so undoing a point creation also rewinds the number it used.
+  CreatePointsOptions createPointsOpts;
+  int createPointsNextId = 1;
 
   // --- Layers and styles -------------------------------------------------------------------------
 
   /// Layer table. Empty here; `AppCommandState` seeds layer "0" (issue #57).
   std::vector<CadLayerRow> drawingLayerTable;
+  /// Current layer for new geometry (ribbon combo + command defaults). Undoable; a restore that
+  /// names a layer no longer in \ref drawingLayerTable falls back to "0".
+  std::string currentLayer = "0";
+  /// Current colour for new geometry (REQ-356, AutoCAD's CECOLOR): colour storage ("ByLayer", an
+  /// ACI, `#RRGGBB`) stamped beside \ref currentLayer on every new object that takes the current
+  /// layer. Saved and reopened with the drawing exactly as \ref currentLayer is.
+  std::string currentColor = "ByLayer";
+  /// REQ-491 current style (the REQ-478 pattern): a new alignment uses it unless another style is named.
+  std::string alignmentStyleCurrent = "Standard";
+  /// Active text style for new TEXT/MTEXT (the STYLE dropdown). Empty resolves to "Standard".
+  std::string activeTextStyleName = "Standard";
   /// Named text styles (REQ-044 / ADR-020) — undoable so style edits undo.
   std::vector<TextStyle> textStyles;
+  /// Text height for new TEXT, synced to the active text style (REQ-044), in plotted inches.
+  float defaultPlottedTextHeightInches = 0.125f;
   /// Named surface styles (REQ-070 / ADR-036 (d)) — undoable for the same reason textStyles is.
   ///
   /// The generated contours and borders these describe are **not** here and never will be: they live
@@ -183,6 +251,8 @@ struct DrawingContent {
   /// what lets a style edit be undoable without a single contour entering the undo stack.
   std::vector<SurfaceStyle> surfaceStyles;
   std::vector<AlignmentStyle> alignmentStyles;
+  /// REQ-483.4: how this drawing writes and reads alignment stations (STATIONFORMAT).
+  alignment::StationFormat alignmentStationFormat;
   std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502: drawing-owned check sets
   std::vector<AlignmentLabelSet> alignmentLabelSets;  ///< Named alignment label sets (REQ-492).
   std::vector<AlignmentLabelStyle> alignmentLabelStyles;  ///< REQ-492.5
@@ -201,7 +271,17 @@ struct DrawingContent {
   std::vector<PdfAttachment> pdfAttachments;
   /// Paper layouts incl. native paper geometry (REQ-025/037/038) — undoable.
   std::vector<PaperLayout> paperLayouts;
+  /// Drawing-wide named page setups (undoable; "Standard" is ensured where the drawing is shown).
+  std::vector<PageSetup> savedPageSetups;
   std::vector<CadRasterImage> cadRasterImages;  ///< model-space raster underlays (REQ-511)
+
+  // --- Saved views and coordinate systems --------------------------------------------------------
+
+  /// Saved UCS definitions (`UCS Named`), persisted with the drawing (REQ-154). "World" is reserved
+  /// and is never stored here.
+  std::vector<NamedUcs> ucsNamed;
+  /// Saved views for this drawing (REQ-106). The live view's name (`activeViewName`) is tab state.
+  std::vector<NamedView> namedViews;
 
   // --- Drawing properties ------------------------------------------------------------------------
 

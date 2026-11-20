@@ -83,8 +83,7 @@ int CommitTraverseToDrawing(AppCommandState& state, const TraverseData& data,
         TraverseAdjustmentHasElevations(*accepted) ? accepted->adjElevation[i] : data.startElevation);
   if (!valid) { log.push_back("TRAVERSE: nonfinite station coordinate; no points committed."); return 0; }
   const auto options = state.createPointsOpts;
-  const int nextPointId = state.createPointsNextId;
-  PushUndoSnapshot(state, "Traverse commit");
+  PushUndoSnapshot(state, "Traverse commit");  // the undo frame carries the point numbering too
   state.createPointsOpts.sequentialNumbering = false;
   state.createPointsOpts.duplicatePolicy = SurveyDuplicatePolicy::Renumber;
   const auto before = state.surveyPoints.size();
@@ -95,7 +94,6 @@ int CommitTraverseToDrawing(AppCommandState& state, const TraverseData& data,
         point.n - state.worldDocumentOriginY, point.z, log, false);
   }
   state.createPointsOpts = options;
-  state.createPointsNextId = nextPointId;
   const int count = static_cast<int>(state.surveyPoints.size() - before);
   log.push_back("TRAVERSE: committed " + std::to_string(count) + " survey points to the drawing.");
   return count;
