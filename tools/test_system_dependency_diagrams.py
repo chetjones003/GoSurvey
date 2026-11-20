@@ -51,12 +51,12 @@ class SystemDependencyDiagramTests(unittest.TestCase):
         with self.assertRaisesRegex(diagrams.DiagramError, "allows math -> pqt"):
             diagrams.validate(self.changed("math", "pqt", add=True))
 
-    def test_core_claim_contradicted_by_the_map_is_rejected(self):
+    def test_core_is_allowed_for_every_non_core_system(self):
         with self.assertRaisesRegex(diagrams.DiagramError, "omits renderer -> core"):
             diagrams.validate(self.changed("renderer", "core", add=False), feature_edges=[])
-        with self.assertRaisesRegex(diagrams.DiagramError, "allows editor -> core"):
-            diagrams.validate(self.changed("editor", "core", add=True))
-        diagrams.validate(self.changed("editor", "survey", add=True))
+        with self.assertRaisesRegex(diagrams.DiagramError, "omits editor -> core"):
+            diagrams.validate(self.changed("editor", "core", add=False))
+        diagrams.validate(self.allowed)
 
     def test_gap_is_dropped_when_the_map_no_longer_has_it(self):
         self.assertIn("Commands and GoSurveyEditor may use Geometry's public kernel interface", diagrams.render_markdown(self.allowed))
