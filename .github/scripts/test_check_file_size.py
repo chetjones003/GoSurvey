@@ -55,6 +55,14 @@ class FindViolationsTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertIn("src/big.cpp", result[0])
 
+    def test_approved_growth_keeps_the_original_baseline(self):
+        current = {"src/big.cpp": 3501, "src/other.cpp": 3501}
+        self.assertEqual(gate.find_violations(
+            current, {"src/big.cpp": 3500, "src/other.cpp": 3500},
+            {"src/big.cpp": 3500, "src/other.cpp": 3500},
+            allow_growth_paths=("src/big.cpp",)),
+            ["src/other.cpp: grew from 3500 to 3501 lines (limit 3000)"])
+
     def test_grandfathered_file_that_shrinks_requires_lower_baseline(self):
         current = {"src/big.cpp": 3400}
         result = self.violations(current, {"src/big.cpp": 3500}, {"src/big.cpp": 3500})

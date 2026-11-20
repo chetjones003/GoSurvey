@@ -20,7 +20,7 @@ SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".i
 EXCLUDED_PREFIXES = ("third_party/",)
 
 
-def find_violations(current, baseline, base_baseline, renamed_paths=()):
+def find_violations(current, baseline, base_baseline, renamed_paths=(), allow_growth_paths=()):
     """Return human-readable violations.
 
     current: {path: line_count} for every in-scope source file.
@@ -54,7 +54,7 @@ def find_violations(current, baseline, base_baseline, renamed_paths=()):
     for path, lines in sorted(current.items()):
         if lines > LIMIT and path not in baseline:
             problems.append(f"{path}: {lines} lines exceeds {LIMIT} and is not grandfathered")
-        elif lines > LIMIT and lines > baseline[path]:
+        elif lines > LIMIT and lines > baseline[path] and path not in allow_growth_paths:
             problems.append(f"{path}: grew from {baseline[path]} to {lines} lines (limit {LIMIT})")
 
     for path, value in sorted(baseline.items()):
@@ -209,6 +209,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2], help="repository root")
     parser.add_argument("--base-ref", help="base commit whose baseline caps the PR's baseline")
+    parser.add_argument("--allow-growth", action="append", default=[], metavar="PATH",
+                        help="allow an existing grandfathered file to grow for an approved PR")
     parser.add_argument("--write-baseline", type=Path, metavar="PATH",
                         help="write the grandfather baseline for the checked-out tree and exit")
     args = parser.parse_args(argv)
@@ -234,7 +236,8 @@ def main(argv=None):
               f"{len(base_baseline)} oversized file(s) at the base commit.")
 
     renamed_paths = read_renamed_paths(args.root, args.base_ref)
-    problems = find_violations(current, baseline, base_baseline, renamed_paths)
+    problems = find_violations(current, baseline, base_baseline, renamed_paths,
+                               allow_growth_paths=args.allow_growth)
     for problem in problems:
         print(f"::error::{problem}")
     if problems:
