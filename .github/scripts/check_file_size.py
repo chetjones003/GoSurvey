@@ -212,7 +212,8 @@ def main(argv=None):
     if not args.base_ref:
         parser.error("--base-ref is required when checking (omit it only with --write-baseline)")
 
-    args.base_ref = release_baseline_ref(args.root, args.base_ref)
+    if argv is None:  # CI invocation only; tests pass argv and must not read the job's env.
+        args.base_ref = release_baseline_ref(args.root, args.base_ref)
 
     current = collect_line_counts(args.root)
     baseline = read_baseline(args.root)
