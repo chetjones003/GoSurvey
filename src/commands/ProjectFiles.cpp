@@ -181,8 +181,8 @@ void RepointOpenDrawings(AppCommandState& st, std::uint32_t uid,
     if (static_cast<int>(i) == st.activeDrawingIdx)
       repoint(st.pdfAttachments, st.cadPointClouds, st.cadRasterImages);
     else if (i < st.documents.size())
-      repoint(st.documents[i].pdfAttachments, st.documents[i].cadPointClouds,
-              st.documents[i].cadRasterImages);
+      repoint(st.documents[i].content.pdfAttachments, st.documents[i].content.cadPointClouds,
+              st.documents[i].content.cadRasterImages);
   }
 }
 

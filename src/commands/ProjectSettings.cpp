@@ -140,10 +140,10 @@ void EnforceProjectSettings(AppCommandState& st, std::vector<std::string>& log) 
     const bool active = i == st.activeDrawingIdx;
     if (!active && i >= static_cast<int>(st.documents.size()))
       continue;
-    int*             units = active ? &st.drawingInsUnits : &st.documents[static_cast<size_t>(i)].drawingInsUnits;
+    int*             units = active ? &st.drawingInsUnits : &st.documents[static_cast<size_t>(i)].content.drawingInsUnits;
     float*           scale = active ? &st.modelUnitsPerPlottedInch
-                                    : &st.documents[static_cast<size_t>(i)].modelUnitsPerPlottedInch;
-    DrawingSettings* ds = active ? &st.drawingSettings : &st.documents[static_cast<size_t>(i)].drawingSettings;
+                                    : &st.documents[static_cast<size_t>(i)].content.modelUnitsPerPlottedInch;
+    DrawingSettings* ds = active ? &st.drawingSettings : &st.documents[static_cast<size_t>(i)].content.drawingSettings;
     const float      scaleBefore = *scale;
     const ProjectApplyResult r = ApplyProjectToDrawing(*p, units, scale, ds);
     if (!r.changed)

@@ -4,6 +4,7 @@
 #include <limits>
 
 #include "CadEntities.hpp"
+#include "DrawingContent.hpp"  // ADR-0010: the fields undo frames and tabs share
 #include <GoSurvey/Terrain/surfacequery.hpp>  // ISurfaceQuery, for MakeSurfaceQueryForCommands (REQ-497)
 #include "GoSurvey/Survey/AlignmentModel.hpp"  // REQ-480 / ADR-075: per-drawing alignment store
 #include "GoSurvey/Survey/AlignmentViewFrames.hpp"  // REQ-517: view frame groups that follow an alignment
@@ -12,10 +13,10 @@
 #include "GoSurvey/Survey/AlignmentDesign.hpp"  // REQ-502: check sets
 #include "CadDimGeom.hpp"
 #include "EntityId.hpp"
-// TextStyles::DefaultTextStyles, for the textStyles member's initializer (issue #57). Pure and
+// TextStyles::DefaultTextStyles, for AppCommandState's textStyles seed (issue #57). Pure and
 // dependency-free (string/vector/CadEntities.hpp), so this adds no cycle and no weight.
 #include "TextStyle.hpp"
-// SurfaceStyles::DefaultSurfaceStyles, for the surfaceStyles member's initializer — same reason,
+// SurfaceStyles::DefaultSurfaceStyles, for AppCommandState's surfaceStyles seed — same reason,
 // same shape, and pure for the same reason (REQ-070 / ADR-036 (d)).
 #include "SurfaceStyle.hpp"
 #include <GoSurvey/Survey/AlignmentStylePublic.hpp>
@@ -248,36 +249,6 @@ struct SurfaceHoverRow {
   std::string elevation;  ///< already to `displayLinearPrecision`; "—" if there is no elevation
 };
 
-
-/// Named layer row for the layer manager (visibility / freeze / lock are stored for future viewport filtering).
-struct CadLayerRow {
-  std::string name;
-  bool on = true;
-  bool frozen = false;
-  bool locked = false;
-  /// Layer swatch color (same encoding as \ref EntityAttributes::color except not "ByLayer").
-  std::string color = "White";
-  /// Named STB plot style assigned to this layer; defaults to Normal.
-  std::string plotStyleName = "Normal";
-  std::string linetype = "Continuous";
-  float lineweightMm = -1.f; ///< \c -1 = default (DXF layer 370 -3 on export).
-  float transparency = 0.f;  ///< 0 opaque .. 1 fully transparent (layer-wide).
-  bool plottable = true;     ///< when false, geometry/viewports on this layer are excluded from plots (REQ-029/030).
-};
-
-
-/// The layer table a brand-new drawing starts with — layer "0" and nothing else.
-///
-/// Layer "0" is documented as always existing, and \ref SyncDrawingLayerTableWithGeometry
-/// synthesizes it when the table is empty. Issue #57: that synthesis happened on *load* but not at
-/// *creation*, so a new drawing and the same drawing reopened were not the same document. The
-/// definition lives here, beside \ref CadLayerRow, so the default row and the row the sync
-/// synthesizes cannot drift apart.
-inline std::vector<CadLayerRow> DefaultDrawingLayerTable() {
-  CadLayerRow zero;
-  zero.name = "0";
-  return {zero};
-}
 
 /// Resolve stored color string + transparency to RGBA for viewport/UI (0..1). \p defaultRgb used for ByLayer.
 void ResolveStoredColorForViewport(const std::string& colorStorage, float transparency, float defaultR,
@@ -680,337 +651,15 @@ inline void SyncPolylineNormal(std::vector<float>& normal, std::size_t vertsFloa
 /// is far above any realistic vertex count so the two grip families never collide.
 inline constexpr int kPolyBulgeGripBase = 1 << 20;
 
-/// The Object Layers tab's rows (REQ-361): each kind of object that lands on its own layer when it
-/// is created. Stored by index — append only.
-enum class ObjectLayerKind : std::uint8_t {
-  SurveyPoint = 0,
-  SurveyPointLabel,
-  Surface,      ///< Every TIN surface store entry (TIN, grid, volume, corridor).
-  FeatureLine,
-  PipeRun,
-  PipeFitting,  ///< A pipe-catalogue part placed off any run (D-2026-09-29-f).
-  Solid,
-  Table,
-};
-inline constexpr int kObjectLayerKindCount = 8;
-
-/// One Object Layers row: the base layer, the name modifier and whether a creation dialog may change it.
-struct ObjectLayerRow {
-  enum class Modifier : std::uint8_t { None = 0, Prefix = 1, Suffix = 2 };
-  std::string layer;
-  Modifier    modifier = Modifier::None;
-  std::string value;   ///< Each `*` becomes the new object's name.
-  bool        locked = false;
-  bool operator==(const ObjectLayerRow& o) const {
-    return layer == o.layer && modifier == o.modifier && value == o.value && locked == o.locked;
-  }
-};
-
-/// REQ-361 item 1's NCS defaults, in \ref ObjectLayerKind order.
-[[nodiscard]] inline std::array<ObjectLayerRow, kObjectLayerKindCount> DefaultObjectLayers() {
-  std::array<ObjectLayerRow, kObjectLayerKindCount> rows;
-  const char* names[kObjectLayerKindCount] = {"V-NODE", "V-NODE-TEXT", "C-TOPO", "C-TOPO-FEAT",
-                                              "C-PIPE", "C-PIPE-FITT", "C-SOLID", "C-ANNO-TABL"};
-  for (int i = 0; i < kObjectLayerKindCount; ++i)
-    rows[static_cast<size_t>(i)].layer = names[i];
-  return rows;
-}
 
 struct ProjectSettings;  // ProjectSettings.hpp (REQ-375)
 struct AddDrawingPlan;   // ProjectAddFlow.hpp (REQ-378)
 
-/// REQ-375 / D-2026-10-05-e: the settings a project supplies as defaults that a project drawing may
-/// override. The zone and the drawing unit are enforced instead; the transformation, geographic
-/// marker and online map are always the drawing's own. The names are the trailer's.
-enum class ProjectDefaultKey : std::uint8_t {
-  AngularUnits = 0,
-  FootDefinition,
-  ScaleInsertedObjects,
-  SetDrawingVariables,
-  PlotScale,
-  ObjectLayers,
-};
-inline constexpr unsigned kProjectDefaultKeyCount = 6;
-inline constexpr const char* kProjectDefaultKeyNames[kProjectDefaultKeyCount] = {
-    "angularUnits", "footDefinition", "scaleInsertedObjects", "setDrawingVariables", "plotScale", "objectLayers"};
-
-/// The drawing's own settings that the Drawing Settings window edits (REQ-357). The drawing unit and
-/// the scale are NOT here: they are `AppCommandState::drawingInsUnits` and
-/// `modelUnitsPerPlottedInch`, one value each (REQ-022, D-2026-09-29-c).
-struct DrawingSettings {
-  /// REQ-375: bit per \ref ProjectDefaultKey the drawing overrides. Meaningful only for a project
-  /// drawing; a standalone drawing keeps it 0.
-  unsigned overridden = 0;
-  [[nodiscard]] bool IsOverridden(ProjectDefaultKey k) const { return (overridden >> static_cast<unsigned>(k)) & 1u; }
-  void SetOverridden(ProjectDefaultKey k, bool on) {
-    const unsigned bit = 1u << static_cast<unsigned>(k);
-    overridden = on ? (overridden | bit) : (overridden & ~bit);
-  }
-
-  enum class AngularUnits : std::uint8_t { Degrees = 0, Radians = 1, Grads = 2 };
-  enum class FootDefinition : std::uint8_t { UsSurvey = 0, International = 1 };
-  AngularUnits   angularUnits = AngularUnits::Degrees;
-  /// Imperial to Metric conversion: every feet↔meters conversion in the drawing uses this.
-  FootDefinition footDefinition = FootDefinition::UsSurvey;
-  /// Off → INSERT's unit scale factor is 1 whatever the block's unit.
-  bool scaleInsertedObjects = true;
-  /// On → DWG/DXF save writes LUNITS and AUNITS from these settings, beside INSUNITS.
-  bool setDrawingVariables = true;
-  /// The drawing's coordinate system (zone), a CS-MAP code such as "HARN/TX.TX-C" (REQ-358).
-  /// Empty = No Datum, No Projection. A code the installed dictionary does not know is kept.
-  std::string zoneCode;
-  /// The geographic marker (REQ-359 item 4): the drawing's geolocation reference — a design point and
-  /// a north direction, stored with the zone and read from GEODATA's design point / north by
-  /// REQ-362. The point is WORLD (WCS) coordinates, the frame GEODATA uses, so it does not move when
-  /// the local-storage origin does. Default: the drawing origin (WCS 0,0) with grid north.
-  double markerX = 0.0;
-  double markerY = 0.0;
-  /// North direction, degrees counter-clockwise from +X; 90 = grid north (+Y).
-  double markerNorthDeg = 90.0;
-
-  /// The Transformation tab (REQ-360): local (drawing) ↔ grid,
-  /// `grid = G_ref + k·R(θ)·(L − L_ref)` with k = k_grid · k_sea. Angles are stored in degrees
-  /// whatever the Angular units (the window converts). Belongs to the zone: reset with it.
-  struct Transform {
-    enum class Computation : std::uint8_t { ReferencePoint = 0, UserDefined = 1 };
-    /// Rotation point: θ from a second point's grid vs local bearing. ToNorth / Azimuth are the two
-    /// kinds of "Specify grid rotation angle".
-    enum class Rotation : std::uint8_t { RotationPoint = 0, ToNorth = 1, Azimuth = 2 };
-    bool        apply = false;
-    bool        applySeaLevel = false;
-    double      elevation = 0.0;        ///< h, drawing unit
-    double      spheroidRadiusM = 0.0;  ///< R, meters; 0 = the zone ellipsoid's semi-major axis
-    Computation computation = Computation::ReferencePoint;
-    double      userScaleFactor = 1.0;  ///< k_grid when User Defined
-    // Reference point: L_ref (WORLD, drawing unit), G_ref (zone unit), survey point number (0 = none).
-    double      refLocalX = 0.0, refLocalY = 0.0;
-    double      refGridE = 0.0, refGridN = 0.0;
-    int         refPointNumber = 0;
-    Rotation    rotation = Rotation::ToNorth;
-    // Rotation point, the same four values and a point number.
-    double      rotLocalX = 0.0, rotLocalY = 0.0;
-    double      rotGridE = 0.0, rotGridN = 0.0;
-    int         rotPointNumber = 0;
-    double      toNorthDeg = 0.0;       ///< local north → grid north, clockwise
-    double      localAzimuthDeg = 0.0;  ///< Azimuth: this local azimuth (clockwise from north)…
-    double      gridAzimuthDeg = 0.0;   ///< …becomes this grid azimuth
-    bool operator==(const Transform& o) const {
-      return apply == o.apply && applySeaLevel == o.applySeaLevel && elevation == o.elevation &&
-             spheroidRadiusM == o.spheroidRadiusM && computation == o.computation &&
-             userScaleFactor == o.userScaleFactor && refLocalX == o.refLocalX && refLocalY == o.refLocalY &&
-             refGridE == o.refGridE && refGridN == o.refGridN && refPointNumber == o.refPointNumber &&
-             rotation == o.rotation && rotLocalX == o.rotLocalX && rotLocalY == o.rotLocalY &&
-             rotGridE == o.rotGridE && rotGridN == o.rotGridN && rotPointNumber == o.rotPointNumber &&
-             toNorthDeg == o.toNorthDeg && localAzimuthDeg == o.localAzimuthDeg &&
-             gridAzimuthDeg == o.gridAzimuthDeg;
-    }
-    bool operator!=(const Transform& o) const { return !(*this == o); }
-  };
-  Transform transform;
-
-  /// The Object Layers tab (REQ-361): the layer each kind of new object is created on. A drawing
-  /// saved without it opens with the defaults.
-  std::array<ObjectLayerRow, kObjectLayerKindCount> objectLayers = DefaultObjectLayers();
-  [[nodiscard]] const ObjectLayerRow& ObjectLayer(ObjectLayerKind k) const {
-    return objectLayers[static_cast<size_t>(k)];
-  }
-
-  /// The Geolocation tab's online map (REQ-363, D-2026-09-30-b). Map Off draws nothing and fetches
-  /// nothing. Stored values are the trailer's; append, never renumber.
-  enum class OnlineMap : std::uint8_t { Off = 0, UsgsImagery = 1, UsgsImageryTopo = 2, UsgsTopo = 3 };
-  OnlineMap onlineMap = OnlineMap::Off;
-
-  /// REQ-364: a piece of the online map kept inside the drawing (ADR-064 (e)): its tiles as they were
-  /// served, at one level. Drawn through the same placement as live tiles, with the map on or off.
-  struct CapturedTile {
-    int x = 0;
-    int y = 0;
-    /// The JPEG / PNG exactly as served. Immutable and shared, so undo snapshots copy a pointer.
-    std::shared_ptr<const std::string> image;
-    bool operator==(const CapturedTile& o) const {
-      return x == o.x && y == o.y && (image == o.image || (image && o.image && *image == *o.image));
-    }
-  };
-  struct CapturedArea {
-    OnlineMap                 map = OnlineMap::Off;
-    int                       level = 0;
-    std::vector<CapturedTile> tiles;
-    bool operator==(const CapturedArea& o) const { return map == o.map && level == o.level && tiles == o.tiles; }
-  };
-  std::vector<CapturedArea> capturedAreas;
-
-  /// Geolocated exactly when a zone is set (REQ-358 item 3).
-  [[nodiscard]] bool Geolocated() const { return !zoneCode.empty(); }
-  /// Back to the default geographic marker (drawing origin, grid north).
-  void ResetGeographicMarker() {
-    markerX = 0.0;
-    markerY = 0.0;
-    markerNorthDeg = 90.0;
-  }
-
-  bool operator==(const DrawingSettings& o) const {
-    return overridden == o.overridden && angularUnits == o.angularUnits && footDefinition == o.footDefinition &&
-           scaleInsertedObjects == o.scaleInsertedObjects && setDrawingVariables == o.setDrawingVariables &&
-           zoneCode == o.zoneCode && markerX == o.markerX && markerY == o.markerY &&
-           markerNorthDeg == o.markerNorthDeg && transform == o.transform &&
-           objectLayers == o.objectLayers && onlineMap == o.onlineMap && capturedAreas == o.capturedAreas;
-  }
-  bool operator!=(const DrawingSettings& o) const { return !(*this == o); }
-};
-
-/// One entry of the Map dropdown (REQ-363 item 1), in dropdown order with Map Off last.
-struct OnlineMapInfo {
-  DrawingSettings::OnlineMap map;
-  const char* label;        ///< Dropdown / button text.
-  const char* storageName;  ///< The trailer's value.
-  const char* service;      ///< USGS The National Map service name; nullptr for Map Off.
-  const char* icon;         ///< Ribbon icon (resources/icons/<icon>.png): the item's thumbnail.
-};
-inline constexpr std::array<OnlineMapInfo, 4> kOnlineMaps = {{
-    {DrawingSettings::OnlineMap::UsgsImagery, "USGS Imagery", "usgsImagery", "USGSImageryOnly", "map_usgs_imagery"},
-    {DrawingSettings::OnlineMap::UsgsImageryTopo, "USGS Imagery Topo", "usgsImageryTopo", "USGSImageryTopo",
-     "map_usgs_imagery_topo"},
-    {DrawingSettings::OnlineMap::UsgsTopo, "USGS Topo", "usgsTopo", "USGSTopo", "map_usgs_topo"},
-    {DrawingSettings::OnlineMap::Off, "Map Off", "off", nullptr, "map_off"},
-}};
-[[nodiscard]] inline const OnlineMapInfo& OnlineMapInfoOf(DrawingSettings::OnlineMap m) {
-  for (const OnlineMapInfo& i : kOnlineMaps)
-    if (i.map == m)
-      return i;
-  return kOnlineMaps.back();
-}
-[[nodiscard]] inline const char* OnlineMapStorageName(DrawingSettings::OnlineMap m) {
-  return OnlineMapInfoOf(m).storageName;
-}
-/// Unknown or empty → Map Off.
-[[nodiscard]] inline DrawingSettings::OnlineMap OnlineMapFromStorageName(const std::string& name) {
-  for (const OnlineMapInfo& i : kOnlineMaps)
-    if (name == i.storageName)
-      return i.map;
-  return DrawingSettings::OnlineMap::Off;
-}
-
-/// Inches per meter under \p f: exactly 39.37 (US survey foot) or 1/0.0254 (international foot).
-[[nodiscard]] inline double DrawingInchesPerMeter(DrawingSettings::FootDefinition f) {
-  return f == DrawingSettings::FootDefinition::UsSurvey ? 39.37 : 1.0 / 0.0254;
-}
-
-/// AutoCAD's AUNITS code for \p a (0 degrees, 2 grads, 3 radians).
-[[nodiscard]] inline int DrawingAunitsCode(DrawingSettings::AngularUnits a) {
-  switch (a) {
-    case DrawingSettings::AngularUnits::Radians: return 3;
-    case DrawingSettings::AngularUnits::Grads:   return 2;
-    default:                                      return 0;
-  }
-}
-
-/// Geometry-only snapshot for undo/redo.  PDF glTexId is zeroed to avoid stale GPU references.
+/// One undo/redo frame: the drawing content plus the face-derived section plane. PDF glTexId is
+/// zeroed to avoid stale GPU references. The block editor (CadBlocks.cpp, ADR-043) also uses one to
+/// stash the model drawing while a block definition is open.
 struct DrawingGeometrySnapshot {
-  std::vector<double>            userLinesFlat;
-  std::vector<EntityAttributes> userLineAttrs;
-  std::vector<double>            userCirclesCxCyZR;
-  std::vector<EntityAttributes> userCircleAttrs;
-  /// Circle plane normals, 3 floats each (REQ-312) - see AppCommandState::userCircleNormals.
-  std::vector<float>            userCircleNormals;
-  std::vector<CadArc>           userArcs;
-  std::vector<EntityAttributes> userArcAttrs;
-  std::vector<CadEllipse>       userEllipses;
-  std::vector<EntityAttributes> userEllAttrs;
-  std::vector<int>              userPolylineOffsets;
-  std::vector<double>            userPolylineVerts;
-  /// REQ-316 / ADR-047: per-vertex DXF bulge (tan(theta/4); 0 = straight segment leaving this
-  /// vertex). Parallel to the vertex list: size() == userPolylineVerts.size() / 3.
-  std::vector<float>            userPolylineVertsBulge;
-  /// REQ-325 / ADR-053: the plane of the (bulge-curved) segment leaving this vertex, 3 floats each
-  /// (stride 3, parallel to userPolylineVerts — see AppCommandState::userPolylineVertsNormal).
-  /// Consulted only when the paired bulge is non-zero; omitted from persistence when every entry is
-  /// world +Z, the same additive/byte-identical-legacy rule REQ-312 used for userCircleNormals.
-  std::vector<float>            userPolylineVertsNormal;
-  std::vector<uint8_t>          userPolylineClosed;
-  std::vector<EntityAttributes> userPolylineAttrs;
-  // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
-  std::vector<int>                featureLineOffsets;
-  std::vector<double>              featureLineVerts;
-  std::vector<uint8_t>            featureLineClosed;
-  std::vector<uint8_t>            featureLineElevPt;
-  std::vector<CadFeatureLineInfo> featureLineInfo;
-  std::vector<CadGradingPreset> gradingPresets;
-  std::vector<EntityAttributes>   featureLineAttrs;
-  std::vector<CadAnnotation>    cadAnnotations;
-  std::vector<EntityAttributes> cadAnnotationAttrs;
-  std::vector<CadFilledRegion>  cadFilledRegions;
-  std::vector<EntityAttributes> cadFilledRegionAttrs;
-  /// Imported meshes (REQ-063). Shared, not copied: see CadMesh's note and architecture §11.5 as
-  /// amended 2026-08-12 — a snapshot of a 2M-triangle model is a refcount bump, not ~53 MB.
-  std::vector<std::shared_ptr<const CadMesh>> cadMeshes;
-  std::vector<EntityAttributes> cadMeshAttrs;
-  /// Point clouds (REQ-171). Shared, not copied — see CadPointCloud's note and architecture §11.5.
-  std::vector<std::shared_ptr<const CadPointCloud>> cadPointClouds;
-  std::vector<EntityAttributes> cadPointCloudAttrs;
-  /// TIN surfaces (REQ-068). Shared payload, not copied — see CadTin and architecture §11.5.
-  std::vector<CadSurface>       cadSurfaces;
-  std::vector<EntityAttributes> cadSurfaceAttrs;
-  /// B-rep solids (REQ-313 / ADR-045). Shared, not copied — see CadSolidPtr's note.
-  std::vector<CadSolidPtr>      cadSolids;
-  std::vector<EntityAttributes> cadSolidAttrs;
-  std::vector<CadTable>         cadTables;       ///< Drawing TABLE entities (REQ-148).
-  std::vector<EntityAttributes> cadTableAttrs;
-  std::vector<CadTableStyle>    tableStyles = CadTableBuiltinStyles();
-  std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
-  std::vector<EntityAttributes> cadPositionMarkerAttrs;
-  std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
-  std::vector<EntityAttributes> cadMultileaderAttrs;
-  std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
-  std::vector<EntityAttributes> cadSplineAttrs;
-  std::vector<CadPoint> cadPoints;  ///< REQ-456 / issue #1019
-  std::vector<EntityAttributes> cadPointAttrs;
-  int pdMode = 0;     ///< AutoCAD PDMODE for CAD POINT display
-  double pdSize = 0.0;  ///< AutoCAD PDSIZE; 0 = 5% of view
-  /// Pipe runs (issue #486 / REQ-345). Without this, BEDIT's swap left the MAIN drawing's pipe
-  /// runs rendering inside the block editor's own viewport — cadTables/cadBlockRefs beside it are
-  /// swapped for exactly this reason ("hide everything that is not the block being edited",
-  /// LoadBlockPrimitivesIntoDrawing), and cadPipeRuns simply arrived after that pass was written.
-  std::vector<CadPipeRun>       cadPipeRuns;
-  std::vector<EntityAttributes> cadPipeRunAttrs;
-  std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
-  std::vector<alignment::ViewFrameGroup> viewFrameGroups;  ///< REQ-517: view frame groups that follow an alignment
-  std::vector<alignment::SampleLine> sampleLines;  ///< REQ-519: sample lines and their sections (persist with the drawing)
-  std::vector<alignment::VerticalProfile> profiles;  ///< REQ-521: design vertical profiles (persist with the drawing)
-  std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
-  /// Named piping networks (issue #486 increment B3 / REQ-345) — swapped alongside `cadPipeRuns`
-  /// for the same BEDIT-isolation reason the comment above states: a network's indices are only
-  /// meaningful against the drawing's OWN `cadPipeRuns`, so it must travel with it, not stay behind.
-  std::vector<CadPipingSystem>  cadPipingSystems;
-  std::vector<CadBlockDefinition> blockDefs;
-  std::vector<CadBlockRef>        cadBlockRefs;
-  std::vector<EntityAttributes>   cadBlockRefAttrs;
-  std::vector<SurveyPoint>      surveyPoints;
-  std::vector<SurveyPointStyleDefinition> surveyPointStyles = DefaultSurveyPointStyles();
-  std::vector<SurveyPointLabelStyleDefinition> surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
-  /// Named point groups (REQ-067). Undoable, like textStyles — creating or editing one is a
-  /// single-step undo. Rules only; membership is never stored.
-  std::vector<PointGroup>       pointGroups;
-  std::vector<CadLayerRow>      drawingLayerTable;
-  std::vector<TextStyle>        textStyles;    ///< Named text styles (REQ-044) — undoable so style edits undo.
-  /// Named surface styles (REQ-070 / ADR-036 (d)) — undoable for the same reason textStyles is.
-  ///
-  /// The generated contours and borders these describe are **not** here and never will be: they live
-  /// in `AppCommandState::surfaceDisplayCache`, which no snapshot touches (ADR-036 (e)). That split is
-  /// what lets a style edit be undoable without a single contour entering the undo stack.
-  std::vector<SurfaceStyle>     surfaceStyles;
-  std::vector<AlignmentStyle>   alignmentStyles;
-  std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502: drawing-owned check sets
-  std::vector<AlignmentLabelSet> alignmentLabelSets;
-  std::vector<AlignmentLabelStyle> alignmentLabelStyles;  ///< REQ-492.5
-  DimensionStyle              dimensionStyle = DimensionStyles::Default();
-  std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
-  MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
-  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
-  std::vector<PdfAttachment>    pdfAttachments;
-  std::vector<PaperLayout>      paperLayouts;  ///< Paper layouts incl. native paper geometry (REQ-037/038) — undoable.
-  std::vector<CadRasterImage>   cadRasterImages; ///< model-space rasters, optionally linked to a surface (REQ-511)
-  double worldDocumentOriginX = 0.0;
-  double worldDocumentOriginY = 0.0;
+  DrawingContent content;
   /// The section plane (REQ-343 amended, GitHub issue #479 acceptance 8). Mirrors
   /// `AppCommandState::viewportSectionClip`/`Offset`/`Flip`/`FrameValid`/`Frame`/`Extent` — moved
   /// into the undo-tracked snapshot (and, via `GsIo.cpp`, into `internal document payload`) so creating, deleting, sliding,
@@ -1022,11 +671,6 @@ struct DrawingGeometrySnapshot {
   double              sectionPlaneOffset = 0.0;
   bool                sectionPlaneFlip = false;
   SectionPlaneExtent  sectionPlaneExtent{};
-  /// Drawing unit, plot scale and Drawing Settings (REQ-357): undoable, so a Drawing Settings
-  /// change is one undo step.
-  int                 drawingInsUnits = 2;
-  float               modelUnitsPerPlottedInch = 50.f;
-  DrawingSettings     drawingSettings;
   std::string description;
 };
 
@@ -1107,117 +751,23 @@ struct DrawingDocument {
   std::vector<NamedView> namedViews;
   std::string activeViewName;
   bool ucsFollow = false;
-  double worldDocumentOriginX = 0.0;
-  double worldDocumentOriginY = 0.0;
   /// Per-drawing entity-id counter (REQ-076). Saved/restored with the tab so two open drawings
   /// number independently; see AppCommandState::nextEntityId for why undo never rewinds it.
   std::uint64_t nextEntityId = 1;
 
-  std::vector<double>            userLinesFlat;
-  std::vector<EntityAttributes> userLineAttrs;
-  std::vector<double>            userCirclesCxCyZR;
-  std::vector<EntityAttributes> userCircleAttrs;
-  /// Circle plane normals, 3 floats each (REQ-312) - see AppCommandState::userCircleNormals.
-  std::vector<float>            userCircleNormals;
-  std::vector<CadArc>           userArcs;
-  std::vector<EntityAttributes> userArcAttrs;
-  std::vector<CadEllipse>       userEllipses;
-  std::vector<EntityAttributes> userEllAttrs;
-  std::vector<int>              userPolylineOffsets;
-  std::vector<double>            userPolylineVerts;
-  /// REQ-316 / ADR-047: per-vertex DXF bulge (tan(theta/4); 0 = straight segment leaving this
-  /// vertex). Parallel to the vertex list: size() == userPolylineVerts.size() / 3.
-  std::vector<float>            userPolylineVertsBulge;
-  /// REQ-325 / ADR-053: the plane of the (bulge-curved) segment leaving this vertex, 3 floats each
-  /// (stride 3, parallel to userPolylineVerts — see AppCommandState::userPolylineVertsNormal).
-  /// Consulted only when the paired bulge is non-zero; omitted from persistence when every entry is
-  /// world +Z, the same additive/byte-identical-legacy rule REQ-312 used for userCircleNormals.
-  std::vector<float>            userPolylineVertsNormal;
-  std::vector<uint8_t>          userPolylineClosed;
-  std::vector<EntityAttributes> userPolylineAttrs;
-  // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
-  std::vector<int>                featureLineOffsets;
-  std::vector<double>              featureLineVerts;
-  std::vector<uint8_t>            featureLineClosed;
-  std::vector<uint8_t>            featureLineElevPt;
-  std::vector<CadFeatureLineInfo> featureLineInfo;
-  std::vector<CadGradingPreset> gradingPresets;
-  std::vector<EntityAttributes>   featureLineAttrs;
-  std::vector<CadAnnotation>    cadAnnotations;
-  std::vector<EntityAttributes> cadAnnotationAttrs;
-  std::vector<CadFilledRegion>  cadFilledRegions;
-  std::vector<EntityAttributes> cadFilledRegionAttrs;
-  std::vector<std::shared_ptr<const CadMesh>> cadMeshes;  ///< REQ-063; shared, see CadMesh's note.
-  std::vector<EntityAttributes> cadMeshAttrs;
-  std::vector<std::shared_ptr<const CadPointCloud>> cadPointClouds;  ///< REQ-171; shared, see CadPointCloud's note.
-  std::vector<EntityAttributes> cadPointCloudAttrs;
-  std::vector<CadSurface>       cadSurfaces;       ///< TIN surfaces (REQ-068).
-  std::vector<EntityAttributes> cadSurfaceAttrs;
-  std::vector<CadSolidPtr>      cadSolids;         ///< B-rep solids (REQ-313); shared, not copied.
-  std::vector<EntityAttributes> cadSolidAttrs;
-  std::vector<CadTable>         cadTables;         ///< Drawing TABLE (REQ-148).
-  std::vector<EntityAttributes> cadTableAttrs;
-  std::vector<CadTableStyle>    tableStyles = CadTableBuiltinStyles();
-  std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
-  std::vector<EntityAttributes> cadPositionMarkerAttrs;
-  std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
-  std::vector<EntityAttributes> cadMultileaderAttrs;
-  std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
-  std::vector<EntityAttributes> cadSplineAttrs;
-  std::vector<CadPoint> cadPoints;  ///< REQ-456 / issue #1019
-  std::vector<EntityAttributes> cadPointAttrs;
-  int pdMode = 0;
-  double pdSize = 0.0;
-  /// Pipe runs and the networks that group them (issue #486 / REQ-345). Per DRAWING, like every
-  /// other entity store here: without them, routing a run in one drawing left it rendering — and
-  /// selectable, and snappable — in every other tab, because a tab switch swaps the whole document
-  /// and whatever it does not name simply stays behind. The same defect the section clip had
-  /// (REQ-341, D-2026-09-16-b finding 6) and for the same reason: pipe runs arrived after this
-  /// snapshot pass was written. The derived `pipeRunWorldSolids` are NOT here — they are display
-  /// data rebuilt from these by signature, exactly like `blockRefWorldSolids`.
-  std::vector<CadPipeRun>       cadPipeRuns;
-  std::vector<EntityAttributes> cadPipeRunAttrs;
-  std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
-  std::vector<alignment::ViewFrameGroup> viewFrameGroups;  ///< REQ-517: view frame groups that follow an alignment
-  std::vector<alignment::SampleLine> sampleLines;  ///< REQ-519: sample lines and their sections (persist with the drawing)
-  std::vector<alignment::VerticalProfile> profiles;  ///< REQ-521: design vertical profiles (persist with the drawing)
-  std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
-  std::vector<CadPipingSystem>  cadPipingSystems;
-  std::vector<CadBlockDefinition> blockDefs;
-  std::vector<CadBlockRef>        cadBlockRefs;
-  std::vector<EntityAttributes>   cadBlockRefAttrs;
-  std::vector<SurveyPoint>      surveyPoints;
-  std::vector<SurveyPointStyleDefinition> surveyPointStyles = DefaultSurveyPointStyles();
-  std::vector<SurveyPointLabelStyleDefinition> surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
-  std::vector<PointGroup>       pointGroups;            ///< Named point groups (REQ-067).
+  /// The drawing content (ADR-0010), saved and restored whole on a tab switch.
+  DrawingContent content;
+
   std::vector<int>              selectedSurveyPointIndices;
-  std::vector<CadLayerRow>      drawingLayerTable;
   std::string                   currentColor = "ByLayer";  ///< Per tab (REQ-356): a new tab starts ByLayer.
-  /// Per tab (REQ-357): drawing unit, plot scale and Drawing Settings travel with their drawing.
-  int                           drawingInsUnits = 2;
-  float                         modelUnitsPerPlottedInch = 50.f;
-  DrawingSettings               drawingSettings;
   projpts::Rules                pointVisibility;        ///< REQ-377: per tab, which project points this drawing shows
-  std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
-  std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
-  std::vector<AlignmentStyle>   alignmentStyles;
-  std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502: drawing-owned check sets
-  std::vector<AlignmentLabelSet> alignmentLabelSets;        ///< Named alignment label sets (REQ-492).
-  std::vector<AlignmentLabelStyle> alignmentLabelStyles;    ///< Named alignment label styles (REQ-492.5).
-  DimensionStyle              dimensionStyle = DimensionStyles::Default();
-  std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
-  MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
-  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
   std::string                   activeTextStyleName = "Standard";  ///< Style for new TEXT/MTEXT.
-  std::vector<PdfAttachment>    pdfAttachments;
   std::vector<SelectedEntity>   selection;
   /// Object isolation (REQ-084 (d)). PER TAB, and stored here for the same reason `selection` is:
   /// entity ids are unique **within a drawing**, so carrying one tab's hidden set into another
   /// would hide whatever objects happened to draw those numbers there. Never written to `internal document payload` —
   /// this struct is the in-memory tab store, not the file format.
   std::vector<std::uint64_t>    hiddenEntityIds;
-  std::vector<PaperLayout>      paperLayouts;            ///< Paper-space layouts (REQ-025); empty = none.
-  std::vector<CadRasterImage>   cadRasterImages; ///< model-space raster underlays (REQ-511)
   std::vector<PageSetup>        savedPageSetups;         ///< Drawing-wide named page setups.
   int                           activeSpaceIndex = kModelSpaceIndex;  ///< -1 = model; else index into paperLayouts.
   uint32_t cadGpuRevision  = 0;
@@ -1474,7 +1024,28 @@ struct UnsavedProject {
   std::vector<std::string> drawings;
 };
 
-struct AppCommandState {
+struct AppCommandState : DrawingContent {
+  /// Seeds the tables a live drawing always has. `DrawingContent` leaves them empty because undo
+  /// frames and stored tabs started empty before ADR-0010 (issue #1557 phase 1a is a pure move).
+  ///
+  /// Layer "0" always exists, **including before anything has been loaded** (issue #57): the
+  /// loader used to synthesize it while a newly created drawing had an empty table, so a new
+  /// drawing was briefly in a state the rest of the code is entitled to assume cannot happen — and
+  /// `save -> load -> save` was not byte-identical, breaking REQ-079's first acceptance condition.
+  /// Seeding here rather than at each creation site means every route to a drawing (File > New,
+  /// the headless driver, an importer, a test) gets it, with no site left to forget. Safe against
+  /// loading, which `clear()`s this table before repopulating it (GsIo.cpp). The "Standard" text
+  /// style (REQ-044 / ADR-020) and surface style (REQ-070 / ADR-036 (d)) had the same defect and
+  /// have the same fix; the alignment style and label tables follow the same rule.
+  AppCommandState() {
+    drawingLayerTable = DefaultDrawingLayerTable();
+    textStyles = TextStyles::DefaultTextStyles();
+    surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
+    alignmentStyles = AlignmentStyles::DefaultAlignmentStyles();
+    alignmentLabelSets = AlignmentLabelSets::DefaultAlignmentLabelSets();
+    alignmentLabelStyles = AlignmentLabelStyles::DefaultAlignmentLabelStyles();
+  }
+
   enum class Kind : std::uint8_t {
     None,
     Line,
@@ -1897,8 +1468,6 @@ struct AppCommandState {
   /// Right-Click Customization dialog open (Options → User Preferences). Not persisted.
   bool   showRightClickDialog    = false;
 
-  /// Plot scale: one plotted inch equals this many drawing units (e.g. 50 for 1 inch = 50 feet).
-  float modelUnitsPerPlottedInch = 50.f;
   /// DWG SCALE object list (issue #622). Per-scale visibility/display is not wired yet; stored for fidelity.
   std::vector<CadAnnotationScale> annotationScales;
   /// Index into \ref annotationScales for model-space annotative display (-1 = drawing plot scale only).
@@ -1916,12 +1485,6 @@ struct AppCommandState {
   std::string dwgImportedLightListDictKey;
   float defaultPlottedTextHeightInches = 0.125f;
 
-  /// Drawing unit, AutoCAD $INSUNITS code (REQ-022). A relabel only — never scales
-  /// geometry. Document property: persisted in the drawing and the DXF header. Offered codes:
-  /// 0=Unitless, 1=Inches, 2=Feet, 4=Millimeters, 6=Meters (REQ-357). Per tab and undoable.
-  int drawingInsUnits = 2;
-  /// The drawing's Drawing Settings (REQ-357): per tab, undoable, saved in the trailer JSON.
-  DrawingSettings drawingSettings;
   /// REQ-377 (#696 P4): which points of the project database this drawing shows. Per tab, saved in the
   /// trailer; unused (and empty) in a standalone drawing.
   projpts::Rules pointVisibility;
@@ -2229,10 +1792,6 @@ struct AppCommandState {
   bool objectSnapKindOverrideValid = false;
   /// \c static_cast<\ref CadSnap::Kind>.
   int objectSnapKindOverrideKind = 0;
-
-  /// World coordinate of local (0,0). Geometry is stored in local space for float precision.
-  double worldDocumentOriginX = 0.0;
-  double worldDocumentOriginY = 0.0;
 
   /// Applied on the next viewport zoom processing step (needs framebuffer size).
   bool pendingZoomExtents = false;
@@ -2587,10 +2146,6 @@ struct AppCommandState {
   /// sweep for that drawing — rare enough to never be reproduced, and silent when it happened.
   std::uint64_t entityIdSweepRevision = kEntityIdSweepNever;
 
-  /// Line vertices for GL: pairs (x,y,z) per endpoint; each segment is two endpoints.
-  std::vector<double> userLinesFlat;
-  std::vector<EntityAttributes> userLineAttrs;
-
   // --- Circle ---
   enum class CircleStyle : std::uint8_t { CenterRadius, ThreePoint } circleStyle = CircleStyle::CenterRadius;
 
@@ -2920,55 +2475,6 @@ struct AppCommandState {
   float circleCz = 0.f;
   float c3p1z = 0.f, c3p2z = 0.f;
 
-  /// Each circle: center X, center Y, center Z, radius (world units) — stride 4 (REQ-057 /
-  /// ADR-025 (a)). The centre's XYZ is contiguous so it reads like a point; the radius trails it.
-  /// Z is absolute (ADR-025 D2). The circle lies in world XY unless `userCircleNormals`
-  /// says otherwise (REQ-312), matching CadArc.
-  std::vector<double> userCirclesCxCyZR;
-  std::vector<EntityAttributes> userCircleAttrs;
-  /// Plane normal per circle, 3 floats each (REQ-312) - parallel to `userCirclesCxCyZR` the way
-  /// `userCircleAttrs` already is, and maintained at the same sites. A side-car rather than a
-  /// wider stride because that 4-float stride is read directly at roughly 300 call sites and a
-  /// stride mistake in a flat float array is silent (D-2026-08-31-f). World +Z is the default,
-  /// which is every circle that existed before this field; `docinvariants` checks the count, so a
-  /// desynchronised insert or erase fails loudly rather than mis-orienting a circle (REQ-204).
-  std::vector<float> userCircleNormals;
-  std::vector<CadArc> userArcs;
-  std::vector<EntityAttributes> userArcAttrs;
-  std::vector<CadEllipse> userEllipses;
-  std::vector<EntityAttributes> userEllAttrs;
-  /// Each polyline: vertex indices [\ref userPolylineOffsets[i], \ref userPolylineOffsets[i+1]); XYZ triplets in
-  /// \ref userPolylineVerts.
-  std::vector<int> userPolylineOffsets;
-  std::vector<double> userPolylineVerts;
-  /// REQ-316 / ADR-047: per-vertex DXF bulge, parallel to userPolylineVerts (size()/3 entries).
-  std::vector<float> userPolylineVertsBulge;
-  /// REQ-325 / ADR-053: per-vertex curve plane normal, parallel to userPolylineVerts (see the
-  /// AppCommandState field of the same name for the full contract).
-  std::vector<float> userPolylineVertsNormal;
-  std::vector<uint8_t> userPolylineClosed;
-  std::vector<EntityAttributes> userPolylineAttrs;
-
-  /// Feature lines (REQ-087, ADR-035) — named 3D design linework, in their own store rather than
-  /// the polyline arrays, so a feature line is never mistaken for a polyline at the type level.
-  ///
-  /// Same CSR shape as polylines: line `i` owns vertices
-  /// [`featureLineOffsets[i]`, `featureLineOffsets[i+1]`), XYZ triplets in \ref featureLineVerts.
-  ///
-  /// \ref featureLineElevPt is per VERTEX, not per line: 1 marks an **elevation point** — a vertex
-  /// that carries an elevation but is not a PI (a corner). It lies on the line by construction, so
-  /// plan geometry is identical whether or not it is counted, and only PI-level operations
-  /// (insert/delete PI, grips) consult the flag (ADR-035 (a)). The obligation that buys: moving a PI
-  /// must re-project the elevation points on its adjacent segments, or the line grows a visible kink
-  /// (ADR-035 (b)).
-  std::vector<int> featureLineOffsets;
-  std::vector<double> featureLineVerts;
-  std::vector<uint8_t> featureLineClosed;
-  std::vector<uint8_t> featureLineElevPt;
-  std::vector<CadFeatureLineInfo> featureLineInfo;
-  std::vector<CadGradingPreset> gradingPresets;
-  std::vector<EntityAttributes> featureLineAttrs;
-
   /// GRADING (REQ-398): pick the baseline feature line, then sit on an options prompt offering the
   /// cut slope, the fill slope, the target surface and — for an open baseline only — which side to
   /// grade. Enter grades. Every value is remembered between runs in a drawing, because a site is
@@ -3153,27 +2659,6 @@ struct AppCommandState {
   /// Renderer-only invalidation. Unlike cadGpuRevision, this does not dirty the drawing or cancel surface workers.
   uint32_t cadGpuCacheRevision = 0;
 
-  std::vector<CadAnnotation> cadAnnotations;
-  std::vector<EntityAttributes> cadAnnotationAttrs;
-  /// Solid-filled regions (ADR-011), imported from SOLID-fill HATCH; rendered filled in the overlay.
-  std::vector<CadFilledRegion> cadFilledRegions;
-  std::vector<EntityAttributes> cadFilledRegionAttrs;
-
-  /// Imported triangle meshes (REQ-063 / ADR-026). Reference geometry: nothing in the command layer
-  /// creates or edits one — REQ-065's glTF importer produces them and ERASE removes them.
-  ///
-  /// `shared_ptr<const>` so undo snapshots share the payload rather than copying it (architecture
-  /// §11.5 as amended). "Editing" a mesh means replacing the pointer; never write through it.
-  std::vector<std::shared_ptr<const CadMesh>> cadMeshes;
-  std::vector<EntityAttributes> cadMeshAttrs;
-
-  /// Point clouds (REQ-171 / ADR-042). Reference geometry: nothing in the command layer creates or
-  /// edits one — REQ-172's E57/PTS/PTX/LAS/LAZ importers produce them and ERASE removes them.
-  ///
-  /// `shared_ptr<const>` so undo snapshots share the payload rather than copying it (architecture
-  /// §11.5), exactly as \ref cadMeshes above.
-  std::vector<std::shared_ptr<const CadPointCloud>> cadPointClouds;
-  std::vector<EntityAttributes> cadPointCloudAttrs;
   /// REQ-171 point-cloud display settings (session-global, not per-cloud — CadPointCloud's payload
   /// is immutable, architecture §11.5, so mutable display prefs live here instead, same reasoning as
   /// SurfaceStyle living apart from CadSurface).
@@ -3184,17 +2669,6 @@ struct AppCommandState {
   /// The ribbon tab that was active before the point-cloud contextual tab armed, restored on
   /// disarm (mirrors `ribbonTabBeforeSurfaceCtx`).
   int ribbonTabBeforePointCloudCtx = -1;
-
-  /// TIN surfaces (REQ-068). The heavy triangulation hangs off a shared_ptr inside each CadSurface,
-  /// so copying this vector — which every undo snapshot does — is strings and refcount bumps.
-  std::vector<CadSurface> cadSurfaces;
-  std::vector<EntityAttributes> cadSurfaceAttrs;
-
-  /// B-rep solids (REQ-313 / ADR-045). `shared_ptr<const>` for the same reason meshes are: an undo
-  /// snapshot shares the payload instead of copying it, and immutability is what makes that safe.
-  /// A solid is REPLACED, never written through.
-  std::vector<CadSolidPtr> cadSolids;
-  std::vector<EntityAttributes> cadSolidAttrs;
 
   /// The per-solid tessellation cache (#120: "do not regenerate a solid's render mesh every
   /// frame"). Rebuilt by \ref RefreshSolidDisplayGeometry only when a solid or the tessellation
@@ -3223,18 +2697,6 @@ struct AppCommandState {
   std::vector<EntityAttributes> blockRefWorldSolidAttrs;
   std::uint64_t blockRefWorldSolidsSig = 0;
 
-  /// Pipe runs (issue #486 increment B1 / REQ-345). The entity IS the path (topology); the swept
-  /// solids below are derived display data, rebuilt from \ref cadPipeRuns whenever it changes and
-  /// never persisted — the same "piping owns topology, blocks own geometry" split CadPipeRun's own
-  /// doc comment explains, and the same shape \ref blockRefWorldSolids already uses for a derived
-  /// solid array.
-  std::vector<CadPipeRun> cadPipeRuns;
-  std::vector<EntityAttributes> cadPipeRunAttrs;
-  std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
-  std::vector<alignment::ViewFrameGroup> viewFrameGroups;  ///< REQ-517: view frame groups that follow an alignment
-  std::vector<alignment::SampleLine> sampleLines;  ///< REQ-519: sample lines and their sections (persist with the drawing)
-  std::vector<alignment::VerticalProfile> profiles;  ///< REQ-521: design vertical profiles (persist with the drawing)
-  std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
   std::vector<CadSolidPtr> pipeRunWorldSolids;
   std::vector<EntityAttributes> pipeRunWorldSolidAttrs;
   /// Which `cadPipeRuns` index each `pipeRunWorldSolids` entry came from (issue #486, selection
@@ -3246,16 +2708,6 @@ struct AppCommandState {
   std::vector<int> pipeRunWorldSolidOwnerIndex;
   std::uint64_t pipeRunWorldSolidsSig = 0;
 
-  /// Named piping networks (issue #486 increment B3 / REQ-345) — see `CadPipingSystem`'s own doc
-  /// comment (CadEntities.hpp) for the ownership model. Metadata only, like `cadPipeRuns` itself;
-  /// persisted in `internal document payload` (additive array, ADR-020 (d)) and snapshotted on undo alongside it.
-  std::vector<CadPipingSystem> cadPipingSystems;
-
-  /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
-  std::vector<CadTable> cadTables;
-  std::vector<EntityAttributes> cadTableAttrs;
-  /// Table styles of this drawing (REQ-475). The built-in set; style editing is a follow-up.
-  std::vector<CadTableStyle> tableStyles = CadTableBuiltinStyles();
   /// TABLE and ADDPOINTTABLE prompt state (REQ-466, REQ-474).
   int tableStage = 0;
   std::string tablePendingStyle;
@@ -3316,20 +2768,7 @@ struct AppCommandState {
   } alignmentFromObjects;
   /// REQ-485.1: the Alignment Layout Tools window follows this alignment while it is open.
   std::string alignmentLayoutToolsName;
-  std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
-  std::vector<EntityAttributes> cadPositionMarkerAttrs;
-  std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
-  std::vector<EntityAttributes> cadMultileaderAttrs;
-  std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
-  std::vector<EntityAttributes> cadSplineAttrs;
-  std::vector<CadPoint> cadPoints;  ///< REQ-456 / issue #1019
-  std::vector<EntityAttributes> cadPointAttrs;
-  int pdMode = 0;
-  double pdSize = 0.0;
 
-  std::vector<CadBlockDefinition> blockDefs;
-  std::vector<CadBlockRef> cadBlockRefs;
-  std::vector<EntityAttributes> cadBlockRefAttrs;
   std::string blockEditorName;
   CadBlockDefinition blockEditorSnapshot;
   bool blockEditorDirty = false;
@@ -4425,12 +3864,7 @@ struct AppCommandState {
   /// (D-2026-09-08-f item 13), and when it arrives this is where it picks them up.
   bool chamferSolidAwaitingDistance = false;
 
-  // --- Survey / COGO points (in-memory database; optional JSON file) ---
-  std::vector<SurveyPoint> surveyPoints;
-  std::vector<SurveyPointStyleDefinition> surveyPointStyles = DefaultSurveyPointStyles();
-  std::vector<SurveyPointLabelStyleDefinition> surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
-  /// Named point groups (REQ-067) — drawing-owned rules, resolved on demand, never cached.
-  std::vector<PointGroup> pointGroups;
+  // --- Survey / COGO points (the points and their styles are DrawingContent) ---
   CreatePointsOptions createPointsOpts;
   int createPointsNextId = 1;
   bool showCreatePointsWindow = false;
@@ -4585,39 +4019,12 @@ struct AppCommandState {
   /// ACI, `#RRGGBB`) stamped beside \ref currentLayer on every new object that takes the current
   /// layer. Saved and reopened with the drawing exactly as \ref currentLayer is.
   std::string currentColor = "ByLayer";
-  /// Layer table. Layer "0" always exists, **including before anything has been loaded** (issue
-  /// #57): the loader used to synthesize it while a newly created drawing had an empty table, so a
-  /// new drawing was briefly in a state the rest of the code is entitled to assume cannot happen —
-  /// and `save -> load -> save` was not byte-identical, breaking REQ-079's first acceptance
-  /// condition. Initialising here rather than at each creation site means every route to a drawing
-  /// (File > New, the headless driver, an importer, a test) gets it, with no site left to forget.
-  /// Safe against loading, which `clear()`s this table before repopulating it (GsIo.cpp).
-  std::vector<CadLayerRow> drawingLayerTable = DefaultDrawingLayerTable();
-  /// Named text styles for this drawing (REQ-044 / ADR-020). "Standard" is always present — see the
-  /// layer-table note above; it had the same defect and has the same fix.
-  std::vector<TextStyle> textStyles = TextStyles::DefaultTextStyles();
-  /// Named surface styles for this drawing (REQ-070 / ADR-036 (d)). "Standard" is always present, and
-  /// it is initialised here rather than at each creation site for the reason the two tables above
-  /// document: a drawing that reaches the renderer with an empty table would be in a state the rest of
-  /// the code is entitled to assume cannot happen.
-  std::vector<SurfaceStyle> surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
-  std::vector<AlignmentStyle> alignmentStyles = AlignmentStyles::DefaultAlignmentStyles();
   /// REQ-491 current style (the REQ-478 pattern): a new alignment uses it unless another style is named.
   std::string alignmentStyleCurrent = "Standard";
-  std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502
-  std::vector<AlignmentLabelSet> alignmentLabelSets = AlignmentLabelSets::DefaultAlignmentLabelSets();
-  std::vector<AlignmentLabelStyle> alignmentLabelStyles = AlignmentLabelStyles::DefaultAlignmentLabelStyles();  ///< REQ-492.5
   /// Active text style for new TEXT/MTEXT (the STYLE dropdown). Empty resolves to "Standard".
   std::string activeTextStyleName = "Standard";
-  /// Centralized dimension style (issue #99) — single active style used by DIMALIGNED/DIMLINEAR/DIMANGULAR.
-  /// Pure value type, undoable via snapshot (like textStyles/surfaceStyles).  New dimensions bake this
-  /// style's effective values; existing dimensions read the active style at draw/measure time (phase 1).
-  DimensionStyle activeDimensionStyle = DimensionStyles::Default();
-  std::vector<DimensionStyle> dimensionStyles = DimensionStyles::DefaultStyles();
-  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
   DimensionStyle dimStyleDraft = DimensionStyles::Default();
   bool showDimStyleDialog = false;
-  MultileaderStyle activeMultileaderStyle = MultileaderStyles::Default();
   MultileaderStyle mleaderStyleDraft = MultileaderStyles::Default();
   bool showMleaderStyleDialog = false;
   bool showTableStyleDialog = false;
@@ -5260,13 +4667,8 @@ struct AppCommandState {
   PdfAttachment pdfAttachPreview;
   bool          pdfAttachPreviewReady = false;
 
-  /// Committed PDF underlays.
-  std::vector<PdfAttachment> pdfAttachments;
-
   // -------------------------------------------------------------------------
   // PAPER SPACE (REQ-025/026/031) — active drawing's layouts; mirrored per tab in DrawingDocument.
-  std::vector<PaperLayout> paperLayouts;
-  std::vector<CadRasterImage> cadRasterImages;
   int activeSpaceIndex = kModelSpaceIndex;   ///< -1 = model space; else index into paperLayouts.
   int lastPaperLayoutIndex = 0;              ///< layout the MODEL/PAPER toggle returns to.
   int selectedViewportLayout = -1;           ///< layout owning the primary selected viewport (REQ-027), or -1.
@@ -5463,21 +4865,15 @@ struct AppCommandState {
 };
 
 /// ADR-054 (a)/(b): coordinate stores are `double` until the single authorized narrowing point at
-/// GPU vertex-buffer assembly (ViewportRenderer). Checked on all three copies of each store — live
-/// state, undo snapshot, per-tab document (ADR-025 context) — so a reintroduced `float` on any one
-/// of them is a compile error, not a silent ±0.008 ft regression (TASK-228 Phase D).
+/// GPU vertex-buffer assembly (ViewportRenderer). Checked on `DrawingContent`, the one definition the
+/// live state, the undo snapshot and the per-tab document share (ADR-0010), so a reintroduced `float`
+/// is a compile error, not a silent ±0.008 ft regression (TASK-228 Phase D).
 #define GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(Type, Field)                                            \
   static_assert(std::is_same_v<decltype(Type::Field)::value_type, double>,                          \
                 #Type "::" #Field " must stay double (ADR-054 (a), REQ-101)")
-GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(AppCommandState, userLinesFlat);
-GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(AppCommandState, userCirclesCxCyZR);
-GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(AppCommandState, userPolylineVerts);
-GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingGeometrySnapshot, userLinesFlat);
-GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingGeometrySnapshot, userCirclesCxCyZR);
-GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingGeometrySnapshot, userPolylineVerts);
-GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingDocument, userLinesFlat);
-GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingDocument, userCirclesCxCyZR);
-GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingDocument, userPolylineVerts);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingContent, userLinesFlat);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingContent, userCirclesCxCyZR);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingContent, userPolylineVerts);
 #undef GOSURVEY_STATIC_ASSERT_DOUBLE_STORE
 
 inline float DefaultAnnotationTextHeightWorld(const AppCommandState& st) {

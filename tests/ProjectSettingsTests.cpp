@@ -181,10 +181,10 @@ TEST_CASE("req375 every project tab agrees with its project, standalone is untou
   JoinTwoTabs(st, MakeProject());
   st.drawingSettings.zoneCode = "HARN/TX.TX-N";
   st.drawingInsUnits = 2;
-  st.documents[2].drawingSettings.zoneCode = "HARN/TX.TX-S";
-  st.documents[2].drawingInsUnits = 2;
-  st.documents[2].drawingSettings.SetOverridden(ProjectDefaultKey::FootDefinition, true);
-  st.documents[2].drawingSettings.footDefinition = DrawingSettings::FootDefinition::UsSurvey;
+  st.documents[2].content.drawingSettings.zoneCode = "HARN/TX.TX-S";
+  st.documents[2].content.drawingInsUnits = 2;
+  st.documents[2].content.drawingSettings.SetOverridden(ProjectDefaultKey::FootDefinition, true);
+  st.documents[2].content.drawingSettings.footDefinition = DrawingSettings::FootDefinition::UsSurvey;
 
   std::vector<std::string> log;
   EnforceProjectSettings(st, log);
@@ -192,9 +192,9 @@ TEST_CASE("req375 every project tab agrees with its project, standalone is untou
   CHECK(st.drawingSettings.zoneCode == "HARN/TX.TX-C");  // the active tab
   CHECK(st.drawingInsUnits == 6);
   CHECK(st.modelUnitsPerPlottedInch == 100.f);
-  CHECK(st.documents[2].drawingSettings.zoneCode == "HARN/TX.TX-C");  // a tab that is not showing
-  CHECK(st.documents[2].drawingInsUnits == 6);
-  CHECK(st.documents[2].drawingSettings.footDefinition == DrawingSettings::FootDefinition::UsSurvey);  // override
+  CHECK(st.documents[2].content.drawingSettings.zoneCode == "HARN/TX.TX-C");  // a tab that is not showing
+  CHECK(st.documents[2].content.drawingInsUnits == 6);
+  CHECK(st.documents[2].content.drawingSettings.footDefinition == DrawingSettings::FootDefinition::UsSurvey);  // override
   CHECK(log.size() == 4);  // each replaced zone and unit is reported, never silent
 
   log.clear();

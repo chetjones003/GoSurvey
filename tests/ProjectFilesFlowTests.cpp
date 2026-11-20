@@ -426,9 +426,9 @@ TEST_CASE("req379 Copy Links In repoints open drawings so the next save does not
   CadRasterImage raster;
   raster.path = outRaster.u8string();
   st.cadRasterImages.push_back(raster);
-  st.documents[2].pdfAttachments.push_back(pdf);  // the other tab holds the same link
-  st.documents[2].cadPointClouds.push_back(Cloud(outCloud.u8string()));
-  st.documents[2].cadRasterImages.push_back(raster);
+  st.documents[2].content.pdfAttachments.push_back(pdf);  // the other tab holds the same link
+  st.documents[2].content.cadPointClouds.push_back(Cloud(outCloud.u8string()));
+  st.documents[2].content.cadRasterImages.push_back(raster);
 
   const std::string egDwg = (s.project.Folder() / "Drawings" / "EG.dwg").u8string();
   WriteText(fs::u8path(egDwg), "dwg");
@@ -448,12 +448,12 @@ TEST_CASE("req379 Copy Links In repoints open drawings so the next save does not
   CHECK(st.cadPointClouds[0]->sourcePath == cloudCopy);
   REQUIRE(st.cadRasterImages.size() == 1);
   CHECK(fs::u8path(st.cadRasterImages[0].path) == fs::u8path(rasterCopy));
-  REQUIRE(st.documents[2].pdfAttachments.size() == 1);
-  CHECK(st.documents[2].pdfAttachments[0].filePath == pdfCopy);  // the tab that is not showing
-  REQUIRE(st.documents[2].cadPointClouds.size() == 1);
-  CHECK(st.documents[2].cadPointClouds[0]->sourcePath == cloudCopy);
-  REQUIRE(st.documents[2].cadRasterImages.size() == 1);
-  CHECK(fs::u8path(st.documents[2].cadRasterImages[0].path) == fs::u8path(rasterCopy));
+  REQUIRE(st.documents[2].content.pdfAttachments.size() == 1);
+  CHECK(st.documents[2].content.pdfAttachments[0].filePath == pdfCopy);  // the tab that is not showing
+  REQUIRE(st.documents[2].content.cadPointClouds.size() == 1);
+  CHECK(st.documents[2].content.cadPointClouds[0]->sourcePath == cloudCopy);
+  REQUIRE(st.documents[2].content.cadRasterImages.size() == 1);
+  CHECK(fs::u8path(st.documents[2].content.cadRasterImages[0].path) == fs::u8path(rasterCopy));
 
   // Reopening a packaged drawing resolves the source-machine path through its project attachment.
   st.cadRasterImages[0].path = outRaster.u8string();
