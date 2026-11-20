@@ -1,7 +1,7 @@
 #include "EditorWindow.hpp"
 #include "ProjectPoints.hpp"
 #include "CadCoordinateFrame.hpp"
-#include "io/ProjectPointDb.hpp"
+#include "io/src/ProjectPointDb.hpp"
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QHeaderView>

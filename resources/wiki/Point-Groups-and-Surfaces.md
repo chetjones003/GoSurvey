@@ -192,7 +192,85 @@ Later, after importing a second day of shots coded `EG`:
 7. **Survey → Surfaces**, select `Existing Ground`, press **Rebuild**. The new points are already
    in the group.
 
+## Surface contextual tools
+
+With a surface selected, **Add Data → Point Files** opens Surface Manager. Under **Point Files**, use
+**Add...** to link a CSV with its explicit column layout. The source remains linked and is read again
+when the surface is rebuilt. This does not add the rows to the drawing's survey point database.
+
+**Reduced LOD** and **High LOD** change the selected surface's viewport triangle detail. Reduced LOD
+keeps every fourth TIN face for display; the full surface remains in use for elevation queries,
+selection, plotting, and export. The choice is saved with the drawing.
+The command-line forms are `SURFLODLOW <surface name>` and `SURFLODHIGH <surface name>`.
+
+**Move to Surface** changes only the elevation of selected block references. Every selected block
+must fall inside the selected surface; if any block is outside, none are moved.
+To use the command line, select the block references and run `MOVETOSURFACE <surface name>`.
+
+**Add Labels** supports linked spot elevations, slopes between two picked points, contour labels,
+and watershed basin labels. **Add Legend** inserts an updateable drawing table for the selected
+surface's elevation, slope, slope-arrow, contour, or watershed analysis. Typed forms are
+`SURFLABEL <surface>, SPOT, x, y`, `SURFLABEL <surface>, SLOPE, x1, y1, x2, y2`,
+`SURFLABEL <surface>, CONTOUR, elevation, x, y`, `SURFLABEL <surface>, WATERSHED`, and
+`SURFACELEGEND <surface>, <ELEVATION|SLOPE|SLOPEARROW|CONTOUR|WATERSHED>, x, y`.
+Surface-linked labels and legends refresh when the source surface is rebuilt.
+
+**Crossing BL** lists crossings between a surface's breaklines and resolves one crossing locally
+with `SURFCROSSBL <surface>, RESOLVE, x, y, HIGHER|LOWER|AVERAGE|TRIM-A|TRIM-B|elevation`.
+The shared linework is unchanged. **Visibility** supports line of sight and a zone of visual
+influence, for example `SURFACEVISIBILITY <surface>, LOS, eyeX, eyeY, eyeHeight, targetX, targetY,
+targetHeight`.
+
+**Drape Image** attaches a readable PNG, JPEG, or BMP at a model-space location and clips it to the
+selected TIN. Rebuilding the TIN updates the drape. The ribbon prompts for the image, lower-left
+placement, size, and rotation; the command forms are `IMAGEATTACH <path>, x, y, width, height,
+rotation-degrees` and `SURFDRAPE <surface>, <image-id>`.
+
+**Create Profile** samples a saved existing-ground profile along a horizontal alignment and places
+its profile view. Supply the alignment, profile name, sample interval, view origin, and positive
+horizontal and vertical scales. Profiles keep uncovered stations as gaps and refresh when the
+surface is rebuilt. `SURFACELIST` reports the stable surface ID used by project references.
+
+**Data Shortcut** is available only in a writable project. Save the source drawing in the project,
+select its surface, and create the shortcut. In another project drawing, create a read-only surface
+reference using the project-relative source drawing path and ID, for example
+`CREATESURFACEREFERENCE Drawings/site.dwg, 42, Existing Ground`. References refresh when opened;
+if the source is missing, the last saved display remains available. Surface definition edits are
+refused on references, while their local name and display style can be changed.
+
 ---
+
+## Grading groups and earthwork volumes
+
+Create grading results with `GRADING`, then select the daylight feature lines to group.
+Type `GRADINGGROUP Earthwork` to create a named group and add the selected gradings.
+The group appears as an ordinary surface in Surface Manager and supports `SURFELEV`.
+You can also open any ribbon **Grading** tool and type `Group Earthwork` at its prompt;
+`Group Earthwork, Remove` and `Group Earthwork, List` work there too.
+
+- `GRADINGGROUP Earthwork, Add` adds selected grading results, moving them out of any previous group.
+- `GRADINGGROUP Earthwork, Remove` removes selected members and rebuilds the surface.
+- `GRADINGGROUP Earthwork, List` lists the group's members.
+- `VOLUMES Ground, Earthwork` reports cut, fill and net against the existing-ground surface.
+
+The design surface covers the slopes between each baseline and its daylight line. It does not
+fill the interior of a closed pad or bridge the land between separate gradings. A group without
+members has no surface triangles. Membership and the baked surface survive DWG save/reopen.
+
+Baseline and target-surface edits do not automatically regrade a member or change its group's
+surface. Explicitly rebuild a grading with `GRADING`, or re-add it after rebuilding, to refresh
+its contribution. Incomplete daylight lines must be rebuilt before they can be grouped.
+
+The **Grading** palette also supports distance, absolute-elevation and relative-elevation targets.
+Use **Copy criteria to new baseline** to make a separate grading from an existing result's values.
+Named criteria are saved with the drawing; saving, updating or deleting one can be undone. Applying
+a preset creates a new result and does not link it to the preset. If its saved target surface has
+been deleted, GoSurvey reports the missing target instead of choosing another surface.
+
+The same palette can add or remove group members, add a closed feature line as an infill boundary,
+list a group's members and delete a feature line together with its group contribution. The
+**FLELEVEDIT** table shows station, elevation, length ahead and grades; edit elevations or grades,
+raise/lower elevations, and insert or delete elevation points. Each applied edit is one undo step.
 
 ## Common problems
 

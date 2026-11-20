@@ -2,7 +2,7 @@
 
 #include "CadOnlineMap.hpp"
 
-#include "geo/WebMercator.hpp"
+#include <GoSurvey/Network/WebMercator.hpp>
 
 #include <algorithm>
 #include <cmath>

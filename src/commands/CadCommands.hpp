@@ -4,6 +4,12 @@
 #include <limits>
 
 #include "CadEntities.hpp"
+#include <GoSurvey/Terrain/surfacequery.hpp>  // ISurfaceQuery, for MakeSurfaceQueryForCommands (REQ-497)
+#include "GoSurvey/Survey/AlignmentModel.hpp"  // REQ-480 / ADR-075: per-drawing alignment store
+#include "GoSurvey/Survey/AlignmentViewFrames.hpp"  // REQ-517: view frame groups that follow an alignment
+#include "GoSurvey/Survey/AlignmentSampleLines.hpp"  // REQ-519: sample lines and their sections
+#include "GoSurvey/Survey/AlignmentProfile.hpp"  // REQ-521: design vertical profiles along alignments
+#include "GoSurvey/Survey/AlignmentDesign.hpp"  // REQ-502: check sets
 #include "CadDimGeom.hpp"
 #include "EntityId.hpp"
 // TextStyles::DefaultTextStyles, for the textStyles member's initializer (issue #57). Pure and
@@ -12,50 +18,51 @@
 // SurfaceStyles::DefaultSurfaceStyles, for the surfaceStyles member's initializer — same reason,
 // same shape, and pure for the same reason (REQ-070 / ADR-036 (d)).
 #include "SurfaceStyle.hpp"
+#include <GoSurvey/Survey/AlignmentStylePublic.hpp>
+#include <GoSurvey/Survey/AlignmentLabelSetPublic.hpp>
 #include "DimensionStyle.hpp"
 #include "MultileaderStyle.hpp"
-#include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
-#include "render/SectionClip.hpp"  // GL-free; the pick and snap paths honour the live clip (REQ-341)
+#include "GoSurvey/Document/cadtablestyle.hpp"
+#include <GoSurvey/Renderer/Camera.hpp>  // Commands -> Renderer is a downward dependency (architecture §2)
+#include <GoSurvey/Renderer/SectionClip.hpp>  // GL-free; the pick and snap paths honour the live clip (REQ-341)
 // The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
 // util/ray3d beside it, so the coordinate-system rules are testable without a window.
-#include "util/ucs.hpp"
-#include "geo/CoordinateSystems.hpp"
-#include "geo/LocalGridTransform.hpp"
+#include <GoSurvey/Math/ucs.hpp>
+#include <GoSurvey/Survey/CoordinateSystems.hpp>
+#include <GoSurvey/Survey/LocalGridTransform.hpp>
 // ADR-060 .gscloud out-of-core cache: EXTRACTCENTERLINE (REQ-347) keeps one open cache handle
 // across hover frames rather than re-opening it every frame.
-#include "util/pointcloudcache.hpp"
+#include "GoSurvey/PointCloud/CacheStorage.hpp"
 #include "DwgIo.hpp"
-#include "PdfAttach.hpp"
+#include "GoSurvey/Pdf/PdfAttach.hpp"
 #include "ProjectPointRules.hpp"  // projpts::Db + projpts::Rules (REQ-376, REQ-377)
 #include "Project.hpp"  // gsproj::Project / LockInfo, for AppCommandState::openProjects (REQ-374)
 #include "ProjectPack.hpp"  // gspack::PackPlan, for AppCommandState::projectPackPrompt (REQ-380)
 #include "PaperSpace.hpp"
-#include "SurveyPoints.hpp"
-#include "AngleFormat.hpp"
-#include "traverse/TraverseCalc.hpp"
-#include "traverse/TraverseLeastSquares.hpp"
+#include "SurveyPointActions.hpp"
+#include <GoSurvey/Core/AngleFormat.hpp>
+#include "GoSurvey/Survey/TraverseCalc.hpp"
+#include "GoSurvey/Survey/TraverseLeastSquares.hpp"
 #include "update/UpdateCheck.hpp"  // update::UpdatePrefs only — pure, no network, no <thread>
-#include "util/tinbuild.hpp"       // TinBuildResult, for AppCommandState::SurfaceRebuildAsync (REQ-069)
-#include "util/surfacevolume.hpp"  // SurfaceVolumeResult, for AppCommandState::VolumeDashboardState (REQ-073)
-#include "util/surfacequery.hpp"   // SurfaceProfileSample, Quick Profile (REQ-145)
-#include "util/watershed.hpp"      // WatershedResult, for AppCommandState::SurfaceWatershedCacheEntry (REQ-132)
-// curveisect::Vec2/Seg/Conic + Intersect*, for FILLET's tangent-arc solve (REQ-103 step 6a) below.
-// Dependency-free by its own design (curveintersect.hpp's own doc comment), so this adds no cycle.
-#include "util/curveintersect.hpp"
-#include "util/geom2d.hpp"        // BulgeArc, for the polyline arc-segment grips (REQ-316 / ADR-047)
+#include <GoSurvey/Terrain/tinbuild.hpp>       // TinBuildResult, for AppCommandState::SurfaceRebuildAsync (REQ-069)
+#include <GoSurvey/Terrain/surfacevolume.hpp>  // SurfaceVolumeResult, for AppCommandState::VolumeDashboardState (REQ-073)
+#include <GoSurvey/Terrain/surfacequery.hpp>   // SurfaceProfileSample, Quick Profile (REQ-145)
+#include <GoSurvey/Terrain/watershed.hpp>      // WatershedResult, for AppCommandState::SurfaceWatershedCacheEntry (REQ-132)
+#include <GoSurvey/Geometry/geom2d.hpp>        // BulgeArc, for the polyline arc-segment grips (REQ-316 / ADR-047)
 // HoverDwell, for AppCommandState's surface rollover timer (REQ-089). Pure and dependency-free
 // (<cmath>), and deliberately in util/ rather than beside the UI that drives it: the state lives on
 // AppCommandState, and Commands may not include a UI header (architecture §11.1).
 #include "util/hoverdwell.hpp"
 #include "util/hoverpickgate.hpp"  // per-frame viewport hover-pick throttle (GitHub issue #166)
-#include "util/cadtable.hpp"   // CadTable entity (REQ-148 / D-2026-08-28-i)
-#include "util/cadblock.hpp"   // Block definitions + INSERT refs (GitHub issue #124)
-#include "util/cadsolid.hpp"   // B-rep solids + their tessellation cache (REQ-313 / ADR-045)
+#include "GoSurvey/Document/cadtable.hpp"   // CadTable entity (REQ-148 / D-2026-08-28-i)
+#include "GoSurvey/Document/cadtablestyle.hpp"  // table styles and point rows (REQ-474, REQ-475)
+#include "GoSurvey/Document/cadblock.hpp"   // Block definitions + INSERT refs (GitHub issue #124)
+#include <GoSurvey/Renderer/CadSolidDisplay.hpp>   // B-rep solids + their tessellation cache (REQ-313 / ADR-045)
 #include "util/solidpick.hpp"  // solidpick::Kind, for SelectedSubObject (REQ-318 / ADR-049)
 // SectionPlaneExtent / SectionPlaneGrip, for the section plane's stored size and handles
 // (REQ-342/339). GL-free and header-only, like every other header in this list — the reason
 // `SectionClip.hpp` was written that way (ADR-002).
-#include "render/SectionClip.hpp"
+#include <GoSurvey/Renderer/SectionClip.hpp>
 // zoomframing::FrameWorldRect, the one camera-framing implementation behind ZOOMEXTENTS, the REQ-120
 // gesture, ZOOM WINDOW and the post-import fit (REQ-122). Pure and dependency-free, like the headers
 // above it.
@@ -146,7 +153,12 @@ struct SelectedEntity {
     /// Spline (REQ-443 / issue #803): an editable 3D NURBS curve. Selects, erases, moves, copies,
     /// rotates, scales and mirrors; TRIM / EXTEND / OFFSET / FILLET / CHAMFER / JOIN / EXPLODE /
     /// STRETCH refuse it by name (\ref DropSplinesFromSelection).
-    Spline = 19
+    Spline = 19,
+    /// CAD POINT (REQ-456 / issue #1019). Appended after Spline so existing type values stay stable.
+    Point = 20,
+    /// Horizontal alignment (REQ-480 / issue #121). Appended after Point so existing values stay stable.
+    /// Phase 1: selects, highlights, erases and reports; whole-object transforms arrive with Phase 2 editing.
+    Alignment = 21
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -245,6 +257,8 @@ struct CadLayerRow {
   bool locked = false;
   /// Layer swatch color (same encoding as \ref EntityAttributes::color except not "ByLayer").
   std::string color = "White";
+  /// Named STB plot style assigned to this layer; defaults to Normal.
+  std::string plotStyleName = "Normal";
   std::string linetype = "Continuous";
   float lineweightMm = -1.f; ///< \c -1 = default (DXF layer 370 -3 on export).
   float transparency = 0.f;  ///< 0 opaque .. 1 fully transparent (layer-wide).
@@ -326,7 +340,7 @@ void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float modelUnitsPerPlott
 /// After editing extension points or dimension offset, restore text from fixed (normal, tangent) offsets vs dim mid.
 void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, float alongT);
 /// Recompute dimension text from current geometry (linear / aligned / angular).
-void CadDimRefreshMeasurementText(CadAnnotation* ann, int linearPrecision, const AngleDisplaySettings& angle);
+void CadDimRefreshMeasurementText(CadAnnotation* ann, const DimensionStyle& style, const AngleDisplaySettings& angle);
 
 // CadArc and CadEllipse are defined in CadEntities.hpp (shared with PaperSpace.hpp, ADR-013).
 
@@ -399,436 +413,7 @@ void StretchOneArc(CadArc& arc, float mnX, float mxX, float mnY, float mxY, floa
 void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, float mnX, float mxX,
                              float mnY, float mxY, bool rectInUcsPlane, std::vector<std::string>& log);
 
-// ================================================================================================
-// REQ-103 FILLET (step 6a) / CHAMFER (step 6b) — pure tangent-arc / corner-point geometry.
-//
-// Inline and header-only (pure — only <cmath>/<vector> and curveintersect.hpp, both dependency-free)
-// so this, the genuinely new geometry in this step, is unit-testable (tests/FilletGeomTests.cpp)
-// without linking CadCommands.cpp's whole command layer — the same reasoning \ref
-// RecomputeArcFromEndpoints above already follows for STRETCH's own new geometry.
-//
-// The construction: offset both picked curves by the fillet radius (a Line translated along its own
-// perpendicular; an Arc/Circle's own full circle grown/shrunk by the radius) and intersect every
-// combination analytically via curveisect's existing IntersectSegSeg/IntersectSegConic/
-// IntersectConicConic (REQ-062/REQ-101 — never tessellated); the candidate nearest both pick points
-// (summed squared distance) is chosen. Radius 0 needs no special case — every offset collapses to
-// the original curve, so the "candidate center" is simply the curves' own intersection. The actual
-// trim/extend mutation afterward reuses LENGTHEN's ApplyLengthenToLine/ToArc/ToPolylineEnd
-// unchanged, converting a known tangent point into the `newLength` those functions already accept.
-// ================================================================================================
-
-/// One of FILLET/CHAMFER's two picked curves, reduced to only what the geometry solve needs: a
-/// Line's own infinite extension (isLine=true; ax,ay/bx,by are any two distinct points on it — a
-/// Polyline segment's own two endpoints work identically), or an Arc/Circle's own FULL circle
-/// (isLine=false; cx,cy,r) — always the full circle, never sweep-limited, matching \ref
-/// FindExtendArcTarget's own reasoning: a tangent point beyond the arc's CURRENT sweep must still
-/// be found so the arc can be extended (not just trimmed within its existing span) to reach it.
-struct FilletCurve {
-  bool isLine = true;
-  float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
-  float cx = 0.f, cy = 0.f, r = 0.f;
-  // issue #373: a Line's own Z at each endpoint, in WORLD space (unused for Arc/Circle). Only
-  // consulted by the two-line 3D fillet path — every other consumer keeps working entirely in
-  // whatever 2D frame it was already given (world XY, or a projected plane's own 2D coordinates).
-  float az0 = 0.f, az1 = 0.f;
-};
-
-/// A curveisect::Seg standing in for curve `(ax,ay)-(bx,by)`'s INFINITE extension. curveisect has no
-/// infinite-line primitive (confirmed by EXTEND's own research note, CadCommands.cpp) — a generously
-/// long finite query segment stands in instead, EXTEND's own `FindExtendLineTarget` technique,
-/// extended in BOTH directions here (a fillet's tangent point may lie beyond either original
-/// endpoint, unlike EXTEND's forward-only ray).
-inline curveisect::Seg FilletLongLine(float ax, float ay, float bx, float by) {
-  // Double precision throughout, matching curveisect::Vec2's own double storage — computing the
-  // huge offset in float32 (the original bug, found via a real user report) loses ~0.01-0.05 units
-  // of precision at typical drawing scales (a ~1e6-unit offset leaves float32 only ~7 significant
-  // digits to place a coordinate that's normally two digits), which showed up as fillet arcs that
-  // visibly did NOT touch their own trimmed line endpoints. Doubles keep this error near 1e-9.
-  const double dax = ax, day = ay, dbx = bx, dby = by;
-  const double dx = dbx - dax, dy = dby - day;
-  const double len = std::hypot(dx, dy);
-  if (len < 1e-9)
-    return {{dax, day}, {dbx, dby}};
-  const double ux = dx / len, uy = dy / len;
-  constexpr double kHuge = 1.0e6;
-  const double mx = 0.5 * (dax + dbx), my = 0.5 * (day + dby);
-  return {{mx - ux * kHuge, my - uy * kHuge}, {mx + ux * kHuge, my + uy * kHuge}};
-}
-
-/// Exact infinite-line intersection (Cramer's rule, double precision throughout) — used for the
-/// Line-Line candidate case instead of `FilletLongLine`'s "huge finite segment" approximation,
-/// which curveisect's Seg-based functions still need for a Line vs Circle/Conic (no infinite-line
-/// primitive exists there) but which two genuinely infinite lines never need at all: this is exact
-/// regardless of the drawing's coordinate scale. False only when the two lines are parallel.
-inline bool FilletLineLineIntersectInf(float ax, float ay, float bx, float by, float cx, float cy, float dx,
-                                       float dy, float* outX, float* outY) {
-  const double rx = static_cast<double>(bx) - ax, ry = static_cast<double>(by) - ay;
-  const double sx = static_cast<double>(dx) - cx, sy = static_cast<double>(dy) - cy;
-  const double det = rx * sy - ry * sx;
-  if (std::fabs(det) < 1e-9 * std::max(1.0, std::hypot(rx, ry) * std::hypot(sx, sy)))
-    return false;
-  const double t = ((static_cast<double>(cx) - ax) * sy - (static_cast<double>(cy) - ay) * sx) / det;
-  *outX = static_cast<float>(ax + t * rx);
-  *outY = static_cast<float>(ay + t * ry);
-  return true;
-}
-
-/// Every real candidate fillet-arc center for `c1`/`c2` offset by `radius` (up to 4 for two lines,
-/// up to 8 for a line+arc or two arcs — see the section comment above for the construction).
-inline void FilletCandidateCenters(const FilletCurve& c1, const FilletCurve& c2, float radius,
-                                   std::vector<curveisect::Vec2>* out) {
-  auto lineOffsetVariant = [](const FilletCurve& c, float signedR, float* ax, float* ay, float* bx,
-                              float* by) {
-    const float vx = c.bx - c.ax, vy = c.by - c.ay;
-    const float len = std::hypot(vx, vy);
-    float nx = 0.f, ny = 1.f;
-    if (len > 1e-12f) {
-      nx = -vy / len;
-      ny = vx / len;
-    }
-    *ax = c.ax + nx * signedR;
-    *ay = c.ay + ny * signedR;
-    *bx = c.bx + nx * signedR;
-    *by = c.by + ny * signedR;
-  };
-  auto lineOffsetVariantSeg = [](const FilletCurve& c, float signedR) -> curveisect::Seg {
-    const float vx = c.bx - c.ax, vy = c.by - c.ay;
-    const float len = std::hypot(vx, vy);
-    float nx = 0.f, ny = 1.f;
-    if (len > 1e-12f) {
-      nx = -vy / len;
-      ny = vx / len;
-    }
-    return FilletLongLine(c.ax + nx * signedR, c.ay + ny * signedR, c.bx + nx * signedR, c.by + ny * signedR);
-  };
-  const float signs[2] = {1.f, -1.f};
-  if (c1.isLine && c2.isLine) {
-    for (float s1 : signs) {
-      float a1x = 0.f, a1y = 0.f, b1x = 0.f, b1y = 0.f;
-      lineOffsetVariant(c1, radius * s1, &a1x, &a1y, &b1x, &b1y);
-      for (float s2 : signs) {
-        float a2x = 0.f, a2y = 0.f, b2x = 0.f, b2y = 0.f;
-        lineOffsetVariant(c2, radius * s2, &a2x, &a2y, &b2x, &b2y);
-        float ix = 0.f, iy = 0.f;
-        if (FilletLineLineIntersectInf(a1x, a1y, b1x, b1y, a2x, a2y, b2x, b2y, &ix, &iy))
-          out->push_back({ix, iy});
-      }
-    }
-    return;
-  }
-  if (!c1.isLine && !c2.isLine) {
-    for (float s1 : signs) {
-      const float r1 = c1.r + radius * s1;
-      if (r1 < 1e-6f)
-        continue;
-      const curveisect::Conic k1 = curveisect::MakeCircle(c1.cx, c1.cy, r1);
-      for (float s2 : signs) {
-        const float r2 = c2.r + radius * s2;
-        if (r2 < 1e-6f)
-          continue;
-        const curveisect::Conic k2 = curveisect::MakeCircle(c2.cx, c2.cy, r2);
-        std::vector<curveisect::Hit2> hits;
-        curveisect::IntersectConicConic(k1, k2, &hits);
-        for (const auto& h : hits)
-          out->push_back(h.p);
-      }
-    }
-    return;
-  }
-  const FilletCurve& lineC = c1.isLine ? c1 : c2;
-  const FilletCurve& circC = c1.isLine ? c2 : c1;
-  for (float sL : signs) {
-    const curveisect::Seg l = lineOffsetVariantSeg(lineC, radius * sL);
-    for (float sC : signs) {
-      const float rC = circC.r + radius * sC;
-      if (rC < 1e-6f)
-        continue;
-      const curveisect::Conic k = curveisect::MakeCircle(circC.cx, circC.cy, rC);
-      std::vector<curveisect::Hit2> hits;
-      curveisect::IntersectSegConic(l, k, &hits);
-      for (const auto& h : hits)
-        out->push_back(h.p);
-    }
-  }
-}
-
-/// True when `pt`, projected onto the segment from `nearX,nearY` to `farX,farY`, has NOT overshot
-/// past the far endpoint (parametric t <= 1, with a small tolerance). FILLET's "radius is too
-/// large" refusal (D-2026-08-25-b): a valid trim/extend target must stay within (or very near) the
-/// curve's own original span from its near-the-corner endpoint out to its far endpoint — going past
-/// the far endpoint means the requested radius needs more material than the curve actually has.
-///
-/// An EARLIER version of this same idea compared which of the two endpoints `pt` is nearer to
-/// (Euclidean distance) instead of this parametric projection, and was wrong: a tangent point at
-/// 60% of the way along a perfectly valid, comfortably-sized fillet is *already* nearer the far
-/// endpoint than the near one (past the segment's own midpoint is completely ordinary), which that
-/// version misread as "overshoot" and refused a legitimate, correctly-sized fillet — caught by a
-/// regression test built from the same user report this whole check exists for, using a SECOND
-/// radius on the identical geometry that should have succeeded and didn't.
-inline bool FilletPointWithinSpan(float nearX, float nearY, float farX, float farY, float ptX, float ptY) {
-  const double dx = static_cast<double>(farX) - nearX, dy = static_cast<double>(farY) - nearY;
-  const double len2 = dx * dx + dy * dy;
-  if (len2 < 1e-12)
-    return true;  // near == far (degenerate); nothing meaningful to check
-  const double t = ((static_cast<double>(ptX) - nearX) * dx + (static_cast<double>(ptY) - nearY) * dy) / len2;
-  constexpr double kSlack = 1e-3;
-  return t <= 1.0 + kSlack;
-}
-
-/// True when `pt` is on the "kept" side of Line/Polyline-segment curve `c` — the side the pick
-/// indicated — measured along the curve's OWN direction from its first stored endpoint, not
-/// perpendicular to it. `pt - c.ax,ay` projected onto the curve's direction must have the same sign
-/// as `pick - c.ax,ay}` projected the same way. Used to filter fillet-center candidates (below) to
-/// the one actually consistent with both picks, not merely the one nearest them — see that
-/// function's own comment for why nearest-to-pick alone is not enough.
-inline bool FilletPointOnKeptSide(const FilletCurve& c, float pickX, float pickY, float ptX, float ptY) {
-  const double ux = static_cast<double>(c.bx) - c.ax, uy = static_cast<double>(c.by) - c.ay;
-  const double pickProj = (static_cast<double>(pickX) - c.ax) * ux + (static_cast<double>(pickY) - c.ay) * uy;
-  const double ptProj = (static_cast<double>(ptX) - c.ax) * ux + (static_cast<double>(ptY) - c.ay) * uy;
-  return (pickProj >= 0.0) == (ptProj >= 0.0);
-}
-
-/// Picks the candidate fillet center (from \ref FilletCandidateCenters) nearest the two pick points
-/// — summed squared distance, the deterministic tie-break generalizing every other REQ-103 step's
-/// own ambiguity resolution (LENGTHEN's nearest endpoint, EXTEND's nearest boundary hit, BREAK's
-/// position-ordering: "whichever interpretation is closest to what the user actually clicked").
-///
-/// For two Lines specifically, "nearest to pick" alone is not a reliable filter: a real user report
-/// found that for a large radius relative to short line segments, the mathematically-correct
-/// "inside the corner" candidate is pushed FAR from the picks (a large radius means a long tangent
-/// length, by construction), while a geometrically WRONG candidate — offset to one side, not
-/// filling the actual corner at all — can end up numerically closer to picks placed near the
-/// visible corner, and so wins the naive tie-break, producing a bizarre, disconnected-looking
-/// result rather than either a correct (if large) arc or a clean refusal. Fixed by filtering to
-/// candidates on the "kept" side (`FilletPointOnKeptSide`) of BOTH lines first — hand-verified
-/// against this exact case in `tests/FilletGeomTests.cpp` — and running the nearest-to-pick
-/// tie-break only among those; if the filter leaves nothing (should not happen for two genuinely
-/// non-parallel lines, but a real geometry library earns defensive code), the unfiltered search is
-/// used rather than manufacturing a spurious refusal.
-///
-/// False if no real candidate exists at all (parallel/collinear lines, arcs too far apart for the
-/// radius, etc.) — REQ-201, the caller states the reason.
-inline bool SolveFilletCenter(const FilletCurve& c1, const FilletCurve& c2, float radius, float pick1X,
-                              float pick1Y, float pick2X, float pick2Y, float* outCx, float* outCy) {
-  std::vector<curveisect::Vec2> cands;
-  FilletCandidateCenters(c1, c2, radius, &cands);
-  if (cands.empty())
-    return false;
-  auto pickBest = [&](const std::vector<size_t>& idx) -> size_t {
-    size_t bestI = idx[0];
-    double bestD = -1.0;
-    for (size_t i : idx) {
-      const double dx1 = cands[i].x - pick1X, dy1 = cands[i].y - pick1Y;
-      const double dx2 = cands[i].x - pick2X, dy2 = cands[i].y - pick2Y;
-      const double d = dx1 * dx1 + dy1 * dy1 + dx2 * dx2 + dy2 * dy2;
-      if (bestD < 0.0 || d < bestD) {
-        bestD = d;
-        bestI = i;
-      }
-    }
-    return bestI;
-  };
-  std::vector<size_t> allIdx(cands.size());
-  for (size_t i = 0; i < cands.size(); ++i)
-    allIdx[i] = i;
-  size_t bestI = 0;
-  if (c1.isLine && c2.isLine) {
-    std::vector<size_t> keptIdx;
-    for (size_t i : allIdx) {
-      const float cx = static_cast<float>(cands[i].x), cy = static_cast<float>(cands[i].y);
-      if (FilletPointOnKeptSide(c1, pick1X, pick1Y, cx, cy) && FilletPointOnKeptSide(c2, pick2X, pick2Y, cx, cy))
-        keptIdx.push_back(i);
-    }
-    bestI = keptIdx.empty() ? pickBest(allIdx) : pickBest(keptIdx);
-  } else {
-    bestI = pickBest(allIdx);
-  }
-  *outCx = static_cast<float>(cands[bestI].x);
-  *outCy = static_cast<float>(cands[bestI].y);
-  return true;
-}
-
-/// The point where the fillet arc centered at (centerX,centerY) touches Line `c` — the UNCLAMPED
-/// foot of the perpendicular onto its infinite extension (OFFSET's own `ClosestPointOnSegment`
-/// clamps to [0,1], wrong here: the tangent point routinely lies beyond the curve's current drawn
-/// extent, which is exactly what the trim/extend step afterward corrects).
-inline void FilletTangentPointOnLine(const FilletCurve& c, float centerX, float centerY, float* tx, float* ty) {
-  const float vx = c.bx - c.ax, vy = c.by - c.ay;
-  const float len2 = vx * vx + vy * vy;
-  if (len2 < 1e-18f) {
-    *tx = c.ax;
-    *ty = c.ay;
-    return;
-  }
-  const float t = ((centerX - c.ax) * vx + (centerY - c.ay) * vy) / len2;
-  *tx = c.ax + t * vx;
-  *ty = c.ay + t * vy;
-}
-
-/// The point where the fillet arc centered at (centerX,centerY) touches Arc/Circle `c` — guaranteed
-/// by \ref FilletCandidateCenters's own construction to already lie exactly on `c`'s own circle,
-/// along the ray from `c`'s center through the fillet center.
-inline void FilletTangentPointOnCircle(const FilletCurve& c, float centerX, float centerY, float* tx, float* ty) {
-  const float dx = centerX - c.cx, dy = centerY - c.cy;
-  const float d = std::hypot(dx, dy);
-  if (d < 1e-9f) {
-    *tx = c.cx + c.r;
-    *ty = c.cy;
-    return;
-  }
-  *tx = c.cx + dx / d * c.r;
-  *ty = c.cy + dy / d * c.r;
-}
-
-/// CCW angular travel in [0, 2*pi) from angle `from` to angle `to`.
-inline float FilletCcwAngleDelta(float from, float to) {
-  constexpr float kTwoPi = 6.28318530717958647692f;
-  float d = std::fmod(to - from, kTwoPi);
-  if (d < 0.f)
-    d += kTwoPi;
-  return d;
-}
-
-/// Converts a target tangent point (known, by \ref FilletCandidateCenters's own construction, to
-/// lie on arc `(cx,cy,r,startRad,sweepRad)`'s own circle) into the ABSOLUTE new-total-arc-length
-/// \ref ApplyLengthenToArc's `newLength` parameter expects, so the moving endpoint (selected by
-/// `nearFirst`, the identical convention `ApplyLengthenToArc` uses) lands exactly on it. Unlike
-/// EXTEND's own `FindExtendArcTarget` (additive, extend-only by construction), this computes the
-/// length directly from the FIXED endpoint, so it is correct whether the fillet shortens or extends
-/// the arc — verified against hand-computed cases in tests/FilletGeomTests.cpp before being trusted.
-inline float FilletArcTangentPointToNewLength(float cx, float cy, float r, float startRad, float sweepRad,
-                                              bool nearFirst, float targetX, float targetY) {
-  const float thetaT = std::atan2(targetY - cy, targetX - cx);
-  const float fixedAngle = nearFirst ? (startRad + sweepRad) : startRad;
-  const bool ccw = (sweepRad >= 0.f);
-  float newAbsSweep;
-  if (nearFirst)
-    newAbsSweep = ccw ? FilletCcwAngleDelta(thetaT, fixedAngle) : FilletCcwAngleDelta(fixedAngle, thetaT);
-  else
-    newAbsSweep = ccw ? FilletCcwAngleDelta(fixedAngle, thetaT) : FilletCcwAngleDelta(thetaT, fixedAngle);
-  return r * newAbsSweep;
-}
-
-/// True when two lines' directions are parallel within tolerance — detects FILLET's documented
-/// AutoCAD special case (two parallel lines get a semicircle regardless of the current radius
-/// setting; see spec/requirements.md REQ-103 FILLET acceptance).
-inline bool FilletLinesAreParallel(float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy) {
-  const float v1x = bx - ax, v1y = by - ay, v2x = dx - cx, v2y = dy - cy;
-  const float len1 = std::hypot(v1x, v1y), len2 = std::hypot(v2x, v2y);
-  if (len1 < 1e-9f || len2 < 1e-9f)
-    return false;
-  const float cross = (v1x / len1) * (v2y / len2) - (v1y / len1) * (v2x / len2);
-  return std::fabs(cross) < 1e-4f;
-}
-
-/// FILLET's documented AutoCAD special case: two parallel, non-collinear lines get connected by a
-/// semicircle regardless of the current radius setting. `pick1X,pick1Y` chooses which end of line 1
-/// anchors the semicircle (nearest that pick, returned unmoved as `anchorX,anchorY`); the
-/// semicircle's OTHER endpoint is the perpendicular projection of the anchor onto line 2's infinite
-/// extension (`projX,projY`) — guaranteeing exact tangency to both lines, with the radius that falls
-/// out equal to exactly half the true perpendicular distance between them, matching AutoCAD's own
-/// documented "radius = half the distance" rule.
-inline void FilletParallelSemicircle(float l1ax, float l1ay, float l1bx, float l1by, float l2ax, float l2ay,
-                                     float l2bx, float l2by, float pick1X, float pick1Y, float* anchorX,
-                                     float* anchorY, float* projX, float* projY) {
-  const float d0 = (pick1X - l1ax) * (pick1X - l1ax) + (pick1Y - l1ay) * (pick1Y - l1ay);
-  const float d1 = (pick1X - l1bx) * (pick1X - l1bx) + (pick1Y - l1by) * (pick1Y - l1by);
-  *anchorX = (d0 <= d1) ? l1ax : l1bx;
-  *anchorY = (d0 <= d1) ? l1ay : l1by;
-  const float vx = l2bx - l2ax, vy = l2by - l2ay;
-  const float len2 = vx * vx + vy * vy;
-  if (len2 < 1e-18f) {
-    *projX = l2ax;
-    *projY = l2ay;
-    return;
-  }
-  const float t = ((*anchorX - l2ax) * vx + (*anchorY - l2ay) * vy) / len2;
-  *projX = l2ax + t * vx;
-  *projY = l2ay + t * vy;
-}
-
-// ================================================================================================
-// REQ-103 CHAMFER (step 6b) — pure corner-point geometry. Eligible curves are Line/Polyline-segment
-// only (Arc excluded — no standard chamfer-to-arc geometry, matching AutoCAD's own restriction), so
-// this is simpler than FILLET's tangent-arc solve: the intersection point of the two (infinite)
-// curves is found by reusing `SolveFilletCenter(c1, c2, 0.f, ...)` — FILLET's own radius-0 case,
-// already proven correct — then each chamfer point is a fixed distance (or distance+angle) from it.
-// ================================================================================================
-
-/// Distance/Distance mode: the chamfer point on curve `c` (a Line/Polyline-segment `FilletCurve`),
-/// `dist` from the already-known intersection point `(px,py)`, signed toward whichever side
-/// `pickX,pickY` is on (the side the user's pick indicates should be kept).
-inline void ChamferPointAtDistance(const FilletCurve& c, float px, float py, float dist, float pickX,
-                                   float pickY, float* outX, float* outY) {
-  const float dx = c.bx - c.ax, dy = c.by - c.ay;
-  const float len = std::hypot(dx, dy);
-  if (len < 1e-9f) {
-    *outX = px;
-    *outY = py;
-    return;
-  }
-  const float ux = dx / len, uy = dy / len;
-  const float side = (pickX - px) * ux + (pickY - py) * uy;
-  const float sign = (side >= 0.f) ? 1.f : -1.f;
-  *outX = px + ux * dist * sign;
-  *outY = py + uy * dist * sign;
-}
-
-/// Distance/Angle mode: from `(fromX,fromY)` (curve `c`'s own Distance/Distance-style point),
-/// a ray along curve `c`'s kept direction (toward `pickX,pickY`) rotated by `angleRad`, intersected
-/// with curve `other`'s infinite extension. The accepted acceptance text names only "rotated toward
-/// curve 2's side," not which of the two possible rotation senses that is in this codebase's
-/// coordinate convention (ASSUMPTION-1, TASK-103) — both `+angleRad` and `-angleRad` are tried, and
-/// whichever intersection lands nearer `otherPickX,otherPickY` is kept, the same "nearest to the
-/// pick" disambiguation `SolveFilletCenter` and every other REQ-103 ambiguity resolution already
-/// use. False if neither rotation intersects `other` at all (parallel to it in both senses).
-inline bool ChamferRayIntersect(const FilletCurve& c, float fromX, float fromY, float pickX, float pickY,
-                                float angleRad, const FilletCurve& other, float otherPickX, float otherPickY,
-                                float* outX, float* outY) {
-  const float dx = c.bx - c.ax, dy = c.by - c.ay;
-  const float len = std::hypot(dx, dy);
-  if (len < 1e-9f)
-    return false;
-  float ux = dx / len, uy = dy / len;
-  const float side = (pickX - fromX) * ux + (pickY - fromY) * uy;
-  if (side < 0.f) {
-    ux = -ux;
-    uy = -uy;
-  }
-  const curveisect::Seg otherLong = FilletLongLine(other.ax, other.ay, other.bx, other.by);
-  bool found = false;
-  float bestX = 0.f, bestY = 0.f;
-  double bestD = -1.0;
-  for (float s : {1.f, -1.f}) {
-    const float rot = angleRad * s;
-    const float rx = ux * std::cos(rot) - uy * std::sin(rot);
-    const float ry = ux * std::sin(rot) + uy * std::cos(rot);
-    // Double precision (see FilletLongLine's own comment) — the original float32 version of this
-    // exact "extend by 1e6" computation is what a real user report traced FILLET's endpoint-vs-arc
-    // gap back to.
-    constexpr double kHuge = 1.0e6;
-    const curveisect::Seg ray{{static_cast<double>(fromX), static_cast<double>(fromY)},
-                              {fromX + static_cast<double>(rx) * kHuge, fromY + static_cast<double>(ry) * kHuge}};
-    std::vector<curveisect::Hit2> hits;
-    curveisect::IntersectSegSeg(ray, otherLong, &hits);
-    for (const auto& h : hits) {
-      const double d = (h.p.x - otherPickX) * (h.p.x - otherPickX) + (h.p.y - otherPickY) * (h.p.y - otherPickY);
-      if (!found || d < bestD) {
-        found = true;
-        bestD = d;
-        bestX = static_cast<float>(h.p.x);
-        bestY = static_cast<float>(h.p.y);
-      }
-    }
-  }
-  if (!found)
-    return false;
-  *outX = bestX;
-  *outY = bestY;
-  return true;
-}
-
-/// Optional batched polylines / arcs / ellipses for the viewport (nullptr = none).
+// Optional batched polylines / arcs / ellipses for the viewport (nullptr = none).
 struct CadExtendedGeometryInput {
   const std::vector<CadArc>* arcs = nullptr;
   const std::vector<EntityAttributes>* arcAttrs = nullptr;
@@ -846,6 +431,21 @@ struct CadExtendedGeometryInput {
   /// REQ-443 splines (NURBS curves), tessellated by the renderer to the view.
   const std::vector<CadSpline>* splines = nullptr;
   const std::vector<EntityAttributes>* splineAttrs = nullptr;
+  /// Horizontal alignments (REQ-480/495, issue #121). Drawn from the exact geometry, sampled for display only.
+  const std::vector<alignment::Alignment>* alignments = nullptr;
+  /// REQ-517: view frame groups, drawn in plan as closed outlines of each frame.
+  const std::vector<alignment::ViewFrameGroup>* viewFrameGroups = nullptr;
+  /// REQ-519: sample lines, drawn in plan as short swaths across each alignment station.
+  const std::vector<alignment::SampleLine>* sampleLines = nullptr;
+  /// Named alignment styles (REQ-491); read when drawing each alignment entity.
+  const std::vector<AlignmentStyle>* alignmentStyles = nullptr;
+  /// Layers frozen in the paper-space viewport being drawn (REQ-028); alignments on them are not drawn (REQ-495.4).
+  const std::vector<std::string>* viewportFrozenLayers = nullptr;
+  /// REQ-456 CAD POINT entities.
+  const std::vector<CadPoint>* points = nullptr;
+  const std::vector<EntityAttributes>* pointAttrs = nullptr;
+  int pdMode = 0;
+  double pdSize = 0.0;
   const std::vector<double>* polylineVerts = nullptr;
   const std::vector<int>* polylineOffsets = nullptr;
   const std::vector<uint8_t>* polylineClosed = nullptr;
@@ -899,7 +499,8 @@ template <class VT>
 /// rubber-band preview, and this gate — where the symptom was that a drawing containing ONLY a
 /// feature line rendered nothing at all, while still hovering and selecting, because the whole
 /// committed-geometry block was skipped. One predicate, one place to add the next entity kind, and
-/// a test that fails when someone forgets. REQ-087.
+/// a test that fails when someone forgets. REQ-087. REQ-443 splines and REQ-456 points belong here
+/// for the same reason: a drawing that holds only that kind must still enter the draw block.
 [[nodiscard]] inline bool CadExtendedHasDrawableGeometry(const CadExtendedGeometryInput& e) {
   if (e.arcs != nullptr && !e.arcs->empty())
     return true;
@@ -910,6 +511,16 @@ template <class VT>
   if (CadChainHasEntities(e.featureLineVerts, e.featureLineOffsets))
     return true;
   if (e.blockRefs != nullptr && !e.blockRefs->empty())
+    return true;
+  if (e.splines != nullptr && !e.splines->empty())
+    return true;
+  if (e.alignments != nullptr && !e.alignments->empty())
+    return true;
+  if (e.viewFrameGroups != nullptr && !e.viewFrameGroups->empty())
+    return true;
+  if (e.sampleLines != nullptr && !e.sampleLines->empty())
+    return true;
+  if (e.points != nullptr && !e.points->empty())
     return true;
   return false;
 }
@@ -986,8 +597,8 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
 
 /// In-process clipboard for COPYCLIP / PASTECLIP.  Geometry stored at local (storage) coordinates.
 struct CadClipboard {
-  float basePtX = 0.f; ///< Bounding-box center X used as paste anchor (local space).
-  float basePtY = 0.f;
+  double basePtX = 0.0; ///< Bounding-box center X used as paste anchor (local space).
+  double basePtY = 0.0;
 
   std::vector<double>            lines;
   std::vector<EntityAttributes> lineAttrs;
@@ -1005,6 +616,8 @@ struct CadClipboard {
   std::vector<EntityAttributes> ellAttrs;
   std::vector<CadSpline>        splines; ///< REQ-443 model-space SPLINE entities.
   std::vector<EntityAttributes> splineAttrs;
+  std::vector<CadPoint>         points; ///< REQ-456 CAD POINT entities.
+  std::vector<EntityAttributes> pointAttrs;
   std::vector<int>              polyOffsets; ///< Self-contained offset table (starts with 0).
   std::vector<double>            polyVerts;
   std::vector<float>            polyVertsBulge; ///< REQ-316 / ADR-047: per-vertex bulge, size()/3.
@@ -1018,6 +631,7 @@ struct CadClipboard {
   std::vector<EntityAttributes> blockRefAttrs;
   std::vector<CadFilledRegion>  filledRegions;     ///< Solid fills enclosed by the copy selection (REQ-038 addendum).
   std::vector<EntityAttributes> filledRegionAttrs;
+  std::vector<SurveyPoint>       surveyPoints; ///< Selected model-space survey points (REQ-383 #782).
   /// Source space of the copy. Text height has different units per space (model: plotted-inches × scale = model
   /// units; paper: paper inches), so a cross-space paste scales annotation height by modelUnitsPerPlottedInch.
   bool fromPaper = false;
@@ -1033,8 +647,8 @@ struct CadClipboard {
 
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
-           (polyOffsets.size() <= 1) && splines.empty() && annotations.empty() && tables.empty() && blockRefs.empty() &&
-           filledRegions.empty();
+           (polyOffsets.size() <= 1) && splines.empty() && points.empty() && annotations.empty() && tables.empty() &&
+           blockRefs.empty() && filledRegions.empty() && surveyPoints.empty();
   }
 };
 
@@ -1320,6 +934,7 @@ struct DrawingGeometrySnapshot {
   std::vector<uint8_t>            featureLineClosed;
   std::vector<uint8_t>            featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<CadGradingPreset> gradingPresets;
   std::vector<EntityAttributes>   featureLineAttrs;
   std::vector<CadAnnotation>    cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
@@ -1340,18 +955,28 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;       ///< Drawing TABLE entities (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadTableStyle>    tableStyles = CadTableBuiltinStyles();
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
   std::vector<EntityAttributes> cadMultileaderAttrs;
   std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
   std::vector<EntityAttributes> cadSplineAttrs;
+  std::vector<CadPoint> cadPoints;  ///< REQ-456 / issue #1019
+  std::vector<EntityAttributes> cadPointAttrs;
+  int pdMode = 0;     ///< AutoCAD PDMODE for CAD POINT display
+  double pdSize = 0.0;  ///< AutoCAD PDSIZE; 0 = 5% of view
   /// Pipe runs (issue #486 / REQ-345). Without this, BEDIT's swap left the MAIN drawing's pipe
   /// runs rendering inside the block editor's own viewport — cadTables/cadBlockRefs beside it are
   /// swapped for exactly this reason ("hide everything that is not the block being edited",
   /// LoadBlockPrimitivesIntoDrawing), and cadPipeRuns simply arrived after that pass was written.
   std::vector<CadPipeRun>       cadPipeRuns;
   std::vector<EntityAttributes> cadPipeRunAttrs;
+  std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
+  std::vector<alignment::ViewFrameGroup> viewFrameGroups;  ///< REQ-517: view frame groups that follow an alignment
+  std::vector<alignment::SampleLine> sampleLines;  ///< REQ-519: sample lines and their sections (persist with the drawing)
+  std::vector<alignment::VerticalProfile> profiles;  ///< REQ-521: design vertical profiles (persist with the drawing)
+  std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
   /// Named piping networks (issue #486 increment B3 / REQ-345) — swapped alongside `cadPipeRuns`
   /// for the same BEDIT-isolation reason the comment above states: a network's indices are only
   /// meaningful against the drawing's OWN `cadPipeRuns`, so it must travel with it, not stay behind.
@@ -1360,6 +985,8 @@ struct DrawingGeometrySnapshot {
   std::vector<CadBlockRef>        cadBlockRefs;
   std::vector<EntityAttributes>   cadBlockRefAttrs;
   std::vector<SurveyPoint>      surveyPoints;
+  std::vector<SurveyPointStyleDefinition> surveyPointStyles = DefaultSurveyPointStyles();
+  std::vector<SurveyPointLabelStyleDefinition> surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
   /// Named point groups (REQ-067). Undoable, like textStyles — creating or editing one is a
   /// single-step undo. Rules only; membership is never stored.
   std::vector<PointGroup>       pointGroups;
@@ -1371,10 +998,17 @@ struct DrawingGeometrySnapshot {
   /// in `AppCommandState::surfaceDisplayCache`, which no snapshot touches (ADR-036 (e)). That split is
   /// what lets a style edit be undoable without a single contour entering the undo stack.
   std::vector<SurfaceStyle>     surfaceStyles;
+  std::vector<AlignmentStyle>   alignmentStyles;
+  std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502: drawing-owned check sets
+  std::vector<AlignmentLabelSet> alignmentLabelSets;
+  std::vector<AlignmentLabelStyle> alignmentLabelStyles;  ///< REQ-492.5
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
+  std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
+  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<PaperLayout>      paperLayouts;  ///< Paper layouts incl. native paper geometry (REQ-037/038) — undoable.
+  std::vector<CadRasterImage>   cadRasterImages; ///< model-space rasters, optionally linked to a surface (REQ-511)
   double worldDocumentOriginX = 0.0;
   double worldDocumentOriginY = 0.0;
   /// The section plane (REQ-343 amended, GitHub issue #479 acceptance 8). Mirrors
@@ -1445,6 +1079,8 @@ constexpr size_t kUcsPreviousDepth = 10;
 /// Snapshot of all per-drawing data.  AppCommandState holds the live (active-tab) copy directly;
 /// switching tabs saves the active fields here and restores the target tab's snapshot.
 struct DrawingDocument {
+  std::vector<CadAnnotationScale> viewportZoomScales;
+  int currentViewportZoomScaleIndex = -1;
   double viewportPanX = 0.0;
   double viewportPanY = 0.0;
   float  viewportZoom = 1.f;
@@ -1505,6 +1141,7 @@ struct DrawingDocument {
   std::vector<uint8_t>            featureLineClosed;
   std::vector<uint8_t>            featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<CadGradingPreset> gradingPresets;
   std::vector<EntityAttributes>   featureLineAttrs;
   std::vector<CadAnnotation>    cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
@@ -1520,12 +1157,17 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;         ///< Drawing TABLE (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadTableStyle>    tableStyles = CadTableBuiltinStyles();
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
   std::vector<EntityAttributes> cadMultileaderAttrs;
   std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
   std::vector<EntityAttributes> cadSplineAttrs;
+  std::vector<CadPoint> cadPoints;  ///< REQ-456 / issue #1019
+  std::vector<EntityAttributes> cadPointAttrs;
+  int pdMode = 0;
+  double pdSize = 0.0;
   /// Pipe runs and the networks that group them (issue #486 / REQ-345). Per DRAWING, like every
   /// other entity store here: without them, routing a run in one drawing left it rendering — and
   /// selectable, and snappable — in every other tab, because a tab switch swaps the whole document
@@ -1535,11 +1177,18 @@ struct DrawingDocument {
   /// data rebuilt from these by signature, exactly like `blockRefWorldSolids`.
   std::vector<CadPipeRun>       cadPipeRuns;
   std::vector<EntityAttributes> cadPipeRunAttrs;
+  std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
+  std::vector<alignment::ViewFrameGroup> viewFrameGroups;  ///< REQ-517: view frame groups that follow an alignment
+  std::vector<alignment::SampleLine> sampleLines;  ///< REQ-519: sample lines and their sections (persist with the drawing)
+  std::vector<alignment::VerticalProfile> profiles;  ///< REQ-521: design vertical profiles (persist with the drawing)
+  std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
   std::vector<CadPipingSystem>  cadPipingSystems;
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef>        cadBlockRefs;
   std::vector<EntityAttributes>   cadBlockRefAttrs;
   std::vector<SurveyPoint>      surveyPoints;
+  std::vector<SurveyPointStyleDefinition> surveyPointStyles = DefaultSurveyPointStyles();
+  std::vector<SurveyPointLabelStyleDefinition> surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
   std::vector<PointGroup>       pointGroups;            ///< Named point groups (REQ-067).
   std::vector<int>              selectedSurveyPointIndices;
   std::vector<CadLayerRow>      drawingLayerTable;
@@ -1551,8 +1200,14 @@ struct DrawingDocument {
   projpts::Rules                pointVisibility;        ///< REQ-377: per tab, which project points this drawing shows
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
+  std::vector<AlignmentStyle>   alignmentStyles;
+  std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502: drawing-owned check sets
+  std::vector<AlignmentLabelSet> alignmentLabelSets;        ///< Named alignment label sets (REQ-492).
+  std::vector<AlignmentLabelStyle> alignmentLabelStyles;    ///< Named alignment label styles (REQ-492.5).
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
+  std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
+  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
   std::string                   activeTextStyleName = "Standard";  ///< Style for new TEXT/MTEXT.
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<SelectedEntity>   selection;
@@ -1562,6 +1217,7 @@ struct DrawingDocument {
   /// this struct is the in-memory tab store, not the file format.
   std::vector<std::uint64_t>    hiddenEntityIds;
   std::vector<PaperLayout>      paperLayouts;            ///< Paper-space layouts (REQ-025); empty = none.
+  std::vector<CadRasterImage>   cadRasterImages; ///< model-space raster underlays (REQ-511)
   std::vector<PageSetup>        savedPageSetups;         ///< Drawing-wide named page setups.
   int                           activeSpaceIndex = kModelSpaceIndex;  ///< -1 = model; else index into paperLayouts.
   uint32_t cadGpuRevision  = 0;
@@ -1644,22 +1300,22 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
 /// REQ-037 / ADR-009: the active layout's paper-space geometry store a draw/edit command writes to,
 /// or nullptr when the command targets model space (model space active, or floating model space).
 PaperLayout* ActivePaperGeometryTarget(AppCommandState& st);
+const PaperLayout* ActivePaperGeometryTarget(const AppCommandState& st);
 
 // Native paper-space geometry selection + edit (REQ-037). Indices are into the ACTIVE layout's stores.
 void ClearPaperEntitySelection(AppCommandState& st);
-/// Topmost paper entity (text over line) within \p tolIn of (x,y) in paper inches; false if none.
 /// Moves everything a model-space reader put into \p scratch (read with origin 0 and 1 unit per plotted
 /// inch, so every number is already in paper inches) into \p L's own stores (issue #768, REQ-113). Shared
-/// by the DWG and DXF readers. Returns true when a polyline carried a bulge: the sheet's polyline store
-/// has none, so curved segments arrive straight and the caller reports it (REQ-201).
-bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch);
+/// by the DWG and DXF readers. Paper POINT and SPLINE come through the same scratch (REQ-456).
+void AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch);
 
+/// Topmost paper entity (text over line) within \p tolIn of (x,y) in paper inches; false if none.
 bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperEntityRef* out,
                        const std::vector<CadBlockDefinition>* blockDefs = nullptr);
 void TogglePaperEntitySelection(AppCommandState& st, PaperEntityRef ref, bool additive);
 void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& log);
 void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn, bool copy,
-                                    std::vector<std::string>& log);
+                                    std::vector<std::string>& log, bool pushUndo = true);
 /// #764 - paper-space SCALE: uniform scale of the selected paper entities about a point (paper inches).
 void ScaleSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float factor,
                                 std::vector<std::string>& log);
@@ -1669,7 +1325,7 @@ void FinishPaperMoveCopy(AppCommandState& st, float dxIn, float dyIn, std::vecto
 /// Second-point step of paper MIRROR (click or typed). Refuses a zero-length mirror line.
 void FinishPaperMirror(AppCommandState& st, float x2In, float y2In, std::vector<std::string>& log);
 void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float angRad,
-                                 std::vector<std::string>& log);
+                                 std::vector<std::string>& log, bool pushUndo = true);
 /// REQ-103 MIRROR, pure-paper-space path. Always duplicates and keeps the source (see the
 /// definition's comment for why there is no erase-source toggle here).
 void MirrorSelectedPaperEntities(AppCommandState& st, float x0In, float y0In, float x1In, float y1In,
@@ -1744,6 +1400,9 @@ void ApplyPageSetupToLayout(PaperLayout& layout, const PageSetup& ps);
 PageSetup PageSetupFromLayout(const PaperLayout& layout, const std::string& name);
 /// Reorder/copy a layout to before \p beforeIdx (== size → move to end); copy clones it. Move-or-Copy.
 void MoveOrCopyLayout(AppCommandState& cmd, int layoutIdx, int beforeIdx, bool makeCopy, std::vector<std::string>& log);
+/// Duplicate a layout at the end, leaving the previously active layout selected. Returns the copy index or -1.
+int CopyPaperLayout(AppCommandState& cmd, int layoutIdx, const std::string& requestedName,
+                    std::vector<std::string>& log);
 
 /// REQ-302: top-level ribbon tabs, in display order. UI-layer concept, but the active index is
 /// persisted app state (AppCommandState::activeRibbonTab) so it lives alongside kModelSpaceIndex-
@@ -2072,7 +1731,26 @@ struct AppCommandState {
     PadSolid,
     /// REQ-443: create a fit-point or control-vertex NURBS spline.
     Spline,
+    /// REQ-456 / issue #1019.
+    Point,
+    Leader,
+    Pedit,
+    Measure,
+    Divide,
+    Area,
+    List,
+    DataExtract,
+    Table,
+    PointTable,
+    /// REQ-485.1 ALIGNMENTLAYOUT: Tangent-Tangent layout, one PI per click or typed point; `U` takes one back.
+    AlignmentLayout,
+    /// REQ-485.2 CREATEALIGNMENTFROMOBJECTS: pick the objects, then accept or reverse the direction.
+    AlignmentFromObjects,
+    /// REQ-484.4 GETSTATIONOFFSET <alignment> with no point: each click (or typed X,Y) reports a station and offset,
+    /// until ESC. \ref stationOffsetPickArgs holds the alignment and any SURFACE= option.
+    StationOffsetPick,
   } active = Kind::None;
+  std::string stationOffsetPickArgs;
 
   static const char* KindName(Kind k) {
     switch (k) {
@@ -2084,6 +1762,17 @@ struct AppCommandState {
     case Kind::Arc:           return "ARC";
     case Kind::Ellipse:       return "ELLIPSE";
     case Kind::Spline:        return "SPLINE";
+    case Kind::Point:         return "POINT";
+    case Kind::Leader:        return "LEADER";
+    case Kind::Pedit:         return "PEDIT";
+    case Kind::Measure:       return "MEASURE";
+    case Kind::Divide:        return "DIVIDE";
+    case Kind::Area:          return "AREA";
+    case Kind::List:          return "LIST";
+    case Kind::DataExtract:   return "DATAEXTRACTION";
+    case Kind::Table:         return "TABLE";
+    case Kind::PointTable:    return "ADDPOINTTABLE";
+    case Kind::StationOffsetPick: return "GETSTATIONOFFSET";
     case Kind::Text:          return "TEXT";
     case Kind::Mtext:         return "MTEXT";
     case Kind::Mleader:          return "MLEADER";
@@ -2169,6 +1858,8 @@ struct AppCommandState {
     case Kind::DrawingSettingsPick: return "DRAWINGSETTINGS";
     case Kind::GeoCaptureArea:     return "GEOCAPTUREAREA";
     case Kind::PadSolid:           return "PADSOLID";
+    case Kind::AlignmentLayout:    return "ALIGNMENTLAYOUT";
+    case Kind::AlignmentFromObjects: return "CREATEALIGNMENTFROMOBJECTS";
     default:                  return "";
     }
   }
@@ -2212,6 +1903,9 @@ struct AppCommandState {
   std::vector<CadAnnotationScale> annotationScales;
   /// Index into \ref annotationScales for model-space annotative display (-1 = drawing plot scale only).
   int currentAnnotationScaleIndex = -1;
+  /// REQ-458: model editor viewport zoom ratio presets (separate from annotationScales).
+  std::vector<CadAnnotationScale> viewportZoomScales;
+  int currentViewportZoomScaleIndex = -1;
   /// REQ-385: LIGHT entities and SUN object from DWG import (issue #624 lights slice).
   std::vector<CadDwgImportedLight> dwgImportedLights;
   CadDwgImportedSun dwgImportedSun{};
@@ -2414,6 +2108,10 @@ struct AppCommandState {
     int solidCount = 0;
     /// Total tessellated triangles across the solid scene, filled in when the scene is built.
     int solidTriangleCount = 0;
+    /// REQ-495 acceptance 4: alignments in the alignment profile, each `alignmentEntityCount` entities long.
+    /// 0 = not the alignment profile.
+    int alignmentCount = 0;
+    int alignmentEntityCount = 0;
 
     /// REQ-100 profile (e) (TASK-270 §14): non-empty selects the point-cloud profile. Unlike every
     /// other profile, the scene is not synthesized — it is the real file at this path, imported
@@ -2447,6 +2145,8 @@ struct AppCommandState {
     std::vector<EntityAttributes> savedMeshAttrs;
     std::vector<CadSolidPtr> savedSolids;             ///< restored verbatim after a solid run
     std::vector<EntityAttributes> savedSolidAttrs;
+    std::vector<alignment::Alignment> savedAlignments;  ///< restored verbatim after an alignment run
+    std::vector<alignment::SampleLine> savedSampleLines;  ///< REQ-519: restored with the alignments they belong to
     /// The mesh profile forces Shaded (REQ-100 (b) measures *shaded* meshes, and REQ-064's budget
     /// condition is stated in Shaded). Saved so a bench run cannot leave the user in a style they
     /// did not choose — which would also silently invalidate ADR-026 (e)'s 2D Wireframe parity.
@@ -2473,6 +2173,16 @@ struct AppCommandState {
   /// not one of the default running object snaps); reachable immediately via the Shift+right-click
   /// "snap once" override.
   bool objectSnapQuadrant = false;
+  /// Snap to a typed displayed station on an alignment (REQ-490). Default OFF; `STATION 12+45.32`
+  /// at a point prompt also resolves directly. While enabled, uses \ref objectSnapStationDisplayed when valid.
+  bool objectSnapStation = false;
+  bool objectSnapNode = true;  ///< REQ-490.2: drawing points and alignment PIs.
+  /// REQ-483.4: how this drawing writes and reads alignment stations (STATIONFORMAT).
+  alignment::StationFormat alignmentStationFormat;
+  bool objectSnapStationDisplayedValid = false;
+  double objectSnapStationDisplayed = 0.0;
+  /// Set when a `STATION …` point entry fails; cleared after the active command logs it (REQ-490).
+  std::string alignmentStationSnapRejectReason;
   bool objectSnapPerpendicular = true;
   bool objectSnapSurveyPoint = true;
   bool objectSnapGeometricCenter = true;
@@ -2556,6 +2266,38 @@ struct AppCommandState {
 
   enum class SplineMethod : std::uint8_t { Fit, Control } splineMethod = SplineMethod::Fit;
   std::vector<spline::Vec3> splineDraftPoints;
+
+  /// REQ-456 LEADER / POINT / PEDIT / MEASURE / DIVIDE / AREA / LIST drafts.
+  enum class LeaderAnnotation : std::uint8_t { Mtext, None } leaderAnnotation = LeaderAnnotation::Mtext;
+  enum class LeaderPathStyle : std::uint8_t { Straight, Spline } leaderPathStyle = LeaderPathStyle::Straight;
+  bool leaderShowArrow = true;
+  enum class LeaderPhase : std::uint8_t { WaitFirst, WaitNext, WaitAnnotation, WaitFormat } leaderPhase =
+      LeaderPhase::WaitFirst;
+  bool leaderFinishAfterAnnotation = false;
+  std::vector<spline::Vec3> leaderDraftPoints;
+  enum class PeditPhase : std::uint8_t {
+    WaitObject,
+    WaitOption,
+    WaitVertex,
+    WaitJoin,
+    WaitVertexMove,
+    WaitVertexInsert
+  } peditPhase = PeditPhase::WaitObject;
+  int peditIndex = -1;
+  int peditVertex = 0;
+  bool peditPaper = false;
+  /// MEASURE and DIVIDE share object-pick + value prompt state (same AutoCAD two-step).
+  enum class MeasurePhase : std::uint8_t { WaitObject, WaitValue } measurePhase = MeasurePhase::WaitObject;
+  SelectedEntity measureTarget{};
+  bool measurePaper = false;
+  PaperEntityRef measurePaperTarget{PaperEntityRef::Type::Line, -1};
+  double measurePickX = 0.0;
+  double measurePickY = 0.0;
+  enum class AreaPhase : std::uint8_t { WaitFirst, WaitNext, WaitObject } areaPhase = AreaPhase::WaitFirst;
+  std::vector<spline::Vec3> areaDraftPoints;
+  double areaRunning = 0.0;
+  bool areaSubtract = false;
+  bool areaAccumulate = false;  ///< Add/Subtract keeps a running total and stays in the command.
 
   /// PADSOLID (GitHub #150): pick the boundary, then sit on an options prompt until a pad
   /// elevation is given. The surface is remembered between runs in a drawing, so the common case
@@ -2682,6 +2424,7 @@ struct AppCommandState {
   double polarIncrementDeg = 90.0;
   std::vector<double> polarExtraAnglesDeg;
   /// Last drawing viewport cursor (world), updated each frame for LINE ortho distance entry.
+  std::string alignmentCursorReadout;  ///< REQ-501.2: station/offset/bearing under the cursor; UI-only, never saved
   float uiCursorWorldX = 0.f;
   float uiCursorWorldY = 0.f;
   /// Drawing viewport pan/zoom (local coordinates; pan is view center in storage space).
@@ -3223,6 +2966,7 @@ struct AppCommandState {
   std::vector<uint8_t> featureLineClosed;
   std::vector<uint8_t> featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<CadGradingPreset> gradingPresets;
   std::vector<EntityAttributes> featureLineAttrs;
 
   /// GRADING (REQ-398): pick the baseline feature line, then sit on an options prompt offering the
@@ -3236,6 +2980,9 @@ struct AppCommandState {
     WaitFillSlope,
     WaitSurfaceName,
     WaitSide,
+    WaitTargetKind,
+    WaitTargetValue,
+    WaitDistanceGrade,
   } gradingPhase = GradingPhase::WaitBaseline;
   /// The baseline, held by **stable entity id** and never by array index — REQ-076's own words,
   /// which say "never an array index, so an edit that compacts the store cannot silently retarget
@@ -3246,6 +2993,9 @@ struct AppCommandState {
   std::string gradingSurface;      ///< target surface name, remembered between runs
   bool gradingSideLeft = true;     ///< open baselines only; meaningless for a closed one
   bool gradingSideChosen = false;  ///< an open baseline must be told, so this starts false
+  CadGradingDefinition::Target gradingTarget = CadGradingDefinition::Target::Surface;
+  double gradingTargetValue = 0.0;
+  double gradingDistanceGradePercent = 0.0;
   /// Issue #997: the stable id of the grading result being EDITED, or 0 when GRADING is creating a
   /// new one. Set when GRADING starts on a selected result; Enter then rebuilds that line in place.
   std::uint64_t gradingEditId = 0;
@@ -3400,6 +3150,8 @@ struct AppCommandState {
   int offsetPaperLayoutIndex = -1;
   /// Bumped when CAD geometry or per-entity viewport styling changes; GPU vertex caches invalidate when stale.
   uint32_t cadGpuRevision = 0;
+  /// Renderer-only invalidation. Unlike cadGpuRevision, this does not dirty the drawing or cancel surface workers.
+  uint32_t cadGpuCacheRevision = 0;
 
   std::vector<CadAnnotation> cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
@@ -3478,6 +3230,11 @@ struct AppCommandState {
   /// solid array.
   std::vector<CadPipeRun> cadPipeRuns;
   std::vector<EntityAttributes> cadPipeRunAttrs;
+  std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
+  std::vector<alignment::ViewFrameGroup> viewFrameGroups;  ///< REQ-517: view frame groups that follow an alignment
+  std::vector<alignment::SampleLine> sampleLines;  ///< REQ-519: sample lines and their sections (persist with the drawing)
+  std::vector<alignment::VerticalProfile> profiles;  ///< REQ-521: design vertical profiles (persist with the drawing)
+  std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
   std::vector<CadSolidPtr> pipeRunWorldSolids;
   std::vector<EntityAttributes> pipeRunWorldSolidAttrs;
   /// Which `cadPipeRuns` index each `pipeRunWorldSolids` entry came from (issue #486, selection
@@ -3497,12 +3254,78 @@ struct AppCommandState {
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
   std::vector<CadTable> cadTables;
   std::vector<EntityAttributes> cadTableAttrs;
+  /// Table styles of this drawing (REQ-475). The built-in set; style editing is a follow-up.
+  std::vector<CadTableStyle> tableStyles = CadTableBuiltinStyles();
+  /// TABLE and ADDPOINTTABLE prompt state (REQ-466, REQ-474).
+  int tableStage = 0;
+  std::string tablePendingStyle;
+  int tablePendingCols = 3;
+  int tablePendingRows = 2;
+  float tablePendingColumnWidthInches = 1.5f;
+  float tablePendingRowHeightInches = 0.375f;
+  bool tableInsertDialogRequested = false;
+  int pointTableStage = 0;
+  std::string pointTableStyle;
+  std::string pointTableLayer;
+  bool pointTableSplitEnabled = true;
+  int pointTableMaxRows = 20;
+  int pointTableMaxStack = 3;
+  double pointTableOffset = 0.3;
+  bool pointTableTileAcross = true;
+  bool pointTableDynamic = true;
+  std::vector<int> pointTableIds;
+  /// Set by the Qt editor. ADDPOINTTABLE then opens the dialog instead of typed prompts.
+  bool addPointTableDialogAvailable = false;
+  bool addPointTableDialogRequested = false;
+  /// REQ-486.1: EDITALIGNMENT asks the Qt editor to open the Alignment Layout table on \ref alignmentLayoutName
+  /// (empty: the selected or first alignment). A headless run only reports it.
+  bool alignmentLayoutRequested = false;
+  std::string alignmentLayoutName;
+  /// REQ-491: EDITALIGNMENTSTYLE asks the Qt editor to open the style dialog on
+  /// The alignment style name is stored in alignmentStyleEditorName.
+  bool alignmentStyleEditorRequested = false;
+  std::string alignmentStyleEditorName;
+  /// REQ-485: set by the Qt editor. ALIGNMENT / CREATEALIGNMENT with no arguments then ask it for the Create Alignment
+  /// dialog, and CREATEALIGNMENTFROMOBJECTS asks for its dialog once the objects and direction are picked.
+  bool createAlignmentDialogAvailable = false;
+  bool createAlignmentDialogRequested = false;
+  bool alignmentFromObjectsDialogRequested = false;
+  /// REQ-485.1 Curve and Spiral Settings, kept for the session like Civil 3D's layout settings. A radius of 0 means
+  /// the drawing's default (100 ft, or 30 m in a metric drawing). Tangent-Tangent starts without curves, as Civil 3D's
+  /// layout toolbar does; the last mode chosen is kept.
+  alignment::CurveSettings alignmentCurveSettings{false, 0.0, 0.0, 0.0};
+  /// ALIGNMENTLAYOUT (Kind::AlignmentLayout): the PIs picked so far and the alignment as it was before the session, so
+  /// every PI rebuilds the tail from scratch and `U` can take one back.
+  struct AlignmentLayoutSession {
+    std::string name;
+    std::vector<alignment::Point2> pis;  ///< Drawing-local.
+    alignment::Alignment base;
+    bool snapshotTaken = false;
+    bool fixedDirection = false;  ///< The first tangent keeps the dialog's starting direction.
+    double directionAzimuth = 0.0;
+    size_t warningsShown = 0;
+  } alignmentLayout;
+  /// CREATEALIGNMENTFROMOBJECTS picks (Kind::AlignmentFromObjects). The picked objects live in `selection`, so the
+  /// command that finally creates the alignment reads them from there.
+  struct AlignmentFromObjectsPick {
+    enum class Phase : std::uint8_t { WaitFirst, WaitMore, WaitDirection } phase = Phase::WaitFirst;
+    bool hasPick = false;
+    double pickX = 0.0;  ///< Drawing-local point of the first pick: the alignment starts at the end nearest it.
+    double pickY = 0.0;
+    bool reverse = false;
+  } alignmentFromObjects;
+  /// REQ-485.1: the Alignment Layout Tools window follows this alignment while it is open.
+  std::string alignmentLayoutToolsName;
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
   std::vector<EntityAttributes> cadMultileaderAttrs;
   std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
   std::vector<EntityAttributes> cadSplineAttrs;
+  std::vector<CadPoint> cadPoints;  ///< REQ-456 / issue #1019
+  std::vector<EntityAttributes> cadPointAttrs;
+  int pdMode = 0;
+  double pdSize = 0.0;
 
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef> cadBlockRefs;
@@ -3861,11 +3684,12 @@ struct AppCommandState {
     /// resolved value cannot be forgotten. A style is five small structs and two doubles, so the
     /// comparison is cheaper than the allocation it prevents.
     SurfaceStyle style;
+    bool reducedDisplayLod = false;
 
     /// All generated geometry, each in `GL_LINES` layout: flat x,y,z, six floats per segment.
     /// Regenerated together, only on a staleness miss, and borrowed by
     /// \ref CadSurfaceDisplayGeometry rather than copied into it.
-    std::vector<float> triangleEdges;  ///< Every triangulation edge (the pre-REQ-070 appearance).
+    std::vector<float> triangleEdges;  ///< Display triangulation edges (sampled in Reduced LOD mode).
     std::vector<float> borderEdges;    ///< The outline: edges belonging to one triangle (\c TinBorderEdges).
     std::vector<float> minorContours;  ///< Minor levels, excluding those that are also major.
     std::vector<float> majorContours;
@@ -4291,6 +4115,14 @@ struct AppCommandState {
   /// REQ-443: the whole spline as it was when a grip drag began, so RMB / Esc restores it exactly (a Fit
   /// spline's control points are re-derived on every drag step, so there is no single coordinate to put back).
   CadSpline entityGripOrigSpline;
+  alignment::Alignment entityGripOrigAlignment;  ///< REQ-487.1: the alignment as it was when the grip was grabbed
+  /// REQ-492.5: a station label being dragged in the viewport. The label is moved live; the original is kept so a
+  /// cancel restores it and a commit can take its undo snapshot before the move.
+  bool alignLabelDragActive = false;
+  bool alignLabelDragMoved = false;
+  int alignLabelDragAlignment = -1;
+  int alignLabelDragIndex = -1;
+  alignment::StationOffsetLabel alignLabelDragOriginal;
   float entityGripOrigEllCx = 0.f, entityGripOrigEllCy = 0.f;
   float entityGripDownWorldX = 0.f; // reserved
   float entityGripDownWorldY = 0.f; // reserved
@@ -4416,6 +4248,8 @@ struct AppCommandState {
     Polar_WaitAngle,        ///< typed degrees, or click (angle from center to cursor)
     Polar_WaitRotateAnswer, ///< "[Y]es / [N]o"; commits on completion
   } arrayPhase = ArrayPhase::PickSelection;
+  /// True while ARRAY is operating on native entities in the active paper layout.
+  bool arrayOnPaper = false;
 
   int arrayCols = 0;
   int arrayRows = 0;
@@ -4593,6 +4427,8 @@ struct AppCommandState {
 
   // --- Survey / COGO points (in-memory database; optional JSON file) ---
   std::vector<SurveyPoint> surveyPoints;
+  std::vector<SurveyPointStyleDefinition> surveyPointStyles = DefaultSurveyPointStyles();
+  std::vector<SurveyPointLabelStyleDefinition> surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
   /// Named point groups (REQ-067) — drawing-owned rules, resolved on demand, never cached.
   std::vector<PointGroup> pointGroups;
   CreatePointsOptions createPointsOpts;
@@ -4765,17 +4601,26 @@ struct AppCommandState {
   /// document: a drawing that reaches the renderer with an empty table would be in a state the rest of
   /// the code is entitled to assume cannot happen.
   std::vector<SurfaceStyle> surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
+  std::vector<AlignmentStyle> alignmentStyles = AlignmentStyles::DefaultAlignmentStyles();
+  /// REQ-491 current style (the REQ-478 pattern): a new alignment uses it unless another style is named.
+  std::string alignmentStyleCurrent = "Standard";
+  std::vector<alignment::AlignmentCheckSet> alignmentCheckSets;  ///< REQ-502
+  std::vector<AlignmentLabelSet> alignmentLabelSets = AlignmentLabelSets::DefaultAlignmentLabelSets();
+  std::vector<AlignmentLabelStyle> alignmentLabelStyles = AlignmentLabelStyles::DefaultAlignmentLabelStyles();  ///< REQ-492.5
   /// Active text style for new TEXT/MTEXT (the STYLE dropdown). Empty resolves to "Standard".
   std::string activeTextStyleName = "Standard";
   /// Centralized dimension style (issue #99) — single active style used by DIMALIGNED/DIMLINEAR/DIMANGULAR.
   /// Pure value type, undoable via snapshot (like textStyles/surfaceStyles).  New dimensions bake this
   /// style's effective values; existing dimensions read the active style at draw/measure time (phase 1).
   DimensionStyle activeDimensionStyle = DimensionStyles::Default();
+  std::vector<DimensionStyle> dimensionStyles = DimensionStyles::DefaultStyles();
+  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
   DimensionStyle dimStyleDraft = DimensionStyles::Default();
   bool showDimStyleDialog = false;
   MultileaderStyle activeMultileaderStyle = MultileaderStyles::Default();
   MultileaderStyle mleaderStyleDraft = MultileaderStyles::Default();
   bool showMleaderStyleDialog = false;
+  bool showTableStyleDialog = false;
   /// Viewport CAD crosshair (Drawing1): RGB 0–1, arm length as fraction of viewport width/height, pickbox half-size in px.
   float viewportCrosshairR = 1.f;
   float viewportCrosshairG = 0.8392157f;
@@ -5031,6 +4876,7 @@ struct AppCommandState {
   char surveyExportCsvPath[512]{};
   /// UTF-8 path to optional startup .gst template (Settings → Startup). Empty = use bundled resources/default-template.gst.
   char defaultWorkspaceTemplatePathUtf8[768]{};
+  char defaultDrawingTemplatePathUtf8[768]{};
   /// Active UI layout stem (file resources/layouts/<stem>.ini). See View → Layout.
   char activeUiLayoutNameUtf8[64]{"default"};
   bool openSaveLayoutAsPopup = false;
@@ -5061,8 +4907,8 @@ struct AppCommandState {
   /// COPY placed CAD duplicates; modal collects policy before duplicating selected survey points.
   bool copySurveyDupModalOpen = false;
   bool copySurveyDupModalOpenRequested = false;
-  float pendingCopyDx = 0.f;
-  float pendingCopyDy = 0.f;
+  double pendingCopyDx = 0.0;
+  double pendingCopyDy = 0.0;
   float pendingCopyDz = 0.f;  // REQ-329 increment 1: COPY under a UCS carries a Z delta to survey points
   SurveyDuplicatePolicy copySurveyDuplicatePolicy = SurveyDuplicatePolicy::Renumber;
   /// DXF import merges its embedded survey points with existing ones. Points whose ID collides are held
@@ -5071,6 +4917,9 @@ struct AppCommandState {
   bool dxfPointConflictModalOpen = false;
   bool dxfPointConflictModalOpenRequested = false;
   int  dxfPointConflictOffset = 0;
+  /// LandXML import (REQ-506) holds point numbers that already exist in the drawing, in WORLD coordinates,
+  /// until the Qt editor asks Overwrite or Offset. A headless run leaves them here and logs them.
+  std::vector<SurveyPoint> pendingLandXmlConflictPoints;
   /// True while the viewport command palette should mirror the command line (hover latched until idle / mouse away).
   bool viewportCmdPaletteEngaged = false;
   /// True when the viewport command palette is visible — command line defers its InputText to avoid duplicate focus.
@@ -5167,6 +5016,7 @@ struct AppCommandState {
     int         othersOpenShowing = 0;   ///< other OPEN drawings of the project that show a deleted point
     int         othersClosedMaybe = 0;   ///< drawings of the project that are not open (rules unread)
     bool        deletePending = false;   ///< the delete question (not only the number-conflict one) is showing
+    bool        clipboardPaste = false;  ///< number conflict came from a pending clipboard paste.
     std::vector<std::string> otherNames; ///< names of those open drawings
     /// The answers. None = not asked yet. Delete: Proceed / HideHere / Cancel. Conflict: Proceed
     /// (overwrite) / Renumber / Cancel.
@@ -5174,6 +5024,9 @@ struct AppCommandState {
     Answer      deleteAnswer = Answer::None;
     Answer      conflictAnswer = Answer::None;
   } pointEditPrompt;
+  bool clipboardPasteResolving = false; ///< the user answered a clipboard point-number question; bypass preflight once.
+  bool clipboardPasteOverwrite = false;
+  bool clipboardPasteOriginal = false;
   /// REQ-383 clauses 1 and 3: a paste that crosses a project / coordinate-system / units boundary.
   /// `block` = coordinate-system mismatch (only Cancel); otherwise Paste anyway / Cancel.
   struct PastePrompt {
@@ -5413,6 +5266,7 @@ struct AppCommandState {
   // -------------------------------------------------------------------------
   // PAPER SPACE (REQ-025/026/031) — active drawing's layouts; mirrored per tab in DrawingDocument.
   std::vector<PaperLayout> paperLayouts;
+  std::vector<CadRasterImage> cadRasterImages;
   int activeSpaceIndex = kModelSpaceIndex;   ///< -1 = model space; else index into paperLayouts.
   int lastPaperLayoutIndex = 0;              ///< layout the MODEL/PAPER toggle returns to.
   int selectedViewportLayout = -1;           ///< layout owning the primary selected viewport (REQ-027), or -1.
@@ -5422,6 +5276,7 @@ struct AppCommandState {
   int   paperVpPhase = 0;
   float paperVpFirstXIn = 0.f;
   float paperVpFirstYIn = 0.f;
+  int   paperVpMode = 0;  ///< REQ-490: 0 = rectangle, 1 = awaiting closed polyline Object pick.
   // Paper-space grip edit (REQ-035): grabbed grip on selectedViewportIndex (click-grab, move, click-commit).
   int   paperGripCorner = -2;                ///< -2 none, -1 move (whole viewport), 0..3 resize corner.
   // Paper-space MOVE/COPY of selected viewports (REQ-035): 0 idle, 1 need base, 2 need destination.
@@ -5701,6 +5556,39 @@ inline bool CadViewIsPlan(const AppCommandState& st) {
   return std::fabs(st.viewportElevationDeg - 90.f) < 1e-4f && std::fabs(st.viewportAzimuthDeg) < 1e-4f;
 }
 
+/// True when model-space Qt overlay and linework should show geometry on \p layerName.
+inline bool CadLayerAllowsViewportDisplay(const AppCommandState& st, const std::string& layerName) {
+  const CadLayerRow* row = FindDrawingLayerRowCi(st, layerName);
+  if (!row)
+    return true;
+  return row->on && !row->frozen;
+}
+
+/// Prefer \p preferred, but fall back to layer \c 0 or the first on/thawed layer so new entities are visible.
+inline std::string CadVisibleLayerForNewEntity(const AppCommandState& st, const std::string& preferred) {
+  const std::string layer = preferred.empty() ? std::string("0") : preferred;
+  if (CadLayerAllowsViewportDisplay(st, layer))
+    return layer;
+  if (CadLayerAllowsViewportDisplay(st, "0"))
+    return "0";
+  for (const CadLayerRow& row : st.drawingLayerTable) {
+    if (CadLayerAllowsViewportDisplay(st, row.name))
+      return row.name;
+  }
+  return layer;
+}
+
+inline const DimensionStyle& CadDimensionStyleForAnnotation(const AppCommandState& st,
+                                                              const CadAnnotation& ann) {
+  if (!ann.dimensionStyleName.empty()) {
+    for (const DimensionStyle& style : st.dimensionStyles) {
+      if (style.name == ann.dimensionStyleName)
+        return style;
+    }
+  }
+  return st.activeDimensionStyle;
+}
+
 /// Duration of a ViewCube orientation change, in seconds. Short enough not to feel sluggish, long
 /// enough to read the rotation — REQ-059 requires the view to settle within 0.5 s.
 inline constexpr float kViewAnimSeconds = 0.28f;
@@ -5943,7 +5831,9 @@ enum class EntityKind : std::uint8_t {
   /// REQ-367 / issue #619. Appended after PositionMarker for the same id-sweep reason.
   Multileader,
   /// REQ-443 / issue #803. Appended after Multileader for the same id-sweep reason.
-  Spline
+  Spline,
+  /// REQ-456 / issue #1019. Appended after Spline for the same id-sweep reason.
+  Point
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -6303,7 +6193,7 @@ void StartPolysolidCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The prompt line, computed rather than literal: it echoes the height, width and justification in
 /// force, which is what makes them discoverable without a separate report command (REQ-304).
 [[nodiscard]] std::string CadPolysolidPromptText(const AppCommandState& st);
-/// Handle one typed line: a coordinate, or one of `A L C U H W J O`. \return false if not consumed.
+/// Handle one typed line: a coordinate, or one of `A L C U H W J O`. \neturn false if not consumed.
 bool HandlePolysolidTextInput(const std::string& line, AppCommandState& st,
                               std::vector<std::string>& log);
 /// Handle a viewport click: a path point, or — at the `O`bject prompt — the entity to sweep along.
@@ -6321,7 +6211,7 @@ void CancelPolysolidCommand(AppCommandState& st);
 void StartRevcloudCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The prompt line, echoing the arc length and options in force.
 [[nodiscard]] std::string CadRevcloudPromptText(const AppCommandState& st);
-/// Handle one typed line: a coordinate, Enter, or one of `A R D O C U`. \return false if not consumed.
+/// Handle one typed line: a coordinate, Enter, or one of `A R D O C U`. \neturn false if not consumed.
 bool HandleRevcloudTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
 /// Handle a viewport click: a corner, or — at the `O`bject prompt — the shape to convert.
 void SubmitRevcloudViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
@@ -6352,7 +6242,7 @@ void StartPipeRunAtCurrentSize(AppCommandState& st, std::vector<std::string>& lo
 void ChoosePipeRunNominalSize(AppCommandState& st, const std::string& size);
 /// The prompt line, computed rather than literal: it echoes the phase and the size/class in force.
 [[nodiscard]] std::string CadPipeRunPromptText(const AppCommandState& st);
-/// Handle one typed line: the size/class line, a coordinate, or one of `U UNDO END`. \return false
+/// Handle one typed line: the size/class line, a coordinate, or one of `U UNDO END`. \neturn false
 /// if not consumed.
 bool HandlePipeRunTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
 /// Handle a viewport click: the run's start point, or a further vertex.
@@ -6388,7 +6278,7 @@ bool CadPipeFitNamedAtPick(AppCommandState& st, int runIdx, const std::string& b
 /// Handle a viewport click: the station point to splice the fitting in at. Always ends the command,
 /// success or refusal — there is nothing left to pick after one point.
 void SubmitPipeFitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
-/// Handle one typed line as a station point (`X,Y,Z`). \return false if not consumed.
+/// Handle one typed line as a station point (`X,Y,Z`). \neturn false if not consumed.
 bool HandlePipeFitTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
 
 // --- PIPESPLIT / PIPEJOIN / PIPEPROP (issue #486 increment B8 / REQ-345) --------------------------
@@ -6396,7 +6286,7 @@ bool HandlePipeFitTextInput(const std::string& line, AppCommandState& st, std::v
 void StartPipeSplitCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Handle a viewport click: the station point to split at. Always ends the command.
 void SubmitPipeSplitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
-/// Handle one typed line as a station point (`X,Y,Z`). \return false if not consumed.
+/// Handle one typed line as a station point (`X,Y,Z`). \neturn false if not consumed.
 bool HandlePipeSplitTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
 /// Merge the two selected `CadPipeRun`s into one — they must share the same nominal size and
 /// pressure class and have exactly one coincident endpoint between them. One-shot, no `Kind` state
@@ -6421,6 +6311,9 @@ void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vect
 /// Sets `CurrentViewport(st)`'s scale from a typed "1:N" ratio or a bare model-units-per-inch
 /// number; a blank \p args reports the current viewport's scale instead.
 void HandleVpscaleCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
+/// Apply one drawing-owned named annotation scale to every selected paper viewport in the active
+/// layout. Unlike VPSCALE, this does not target a floating viewport or parse a free-form ratio.
+void HandleVpMatchScaleCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
 /// Opens the Page Setup Manager dialog for the active layout (refuses in model space).
 void StartPageSetupCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The candidate wall, optionally including the segment \p cursor is currently proposing.
@@ -6620,6 +6513,18 @@ void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
 /// across time (an in-flight rebuild, a cross-object link), use \ref FindSurfaceIndexById: a name
 /// can be changed, and an erased name can be taken by a different surface.
 [[nodiscard]] int FindSurfaceIndex(const AppCommandState& st, const std::string& name);
+/// REQ-497: the elevation reader for a built surface, in drawing-local coordinates; null when the surface is not built.
+[[nodiscard]] std::unique_ptr<ISurfaceQuery> MakeSurfaceQueryForCommands(const AppCommandState& st, const CadSurface& surf);
+/// REQ-512: atomically move selected block references to the sampled surface elevations.
+bool MoveSelectedBlockRefsToSurface(AppCommandState& st, size_t surfaceIndex, std::vector<std::string>& log);
+/// REQ-508: select viewport triangle detail for one surface; records one undoable drawing change.
+bool SetSurfaceDisplayLod(AppCommandState& st, size_t surfaceIndex, bool reduced);
+/// REQ-511: add a readable model-space image attachment with stable identity and drawing placement.
+bool AttachModelRasterImage(AppCommandState& st, const std::string& path, float x, float y,
+                            float width, float height, float rotationRad, std::vector<std::string>& log);
+/// REQ-511: associate a model-space image with a built TIN for clipped terrain draping.
+bool SetModelRasterDrape(AppCommandState& st, size_t imageIndex, size_t surfaceIndex,
+                         std::vector<std::string>& log);
 
 /// Index of the surface whose stable entity id is \p id, or -1 when it does not resolve — erased, or
 /// never assigned (REQ-076 / ADR-036 (a)). `id == 0` always returns -1: 0 means "unassigned", so
@@ -6634,6 +6539,14 @@ void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
 ///
 /// Returns true when a surface was produced.
 bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log);
+/// Refresh linked legend rows for surfaces using an edited style's analysis configuration.
+void RefreshSurfaceLegendTablesForStyle(AppCommandState& st, const std::string& styleName);
+/// Refresh linked entities and analysis results after a project-owned surface reference replaces its TIN.
+void RefreshSurfaceDependentsAfterReplacement(AppCommandState& st, size_t surfaceIndex,
+                                              std::vector<std::string>& log);
+/// Refresh saved surface profiles after an alignment geometry or stationing edit.
+void RefreshSurfaceProfilesForAlignment(AppCommandState& st, std::uint64_t alignmentId,
+                                        std::vector<std::string>& log);
 
 /// Re-lay everything linked to surface p si, after that surface has been rebuilt (ADR-065 (b),
 /// GitHub #150). Called from the only places a TIN is replaced - `SURFACEREBUILD` and the async
@@ -6642,7 +6555,8 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
 /// A linked entity whose vertices are no longer over the new ground is LEFT WHERE IT IS and said
 /// so: a surface shrinking under a draped line is not a reason to move or discard the line
 /// (REQ-201). Its link is kept, so it re-drapes on its own once the surface covers it again.
-void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::string>& log);
+void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::string>& log,
+                            bool invalidateCache = true);
 
 /// The name of the surface p e is draped on and follows, or empty when it follows none
 /// (ADR-065 (d), GitHub #150) - never linked, baked since, or linked to a surface that has been
@@ -6771,7 +6685,11 @@ bool CanUndo(const AppCommandState& st);
 bool CanRedo(const AppCommandState& st);
 
 
-inline void BumpCadGpuCache(AppCommandState& st) { ++st.cadGpuRevision; }
+inline void BumpCadGpuCache(AppCommandState& st) {
+  ++st.cadGpuRevision;
+  ++st.cadGpuCacheRevision;
+}
+inline void BumpCadGpuCacheOnly(AppCommandState& st) { ++st.cadGpuCacheRevision; }
 
 /// Keeps per-entity attribute vectors sized to match geometry counts (used by Properties and select-similar).
 void EnsureAttrCounts(AppCommandState& st);
@@ -6947,6 +6865,8 @@ inline void ClearEntityGripInteraction(AppCommandState& st) {
   st.entityGripLengthenMode = false;
 }
 
+void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log);
+
 inline void RestoreEntityGripOriginal(AppCommandState& st) {
   if (!st.entityGripMoveActive)
     return;
@@ -6975,6 +6895,14 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
     if (idx < 0 || static_cast<size_t>(idx) >= st.cadSplines.size())
       return;
     st.cadSplines[static_cast<size_t>(idx)] = st.entityGripOrigSpline;
+    break;
+  }
+  case SelectedEntity::Type::Alignment: {  // REQ-487.1
+    if (idx < 0 || static_cast<size_t>(idx) >= st.alignments.size())
+      return;
+    st.alignments[static_cast<size_t>(idx)] = st.entityGripOrigAlignment;
+    std::vector<std::string> quiet;
+    RefreshAlignmentOffsets(st, quiet);  // the linked offsets followed the drag; put them back with it
     break;
   }
   case SelectedEntity::Type::Polyline: {
@@ -7160,6 +7088,12 @@ float RotateDeltaFromReferenceAndNewSegment(float refX1, float refY1, float refX
 
 
 /// Build the angle-display settings (REQ-021) from the live UNITS state.
+/// The style tables and plot scale an alignment's labels are placed with (REQ-492.5).
+[[nodiscard]] inline AlignmentLabelSets::LabelContext CadAlignmentLabelContext(const AppCommandState& st) {
+  return AlignmentLabelSets::LabelContext{st.alignmentLabelSets, st.alignmentStyles, st.alignmentLabelStyles,
+                                          st.drawingInsUnits, static_cast<double>(st.modelUnitsPerPlottedInch)};
+}
+
 [[nodiscard]] inline AngleDisplaySettings CadAngleDisplaySettings(const AppCommandState& st) {
   return AngleDisplaySettings{static_cast<AngleDisplayType>(st.angleDisplayType), st.angleDisplayPrecision,
                               st.angleDisplayClockwise, st.angleDisplayBaseDeg};
@@ -7222,6 +7156,29 @@ void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartSplineCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartPointCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartLeaderCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartPeditCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartMeasureCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartDivideCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartAreaCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartListCommand(AppCommandState& st, std::vector<std::string>& log);
+/// DATAEXTRACTION (REQ-467, issue #804): selection, typed columns, then a spreadsheet file.
+void StartDataExtractCommand(AppCommandState& st, std::vector<std::string>& log);
+/// TABLE (REQ-466): typed style, columns and rows, then the insertion point.
+void StartTableCommand(AppCommandState& st, std::vector<std::string>& log);
+/// ADDPOINTTABLE (REQ-474): opens the point table dialog in the Qt editor, or runs typed prompts.
+void StartAddPointTableCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Continues ADDPOINTTABLE with points chosen in the dialog; returns false (and logs why) when none apply.
+bool BeginAddPointTableWithPoints(AppCommandState& st, const std::string& styleName, std::vector<int> ids,
+                                  std::vector<std::string>& log);
+void ExecutePdModeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void ExecutePdSizeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+bool HandleCadDrawInquiryTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
+bool SubmitCadDrawInquiryViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
+[[nodiscard]] const char* CadDrawInquiryCommandInputHint(const AppCommandState& st);
+void ResetCadDrawInquiryDrafts(AppCommandState& st);
+void CommitCadPointAt(AppCommandState& st, double x, double y, double z, std::vector<std::string>& log);
 
 /// TRIMSTATE (REQ-056): prompt for a new value, echoing the current one.
 void StartTrimStateCommand(AppCommandState& st, std::vector<std::string>& log);
@@ -7643,7 +7600,7 @@ bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std
 int PickFilledRegionAt(const AppCommandState& st, double wx, double wy, const ray3d::Ray* ray = nullptr);
 
 /// Which kind of thing \ref ResolveViewportPick found under the cursor (GitHub issue #564 §2).
-enum class ViewportPickFamily : std::uint8_t { None, Table, Annotation, Linework, Solid, FilledRegion };
+enum class ViewportPickFamily : std::uint8_t { None, Table, Annotation, Linework, Solid, FilledRegion, PdfUnderlay };
 
 /// The inputs a viewport hover or click already has, gathered so both ask the SAME question.
 struct ViewportPickRequest {
@@ -7832,6 +7789,120 @@ struct DrawingTransformFactors {
 /// The inverse of \ref DrawingPointToGrid: the LOCAL drawing point (x, y) of a grid coordinate in the
 /// zone's unit. Fails, with the reason, exactly when DrawingPointToGrid would.
 [[nodiscard]] geo::GeoResult GridToDrawingPoint(const AppCommandState& st, double easting, double northing);
+
+// --- Alignments (REQ-480..485, 501; GitHub issue #121 Phase 1; CadCommands_Alignment.cpp) ----------------
+// Typed-argument commands, dispatched from ProcessCommandLineSubmit. Geometry lives in alignment/Alignment.hpp.
+void RunAlignmentCreate(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentAdd(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentDelete(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-517: CREATEVIEWFRAMES <alignment>, <start>, <end>, <sheet>, <scale>, <overlap>[, CENTRED|LEFT|RIGHT].
+void RunCreateViewFrames(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-517.7: VIEWFRAMEDELETE <alignment>. Deletes the alignment's view frame groups in one undo step.
+void RunViewFrameDelete(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-518: CREATESHEETS <alignment>[, <frames>[, <title block DWG>]]. One rotated paper layout per frame, one undo step.
+void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-519: CREATESAMPLELINES <alignment>, <start>, <end>, <interval>, <left>, <right>[, <surface>]. One undo step.
+void RunCreateSampleLines(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-519: CREATESECTIONSHEETS <alignment>, <sample lines>, <sections per sheet>, <axis elevation>. One undo step.
+void RunCreateSectionSheets(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunCreateDesignProfile(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-521
+void RunProfilePvi(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-521
+void RunProfileDelPvi(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-521
+void RunProfileQuery(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-521
+void RunProfileList(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-521
+void RunProfileDelete(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-521
+/// REQ-517.8/.9: keeps view frame groups in step with the alignments. Logs a group it could not regenerate.
+void RefreshViewFrameGroups(AppCommandState& st, std::vector<std::string>& log);
+/// True when the active tab's survey-point project is read-only (REQ-517.6 uses the same rule as paste).
+bool ActiveProjectPointsReadOnly(const AppCommandState& st);
+void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-484.4: reports the station and offset of one picked point (drawing-local) while GETSTATIONOFFSET picks.
+void CommitStationOffsetPick(AppCommandState& st, double lx, double ly, std::vector<std::string>& log);
+void RunGetPointFromStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunCreateAlignmentFromObjects(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+// REQ-485 interactive creation: ALIGNMENTLAYOUT picks PIs, CREATEALIGNMENTFROMOBJECTS without a name picks objects.
+void RunAlignmentLayout(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentCurveSettings(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// A click or snapped point for Kind::AlignmentLayout, or an object pick for Kind::AlignmentFromObjects (drawing-local).
+bool SubmitAlignmentCommandPoint(AppCommandState& st, double localX, double localY, std::vector<std::string>& log);
+/// Typed input (including a bare Enter) for the two alignment Kinds; false when neither is active.
+bool HandleAlignmentCommandText(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+/// ESC: the layout keeps what was built (as Civil 3D does); picking objects is abandoned.
+void CancelAlignmentCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Command-line prompt for the two alignment Kinds, or nullptr.
+const char* AlignmentCommandPrompt(const AppCommandState& st);
+/// "Alignment - (n)" with the first n not already used, like Civil 3D's default name.
+std::string NextAlignmentName(const AppCommandState& st);
+/// `base`, or "base (2)", "base (3)"... - the first not used; names are unique ignoring case (REQ-480, REQ-487 AC4).
+std::string UniqueAlignmentName(const AppCommandState& st, const std::string& base);
+/// STATIONFORMAT [DELIMITER=][, DIGITS=][, DECIMALS=][, PREFIX=][, SUFFIX=] | DEFAULT - REQ-483.4.
+void RunStationFormat(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// ALIGNMENTMETA <alignment>, SET, <name>, <value> | REMOVE, <name> | LIST - REQ-480.1 metadata.
+void RunAlignmentMeta(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// At the Reverse prompt of CREATEALIGNMENTFROMOBJECTS, the alignment the picks would make (for the direction arrows).
+/// False at other times or when the picks cannot make one.
+bool AlignmentFromObjectsPreview(const AppCommandState& st, alignment::Alignment* out);
+/// The picked start and Reverse answer as CREATEALIGNMENTFROMOBJECTS fields (", PICK=<x> <y>[, REVERSE]"), for the
+/// Create Alignment from Objects dialog to submit with its own fields.
+std::string AlignmentFromObjectsPickArgs(const AppCommandState& st);
+/// The curve radius the layout and Create from Objects use: the settings radius, else 100 ft (30 m metric).
+double EffectiveAlignmentCurveRadius(const AppCommandState& st);
+/// REQ-488.3: rebuilds every linked offset alignment from its parent (a vanished parent detaches it).
+void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log);
+void RunAlignmentEdit(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentLock(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentInsert(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentRemove(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentContinuity(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunReverseAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentLabelStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-492.5
+void RunAlignmentReport(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunOffsetAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentDetach(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunEditAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunEditAlignmentStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunFeatureLineFromAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentProps(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentInverse(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentBearing(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentDistance(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vector<std::string>& log);  // REQ-502
+void RunAlignmentCriteria(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentSpeed(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentCheck(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-500: QUICKPROFILE <surface>, <alignment>. False only when no alignment has that name.
+bool RunQuickProfileAlongAlignment(AppCommandState& st, const std::string& surfaceName, const std::string& alignmentName,
+                                   std::vector<std::string>& log);
+/// REQ-498.2: rebuilds the feature lines made from alignments and logs any link it drops.
+void RefreshFeatureLineLinks(AppCommandState& st, std::vector<std::string>& log);
+/// Offsets and dynamic tables only: the form the erase path uses, so feature links are checked (and logged) once.
+void RefreshAlignmentOffsetsOnly(AppCommandState& st, std::vector<std::string>& log);
+void RunAlignmentSurface(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-492.5 viewport drag of a station label. Begin returns false when no label lies within \p tolWorld of (lx,ly).
+[[nodiscard]] bool TryBeginAlignmentLabelDrag(AppCommandState& st, float lx, float ly, float tolWorld);
+void ApplyAlignmentLabelDrag(AppCommandState& st, float lx, float ly);
+/// Commit (\p commit true) takes one undo step for the whole drag; cancel puts the label back where it was.
+void FinishAlignmentLabelDrag(AppCommandState& st, bool commit, std::vector<std::string>& log);
+void RunAlignmentLabel(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentTable(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-501.2: "STA 25+42.35  OFF -12.40  N 45d12'30" E" for the alignment nearest the LOCAL point (lx, ly), or an
+/// empty string when no alignment lies within \p maxOffset (drawing units). Read-only; used by the status bar.
+[[nodiscard]] std::string AlignmentCursorReadout(const AppCommandState& st, double lx, double ly, double maxOffset);
+/// REQ-490 station snap: resolve \p displayed on the alignment whose station point is nearest
+/// (\p preferLocalX, \p preferLocalY) in storage coordinates.
+[[nodiscard]] bool ResolveAlignmentStationSnapPoint(const AppCommandState& st, double displayed, float preferLocalX,
+                                                    float preferLocalY, float* outLx, float* outLy);
+/// True when \p raw is `STATION …` point entry (case-insensitive prefix).
+[[nodiscard]] bool LooksLikeAlignmentStationSnapInput(const std::string& raw);
+/// Parses `STATION 12+45.32` into storage coordinates. Returns false if \p raw is not a station line.
+[[nodiscard]] bool TryParseAlignmentStationSnapStoragePoint(AppCommandState& st, const std::string& raw, float* lx,
+                                                            float* ly, double* outWorldZ, bool allowRelative,
+                                                            float baseLocalX, float baseLocalY);
 
 // --- Traverse Editor scale factor (REQ-401, GitHub issue #828; CadCommands_Geo.cpp) ---------------
 /// Resolves the ground→grid multiplier the Traverse Editor applies when its "Apply scale factor"
@@ -8456,6 +8527,16 @@ void SubmitViewportPick(AppCommandState& st, double localX, double localY, std::
                         bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false,
                         const ray3d::Ray* pickRay = nullptr);
 
+/// One click during \c ViewportClickRoute::SelectionAccumulate: toggle a hit into the growing
+/// selection, or arm a selection box on empty space. Returns true when an entity/sub-object was
+/// toggled; false when a box corner was armed instead (or when \p beginBoxOnMiss is false and the
+/// click missed).
+bool SubmitViewportSelectionAccumulateClick(AppCommandState& st, double rawLocalX, double rawLocalY,
+                                            float anchorScreenX, float anchorScreenY, bool shiftModifier,
+                                            bool ctrlModifier, const ray3d::Ray* pickRay,
+                                            float viewportWidthPx, float viewportHeightPx, float orthoHalfH,
+                                            std::vector<std::string>& log, bool beginBoxOnMiss = true);
+
 void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st, std::vector<std::string>& log);
 void StartAlignCommand(AppCommandState& st, std::vector<std::string>& log);
 void ExecuteAlignCommand(AppCommandState& st, std::vector<std::string>& log);
@@ -8472,11 +8553,17 @@ void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::ve
 
 /// Copy currently selected CAD entities into \p st.clipboard.  Clears any previous clipboard content.
 void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log);
+/// Cut (issue #805): copy the selection, then delete it. Refuses with nothing changed when the clipboard
+/// cannot carry part of the selection (for example a surface, a feature line, a mesh, a section plane,
+/// or a paper viewport). The allow-lists in the .cpp file name every type the clipboard carries.
+void CutSelectionToClipboard(AppCommandState& st, std::vector<std::string>& log);
 /// Begin PASTE — show cursor-following preview; next viewport click places the clipboard contents.
 void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Commit a PASTE: place the clipboard at (x,y) in the ACTIVE space's coordinates (world for model, paper
 /// inches for a paper layout). Routes the write + new selection by active space (REQ-038, ADR-013).
-void CommitClipboardPasteAt(AppCommandState& st, float x, float y, std::vector<std::string>& log);
+void CommitClipboardPasteAt(AppCommandState& st, double x, double y, std::vector<std::string>& log);
+void ResolveClipboardPastePointConflict(AppCommandState& st, AppCommandState::PointEditPrompt::Answer answer,
+                                        std::vector<std::string>& log);
 /// Immediately paste clipboard contents at their original (stored) coordinates without interaction.
 void StartPasteOrigCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Release draft cache and preview texture; resets command state to idle.

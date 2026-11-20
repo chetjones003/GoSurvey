@@ -1,0 +1,232 @@
+/*
+
+   ____                               ____      ___ ____       ____  ____      ___
+  6MMMMb                              `MM(      )M' `MM'      6MMMMb\`MM(      )M'
+ 8P    Y8                              `MM.     d'   MM      6M'    ` `MM.     d'
+6M      Mb __ ____     ____  ___  __    `MM.   d'    MM      MM        `MM.   d'
+MM      MM `M6MMMMb   6MMMMb `MM 6MMb    `MM. d'     MM      YM.        `MM. d'
+MM      MM  MM'  `Mb 6M'  `Mb MMM9 `Mb    `MMd       MM       YMMMMb     `MMd
+MM      MM  MM    MM MM    MM MM'   MM     dMM.      MM           `Mb     dMM.
+MM      MM  MM    MM MMMMMMMM MM    MM    d'`MM.     MM            MM    d'`MM.
+YM      M9  MM    MM MM       MM    MM   d'  `MM.    MM            MM   d'  `MM.
+ 8b    d8   MM.  ,M9 YM    d9 MM    MM  d'    `MM.   MM    / L    ,M9  d'    `MM.
+  YMMMM9    MMYMMM9   YMMMM9 _MM_  _MM_M(_    _)MM_ _MMMMMMM MYMMMM9 _M(_    _)MM_
+            MM
+            MM
+           _MM_
+
+  Copyright (c) 2018, Kenneth Troldal Balslev
+
+  All rights reserved.
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+  - Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+  - Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in the
+    documentation and/or other materials provided with the distribution.
+  - Neither the name of the author nor the
+    names of any contributors may be used to endorse or promote products
+    derived from this software without specific prior written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+  DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+  (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+  LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+  ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+ */
+
+#ifndef OPENXLSX_XLZIPARCHIVE_HPP
+#define OPENXLSX_XLZIPARCHIVE_HPP
+
+#ifdef _MSC_VER    // conditionally enable MSVC specific pragmas to avoid other compilers warning about unknown pragmas
+#   pragma warning(push)
+#   pragma warning(disable : 4251)
+#   pragma warning(disable : 4275)
+#endif // _MSC_VER
+
+// ===== External Includes ===== //
+#include <memory>    // std::shared_ptr
+#include <cstddef>      // size_t
+#include <type_traits>  // std::make_signed_t
+
+// ===== OpenXLSX Includes ===== //
+#include "OpenXLSX-Exports.hpp"
+
+#ifdef USE_LIBZIP
+    namespace LibZip {
+        class ZipArchive;
+    } // namespace LibZip
+    #define XLZipImplementation LibZip::ZipArchive
+#else
+    namespace Zippy
+    {
+        class ZipArchive;
+    }   // namespace Zippy
+    #define XLZipImplementation Zippy::ZipArchive
+#endif
+
+// ===== portable ssize_t definition ===== //
+using ssize_t = std::make_signed_t< std::size_t >;
+
+namespace OpenXLSX
+{
+    /**
+     * @brief provide the user with the name of the zip library in use
+     */
+    OPENXLSX_EXPORT const char *ZipLibraryName();
+
+    /**
+     * @brief provide the user with the version string of the zip library in use
+     */
+    OPENXLSX_EXPORT const char *ZipLibraryVersion();
+
+    /**
+     * @brief
+     */
+    class OPENXLSX_EXPORT XLZipArchive
+    {
+    public:
+        /**
+         * @brief
+         */
+        XLZipArchive();
+
+        /**
+         * @brief
+         * @param other
+         */
+        XLZipArchive(const XLZipArchive& other);
+
+        /**
+         * @brief
+         * @param other
+         */
+        XLZipArchive(XLZipArchive&& other) noexcept;
+
+        /**
+         * @brief
+         */
+        ~XLZipArchive();
+
+        /**
+         * @brief copy assignment shall be disabled until a use case is found
+         * @param other
+         * @return
+         */
+        XLZipArchive& operator=(const XLZipArchive& other) = delete;
+
+        /**
+         * @brief
+         * @param other
+         * @return
+         */
+        XLZipArchive& operator=(XLZipArchive&& other) noexcept;
+
+        /**
+         * @brief check if zippy is in use (or ziplib)
+         * @param
+         * @return true if zippy is used for the zip implementation, otherwise false
+         */
+        bool usesZippy();
+
+        /**
+         * @brief
+         * @return
+         */
+        explicit operator bool() const;
+
+        bool isValid() const;
+
+        /**
+         * @brief
+         * @return
+         */
+        bool isOpen() const;
+
+        /**
+         * @brief
+         * @param fileName
+         */
+        void open(const std::string& fileName);
+
+        /**
+         * @brief
+         */
+        void close();
+
+        /**
+         * @brief make archive updates (from addEntry) available to calls via getEntry
+         */
+        void commitChanges();
+
+        /**
+         * @brief
+         * @param path
+         */
+        void save(const std::string& path = "");
+
+        /**
+         * @brief
+         * @param name
+         * @param data
+         */
+        void addEntry(const std::string& name, const std::string& data);
+
+        /**
+         * @brief like addEntry, but call commitChanges() afterwards
+         * @param name
+         * @param data
+         */
+        void addEntryAndCommit(const std::string& name, const std::string& data);
+
+        /**
+         * @brief
+         * @param entryName
+         */
+        void deleteEntry(const std::string& entryName);
+
+        /**
+         * @brief
+         * @param name
+         * @return
+         */
+        std::string getEntry(const std::string& name) const;
+
+        /**
+         * @brief
+         * @param entryName
+         * @return
+         */
+        bool hasEntry(const std::string& entryName) const;
+
+        /**
+         * @brief get the amount of entries in the archive
+         * @return for libzip: amount of entries in archive, 0 for zippy
+         */
+        ssize_t entryCount() const;
+
+        /**
+         * @brief get the name of an archive entry by its index
+         * @param index the archive entry whose name to fetch
+         * @return for libzip: name of the archive entry (full path), "" for zippy
+         */
+        std::string entryName( int index ) const;
+
+    private:
+        std::shared_ptr<XLZipImplementation> m_archive; /**< */
+    };
+}    // namespace OpenXLSX
+
+#ifdef _MSC_VER    // conditionally enable MSVC specific pragmas to avoid other compilers warning about unknown pragmas
+#   pragma warning(pop)
+#endif // _MSC_VER
+
+#endif    // OPENXLSX_XLZIPARCHIVE_HPP

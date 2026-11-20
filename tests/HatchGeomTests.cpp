@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "commands/HatchGeom.hpp"
-#include "commands/HatchBoundary.hpp"
+#include <GoSurvey/Geometry/HatchBoundary.hpp>
 #include "commands/HatchPat.hpp"
 #include "commands/HatchPattern.hpp"
 

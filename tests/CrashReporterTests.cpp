@@ -2,9 +2,22 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <nlohmann/json.hpp>
+
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+TEST_CASE("NormalizeReportChannel keeps stable and beta and maps every other value to dev", "[crash][platform]") {
+  // REQ-425 §8 / D-2026-11-09-d: a developer build must never be reported as a release channel.
+  REQUIRE(crashReporter::NormalizeReportChannel("stable") == "stable");
+  REQUIRE(crashReporter::NormalizeReportChannel("beta") == "beta");
+  REQUIRE(crashReporter::NormalizeReportChannel("dev") == "dev");
+  REQUIRE(crashReporter::NormalizeReportChannel("") == "dev");
+  REQUIRE(crashReporter::NormalizeReportChannel("none") == "dev");
+  REQUIRE(crashReporter::NormalizeReportChannel("Beta") == "dev");
+  REQUIRE(crashReporter::NormalizeReportChannel("beta ") == "dev");
+}
 
 TEST_CASE("ExceptionCodeToWireReason maps common Windows codes", "[crash][platform]") {
 #ifdef _WIN32
@@ -12,6 +25,26 @@ TEST_CASE("ExceptionCodeToWireReason maps common Windows codes", "[crash][platfo
   REQUIRE(crashReporter::ExceptionCodeToWireReason(EXCEPTION_STACK_OVERFLOW) == "stack_overflow");
 #endif
   REQUIRE(crashReporter::ExceptionCodeToWireReason(0xDEADBEEF) == "unhandled_exception");
+}
+
+TEST_CASE("TruncateUtf8 keeps short text and cuts long text at a character boundary", "[crash][platform]") {
+  // "ab" + "\xC3\xA9" (e acute, 2 bytes) + "\xC3\xA9" = 6 bytes.
+  const std::string text = "ab\xC3\xA9\xC3\xA9";
+  REQUIRE(crashReporter::TruncateUtf8(text, 6) == text);
+  REQUIRE(crashReporter::TruncateUtf8(text, 3) == "ab");
+  REQUIRE(crashReporter::TruncateUtf8(text, 4) == "ab\xC3\xA9");
+  REQUIRE(crashReporter::TruncateUtf8(text, 5) == "ab\xC3\xA9");
+}
+
+TEST_CASE("TruncateUtf8 keeps the upload JSON-encodable when a multi-byte character straddles the cap", "[crash][platform]") {
+  // 16383 ASCII bytes then a 2-byte character: the 16384-byte cut lands inside it.
+  const std::string report = std::string(16383, 'a') + "\xC3\xA9";
+  REQUIRE(report.size() == 16385);
+  const std::string cut = crashReporter::TruncateUtf8(report, 16384);
+  REQUIRE(cut == std::string(16383, 'a'));
+  nlohmann::json body;
+  body["report"] = cut;
+  REQUIRE_NOTHROW(body.dump());
 }
 
 #ifdef _WIN32

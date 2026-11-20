@@ -264,8 +264,23 @@ See [[PDF Underlays]].
 
 ---
 
+## SPLINE
+
+`SPLINE` draws a NURBS curve through clicked or typed points (Fit) or through control vertices
+(`CV`). It works in model space and on a paper layout.
+
+## POINT
+
+`POINT` places CAD point markers (not survey points). `PDMODE` and `PDSIZE` control how every CAD
+point in the drawing is drawn. Use `CREATEPOINTS` when you need a numbered survey point.
+
+## LEADER
+
+`LEADER` (and `MLEADER`) draws a leader with optional Mtext. Format chooses Straight or Spline path
+and Arrow or None at the tip. On a paper layout the Mtext box is in paper inches. Tolerance, Copy,
+and Block annotation are not supported.
+
 ## What is not here
 
-GoSurvey has no `SPLINE`, `POINT` (as a drawing command — use `CREATEPOINTS` for survey points),
-`BLOCK`/`INSERT`, `XLINE`, `RAY`, `DONUT`, `SOLID`, `REVCLOUD`, `WIPEOUT`, or `TABLE` command, and
-no `MIRROR` (the ribbon button exists but is disabled). See [[Known Limitations]].
+GoSurvey has no `XLINE`, `RAY`, `DONUT`, `SOLID`, `REVCLOUD`, `WIPEOUT`, or `MLINE` command.
+See [[Known Limitations]].

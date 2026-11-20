@@ -17,7 +17,7 @@
 // implemented anyway, because a seam that covers most of a header is a link error waiting for
 // whichever command grows a new call.
 
-#include "WinFileDialogs.hpp"
+#include <GoSurvey/UI/FileDialogs.hpp>
 
 #include "HeadlessFileDialogs.hpp"
 
@@ -87,6 +87,14 @@ size_t PendingDialogAnswers() {
 bool BrowseOpenFileCsvUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
 
 bool BrowseSaveFileCsvUtf8(char* utf8Out, size_t utf8Cap, const char*) {
+  return NextAnswer(utf8Out, utf8Cap);
+}
+
+bool BrowseSaveFileTxtUtf8(char* utf8Out, size_t utf8Cap, const char*) {
+  return NextAnswer(utf8Out, utf8Cap);
+}
+
+bool BrowseSaveFileSpreadsheetUtf8(char* utf8Out, size_t utf8Cap, const char*) {
   return NextAnswer(utf8Out, utf8Cap);
 }
 

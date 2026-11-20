@@ -7,7 +7,7 @@ name: pr-checks
 on:
   pull_request:
     branches: [master, beta]
-    types: [opened, synchronize, reopened, ready_for_review, edited]
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
 
 concurrency:
   group: pr-checks-${{ github.event.pull_request.number }}
@@ -18,10 +18,41 @@ permissions:
   pull-requests: read
   security-events: write
 
+# Every job runs on the self-hosted Victus Windows runners. Fork PRs wait for maintainer
+# approval (repository fork-PR approval policy) before any job runs on that machine.
+defaults:
+  run:
+    shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; $PSNativeCommandUseErrorActionPreference = $true; . '{0}'"
+
 jobs:
+  architecture-dependencies:
+    name: architecture / dependency ratchet
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          # Rename-aware debt comparison needs the PR base commit in this repository.
+          fetch-depth: 0
+
+      - name: Check out PR base for the ratchet reference
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref == 'master' && startsWith(github.head_ref, 'chore/release-') && 'beta' || github.event.pull_request.base.sha }}
+          path: build/dependency-reference
+
+      - name: Check dependency baseline
+        run: python tools/architecture_dependencies.py --reference-root build/dependency-reference
+
+      - name: Test dependency checker
+        run: python -m unittest tools.test_architecture_dependencies tools.test_architecture_snapshot
+
+      - name: Check system dependency diagrams are current
+        run: python -m unittest tools.test_system_dependency_diagrams
+
   classify-docs-only:
     name: policy / docs-only classification
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
     steps:
@@ -46,23 +77,59 @@ jobs:
       always() &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - name: Check out PR changes
+        uses: actions/checkout@v4
+        with:
+          # Full history so the move-only proof can find the merge base with the PR base.
+          fetch-depth: 0
+
+      - name: Check patch formatting and Python syntax
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$env:BASE_SHA"
+          # Vendored sources retain upstream formatting, including whitespace that `diff --check`
+          # flags. Keep checking project-owned changes without rewriting third-party code.
+          git diff --check "$env:BASE_SHA" HEAD -- . ':(exclude)third_party/**'
+          python -m compileall -q .github/scripts
+          python -m unittest discover -s .github/scripts -p "test_*.py"
+
+      - name: Prove move-only changes
+        if: "${{ contains(github.event.pull_request.labels.*.name, 'refactor: move-only') }}"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python .github/scripts/check_move_only.py --base-ref "$env:BASE_SHA"
+
+      - name: Check out base dependency reference
+        if: "${{ contains(github.event.pull_request.labels.*.name, 'refactor: move-only') }}"
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: build/dependency-reference
+          persist-credentials: false
+
+      - name: Check move-only dependency baseline
+        if: "${{ contains(github.event.pull_request.labels.*.name, 'refactor: move-only') }}"
+        run: python tools/architecture_dependencies.py --reference-root build/dependency-reference
+
+  # File-size gate (#1213). Runs on every PR, including docs-only ones, so no docs-only skip here.
+  file-size-gate:
+    name: PR gate / file size
+    runs-on: [self-hosted, Windows, X64]
     steps:
       - name: Check out PR changes
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Check patch formatting and Python syntax
+      - name: Enforce C/C++ source file-size limit
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          # Vendored sources retain upstream formatting, including whitespace that `diff --check`
-          # flags. Keep checking project-owned changes without rewriting third-party code.
-          git diff --check "$BASE_SHA" HEAD -- . ':(exclude)third_party/**'
-          python -m compileall -q .github/scripts
-          python -m unittest discover -s .github/scripts -p "test_*.py"
+          git fetch --no-tags --depth=1 origin "$env:BASE_SHA"
+          python .github/scripts/check_file_size.py --base-ref "$env:BASE_SHA"
 
   # These inexpensive security scans remain required on every non-docs PR.
   security-gitleaks:
@@ -72,7 +139,7 @@ jobs:
       always() &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -80,9 +147,12 @@ jobs:
           fetch-depth: 0
 
       - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@v2
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $gitleaks = ./tools/ci-get-tool.ps1 -Name gitleaks
+          & $gitleaks git --redact --verbose --no-banner "--log-opts=--no-merges --first-parent $env:BASE_SHA..$env:HEAD_SHA" .
 
   security-dependency-scan:
     name: security / dependency-scan
@@ -91,7 +161,7 @@ jobs:
       always() &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -99,15 +169,9 @@ jobs:
           fetch-depth: 1
 
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.35.0
-        env:
-          # The default mirror.gcr.io source returned HTTP 404 twice in the 0.7.5 promotion scan.
-          # Use Trivy's official GHCR database directly so the blocking scan can initialize.
-          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2
-        with:
-          scan-type: fs
-          scan-ref: .
-          severity: CRITICAL,HIGH
-          exit-code: '1'
-          ignore-unfixed: true
-          version: v0.75.0
+        run: |
+          $trivy = ./tools/ci-get-tool.ps1 -Name trivy
+          # The vulnerability database is cached on the runner, not in GitHub storage.
+          $cache = Join-Path $env:LOCALAPPDATA 'GoSurveyCI/trivy-cache'
+          & $trivy fs --cache-dir $cache --db-repository ghcr.io/aquasecurity/trivy-db:2 `
+            --scanners vuln,secret --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 .

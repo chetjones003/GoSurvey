@@ -38,13 +38,20 @@ class ClassifyDocsOnlyTests(unittest.TestCase):
     def test_documentation_files_are_eligible(self):
         files = [
             {"filename": "AGENTS.md"},
-            {"filename": "spec/requirements.md"},
+            {"filename": "docs/install.md"},
         ]
 
         self.assertTrue(self.classify(2, files))
 
     def test_missing_label_runs_checks_without_listing_files(self):
         with patch.dict(os.environ, {"PR_LABELS": "[]"}):
+            with patch.object(classifier, "github_get") as get:
+                self.assertFalse(classifier.classify_docs_only())
+
+        get.assert_not_called()
+
+    def test_move_only_label_forces_full_validation(self):
+        with patch.dict(os.environ, {"PR_LABELS": '["docs-only", "refactor: move-only"]'}):
             with patch.object(classifier, "github_get") as get:
                 self.assertFalse(classifier.classify_docs_only())
 

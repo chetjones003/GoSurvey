@@ -1,0 +1,51 @@
+{
+  "formatVersion": 1,
+  "id": "450666bd-9498-45e9-96ed-d797f1bf5d77",
+  "name": "GoSurvey Feature Showcase",
+  "layout": {
+    "drawings": "Drawings",
+    "points": "Points",
+    "pointClouds": "PointClouds",
+    "pdfs": "PDFs",
+    "turnovers": "Turnovers",
+    "settings": "Settings"
+  },
+  "settings": {},
+  "items": [
+    {
+      "path": "Drawings/01-Geometry-and-Civil-Objects.dwg",
+      "kind": "in-project",
+      "associations": []
+    },
+    {
+      "path": "Drawings/09-Mountainous-Surface.dwg",
+      "kind": "in-project",
+      "associations": []
+    },
+    {
+      "path": "Drawings/10-Grading.dwg",
+      "kind": "in-project",
+      "associations": []
+    },
+    {
+      "path": "Drawings/11-Alignments.dwg",
+      "kind": "in-project",
+      "associations": []
+    },
+    {
+      "path": "Drawings/12-Primitive-3D-Models.dwg",
+      "kind": "in-project",
+      "associations": []
+    },
+    {
+      "path": "Drawings/13-Complex-Piping-System.dwg",
+      "kind": "in-project",
+      "associations": []
+    },
+    {
+      "path": "Drawings/14-Additional-Features.dwg",
+      "kind": "in-project",
+      "associations": []
+    }
+  ]
+}

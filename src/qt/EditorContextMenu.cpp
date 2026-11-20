@@ -123,7 +123,7 @@ void EditorWindow::ShowDrawingContextMenu(const QPoint& globalPosition) {
 
   auto* clipboard = menu->addMenu("Clipboard");
   clipboard->setObjectName("ctxClipboard");
-  add(clipboard, "Cut\tCtrl+X", [this] { CopySelectionToClipboard(m_State, m_Log); StartDeleteCommand(m_State, m_Log); }, hasSel, "ctxCut");
+  add(clipboard, "Cut\tCtrl+X", [this] { CutSelection(); }, hasSel, "ctxCut");
   add(clipboard, "Copy\tCtrl+C", [this] { CopySelectionToClipboard(m_State, m_Log); }, hasSel, "ctxCopy");
   add(clipboard, "Paste\tCtrl+V", [this] { StartPasteCommand(m_State, m_Log); }, hasClip, "ctxPaste");
   add(clipboard, "Paste at Original Coordinates", [this] { StartPasteOrigCommand(m_State, m_Log); }, hasClip, "ctxPasteOriginal");
@@ -264,7 +264,7 @@ void EditorWindow::ShowRightClickCustomization() {
     banner->setObjectName("rightClickBanner");
     banner->setStyleSheet(palette().color(QPalette::Window).lightness() < 128
         ? QtApplyAccent("background:#30373c; color:#ffffff; border-bottom:2px solid @strong@; padding:12px 16px; font-size:13px;", true)
-        : "background:#1f3a5f; color:#ffffff; padding:12px 16px; font-size:13px;");
+        : QtApplyAccent("background:#fbebd7; color:#30353b; border-bottom:2px solid @strong@; padding:12px 16px; font-size:13px;", false));
     layout->addWidget(banner);
   }
   // Everything is staged in the widgets; nothing reaches the preferences until Apply & Close.

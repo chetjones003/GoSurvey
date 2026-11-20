@@ -1,7 +1,7 @@
 #include "CadCoordinateFrame.hpp"
 
 #include "CadCommands.hpp"
-#include "SurveyPoints.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -72,6 +72,37 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
   for (CadSolidPtr& sp : st.cadSolids) {
     if (sp)
       sp = std::make_shared<const brep::Solid>(brep::Translate(*sp, ray3d::Vec3{dx, dy, 0.0}));
+  }
+  // A built TIN is likewise shared and immutable, so it is replaced by a shifted copy. A surface
+  // imported as a fixed triangulation (DWG Civil 3D TIN) has no sources to rebuild it from.
+  for (CadSurface& surface : st.cadSurfaces) {
+    if (!surface.tin) continue;
+    auto moved = std::make_shared<CadTin>(*surface.tin);
+    for (size_t i = 0; i + 2 < moved->vertsXyz.size(); i += 3)
+      add2(&moved->vertsXyz[i], &moved->vertsXyz[i + 1]);
+    surface.tin = std::move(moved);
+  }
+  // Alignments and the plan points of their fixed station labels are drawing-local too (REQ-496.1).
+  for (alignment::Alignment& al : st.alignments) {
+    al.Translate(dx, dy);
+    for (alignment::StationOffsetLabel& label : al.stationLabels)
+      if (label.fixed) add2(&label.fixedPoint.x, &label.fixedPoint.y);
+  }
+  // Feature-line vertices are stored local as XYZ triples: X and Y rebase, Z is absolute.
+  for (size_t i = 0; i + 2 < st.featureLineVerts.size(); i += 3)
+    add2(&st.featureLineVerts[i], &st.featureLineVerts[i + 1]);
+  // Point and edge edits are stored in the same local frame; a later rebuild would otherwise apply them
+  // at their old positions. Z values are absolute and stay as they are.
+  for (CadSurface& surface : st.cadSurfaces) {
+    for (size_t i = 0; i + 2 < surface.addedPointXyz.size(); i += 3)
+      add2(&surface.addedPointXyz[i], &surface.addedPointXyz[i + 1]);
+    for (auto& pick : surface.deletedPointPicks) add2(&pick.first, &pick.second);
+    for (auto& pick : surface.swappedEdgePicks) add2(&pick.first, &pick.second);
+    for (auto& pick : surface.deletedEdgePicks) add2(&pick.first, &pick.second);
+    for (auto& moved : surface.movedPoints) {
+      add2(&moved.fromX, &moved.fromY);
+      add2(&moved.toX, &moved.toY);
+    }
   }
 }
 

@@ -17,7 +17,7 @@
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
-#include "util/cadpiperun.hpp"
+#include "GoSurvey/Document/cadpiperun.hpp"
 
 namespace {
 

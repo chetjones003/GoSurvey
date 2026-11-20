@@ -1,0 +1,41 @@
+name: architecture-health-comment
+
+# Use trusted workflow and scanner code from the PR base. PR files are inspected as data only.
+on:
+  pull_request_target:
+    branches: [master, beta]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: architecture-health-comment-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  report:
+    name: architecture-health comment
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out trusted base code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Update architecture-health comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 tools/architecture_health_comment.py

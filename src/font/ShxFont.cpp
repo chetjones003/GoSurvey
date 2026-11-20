@@ -361,4 +361,23 @@ float MeasureWidthPx(Font& font, const std::string& text, float capPx) {
   return w;
 }
 
+Vec2 MeasureInkExtent(Font& font, const std::string& text, float capHeight) {
+  float x = 0, y = 0;
+  float minX = 0, minY = 0, maxX = 0, maxY = 0;
+  bool haveInk = false;
+  for (const unsigned char character : text) {
+    if (character == '\n') { x = 0; y -= font.capHeight() * 1.4f; continue; }
+    const auto* glyph = font.glyph(character);
+    if (!glyph) continue;
+    for (const auto& stroke : glyph->strokes) for (const auto& point : stroke) {
+      const float px = x + point.x, py = y + point.y;
+      if (!haveInk) { minX = maxX = px; minY = maxY = py; haveInk = true; }
+      else { minX = std::min(minX, px); maxX = std::max(maxX, px); minY = std::min(minY, py); maxY = std::max(maxY, py); }
+    }
+    x += glyph->advance;
+  }
+  const float scale = std::max(capHeight, 0.f) / font.capHeight();
+  return haveInk ? Vec2{(maxX - minX) * scale, (maxY - minY) * scale} : Vec2{};
+}
+
 }  // namespace Shx

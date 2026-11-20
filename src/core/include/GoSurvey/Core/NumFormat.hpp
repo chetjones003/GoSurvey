@@ -1,0 +1,24 @@
+#pragma once
+
+#include <string>
+
+/// Centralized display formatting for user-facing coordinate/length readouts.
+/// Pure and UI/GL-free (ADR-002) so it is unit-testable in the Domain test
+/// target. These functions control only how many decimals the *user sees* —
+/// stored values keep full precision. Non-survey readouts use
+/// AppCommandState::displayLinearPrecision; survey readouts use
+/// AppCommandState::surveyPointDisplayPrecision.
+
+/// Clamp a requested decimal count to a sane printable range.
+[[nodiscard]] int DisplayPrecisionClamp(int precision);
+
+/// Build a printf float token (e.g. "%.4f") for the given decimal precision.
+[[nodiscard]] std::string DisplayFloatFmt(int precision);
+
+/// Format one linear/coordinate value at the given display precision.
+[[nodiscard]] std::string FormatLinear(double value, int precision);
+
+/// Earthwork display unit (REQ-073): 1 yd³ = 27 ft³. Compute stays in cubic feet.
+inline constexpr double kCubicFeetPerCubicYard = 27.0;
+
+[[nodiscard]] std::string FormatVolumeYd3(double volumeFt3, int precision);

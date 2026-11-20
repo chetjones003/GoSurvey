@@ -1,12 +1,13 @@
 #include "CadSnap.hpp"
 
-#include "SurveyPoints.hpp"
-#include "geom2d.hpp"
-#include "util/cadblock.hpp"
-#include "util/cadpiperun.hpp"
-#include "util/curveintersect.hpp"
-#include "util/pointcloudcache.hpp"
-#include "util/pointcloudoctree.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
+#include "GoSurvey/Survey/AlignmentModel.hpp"
+#include <GoSurvey/Geometry/geom2d.hpp>
+#include "GoSurvey/Document/cadblock.hpp"
+#include "GoSurvey/Document/cadpiperun.hpp"
+#include <GoSurvey/Geometry/curveintersect.hpp>
+#include "GoSurvey/PointCloud/CacheStorage.hpp"
+#include "GoSurvey/PointCloud/OctreeIndex.hpp"
 #include "util/solidpick.hpp"
 
 #include <algorithm>
@@ -565,9 +566,18 @@ void AppendPerpendicularFromRef(float refX, float refY, float wx, float wy, floa
 struct IsectSeg {
   double x0 = 0.0, y0 = 0.0, z0 = 0.0;
   double x1 = 0.0, y1 = 0.0, z1 = 0.0;
+  /// A display chord of alignment `owner` (-1 for real linework), `seq` along it. Neighbouring chords of one alignment
+  /// meet at a sample vertex, which is not an intersection (REQ-490).
+  int owner = -1;
+  int seq = 0;
   [[nodiscard]] curveisect::Seg xy() const { return curveisect::Seg{{x0, y0}, {x1, y1}}; }
   [[nodiscard]] double zAt(double t) const { return z0 + (z1 - z0) * t; }
 };
+
+/// Two chords of the same alignment that touch end to end (REQ-490): their shared vertex is a sample, not a crossing.
+[[nodiscard]] bool NeighbourChords(const IsectSeg& a, const IsectSeg& b) {
+  return a.owner >= 0 && a.owner == b.owner && std::abs(a.seq - b.seq) <= 1;
+}
 
 /// A circle, arc or ellipse in a plane parallel to XY, so one elevation describes it.
 ///
@@ -677,6 +687,42 @@ void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double t
     if (NearCursor(ray, wx, wy, el.cx, el.cy, el.z, ma, tol))
       conics->push_back(IsectConic{curveisect::MakeEllipse(el.cx, el.cy, el.majVx, el.majVy, el.ratio), el.z});
   }
+
+  // REQ-490: alignments participate in INT/APPINT with lines, arcs and other alignments (exact geometry sampled to
+  // segments only for display tolerance — same chord height as the viewport uses at this aperture).
+  // An entity with a chord near the cursor is sampled again finely, so the crossing found lies on the true curve.
+  const double alignChord = std::max(tol * 0.25, 1e-6);
+  constexpr double kSnapChord = 1e-4;
+  for (size_t ai = 0; ai < cmd.alignments.size(); ++ai) {
+    const alignment::Alignment& al = cmd.alignments[ai];
+    if (al.Empty())
+      continue;
+    const int nEnt = static_cast<int>(al.Entities().size());
+    int seq = 0;
+    for (int ei = 0; ei < nEnt; ++ei) {
+      std::vector<alignment::Point2> pts = al.SampleEntityForDisplay(ei, alignChord);
+      if (pts.size() < 2)
+        continue;
+      bool near = false;
+      for (size_t k = 1; k < pts.size() && !near; ++k) {
+        const double r = 0.5 * std::hypot(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y);
+        near = NearCursor(ray, wx, wy, 0.5 * (pts[k].x + pts[k - 1].x), 0.5 * (pts[k].y + pts[k - 1].y), 0.0, r, tol);
+      }
+      if (!near) {
+        seq += static_cast<int>(pts.size()) - 1;
+        continue;
+      }
+      if (alignChord > kSnapChord) pts = al.SampleEntityForDisplay(ei, kSnapChord);
+      for (size_t k = 1; k < pts.size(); ++k, ++seq) {
+        IsectSeg s{pts[k - 1].x, pts[k - 1].y, 0.0, pts[k].x, pts[k].y, 0.0, static_cast<int>(ai), seq};
+        const double mx = 0.5 * (s.x0 + s.x1);
+        const double my = 0.5 * (s.y0 + s.y1);
+        const double r = 0.5 * std::hypot(s.x1 - s.x0, s.y1 - s.y0);
+        if (NearCursor(ray, wx, wy, mx, my, 0.0, r, tol))
+          segs->push_back(s);
+      }
+    }
+  }
 }
 
 /// One resolved intersection point in world space.
@@ -695,6 +741,8 @@ void ComputeTrueIntersections(const std::vector<IsectSeg>& segs, const std::vect
 
   for (size_t i = 0; i < segs.size(); ++i) {
     for (size_t j = i + 1; j < segs.size(); ++j) {
+      if (NeighbourChords(segs[i], segs[j]))
+        continue;
       hits.clear();
       curveisect::IntersectSegSeg(segs[i].xy(), segs[j].xy(), &hits);
       for (const auto& h : hits) {
@@ -765,6 +813,8 @@ void ComputeApparentIntersections(const Camera& cam, const std::vector<IsectSeg>
     const curveisect::Seg pi = curveisect::ProjectSeg(segs[i].x0, segs[i].y0, segs[i].z0, segs[i].x1, segs[i].y1,
                                                       segs[i].z1, right, up);
     for (size_t j = i + 1; j < segs.size(); ++j) {
+      if (NeighbourChords(segs[i], segs[j]))
+        continue;
       const curveisect::Seg pj = curveisect::ProjectSeg(segs[j].x0, segs[j].y0, segs[j].z0, segs[j].x1, segs[j].y1,
                                                         segs[j].z1, right, up);
       hits.clear();
@@ -951,11 +1001,79 @@ bool RayHitSolidFace(const ray3d::Ray& ray, const std::vector<float>& triVerts,
   }
   return found;
 }
+
+/// REQ-490: alignment tangents/spirals offer Quadrant when their heading matches a UCS axis; curves do not.
+[[nodiscard]] bool AlignmentDirectionCardinalInUcs(double azimuth, const ucs::Ucs& ucs) {
+  const double dx = std::sin(azimuth);
+  const double dy = std::cos(azimuth);
+  const auto axisParallel = [&](double ux, double uy) {
+    const double len = std::hypot(ux, uy);
+    if (len < 1.e-12)
+      return false;
+    const double dot = (dx * ux + dy * uy) / len;
+    return std::fabs(dot) >= 1.0 - 1.e-6;
+  };
+  return axisParallel(ucs.xAxis.x, ucs.xAxis.y) || axisParallel(ucs.yAxis.x, ucs.yAxis.y);
+}
+
+void ConsiderSegmentQuadrant(SnapPickAccum* acc, float wx, float wy, double x0, double y0, double x1, double y1,
+                             float tolWorld) {
+  assert(acc != nullptr);
+  const double dx = x1 - x0;
+  const double dy = y1 - y0;
+  const double len2 = dx * dx + dy * dy;
+  if (len2 < 1.e-24)
+    return;
+  const double t =
+      std::clamp(((static_cast<double>(wx) - x0) * dx + (static_cast<double>(wy) - y0) * dy) / len2, 0.0, 1.0);
+  const double px = x0 + t * dx;
+  const double py = y0 + t * dy;
+  Consider(acc, wx, wy, SnapFloatCoordinate(px), SnapFloatCoordinate(py), Kind::Quadrant, tolWorld, 0.0f);
+}
+
+void AppendAlignmentQuadrantCandidates(SnapPickAccum* acc, float wx, float wy, const alignment::Alignment& al,
+                                       const ucs::Ucs& activeUcs, float tolWorld) {
+  assert(acc != nullptr);
+  const std::vector<alignment::Entity>& ents = al.Entities();
+  for (size_t ei = 0; ei < ents.size(); ++ei) {
+    const alignment::Entity& e = ents[ei];
+    if (e.kind == alignment::EntityKind::Arc)
+      continue;
+    if (e.kind == alignment::EntityKind::Line) {
+      if (!AlignmentDirectionCardinalInUcs(e.startAzimuth, activeUcs))
+        continue;
+      const double sinA = std::sin(e.startAzimuth);
+      const double cosA = std::cos(e.startAzimuth);
+      ConsiderSegmentQuadrant(acc, wx, wy, e.start.x, e.start.y, e.start.x + e.length * sinA,
+                              e.start.y + e.length * cosA, tolWorld);
+      continue;
+    }
+    if (e.kind != alignment::EntityKind::Spiral)
+      continue;
+    constexpr int kSteps = 48;
+    const int iEnt = static_cast<int>(ei);
+    bool prevCard = false;
+    for (int step = 0; step <= kSteps; ++step) {
+      const double dist = e.length * (static_cast<double>(step) / kSteps);
+      const double sta = al.EntityStartStation(iEnt) + dist;
+      const bool card = AlignmentDirectionCardinalInUcs(al.GetBearingAtStation(sta), activeUcs);
+      if (card && !prevCard) {
+        const alignment::Point2 p = al.GetPointAtStation(sta);
+        Consider(acc, wx, wy, SnapFloatCoordinate(p.x), SnapFloatCoordinate(p.y), Kind::Quadrant, tolWorld, 0.0f);
+      }
+      prevCard = card;
+    }
+  }
+}
 } // namespace
 
 Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, float tolWorld,
              SnapExclude exclude, const ray3d::Ray* pickRay, const Kind* onlyKind) {
   SnapPickAccum acc{};
+  const auto isolatedOut = [&](const std::vector<EntityAttributes>& attrs, size_t index) {
+    return !cmd.hiddenEntityIds.empty() && index < attrs.size() &&
+           CadEntityIdHidden(&cmd.hiddenEntityIds, attrs[index].id);
+  };
   // Null (plan view, paper space) leaves every candidate measured exactly as before.
   acc.ray = (pickRay && pickRay->valid()) ? pickRay : nullptr;
   if (cmd.activeSpaceIndex < 0)
@@ -969,6 +1087,9 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   const bool wantMidpoint = want(Kind::Midpoint, cmd.objectSnapMidpoint);
   const bool wantCenter = want(Kind::Center, cmd.objectSnapCenter);
   const bool wantQuadrant = want(Kind::Quadrant, cmd.objectSnapQuadrant);
+  const bool wantStation =
+      want(Kind::Station, cmd.objectSnapStation && cmd.objectSnapStationDisplayedValid);
+  const bool wantNode = want(Kind::Node, cmd.objectSnapNode);
   const bool wantGeometricCenter = want(Kind::GeometricCenter, cmd.objectSnapGeometricCenter);
   const bool wantIntersection = want(Kind::Intersection, cmd.objectSnapIntersection);
   const bool wantApparentIntersection = want(Kind::ApparentIntersection, cmd.objectSnapApparentIntersection);
@@ -1009,6 +1130,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   const auto& L = cmd.userLinesFlat;
   if (L.size() % 6 == 0) {
     for (size_t i = 0; i + 5 < L.size(); i += 6) {
+      if (isolatedOut(cmd.userLineAttrs, i / 6)) continue;
       if (exclude.valid && exclude.type == SelectedEntity::Type::LineSeg &&
           exclude.index == static_cast<int>(i / 6)) continue;
       const float x0 = L[i];
@@ -1052,6 +1174,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   const auto& C = cmd.userCirclesCxCyZR;
   if (C.size() % 4 == 0 && (wantCenter || wantQuadrant)) {  // cx,cy,z,r
     for (size_t i = 0; i + 3 < C.size(); i += 4) {
+      if (isolatedOut(cmd.userCircleAttrs, i / 4)) continue;
       if (exclude.valid && exclude.type == SelectedEntity::Type::Circle &&
           exclude.index == static_cast<int>(i / 4)) continue;
       const float cx = C[i];
@@ -1082,6 +1205,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   const int polyCount =
       static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < polyCount; ++pi) {
+    if (isolatedOut(cmd.userPolylineAttrs, static_cast<size_t>(pi))) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Polyline && exclude.index == pi) continue;
     const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
     const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
@@ -1198,6 +1322,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
 
   constexpr int kArcSnapSeg = 24;
   for (size_t arcIdx = 0; arcIdx < cmd.userArcs.size(); ++arcIdx) {
+    if (isolatedOut(cmd.userArcAttrs, arcIdx)) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Arc &&
         exclude.index == static_cast<int>(arcIdx)) continue;
     const CadArc& a = cmd.userArcs[arcIdx];
@@ -1258,6 +1383,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   constexpr int kEllSnapSeg = 36;
   constexpr float kTwoPi = 6.28318530718f;
   for (size_t ellIdx = 0; ellIdx < cmd.userEllipses.size(); ++ellIdx) {
+    if (isolatedOut(cmd.userEllAttrs, ellIdx)) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Ellipse &&
         exclude.index == static_cast<int>(ellIdx)) continue;
     const CadEllipse& el = cmd.userEllipses[ellIdx];
@@ -1332,6 +1458,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   // REQ-443: a spline's editable fit/CV points and its true curve ends participate in Endpoint;
   // perpendicular candidates are projected onto its adaptive tessellation chords.
   for (size_t splineIdx = 0; splineIdx < cmd.cadSplines.size(); ++splineIdx) {
+    if (isolatedOut(cmd.cadSplineAttrs, splineIdx)) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Spline &&
         exclude.index == static_cast<int>(splineIdx)) continue;
     const CadSpline& sp = cmd.cadSplines[splineIdx];
@@ -1371,6 +1498,70 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     }
   }
 
+  // REQ-490 alignments (issue #121 Phase 1): the geometry points a designer snaps to - beginning, end, PC, PT,
+  // PI (a point no geometry passes through), curve centre and midpoints - plus Nearest on the true curve.
+  // Computed from the exact geometry, never from a tessellation.
+  for (const alignment::Alignment& al : cmd.alignments) {
+    if (al.Empty())
+      continue;
+    if (wantEndpoint || wantMidpoint || wantCenter || wantNode) {
+      for (const alignment::GeometryPoint& gp : al.GeometryPoints()) {
+        using GC = alignment::GeometryPointCode;
+        const bool pi = gp.code == GC::TanTan || gp.code == GC::CurvePI || gp.code == GC::SpiralPI;
+        if (pi && wantNode)  // REQ-490.2: the PIs are Node points; Endpoint keeps offering them too
+          Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(gp.point.x),
+                   SnapFloatCoordinate(gp.point.y), Kind::Node, tolWorld, 0.0f);
+        Kind k = Kind::Endpoint;
+        if (gp.code == GC::CurveCenter) {
+          if (!wantCenter) continue;
+          k = Kind::Center;
+        } else if (gp.code == GC::LineMidPt || gp.code == GC::CurveMidPt) {
+          if (!wantMidpoint) continue;
+          k = Kind::Midpoint;
+        } else if (!wantEndpoint) {
+          continue;
+        }
+        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(gp.point.x),
+                 SnapFloatCoordinate(gp.point.y), k, tolWorld, 0.0f);
+      }
+    }
+    if (wantNearest) {
+      const alignment::Point2 n = al.GetClosestPoint(static_cast<double>(wx), static_cast<double>(wy));
+      Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(n.x),
+               SnapFloatCoordinate(n.y), Kind::Nearest, tolWorld, 0.0f);
+    }
+    if (wantQuadrant)
+      AppendAlignmentQuadrantCandidates(&acc, wx, wy, al, cmd.activeUcs, tolWorld);
+  }
+
+  if (wantStation) {
+    for (const alignment::Alignment& al : cmd.alignments) {
+      if (al.Empty())
+        continue;
+      const std::vector<double> raws = al.RawStationsForDisplayed(cmd.objectSnapStationDisplayed);
+      for (const double raw : raws) {
+        const alignment::Point2 p = al.GetPointAtStation(raw);
+        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(p.x),
+                 SnapFloatCoordinate(p.y), Kind::Station, tolWorld, 0.0f);
+      }
+    }
+  }
+
+  if (wantEndpoint || wantNode) {
+    for (size_t pi = 0; pi < cmd.cadPoints.size(); ++pi) {
+      if (exclude.valid && exclude.type == SelectedEntity::Type::Point &&
+          exclude.index == static_cast<int>(pi))
+        continue;
+      const CadPoint& p = cmd.cadPoints[pi];
+      if (wantEndpoint)
+        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(p.x),
+                 SnapFloatCoordinate(p.y), Kind::Endpoint, tolWorld, SnapFloatCoordinate(p.z));
+      if (wantNode)
+        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(p.x),
+                 SnapFloatCoordinate(p.y), Kind::Node, tolWorld, SnapFloatCoordinate(p.z));
+    }
+  }
+
   // Intersection / apparent intersection (REQ-062). Gathered once and shared: both walk the same
   // near-cursor object list, and the cull is the only thing that keeps a pairwise snap affordable.
   if (wantIntersection || wantApparentIntersection) {
@@ -1396,9 +1587,19 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   }
 
   if (wantSurveyPoint) {
-    const float arm =
-        SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
     for (const SurveyPoint& sp : cmd.surveyPoints) {
+      const float ex = static_cast<float>(sp.easting);
+      const float ey = static_cast<float>(sp.northing);
+      const float ez = static_cast<float>(sp.elevation);
+      // Same size as the drawn marker: annotative markers follow the current annotation scale (D-2026-11-06-a).
+      const SurveyPointStyleDefinition* markerStyle = FindSurveyPointStyle(cmd.surveyPointStyles, sp.styleName);
+      const float arm = SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches,
+          ModelObjectUnitsPerPlottedInch(markerStyle == nullptr || markerStyle->annotative,
+              cmd.activeSpaceIndex == kModelSpaceIndex, cmd.modelUnitsPerPlottedInch, cmd.annotationScales,
+              cmd.currentAnnotationScaleIndex));
+      // Exact centre: needed when the cursor sits on the point node (ALIGN / IMPORT workflows)
+      // even if it is not over the plotted X arms.
+      Consider(&acc, wx, wy, ex, ey, Kind::SurveyCenter, tolWorld, ez);
       // The X marker's half-span is a fixed plotted size, so at a zoomed-out view it is many
       // apertures wide — the same "cursor is over the SHAPE" heuristic circles get, and the same
       // orbited-view breakage (issue #372): evaluate it where the ray meets the point's own plane.
@@ -1406,11 +1607,11 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       float hy = 0.f;
       // Snap-candidate pipeline stays float (established render/pick boundary, Phase D) — narrow the
       // double survey-point coordinate here, same as every other entity kind in this loop.
-      const bool heur = CenterHeuristicPoint(acc, wx, wy, static_cast<float>(sp.elevation), &hx, &hy);
+      const bool heur = CenterHeuristicPoint(acc, wx, wy, ez, &hx, &hy);
       const float p2 =
-          MinDistSqToSurveyMarker(hx, hy, static_cast<float>(sp.easting), static_cast<float>(sp.northing), arm);
-      ConsiderSnap(&acc, wx, wy, static_cast<float>(sp.easting), static_cast<float>(sp.northing), Kind::SurveyCenter,
-                   p2, tolWorld, static_cast<float>(sp.elevation),
+          MinDistSqToSurveyMarker(hx, hy, ex, ey, arm);
+      ConsiderSnap(&acc, wx, wy, ex, ey, Kind::SurveyCenter,
+                   p2, tolWorld, ez,
                    /*heuristicAccept=*/heur);  // elevation IS the point's Z (REQ-057)
     }
   }
@@ -1771,6 +1972,8 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   // --- PDF underlay snap points ---
   if (cmd.objectSnapEnabled) {
     for (const PdfAttachment& att : cmd.pdfAttachments) {
+      if (!att.snapEnabled)
+        continue;
       const float cosR = std::cos(att.rotationDeg * 3.14159265f / 180.f);
       const float sinR = std::sin(att.rotationDeg * 3.14159265f / 180.f);
       const float sc   = att.scale;
@@ -1790,7 +1993,26 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       const float pdfCurY   = (-dxW * sinR + dyW * cosR) / sc;
       const float pdfTol    = (sc > 1e-9f) ? tolWorld / sc : 0.f;
 
-      // ---- Endpoint snap via spatial grid (O(cells-near-cursor)) ----------
+      // ---- Calm snap (REQ-391): same SnapPoints + SnapIndex path as the PDF viewer ----
+      const bool useCalmSnap = att.snapCalmIndex.Size() > 0 && pdfTol > 0.f;
+      const float calmMerge  = 0.6f * pdfTol;
+      if (useCalmSnap && (wantEndpoint || wantCenter)) {
+        const bool linesOk   = att.snapLines && wantEndpoint;
+        const bool circlesOk = att.snapCircles && wantCenter;
+        if (linesOk || circlesOk) {
+          pdfview::SnapIndex::Pt hit{};
+          float weight = 0.f;
+          if (att.snapCalmIndex.Nearest(pdfCurX, pdfCurY, pdfTol, hit, calmMerge, &weight, linesOk, circlesOk)) {
+            float lx = 0.f, ly = 0.f;
+            pdfToLocal(hit.first, hit.second, &lx, &ly);
+            if (weight >= 3.5f && circlesOk)
+              Consider(&acc, wx, wy, lx, ly, Kind::Center, tolWorld);
+            else if (linesOk)
+              Consider(&acc, wx, wy, lx, ly, Kind::Endpoint, tolWorld);
+          }
+        }
+      } else {
+      // ---- Endpoint snap via spatial grid (legacy attachments without calm index) ----
       if (att.snapLines && wantEndpoint) {
         // Visibility-mask check: returns true if pdfX,pdfY is inside or
         // adjacent to a cell marked as having visible foreground content.
@@ -1803,13 +2025,27 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
           if (!hasMask || att.pageWidthPts <= 0.f || att.pageHeightPts <= 0.f)
             return true;
           // Map PDF coords (y-up, origin BL) to mask coords (row 0 = top of page).
-          // The endpoint coordinate and the line pixels that pass through it map to
-          // the same cell by construction, so an exact single-cell check is correct.
-          // A 3x3 neighbourhood is too permissive on dense drawings (13 pt cells → every
-          // "empty" area on a busy engineering plan is within one cell of some drawn line).
           const int cx = std::clamp(static_cast<int>(pdfX / att.pageWidthPts  * MW), 0, MW - 1);
           const int cy = std::clamp(static_cast<int>((1.f - pdfY / att.pageHeightPts) * MH), 0, MH - 1);
-          return att.snapVisMask[static_cast<size_t>(cy) * MW + cx] != 0;
+          auto cellForeground = [&](int mx, int my) -> bool {
+            if (mx < 0 || mx >= MW || my < 0 || my >= MH)
+              return false;
+            return att.snapVisMask[static_cast<size_t>(my) * MW + static_cast<size_t>(mx)] != 0;
+          };
+          if (cellForeground(cx, cy))
+            return true;
+          // Vector endpoints and the 256² raster mask can disagree by a few cells when strokes are
+          // thin, anti-aliased, or the point sits inside a ring (circle centre). Search a small
+          // neighbourhood before rejecting a path-derived endpoint.
+          for (int dy = -2; dy <= 2; ++dy) {
+            for (int dx = -2; dx <= 2; ++dx) {
+              if (dx == 0 && dy == 0)
+                continue;
+              if (cellForeground(cx + dx, cy + dy))
+                return true;
+            }
+          }
+          return false;
         };
 
         const auto& grid = att.snapEndptGrid;
@@ -1897,6 +2133,8 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
           float lcx = 0.f, lcy = 0.f;
           pdfToLocal(SC[i], SC[i + 1], &lcx, &lcy);
           const float lr = SC[i + 2] * sc;
+          // Small plan symbols: snap when the cursor is near the centre point itself.
+          Consider(&acc, wx, wy, lcx, lcy, Kind::Center, tolWorld, 0.f);
           float hx = 0.f;
           float hy = 0.f;
           // planeZ 0: a PDF underlay's snap geometry sits on the drawing datum, the same assumption
@@ -1906,6 +2144,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
           ConsiderSnap(&acc, wx, wy, lcx, lcy, Kind::Center, p2, tolWorld, 0.f, /*heuristicAccept=*/heur);
         }
       }
+      } // !useCalmSnap
 
       // ---- Text insertion-point snap --------------------------------------
       // NOTE: Text positions are intentionally NOT emitted here.
@@ -2194,6 +2433,33 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     }
     break;
   }
+  case Kind::Station:
+    for (const alignment::Alignment& al : cmd.alignments) {
+      if (al.Empty())
+        continue;
+      if (!cmd.objectSnapStationDisplayedValid)
+        break;
+      const std::vector<double> raws = al.RawStationsForDisplayed(cmd.objectSnapStationDisplayed);
+      for (const double raw : raws) {
+        const alignment::Point2 p = al.GetPointAtStation(raw);
+        PushSnapPickerEntry(static_cast<float>(p.x), static_cast<float>(p.y), Kind::Station, sortWorldX, sortWorldY,
+                            out, 0.f);
+      }
+    }
+    break;
+  case Kind::Node:  // REQ-490.2: drawing points, and every PI and spiral PI of an alignment
+    for (const CadPoint& p : cmd.cadPoints)
+      PushSnapPickerEntry(static_cast<float>(p.x), static_cast<float>(p.y), Kind::Node, sortWorldX, sortWorldY, out,
+                          static_cast<float>(p.z));
+    for (const alignment::Alignment& al : cmd.alignments) {
+      for (const alignment::GeometryPoint& gp : al.GeometryPoints()) {
+        using GC = alignment::GeometryPointCode;
+        if (gp.code != GC::TanTan && gp.code != GC::CurvePI && gp.code != GC::SpiralPI) continue;
+        PushSnapPickerEntry(static_cast<float>(gp.point.x), static_cast<float>(gp.point.y), Kind::Node, sortWorldX,
+                            sortWorldY, out, 0.f);
+      }
+    }
+    break;
   case Kind::Nearest:
     for (const CadSpline& sp : cmd.cadSplines) {
       std::vector<spline::Vec3> points;
@@ -2371,6 +2637,14 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
 
   // CAD entity grips
   for (const SelectedEntity& sel : cmd.selection) {
+    // The moving entity must not snap its own live grip back to the preceding mouse frame; that
+    // turns a drag into a sticky cursor. Other selected entities' grips remain valid targets.
+    if ((cmd.entityGripMoveActive && sel.type == cmd.entityGripType &&
+         sel.index == cmd.entityGripEntityIndex) ||
+        ((cmd.dimGripMoveActive || cmd.mtextGripMoveActive) &&
+         sel.type == SelectedEntity::Type::Annotation &&
+         sel.index == (cmd.dimGripMoveActive ? cmd.dimGripAnnotationIndex : cmd.mtextGripAnnotationIndex)))
+      continue;
     if (sel.type == SelectedEntity::Type::LineSeg) {
       const size_t k = static_cast<size_t>(sel.index) * 6;
       if (k + 5 < cmd.userLinesFlat.size()) {

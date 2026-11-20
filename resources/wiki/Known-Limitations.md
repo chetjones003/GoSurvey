@@ -16,7 +16,6 @@ Current as of **version 0.7.6**.
 | **Poly VP** | Layout ribbon | Button is **disabled**. *"Polygonal viewport — coming in a later increment"* |
 | **POLAR** | Status bar | Toggles and lights up; **polar tracking is not implemented**. *"Polar tracking (UI only for now)"* |
 | **Layer On / Freeze / Lock** | Layer Manager | Stored and round-tripped, **not enforced**. *"On / Freeze / Lock are stored for future visibility and editing rules; all layers still draw"* |
-| **Ctrl+X** | Right-click ▸ Clipboard ▸ Cut | The label is shown, but the key is only wired inside the MTEXT editor. Use the menu item |
 | **Insert Field…** (`Ctrl+F`) | MTEXT editor | *"Fields are not supported yet"* |
 | **Background Mask…** | MTEXT editor | *"Background masking is not supported yet"* |
 | **Paragraph…**, Paragraph Alignment, Bullets and Lists, Columns, Combine Paragraphs | MTEXT editor | *"Paragraph and column properties are not stored yet"* |
@@ -49,8 +48,8 @@ yet.)"*
 
 ### Drawing
 
-`SPLINE` · `POINT` (as a drawing command — use `CREATEPOINTS`) · `XLINE` · `RAY` · `DONUT` ·
-`SOLID` · `REVCLOUD` · `WIPEOUT` · `TABLE` · `MLINE`
+`XLINE` · `RAY` · `DONUT` · `SOLID` · `REVCLOUD` · `WIPEOUT` · `MLINE`. `SPLINE` and `POINT` are
+available (issue #1019). `POINT` is a CAD marker, not a survey point — use `CREATEPOINTS` for those.
 
 ### Modifying
 
@@ -64,7 +63,7 @@ yet.)"*
 
 ### Inquiry
 
-`AREA` · `DIST` · `LIST` · `MASSPROP`. The only area reported is a circle's, in the Properties panel.
+`MASSPROP`. `AREA`, `DIST`, and `LIST` are available (issue #1019 for AREA and LIST).
 
 ### View
 
@@ -91,9 +90,14 @@ presets
 | **Object snap tracking, temporary tracking points** | Not present |
 | **Polar coordinate entry** (`@100<45`) | Use bearing lock: `A 45` then the distance |
 | **Parametric constraints** | Not present |
-| **Annotative scaling of existing text** | Changing the plot scale does not resize existing text; it does reposition survey point labels |
+| **Annotative scaling of existing text** | Changing the plot scale does not resize existing text; it does reposition survey point labels. In model space the annotation scale resizes annotative objects only |
 | **Coordinate system / projection library** | Coordinates are unprojected numbers. Use `ALIGN` to fit to control |
 | **Unit conversion** | The `UNITS` insertion setting is a **relabel only** — coordinates are never scaled |
+| **Table styles** | Styles can be created and modified in the table style manager and are stored in GoSurvey drawing data; they are not written to DWG table-style records |
+| **DATAEXTRACTION into a drawing table** | Output goes to a `.xlsx` or `.csv` file only |
+| **Linked spreadsheets (`DATALINK`)** | Not available |
+| **Reflex angles on angular dimensions** | Angles larger than 180° are not measured; the smaller angle is shown |
+| **Point table layout** | The `NameNEZD` column list has not yet been checked against Civil 3D |
 | **Native DWG reading** | Planned; today DWG needs an external converter |
 | **Associative dimensions in DXF** | Aligned dimensions export as exploded lines plus text |
 
@@ -104,10 +108,10 @@ presets
 | Gap | Detail |
 |---|---|
 | **Binary DXF** | Not supported. *"in AutoCAD use Save As → ASCII DXF"* |
-| **DXF paper space** | Layouts, viewports, and supported sheet entities import in paper inches. Unsupported paper-space types are reported; polyline arc bulges are drawn straight |
+| **DXF paper space** | Layouts, viewports, and supported sheet entities — including paper `POINT` and `SPLINE` — import and export in paper inches. Unsupported paper-space types are reported |
 | **Unsupported DXF entities** | Reported as `N unsupported ENTITIES record(s)`, never silently dropped |
 | **DXF export coverage** | Some entity types have no export branch yet and are absent from the file. The log names what was excluded |
-| **DWG export losses** | Block definitions and inserts (written exploded), elevations, block attributes, multileaders, tables, Civil 3D objects and proxies. The dialog lists these before writing |
+| **DWG export losses** | Block definitions and inserts (written exploded), elevations, block attributes, multileader extra branches (R2000 and R2004 only), tables, Civil 3D objects and proxies. The dialog lists these before writing |
 | **Civil 3D COGO points** | Custom objects — **not in a DXF at all**. Use a PNEZD/PENZD CSV |
 | **Plant 3D drawings** | Largely `AcPp*` custom objects requiring Autodesk's object enabler; unreachable by any third-party reader |
 | **Model import** | `IMPORTMODEL` brings in **geometry only**. Materials, animations, and cameras are named in the log as not imported |

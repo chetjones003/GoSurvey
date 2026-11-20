@@ -2,7 +2,7 @@
 // REQ-059: the ViewCube's geometry, hit-testing and click targets. Pure and header-only (Camera math
 // only, no Qt, no GL) so the whole widget can be unit-tested without a window; the Qt viewport only
 // paints what BuildScene returns and forwards presses to HitTest / TargetFor.
-#include "Camera.hpp"
+#include <GoSurvey/Renderer/Camera.hpp>
 
 #include <algorithm>
 #include <cmath>

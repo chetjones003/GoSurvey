@@ -3,7 +3,7 @@
 // Queue backing the headless file-dialog seam (REQ-203 / ADR-031 (b′)).
 //
 // The transcript driver fills this queue from `DIALOG OPEN <path>` / `DIALOG SAVE <path>` /
-// `DIALOG CANCEL` lines; the WinFileDialogs.hpp implementation in HeadlessFileDialogs.cpp drains it.
+// `DIALOG CANCEL` lines; the FileDialogs.hpp implementation in HeadlessFileDialogs.cpp drains it.
 //
 // A QUEUE rather than a mode, deliberately: a transcript that opens two files in a row needs two
 // different answers, and a single "always return this path" setting cannot give them.

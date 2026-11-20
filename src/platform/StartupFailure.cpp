@@ -1,7 +1,8 @@
 #include "StartupFailure.hpp"
 
 #include "AppPaths.hpp"
-#include "FailureReportUi.hpp"
+#include "CrashReporter.hpp"
+#include <GoSurvey/UI/FailureReportDialog.hpp>
 #include "HttpFetch.hpp"
 #include "TelemetryPing.hpp"
 #include "UserPrefs.hpp"
@@ -49,7 +50,7 @@ void TryPostStartupReportSilent(Stage stage, const std::string& reportUtf8) {
   nlohmann::json body;
   body["installId"] = ids.installId.empty() ? "unknown" : ids.installId;
   body["version"]     = GOSURVEY_VERSION_FULL;
-  body["channel"]     = "stable";
+  body["channel"]     = std::string(crashReporter::NormalizeReportChannel(GOSURVEY_BUILD_CHANNEL));
   body["os"]          = "windows";
   body["stage"]       = StageWireName(stage);
   body["report"]      = report;

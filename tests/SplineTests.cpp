@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include "util/spline.hpp"
+#include <GoSurvey/Geometry/spline.hpp>
 #include "viewport/TransformPreview.hpp"
 #include "commands/CadCommands.hpp"
 

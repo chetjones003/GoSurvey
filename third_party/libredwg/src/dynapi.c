@@ -9921,6 +9921,8 @@ static const Dwg_DYNAPI_field _dwg_TABLESTYLE_fields[] = {
     0,0,0, 0 },
   { "ovr",	"Dwg_TABLESTYLE_CellStyle", sizeof (Dwg_TABLESTYLE_CellStyle),  OFF (struct _dwg_object_TABLESTYLE, ovr),
     0,0,0, 0 },
+  { "overrides", "Dwg_TABLESTYLE_CellStyle*", sizeof (Dwg_TABLESTYLE_CellStyle*), OFF (struct _dwg_object_TABLESTYLE, overrides),
+    1,1,0, 0 },
   { "num_rowstyles",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_object_TABLESTYLE, num_rowstyles),
     0,0,0, 0 },
   { "rowstyles",	"Dwg_TABLESTYLE_rowstyles*", sizeof (Dwg_TABLESTYLE_rowstyles*),  OFF (struct _dwg_object_TABLESTYLE, rowstyles),
@@ -12630,6 +12632,8 @@ static const Dwg_DYNAPI_field _dwg_TABLEGEOMETRY_Cell_fields[] = {
 static const Dwg_DYNAPI_field _dwg_TABLESTYLE_CellStyle_fields[] = {
   { "parent",	"struct _dwg_object_TABLESTYLE*", sizeof (void *),  OFF (struct _dwg_TABLESTYLE_CellStyle, parent),
     1,1,0, 0 },
+  { "record_id", "BL", sizeof (BITCODE_BL), OFF (struct _dwg_TABLESTYLE_CellStyle, record_id),
+    0,0,0, 0 },
   { "id",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_TABLESTYLE_CellStyle, id),
     0,0,0, 90 },
   { "type",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_TABLESTYLE_CellStyle, type),

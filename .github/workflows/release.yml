@@ -1,10 +1,9 @@
 # GoSurvey build / package / release pipeline — REQ-202, ADR-029.
 #
-# Two jobs, three publish outcomes, decided by which branch the run targets:
+# The build job calls the same Release validation action as PR CI; beta pushes continue to
+# publish automatically and stable releases remain manual:
 #
-#   build             compile GoSurvey.exe (Qt frontend) and supporting checks — this
-#                     pipeline ships the app, it does not verify it), run only on manual
-#                     dispatch (REQ-202 (d))
+#   build             shared Release build and full test validation
 #   package           Inno installer from the build artifacts; then:
 #     any other branch  installer kept as a workflow artifact; nothing published
 #     beta              installer published to the ROLLING `channel-beta` prerelease (assets replaced)
@@ -12,21 +11,30 @@
 #
 # The version gate is what makes a re-run against master safe to repeat. The release step is a
 # no-op while project(VERSION) still matches the newest tag, so re-running the pipeline against
-# master does not republish, retag, or notify users. Bumping the version in CMakeLists.txt IS the
-# release.
+# master does not republish or retag. A failed beta/master run opens or updates its triage issue.
+# Bumping the version in CMakeLists.txt IS the release.
 #
-# The version has exactly one source (ADR-029 (a)): project(VERSION) in CMakeLists.txt. It is
-# read here and passed onward; nothing in this file hard-codes a version number.
+# The stable version source (ADR-029 / ADR-074) is GOSURVEY_STABLE_VERSION in CMakeLists.txt.
+# Beta derives a rolling patch version from that source and the previous rolling manifest.
 
 name: release
 
 on:
-  # REQ-202 (d): manual dispatch only. The pipeline used to run on every push; that automatic
-  # trigger is gone by deliberate choice (2026-09-06) — CI minutes and rolling-beta churn were
-  # spent on commits that did not need a build, and a stable release must never be one push away
-  # from firing on its own. Choose the target branch in the "Run workflow" ref dropdown; that
-  # selection drives the same beta/master routing this file always had.
+  # Stable publication remains manual; beta publishes when its source branch changes.
+  push:
+    branches: [beta]
   workflow_dispatch:
+    inputs:
+      beta_notes_api_smoke:
+        description: Run a non-publishing OpenAI beta-notes API smoke test
+        required: false
+        type: boolean
+        default: false
+      beta_notes_validation:
+        description: Run the full build, CTest, and package flow with generated beta notes without publishing
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -38,10 +46,31 @@ permissions:
   actions: write    # sccache GitHub Actions cache backend
 
 jobs:
+  beta-notes-api-smoke:
+    if: ${{ inputs.beta_notes_api_smoke == true }}
+    name: Beta notes OpenAI API smoke test
+    runs-on: [self-hosted, Windows, X64]
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Verify OpenAI Responses API with gpt-6-luna
+        env:
+          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+        run: python .github/scripts/beta_release_notes.py --smoke-test
+
   build:
-    runs-on: windows-latest
+    if: ${{ inputs.beta_notes_api_smoke != true }}
+    # All release jobs run on the self-hosted Victus runner. CI artifacts stay on its disk
+    # (tools/ci-local-artifacts.ps1); published installers still go to GitHub Releases and PDBs to R2.
+    runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: read
     env:
-      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_ENABLED: "false"
     outputs:
       version: ${{ steps.ver.outputs.version }}
       full: ${{ steps.ver.outputs.full }}
@@ -55,49 +84,22 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
         with:
-          # Full history only on master (version-gate / tag inspection). Feature and beta
-          # pushes do not need it; the gate itself asks the remote via git ls-remote.
-          fetch-depth: ${{ github.ref_name == 'master' && '0' || '1' }}
+          # Beta resolves its number against the current master version and prior beta manifest;
+          # master also needs full history for stable tag inspection.
+          fetch-depth: ${{ (github.ref_name == 'master' || github.ref_name == 'beta' || inputs.beta_notes_validation == true) && '0' || '1' }}
 
-      - name: Set up MSVC
-        # Puts cl.exe, the linker and the Windows SDK on PATH. Required: CMakePresets pins the
-        # compiler to `cl`, and the Ninja generator does not locate MSVC on its own the way the
-        # Visual Studio generator does — so without this, configure fails outright rather than
-        # quietly picking up some other compiler. That loud failure is deliberate (see below).
-        uses: ilammy/msvc-dev-cmd@v1
-
-      # Install the supported Qt frontend's pinned MSVC kit before configure.
-      - name: Set up Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.3'
-          arch: win64_msvc2022_64
-          cache: true
-
-      - name: Ensure Ninja
-        # The repo's CMakePresets.json uses the Ninja generator. windows-latest already ships
-        # ninja; only download the official zip if PATH does not have it. Chocolatey is not used
-        # — it added ~15–20s to every run for a tool that is already on the image.
+      - name: Capture master baseline for beta notes
+        if: github.ref_name == 'beta' || inputs.beta_notes_validation == true
+        id: notes-baseline
         shell: pwsh
         run: |
-          if (Get-Command ninja -ErrorAction SilentlyContinue) {
-            Write-Host "Using $((Get-Command ninja).Source) ($(ninja --version))"
-            exit 0
+          git fetch --no-tags origin master
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch master to capture the beta notes baseline.' }
+          $baseline = git rev-parse origin/master
+          if ($LASTEXITCODE -ne 0 -or $baseline -notmatch '^[0-9a-fA-F]{40}$') {
+            throw 'Could not capture the master commit for the beta notes baseline.'
           }
-          $ver = '1.12.1'
-          $dir = Join-Path $env:RUNNER_TEMP 'ninja'
-          New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $zip = Join-Path $env:RUNNER_TEMP 'ninja.zip'
-          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v$ver/ninja-win.zip" -OutFile $zip
-          Expand-Archive -Path $zip -DestinationPath $dir -Force
-          Add-Content -Path $env:GITHUB_PATH -Value $dir
-          Write-Host "Installed ninja $ver to $dir"
-
-      - name: Run sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
-
-      # No dependency cache: all deps are vendored in third_party/ (D-2026-08-31-b),
-      # so there is nothing to fetch or cache. `cmake --preset` configures in ~3 s.
+          "commit=$baseline" | Out-File $env:GITHUB_OUTPUT -Append
 
       # ---------------------------------------------------------------------
       # Version and channel
@@ -110,31 +112,98 @@ jobs:
           # the environment rather than pasted into the script. Branch names may contain
           # characters PowerShell treats as syntax.
           BRANCH_NAME: ${{ github.ref_name }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $line = Select-String -Path CMakeLists.txt -Pattern 'project\(GoSurvey VERSION ([0-9]+\.[0-9]+\.[0-9]+)'
-          if (-not $line) { throw "Could not read project(VERSION) from CMakeLists.txt" }
-          $version = $line.Matches[0].Groups[1].Value
-
           $branch = $env:BRANCH_NAME
+          $betaVersion = ''
           if ($branch -eq 'master') {
+            $line = Select-String -Path CMakeLists.txt -Pattern 'GOSURVEY_STABLE_VERSION\s+"([0-9]+\.[0-9]+\.[0-9]+)"'
+            if (-not $line) { throw "Could not read GOSURVEY_STABLE_VERSION from CMakeLists.txt" }
+            $version = $line.Matches[0].Groups[1].Value
             $channel  = 'stable'
             $full     = $version
             $suffix   = ''
             $quadLast = '0'
             $tag      = "v$version"
           } elseif ($branch -eq 'beta') {
+            git fetch --no-tags origin master
+            if ($LASTEXITCODE -ne 0) { throw "Could not fetch master to resolve the stable beta baseline" }
+            $stableSource = git show origin/master:CMakeLists.txt
+            if ($LASTEXITCODE -ne 0) { throw "Could not read master CMakeLists.txt" }
+            $stableMatch = [regex]::Match(($stableSource -join "`n"), 'GOSURVEY_STABLE_VERSION\s+"([0-9]+\.[0-9]+\.[0-9]+)"')
+            if (-not $stableMatch.Success) {
+              # Until the stable-version declaration reaches master, use its existing
+              # project(VERSION) as the stable baseline.
+              $stableMatch = [regex]::Match(($stableSource -join "`n"), 'project\(GoSurvey\s+VERSION\s+"?([0-9]+\.[0-9]+\.[0-9]+)"?')
+            }
+            if (-not $stableMatch.Success) { throw "Could not read the stable version from master CMakeLists.txt" }
+            $stableVersion = [version]::Parse($stableMatch.Groups[1].Value)
+
+            # The rolling release is the persistent counter. A missing asset is the first run;
+            # any other download/parse problem fails closed rather than guessing a version.
+            $manifestResponse = Invoke-WebRequest `
+              -Uri "https://github.com/$($env:REPOSITORY)/releases/download/channel-beta/latest.json" `
+              -SkipHttpErrorCheck
+            $previousManifest = $null
+            if ($manifestResponse.StatusCode -eq 200) {
+              try {
+                $manifestContent = $manifestResponse.Content
+                if ($manifestContent -is [byte[]]) {
+                  $manifestContent = [Text.Encoding]::UTF8.GetString($manifestContent)
+                }
+                $previousManifest = ConvertFrom-Json -InputObject $manifestContent
+              }
+              catch { throw "Could not parse the previous beta manifest: $($_.Exception.Message)" }
+              if ($previousManifest.version -notmatch '^\d+\.\d+\.\d+$') {
+                throw "Previous beta manifest has an invalid version: '$($previousManifest.version)'"
+              }
+              # The existing channel-beta manifest predates sourceCommit. Permit that one
+              # legacy shape; the next published manifest writes the provenance field.
+              $sourceCommitProperty = $previousManifest.PSObject.Properties['sourceCommit']
+              if ($sourceCommitProperty -and ($null -eq $sourceCommitProperty.Value -or $sourceCommitProperty.Value -notmatch '^[0-9a-fA-F]{40}$')) {
+                throw "Previous beta manifest has an invalid sourceCommit: '$($sourceCommitProperty.Value)'"
+              }
+            } elseif ($manifestResponse.StatusCode -ne 404) {
+              throw "Could not fetch previous beta manifest (HTTP $($manifestResponse.StatusCode))"
+            } else {
+              # A missing manifest is a first run only when the rolling release is absent too.
+              # Otherwise the persistent version counter was lost; stop rather than reset it.
+              $releaseResponse = Invoke-WebRequest `
+                -Uri "https://api.github.com/repos/$($env:REPOSITORY)/releases/tags/channel-beta" `
+                -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' } `
+                -SkipHttpErrorCheck
+              if ($releaseResponse.StatusCode -eq 200) {
+                throw "channel-beta exists but latest.json is missing. Restore latest.json before publishing beta again."
+              }
+              if ($releaseResponse.StatusCode -ne 404) {
+                throw "Could not check the channel-beta release (HTTP $($releaseResponse.StatusCode))"
+              }
+            }
+
+            $sameCommit = $previousManifest -and $previousManifest.sourceCommit -eq $env:SOURCE_COMMIT
+            if ($sameCommit) {
+              $version = $previousManifest.version
+            } else {
+              $baseVersion = $stableVersion
+              if ($previousManifest) {
+                $previousVersion = [version]::Parse($previousManifest.version)
+                if ($previousVersion -gt $baseVersion) { $baseVersion = $previousVersion }
+              }
+              $version = '{0}.{1}.{2}' -f $baseVersion.Major, $baseVersion.Minor, ($baseVersion.Build + 1)
+            }
+
             $channel  = 'beta'
-            # REQ-402 (2026-10-09): no auto-appended "-beta.N" suffix. The target beta version
-            # (e.g. 0.7.1 vs 0.8.0 — a real decision, not a running counter) is chosen in CLI
-            # conversation and committed as a project(VERSION) bump BEFORE this workflow is
-            # dispatched against beta, the same way a master release is decided. The rolling
-            # `channel-beta` prerelease tag/assets still get replaced on every dispatch; only the
-            # version STRING shown to users is now the plain version, matching what was bumped.
+            $betaVersion = $version
             $suffix   = ''
             $full     = $version
-            $quadLast = "${{ github.run_number }}"
+            $quadLast = '0'
             $tag      = 'channel-beta'
           } else {
+            $line = Select-String -Path CMakeLists.txt -Pattern 'GOSURVEY_STABLE_VERSION\s+"([0-9]+\.[0-9]+\.[0-9]+)"'
+            if (-not $line) { throw "Could not read GOSURVEY_STABLE_VERSION from CMakeLists.txt" }
+            $version = $line.Matches[0].Groups[1].Value
             $channel  = 'none'
             $suffix   = "-dev.${{ github.run_number }}"
             $full     = "$version$suffix"
@@ -146,13 +215,34 @@ jobs:
           "full=$full"         | Out-File $env:GITHUB_OUTPUT -Append
           "suffix=$suffix"     | Out-File $env:GITHUB_OUTPUT -Append
           "quad=$version.$quadLast" | Out-File $env:GITHUB_OUTPUT -Append
+          "buildField=$quadLast" | Out-File $env:GITHUB_OUTPUT -Append
           "channel=$channel"   | Out-File $env:GITHUB_OUTPUT -Append
           "tag=$tag"           | Out-File $env:GITHUB_OUTPUT -Append
+          "betaVersion=$betaVersion" | Out-File $env:GITHUB_OUTPUT -Append
+          if ($branch -eq 'beta') { "sourceCommit=$($env:SOURCE_COMMIT)" | Out-File $env:GITHUB_OUTPUT -Append }
           Write-Host "version=$version full=$full channel=$channel tag=$tag"
+
+      - name: Generate beta release notes and What's New content
+        if: github.ref_name == 'beta' || inputs.beta_notes_validation == true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+          RELEASE_VERSION: ${{ steps.ver.outputs.full }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          BASELINE_COMMIT: ${{ steps.notes-baseline.outputs.commit }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python .github/scripts/beta_release_notes.py `
+            --repository $env:REPOSITORY `
+            --source-commit $env:SOURCE_COMMIT `
+            --baseline-commit $env:BASELINE_COMMIT `
+            --version $env:RELEASE_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Beta note generation failed (exit $LASTEXITCODE)." }
 
       - name: Check whether this version was already released
         id: gate
-        if: github.ref_name == 'master'
+        if: github.ref_name == 'master' && inputs.beta_notes_validation != true
         shell: pwsh
         run: |
           $tag = "v${{ steps.ver.outputs.version }}"
@@ -169,125 +259,30 @@ jobs:
       # ---------------------------------------------------------------------
       # Build
       # ---------------------------------------------------------------------
-      - name: Configure
-        # The compiler is NOT chosen here. CMakePresets pins `cl` for both presets, so CI and a
-        # developer machine compile with the same toolchain by construction. Passing it here
-        # instead would recreate exactly the split that broke the first CI run: ninja-release
-        # pinned nothing, CMake took whatever was first on PATH, and local (clang) silently
-        # diverged from CI (cl) until the build failed on a construct only one of them rejects.
-        #
-        # /analyze (REQ-324) is added via GOSURVEY_ENABLE_ANALYZE, NOT -DCMAKE_CXX_FLAGS: a
-        # command-line CMAKE_CXX_FLAGS on first configure REPLACES CMake's MSVC-default flags
-        # (which include /EHsc /GR) instead of adding to them, silently dropping /EHsc and
-        # crashing exception-using tests with a stack-buffer-overrun (0xc0000409) — caught by
-        # this PR's own first CI run. GOSURVEY_ENABLE_ANALYZE instead adds /analyze as a
-        # per-target compile option (CMakeLists.txt's gosurvey_target_warnings), additive and
-        # scoped to our own targets only. It does not fail the build unless paired with /WX,
-        # which is deliberately NOT set — the existing codebase has never been triaged against it.
-        # This pipeline ships the Qt application only.
-        run: >
-          cmake --preset ninja-release
-          -DCMAKE_C_COMPILER_LAUNCHER=sccache
-          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-          -DGOSURVEY_ENABLE_ANALYZE=ON
-          -DGOSURVEY_VERSION_SUFFIX="${{ steps.ver.outputs.suffix }}"
-          -DGOSURVEY_VERSION_BUILD=${{ github.run_number }}
-
-      - name: Register MSVC /analyze problem matcher
-        # Turns `/analyze` warnings in the Build step's log into GitHub Actions annotations
-        # (REQ-324). Registered as its own step so it is easy to find/remove independently of the
-        # Configure and Build steps it affects.
-        run: echo "::add-matcher::.github/msvc-analyze-matcher.json"
-
-      - name: Build
-        run: cmake --build --preset ninja-release
-
-      - name: Set up Mesa OpenGL for hosted release tests
-        shell: pwsh
-        run: |
-          # Qt's bundled software OpenGL driver only reports OpenGL 3.0. GoSurvey needs 3.3,
-          # so use the same pinned Mesa llvmpipe runtime as full-validation.yml.
-          $version = '26.2.4'
-          $archive = Join-Path $env:RUNNER_TEMP "mesa3d-$version-release-msvc.7z"
-          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/$version/mesa3d-$version-release-msvc.7z"
-          Invoke-WebRequest -Uri $url -OutFile $archive
-          $expectedHash = '351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695'
-          $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualHash -ne $expectedHash) { throw "Mesa archive SHA256 mismatch: $actualHash" }
-
-          $sevenZipPath = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
-          if (-not $sevenZipPath) { $sevenZipPath = 'C:\Program Files\7-Zip\7z.exe' }
-          if (-not (Test-Path -LiteralPath $sevenZipPath)) { throw '7-Zip was not found on this Windows runner' }
-          $extractDir = Join-Path $env:RUNNER_TEMP "mesa3d-$version"
-          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
-          & $sevenZipPath x $archive "-o$extractDir" -y | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "7-Zip failed to extract Mesa (exit $LASTEXITCODE)" }
-
-          $mesaOpenGl = Get-ChildItem -LiteralPath $extractDir -Recurse -File -Filter opengl32.dll |
-            Where-Object { $_.Directory.Name -eq 'x64' } | Select-Object -First 1
-          if (-not $mesaOpenGl) { throw 'Mesa x64 opengl32.dll was not present in the pinned archive' }
-          Add-Content -Path $env:GITHUB_ENV -Value "GOSURVEY_MESA_BIN=$($mesaOpenGl.DirectoryName)"
-          Add-Content -Path $env:GITHUB_ENV -Value 'GALLIUM_DRIVER=llvmpipe'
-
-      - name: Stage Mesa runtime dependencies for release tests
-        shell: pwsh
-        run: |
-          $runtime = Join-Path $env:GITHUB_WORKSPACE 'build'
-          $backup = Join-Path $env:RUNNER_TEMP 'gosurvey-release-qt-runtime-backup'
-          if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }
-          New-Item -ItemType Directory -Force -Path $backup | Out-Null
-
-          foreach ($dependency in 'opengl32.dll', 'libgallium_wgl.dll', 'libglapi.dll', 'dxil.dll') {
-            $source = Join-Path $env:GOSURVEY_MESA_BIN $dependency
-            $destination = Join-Path $runtime $dependency
-            if (Test-Path -LiteralPath $destination) {
-              Copy-Item -LiteralPath $destination -Destination (Join-Path $backup $dependency) -Force
-            }
-            if (Test-Path -LiteralPath $source) {
-              Copy-Item -LiteralPath $source -Destination $destination -Force
-            } elseif ($dependency -eq 'opengl32.dll') {
-              throw "Pinned Mesa OpenGL entry point is missing: $source"
-            } else {
-              Write-Host "Optional Mesa dependency is absent; retaining the existing runtime file if present: $dependency"
-            }
-          }
-
-      - name: Test release (REQ-202)
-        shell: pwsh
-        env:
-          QT_OPENGL: desktop
-          GALLIUM_DRIVER: llvmpipe
-        run: |
-          $runtime = Join-Path $env:GITHUB_WORKSPACE 'build'
-          $backup = Join-Path $env:RUNNER_TEMP 'gosurvey-release-qt-runtime-backup'
-          $dependencies = @('opengl32.dll', 'libgallium_wgl.dll', 'libglapi.dll', 'dxil.dll')
-          $testExit = 1
-          try {
-            ctest --preset ninja-release --parallel 8 --output-on-failure
-            $testExit = $LASTEXITCODE
-          } finally {
-            # Mesa is only a test driver. Restore Qt's original DLLs (or remove Mesa-only files)
-            # before later steps stage the application for publication, including on test failure.
-            foreach ($dependency in $dependencies) {
-              $saved = Join-Path $backup $dependency
-              $staged = Join-Path $runtime $dependency
-              if (Test-Path -LiteralPath $saved) {
-                Copy-Item -LiteralPath $saved -Destination $staged -Force
-              } elseif (Test-Path -LiteralPath $staged) {
-                Remove-Item -LiteralPath $staged -Force
-              }
-            }
-          }
-          if ($testExit -ne 0) { throw "CTest failed with exit code $testExit." }
+      - name: Release build and test validation
+        uses: ./.github/actions/release-validation
+        with:
+          version-suffix: ${{ steps.ver.outputs.suffix }}
+          version-build: ${{ steps.ver.outputs.buildField }}
+          beta-version: ${{ steps.ver.outputs.betaVersion }}
+          # D-2026-11-09-d: only a published channel build reports stable or beta; a feature build reports dev.
+          build-channel: ${{ contains('stable beta', steps.ver.outputs.channel) && steps.ver.outputs.channel || 'dev' }}
+          test-parallel: 'auto'
 
       - name: Test release PDB archive validation
         shell: pwsh
-        run: ./tools/test-archive-release-pdb.ps1
+        run: |
+          ./tools/test-archive-release-pdb.ps1
+          ./tools/test-prune-release-pdb.ps1
 
       - name: Archive private release PDB
+        id: archive-pdb
         # REQ-425 / issue #1004: archive symbols from this exact build before any package
         # artifact is staged. The R2 key is separate from the crash-dumps/ lifecycle prefix.
-        if: github.ref_name == 'beta' || (github.ref_name == 'master' && steps.gate.outputs.publish == 'true')
+        if: >-
+          (github.ref_name == 'beta' ||
+           (github.ref_name == 'master' && steps.gate.outputs.publish == 'true')) &&
+          inputs.beta_notes_validation != true
         shell: pwsh
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -298,7 +293,25 @@ jobs:
             -ExecutablePath 'build/GoSurvey.exe' `
             -PdbPath 'build/.cmake/release/symbols/GoSurvey.pdb' `
             -Version '${{ steps.ver.outputs.version }}' `
+            -Channel '${{ steps.ver.outputs.channel }}' `
             -Commit (git rev-parse --short=12 HEAD)
+
+      - name: Prune superseded private release PDBs
+        # D-2026-11-09-b: runs only after the new PDB is in R2 (a failed archive stops the job first).
+        # It deletes older PDBs of this channel only, and never the one just archived.
+        if: >-
+          (github.ref_name == 'beta' ||
+           (github.ref_name == 'master' && steps.gate.outputs.publish == 'true')) &&
+          inputs.beta_notes_validation != true
+        shell: pwsh
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          ./tools/prune-release-pdb.ps1 `
+            -Channel '${{ steps.ver.outputs.channel }}' `
+            -CurrentKey '${{ steps.archive-pdb.outputs.pdb-key }}'
 
       - name: REQ-336 assert whats-new.md is packaged
         # Runtime falls back if the file is missing; CI must still refuse to ship without it.
@@ -341,21 +354,55 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          if ($env:SCCACHE_PATH) { & $env:SCCACHE_PATH --show-stats }
-          else { sccache --show-stats }
+          $sccache = $null
+          if ($env:SCCACHE_PATH -and (Test-Path -LiteralPath $env:SCCACHE_PATH)) {
+            $sccache = $env:SCCACHE_PATH
+          } else {
+            $command = Get-Command sccache.exe -ErrorAction SilentlyContinue
+            if ($command) { $sccache = $command.Source }
+          }
+          if ($sccache) {
+            & $sccache --show-stats
+            if ($LASTEXITCODE -ne 0) {
+              $statsExitCode = $LASTEXITCODE
+              Write-Warning "sccache stats exited with $statsExitCode; ignoring cleanup failure."
+              exit 0
+            }
+          } else {
+            Write-Warning 'sccache was unavailable during cleanup; skipping stats.'
+          }
 
-      - name: Upload binaries for packaging
-        uses: actions/upload-artifact@v4
-        with:
-          name: gosurvey-bin
-          path: |
-            build/GoSurvey.exe
-            build/*.dll
-            build/qt.conf
-            build/qt-plugins/
-            build/resources/
-          if-no-files-found: error
-          retention-days: 1
+      - name: Store test diagnostics on the runner
+        if: always()
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'release-test-diagnostics'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          foreach ($dir in 'ci', 'catch', 'qt-editor') {
+            $source = Join-Path 'build/artifacts' $dir
+            if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $stage -Recurse -Force }
+          }
+          ./tools/ci-local-artifacts.ps1 -Action store -Name release-test-diagnostics -SourcePath $stage
+
+      - name: Store binaries for packaging on the runner
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'gosurvey-bin'
+          if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -LiteralPath build/GoSurvey.exe, build/qt.conf -Destination $stage
+          Copy-Item -Path build/*.dll -Destination $stage
+          Copy-Item -LiteralPath build/qt-plugins, build/resources -Destination $stage -Recurse
+          ./tools/ci-local-artifacts.ps1 -Action store -Name gosurvey-bin -SourcePath $stage
+
+      - name: Store generated beta release content on the runner
+        if: github.ref_name == 'beta' || inputs.beta_notes_validation == true
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'beta-release-content'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -LiteralPath build/artifacts/release-notes/beta-release-content.json -Destination $stage -Force
+          ./tools/ci-local-artifacts.ps1 -Action store -Name beta-release-content -SourcePath $stage
 
   package:
     needs: build
@@ -363,8 +410,13 @@ jobs:
     # is published (beta, master) or explicitly asked for (workflow_dispatch).
     # A feature-branch push runs the build job only; use "Run workflow" to get an
     # installer artifact on demand.
-    if: github.ref_name == 'beta' || github.ref_name == 'master' || github.event_name == 'workflow_dispatch'
-    runs-on: windows-latest
+    if: >-
+      inputs.beta_notes_api_smoke != true &&
+      (github.ref_name == 'beta' || github.ref_name == 'master' || github.event_name == 'workflow_dispatch')
+    runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
+    permissions:
+      contents: write
+      actions: read
 
     steps:
       - name: Check out
@@ -372,14 +424,16 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Download binaries
-        # upload-artifact@v4 strips the shared `build/` prefix from the uploaded
-        # paths, so the archive contains the app/runtime files at its root. Unpack into
-        # build/ so installer/GoSurvey.iss finds the Qt deployment tree.
-        uses: actions/download-artifact@v4
-        with:
-          name: gosurvey-bin
-          path: build
+      - name: Restore binaries from the runner
+        # The stored artifact holds the app/runtime files at its root; restore into build/ so
+        # installer/GoSurvey.iss finds the Qt deployment tree.
+        shell: pwsh
+        run: ./tools/ci-local-artifacts.ps1 -Action restore -Name gosurvey-bin -Destination build
+
+      - name: Restore generated beta release content from the runner
+        if: github.ref_name == 'beta' || inputs.beta_notes_validation == true
+        shell: pwsh
+        run: ./tools/ci-local-artifacts.ps1 -Action restore -Name beta-release-content -Destination installer/Output/beta-release-content
 
       - name: REQ-336 assert whats-new.md in packaging inputs
         shell: pwsh
@@ -419,13 +473,8 @@ jobs:
               throw "Expected $path in packaging inputs; offline installer would be incomplete."
             }
           }
-          $iscc = Get-ChildItem 'C:\Program Files (x86)\Inno Setup*\ISCC.exe','C:\Program Files\Inno Setup*\ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $iscc) {
-            Write-Host "Inno Setup not present on the runner image - installing."
-            choco install innosetup -y --no-progress
-            $iscc = Get-ChildItem 'C:\Program Files (x86)\Inno Setup*\ISCC.exe','C:\Program Files\Inno Setup*\ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-          }
-          if (-not $iscc) { throw "ISCC.exe not found after install attempt" }
+          # Pinned per-user Inno Setup 6 in the runner's local tool cache; no elevation needed.
+          $iscc = Get-Item -LiteralPath (./tools/ci-get-tool.ps1 -Name innosetup)
           Write-Host "Using $($iscc.FullName)"
           & $iscc.FullName `
             "/DAppVersion=${{ needs.build.outputs.full }}" `
@@ -477,9 +526,12 @@ jobs:
           # (Found the accidental way: a commit message containing "MSVC toolchain" ended a string
           # literal and failed the step with `Unexpected token 'MSVC'`.)
           #
-          # Used ONLY to look for the `BREAKING-DRAWINGS:` marker. User-facing release notes come
-          # from RELEASE_NOTES.md — a commit message must never reach the update dialog.
+          # Used ONLY to look for the `BREAKING-DRAWINGS:` marker. Beta notes come from the
+          # validated generator artifact; stable notes come from RELEASE_NOTES.md. A commit message
+          # must never reach the update dialog or the AI prompt.
           HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          EXPECTED_VERSION: ${{ needs.build.outputs.full }}
+          BETA_NOTES_VALIDATION: ${{ inputs.beta_notes_validation }}
         run: |
           $installer = Get-ChildItem installer\Output\*.exe | Select-Object -First 1
           if (-not $installer) { throw "No installer produced in installer\Output" }
@@ -495,11 +547,12 @@ jobs:
           # remains gsFormatVersion for compatibility with already deployed updater clients.
           # The CLIENT compares it against its own compiled-in value, so no release history has to
           # be consulted here and the comparison happens where the truth is actually known.
-          $fmtLine = Select-String -Path src\io\GsMigrate.hpp -Pattern 'kGsFormatVersion\s*=\s*(\d+)'
-          if (-not $fmtLine) { throw "Could not read kGsFormatVersion from src\io\GsMigrate.hpp" }
+          $fmtLine = Select-String -Path src\io\src\GsMigrate.hpp -Pattern 'kGsFormatVersion\s*=\s*(\d+)'
+          if (-not $fmtLine) { throw "Could not read kGsFormatVersion from src\io\src\GsMigrate.hpp" }
           $gsFormatVersion = [int]$fmtLine.Matches[0].Groups[1].Value
 
-          # Release notes come from RELEASE_NOTES.md, NOT from the commit message.
+          # Stable release notes come from RELEASE_NOTES.md. Beta uses the generated artifact above.
+          # Neither path uses the commit message as user-facing release content.
           #
           # The manifest's notes are shown to surveyors inside the update dialog. Commit messages
           # are written for developers and are full of things an end user should never be shown --
@@ -517,7 +570,25 @@ jobs:
           # fallback line. Safe to interpolate: this value is a [0-9.]+ string from a regex.
           $version = "${{ needs.build.outputs.version }}"
           $notes = ""
-          if (Test-Path RELEASE_NOTES.md) {
+          $betaContent = $null
+          if ($env:GITHUB_REF_NAME -eq 'beta' -or $env:BETA_NOTES_VALIDATION -eq 'true') {
+            $generatedPath = 'installer\Output\beta-release-content\beta-release-content.json'
+            if (-not (Test-Path -LiteralPath $generatedPath)) {
+              throw "REQ-505: generated beta release content is missing: $generatedPath"
+            }
+            try {
+              $betaContent = Get-Content -LiteralPath $generatedPath -Raw | ConvertFrom-Json
+            } catch {
+              throw "REQ-505: generated beta release content is invalid JSON: $($_.Exception.Message)"
+            }
+            if ($betaContent.sourceCommit -ne $env:GITHUB_SHA -or
+                $betaContent.version -ne $env:EXPECTED_VERSION -or
+                [string]::IsNullOrWhiteSpace($betaContent.notes) -or
+                [string]::IsNullOrWhiteSpace($betaContent.whatsNewMarkdown)) {
+              throw 'REQ-505: generated beta release content does not match this source commit and version.'
+            }
+            $notes = [string]$betaContent.notes
+          } elseif (Test-Path RELEASE_NOTES.md) {
             $lines = Get-Content RELEASE_NOTES.md
             $start = -1
             for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -575,6 +646,15 @@ jobs:
             }
             notes       = $notes
           }
+          if ($env:GITHUB_REF_NAME -eq 'beta' -or $env:BETA_NOTES_VALIDATION -eq 'true') {
+            # This makes retries idempotent: the version resolver can recognize the exact source
+            # commit already represented by the rolling manifest.
+            $manifest['sourceCommit'] = $env:GITHUB_SHA
+            $manifest['whatsNewMarkdown'] = [string]$betaContent.whatsNewMarkdown
+            $manifest['notesBaselineCommit'] = [string]$betaContent.baselineCommit
+            $manifest['notesSourcePullRequestCount'] = [int]$betaContent.sourcePullRequestCount
+            $manifest['notesModel'] = [string]$betaContent.model
+          }
           $manifest | ConvertTo-Json -Depth 4 | Out-File -Encoding utf8 installer\Output\latest.json
           if ($env:GITHUB_REF_NAME -eq 'master') {
             @(
@@ -593,22 +673,36 @@ jobs:
       # ---------------------------------------------------------------------
       # Publish
       # ---------------------------------------------------------------------
-      - name: Upload artifact (non-release branches)
-        if: github.ref_name != 'master' && github.ref_name != 'beta'
-        uses: actions/upload-artifact@v4
-        with:
-          name: GoSurvey-${{ needs.build.outputs.full }}
-          path: |
-            installer/Output/*.exe
-            installer/Output/latest.json
-          retention-days: 14
+      - name: Store installer on the runner (non-release branches)
+        if: >-
+          (github.ref_name != 'master' && github.ref_name != 'beta') ||
+          inputs.beta_notes_validation == true
+        shell: pwsh
+        env:
+          ARTIFACT_NAME: GoSurvey-${{ needs.build.outputs.full }}
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'installer-artifact'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -Path installer/Output/*.exe, installer/Output/latest.json -Destination $stage
+          ./tools/ci-local-artifacts.ps1 -Action store -Name $env:ARTIFACT_NAME -SourcePath $stage
 
       - name: Publish the rolling beta prerelease
-        if: github.ref_name == 'beta'
+        if: github.ref_name == 'beta' && inputs.beta_notes_validation != true
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A queued beta run can finish after a newer commit. Check the branch tip immediately
+          # before touching the rolling release so an older build cannot replace newer assets.
+          $remoteBeta = git ls-remote origin refs/heads/beta
+          if ($LASTEXITCODE -ne 0) { throw "Could not resolve current beta head before publishing" }
+          $remoteBetaSha = ($remoteBeta -split '\s+')[0]
+          if ([string]::IsNullOrWhiteSpace($remoteBetaSha)) { throw "Could not resolve current beta head before publishing" }
+          if ($remoteBetaSha -ne $env:GITHUB_SHA) {
+            Write-Host "Skipping stale beta build $($env:GITHUB_SHA); current beta head is $remoteBetaSha."
+            exit 0
+          }
+
           # One permanent prerelease row, not one per push. `--clobber` replaces the assets in
           # place, which is what gives the beta manifest a fixed, forever-valid URL.
           $exists = gh release view channel-beta 2>$null
@@ -642,7 +736,10 @@ jobs:
             --notes-file installer\Output\release-body.md
 
       - name: Publish the stable release
-        if: github.ref_name == 'master' && needs.build.outputs.publish == 'true'
+        if: >-
+          github.ref_name == 'master' &&
+          needs.build.outputs.publish == 'true' &&
+          inputs.beta_notes_validation != true
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -666,3 +763,25 @@ jobs:
       - name: Report that the version gate held
         if: github.ref_name == 'master' && needs.build.outputs.publish == 'false'
         run: echo "v${{ needs.build.outputs.version }} is already released. Bump project(VERSION) in CMakeLists.txt to ship a new one."
+
+  report-release-failure:
+    name: report release failure
+    needs: [build, package]
+    if: >-
+      always() &&
+      (needs.build.result == 'failure' || needs.package.result == 'failure') &&
+      (github.ref_name == 'beta' || github.ref_name == 'master') &&
+      inputs.beta_notes_validation != true
+    runs-on: [self-hosted, Windows, X64]
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - name: Check out release workflow source
+        uses: actions/checkout@v4
+
+      - name: Create or update release failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pwsh -NoLogo -NoProfile -File .github/scripts/report_release_failure.ps1

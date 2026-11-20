@@ -2,8 +2,8 @@
 // REQ-431: the reading aids of the Qt least-squares adjustment window - a command editor with
 // colours, line numbers and an inline error, and a plan preview with error ellipses. They only
 // display; the traverse, the results and the files stay owned by AdjustmentWindow.
-#include "traverse/TraverseCalc.hpp"
-#include "traverse/TraverseLeastSquares.hpp"
+#include "GoSurvey/Survey/TraverseCalc.hpp"
+#include "GoSurvey/Survey/TraverseLeastSquares.hpp"
 #include <QColor>
 #include <QPlainTextEdit>
 #include <QPointF>
@@ -86,6 +86,7 @@ public:
   QString TooltipAt(const QPoint& position) const;
 protected:
   void paintEvent(QPaintEvent* event) override;
+  void resizeEvent(QResizeEvent* event) override;
   void wheelEvent(QWheelEvent* event) override;
   void mousePressEvent(QMouseEvent* event) override;
   void mouseMoveEvent(QMouseEvent* event) override;
@@ -106,7 +107,7 @@ private:
   QString m_Unit = "ft";
   std::vector<Station> m_Stations;
   std::vector<Segment> m_Segments;
-  bool m_Initialised = false, m_HavePrevious = false, m_Panning = false;
+  bool m_Initialised = false, m_HavePrevious = false, m_Panning = false, m_UserNavigated = false;
   QPointF m_Center;
   double m_Scale = 1.0;
   QRectF m_Previous;

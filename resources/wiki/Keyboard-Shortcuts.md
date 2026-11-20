@@ -16,10 +16,11 @@ Every key GoSurvey listens for.
 | `Ctrl+Y` | Redo | Alternative binding |
 | `Ctrl+C` | Copy selection to the clipboard | Not while typing |
 | `Ctrl+V` | Paste from the clipboard at the cursor | Not while typing |
+| `Ctrl+X` | Cut: copy the selection to the clipboard, then erase it | Not while typing; refused in a read-only drawing (see Modify Tools) |
 | `Delete` | Start DELETE | Erases the selection immediately if there is one; otherwise asks for a window. Not while typing |
 | `F1` | Open the in-app user manual | Contextual — command page, UI hover topic, or Home |
 
-`Ctrl+Z`, `Ctrl+Y`, `Ctrl+C`, `Ctrl+V`, and `Delete` are **suppressed while a text field has
+`Ctrl+Z`, `Ctrl+Y`, `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, and `Delete` are **suppressed while a text field has
 focus**, so they behave as ordinary text editing there.
 
 ![In-app user manual (F1)](wiki-img:20-in-app-wiki.png)

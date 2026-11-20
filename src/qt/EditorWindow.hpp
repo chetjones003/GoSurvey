@@ -5,7 +5,7 @@
 #include "CadCommands.hpp"
 #include "CadDynInput.hpp"
 #include "WikiContent.hpp"
-#include "PdfCoordExtract.hpp"
+#include "GoSurvey/Pdf/PdfCoordExtract.hpp"
 
 namespace update { struct UpdateState; }
 namespace telemetry { struct TelemetryTask; }
@@ -19,6 +19,8 @@ class QResizeEvent;
 class QEvent;
 class QPlainTextEdit;
 class QTreeWidget;
+class QTreeWidgetItem;
+class QPushButton;
 class QScrollArea;
 class QComboBox;
 class QLabel;
@@ -32,6 +34,8 @@ class QDialog;
 class FloatingCommandBar;
 class QFrame;
 class QTimer;
+class QDockWidget;
+class QToolBar;
 
 class EditorWindow final : public QMainWindow {
 public:
@@ -50,11 +54,17 @@ public:
   /// application entry point only, so test windows never send one.
   void EnableTelemetry();
   void InitializeStartup();
+  /// #1202: starts the one-second wait before a startup update offer may appear. Called once, by
+  /// the entry point, immediately after the main window is first shown.
+  void ScheduleInitialUpdateOffer();
   void OpenDrawing(const QString& path);
   AppCommandState& State() { return m_State; }
   bool CommitPdfCoordinate(const pdfview::CoordCandidate& candidate);
   std::size_t CommitPdfCoordinates(const std::vector<pdfview::CoordCandidate>& candidates); ///< one redraw for the lot; returns how many were created
   bool RunSmokeChecks(QString& error);
+  void PickRibbonAnnotStyle(const QString& galleryObjectName, const QString& styleName);
+  void OpenRibbonStyleManager(const QString& galleryObjectName);
+  void ShowTableStyles();
 protected:
   void closeEvent(QCloseEvent* event) override;
   void changeEvent(QEvent* event) override;
@@ -73,11 +83,15 @@ private:
   void RefreshRibbon();
   void RefreshToolspace();
   void RunRibbonAction(const QString& id);
+  void ShowGradingTools();
+  void ShowFeatureLineElevations();
   bool ConfirmDwgExport(const QString& path);
   void EditRibbonHatch(const QString& field, const QString& value);
+  void EditRibbonPdf(const QString& field, const QString& value);
   void BuildTitleBar(QMenu* applicationMenu);
   void UpdateChromeIcons();
   void BuildDocks();
+  void UpdateAdaptiveDocks();
   void BuildDraftingInput();
   void RefreshDraftingInput(const QString& hint = {});
   void ResetDraftingInput();
@@ -90,7 +104,8 @@ private:
   void CancelDraftingInput();
   void ShowPolarSettings();
   void ShowSnapOverride(const QPoint& position);
-  void ShowContextualHelp();
+  /// The user manual, open at `topicCommand`'s page (empty: the running or last command's).
+  void ShowContextualHelp(const QString& topicCommand = {});
   void BuildPropertiesPanel();
   void RefreshProperties();
   void Refresh();
@@ -100,6 +115,7 @@ private:
   void SwitchDrawing(int index);
   void CloseDrawing(int index);
   bool SaveDrawing(bool saveAs = false);
+  bool SaveDrawingTemplate();
   bool ConfirmSave();
   void ShowWhatsNew();
   void RefreshRecentDrawings();
@@ -130,6 +146,14 @@ private:
   void ShowProjectPointWarning();
   void ShowPointTransfer(bool importing);
   void ShowSurveyReports();
+  /// REQ-486: the Alignment Layout table, docked like Civil 3D's Panorama, showing `name` (empty: keep the current one).
+  void ShowAlignmentLayout(const std::string& name);
+  /// Refills the docked Alignment Layout table when the drawing changed (called from Refresh).
+  void SyncAlignmentLayout();
+  /// REQ-485.1: shows, retitles or hides the Alignment Layout Tools window (called from Refresh).
+  void SyncAlignmentLayoutTools();
+  /// REQ-485: runs the Create Alignment dialog a command asked for and submits what it collected.
+  void ShowCreateAlignmentDialog(bool fromObjects);
   // Issue #893: surface and surface-style dialogs (EditorSurfaces / EditorSurfaceManager / EditorSurfaceStyles).
   void ShowCreateSurface();
   void ShowSurfaceProperties(int surfaceIndex);
@@ -141,8 +165,16 @@ private:
   void ShowViewportScale();
   void ShowViewportsManager();
   bool ActiveDrawingReadOnly() const;
-  void ShowToolspaceContextMenu(const QPoint& position);
+  void CutSelection();  // Cut (issue #805): ribbon, context menu and Ctrl+X share the read-only guard.
+  /// LandXML import (REQ-506): asks Overwrite or Offset for point numbers that already exist.
+  void AskLandXmlPointConflicts();
+  void ShowToolspaceContextMenu(QTreeWidget* tree, const QPoint& position);
+  QMenu* BuildToolspaceMenu(QTreeWidgetItem* item);
+  void ShowPdfFile(const QString& path);
+  void PreviewActiveLayout();
+  void ShowActiveLayoutDetails();
   void ShowPasteWarning();
+  void ShowAlignResultsDialog();
   void ShowProjectAttachPrompt();
   void ShowPdfAttachDialog();
   void AddPdfToProjectFromDisk();
@@ -168,6 +200,7 @@ private:
   void ShowUpdateDialog();
   bool UpdateBlocksLaunch() const;
   QString m_DevelopmentBranchLabel;
+  std::uint64_t m_DocumentGeneration = 0;
   bool m_ModalOpen = false;
   AppCommandState m_State;
   std::vector<std::string> m_Log;
@@ -187,6 +220,11 @@ private:
   FloatingCommandBar* m_CommandBar = nullptr;
   QFrame* m_DynamicInput = nullptr;
   QLabel* m_DynamicPrompt = nullptr;
+  QLabel* m_DynamicAlignment = nullptr;  ///< REQ-501.2: station / offset / bearing near an alignment
+  /// The dynamic input is showing for a command (its fields take typing and Enter). During a grip drag with no command
+  /// it may show only the alignment readout, and then takes no input.
+  bool m_DynamicInputForCommand = false;
+  [[nodiscard]] bool DynamicInputAcceptsInput() const;
   QLabel* m_DynamicLabels[3]{};
   QLineEdit* m_DynamicFields[3]{};
   dyninput::Group m_DynamicGroup;
@@ -197,15 +235,32 @@ private:
   ray3d::Vec3 m_DynamicCursor{};
   bool m_DynamicReset = true;
   QLabel* m_WindowTitle = nullptr;
-  QTreeWidget* m_Toolspace = nullptr;
+  QDockWidget* m_PropertiesDock = nullptr;
+  QDockWidget* m_ToolspaceDock = nullptr;
+  QToolBar* m_PropertiesRail = nullptr;
+  QToolBar* m_ToolspaceRail = nullptr;
+  bool m_PropertiesRailInstalled = false;
+  bool m_ToolspaceRailInstalled = false;
+  QTreeWidget* m_Toolspace = nullptr;              ///< Prospector tab (REQ-142): the active drawing's objects.
+  QTreeWidget* m_ToolspaceProject = nullptr;       ///< Project tab (REQ-142): projects, tracked items and open drawings.
+  QTreeWidget* m_ToolspaceSettings = nullptr;      ///< Settings tab (REQ-142): drawing-level style tables.
+  QPushButton* m_ToolspaceRefresh = nullptr;       ///< Project tab's Refresh (REQ-379 clause 6).
+  QPushButton* m_ToolspaceProjectHealth = nullptr; ///< Project tab's Project Health (REQ-379 clause 4).
+  QPushButton* m_ToolspaceAddPdf = nullptr;        ///< Project tab's Add PDF... (REQ-379 clause 5).
   QScrollArea* m_PropertiesScroll = nullptr;
   std::uint64_t m_PropertiesFingerprint = ~0ull;
   QString m_PropertiesNote;
   QLabel* m_Coordinates = nullptr;
   bool m_Refreshing = false;
+  bool m_UpdatingAdaptiveDocks = false;
+  bool m_PropertiesDockWanted = true;
+  bool m_ToolspaceDockWanted = true;
+  bool m_PropertiesDockExpandedCompact = false;
+  bool m_ToolspaceDockExpandedCompact = false;
   bool m_TextDialogOpen = false;
   bool m_StartupInitialized = false;
   bool m_WhatsNewAutoOpened = false;
+  bool m_InitialUpdateOfferDue = false;   ///< #1202: the one-second wait after the window appeared has elapsed
   bool m_RecentListView = false;
   bool m_RecentShowAll = false;
   bool m_ShowAllProjects = false;

@@ -25893,6 +25893,7 @@ dwg_add_TEXT (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
   _obj->ins_pt.x = ins_pt->x;
   _obj->ins_pt.y = ins_pt->y;
   _obj->elevation = ins_pt->z;
+  _obj->width_factor = 1.0;
   _obj->height = height;
   if (dwg->header_vars.TEXTSTYLE)
     _obj->style = dwg_add_handleref (
@@ -25911,12 +25912,17 @@ add_attrib_links (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
                   Dwg_Entity_INSERT *restrict insert,
                   Dwg_Object *restrict insobj, Dwg_Object *restrict attobj)
 {
+  const BITCODE_BL insert_index = insobj->index;
+  const BITCODE_BL attribute_index = attobj->index;
   Dwg_Object *seqend = dwg_ref_object (insobj->parent, insert->seqend);
   // prev attrib
   Dwg_Object *lastobj = dwg_ref_object (insobj->parent, insert->last_attrib);
   if (!insert->has_attribs || !seqend || !lastobj) // no ATTRIB and SEQEND yet
     {
       API_ADD_ENTITY (SEQEND);
+      // Adding the SEQEND can relocate dwg->object, invalidating both cached object pointers.
+      insobj = &dwg->object[insert_index];
+      attobj = &dwg->object[attribute_index];
       if (dwg->header.version <= R_12)
         obj->type = DWG_TYPE_SEQEND_r11;
       insert->has_attribs = 1;
@@ -25930,7 +25936,10 @@ add_attrib_links (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
       insert->last_attrib = insert->first_attrib;
       insert->seqend = dwg_add_handleref (dwg, 3, obj->handle.value, insobj);
       insert->attribs = (BITCODE_H *)malloc (sizeof (BITCODE_H));
-      insert->attribs[0] = insert->last_attrib;
+      // R2004+ ATTRIB vectors are hard-owner references (3). Soft-pointer/relative links do
+      // not own their attributes: AutoCAD erases those orphaned records while opening.
+      insert->attribs[0]
+          = dwg_add_handleref (dwg, 3, attobj->handle.value, insobj);
       IN_POSTPROCESS_SEQEND (obj, insert->num_owned, insert->attribs);
     }
   else
@@ -25938,13 +25947,15 @@ add_attrib_links (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
       Dwg_Data *dwg = insobj->parent;
       insert->last_attrib
           = dwg_add_handleref (dwg, 4, attobj->handle.value, insobj);
-      attobj->tio.entity->prev_entity = insert->last_attrib;
+      attobj->tio.entity->prev_entity
+          = dwg_add_handleref (dwg, 4, lastobj->handle.value, attobj);
       insert->num_owned++;
       insert->attribs = (BITCODE_H *)realloc (
           insert->attribs, insert->num_owned * sizeof (BITCODE_H));
       lastobj->tio.entity->next_entity
           = dwg_add_handleref (dwg, 3, attobj->handle.value, insobj);
-      insert->attribs[insert->num_owned - 1] = insert->last_attrib;
+      insert->attribs[insert->num_owned - 1]
+          = dwg_add_handleref (dwg, 3, attobj->handle.value, insobj);
       seqend = dwg_ref_object (dwg, insert->seqend);
       IN_POSTPROCESS_SEQEND (seqend, insert->num_owned, insert->attribs);
     }
@@ -26044,14 +26055,21 @@ dwg_add_ATTRIB (Dwg_Entity_INSERT *restrict insert, const double height,
   _obj->ins_pt.y = ins_pt->y;
   _obj->elevation = ins_pt->z;
   _obj->height = height;
+  _obj->width_factor = 1.0;
+  _obj->flags = (BITCODE_RC)flags;
+  _obj->mtext_type = 1; // R2018 single-line attribute; zero is not a valid content type.
+  // ATTRIB is an INSERT subentity, never a standalone entity in the containing model/block
+  // space. AutoCAD purges attributes with entmode=2 and then rejects their broken INSERT.
+  obj->tio.entity->entmode = 0;
+  obj->tio.entity->ownerhandle
+      = dwg_add_handleref (dwg, 4, insobj->handle.value, obj);
   // block handles
   if (dwg->header_vars.TEXTSTYLE)
     _obj->style = dwg_add_handleref (
         dwg, 5, dwg->header_vars.TEXTSTYLE->absolute_ref, NULL);
   insert->has_attribs = 1;
   // TODO: if !blkhdr->hasattrs: error no ATTDEF
-  insert->block_header
-      = dwg_add_handleref (dwg, 3, blkobj->handle.value, insobj);
+  // Keep the INSERT's referenced block; blkobj is its containing space, not that block.
   if (dwg->header.version <= R_12)
     {
       obj->type = DWG_TYPE_ATTRIB_r11;
@@ -26092,6 +26110,9 @@ dwg_add_ATTDEF (Dwg_Object_BLOCK_HEADER *restrict blkhdr, const double height,
   _obj->ins_pt.y = ins_pt->y;
   _obj->elevation = ins_pt->z;
   _obj->height = height;
+  _obj->width_factor = 1.0;
+  _obj->flags = (BITCODE_RC)flags;
+  _obj->mtext_type = 1; // Single-line definition, matching AutoCAD-authored ATTDEF records.
   // block handles
   if (dwg->header_vars.TEXTSTYLE)
     _obj->style = dwg_add_handleref (
@@ -26551,6 +26572,10 @@ dwg_add_POLYLINE_PFACE (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
       vtx = dwg_obj_generic_to_object (_vtx, &error);
       if (!vtx || !vtx->tio.entity || vtx->supertype != DWG_SUPERTYPE_ENTITY)
         goto vtx_pface_err;
+      // Adding the vertex may have reallocated dwg->object; `pl` pointed into it (GoSurvey).
+      pl = dwg_obj_generic_to_object (_pl, &error);
+      if (!pl)
+        goto vtx_pface_err;
       _pl->vertex[i] = dwg_add_handleref (dwg, 3, vtx->handle.value, pl);
       if (i == 0)
         _pl->first_vertex
@@ -26567,6 +26592,9 @@ dwg_add_POLYLINE_PFACE (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
         }
       vtx = dwg_obj_generic_to_object (_vtxf, &error);
       if (!vtx || !vtx->tio.entity || vtx->supertype != DWG_SUPERTYPE_ENTITY)
+        goto vtx_pface_face_err;
+      pl = dwg_obj_generic_to_object (_pl, &error);
+      if (!pl)
         goto vtx_pface_face_err;
       vtx->tio.entity->next_entity = NULL;
       _pl->vertex[numverts + j]
@@ -26594,12 +26622,15 @@ dwg_add_POLYLINE_PFACE (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
       return NULL;
     }
   seq = dwg_obj_generic_to_object (_seq, &error);
+  pl = dwg_obj_generic_to_object (_pl, &error);
+  if (!seq || !pl)
+    return NULL;
   _pl->seqend
       = dwg_add_handleref (dwg, 3, dwg_obj_generic_handlevalue (_seq), pl);
   IN_POSTPROCESS_SEQEND (seq, _pl->num_owned, _pl->vertex);
   pl->tio.entity->next_entity = NULL; // fixup
   if (dwg->header.version <= R_12)
-    obj->type = DWG_TYPE_POLYLINE_r11;
+    pl->type = DWG_TYPE_POLYLINE_r11;
   return _pl;
 }
 
@@ -27716,6 +27747,12 @@ dwg_add_MTEXT (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
   _obj->extents_width = _obj->rect_width;
   _obj->attachment = 1;
   _obj->flow_dir = 1;
+  // Native R2018 non-annotative MTEXT carries an embedded-object header. Version zero is
+  // not a valid authored header: AutoCAD rejects a block containing it with eFilerError.
+  _obj->is_not_annotative = 1;
+  _obj->class_version = 4;
+  _obj->default_flag = 1;
+  _obj->ignore_attachment = _obj->attachment;
   if (dwg->header_vars.TEXTSTYLE)
     _obj->style = dwg_add_handleref (
         dwg, 5, dwg->header_vars.TEXTSTYLE->absolute_ref, NULL);
@@ -27807,6 +27844,30 @@ dwg_add_LEADER (
 }
 
 /* GoSurvey (issue #619): minimal MLEADERSTYLE + MULTILEADER writers for R2010+ export. */
+/* GoSurvey (issue #1010): AutoCAD's own classes for these two types use these application names and proxy
+   flags; the generic table gives MULTILEADER "ObjectDBX Classes" and flags 0, which AutoCAD does not accept. */
+static void
+dwg_set_class_app (Dwg_Data *restrict dwg, const char *restrict dxfname,
+                   const char *restrict appname, const BITCODE_BS proxyflag)
+{
+  BITCODE_BS i;
+  for (i = 0; i < dwg->num_classes; i++)
+    {
+      Dwg_Class *klass = &dwg->dwg_class[i];
+      if (klass->dxfname && strcmp (klass->dxfname, dxfname) == 0)
+        {
+          char *copy = strdup (appname);
+          if (copy)
+            {
+              free (klass->appname);
+              klass->appname = copy;
+            }
+          klass->proxyflag = proxyflag;
+          return;
+        }
+    }
+}
+
 static void
 dwg_fill_MLEADERSTYLE_defaults (Dwg_Data *restrict dwg,
                                 Dwg_Object_MLEADERSTYLE *restrict sty)
@@ -27822,6 +27883,11 @@ dwg_fill_MLEADERSTYLE_defaults (Dwg_Data *restrict dwg,
   sty->second_seg_angle = deg2rad (15.0);
   sty->type = 1;
   sty->line_color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
+  /* AutoCAD writes ByBlock linetype and lineweight (-2) here; null handle / 0 is rejected on open. */
+  if (dwg->header_vars.LTYPE_BYBLOCK)
+    sty->line_type = dwg_add_handleref (
+        dwg, 5, dwg->header_vars.LTYPE_BYBLOCK->absolute_ref, NULL);
+  sty->linewt = -2;
   sty->has_landing = 1;
   sty->has_dogleg = 1;
   sty->landing_gap = 0.09;
@@ -27857,6 +27923,119 @@ dwg_fill_MLEADERSTYLE_defaults (Dwg_Data *restrict dwg,
   sty->text_extended = 0;
 }
 
+/* GoSurvey REQ-478: drawing-owned native table styles. Defaults are taken from the
+   supplied AutoCAD R2018 Standard style; each modern cell-style record has its own map key. */
+EXPORT Dwg_Object_TABLESTYLE *
+dwg_add_TABLESTYLE (Dwg_Data *restrict dwg, const char *restrict name)
+{
+  if (!dwg || !name || dwg->header.version < R_2004)
+    return NULL;
+  REQUIRE_CLASS ("TABLESTYLE");
+  {
+    API_ADD_OBJECT (TABLESTYLE);
+    const BITCODE_BL object_index = obj->index;
+    BITCODE_H dictref = dwg_find_dictionary (dwg, "ACAD_TABLESTYLE");
+    Dwg_Object_DICTIONARY *dict = NULL;
+    if (!dictref)
+      {
+        dict = dwg_add_DICTIONARY (dwg, "ACAD_TABLESTYLE", NULL, 0);
+        dictref = dwg_find_dictionary (dwg, "ACAD_TABLESTYLE");
+      }
+    obj = &dwg->object[object_index];
+    if (dictref)
+      {
+        Dwg_Object *dictionary = dwg_ref_object (dwg, dictref);
+        if (dictionary && dictionary->tio.object)
+          {
+            dict = dictionary->tio.object->tio.DICTIONARY;
+            dwg_add_DICTIONARY_item (dict, name, obj->handle.value);
+            obj->tio.object->ownerhandle = dwg_add_handleref (dwg, 4, dictionary->handle.value, obj);
+            add_obj_reactor (obj->tio.object, dictionary->handle.value);
+          }
+      }
+    _obj->name = dwg_add_u8_input (dwg, name);
+    _obj->horiz_cell_margin = _obj->vert_cell_margin = 0.06;
+    if (dwg->header.version >= R_2010)
+      {
+        Dwg_CellStyle *base = &_obj->sty.cellstyle;
+        _obj->unknown_bl2 = 101;
+        _obj->sty.id = 4;
+        _obj->sty.type = 2;
+        _obj->sty.name = dwg_add_u8_input (dwg, "Table");
+        base->type = 5;
+        base->data_flags = 1;
+        base->bg_color.method = 0xc8;
+        base->bg_color.rgb = 0xc8000000;
+        base->content_layout = 1;
+        base->margin_override_flags = 1;
+        base->vert_margin = base->horiz_margin = base->bottom_margin = base->right_margin = 0.06;
+        base->content_format.value_data_type = 0x200;
+        base->content_format.block_scale = 1.0;
+        base->content_format.cell_alignment = 1;
+        base->content_format.content_color.method = 0xc1;
+        base->content_format.content_color.rgb = 0xc1000000;
+        base->content_format.text_height = 0.18;
+        _obj->numoverrides = 3;
+        _obj->overrides = calloc (3, sizeof (Dwg_TABLESTYLE_CellStyle));
+        if (!_obj->overrides) return NULL;
+        for (unsigned i = 0; i < 3; ++i)
+          {
+            Dwg_TABLESTYLE_CellStyle *row = &_obj->overrides[i];
+            row->parent = _obj;
+            row->record_id = row->id = i + 1;
+            row->type = i == 2 ? 2 : 1;
+            row->name = dwg_add_u8_input (dwg, i == 0 ? "_TITLE" : i == 1 ? "_HEADER" : "_DATA");
+            row->cellstyle = *base;
+            row->cellstyle.margin_override_flags = 0;
+            row->cellstyle.merge_flags = i == 0 ? 0x8000 : 0;
+            row->cellstyle.content_format.text_height = i == 0 ? 0.25 : 0.18;
+            row->cellstyle.content_format.cell_alignment = i == 2 ? 2 : 5;
+            row->cellstyle.content_format.text_style = dwg_find_tablehandle (dwg, "Standard", "STYLE");
+            row->cellstyle.num_borders = 6;
+            row->cellstyle.borders = calloc (6, sizeof (Dwg_GridFormat));
+            if (!row->cellstyle.borders) return NULL;
+            for (unsigned j = 0; j < 6; ++j)
+              {
+                Dwg_GridFormat *border = &row->cellstyle.borders[j];
+                border->index_mask = 1u << j;
+                border->border_type = 1;
+                border->linewt = -2;
+                border->color.method = 0xc1;
+                border->color.rgb = 0xc1000000;
+                border->double_line_spacing = 0.045;
+              }
+          }
+      }
+    else
+      {
+        _obj->num_rowstyles = 3;
+        _obj->rowstyles = calloc (3, sizeof (Dwg_TABLESTYLE_rowstyles));
+        if (!_obj->rowstyles) return NULL;
+        for (unsigned i = 0; i < 3; ++i)
+          {
+            Dwg_TABLESTYLE_rowstyles *row = &_obj->rowstyles[i];
+            row->parent = _obj;
+            row->text_style = dwg_find_tablehandle (dwg, "Standard", "STYLE");
+            row->text_height = i == 1 ? 0.25 : 0.18;
+            row->text_alignment = i == 0 ? 2 : 5;
+            row->text_color.method = row->fill_color.method = 0xc1;
+            row->text_color.rgb = row->fill_color.rgb = 0xc1000000;
+            row->num_borders = 6;
+            row->borders = calloc (6, sizeof (Dwg_TABLESTYLE_border));
+            if (!row->borders) return NULL;
+            for (unsigned j = 0; j < 6; ++j)
+              {
+                row->borders[j].linewt = -2;
+                row->borders[j].visible = 1;
+                row->borders[j].color.method = 0xc1;
+                row->borders[j].color.rgb = 0xc1000000;
+              }
+          }
+      }
+    return _obj;
+  }
+}
+
 EXPORT Dwg_Object_MLEADERSTYLE *
 dwg_add_MLEADERSTYLE (Dwg_Data *restrict dwg, const char *restrict name)
 {
@@ -27872,6 +28051,7 @@ dwg_add_MLEADERSTYLE (Dwg_Data *restrict dwg, const char *restrict name)
   if (!dwg_is_valid_name_u8 (dwg, name))
     LOG_WARN ("Invalid name \"%s\"\n", name);
   REQUIRE_CLASS ("MLEADERSTYLE");
+  dwg_set_class_app (dwg, "MLEADERSTYLE", "ACDB_MLEADERSTYLE_CLASS", 4095);
   {
     API_ADD_OBJECT (MLEADERSTYLE);
     dictref = dwg_find_dictionary (dwg, "ACAD_MLEADERSTYLE");
@@ -27918,6 +28098,157 @@ dwg_require_MLEADERSTYLE_Standard (Dwg_Data *restrict dwg)
   dwg_add_MLEADERSTYLE (dwg, "Standard");
 }
 
+/* GoSurvey (issue #1010): AutoCAD rebuilds a multileader's picture from proxy graphics ("preview"). This writes the
+   block AutoCAD writes: an 8-byte header (total size, chunk count), then chunks of (size, type, data): marker
+   chunks around one Text chunk (type 38, the label) and one Polyline chunk (type 6, 3 doubles per point) per
+   branch. Little-endian host, like the other bit streams written through this API. */
+typedef struct
+{
+  unsigned char *p;
+  size_t len, cap;
+  unsigned count;
+} gfx_buf;
+
+static int
+gfx_put (gfx_buf *b, const void *data, size_t n)
+{
+  if (b->len + n > b->cap)
+    {
+      size_t cap = b->cap ? b->cap * 2 : 512;
+      unsigned char *np;
+      while (cap < b->len + n)
+        cap *= 2;
+      np = (unsigned char *)realloc (b->p, cap);
+      if (!np)
+        return 0;
+      b->p = np;
+      b->cap = cap;
+    }
+  memcpy (b->p + b->len, data, n);
+  b->len += n;
+  return 1;
+}
+
+static int
+gfx_int (gfx_buf *b, int v)
+{
+  return gfx_put (b, &v, 4);
+}
+
+static int
+gfx_dbl (gfx_buf *b, double v)
+{
+  return gfx_put (b, &v, 8);
+}
+
+/* A 12-byte marker chunk: size, type, one int. */
+static int
+gfx_marker (gfx_buf *b, int type, int value)
+{
+  b->count++;
+  return gfx_int (b, 12) && gfx_int (b, type) && gfx_int (b, value);
+}
+
+/* UTF-8 text -> UTF-16LE code units; a "\P" break or a newline becomes a space. */
+static size_t
+gfx_utf16 (const char *s, unsigned short *out, size_t max)
+{
+  size_t n = 0;
+  while (*s && n + 2 < max)
+    {
+      unsigned c = (unsigned char)*s++;
+      unsigned cp = c;
+      if (c == '\\' && *s == 'P')
+        {
+          s++;
+          cp = ' ';
+        }
+      else if (c == '\n' || c == '\r')
+        cp = ' ';
+      else if (c >= 0xC0)
+        {
+          int extra = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : 1;
+          cp = c & (0x3F >> extra);
+          while (extra-- > 0 && (*s & 0xC0) == 0x80)
+            cp = (cp << 6) | ((unsigned char)*s++ & 0x3F);
+        }
+      if (cp >= 0x10000)
+        {
+          cp -= 0x10000;
+          out[n++] = (unsigned short)(0xD800 + (cp >> 10));
+          out[n++] = (unsigned short)(0xDC00 + (cp & 0x3FF));
+        }
+      else
+        out[n++] = (unsigned short)cp;
+    }
+  return n;
+}
+
+static unsigned char *
+dwg_mleader_proxy_gfx (const char *text, const dwg_point_3d *text_loc,
+                       const double text_height, const unsigned num_branches,
+                       const dwg_mleader_branch *branches, BITCODE_BLL *out_size)
+{
+  gfx_buf b = { NULL, 0, 0, 0 };
+  unsigned short wtext[1024];
+  static const unsigned char font[] = { 't', 0, 'x', 0, 't', 0, '.', 0, 's', 0, 'h', 0, 'x', 0, 0, 0 };
+  static const unsigned char zeros[8] = { 0 };
+  const size_t nchars = gfx_utf16 (text, wtext, 1024);
+  const size_t strbytes = (nchars + 1) * 2;
+  const size_t strpad = (4 - (strbytes % 4)) % 4;
+  unsigned bi;
+  int ok = gfx_int (&b, 0) && gfx_int (&b, 0); /* header, patched below */
+  ok = ok && gfx_marker (&b, 22, (int)0xC0000000) && gfx_marker (&b, 51, 0)
+       && gfx_marker (&b, 19, 15001);
+  /* Text chunk (type 38): position, normal, direction, the string, then metrics and the font. */
+  b.count++;
+  ok = ok && gfx_int (&b, (int)(8 + 72 + strbytes + strpad + 8 + 8 * 4 + 24 + 8 + 8 + sizeof (font) + 4))
+       && gfx_int (&b, 38);
+  ok = ok && gfx_dbl (&b, text_loc->x) && gfx_dbl (&b, text_loc->y) && gfx_dbl (&b, text_loc->z);
+  ok = ok && gfx_dbl (&b, 0.0) && gfx_dbl (&b, 0.0) && gfx_dbl (&b, 1.0);
+  ok = ok && gfx_dbl (&b, 1.0) && gfx_dbl (&b, 0.0) && gfx_dbl (&b, 0.0);
+  ok = ok && gfx_put (&b, wtext, nchars * 2);
+  ok = ok && gfx_put (&b, zeros, 2 + strpad);
+  ok = ok && gfx_int (&b, (int)nchars) && gfx_int (&b, 1);
+  ok = ok && gfx_dbl (&b, text_height) && gfx_dbl (&b, 1.0) && gfx_dbl (&b, 0.0) && gfx_dbl (&b, 1.0);
+  ok = ok && gfx_put (&b, zeros, 8) && gfx_put (&b, zeros, 8) && gfx_put (&b, zeros, 8);
+  ok = ok && gfx_int (&b, 0) && gfx_int (&b, 1);
+  ok = ok && gfx_put (&b, zeros, 8);
+  ok = ok && gfx_put (&b, font, sizeof (font));
+  ok = ok && gfx_put (&b, zeros, 4);
+  ok = ok && gfx_marker (&b, 51, 0) && gfx_marker (&b, 16, 0) && gfx_marker (&b, 22, (int)0xC0000000)
+       && gfx_marker (&b, 18, 0x7FFF) && gfx_marker (&b, 19, 1);
+  for (bi = 0; ok && bi < num_branches; bi++)
+    {
+      unsigned j;
+      const unsigned n = branches[bi].num_points;
+      if (n < 2 || !branches[bi].points)
+        continue;
+      ok = ok && gfx_marker (&b, 19, 5001 + (int)bi);
+      b.count++;
+      ok = ok && gfx_int (&b, (int)(8 + 4 + 24 * n)) && gfx_int (&b, 6) && gfx_int (&b, (int)n);
+      for (j = 0; ok && j < n; j++)
+        ok = gfx_dbl (&b, branches[bi].points[j].x) && gfx_dbl (&b, branches[bi].points[j].y)
+             && gfx_dbl (&b, branches[bi].points[j].z);
+    }
+  ok = ok && gfx_marker (&b, 22, (int)0xC0000000) && gfx_marker (&b, 18, 0x7FFF)
+       && gfx_marker (&b, 23, 0) && gfx_marker (&b, 19, 15002) && gfx_marker (&b, 22, (int)0xC0000000)
+       && gfx_marker (&b, 18, 0x7FFF) && gfx_marker (&b, 23, -1) && gfx_marker (&b, 51, 0);
+  if (!ok)
+    {
+      free (b.p);
+      return NULL;
+    }
+  {
+    const int total = (int)b.len;
+    const int count = (int)b.count;
+    memcpy (b.p, &total, 4);
+    memcpy (b.p + 4, &count, 4);
+  }
+  *out_size = (BITCODE_BLL)b.len;
+  return b.p;
+}
+
 EXPORT Dwg_Entity_MULTILEADER *
 dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
                               const unsigned num_branches,
@@ -27948,10 +28279,23 @@ dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
         }
     }
   REQUIRE_CLASS ("MULTILEADER");
+  dwg_set_class_app (dwg, "MULTILEADER", "ACDB_MLEADER_CLASS", 1025);
   dwg_require_MLEADERSTYLE_Standard (dwg);
   API_ADD_ENTITY2 (MULTILEADER);
 
   _obj->class_version = 2;
+  {
+    BITCODE_BLL gfx_size = 0;
+    unsigned char *gfx = dwg_mleader_proxy_gfx (
+        text, text_loc, text_height > 1e-9 ? text_height : 0.18, num_branches, branches, &gfx_size);
+    if (gfx)
+      {
+        obj->tio.entity->preview_exists = 1;
+        obj->tio.entity->preview_is_proxy = 0;
+        obj->tio.entity->preview_size = gfx_size;
+        obj->tio.entity->preview = (BITCODE_TF)gfx;
+      }
+  }
   Dwg_MLEADER_AnnotContext *ctx = &_obj->ctx;
   ctx->scale_factor = 1.0;
   ctx->content_base.x = text_loc->x;
@@ -28063,6 +28407,10 @@ dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
   _obj->flags = 0;
   _obj->type = 1;
   _obj->line_color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
+  if (dwg->header_vars.LTYPE_BYBLOCK)
+    _obj->line_ltype = dwg_add_handleref (
+        dwg, 5, dwg->header_vars.LTYPE_BYBLOCK->absolute_ref, NULL);
+  _obj->line_linewt = -2;
   _obj->has_landing = 1;
   _obj->has_dogleg = 0;
   _obj->landing_dist = 0.36;
@@ -28081,10 +28429,19 @@ dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
   _obj->block_scale.x = _obj->block_scale.y = _obj->block_scale.z = 1.0;
   _obj->style_attachment = 0;
   _obj->is_annotative = 0;
+  _obj->num_arrowheads = 0;
+  _obj->num_blocklabels = 0;
+  _obj->arrowheads = NULL;
+  _obj->blocklabels = NULL;
+  /* Values AutoCAD writes for a new mtext multileader (issue #1010). */
+  _obj->is_neg_textdir = 0;
+  _obj->ipe_alignment = 0;
+  _obj->justification = 1;
+  _obj->scale_factor = 1.0;
   _obj->attach_dir = 0;
-  _obj->attach_top = 0;
-  _obj->attach_bottom = 0;
-  _obj->is_text_extended = 0;
+  _obj->attach_top = 9;
+  _obj->attach_bottom = 9;
+  _obj->is_text_extended = 1;
 
   return _obj;
 }
@@ -31125,7 +31482,7 @@ dwg_add_IMAGE (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
     _obj->file_path = dwg_add_u8_input (dwg, file_path);
     // TODO: get pixel props from the image. is_loaded, pixel_size, ...
     // needs -lpng -ljpeg ... load dynamically?
-    _img->imagedef = dwg_add_handleref (dwg, 4, obj->handle.value, img);
+    _img->imagedef = dwg_add_handleref (dwg, 5, obj->handle.value, img); /* 340 is a hard pointer (issue #1010) */
   }
   {
     Dwg_Data *dwg = img->parent;

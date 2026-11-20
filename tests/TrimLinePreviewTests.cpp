@@ -120,7 +120,7 @@ TEST_CASE("A selected polyline's tilted curved segment highlights on the true ar
   se.index = 0;
   st.selection.push_back(se);
 
-  std::vector<float> hlLines;
+  std::vector<double> hlLines;
   std::vector<float> hlCircles;
   BuildSelectionHighlight(st, &hlLines, &hlCircles);
   REQUIRE(hlLines.size() % 6 == 0);

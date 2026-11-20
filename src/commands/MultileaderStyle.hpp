@@ -1,7 +1,9 @@
 #pragma once
 
 #include <algorithm>
+#include <map>
 #include <string>
+#include <vector>
 
 #include "CadEntities.hpp"
 
@@ -14,11 +16,13 @@ struct MultileaderStyle {
   float arrowSizeInches = 0.10f;
   float landingGapInches = 0.05f;
   bool annotativeDefault = false;
+  /// Leader format / structure / content settings of the Modify Multileader Style window, keyed by name.
+  std::map<std::string, std::string> props;
 
   bool operator==(const MultileaderStyle& o) const {
     return name == o.name && textSizeInches == o.textSizeInches && textFont == o.textFont &&
            arrowSizeInches == o.arrowSizeInches && landingGapInches == o.landingGapInches &&
-           annotativeDefault == o.annotativeDefault;
+           annotativeDefault == o.annotativeDefault && props == o.props;
   }
   bool operator!=(const MultileaderStyle& o) const { return !(*this == o); }
 };
@@ -29,6 +33,15 @@ inline MultileaderStyle Default() {
   MultileaderStyle s;
   s.name = "Standard";
   return s;
+}
+
+inline std::vector<MultileaderStyle> DefaultStyles() { return {Default()}; }
+
+inline const MultileaderStyle* Find(const std::vector<MultileaderStyle>& styles, const std::string& name) {
+  const auto it = std::find_if(styles.begin(), styles.end(), [&name](const MultileaderStyle& style) {
+    return style.name == name;
+  });
+  return it == styles.end() ? nullptr : &*it;
 }
 
 inline void BakeOntoMultileaderLabel(CadAnnotation& label, const MultileaderStyle& sty) {

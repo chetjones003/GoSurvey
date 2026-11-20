@@ -8,7 +8,7 @@
 // one `dyninput::Group`, so a transcript that types `@5,3` and checks both the labels and the point
 // that lands is checking what the user gets — the two cannot drift apart.
 
-#include "util/ray3d.hpp"
+#include <GoSurvey/Math/ray3d.hpp>
 
 #include <array>
 #include <string>

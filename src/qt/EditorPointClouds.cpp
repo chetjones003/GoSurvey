@@ -8,11 +8,11 @@
 #include "EditorWindow.hpp"
 #include "NonDismissableDialog.hpp"
 #include "ProjectFiles.hpp"
-#include "io/CadPointCloudE57.hpp"
-#include "io/CadPointCloudLas.hpp"
-#include "io/CadPointCloudLaz.hpp"
-#include "io/CadPointCloudPts.hpp"
-#include "io/CadPointCloudPtx.hpp"
+#include "io/src/CadPointCloudE57.hpp"
+#include "io/src/CadPointCloudLas.hpp"
+#include "io/src/CadPointCloudLaz.hpp"
+#include "io/src/CadPointCloudPts.hpp"
+#include "io/src/CadPointCloudPtx.hpp"
 
 #include <QApplication>
 #include <QComboBox>

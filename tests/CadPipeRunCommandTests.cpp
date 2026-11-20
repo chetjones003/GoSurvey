@@ -1,10 +1,10 @@
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
-#include "util/cadpiperun.hpp"
+#include "GoSurvey/Document/cadpiperun.hpp"
 #include "CadRubberPreview.hpp"
-#include "util/brep.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
 #include <chrono>
-#include "util/ucs.hpp"
+#include <GoSurvey/Math/ucs.hpp>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>

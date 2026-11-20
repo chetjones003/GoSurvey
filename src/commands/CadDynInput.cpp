@@ -4,7 +4,7 @@
 
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
-#include "StringUtil.hpp"
+#include <GoSurvey/Core/StringUtil.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -314,6 +314,7 @@ bool CadCommandExpectsPointEntry(const AppCommandState& cmd) {
            cmd.dimAngularPhase == DAP::WaitRay2;
   }
   case K::IdPoint: return true;
+  case K::StationOffsetPick: return true;
   case K::SurveyInverse: return true;
   case K::Dist: return true;
   // REQ-074. Missing here as well as from the viewport click dispatch, so SURFELEV got neither
@@ -331,6 +332,7 @@ bool CadCommandExpectsPointEntry(const AppCommandState& cmd) {
   case K::GeoMarkPoint: return true;       // REQ-359
   case K::GeoReorientMarker: return true;  // REQ-359
   case K::DrawingSettingsPick: return true;  // REQ-360
+  case K::AlignmentLayout: return true;      // REQ-485.1: every prompt wants a PI
   case K::GeoCaptureArea:  // REQ-364: Pick Area's corners; nothing to type while it captures
     return cmd.geoCmdPhase != AppCommandState::GeoCmdPhase::Capturing;
   // REQ-154. The second of the two lists a point-picking command has to appear in — UCS was missing
@@ -389,6 +391,8 @@ bool CadCommandExpectsPointEntry(const AppCommandState& cmd) {
     using IPh = AppCommandState::InsertBlockPhase;
     return cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale;
   }
+  case K::PdfAttach:
+    return cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint;
   // REQ-354 / GitHub issue #564 section 5: PIPERUN's start and next points are point prompts like
   // any other (its size and wall prompts are not). It was missing, so PIPERUN had a single field.
   case K::PipeRun: {
@@ -453,12 +457,16 @@ CadDynInputPrompt CadDynInputPromptFor(const AppCommandState& cmd) {
     if (cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint) {
       base(cmd.anchorX, cmd.anchorY, cmd.anchorZ);
       p.initialMode = dyninput::Mode::RelativePolar;  // REQ-024: an anchored segment
+      // REQ-047: distance-only entry under ORTHO is handled by the command's ortho-distance path,
+      // not as a polar @dx,dy from the crosshair angle.
+      p.directDistance = cmd.orthoMode;
     }
     break;
   case K::Polyline:
     if (cmd.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint) {
       base(cmd.anchorX, cmd.anchorY, cmd.anchorZ);
       p.initialMode = dyninput::Mode::RelativePolar;
+      p.directDistance = cmd.orthoMode;
     }
     break;
   case K::Move:

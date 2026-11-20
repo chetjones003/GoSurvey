@@ -1,12 +1,12 @@
 #pragma once
 #include <QMainWindow>
-#include "PdfDocument.hpp"
-#include "PdfAnnotate.hpp"
-#include "PdfSnap.hpp"
+#include "GoSurvey/Pdf/PdfDocument.hpp"
+#include "GoSurvey/Pdf/PdfAnnotate.hpp"
+#include "GoSurvey/Pdf/PdfSnap.hpp"
 #include <QPointF>
-#include "PdfCoordExtract.hpp"
-#include "PdfAlign.hpp"
-#include "PdfDiff.hpp"
+#include "GoSurvey/Pdf/PdfCoordExtract.hpp"
+#include "GoSurvey/Pdf/PdfAlign.hpp"
+#include "GoSurvey/Pdf/PdfDiff.hpp"
 #include <QString>
 #include <atomic>
 #include <cstdint>
@@ -20,6 +20,7 @@
 #include <QRect>
 class PdfCanvas;
 class PdfScaleDialogs;
+class QTemporaryDir;
 class QAction;
 class QActionGroup;
 class QPushButton;
@@ -52,6 +53,7 @@ public:
   explicit PdfWindow(QWidget* parent);
   ~PdfWindow() override;
   void Open(const QString& path);
+  void OpenPlotPreview(const QString& path, std::unique_ptr<QTemporaryDir> temporaryDirectory);
   bool LoadFile(const QString& path, QString& error);
   bool SaveFile(const QString& path, QString& error);
   bool IsBusy() const { return m_Work.valid() || m_OpenWork.valid(); }
@@ -93,6 +95,7 @@ public:
   /// Zoom by a factor keeping the page point under a point of the scroll area's viewport fixed.
   void ZoomBy(double factor, QPoint viewportPoint);
 protected:
+  void changeEvent(QEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;
   void closeEvent(QCloseEvent* event) override;
   void keyPressEvent(QKeyEvent* event) override;
@@ -100,6 +103,8 @@ protected:
 private:
   friend class QtEditorTests;
   struct SaveResult { bool succeeded = false; std::string error; };
+  void ApplyAppearance();
+  void RefreshAppearanceIcons();
   void RequestRender(bool keepPicture = false);
   void PollRender();
   // REQ-387 / REQ-455: layout, zoom and the continuous strip. Page rectangles are in canvas coordinates.
@@ -184,6 +189,8 @@ private:
   void UpdatePropertiesPanel();
   void PollOpen();
   bool AdoptDocument(std::unique_ptr<pdfview::PdfDocument> document, const QString& path, QString& error);
+  std::unique_ptr<QTemporaryDir> m_TemporaryDirectory;
+  QString m_TemporaryPreviewPath;
   std::unique_ptr<pdfview::PdfDocument> m_Document;
   std::future<pdfview::Bitmap> m_Work;
   std::future<pdfview::PdfDocument::OpenResult> m_OpenWork;
@@ -226,7 +233,12 @@ private:
   QPointF m_ExtractStart;
   QPointF m_ExtractEnd;
   std::optional<pdfview::ExtractResult> m_ExtractResult;
+  int m_ExtractAccepted = 0;
+  int m_ExtractDenied = 0;
   QDialog* m_ExtractReview = nullptr;
+  QTableWidget* m_ExtractCandidatesTable = nullptr;
+  QLabel* m_ExtractSkippedIntro = nullptr;
+  QTableWidget* m_ExtractSkippedTable = nullptr;
   // REQ-429: the find bar. Results are read-only: nothing here touches the annotation session.
   struct SearchOutcome {
     bool ok = false;
@@ -354,7 +366,9 @@ private:
   QTimer* m_AuditPoll = nullptr;
   QDialog* m_AuditDialog = nullptr;
   QTableWidget* m_AuditTable = nullptr;
+  QLabel* m_AuditTableStatus = nullptr;
   QLabel* m_AuditSummary = nullptr;
+  QProgressBar* m_AuditProgress = nullptr;
   QCheckBox* m_AuditAllRows = nullptr;
   QCheckBox* m_AuditShowSheet = nullptr;
   int m_AuditSelected = -1;
@@ -422,6 +436,7 @@ private:
   void StopCompareDetail();
   QTimer* m_ComparePoll = nullptr;
   QWidget* m_ComparePanel = nullptr; ///< the Compare tab of the side panel
+  QScrollArea* m_CompareScroll = nullptr;
   void ShowComparePanel();
   QComboBox* m_CompareMode = nullptr;
   QSlider* m_CompareOpacity = nullptr;

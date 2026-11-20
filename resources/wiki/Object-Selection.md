@@ -11,7 +11,7 @@ With no command active:
 | **Move the cursor over an object** | It highlights, so you can see what you are about to pick |
 | **Click an object** | Selects it. Grips appear and the Properties panel fills in |
 | **Click, then click again in empty space** | The two clicks define a **selection window** over everything inside |
-| **Drag from empty space and release** | Same window, as a drag instead of two clicks |
+| **Drag from empty space and release** | Adds the window's hits to the current selection; hold **Shift** to remove hits |
 | **Click empty space once and press Esc** | Clears the selection (`Selection cleared.`) |
 
 Typing `SELECT` **clears the current selection** and prints a reminder of how to build a new one —
@@ -26,7 +26,9 @@ Commands that need objects (MOVE, COPY, ROTATE, SCALE, DELETE, JOIN, ALIGN) beha
 
 - **If objects are already selected when you start the command**, it uses that selection and skips
   the selection step.
-- **If nothing is selected**, the command asks for a **two-click window** first.
+- **If nothing is selected**, the prompt says **Select objects, ENTER to continue**. Click objects,
+  drag a box, or click two empty corners. Selections accumulate until **Enter**; **Shift** removes hits.
+  An ordinary object click after an empty click picks the object rather than consuming it as a box corner.
 
 TRIM and OFFSET are different — they take individual picks as part of their own workflow rather
 than a window.

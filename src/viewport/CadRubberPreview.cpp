@@ -2,9 +2,10 @@
 
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
+#include "CadDimStroke.hpp"
 #include "CadCoordinateFrame.hpp"
-#include "geom2d.hpp"
-#include "util/cadpiperun.hpp"  // CadBuildPipeRunSolids (issue #486 increment B2 / REQ-345)
+#include <GoSurvey/Geometry/geom2d.hpp>
+#include "GoSurvey/Document/cadpiperun.hpp"  // CadBuildPipeRunSolids (issue #486 increment B2 / REQ-345)
 
 #include <vector>
 
@@ -147,11 +148,49 @@ void AppendSolidBaseProfile(const AppCommandState& cmd, std::vector<float>& out)
 
 } // namespace
 
-void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double curY, bool orthoEnabled,
+void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, bool orthoEnabled,
                                double /*viewAnchorX*/, double /*viewAnchorY*/, float orthoHalfH, int fbHeightPx,
                                std::vector<float>& rubberLines) {
   const float curXf = static_cast<float>(curX);
   const float curYf = static_cast<float>(curY);
+  // Preview the same dimension geometry the command will commit. Keeping this in the shared draft
+  // pass ensures cursor movement, snap results, and rubber-band rendering use the same point.
+  CadAnnotation dimensionDraft;
+  bool hasDimensionDraft = false;
+  switch (cmd.active) {
+    case AppCommandState::Kind::DimLinear:
+      hasDimensionDraft = CadDimLinearBuildDraft(cmd, curXf, curYf, &dimensionDraft);
+      break;
+    case AppCommandState::Kind::DimAligned:
+      hasDimensionDraft = CadDimAlignedBuildDraft(cmd, curXf, curYf, &dimensionDraft);
+      break;
+    case AppCommandState::Kind::DimAngular:
+      hasDimensionDraft = CadDimAngularBuildDraft(cmd, curXf, curYf, &dimensionDraft);
+      break;
+    default:
+      break;
+  }
+  if (hasDimensionDraft) {
+    CadDimStrokeParams params;
+    params.modelUnitsPerPlottedInch = cmd.modelUnitsPerPlottedInch;
+    params.arrowSizeInches = cmd.activeDimensionStyle.arrowSizeInches;
+    params.arrowScale = cmd.viewportDimArrowScale;
+    params.arrowType = cmd.activeDimensionStyle.arrowType;
+    CadDimWorldStrokes strokes;
+    if (CadDimBuildWorldStrokes(dimensionDraft, params, &strokes)) {
+      for (const auto& s : strokes.segs)
+        PushRubberSegViewRel(rubberLines, s.x0, s.y0, s.x1, s.y1, 0., 0., dimensionDraft.insZ,
+                             dimensionDraft.insZ);
+      for (const auto& a : strokes.arrows) {
+        PushRubberSegViewRel(rubberLines, a.x0, a.y0, a.x1, a.y1, 0., 0., dimensionDraft.insZ,
+                             dimensionDraft.insZ);
+        PushRubberSegViewRel(rubberLines, a.x1, a.y1, a.x2, a.y2, 0., 0., dimensionDraft.insZ,
+                             dimensionDraft.insZ);
+        PushRubberSegViewRel(rubberLines, a.x2, a.y2, a.x0, a.y0, 0., 0., dimensionDraft.insZ,
+                             dimensionDraft.insZ);
+      }
+    }
+  }
   // The elevation this command will COMMIT at (REQ-058). A rubber drawn on the datum while the
   // geometry lands on the work plane reads as correct in plan view and is plainly wrong the moment
   // the view tilts — the same class of defect as TASK-035 DEFECT-C.
@@ -165,6 +204,44 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
   // single-elevation behaviour above; off it, a pick's own Z is the only thing that says where on
   // the plane it sat.
   const bool planeIsFlat = CadWorkPlaneIsWorldXy(cmd);
+
+  // REQ-485.2: at the Reverse prompt, an arrow along each piece shows which way the alignment will run, as Civil 3D
+  // draws them. Sized to the view so they read at any zoom.
+  if (cmd.active == AppCommandState::Kind::AlignmentFromObjects) {
+    alignment::Alignment preview;
+    if (AlignmentFromObjectsPreview(cmd, &preview)) {
+      const double s = std::max(1e-6, static_cast<double>(orthoHalfH) * 0.035);
+      for (size_t i = 0; i < preview.Entities().size(); ++i) {
+        const double mid = preview.EntityStartStation(static_cast<int>(i)) + preview.Entities()[i].length * 0.5;
+        const alignment::Point2 p = preview.GetPointAtStation(mid);
+        const double az = preview.GetBearingAtStation(mid);
+        const double dx = std::sin(az) * s, dy = std::cos(az) * s;  // along travel
+        const double nx = std::cos(az) * s * 0.6, ny = -std::sin(az) * s * 0.6;  // across it
+        const double tx = p.x + dx, ty = p.y + dy;
+        PushRubberSegViewRel(rubberLines, p.x - dx, p.y - dy, tx, ty, 0., 0., zc, zc);
+        PushRubberSegViewRel(rubberLines, p.x - dx * 0.2 + nx, p.y - dy * 0.2 + ny, tx, ty, 0., 0., zc, zc);
+        PushRubberSegViewRel(rubberLines, p.x - dx * 0.2 - nx, p.y - dy * 0.2 - ny, tx, ty, 0., 0., zc, zc);
+      }
+    }
+  }
+
+  // REQ-487.1: dragging an alignment grip, a rubber line from where the grip was to the cursor, as Civil 3D draws.
+  if (cmd.entityGripMoveActive && cmd.entityGripType == SelectedEntity::Type::Alignment)
+    PushRubberSegViewRel(rubberLines, cmd.entityGripAnchorX, cmd.entityGripAnchorY, curX, curY, 0., 0., zc, zc);
+
+  // REQ-485.1: the next tangent of an alignment layout, from the last PI to the cursor (along the starting direction
+  // when the dialog fixed one).
+  if (cmd.active == AppCommandState::Kind::AlignmentLayout && !cmd.alignmentLayout.pis.empty()) {
+    const alignment::Point2 last = cmd.alignmentLayout.pis.back();
+    double tx = curX, ty = curY;
+    if (cmd.alignmentLayout.fixedDirection && cmd.alignmentLayout.pis.size() == 1) {
+      const double ux = std::sin(cmd.alignmentLayout.directionAzimuth), uy = std::cos(cmd.alignmentLayout.directionAzimuth);
+      const double t = std::max(0.0, (curX - last.x) * ux + (curY - last.y) * uy);
+      tx = last.x + ux * t;
+      ty = last.y + uy * t;
+    }
+    PushRubberSegViewRel(rubberLines, last.x, last.y, tx, ty, 0., 0., zc, zc);
+  }
 
   if (cmd.active == AppCommandState::Kind::Line && cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint) {
     using SAP = AppCommandState::SegmentAnglePickPhase;
@@ -464,6 +541,29 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       float ox = 0.f, oy = 0.f;
       localOf(cmd.ucsPendingOrigin, &ox, &oy);
       PushRubberSegViewRel(rubberLines, ox, oy, curXf, curYf, 0., 0., zc, zc);
+    }
+  }
+
+  if (cmd.active == AppCommandState::Kind::PdfAttach &&
+      cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint &&
+      cmd.pdfAttachPreviewReady && cmd.pdfAttachPreview.pageWidthPts > 0.f &&
+      cmd.pdfAttachPreview.pageHeightPts > 0.f) {
+    const float cosR = std::cos(cmd.pdfAttachRotDeg * 3.14159265f / 180.f);
+    const float sinR = std::sin(cmd.pdfAttachRotDeg * 3.14159265f / 180.f);
+    const float W = cmd.pdfAttachPreview.pageWidthPts * cmd.pdfAttachScale;
+    const float H = cmd.pdfAttachPreview.pageHeightPts * cmd.pdfAttachScale;
+    const float corners[4][2] = {{0.f, 0.f}, {W, 0.f}, {W, H}, {0.f, H}};
+    float xs[4]{};
+    float ys[4]{};
+    for (int i = 0; i < 4; ++i) {
+      const float px = corners[i][0];
+      const float py = corners[i][1];
+      xs[i] = curXf + px * cosR - py * sinR;
+      ys[i] = curYf + px * sinR + py * cosR;
+    }
+    for (int i = 0; i < 4; ++i) {
+      const int j = (i + 1) % 4;
+      PushRubberSegViewRel(rubberLines, xs[i], ys[i], xs[j], ys[j], 0., 0., zc, zc);
     }
   }
 

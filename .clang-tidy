@@ -6,7 +6,7 @@
 #
 # Checks are deliberately conservative: bug-finding and correctness checks are on;
 # style/naming checks are off, since this codebase has its own established conventions
-# (spec/coding-standards.md) that do not match clang-tidy's defaults, and a style check
+# that do not match clang-tidy's defaults, and a style check
 # flagging every pre-existing identifier style choice on a touched line would be noise,
 # not signal.
 #

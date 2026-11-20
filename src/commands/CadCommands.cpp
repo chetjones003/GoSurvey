@@ -11,45 +11,47 @@
 #include "CadCoordinateFrame.hpp"
 #include "CadLinetype.hpp"
 #include "HatchGeom.hpp"
-#include "HatchBoundary.hpp"
-#include "geom2d.hpp"
-#include "util/benchscene.hpp"
-#include "util/cadpiperun.hpp"  // CadPipeRun solid generation (issue #486 increment B1 / REQ-345)
-#include "util/meshgeom.hpp"
-#include "util/pointcloudoctree.hpp"  // REQ-171/172 out-of-core octree (ADR-060)
-#include "util/pointcloudcache.hpp"   // ADR-060 .gscloud out-of-core cache (streams the E57 internally)
-#include "util/cylinderfit.hpp"       // REQ-347 EXTRACTCENTERLINE's least-squares cylinder-axis fit
-#include "io/CadPointCloudE57.hpp"    // QuickPointCountEstimate, for the import progress bar's total
-#include "io/CadPointCloudPts.hpp"    // REQ-172 PTS increment — reader/writer, same contract as E57
-#include "io/CadPointCloudPtx.hpp"    // REQ-172 PTX increment — reader/writer, same contract as E57
-#include "io/CadPointCloudLas.hpp"    // REQ-172 LAS increment — reader/writer, same contract as E57
-#include "io/CadPointCloudLaz.hpp"    // REQ-172 LAZ increment — reader/writer, same contract as E57
-#include "util/tinbuild.hpp"
-#include "util/contourgen.hpp"  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
-#include "util/surfaceanalysis.hpp"  // REQ-072 banding + slope arrows (ADR-036 (g)) — pure, like contourgen
-#include "util/surfacevolume.hpp"  // REQ-073 surface-to-surface volumes (TASK-095) — pure, like surfaceanalysis
-#include "util/surfacestats.hpp"   // REQ-125
-#include "util/watershed.hpp"      // REQ-132…134
-#include "util/tinvolume.hpp"      // REQ-136
-#include "util/gridsurface.hpp"    // REQ-137
-#include "util/surfacequery.hpp"   // REQ-137
-#include "util/daylight.hpp"       // REQ-398 side slope grading — the daylight solver
-#include "util/curveintersect.hpp"  // REQ-062 analytic intersections; EXTEND (TASK-096) reuses this over TRIM's tessellation
-#include "io/LandXmlIo.hpp"  // issue #1002: EXPORTLANDXML
-#include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
-#include "util/gltfimport.hpp"
-#include "util/stlimport.hpp"
+#include <GoSurvey/Geometry/HatchBoundary.hpp>
+#include <GoSurvey/Geometry/FilletChamfer.hpp>
+#include <GoSurvey/Geometry/geom2d.hpp>
+#include <GoSurvey/Debug/BenchScene.hpp>
+#include "GoSurvey/Document/cadpiperun.hpp"  // CadPipeRun solid generation (issue #486 increment B1 / REQ-345)
+#include <GoSurvey/Geometry/meshgeom.hpp>
+#include "GoSurvey/PointCloud/Octree.hpp"  // REQ-171/172 out-of-core octree (ADR-060)
+#include "GoSurvey/IO/PointCloudCacheImport.hpp"   // ADR-060 .gscloud out-of-core cache (streams the E57 internally)
+#include "GoSurvey/PointCloud/CylinderFit.hpp"       // REQ-347 EXTRACTCENTERLINE's least-squares cylinder-axis fit
+#include "io/src/CadPointCloudE57.hpp"    // QuickPointCountEstimate, for the import progress bar's total
+#include "io/src/CadPointCloudPts.hpp"    // REQ-172 PTS increment — reader/writer, same contract as E57
+#include "io/src/CadPointCloudPtx.hpp"    // REQ-172 PTX increment — reader/writer, same contract as E57
+#include "io/src/CadPointCloudLas.hpp"    // REQ-172 LAS increment — reader/writer, same contract as E57
+#include "io/src/CadPointCloudLaz.hpp"    // REQ-172 LAZ increment — reader/writer, same contract as E57
+#include "io/src/RasterImage.hpp"        // REQ-511 readable model-space raster attachments
+#include <GoSurvey/Terrain/tinbuild.hpp>
+#include <GoSurvey/Terrain/contourgen.hpp>  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
+#include <GoSurvey/Terrain/surfaceanalysis.hpp>  // REQ-072 banding + slope arrows (ADR-036 (g)) — pure, like contourgen
+#include <GoSurvey/Terrain/surfacevolume.hpp>  // REQ-073 surface-to-surface volumes (TASK-095) — pure, like surfaceanalysis
+#include <GoSurvey/Terrain/surfacestats.hpp>   // REQ-125
+#include <GoSurvey/Terrain/watershed.hpp>      // REQ-132…134
+#include "GoSurvey/Survey/AlignmentGroundModel.hpp" // REQ-513 surface profiles
+#include <GoSurvey/Terrain/tinvolume.hpp>      // REQ-136
+#include <GoSurvey/Terrain/gridsurface.hpp>    // REQ-137
+#include <GoSurvey/Terrain/surfacequery.hpp>   // REQ-137
+#include <GoSurvey/Terrain/daylight.hpp>       // REQ-398 side slope grading — the daylight solver
+#include "io/src/LandXmlIo.hpp"  // issue #1002: EXPORTLANDXML
+#include "io/src/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
+#include "io/src/gltfimport.hpp"
+#include "io/src/stlimport.hpp"
 #include "DwgMeshConvert.hpp"
 #include "DwgIo.hpp"
-#include "WinFileDialogs.hpp"
-#include "NumFormat.hpp"
-#include "util/PlotScales.hpp"  // VPSCALE (REQ-027): PlotScaleLabel / metric-ratio helpers
-#include "MtextRichFormat.hpp"
+#include <GoSurvey/UI/FileDialogs.hpp>
+#include <GoSurvey/Core/NumFormat.hpp>
+#include "GoSurvey/Document/PlotScales.hpp"  // VPSCALE (REQ-027): PlotScaleLabel / metric-ratio helpers
+#include "GoSurvey/Document/MtextRichFormat.hpp"
 #include "AppPaths.hpp"
 
 #include <chrono>
 
-#include "StringUtil.hpp"
+#include <GoSurvey/Core/StringUtil.hpp>
 #include "AppPaths.hpp"
 
 #include "CadSnap.hpp"
@@ -86,6 +88,8 @@
 void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   if (idx < 0 || static_cast<size_t>(idx) >= cmd.documents.size()) return;
   DrawingDocument& doc       = cmd.documents[static_cast<size_t>(idx)];
+  doc.viewportZoomScales = cmd.viewportZoomScales;
+  doc.currentViewportZoomScaleIndex = cmd.currentViewportZoomScaleIndex;
   doc.viewportPanX           = cmd.viewportPanX;
   doc.viewportPanY           = cmd.viewportPanY;
   doc.viewportZoom           = cmd.viewportZoom;
@@ -133,6 +137,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.featureLineClosed      = cmd.featureLineClosed;
   doc.featureLineElevPt      = cmd.featureLineElevPt;
   doc.featureLineInfo        = cmd.featureLineInfo;
+  doc.gradingPresets         = cmd.gradingPresets;
   doc.featureLineAttrs       = cmd.featureLineAttrs;
   doc.cadAnnotations         = cmd.cadAnnotations;
   doc.cadAnnotationAttrs     = cmd.cadAnnotationAttrs;
@@ -148,19 +153,31 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadSolidAttrs          = cmd.cadSolidAttrs;
   doc.cadTables              = cmd.cadTables;
   doc.cadTableAttrs          = cmd.cadTableAttrs;
+  doc.tableStyles            = cmd.tableStyles;
   doc.cadPositionMarkers     = cmd.cadPositionMarkers;  // REQ-359: per drawing
   doc.cadPositionMarkerAttrs = cmd.cadPositionMarkerAttrs;
   doc.cadMultileaders        = cmd.cadMultileaders;  // REQ-367
   doc.cadMultileaderAttrs    = cmd.cadMultileaderAttrs;
   doc.cadSplines             = cmd.cadSplines;  // REQ-443
   doc.cadSplineAttrs         = cmd.cadSplineAttrs;
+  doc.cadPoints              = cmd.cadPoints;  // REQ-456
+  doc.cadPointAttrs          = cmd.cadPointAttrs;
+  doc.pdMode                 = cmd.pdMode;
+  doc.pdSize                 = cmd.pdSize;
   doc.cadPipeRuns            = cmd.cadPipeRuns;      // pipe runs are per-drawing (issue #486 / REQ-345)
   doc.cadPipeRunAttrs        = cmd.cadPipeRunAttrs;
+  doc.alignments             = cmd.alignments;       // REQ-480: per-drawing
+  doc.viewFrameGroups        = cmd.viewFrameGroups;  // REQ-517: per-drawing
+  doc.sampleLines            = cmd.sampleLines;      // REQ-519: per-drawing
+  doc.profiles               = cmd.profiles;         // REQ-521: per-drawing
+  doc.surfaceProfiles        = cmd.surfaceProfiles;  // REQ-513
   doc.cadPipingSystems       = cmd.cadPipingSystems;  // indices into cadPipeRuns — travels with it
   doc.blockDefs              = cmd.blockDefs;
   doc.cadBlockRefs           = cmd.cadBlockRefs;
   doc.cadBlockRefAttrs       = cmd.cadBlockRefAttrs;
   doc.surveyPoints           = cmd.surveyPoints;
+  doc.surveyPointStyles      = cmd.surveyPointStyles;
+  doc.surveyPointLabelStyles = cmd.surveyPointLabelStyles;
   doc.pointGroups            = cmd.pointGroups;
   doc.selectedSurveyPointIndices = cmd.selectedSurveyPointIndices;
   doc.drawingLayerTable      = cmd.drawingLayerTable;
@@ -171,13 +188,20 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.pointVisibility        = cmd.pointVisibility;
   doc.textStyles             = cmd.textStyles;
   doc.surfaceStyles          = cmd.surfaceStyles;
+  doc.alignmentStyles        = cmd.alignmentStyles;
+  doc.alignmentCheckSets     = cmd.alignmentCheckSets;  // REQ-502
+  doc.alignmentLabelSets     = cmd.alignmentLabelSets;
+  doc.alignmentLabelStyles   = cmd.alignmentLabelStyles;  // REQ-492.5
   doc.dimensionStyle         = cmd.activeDimensionStyle;
+  doc.dimensionStyles        = cmd.dimensionStyles;
   doc.multileaderStyle       = cmd.activeMultileaderStyle;
+  doc.multileaderStyles      = cmd.multileaderStyles;
   doc.activeTextStyleName    = cmd.activeTextStyleName;
   doc.pdfAttachments         = cmd.pdfAttachments;
   doc.selection              = cmd.selection;
   doc.hiddenEntityIds        = cmd.hiddenEntityIds;  // isolation is per-drawing (REQ-084 (d))
   doc.paperLayouts           = cmd.paperLayouts;
+  doc.cadRasterImages        = cmd.cadRasterImages;
   // REQ-155: fold the live floating-viewport UCS into the snapshot's copy of that viewport, so a
   // tab switch while floating does not lose a UCS change made in the viewport.
   if (cmd.floatingUcsSwapActive && cmd.floatingViewportLayout >= 0 &&
@@ -197,6 +221,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
 void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   if (idx < 0 || static_cast<size_t>(idx) >= cmd.documents.size()) return;
   const DrawingDocument& doc     = cmd.documents[static_cast<size_t>(idx)];
+  cmd.viewportZoomScales = doc.viewportZoomScales;
+  cmd.currentViewportZoomScaleIndex = doc.currentViewportZoomScaleIndex;
   cmd.viewportPanX               = doc.viewportPanX;
   cmd.viewportPanY               = doc.viewportPanY;
   cmd.viewportZoom               = doc.viewportZoom;
@@ -243,6 +269,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.featureLineClosed          = doc.featureLineClosed;
   cmd.featureLineElevPt          = doc.featureLineElevPt;
   cmd.featureLineInfo            = doc.featureLineInfo;
+  cmd.gradingPresets              = doc.gradingPresets;
   cmd.featureLineAttrs           = doc.featureLineAttrs;
   cmd.cadAnnotations             = doc.cadAnnotations;
   cmd.cadAnnotationAttrs         = doc.cadAnnotationAttrs;
@@ -258,14 +285,24 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadSolidAttrs              = doc.cadSolidAttrs;
   cmd.cadTables                  = doc.cadTables;
   cmd.cadTableAttrs              = doc.cadTableAttrs;
+  cmd.tableStyles                = doc.tableStyles.empty() ? CadTableBuiltinStyles() : doc.tableStyles;
   cmd.cadPositionMarkers         = doc.cadPositionMarkers;  // REQ-359
   cmd.cadPositionMarkerAttrs     = doc.cadPositionMarkerAttrs;
   cmd.cadMultileaders            = doc.cadMultileaders;  // REQ-367
   cmd.cadMultileaderAttrs        = doc.cadMultileaderAttrs;
   cmd.cadSplines                 = doc.cadSplines;  // REQ-443
   cmd.cadSplineAttrs             = doc.cadSplineAttrs;
+  cmd.cadPoints                  = doc.cadPoints;  // REQ-456
+  cmd.cadPointAttrs              = doc.cadPointAttrs;
+  cmd.pdMode                     = doc.pdMode;
+  cmd.pdSize                     = doc.pdSize;
   cmd.cadPipeRuns                = doc.cadPipeRuns;      // issue #486 / REQ-345
   cmd.cadPipeRunAttrs            = doc.cadPipeRunAttrs;
+  cmd.alignments                 = doc.alignments;       // REQ-480
+  cmd.viewFrameGroups            = doc.viewFrameGroups;  // REQ-517
+  cmd.sampleLines                = doc.sampleLines;      // REQ-519
+  cmd.profiles                   = doc.profiles;         // REQ-521
+  cmd.surfaceProfiles            = doc.surfaceProfiles;  // REQ-513
   cmd.cadPipingSystems           = doc.cadPipingSystems;
   // The derived swept solids belong to the drawing we are leaving. Their rebuild is gated on a
   // signature over the runs alone, and the incoming drawing can legitimately hash the same (two
@@ -278,6 +315,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadBlockRefs               = doc.cadBlockRefs;
   cmd.cadBlockRefAttrs           = doc.cadBlockRefAttrs;
   cmd.surveyPoints               = doc.surveyPoints;
+  cmd.surveyPointStyles          = doc.surveyPointStyles.empty() ? DefaultSurveyPointStyles() : doc.surveyPointStyles;
+  cmd.surveyPointLabelStyles     = doc.surveyPointLabelStyles.empty() ? DefaultSurveyPointLabelStyles() : doc.surveyPointLabelStyles;
   cmd.pointGroups                = doc.pointGroups;
   cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
   cmd.drawingLayerTable          = doc.drawingLayerTable;
@@ -288,14 +327,24 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.pointVisibility            = doc.pointVisibility;
   cmd.textStyles                 = doc.textStyles;
   cmd.surfaceStyles              = doc.surfaceStyles;
+  cmd.alignmentCheckSets         = doc.alignmentCheckSets;  // REQ-502
+  cmd.alignmentStyles            = doc.alignmentStyles.empty() ? AlignmentStyles::DefaultAlignmentStyles()
+                                                               : doc.alignmentStyles;
+  cmd.alignmentLabelSets         = doc.alignmentLabelSets.empty() ? AlignmentLabelSets::DefaultAlignmentLabelSets()
+                                                                  : doc.alignmentLabelSets;
+  cmd.alignmentLabelStyles       = doc.alignmentLabelStyles.empty() ? AlignmentLabelStyles::DefaultAlignmentLabelStyles()
+                                                                    : doc.alignmentLabelStyles;  // REQ-492.5
   cmd.activeDimensionStyle       = doc.dimensionStyle;
+  cmd.dimensionStyles            = doc.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : doc.dimensionStyles;
   cmd.activeMultileaderStyle     = doc.multileaderStyle;
+  cmd.multileaderStyles          = doc.multileaderStyles.empty() ? MultileaderStyles::DefaultStyles() : doc.multileaderStyles;
   cmd.mleaderStyleDraft          = doc.multileaderStyle;
   cmd.activeTextStyleName        = doc.activeTextStyleName;
   cmd.pdfAttachments             = doc.pdfAttachments;
   cmd.selection                  = doc.selection;
   cmd.hiddenEntityIds            = doc.hiddenEntityIds;  // isolation is per-drawing (REQ-084 (d))
   cmd.paperLayouts               = doc.paperLayouts;
+  cmd.cadRasterImages            = doc.cadRasterImages;
   cmd.savedPageSetups            = doc.savedPageSetups;
   cmd.activeSpaceIndex           = doc.activeSpaceIndex;
   cmd.lastPaperLayoutIndex       = doc.activeSpaceIndex >= 0 ? doc.activeSpaceIndex : 0;
@@ -499,16 +548,135 @@ int AddViewportRect(AppCommandState& cmd, int layoutIdx, float x0In, float y0In,
   return idx;
 }
 
+static bool AddViewportFromPaperPolyline(AppCommandState& cmd, int layoutIdx, int polylineIndex,
+                                         std::vector<std::string>& log) {
+  if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.paperLayouts.size())
+    return false;
+  PaperLayout& layout = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  if (polylineIndex < 0 || static_cast<size_t>(polylineIndex + 1) >= layout.paperPolyOffsets.size() ||
+      static_cast<size_t>(polylineIndex) >= layout.paperPolyClosed.size() ||
+      layout.paperPolyClosed[static_cast<size_t>(polylineIndex)] == 0) {
+    log.push_back("MVIEW Object — select a closed paper-space polyline.");
+    return false;
+  }
+  const int begin = layout.paperPolyOffsets[static_cast<size_t>(polylineIndex)];
+  const int end = layout.paperPolyOffsets[static_cast<size_t>(polylineIndex + 1)];
+  if (begin < 0 || end - begin < 2 || static_cast<size_t>(end) * 3 > layout.paperPolyVerts.size()) {
+    log.push_back("MVIEW Object — the polyline boundary is invalid.");
+    return false;
+  }
+  Viewport viewport;
+  viewport.clipBoundary.reserve(static_cast<size_t>(end - begin));
+  float minX = std::numeric_limits<float>::infinity(), minY = minX;
+  float maxX = -minX, maxY = -minX;
+  double twiceArea = 0.0;
+  for (int i = begin; i < end; ++i) {
+    const size_t p = static_cast<size_t>(i) * 3;
+    const float x = layout.paperPolyVerts[p], y = layout.paperPolyVerts[p + 1];
+    const size_t next = static_cast<size_t>(i + 1 < end ? i + 1 : begin) * 3;
+    const float nx = layout.paperPolyVerts[next], ny = layout.paperPolyVerts[next + 1];
+    const float bulge = static_cast<size_t>(i) < layout.paperPolyVertsBulge.size()
+                            ? layout.paperPolyVertsBulge[static_cast<size_t>(i)] : 0.f;
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(bulge)) {
+      log.push_back("MVIEW Object — the polyline boundary contains a non-finite coordinate.");
+      return false;
+    }
+    viewport.clipBoundary.push_back({x, y, bulge});
+    ForEachBulgeChord(x, y, nx, ny, bulge, 32, [&](double ax, double ay, double bx, double by) {
+      minX = std::min(minX, static_cast<float>((std::min)(ax, bx)));
+      minY = std::min(minY, static_cast<float>((std::min)(ay, by)));
+      maxX = std::max(maxX, static_cast<float>((std::max)(ax, bx)));
+      maxY = std::max(maxY, static_cast<float>((std::max)(ay, by)));
+      twiceArea += ax * by - ay * bx;
+    });
+  }
+  if (maxX - minX < 1.e-4f || maxY - minY < 1.e-4f || std::fabs(twiceArea) < 1.e-8) {
+    log.push_back("MVIEW Object — the polyline boundary has no usable area.");
+    return false;
+  }
+  viewport.paperXIn = minX;
+  viewport.paperYIn = minY;
+  viewport.paperWIn = maxX - minX;
+  viewport.paperHIn = maxY - minY;
+  viewport.modelCenterX = cmd.worldDocumentOriginX;
+  viewport.modelCenterY = cmd.worldDocumentOriginY;
+  viewport.scaleModelPerPaperIn = cmd.modelUnitsPerPlottedInch > 1.e-6f ? cmd.modelUnitsPerPlottedInch : 50.f;
+  viewport.annotationScaleName = CadActiveAnnotationScaleName(&cmd.annotationScales, cmd.currentAnnotationScaleIndex,
+                                                                nullptr, cmd.modelUnitsPerPlottedInch);
+  PushUndoSnapshot(cmd, "Create MVIEW object viewport");
+  layout.viewports.push_back(std::move(viewport));
+  const int idx = static_cast<int>(layout.viewports.size()) - 1;
+  cmd.selectedViewportLayout = layoutIdx;
+  cmd.selectedViewportIndex = idx;
+  cmd.selectedViewports = {idx};
+  BumpCadGpuCache(cmd);
+  log.push_back("MVIEW Object — viewport created from the closed polyline; source polyline unchanged.");
+  return true;
+}
+
+static bool CreateMviewPreset(AppCommandState& st, const std::string& option, std::vector<std::string>& log) {
+  if (st.activeSpaceIndex < 0 || static_cast<size_t>(st.activeSpaceIndex) >= st.paperLayouts.size()) {
+    log.push_back("MVIEW — switch to a paper layout first (MODEL/PAPER button).");
+    return false;
+  }
+  if (option == "object") {
+    st.paperVpMode = 1;
+    st.paperVpPhase = 0;
+    log.push_back("MVIEW Object — select a closed paper-space polyline (Esc to cancel).");
+    return true;
+  }
+  PaperLayout& layout = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+  const float width = layout.sheetWidthIn(), height = layout.sheetHeightIn();
+  if (!std::isfinite(width) || !std::isfinite(height) || width <= 0.f || height <= 0.f) {
+    log.push_back("MVIEW — the active layout has invalid paper dimensions.");
+    return false;
+  }
+  std::vector<std::array<float, 4>> rects;
+  if (option == "fit") rects.push_back({0.f, 0.f, width, height});
+  else if (option == "2") {
+    rects.push_back({0.f, 0.f, width * .5f, height});
+    rects.push_back({width * .5f, 0.f, width, height});
+  } else if (option == "3") {
+    rects.push_back({0.f, 0.f, width * .5f, height});
+    rects.push_back({width * .5f, height * .5f, width, height});
+    rects.push_back({width * .5f, 0.f, width, height * .5f});
+  } else if (option == "4") {
+    rects.push_back({0.f, 0.f, width * .5f, height * .5f});
+    rects.push_back({width * .5f, 0.f, width, height * .5f});
+    rects.push_back({0.f, height * .5f, width * .5f, height});
+    rects.push_back({width * .5f, height * .5f, width, height});
+  } else {
+    log.push_back("MVIEW — option must be Fit, 2, 3, 4, or Object.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Create MVIEW viewport(s)");
+  std::vector<int> created;
+  for (const auto& r : rects) {
+    const int index = AddViewportRect(st, st.activeSpaceIndex, r[0], r[1], r[2], r[3]);
+    if (index >= 0) created.push_back(index);
+  }
+  st.selectedViewports = created;
+  st.selectedViewportIndex = created.empty() ? -1 : created.front();
+  st.selectedViewportLayout = created.empty() ? -1 : st.activeSpaceIndex;
+  st.paperVpMode = 0;
+  st.paperVpPhase = 0;
+  st.active = AppCommandState::Kind::None;
+  log.push_back("MVIEW " + (option == "fit" ? std::string("Fit") : option) + " — " +
+                std::to_string(created.size()) + " viewport(s) created.");
+  return !created.empty();
+}
+
 void StartPaperRectViewportCommand(AppCommandState& cmd, std::vector<std::string>& log) {
   if (cmd.activeSpaceIndex == kModelSpaceIndex || cmd.activeSpaceIndex < 0 ||
       static_cast<size_t>(cmd.activeSpaceIndex) >= cmd.paperLayouts.size()) {
-    log.push_back("Rectangular viewport — switch to a paper layout first (MODEL/PAPER button).");
+    log.push_back("MVIEW — switch to a paper layout first (MODEL/PAPER button).");
     return;
   }
   cmd.active = AppCommandState::Kind::PaperRectViewport;
   cmd.lastCommand = AppCommandState::Kind::PaperRectViewport;
   cmd.paperVpPhase = 0;
-  log.push_back("Rectangular viewport — click the first corner on the sheet (Esc to cancel).");
+  cmd.paperVpMode = 0;
+  log.push_back("MVIEW — click first corner or type [Fit/2/3/4/Object] (Esc to cancel).");
 }
 
 void DeleteViewport(AppCommandState& cmd, int layoutIdx, int vpIdx) {
@@ -687,7 +855,7 @@ void ProcessPaperDeleteWaitingSelectionEnter(AppCommandState& st, std::vector<st
 
 bool InFloatingModelSpace(const AppCommandState& cmd) { return cmd.floatingViewportIndex >= 0; }
 
-PaperLayout* ActivePaperGeometryTarget(AppCommandState& st) {
+const PaperLayout* ActivePaperGeometryTarget(const AppCommandState& st) {
   // REQ-037 / ADR-009: a draw/edit command writes to the active layout's paper store when a paper
   // layout is active and NOT in floating model space; otherwise it targets model space (→ nullptr).
   if (st.activeSpaceIndex < 0 || InFloatingModelSpace(st))
@@ -695,6 +863,10 @@ PaperLayout* ActivePaperGeometryTarget(AppCommandState& st) {
   if (static_cast<size_t>(st.activeSpaceIndex) >= st.paperLayouts.size())
     return nullptr;
   return &st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+}
+
+PaperLayout* ActivePaperGeometryTarget(AppCommandState& st) {
+  return const_cast<PaperLayout*>(ActivePaperGeometryTarget(static_cast<const AppCommandState&>(st)));
 }
 
 // --- Native paper-space geometry: selection + edit (REQ-037, ADR-009) ---
@@ -748,7 +920,7 @@ static float PaperPointSegDist2(float px, float py, float ax, float ay, float bx
 // PaperTextBoundsIn (top-left text bounds, REQ-039) now lives in PaperSpace.hpp as an inline helper so the
 // header-only box-select + unit tests can share it.
 
-bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch) {
+void AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch) {
   for (size_t i = 0; i + 3 < scratch.userCirclesCxCyZR.size(); i += 4) {
     L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i]));
     L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i + 1]));
@@ -764,15 +936,20 @@ bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch) 
       L.paperPolyOffsets.push_back(0);
     const int a = scratch.userPolylineOffsets[p];
     const int b = scratch.userPolylineOffsets[p + 1];
-    for (int v = a * 3; v < b * 3; ++v)
-      L.paperPolyVerts.push_back(static_cast<float>(scratch.userPolylineVerts[static_cast<size_t>(v)]));
+    for (int v = a; v < b; ++v) {
+      const size_t base = static_cast<size_t>(v) * 3;
+      L.paperPolyVerts.push_back(static_cast<float>(scratch.userPolylineVerts[base]));
+      L.paperPolyVerts.push_back(static_cast<float>(scratch.userPolylineVerts[base + 1]));
+      L.paperPolyVerts.push_back(static_cast<float>(scratch.userPolylineVerts[base + 2]));
+      const float bg = static_cast<size_t>(v) < scratch.userPolylineVertsBulge.size()
+                           ? scratch.userPolylineVertsBulge[static_cast<size_t>(v)]
+                           : 0.f;
+      L.paperPolyVertsBulge.push_back(bg);
+    }
     L.paperPolyOffsets.push_back(L.paperPolyOffsets.back() + (b - a));
     L.paperPolyClosed.push_back(scratch.userPolylineClosed[p]);
     L.paperPolyAttrs.push_back(scratch.userPolylineAttrs[p]);
   }
-  bool bulged = false;
-  for (const float bg : scratch.userPolylineVertsBulge)
-    bulged = bulged || bg != 0.f;
   L.paperLines.insert(L.paperLines.end(), scratch.userLinesFlat.begin(), scratch.userLinesFlat.end());
   L.paperLineAttrs.insert(L.paperLineAttrs.end(), scratch.userLineAttrs.begin(), scratch.userLineAttrs.end());
   L.paperTexts.insert(L.paperTexts.end(), scratch.cadAnnotations.begin(), scratch.cadAnnotations.end());
@@ -787,7 +964,10 @@ bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch) 
                                  scratch.cadMultileaderAttrs.end());
   L.paperTables.insert(L.paperTables.end(), scratch.cadTables.begin(), scratch.cadTables.end());
   L.paperTableAttrs.insert(L.paperTableAttrs.end(), scratch.cadTableAttrs.begin(), scratch.cadTableAttrs.end());
-  return bulged;
+  L.paperPoints.insert(L.paperPoints.end(), scratch.cadPoints.begin(), scratch.cadPoints.end());
+  L.paperPointAttrs.insert(L.paperPointAttrs.end(), scratch.cadPointAttrs.begin(), scratch.cadPointAttrs.end());
+  L.paperSplines.insert(L.paperSplines.end(), scratch.cadSplines.begin(), scratch.cadSplines.end());
+  L.paperSplineAttrs.insert(L.paperSplineAttrs.end(), scratch.cadSplineAttrs.begin(), scratch.cadSplineAttrs.end());
 }
 
 bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperRef* out,
@@ -874,10 +1054,23 @@ bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, Pape
   for (int pi = static_cast<int>(L.paperPolyOffsets.size()) - 2; pi >= 0; --pi) {
     const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
     const int v1 = L.paperPolyOffsets[(static_cast<size_t>(pi)+ 1)];
-    for (int vi = v0; vi + 1 < v1; ++vi) {
-      const size_t a = static_cast<size_t>(vi) * 3, b = (static_cast<size_t>(vi)+ 1) * 3;
-      if (PaperPointSegDist2(x, y, L.paperPolyVerts[a], L.paperPolyVerts[a + 1], L.paperPolyVerts[b],
-                             L.paperPolyVerts[b + 1]) <= tol2) {
+    const bool closed = static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)] != 0;
+    const int nSeg = closed ? (v1 - v0) : (v1 - v0 - 1);
+    for (int s = 0; s < nSeg; ++s) {
+      const int ia = v0 + s;
+      const int ib = v0 + ((s + 1) % (v1 - v0));
+      const size_t a = static_cast<size_t>(ia) * 3, b = static_cast<size_t>(ib) * 3;
+      const float bulge = static_cast<size_t>(ia) < L.paperPolyVertsBulge.size() ? L.paperPolyVertsBulge[static_cast<size_t>(ia)] : 0.f;
+      if (std::fabs(bulge) > 1.e-8f) {
+        const BulgeArcSpan span = BulgeArc(L.paperPolyVerts[a], L.paperPolyVerts[a + 1], L.paperPolyVerts[b],
+                                           L.paperPolyVerts[b + 1], bulge);
+        if (span.valid && PointArcDistanceSq(x, y, span) <= static_cast<double>(tol2)) {
+          out->type = PaperRef::Type::Polyline;
+          out->index = pi;
+          return true;
+        }
+      } else if (PaperPointSegDist2(x, y, L.paperPolyVerts[a], L.paperPolyVerts[a + 1], L.paperPolyVerts[b],
+                                    L.paperPolyVerts[b + 1]) <= tol2) {
         out->type = PaperRef::Type::Polyline;
         out->index = pi;
         return true;
@@ -891,6 +1084,28 @@ bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, Pape
       out->type = PaperRef::Type::Line;
       out->index = si;
       return true;
+    }
+  }
+  for (int pi = static_cast<int>(L.paperPoints.size()) - 1; pi >= 0; --pi) {
+    const CadPoint& p = L.paperPoints[static_cast<size_t>(pi)];
+    const float dx = x - static_cast<float>(p.x);
+    const float dy = y - static_cast<float>(p.y);
+    if (dx * dx + dy * dy <= tol2) {
+      out->type = PaperRef::Type::Point;
+      out->index = pi;
+      return true;
+    }
+  }
+  for (int si = static_cast<int>(L.paperSplines.size()) - 1; si >= 0; --si) {
+    std::vector<ray3d::Vec3> pts;
+    spline::Tessellate(L.paperSplines[static_cast<size_t>(si)], kSplineSampleTolerance, &pts);
+    for (size_t k = 1; k < pts.size(); ++k) {
+      if (PaperPointSegDist2(x, y, static_cast<float>(pts[k - 1].x), static_cast<float>(pts[k - 1].y),
+                             static_cast<float>(pts[k].x), static_cast<float>(pts[k].y)) <= tol2) {
+        out->type = PaperRef::Type::Spline;
+        out->index = si;
+        return true;
+      }
     }
   }
   return false;
@@ -921,6 +1136,8 @@ static void ErasePaperPolyline(PaperLayout& L, int pi) {
   const int nv = v1 - v0;
   L.paperPolyVerts.erase(L.paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
                          L.paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+  if (L.paperPolyVertsBulge.size() >= static_cast<size_t>(v1))
+    L.paperPolyVertsBulge.erase(L.paperPolyVertsBulge.begin() + v0, L.paperPolyVertsBulge.begin() + v1);
   L.paperPolyOffsets.erase(L.paperPolyOffsets.begin() + (pi + 1));  // drop this poly's end marker
   for (size_t k = (static_cast<size_t>(pi)+ 1); k < L.paperPolyOffsets.size(); ++k)
     L.paperPolyOffsets[k] -= nv;                                    // shift the rest back
@@ -937,7 +1154,7 @@ void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& 
   if (!L || st.selectedPaperEntities.empty())
     return;
   // Group indices by type; erase each type's indices in descending order so earlier indices stay valid.
-  std::vector<int> byType[9];
+  std::vector<int> byType[11];
   for (const PaperRef& r : st.selectedPaperEntities)
     byType[static_cast<int>(r.type)].push_back(r.index);
   auto descUnique = [](std::vector<int>& v) {
@@ -988,17 +1205,22 @@ void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& 
     eraseElem(L->paperMultileaders, L->paperMultileaderAttrs, mi);
   for (int ti : byType[static_cast<int>(PaperRef::Type::Table)])
     eraseElem(L->paperTables, L->paperTableAttrs, ti);
+  for (int si : byType[static_cast<int>(PaperRef::Type::Spline)])
+    eraseElem(L->paperSplines, L->paperSplineAttrs, si);
+  for (int pi : byType[static_cast<int>(PaperRef::Type::Point)])
+    eraseElem(L->paperPoints, L->paperPointAttrs, pi);
   ClearPaperEntitySelection(st);
   BumpCadGpuCache(st);
   log.push_back("DELETE — removed " + std::to_string(n) + " paper object(s).");
 }
 
 void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn, bool copy,
-                                    std::vector<std::string>& log) {
+                                    std::vector<std::string>& log, bool pushUndo) {
   PaperLayout* L = ActivePaperGeometryTarget(st);
   if (!L || st.selectedPaperEntities.empty())
     return;
-  PushUndoSnapshot(st, copy ? "Copy paper geometry" : "Move paper geometry");
+  if (pushUndo)
+    PushUndoSnapshot(st, copy ? "Copy paper geometry" : "Move paper geometry");
   std::vector<PaperRef> newSel;
   auto attrAt = [](const std::vector<EntityAttributes>& v, int i) {
     return (i >= 0 && static_cast<size_t>(i) < v.size()) ? v[static_cast<size_t>(i)] : EntityAttributes{};
@@ -1080,6 +1302,9 @@ void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn,
           L->paperPolyVerts.push_back(L->paperPolyVerts[(static_cast<size_t>(vi)* 3)] + dxIn);
           L->paperPolyVerts.push_back(L->paperPolyVerts[(static_cast<size_t>(vi)* 3 + 1)] + dyIn);
           L->paperPolyVerts.push_back(L->paperPolyVerts[(static_cast<size_t>(vi)* 3 + 2)]);
+          L->paperPolyVertsBulge.push_back(static_cast<size_t>(vi) < L->paperPolyVertsBulge.size()
+                                               ? L->paperPolyVertsBulge[static_cast<size_t>(vi)]
+                                               : 0.f);
         }
         L->paperPolyOffsets.push_back(baseVert + (v1 - v0));
         L->paperPolyClosed.push_back(static_cast<size_t>(pi) < L->paperPolyClosed.size() ? L->paperPolyClosed[static_cast<size_t>(pi)] : 0u);
@@ -1150,6 +1375,40 @@ void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn,
       }
       break;
     }
+    case PaperRef::Type::Spline: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperSplines.size())
+        break;
+      if (copy) {
+        CadSpline c = L->paperSplines[static_cast<size_t>(r.index)];
+        spline::MapPoints(&c, [&](const spline::Vec3& v) {
+          return spline::Vec3{v.x + dxIn, v.y + dyIn, v.z};
+        });
+        L->paperSplines.push_back(std::move(c));
+        L->paperSplineAttrs.push_back(attrAt(L->paperSplineAttrs, r.index));
+        newSel.push_back({PaperRef::Type::Spline, static_cast<int>(L->paperSplines.size()) - 1});
+      } else {
+        spline::MapPoints(&L->paperSplines[static_cast<size_t>(r.index)], [&](const spline::Vec3& v) {
+          return spline::Vec3{v.x + dxIn, v.y + dyIn, v.z};
+        });
+      }
+      break;
+    }
+    case PaperRef::Type::Point: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperPoints.size())
+        break;
+      if (copy) {
+        CadPoint c = L->paperPoints[static_cast<size_t>(r.index)];
+        c.x += dxIn;
+        c.y += dyIn;
+        L->paperPoints.push_back(c);
+        L->paperPointAttrs.push_back(attrAt(L->paperPointAttrs, r.index));
+        newSel.push_back({PaperRef::Type::Point, static_cast<int>(L->paperPoints.size()) - 1});
+      } else {
+        L->paperPoints[static_cast<size_t>(r.index)].x += dxIn;
+        L->paperPoints[static_cast<size_t>(r.index)].y += dyIn;
+      }
+      break;
+    }
     }
   }
   if (copy && !newSel.empty())
@@ -1159,7 +1418,7 @@ void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn,
 }
 
 void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float angRad,
-                                 std::vector<std::string>& log) {
+                                 std::vector<std::string>& log, bool pushUndo) {
   PaperLayout* L = ActivePaperGeometryTarget(st);
   if (!L || st.selectedPaperEntities.empty())
     return;
@@ -1169,10 +1428,12 @@ void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, 
     x = baseX + dx * c - dy * s;
     y = baseY + dx * s + dy * c;
   };
-  DropPaperLeadersFromSelection(st, "ROTATE", log);
+  if (pushUndo)
+    DropPaperLeadersFromSelection(st, "ROTATE", log);
   if (st.selectedPaperEntities.empty())
     return;
-  PushUndoSnapshot(st, "Rotate paper geometry");
+  if (pushUndo)
+    PushUndoSnapshot(st, "Rotate paper geometry");
   for (const PaperRef& r : st.selectedPaperEntities) {
     switch (r.type) {
     case PaperRef::Type::Line: {
@@ -1234,8 +1495,57 @@ void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, 
         CadTableRotateAround(&L->paperTables[static_cast<size_t>(r.index)], baseX, baseY, angRad);
       break;
     }
-    case PaperRef::Type::Leader:  // dropped from the selection above
+    case PaperRef::Type::Leader: {
+      if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperMultileaders.size()) {
+        CadMultileader& leader = L->paperMultileaders[static_cast<size_t>(r.index)];
+        auto rotatePath = [&](std::vector<float>& xyz) {
+          for (size_t i = 0; i + 2 < xyz.size(); i += 3)
+            rot(xyz[i], xyz[i + 1]);
+        };
+        rotatePath(leader.pathXyz);
+        for (auto& path : leader.extraLeaderPaths) rotatePath(path);
+        rot(leader.label.insX, leader.label.insY);
+        float minX = std::numeric_limits<float>::infinity();
+        float minY = std::numeric_limits<float>::infinity();
+        float maxX = -minX;
+        float maxY = -minY;
+        const std::array<std::array<float, 2>, 4> corners{{
+            {{leader.label.boxMinX, leader.label.boxMinY}},
+            {{leader.label.boxMinX, leader.label.boxMaxY}},
+            {{leader.label.boxMaxX, leader.label.boxMinY}},
+            {{leader.label.boxMaxX, leader.label.boxMaxY}},
+        }};
+        for (const auto& corner : corners) {
+          float x = corner[0], y = corner[1];
+          rot(x, y);
+          minX = std::min(minX, x); minY = std::min(minY, y);
+          maxX = std::max(maxX, x); maxY = std::max(maxY, y);
+        }
+        leader.label.boxMinX = minX; leader.label.boxMinY = minY;
+        leader.label.boxMaxX = maxX; leader.label.boxMaxY = maxY;
+        leader.label.rotationRad += angRad;
+      }
       break;
+    }
+    case PaperRef::Type::Spline: {
+      if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperSplines.size())
+        spline::MapPoints(&L->paperSplines[static_cast<size_t>(r.index)], [&](const spline::Vec3& v) {
+          float x = static_cast<float>(v.x), y = static_cast<float>(v.y);
+          rot(x, y);
+          return spline::Vec3{x, y, v.z};
+        });
+      break;
+    }
+    case PaperRef::Type::Point: {
+      if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperPoints.size()) {
+        float x = static_cast<float>(L->paperPoints[static_cast<size_t>(r.index)].x);
+        float y = static_cast<float>(L->paperPoints[static_cast<size_t>(r.index)].y);
+        rot(x, y);
+        L->paperPoints[static_cast<size_t>(r.index)].x = x;
+        L->paperPoints[static_cast<size_t>(r.index)].y = y;
+      }
+      break;
+    }
     }
   }
   BumpCadGpuCache(st);
@@ -1387,6 +1697,33 @@ void MirrorSelectedPaperEntities(AppCommandState& st, float x0In, float y0In, fl
     }
     case PaperRef::Type::Leader:  // dropped from the selection above
       break;
+    case PaperRef::Type::Spline: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperSplines.size())
+        break;
+      CadSpline c = L->paperSplines[static_cast<size_t>(r.index)];
+      spline::MapPoints(&c, [&](const spline::Vec3& v) {
+        float x = static_cast<float>(v.x), y = static_cast<float>(v.y);
+        refl(x, y);
+        return spline::Vec3{x, y, v.z};
+      });
+      L->paperSplines.push_back(std::move(c));
+      L->paperSplineAttrs.push_back(attrAt(L->paperSplineAttrs, r.index));
+      newSel.push_back({PaperRef::Type::Spline, static_cast<int>(L->paperSplines.size()) - 1});
+      break;
+    }
+    case PaperRef::Type::Point: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperPoints.size())
+        break;
+      CadPoint c = L->paperPoints[static_cast<size_t>(r.index)];
+      float x = static_cast<float>(c.x), y = static_cast<float>(c.y);
+      refl(x, y);
+      c.x = x;
+      c.y = y;
+      L->paperPoints.push_back(c);
+      L->paperPointAttrs.push_back(attrAt(L->paperPointAttrs, r.index));
+      newSel.push_back({PaperRef::Type::Point, static_cast<int>(L->paperPoints.size()) - 1});
+      break;
+    }
     }
   }
   if (!newSel.empty())
@@ -1506,6 +1843,20 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
       }
       break;
     }
+    case SelectedEntity::Type::Point: {
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadPoints.size()) {
+        const CadPoint& p = cmd.cadPoints[static_cast<size_t>(sel.index)];
+        tryGrip(sel, static_cast<float>(p.x), static_cast<float>(p.y), 0);
+      }
+      break;
+    }
+    case SelectedEntity::Type::Alignment: {  // REQ-487.1: start, tangent ends, curve radius grips
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.alignments.size()) {
+        for (const alignment::Grip& g : alignment::GripPoints(cmd.alignments[static_cast<size_t>(sel.index)]))
+          tryGrip(sel, static_cast<float>(g.point.x), static_cast<float>(g.point.y), g.which);
+      }
+      break;
+    }
     default:
       break;
     }
@@ -1588,6 +1939,9 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
   case SelectedEntity::Type::Spline:  // REQ-443
     cmd.entityGripOrigSpline = cmd.cadSplines[static_cast<size_t>(bestSel.index)];
     break;
+  case SelectedEntity::Type::Alignment:  // REQ-487.1
+    cmd.entityGripOrigAlignment = cmd.alignments[static_cast<size_t>(bestSel.index)];
+    break;
   default:
     break;
   }
@@ -1600,6 +1954,10 @@ void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std
   PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
   if (vpIdx < 0 || static_cast<size_t>(vpIdx) >= L.viewports.size())
     return;
+  if (!L.viewports[static_cast<size_t>(vpIdx)].on) {
+    log.push_back("MSPACE - the selected viewport is off.");
+    return;
+  }
   cmd.floatingViewportLayout = layoutIdx;
   cmd.floatingViewportIndex = vpIdx;
   cmd.active = AppCommandState::Kind::None;
@@ -1665,6 +2023,7 @@ void ApplyPageSetupToLayout(PaperLayout& layout, const PageSetup& ps) {
   layout.offsetXIn = ps.offsetXIn;
   layout.offsetYIn = ps.offsetYIn;
   layout.centerPlot = ps.centerPlot;
+  layout.plotStyleTablePath = ps.plotStyleTablePath;
   layout.pageSetupName = ps.name;
 }
 
@@ -1681,6 +2040,7 @@ PageSetup PageSetupFromLayout(const PaperLayout& layout, const std::string& name
   ps.offsetXIn = layout.offsetXIn;
   ps.offsetYIn = layout.offsetYIn;
   ps.centerPlot = layout.centerPlot;
+  ps.plotStyleTablePath = layout.plotStyleTablePath;
   return ps;
 }
 
@@ -1689,37 +2049,62 @@ void MoveOrCopyLayout(AppCommandState& cmd, int layoutIdx, int beforeIdx, bool m
   const int n = static_cast<int>(cmd.paperLayouts.size());
   if (layoutIdx < 0 || layoutIdx >= n)
     return;
-  PaperLayout item = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
   if (makeCopy) {
-    // Unique "Name (2)" style name.
-    std::string base = item.name;
-    int k = 2;
-    auto taken = [&](const std::string& s) {
-      for (const PaperLayout& l : cmd.paperLayouts)
-        if (l.name == s)
-          return true;
-      return false;
-    };
-    std::string nm;
-    do {
-      nm = base + " (" + std::to_string(k++) + ")";
-    } while (taken(nm));
-    item.name = nm;
-    int insertAt = std::clamp(beforeIdx, 0, n);
-    cmd.paperLayouts.insert(cmd.paperLayouts.begin() + insertAt, item);
-    SetActiveSpace(cmd, insertAt);
-    log.push_back("Layout copied as \"" + item.name + "\".");
-  } else {
-    cmd.paperLayouts.erase(cmd.paperLayouts.begin() + layoutIdx);
-    int insertAt = beforeIdx;
-    if (insertAt > layoutIdx)
-      --insertAt;  // account for the removed slot
-    insertAt = std::clamp(insertAt, 0, static_cast<int>(cmd.paperLayouts.size()));
-    cmd.paperLayouts.insert(cmd.paperLayouts.begin() + insertAt, item);
-    SetActiveSpace(cmd, insertAt);
-    log.push_back("Layout \"" + item.name + "\" moved.");
+    CopyPaperLayout(cmd, layoutIdx, {}, log);
+    return;
   }
+  PaperLayout item = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  cmd.paperLayouts.erase(cmd.paperLayouts.begin() + layoutIdx);
+  int insertAt = beforeIdx;
+  if (insertAt > layoutIdx)
+    --insertAt;  // account for the removed slot
+  insertAt = std::clamp(insertAt, 0, static_cast<int>(cmd.paperLayouts.size()));
+  cmd.paperLayouts.insert(cmd.paperLayouts.begin() + insertAt, item);
+  SetActiveSpace(cmd, insertAt);
+  log.push_back("Layout \"" + item.name + "\" moved.");
   BumpCadGpuCache(cmd);
+}
+
+int CopyPaperLayout(AppCommandState& cmd, int layoutIdx, const std::string& requestedName,
+                    std::vector<std::string>& log) {
+  const int n = static_cast<int>(cmd.paperLayouts.size());
+  if (layoutIdx < 0 || layoutIdx >= n) {
+    log.push_back("LAYOUT COPY - no source layout was found.");
+    return -1;
+  }
+
+  auto nameTaken = [&](const std::string& name) {
+    const std::string folded = StringUtil::toLowerAsciiCopy(name);
+    return std::any_of(cmd.paperLayouts.begin(), cmd.paperLayouts.end(), [&](const PaperLayout& layout) {
+      return StringUtil::toLowerAsciiCopy(layout.name) == folded;
+    });
+  };
+
+  PaperLayout copy = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  std::string name = StringUtil::trimCopy(requestedName);
+  if (name.empty()) {
+    const std::string base = copy.name;
+    for (int suffix = 2;; ++suffix) {
+      name = base + " (" + std::to_string(suffix) + ")";
+      if (!nameTaken(name))
+        break;
+    }
+  } else if (nameTaken(name)) {
+    log.push_back("LAYOUT COPY - a layout named \"" + name + "\" already exists.");
+    return -1;
+  }
+
+  copy.name = name;
+  // Append instead of inserting beside the source. This keeps every existing layout index stable,
+  // including the current layout index held by the undo system, which does not snapshot tab state.
+  const int insertAt = n;
+  // Validation above must finish before this snapshot so a collision is a true no-op, including history.
+  PushUndoSnapshot(cmd, "Copy layout");
+  cmd.paperLayouts.insert(cmd.paperLayouts.begin() + insertAt, std::move(copy));
+
+  BumpCadGpuCache(cmd);
+  log.push_back("Layout copied as \"" + name + "\".");
+  return insertAt;
 }
 
 // ---------------------------------------------------------------------------
@@ -1768,14 +2153,24 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.cadSolidAttrs        = st.cadSolidAttrs;
   snap.cadTables            = st.cadTables;
   snap.cadTableAttrs        = st.cadTableAttrs;
+  snap.tableStyles          = st.tableStyles;
   snap.cadPositionMarkers   = st.cadPositionMarkers;  // REQ-359
   snap.cadPositionMarkerAttrs = st.cadPositionMarkerAttrs;
   snap.cadMultileaders      = st.cadMultileaders;  // REQ-367
   snap.cadMultileaderAttrs  = st.cadMultileaderAttrs;
   snap.cadSplines           = st.cadSplines;  // REQ-443
   snap.cadSplineAttrs       = st.cadSplineAttrs;
+  snap.cadPoints            = st.cadPoints;  // REQ-456
+  snap.cadPointAttrs        = st.cadPointAttrs;
+  snap.pdMode               = st.pdMode;
+  snap.pdSize               = st.pdSize;
   snap.cadPipeRuns          = st.cadPipeRuns;      // issue #486 / REQ-345
   snap.cadPipeRunAttrs      = st.cadPipeRunAttrs;
+  snap.alignments           = st.alignments;       // REQ-480
+  snap.viewFrameGroups      = st.viewFrameGroups;  // REQ-517: undo restores frames with their alignment
+  snap.sampleLines          = st.sampleLines;      // REQ-519: undo restores sample lines and sections
+  snap.profiles             = st.profiles;         // REQ-521: undo restores design profiles
+  snap.surfaceProfiles      = st.surfaceProfiles;  // REQ-513
   snap.cadPipingSystems     = st.cadPipingSystems; // issue #486 increment B3 / REQ-345
   snap.blockDefs            = st.blockDefs;
   snap.cadBlockRefs         = st.cadBlockRefs;
@@ -1800,20 +2195,30 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.featureLineClosed    = st.featureLineClosed;
   snap.featureLineElevPt    = st.featureLineElevPt;
   snap.featureLineInfo      = st.featureLineInfo;
+  snap.gradingPresets       = st.gradingPresets;
   snap.featureLineAttrs     = st.featureLineAttrs;
   snap.cadAnnotations       = st.cadAnnotations;
   snap.cadAnnotationAttrs   = st.cadAnnotationAttrs;
   snap.cadFilledRegions     = st.cadFilledRegions;
   snap.cadFilledRegionAttrs = st.cadFilledRegionAttrs;
   snap.surveyPoints         = st.surveyPoints;
+  snap.surveyPointStyles    = st.surveyPointStyles;
+  snap.surveyPointLabelStyles = st.surveyPointLabelStyles;
   snap.pointGroups          = st.pointGroups;   // group edits are undoable (REQ-067)
   snap.drawingLayerTable    = st.drawingLayerTable;
   snap.textStyles           = st.textStyles;  // style edits are undoable (REQ-044)
   snap.surfaceStyles        = st.surfaceStyles;  // and surface-style edits (REQ-070)
+  snap.alignmentStyles      = st.alignmentStyles;  // REQ-491
+  snap.alignmentCheckSets   = st.alignmentCheckSets;  // REQ-502
+  snap.alignmentLabelSets   = st.alignmentLabelSets;
+  snap.alignmentLabelStyles = st.alignmentLabelStyles;  // REQ-492.5
   snap.dimensionStyle       = st.activeDimensionStyle;  // dimension-style edits are undoable (issue #99)
+  snap.dimensionStyles      = st.dimensionStyles;
   snap.multileaderStyle     = st.activeMultileaderStyle;
+  snap.multileaderStyles    = st.multileaderStyles;
   snap.pdfAttachments       = st.pdfAttachments;
   snap.paperLayouts         = st.paperLayouts;  // native paper geometry is undoable (REQ-037/038)
+  snap.cadRasterImages      = st.cadRasterImages;
   // Zero GL texture IDs: restored snapshots must not reference freed GPU resources.
   for (auto& att : snap.pdfAttachments)
     att.glTexId = 0;
@@ -1863,6 +2268,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.featureLineClosed    = snap.featureLineClosed;
   st.featureLineElevPt    = snap.featureLineElevPt;
   st.featureLineInfo      = snap.featureLineInfo;
+  st.gradingPresets       = snap.gradingPresets;
   st.featureLineAttrs     = snap.featureLineAttrs;
   st.cadAnnotations       = snap.cadAnnotations;
   st.cadAnnotationAttrs   = snap.cadAnnotationAttrs;
@@ -1878,26 +2284,46 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.cadSolidAttrs        = snap.cadSolidAttrs;
   st.cadTables            = snap.cadTables;
   st.cadTableAttrs        = snap.cadTableAttrs;
+  st.tableStyles          = snap.tableStyles.empty() ? CadTableBuiltinStyles() : snap.tableStyles;
   st.cadPositionMarkers   = snap.cadPositionMarkers;  // REQ-359
   st.cadPositionMarkerAttrs = snap.cadPositionMarkerAttrs;
   st.cadMultileaders      = snap.cadMultileaders;  // REQ-367
   st.cadMultileaderAttrs  = snap.cadMultileaderAttrs;
   st.cadSplines           = snap.cadSplines;  // REQ-443
   st.cadSplineAttrs       = snap.cadSplineAttrs;
+  st.cadPoints            = snap.cadPoints;  // REQ-456
+  st.cadPointAttrs        = snap.cadPointAttrs;
+  st.pdMode               = snap.pdMode;
+  st.pdSize               = snap.pdSize;
   st.cadPipeRuns          = snap.cadPipeRuns;      // issue #486 / REQ-345
   st.cadPipeRunAttrs      = snap.cadPipeRunAttrs;
+  st.alignments           = snap.alignments;       // REQ-480
+  st.viewFrameGroups      = snap.viewFrameGroups;  // REQ-517
+  st.sampleLines          = snap.sampleLines;      // REQ-519
+  st.profiles             = snap.profiles;         // REQ-521
+  st.surfaceProfiles      = snap.surfaceProfiles;  // REQ-513
   st.cadPipingSystems     = snap.cadPipingSystems; // issue #486 increment B3 / REQ-345
   st.pipeRunWorldSolidsSig = 0;  // force RebuildPipeRunWorldSolids to re-derive from the swap
   st.blockDefs            = snap.blockDefs;
   st.cadBlockRefs         = snap.cadBlockRefs;
   st.cadBlockRefAttrs     = snap.cadBlockRefAttrs;
   st.surveyPoints         = snap.surveyPoints;
+  st.surveyPointStyles    = snap.surveyPointStyles.empty() ? DefaultSurveyPointStyles() : snap.surveyPointStyles;
+  st.surveyPointLabelStyles = snap.surveyPointLabelStyles.empty() ? DefaultSurveyPointLabelStyles() : snap.surveyPointLabelStyles;
   st.pointGroups          = snap.pointGroups;
   st.drawingLayerTable    = snap.drawingLayerTable;
   st.textStyles           = snap.textStyles;
   st.surfaceStyles        = snap.surfaceStyles;
+  st.alignmentStyles      = snap.alignmentStyles;
+  st.alignmentCheckSets   = snap.alignmentCheckSets;  // REQ-502
+  st.alignmentLabelSets   = snap.alignmentLabelSets.empty() ? AlignmentLabelSets::DefaultAlignmentLabelSets()
+                                                            : snap.alignmentLabelSets;
+  st.alignmentLabelStyles = snap.alignmentLabelStyles.empty() ? AlignmentLabelStyles::DefaultAlignmentLabelStyles()
+                                                              : snap.alignmentLabelStyles;  // REQ-492.5
   st.activeDimensionStyle = snap.dimensionStyle;
+  st.dimensionStyles = snap.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : snap.dimensionStyles;
   st.activeMultileaderStyle = snap.multileaderStyle;
+  st.multileaderStyles      = snap.multileaderStyles.empty() ? MultileaderStyles::DefaultStyles() : snap.multileaderStyles;
   st.mleaderStyleDraft = snap.multileaderStyle;
   st.pdfAttachments       = snap.pdfAttachments;
   // A restore that adds/removes a layout (undo/redo of layout delete or add) shifts every layout
@@ -1908,6 +2334,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
     ExitFloatingModelSpace(st, ignored);  // before the swap, so the drawing's UCS is restored
   }
   st.paperLayouts         = snap.paperLayouts;
+  st.cadRasterImages      = snap.cadRasterImages;
   st.selectedPaperEntities.clear();  // restored layouts invalidate paper-entity indices
   if (layoutCountChanged) {
     ClearViewportSelection(st);
@@ -2010,7 +2437,8 @@ const EntityKind kEntityKindsInSweepOrder[] = {
     EntityKind::PointCloud,
     EntityKind::PositionMarker,  ///< REQ-359 — append-only id sweep
     EntityKind::Multileader,     ///< REQ-367
-    EntityKind::Spline};         ///< REQ-443 — last, so kinds above keep their ids.
+    EntityKind::Spline,          ///< REQ-443
+    EntityKind::Point};          ///< REQ-456 — last, so kinds above keep their ids.
 
 /// The attribute array for a kind. One accessor for both the const and mutable walks, so the
 /// two can never disagree about which arrays are covered.
@@ -2034,6 +2462,7 @@ auto* AttrsForKind(StateT& st, EntityKind k) {
   case EntityKind::PositionMarker: return &st.cadPositionMarkerAttrs; // REQ-359
   case EntityKind::Multileader:    return &st.cadMultileaderAttrs;   // REQ-367
   case EntityKind::Spline:         return &st.cadSplineAttrs;        // REQ-443
+  case EntityKind::Point:          return &st.cadPointAttrs;         // REQ-456
   }
   return &st.userLineAttrs;
 }
@@ -2116,24 +2545,25 @@ void AppendContourLinesFrom(const ContourResult& r, std::vector<float>* out) {
 
 /// Every triangulation edge of \p t in `GL_LINES` layout — the appearance a surface had before
 /// REQ-070, now the style's "triangles" component.
-void AppendTriangleEdges(const CadTin& t, std::vector<float>* out) {
+void AppendTriangleEdges(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
+                         std::vector<float>* out) {
   const auto emit = [&](std::uint32_t a, std::uint32_t b) {
     // Narrowed here (ADR-054 (b)): `out` is the render buffer, GPU-bound `float`.
-    out->push_back(static_cast<float>(t.vertsXyz[a * 3 + 0]));
-    out->push_back(static_cast<float>(t.vertsXyz[a * 3 + 1]));
-    out->push_back(static_cast<float>(t.vertsXyz[a * 3 + 2]));
-    out->push_back(static_cast<float>(t.vertsXyz[b * 3 + 0]));
-    out->push_back(static_cast<float>(t.vertsXyz[b * 3 + 1]));
-    out->push_back(static_cast<float>(t.vertsXyz[b * 3 + 2]));
+    out->push_back(static_cast<float>(vertsXyz[a * 3 + 0]));
+    out->push_back(static_cast<float>(vertsXyz[a * 3 + 1]));
+    out->push_back(static_cast<float>(vertsXyz[a * 3 + 2]));
+    out->push_back(static_cast<float>(vertsXyz[b * 3 + 0]));
+    out->push_back(static_cast<float>(vertsXyz[b * 3 + 1]));
+    out->push_back(static_cast<float>(vertsXyz[b * 3 + 2]));
   };
   // Each interior edge is emitted twice, once per adjoining triangle. De-duplicating would cost a
   // hash of every edge to halve a buffer the line pipeline already handles at this size (REQ-100's
   // measured envelope is 750k segments); that trade is worth revisiting only if the surface profile
   // misses its budget.
-  for (size_t i = 0; i + 2 < t.indices.size(); i += 3) {
-    emit(t.indices[i], t.indices[i + 1]);
-    emit(t.indices[i + 1], t.indices[i + 2]);
-    emit(t.indices[i + 2], t.indices[i]);
+  for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+    emit(indices[i], indices[i + 1]);
+    emit(indices[i + 1], indices[i + 2]);
+    emit(indices[i + 2], indices[i]);
   }
 }
 
@@ -2154,7 +2584,8 @@ constexpr double kArrowHeadAngleRad = 0.4363;  // 25 degrees
 /// arrow) `AssignBand` placed in no band. Both outputs are cleared unconditionally, and left with
 /// zero buckets — not one empty bucket — when the corresponding toggle (`analysisMode` / `slopeArrowsOn`)
 /// is off, so a plain-style surface pays nothing here and the assembly pass has nothing to iterate.
-void BuildSurfaceAnalysisGeometry(const CadTin& tin, const SurfaceStyle& style,
+void BuildSurfaceAnalysisGeometry(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
+                                  const SurfaceStyle& style,
                                   std::vector<std::vector<float>>* bandBuffers,
                                   std::vector<std::vector<float>>* arrowBuffers) {
   bandBuffers->clear();
@@ -2191,12 +2622,12 @@ void BuildSurfaceAnalysisGeometry(const CadTin& tin, const SurfaceStyle& style,
     buf.push_back(static_cast<float>(bz));
   };
 
-  for (size_t i = 0; i + 2 < tin.indices.size(); i += 3) {
-    const std::uint32_t ia = tin.indices[i], ib = tin.indices[i + 1], ic = tin.indices[i + 2];
+  for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+    const std::uint32_t ia = indices[i], ib = indices[i + 1], ic = indices[i + 2];
     AnalysisTriangle t;
-    t.x0 = tin.vertsXyz[ia * 3 + 0]; t.y0 = tin.vertsXyz[ia * 3 + 1]; t.z0 = tin.vertsXyz[ia * 3 + 2];
-    t.x1 = tin.vertsXyz[ib * 3 + 0]; t.y1 = tin.vertsXyz[ib * 3 + 1]; t.z1 = tin.vertsXyz[ib * 3 + 2];
-    t.x2 = tin.vertsXyz[ic * 3 + 0]; t.y2 = tin.vertsXyz[ic * 3 + 1]; t.z2 = tin.vertsXyz[ic * 3 + 2];
+    t.x0 = vertsXyz[ia * 3 + 0]; t.y0 = vertsXyz[ia * 3 + 1]; t.z0 = vertsXyz[ia * 3 + 2];
+    t.x1 = vertsXyz[ib * 3 + 0]; t.y1 = vertsXyz[ib * 3 + 1]; t.z1 = vertsXyz[ib * 3 + 2];
+    t.x2 = vertsXyz[ic * 3 + 0]; t.y2 = vertsXyz[ic * 3 + 1]; t.z2 = vertsXyz[ic * 3 + 2];
 
     if (wantBands) {
       double value = 0.0;
@@ -2433,7 +2864,8 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
 
     auto it = std::find_if(st.surfaceDisplayCache.begin(), st.surfaceDisplayCache.end(),
                            [&](const AppCommandState::SurfaceDisplayCacheEntry& e) { return e.surfaceId == id; });
-    if (it != st.surfaceDisplayCache.end() && it->builtFrom.lock() == tin && it->style == resolved)
+    if (it != st.surfaceDisplayCache.end() && it->builtFrom.lock() == tin && it->style == resolved &&
+        it->reducedDisplayLod == surf.reducedDisplayLod)
       continue;  // BEFORE any clear/reserve — see the header comment; this early-out is the budget
 
     if (!tin) {
@@ -2448,7 +2880,19 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
     }
     it->builtFrom = tin;
     it->style = resolved;
+    it->reducedDisplayLod = surf.reducedDisplayLod;
     ++st.surfaceDisplayRegenCount;  // past the early-out: this frame is doing the real work
+
+    std::vector<std::uint32_t> reducedIndices;
+    const std::vector<std::uint32_t>* displayIndices = &tin->indices;
+    if (surf.reducedDisplayLod) {
+      // Store only sampled indices in the display cache path; copying the full vertex array would
+      // duplicate the largest part of a TIN merely to display a reduced overview.
+      reducedIndices.reserve((tin->indices.size() + 11) / 12 * 3);
+      for (size_t i = 0; i + 2 < tin->indices.size(); i += 12)
+        reducedIndices.insert(reducedIndices.end(), tin->indices.begin() + i, tin->indices.begin() + i + 3);
+      displayIndices = &reducedIndices;
+    }
 
     // Each component is generated only when its own toggle is on, and its buffer is released when it
     // is off — REQ-070's "a style with triangles off and contours on draws only contours" is then a
@@ -2465,7 +2909,7 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
       // to it would double the buffer on every edit. Capacity is kept, because what follows refills
       // it to the same size.
       it->triangleEdges.clear();
-      AppendTriangleEdges(*tin, &it->triangleEdges);
+      AppendTriangleEdges(tin->vertsXyz, *displayIndices, &it->triangleEdges);
     } else {
       release(&it->triangleEdges);
     }
@@ -2512,7 +2956,10 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
 
     // REQ-072: unconditional — the builder itself clears both outputs to zero buckets when neither
     // `analysisMode` nor `slopeArrowsOn` is on, which is what turns them off (§6 (2)/(3)).
-    BuildSurfaceAnalysisGeometry(*tin, resolved, &it->bandTriangleBuffers, &it->arrowLineBuffers);
+    // Analysis data is authoritative surface information, not a viewport mesh simplification.
+    // Keep arrows and range assignment full-detail even when triangles use Reduced LOD.
+    BuildSurfaceAnalysisGeometry(tin->vertsXyz, tin->indices, resolved,
+                                 &it->bandTriangleBuffers, &it->arrowLineBuffers);
   }
 
   st.surfaceWatershedCache.erase(
@@ -2871,21 +3318,24 @@ bool VolumeClipRingLocalXy(const AppCommandState& st, std::uint64_t entityId,
 
 /// Appends one \ref TinConstraint per edge of \p chain — consecutive vertex pairs, plus the closing
 /// edge (last→first) when \p forceClosed or the source itself is closed.
-void AppendChainConstraints(const ResolvedChain& chain, bool forceClosed, std::vector<TinConstraint>& out) {
+void AppendChainConstraints(const ResolvedChain& chain, bool forceClosed, std::vector<TinConstraint>& out,
+                            std::vector<std::uint64_t>* sourceIds = nullptr, std::uint64_t sourceId = 0) {
   const size_t n = chain.verts.size();
   if (n < 2)
     return;
   for (size_t i = 0; i + 1 < n; ++i) {
     TinConstraint c;
-    c.ax = chain.verts[i][0]; c.ay = chain.verts[i][1]; c.az = static_cast<float>(chain.verts[i][2]);
-    c.bx = chain.verts[i + 1][0]; c.by = chain.verts[i + 1][1]; c.bz = static_cast<float>(chain.verts[i + 1][2]);
+    c.ax = chain.verts[i][0]; c.ay = chain.verts[i][1]; c.az = chain.verts[i][2];
+    c.bx = chain.verts[i + 1][0]; c.by = chain.verts[i + 1][1]; c.bz = chain.verts[i + 1][2];
     out.push_back(c);
+    if (sourceIds) sourceIds->push_back(sourceId);
   }
   if ((forceClosed || chain.closed) && n >= 3) {
     TinConstraint c;
-    c.ax = chain.verts[n - 1][0]; c.ay = chain.verts[n - 1][1]; c.az = static_cast<float>(chain.verts[n - 1][2]);
-    c.bx = chain.verts[0][0]; c.by = chain.verts[0][1]; c.bz = static_cast<float>(chain.verts[0][2]);
+    c.ax = chain.verts[n - 1][0]; c.ay = chain.verts[n - 1][1]; c.az = chain.verts[n - 1][2];
+    c.bx = chain.verts[0][0]; c.by = chain.verts[0][1]; c.bz = chain.verts[0][2];
     out.push_back(c);
+    if (sourceIds) sourceIds->push_back(sourceId);
   }
 }
 
@@ -2894,6 +3344,7 @@ void AppendChainConstraints(const ResolvedChain& chain, bool forceClosed, std::v
 struct SurfaceBuildInputs {
   std::vector<TinInputPoint> pts;
   std::vector<TinConstraint> constraints;
+  std::vector<std::uint64_t> constraintSourceIds;  ///< Stable source entity ID parallel to each constraint.
   std::vector<TinBoundaryLoop> cullLoops;
   double originX = 0.0, originY = 0.0;
   /// A linked point file could not be read (REQ-086). The build is ABANDONED rather than run on what
@@ -2910,6 +3361,105 @@ struct SurfaceBuildInputs {
   std::vector<double> volumeCompVertsXyz;
   std::vector<std::uint32_t> volumeCompIndices;
 };
+
+void ApplySurfaceCrossingCorrections(const CadSurface& surface, SurfaceBuildInputs& inputs) {
+  for (const CadSurfaceCrossingCorrection& correction : surface.crossingCorrections) {
+    for (const TinCrossingIssue& issue : TinFindCrossingConflicts(inputs.constraints)) {
+      if (issue.constraintIndexA >= inputs.constraintSourceIds.size() ||
+          issue.constraintIndexB >= inputs.constraintSourceIds.size()) continue;
+      const std::uint64_t idA = inputs.constraintSourceIds[issue.constraintIndexA];
+      const std::uint64_t idB = inputs.constraintSourceIds[issue.constraintIndexB];
+      const bool sameOrder = idA == correction.entityA && idB == correction.entityB;
+      const bool reverseOrder = idA == correction.entityB && idB == correction.entityA;
+      if ((!sameOrder && !reverseOrder) ||
+          std::hypot(issue.x - inputs.originX - correction.x, issue.y - inputs.originY - correction.y) > 0.05)
+        continue;
+      const size_t indexA = sameOrder ? issue.constraintIndexA : issue.constraintIndexB;
+      const size_t indexB = sameOrder ? issue.constraintIndexB : issue.constraintIndexA;
+      if (correction.kind == CadSurfaceCrossingCorrection::Kind::TrimA ||
+          correction.kind == CadSurfaceCrossingCorrection::Kind::TrimB) {
+        const size_t remove = correction.kind == CadSurfaceCrossingCorrection::Kind::TrimA ? indexA : indexB;
+        inputs.constraints.erase(inputs.constraints.begin() + static_cast<std::ptrdiff_t>(remove));
+        inputs.constraintSourceIds.erase(inputs.constraintSourceIds.begin() + static_cast<std::ptrdiff_t>(remove));
+      } else {
+        double z = (issue.zFromA + issue.zFromB) * 0.5;
+        switch (correction.kind) {
+        case CadSurfaceCrossingCorrection::Kind::Higher: z = std::max(issue.zFromA, issue.zFromB); break;
+        case CadSurfaceCrossingCorrection::Kind::Lower: z = std::min(issue.zFromA, issue.zFromB); break;
+        case CadSurfaceCrossingCorrection::Kind::Average: break;
+        case CadSurfaceCrossingCorrection::Kind::Custom: z = correction.customElevation; break;
+        case CadSurfaceCrossingCorrection::Kind::TrimA:
+        case CadSurfaceCrossingCorrection::Kind::TrimB: break;
+        }
+        const auto split = [&](size_t index) {
+          const TinConstraint original = inputs.constraints[index];
+          TinConstraint first = original, second = original;
+          const double x = issue.x;
+          const double y = issue.y;
+          first.bx = x; first.by = y; first.bz = z;
+          second.ax = x; second.ay = y; second.az = z;
+          inputs.constraints[index] = first;
+          inputs.constraints.insert(inputs.constraints.begin() + static_cast<std::ptrdiff_t>(index + 1), second);
+          inputs.constraintSourceIds.insert(inputs.constraintSourceIds.begin() + static_cast<std::ptrdiff_t>(index + 1),
+                                             inputs.constraintSourceIds[index]);
+        };
+        if (indexA > indexB) { split(indexA); split(indexB); }
+        else { split(indexB); split(indexA); }
+      }
+      break;
+    }
+  }
+}
+
+bool IsSimpleInfillPolygon(const std::vector<double>& xyz, std::string* why) {
+  const size_t n = xyz.size() / 3;
+  if (n < 3 || xyz.size() % 3 != 0) { if (why) *why = "boundary needs at least three vertices"; return false; }
+  double minX = xyz[0], maxX = xyz[0], minY = xyz[1], maxY = xyz[1];
+  for (size_t i = 0; i < n; ++i) {
+    minX = std::min(minX, xyz[i * 3]); maxX = std::max(maxX, xyz[i * 3]);
+    minY = std::min(minY, xyz[i * 3 + 1]); maxY = std::max(maxY, xyz[i * 3 + 1]);
+  }
+  const double scale = std::max(1.0, std::hypot(maxX - minX, maxY - minY));
+  const double eps = scale * 1e-10, crossEps = eps * scale;
+  const double ox = xyz[0], oy = xyz[1];
+  double area2 = 0.0;
+  for (size_t i = 0; i < n; ++i) {
+    const size_t j = (i + 1) % n;
+    const double ax = xyz[i * 3] - ox, ay = xyz[i * 3 + 1] - oy;
+    const double bx = xyz[j * 3] - ox, by = xyz[j * 3 + 1] - oy;
+    if (std::hypot(ax - bx, ay - by) <= eps) { if (why) *why = "boundary has a zero-length edge"; return false; }
+    area2 += ax * by - bx * ay;
+  }
+  if (std::abs(area2) <= crossEps) { if (why) *why = "boundary has zero plan area"; return false; }
+  auto orient = [&](size_t a, size_t b, size_t c) {
+    const double abx = xyz[b * 3] - xyz[a * 3], aby = xyz[b * 3 + 1] - xyz[a * 3 + 1];
+    const double acx = xyz[c * 3] - xyz[a * 3], acy = xyz[c * 3 + 1] - xyz[a * 3 + 1];
+    return abx * acy - aby * acx;
+  };
+  auto onSegment = [&](size_t a, size_t b, size_t p) {
+    return xyz[p * 3] >= std::min(xyz[a * 3], xyz[b * 3]) - eps &&
+           xyz[p * 3] <= std::max(xyz[a * 3], xyz[b * 3]) + eps &&
+           xyz[p * 3 + 1] >= std::min(xyz[a * 3 + 1], xyz[b * 3 + 1]) - eps &&
+           xyz[p * 3 + 1] <= std::max(xyz[a * 3 + 1], xyz[b * 3 + 1]) + eps;
+  };
+  for (size_t a = 0; a < n; ++a) {
+    const size_t b = (a + 1) % n;
+    for (size_t c = a + 1; c < n; ++c) {
+      const size_t d = (c + 1) % n;
+      if (a == c || b == c || d == a) continue;
+      const double abC = orient(a, b, c), abD = orient(a, b, d);
+      const double cdA = orient(c, d, a), cdB = orient(c, d, b);
+      const bool proper = ((abC > crossEps && abD < -crossEps) || (abC < -crossEps && abD > crossEps)) &&
+                          ((cdA > crossEps && cdB < -crossEps) || (cdA < -crossEps && cdB > crossEps));
+      const bool touch = (std::abs(abC) <= crossEps && onSegment(a, b, c)) ||
+                         (std::abs(abD) <= crossEps && onSegment(a, b, d)) ||
+                         (std::abs(cdA) <= crossEps && onSegment(c, d, a)) ||
+                         (std::abs(cdB) <= crossEps && onSegment(c, d, b));
+      if (proper || touch) { if (why) *why = "boundary self-intersects or touches itself"; return false; }
+    }
+  }
+  return true;
+}
 
 static void ApplyDefinitionPointEdits(const CadSurface& surface, SurfaceBuildInputs& in) {
   assert(std::isfinite(in.originX));
@@ -2976,6 +3526,55 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
   in.originX = st.worldDocumentOriginX;
   in.originY = st.worldDocumentOriginY;
 
+  if (surface.gradingGroup) {
+    for (const auto &member : surface.gradingMembers) {
+      if (!member.strips) {
+        in.inputsIncomplete = true;
+        in.incompleteReason = "missing baked grading strips";
+        log.push_back("Surface \"" + surface.name + "\": " + in.incompleteReason);
+        return in;
+      }
+      for (const auto &strip : *member.strips) {
+        if (((member.infill && (strip.size() < 9 || strip.size() % 3 != 0)) ||
+             (!member.infill && strip.size() != 12)) ||
+            !std::all_of(strip.begin(), strip.end(),
+                         [](double v) { return std::isfinite(v); })) {
+          in.inputsIncomplete = true;
+          in.incompleteReason = "invalid baked grading strip";
+          log.push_back("Surface \"" + surface.name +
+                        "\": " + in.incompleteReason);
+          return in;
+        }
+        if (member.infill) {
+          std::string polygonError;
+          if (!IsSimpleInfillPolygon(strip, &polygonError)) {
+            in.inputsIncomplete = true;
+            in.incompleteReason = "infill " + polygonError;
+            log.push_back("Surface \"" + surface.name + "\": " + in.incompleteReason);
+            return in;
+          }
+        }
+        ResolvedChain chain;
+        TinBoundaryLoop loop;
+        loop.kind =
+            TinBoundaryKind::Clip; // union, including disconnected members
+        for (size_t v = 0; v < strip.size(); v += 3) {
+          const double x = strip[v] + in.originX, y = strip[v + 1] + in.originY;
+          chain.verts.push_back({x, y, strip[v + 2]});
+          loop.ring.emplace_back(x, y);
+        }
+        AppendChainConstraints(chain, true, in.constraints, &in.constraintSourceIds, member.gradingId);
+        in.cullLoops.push_back(std::move(loop));
+      }
+    }
+    if (!TinFindCrossingConflicts(in.constraints).empty()) {
+      in.inputsIncomplete = true;
+      in.incompleteReason = "grading strips cross at different elevations";
+      log.push_back("Surface \"" + surface.name + "\": " + in.incompleteReason);
+    }
+    return in;
+  }
+
   // Gather points from every named group. Groups are referenced by name (REQ-067), so a name that
   // no longer resolves is reported rather than silently contributing nothing — otherwise a renamed
   // group would quietly shrink a surface with no indication why.
@@ -3034,7 +3633,7 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
       continue;
     }
     resolvedBreaklines.push_back(bl);
-    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints);
+    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints, &in.constraintSourceIds, bl.entityId);
   }
   surface.breaklines = std::move(resolvedBreaklines);
   if (droppedBreaklines > 0)
@@ -3050,7 +3649,7 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
       continue;
     }
     resolvedContours.push_back(c);
-    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints);
+    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints, &in.constraintSourceIds, c.entityId);
   }
   surface.contourSources = std::move(resolvedContours);
   if (droppedContours > 0)
@@ -3068,7 +3667,7 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
       continue;
     }
     resolvedBoundaries.push_back(b);
-    AppendChainConstraints(chain, /*forceClosed=*/true, in.constraints);
+    AppendChainConstraints(chain, /*forceClosed=*/true, in.constraints, &in.constraintSourceIds, b.entityId);
     TinBoundaryLoop loop;
     loop.kind = b.kind == CadBoundaryKind::Outer ? TinBoundaryKind::Outer
               : b.kind == CadBoundaryKind::Hide  ? TinBoundaryKind::Hide
@@ -3111,6 +3710,7 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
 
   // Crossing breaklines at different elevations (REQ-069): reported by name and location so the
   // conflict can actually be found and fixed, rather than left to be inferred from a stray edge.
+  ApplySurfaceCrossingCorrections(surface, in);
   for (const TinCrossingIssue& issue : TinFindCrossingConflicts(in.constraints))
     log.push_back("Surface \"" + surface.name + "\": breaklines cross at (" +
                   std::to_string(issue.x) + ", " + std::to_string(issue.y) +
@@ -3316,6 +3916,7 @@ bool BuildCorridorSurface(AppCommandState& st, CadSurface& surface, std::vector<
   SurfaceBuildInputs in = ResolveSurfaceInputs(st, surface, log);
   in.pts.clear();
   in.constraints.clear();
+  in.constraintSourceIds.clear();
   std::vector<CadSurfaceBreakline> kept;
   for (const CadSurfaceBreakline& fl : surface.corridorFeatureLines) {
     ResolvedChain chain;
@@ -3324,7 +3925,7 @@ bool BuildCorridorSurface(AppCommandState& st, CadSurface& surface, std::vector<
     kept.push_back(fl);
     for (const auto& v : chain.verts)
       in.pts.push_back({v[0], v[1], static_cast<float>(v[2])});
-    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints);
+    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints, &in.constraintSourceIds, fl.entityId);
   }
   surface.corridorFeatureLines = std::move(kept);
   if (in.pts.empty()) {
@@ -3357,7 +3958,130 @@ bool BuildCorridorSurface(AppCommandState& st, CadSurface& surface, std::vector<
 
 } // namespace
 
-bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
+namespace {
+bool RefreshSurfaceProfilesForSurface(AppCommandState& st, const CadSurface& surface, bool invalidateCache = true,
+                                      std::uint64_t alignmentId = 0);
+bool RefreshSurfaceLabelValues(AppCommandState& st, const CadSurface& surface, bool invalidateCache = true) {
+  const auto surfaceIt = std::find_if(st.cadSurfaces.begin(), st.cadSurfaces.end(),
+                                     [&](const CadSurface& candidate) { return &candidate == &surface; });
+  if (surfaceIt == st.cadSurfaces.end()) return false;
+  const size_t si = static_cast<size_t>(surfaceIt - st.cadSurfaces.begin());
+  if (si >= st.cadSurfaceAttrs.size() || st.cadSurfaceAttrs[si].id == 0) return false;
+  const std::uint64_t id = st.cadSurfaceAttrs[si].id;
+  const bool hasBuiltTin = surface.tin && !surface.tin->indices.empty();
+  auto elevation = [&](double x, double y, double* z) {
+    return hasBuiltTin && TinElevationAt(surface.tin->vertsXyz, surface.tin->indices, x, y, z);
+  };
+  bool changed = false;
+  for (CadAnnotation& label : st.cadAnnotations) {
+    if (label.surfaceLabelForId != id) continue;
+    if (!hasBuiltTin) {
+      const std::string unavailable = "Surface value unavailable";
+      if (label.text != unavailable) { label.text = unavailable; changed = true; }
+      continue;
+    }
+    if (label.surfaceLabelValues.empty()) continue;
+    bool valueAvailable = false;
+    double z0 = 0.0, z1 = 0.0;
+    if (label.surfaceLabelKind == 1 && label.surfaceLabelValues.size() == 2 &&
+        elevation(label.surfaceLabelValues[0], label.surfaceLabelValues[1], &z0)) {
+      label.text = "Elev " + FormatLinear(z0, st.displayLinearPrecision);
+      changed = true; valueAvailable = true;
+    } else if (label.surfaceLabelKind == 2 && label.surfaceLabelValues.size() == 4 &&
+               elevation(label.surfaceLabelValues[0], label.surfaceLabelValues[1], &z0) &&
+               elevation(label.surfaceLabelValues[2], label.surfaceLabelValues[3], &z1)) {
+      const double run = std::hypot(label.surfaceLabelValues[2] - label.surfaceLabelValues[0],
+                                    label.surfaceLabelValues[3] - label.surfaceLabelValues[1]);
+      if (run > 1.e-9) {
+        label.text = "Slope " + FormatLinear((z1 - z0) / run * 100.0, st.displayLinearPrecision) + "%";
+        changed = true; valueAvailable = true;
+      }
+    } else if (label.surfaceLabelKind == 3 && label.surfaceLabelValues.size() == 1 &&
+               elevation(label.insX, label.insY, &z0) &&
+               std::abs(z0 - label.surfaceLabelValues[0]) <= 0.01) {
+      const std::string text = "Elev " + FormatLinear(label.surfaceLabelValues[0], st.displayLinearPrecision);
+      if (label.text != text) { label.text = text; changed = true; }
+      valueAvailable = true;
+    } else if (label.surfaceLabelKind == 4 && label.surfaceLabelValues.size() == 2) {
+      const WatershedResult watersheds = ComputeWatershed(surface.tin->vertsXyz, surface.tin->indices);
+      const WatershedBasin* nearest = nullptr;
+      double nearestD2 = std::numeric_limits<double>::infinity();
+      for (const WatershedBasin& basin : watersheds.basins) {
+        const double dx = basin.drainX - label.surfaceLabelValues[0];
+        const double dy = basin.drainY - label.surfaceLabelValues[1];
+        if (dx * dx + dy * dy < nearestD2) { nearestD2 = dx * dx + dy * dy; nearest = &basin; }
+      }
+      if (nearest && nearestD2 < 1.e-6) {
+        label.text = "Watershed " + FormatLinear(nearest->area2d, st.displayLinearPrecision) + " sq ft";
+        changed = true; valueAvailable = true;
+      }
+    }
+    if (!valueAvailable && (label.surfaceLabelKind == 1 || label.surfaceLabelKind == 2 ||
+                            label.surfaceLabelKind == 3 || label.surfaceLabelKind == 4)) {
+      const std::string unavailable = "Surface value unavailable";
+      if (label.text != unavailable) { label.text = unavailable; changed = true; }
+    }
+  }
+  auto legendCells = [&](const std::string& kind) {
+    std::vector<std::string> cells = {"Range", "Upper bound", "Color"};
+    if (!hasBuiltTin) return std::vector<std::string>{"Analysis", "Surface value unavailable", "—"};
+    const SurfaceStyle* style = SurfaceStyles::Find(st.surfaceStyles, surface.styleName);
+    if (kind == "watershed") {
+      const WatershedResult result = ComputeWatershed(surface.tin->vertsXyz, surface.tin->indices);
+      for (const WatershedBasin& basin : result.basins) {
+        cells.push_back("Basin " + std::to_string(basin.id));
+        cells.push_back(FormatLinear(basin.area2d, st.displayLinearPrecision) + " sq ft");
+        cells.push_back(basin.drain == DrainKind::Depression ? "depression" : basin.drain == DrainKind::Flat ? "flat" : "boundary");
+      }
+    } else if (kind == "contour" && style) {
+      const SurfaceStats stats = ComputeSurfaceStats(surface.tin->vertsXyz, surface.tin->indices,
+                                                      static_cast<int>(surface.breaklines.size()), surface.isVolumeSurface());
+      std::vector<double> levels = style->userContourFt;
+      if (levels.empty() && style->minorIntervalFt > 0.0 && stats.built) {
+        const int first = static_cast<int>(std::ceil(stats.minZ / style->minorIntervalFt));
+        const int last = static_cast<int>(std::floor(stats.maxZ / style->minorIntervalFt));
+        if (last - first < 1000) for (int n = first; n <= last; ++n) levels.push_back(n * style->minorIntervalFt);
+      }
+      for (double level : levels) { cells.push_back("Contour"); cells.push_back(FormatLinear(level, st.displayLinearPrecision)); cells.push_back("—"); }
+    } else if (style) {
+      const bool arrows = kind == "slopearrow";
+      const std::vector<SurfaceBand>& bands = arrows ? style->arrowBands : style->bands;
+      const bool modeMatches = arrows || (kind == "elevation" && style->analysisMode == SurfaceAnalysisMode::Elevation) ||
+                               (kind == "slope" && style->analysisMode == SurfaceAnalysisMode::Slope);
+      if (modeMatches) {
+        double lower = -std::numeric_limits<double>::infinity();
+        for (const SurfaceBand& band : bands) {
+          cells.push_back(std::isfinite(lower) ? "(" + FormatLinear(lower, st.displayLinearPrecision) + ", " + FormatLinear(band.upperBound, st.displayLinearPrecision) + "]" : "≤ " + FormatLinear(band.upperBound, st.displayLinearPrecision));
+          cells.push_back(FormatLinear(band.upperBound, st.displayLinearPrecision)); cells.push_back(band.color); lower = band.upperBound;
+        }
+      }
+    }
+    return cells;
+  };
+  for (CadTable& table : st.cadTables) {
+    if (table.surfaceLegendForId != id) continue;
+    std::vector<std::string> cells = legendCells(table.surfaceLegendKind);
+    if (table.cells != cells || table.cols != 3) {
+      table.cells = std::move(cells);
+      table.cols = 3;
+      if (table.cells.size() > 3) CadTableFitToContent(&table, st.modelUnitsPerPlottedInch);
+      changed = true;
+    }
+  }
+  if (changed && invalidateCache) BumpCadGpuCache(st);
+  return changed;
+}
+} // namespace
+
+static bool BuildSurfaceFromSourcesImpl(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
+  if (surface.gradingGroup && surface.gradingMembers.empty()) {
+    surface.tin.reset();
+    surface.builtAtRevision = st.cadGpuRevision;
+    surface.lastBuildIncomplete = false;
+    surface.lastBuildMessage = "Empty grading group.";
+    log.push_back("Grading group \"" + surface.name + "\": no members.");
+    return true;
+  }
   // Synchronous path: explicit user actions (create, the manual Rebuild button) that should show a
   // result immediately rather than waiting a frame for the async path below to pick them up.
   if (surface.kind == SurfaceKind::Grid || surface.kind == SurfaceKind::GridVolume)
@@ -3409,6 +4133,15 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
   const TinBuildResult r = RunSurfaceBuild(in);
   surface.builtAtRevision = st.cadGpuRevision;
   surface.lastBuildIncomplete = false;
+  if (surface.gradingGroup &&
+      (r.conflictingDuplicates > 0 || r.constraintsUnresolved > 0)) {
+    surface.lastBuildIncomplete = true;
+    surface.lastBuildMessage =
+        "Conflicting grading elevations or unresolved grading boundary edges.";
+    log.push_back("Grading group \"" + surface.name +
+                  "\": " + surface.lastBuildMessage);
+    return false;
+  }
   if (!r.ok()) {
     // No partial surface, and the previous triangulation is left alone (REQ-001).
     surface.lastBuildMessage = r.message;
@@ -3435,6 +4168,51 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
     msg += " " + std::to_string(r.constraintsUnresolved) + " constraint edge(s) could not be enforced.";
   log.push_back(msg);
   return true;
+}
+
+bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
+  if (surface.dataShortcutReadOnly) {
+    log.push_back("Surface reference \"" + surface.name + "\" is read-only; refresh it from its project shortcut instead.");
+    return false;
+  }
+  const bool built = BuildSurfaceFromSourcesImpl(st, surface, log);
+  if (built) { RefreshSurfaceLabelValues(st, surface); RefreshSurfaceProfilesForSurface(st, surface); }
+  return built;
+}
+
+void RefreshSurfaceLegendTablesForStyle(AppCommandState& st, const std::string& styleName) {
+  bool changed = false;
+  for (const CadSurface& surface : st.cadSurfaces)
+    if (surface.styleName == styleName)
+      changed = RefreshSurfaceLabelValues(st, surface, false) || changed;
+  if (changed) BumpCadGpuCacheOnly(st);
+}
+
+void RefreshSurfaceDependentsAfterReplacement(AppCommandState& st, size_t surfaceIndex,
+                                              std::vector<std::string>& log) {
+  if (surfaceIndex >= st.cadSurfaces.size()) return;
+  CadSurface& surface = st.cadSurfaces[surfaceIndex];
+  ReDrapeLinkedToSurface(st, surfaceIndex, log, false);
+  (void)RefreshSurfaceLabelValues(st, surface, false);
+  (void)RefreshSurfaceProfilesForSurface(st, surface, false);
+  BumpCadGpuCache(st);
+}
+
+void RefreshSurfaceProfilesForAlignment(AppCommandState& st, std::uint64_t alignmentId,
+                                        std::vector<std::string>& log) {
+  if (alignmentId == 0) return;
+  bool changed = false;
+  for (const CadSurfaceProfile& profile : st.surfaceProfiles) {
+    if (profile.alignmentId != alignmentId) continue;
+    const int surfaceIndex = FindSurfaceIndexById(st, profile.surfaceId);
+    if (surfaceIndex < 0) continue;
+    changed = RefreshSurfaceProfilesForSurface(st, st.cadSurfaces[static_cast<size_t>(surfaceIndex)], false,
+                                               alignmentId) || changed;
+  }
+  if (changed) {
+    BumpCadGpuCache(st);
+    log.push_back("Saved surface profile refreshed for edited alignment.");
+  }
 }
 
 int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
@@ -3544,6 +4322,64 @@ void EraseSurfaceAtIndex(AppCommandState& st, size_t index) {
 
 void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
   using SurfaceJob = AppCommandState::SurfaceRebuildAsync;
+  bool appliedSurface = false;
+  std::unordered_set<std::uint64_t> presentSurfaceIds;
+  for (size_t i = 0; i < st.cadSurfaces.size() && i < st.cadSurfaceAttrs.size(); ++i)
+    if (st.cadSurfaceAttrs[i].id != 0) presentSurfaceIds.insert(st.cadSurfaceAttrs[i].id);
+  for (CadSurfaceProfile& profile : st.surfaceProfiles) {
+    const bool hasAlignment = std::any_of(st.alignments.begin(), st.alignments.end(),
+        [&](const alignment::Alignment& a) { return a.id == profile.alignmentId; });
+    const int surfaceIndex = FindSurfaceIndexById(st, profile.surfaceId);
+    std::string unavailable;
+    if (!hasAlignment) unavailable = "Source alignment is missing.";
+    else if (surfaceIndex < 0) unavailable = "Source surface is missing.";
+    else {
+      const CadSurface& surface = st.cadSurfaces[static_cast<size_t>(surfaceIndex)];
+      if (!surface.tin || surface.tin->indices.empty()) unavailable = "Source surface has no built TIN.";
+    }
+    if (!unavailable.empty()) {
+      if (profile.sourceStatus != unavailable) {
+        profile.sourceStatus = unavailable;
+        log.push_back("Profile \"" + profile.name + "\" unavailable: " + unavailable + " Last saved view retained.");
+      }
+    } else if (profile.sourceStatus == "Source alignment is missing." ||
+               profile.sourceStatus == "Source surface is missing." ||
+               profile.sourceStatus == "Source surface has no built TIN." ||
+               profile.sourceStatus == "Source alignment unavailable." ||
+               profile.sourceStatus == "Source surface unavailable.") {
+      const std::string priorStatus = profile.sourceStatus;
+      appliedSurface = RefreshSurfaceProfilesForSurface(
+          st, st.cadSurfaces[static_cast<size_t>(surfaceIndex)], false,
+          profile.alignmentId) || appliedSurface;
+      if (profile.sourceStatus.empty())
+        log.push_back("Profile \"" + profile.name + "\" source is available again; profile view refreshed.");
+      else if (profile.sourceStatus != priorStatus)
+        log.push_back("Profile \"" + profile.name + "\" unavailable: " + profile.sourceStatus);
+    }
+  }
+  bool invalidatedMissingLabel = false;
+  for (CadAnnotation& label : st.cadAnnotations) {
+    if (label.surfaceLabelForId != 0 && presentSurfaceIds.find(label.surfaceLabelForId) == presentSurfaceIds.end() &&
+        label.text != "Surface value unavailable") {
+      label.text = "Surface value unavailable";
+      invalidatedMissingLabel = true;
+    }
+  }
+  const std::vector<std::string> unavailableLegend = {
+      "Analysis", "Surface value unavailable", "—"};
+  for (CadTable& table : st.cadTables) {
+    if (table.surfaceLegendForId == 0 || presentSurfaceIds.find(table.surfaceLegendForId) != presentSurfaceIds.end())
+      continue;
+    if (table.cells != unavailableLegend || table.cols != 3) {
+      table.cells = unavailableLegend;
+      table.cols = 3;
+      invalidatedMissingLabel = true;
+    }
+  }
+  for (const CadSurface& surface : st.cadSurfaces)
+    if (!surface.tin || surface.tin->indices.empty())
+      invalidatedMissingLabel = RefreshSurfaceLabelValues(st, surface, false) || invalidatedMissingLabel;
+  if (invalidatedMissingLabel) BumpCadGpuCacheOnly(st);
 
   // Reap finished workers first, so a surface freed up this frame can be redispatched this same
   // frame rather than waiting one extra frame.
@@ -3577,7 +4413,10 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
         MarkVolumeSurfacesDirtyForParent(st, surface.name);
         // A link means the same thing whichever way the rebuild was driven (ADR-069 (b)): the
         // command path above and this async reap are the only two places a TIN is replaced.
-        ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);
+        ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log, false);
+        (void)RefreshSurfaceLabelValues(st, surface, false);
+        (void)RefreshSurfaceProfilesForSurface(st, surface, false);
+        appliedSurface = true;
       } else {
         // No partial surface; the previous triangulation (if any) is left alone (REQ-001).
         surface.lastBuildMessage = r.ok() ? "Boundaries left no surface." : r.message;
@@ -3589,11 +4428,23 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
     st.surfaceRebuildAsync.erase(st.surfaceRebuildAsync.begin() + static_cast<std::ptrdiff_t>(i));
   }
 
+  if (appliedSurface) BumpCadGpuCacheOnly(st);
+
   // Dispatch a rebuild for every surface whose definition might have changed and does not already
   // have one in flight — one dispatch per surface per revision is REQ-069's "at most one rebuild per
   // command/undo boundary," since a command bumps cadGpuRevision once however many points it moved.
   for (size_t sIdx = 0; sIdx < st.cadSurfaces.size(); ++sIdx) {
     CadSurface& surface = st.cadSurfaces[sIdx];
+    if (surface.dataShortcutReadOnly) {
+      surface.builtAtRevision = st.cadGpuRevision;
+      continue; // shortcut TINs update only through RefreshProjectSurfaceReferences
+    }
+    // REQ-404 / ADR-070: only membership edits and explicit grading rebuilds
+    // refresh these snapshots.
+    if (surface.gradingGroup) {
+      surface.builtAtRevision = st.cadGpuRevision;
+      continue;
+    }
     if (surface.builtAtRevision == st.cadGpuRevision)
       continue;
     // The id is assigned by EnsureEntityIds, which main.cpp runs immediately before this every frame.
@@ -3612,6 +4463,19 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
       (void)BuildSurfaceFromSources(st, surface, buildLog);
       for (std::string& m : buildLog)
         log.push_back(std::move(m));
+      continue;
+    }
+
+    // A fixed triangulation (a TIN imported from a Civil 3D DWG) has no sources to rebuild from, so a
+    // revision change must leave it alone rather than "rebuild" it from nothing.
+    if (surface.tin && !surface.isVolumeSurface() && surface.sourcePointGroups.empty() &&
+        surface.sourcePointFiles.empty() && surface.addedPointXyz.empty() && surface.breaklines.empty() &&
+        surface.contourSources.empty() && surface.boundaries.empty() && surface.movedPoints.empty() &&
+        surface.corridorFeatureLines.empty()) {
+      const bool refreshedLabels = RefreshSurfaceLabelValues(st, surface, false);
+      const bool refreshedProfiles = RefreshSurfaceProfilesForSurface(st, surface, false);
+      if (refreshedLabels || refreshedProfiles) BumpCadGpuCacheOnly(st);
+      surface.builtAtRevision = st.cadGpuRevision;
       continue;
     }
 
@@ -3816,7 +4680,9 @@ void ReportSurfaces(const AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("SURFACELIST — no surfaces in the drawing.");
     return;
   }
-  for (const CadSurface& s : st.cadSurfaces) {
+  for (size_t surfaceIndex = 0; surfaceIndex < st.cadSurfaces.size(); ++surfaceIndex) {
+    const CadSurface& s = st.cadSurfaces[surfaceIndex];
+    const std::uint64_t id = surfaceIndex < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[surfaceIndex].id : 0;
     std::string line = "Surface \"" + s.name + "\": ";
     const char* kn = s.kind == SurfaceKind::Grid          ? "grid"
                      : s.kind == SurfaceKind::TinVolume   ? "tin-volume"
@@ -3832,6 +4698,7 @@ void ReportSurfaces(const AppCommandState& st, std::vector<std::string>& log) {
             std::to_string(s.contourSources.size()) + " contour source(s), " +
             std::to_string(s.boundaries.size()) + " boundary(ies), " +
             std::to_string(s.sourcePointFiles.size()) + " point file(s).";
+    line += " Stable surface ID: " + std::to_string(id) + ".";
     log.push_back(line);
 
     for (size_t i = 0; i < s.sourcePointGroups.size(); ++i) {
@@ -4018,6 +4885,10 @@ void RunSurfaceCreateVolGrid(AppCommandState& st, const std::string& args, std::
 
 static void CommitSurfSwapEdgeLocal(AppCommandState& st, CadSurface& s, double x, double y,
                                     std::vector<std::string>& log) {
+  if (s.dataShortcutReadOnly) {
+    log.push_back("SURFSWAPEDGE — surface reference \"" + s.name + "\" is read-only.");
+    return;
+  }
   if (!s.tin || s.tin->indices.size() < 6) {
     log.push_back("SURFSWAPEDGE — \"" + s.name + "\" is not a built TIN.");
     return;
@@ -4067,15 +4938,38 @@ void RunSurfSwapEdge(AppCommandState& st, const std::string& args, std::vector<s
 static bool SurfaceRefusesPointEdits(const CadSurface& s, const char* cmd, std::vector<std::string>& log) {
   assert(cmd != nullptr);
   assert(cmd[0] != '\0');
+  if (s.dataShortcutReadOnly) {
+    log.push_back(std::string(cmd) + " — surface reference \"" + s.name + "\" is read-only.");
+    return true;
+  }
   if (s.kind == SurfaceKind::Tin && !s.isVolumeSurface())
     return false;
   log.push_back(std::string(cmd) + " — \"" + s.name + "\" is not a TIN surface.");
   return true;
 }
 
+// A TIN imported from a Civil 3D DWG is a fixed triangulation with no definition (no point groups, files, added
+// points, breaklines, contours, boundaries or corridor). Point edits would be rebuilt from the edits alone and
+// replace the imported triangulation, so they are refused rather than silently losing it.
+static bool SurfaceIsImportedFixedTin(const CadSurface& s) {
+  return s.importedFixedTin && s.tin && !s.isVolumeSurface() && s.sourcePointGroups.empty() && s.sourcePointFiles.empty() &&
+         s.addedPointXyz.empty() && s.breaklines.empty() && s.contourSources.empty() && s.boundaries.empty() &&
+         s.movedPoints.empty() && s.corridorFeatureLines.empty();
+}
+
+static bool RefusesImportedTinPointEdit(const CadSurface& s, const char* command, std::vector<std::string>& log) {
+  if (!SurfaceIsImportedFixedTin(s)) return false;
+  log.push_back(std::string(command) + " — \"" + s.name + "\" is an imported fixed triangulation with no definition; "
+                "point edits would rebuild it from the edits alone and discard the imported surface. Edit the surface in "
+                "Civil 3D, or build a new surface from points.");
+  return true;
+}
+
 static void CommitSurfAddPointLocal(AppCommandState& st, CadSurface& s, double x, double y, double z,
                                     std::vector<std::string>& log) {
   if (SurfaceRefusesPointEdits(s, "SURFACEADDPOINT", log))
+    return;
+  if (RefusesImportedTinPointEdit(s, "SURFACEADDPOINT", log))
     return;
   if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
     log.push_back("SURFACEADDPOINT — x, y, and z must be finite numbers.");
@@ -4092,6 +4986,8 @@ static void CommitSurfAddPointLocal(AppCommandState& st, CadSurface& s, double x
 static void CommitSurfDelPointLocal(AppCommandState& st, CadSurface& s, double x, double y,
                                     std::vector<std::string>& log) {
   if (SurfaceRefusesPointEdits(s, "SURFACEDELPOINT", log))
+    return;
+  if (RefusesImportedTinPointEdit(s, "SURFACEDELPOINT", log))
     return;
   if (!std::isfinite(x) || !std::isfinite(y)) {
     log.push_back("SURFACEDELPOINT — x and y must be finite numbers.");
@@ -4111,6 +5007,8 @@ static void CommitSurfDelPointLocal(AppCommandState& st, CadSurface& s, double x
 static void CommitSurfMovePointLocal(AppCommandState& st, CadSurface& s, double x1, double y1, double x2, double y2,
                                      double z2, std::vector<std::string>& log) {
   if (SurfaceRefusesPointEdits(s, "SURFACEMOVEPOINT", log))
+    return;
+  if (RefusesImportedTinPointEdit(s, "SURFACEMOVEPOINT", log))
     return;
   if (!std::isfinite(x1) || !std::isfinite(y1) || !std::isfinite(x2) || !std::isfinite(y2) || !std::isfinite(z2)) {
     log.push_back("SURFACEMOVEPOINT — coordinates must be finite numbers.");
@@ -4287,6 +5185,164 @@ static std::unique_ptr<ISurfaceQuery> MakeSurfaceQuery(const AppCommandState& st
   return nullptr;
 }
 
+bool RefreshSurfaceProfilesForSurface(AppCommandState& st, const CadSurface& surface, bool invalidateCache,
+                                      std::uint64_t alignmentId) {
+  const auto surfaceIt = std::find_if(st.cadSurfaces.begin(), st.cadSurfaces.end(),
+                                     [&](const CadSurface& value) { return &value == &surface; });
+  if (surfaceIt == st.cadSurfaces.end()) return false;
+  const size_t surfaceIndex = static_cast<size_t>(surfaceIt - st.cadSurfaces.begin());
+  if (surfaceIndex >= st.cadSurfaceAttrs.size()) return false;
+  const std::uint64_t surfaceId = st.cadSurfaceAttrs[surfaceIndex].id;
+  if (surfaceId == 0) return false;
+  bool changed = false;
+  auto eraseEntities = [&](const std::vector<std::uint64_t>& ids) {
+    const std::unordered_set<std::uint64_t> remove(ids.begin(), ids.end());
+    std::vector<double> lines;
+    std::vector<EntityAttributes> attrs;
+    std::vector<int> oldToNew(st.userLineAttrs.size(), -1);
+    lines.reserve(st.userLinesFlat.size()); attrs.reserve(st.userLineAttrs.size());
+    for (size_t i = 0; i < st.userLineAttrs.size(); ++i) {
+      if (remove.find(st.userLineAttrs[i].id) != remove.end()) continue;
+      const size_t start = i * 6;
+      if (start + 5 >= st.userLinesFlat.size()) continue;
+      oldToNew[i] = static_cast<int>(attrs.size());
+      lines.insert(lines.end(), st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(start),
+                   st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(start + 6));
+      attrs.push_back(st.userLineAttrs[i]);
+    }
+    st.userLinesFlat.swap(lines); st.userLineAttrs.swap(attrs);
+    for (size_t i = st.selection.size(); i > 0; --i) {
+      SelectedEntity& selected = st.selection[i - 1];
+      if (selected.type != SelectedEntity::Type::LineSeg || selected.index < 0 ||
+          static_cast<size_t>(selected.index) >= oldToNew.size()) continue;
+      const int mapped = oldToNew[static_cast<size_t>(selected.index)];
+      if (mapped < 0) st.selection.erase(st.selection.begin() + static_cast<std::ptrdiff_t>(i - 1));
+      else selected.index = mapped;
+    }
+  };
+  for (CadSurfaceProfile& profile : st.surfaceProfiles) {
+    if (profile.surfaceId != surfaceId || (alignmentId != 0 && profile.alignmentId != alignmentId)) continue;
+    auto setStatus = [&](const std::string& status) {
+      if (profile.sourceStatus == status) return;
+      profile.sourceStatus = status;
+      changed = true;
+    };
+    const auto alignmentIt = std::find_if(st.alignments.begin(), st.alignments.end(),
+                                          [&](const alignment::Alignment& value) { return value.id == profile.alignmentId; });
+    if (alignmentIt == st.alignments.end()) {
+      setStatus("Source alignment unavailable.");
+      continue;
+    }
+    const size_t alignmentIndex = static_cast<size_t>(alignmentIt - st.alignments.begin());
+    auto query = MakeSurfaceQuery(st, surface);
+    if (!query) {
+      setStatus("Source surface unavailable.");
+      continue;
+    }
+    std::vector<alignment::GroundPoint> sampled;
+    std::string why;
+    if (!alignment::SampleGround(st.alignments[alignmentIndex], *query,
+                                profile.sampleInterval, 100000, &sampled, &why)) {
+      setStatus("Surface profile unavailable: " + why + ".");
+      continue;
+    }
+    std::vector<double> stations, elevations;
+    stations.reserve(sampled.size()); elevations.reserve(sampled.size());
+    double minZ = std::numeric_limits<double>::infinity(), maxZ = -minZ;
+    for (const auto& point : sampled) {
+      stations.push_back(point.internalStation);
+      elevations.push_back(point.hasGround ? point.ground : std::numeric_limits<double>::quiet_NaN());
+      if (point.hasGround) { minZ = std::min(minZ, point.ground); maxZ = std::max(maxZ, point.ground); }
+    }
+    if (!std::isfinite(minZ)) {
+      setStatus("Surface profile unavailable: alignment has no covered stations.");
+      continue; // preserve the last good graph while the source is unavailable
+    }
+    setStatus("");
+    eraseEntities(profile.viewEntityIds);
+    profile.viewEntityIds.clear(); profile.stations = std::move(stations); profile.elevations = std::move(elevations);
+    changed = true;
+    const size_t firstLine = st.userLineAttrs.size();
+    auto addLine = [&](double x0, double y0, double x1, double y1) {
+      st.userLinesFlat.insert(st.userLinesFlat.end(), {x0, y0, 0.0, x1, y1, 0.0});
+      EntityAttributes attrs = MakeNewEntityAttrs(st);
+      attrs.id = st.nextEntityId++;
+      st.userLineAttrs.push_back(std::move(attrs));
+    };
+    const double endX = profile.viewX + profile.stations.back() * profile.horizontalScale;
+    const double graphHeight = std::max(0.1, (maxZ - minZ) * profile.verticalScale);
+    addLine(profile.viewX, profile.viewY, endX, profile.viewY); // station axis
+    addLine(profile.viewX, profile.viewY, profile.viewX, profile.viewY + graphHeight); // elevation axis
+    for (size_t i = 1; i < profile.stations.size(); ++i) {
+      if (!std::isfinite(profile.elevations[i - 1]) || !std::isfinite(profile.elevations[i])) continue;
+      addLine(profile.viewX + profile.stations[i - 1] * profile.horizontalScale,
+              profile.viewY + (profile.elevations[i - 1] - minZ) * profile.verticalScale,
+              profile.viewX + profile.stations[i] * profile.horizontalScale,
+              profile.viewY + (profile.elevations[i] - minZ) * profile.verticalScale);
+    }
+    EnsureEntityIds(st);
+    for (size_t i = firstLine; i < st.userLineAttrs.size(); ++i) profile.viewEntityIds.push_back(st.userLineAttrs[i].id);
+    if (invalidateCache) BumpCadGpuCache(st);
+  }
+  return changed;
+}
+
+void RunCreateSurfaceProfile(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const auto f = SplitCommaFields(args);
+  if (f.size() != 8) { log.push_back("CREATEPROFILEFROMSURFACE — usage: <surface>, <alignment>, <profile name>, interval, viewX, viewY, horizontal scale, vertical scale."); return; }
+  const int si = FindSurfaceIndex(st, StringUtil::trimCopy(f[0]));
+  if (si < 0) { log.push_back("CREATEPROFILEFROMSURFACE — no surface named \"" + f[0] + "\"."); return; }
+  if (!st.cadSurfaces[static_cast<size_t>(si)].tin) { log.push_back("CREATEPROFILEFROMSURFACE — surface has no built TIN."); return; }
+  int ai = -1;
+  for (size_t i = 0; i < st.alignments.size(); ++i) if (st.alignments[i].name == StringUtil::trimCopy(f[1])) { ai = static_cast<int>(i); break; }
+  if (ai < 0) { log.push_back("CREATEPROFILEFROMSURFACE — no alignment named \"" + f[1] + "\"."); return; }
+  const std::string name = StringUtil::trimCopy(f[2]);
+  if (name.empty() || std::any_of(st.surfaceProfiles.begin(), st.surfaceProfiles.end(), [&](const auto& p) { return p.name == name; })) {
+    log.push_back("CREATEPROFILEFROMSURFACE — profile name must be non-empty and unique."); return;
+  }
+  double values[5]{};
+  for (size_t i = 0; i < 5; ++i) { char* end = nullptr; values[i] = std::strtod(f[i + 3].c_str(), &end); if (!end || *end != '\0' || !std::isfinite(values[i])) { log.push_back("CREATEPROFILEFROMSURFACE — interval, view origin, and scales must be finite numbers."); return; } }
+  if (values[0] <= 0.0 || values[3] <= 0.0 || values[4] <= 0.0) { log.push_back("CREATEPROFILEFROMSURFACE — interval and profile-view scales must be positive."); return; }
+  EnsureEntityIds(st);
+  if (static_cast<size_t>(si) >= st.cadSurfaceAttrs.size() || st.cadSurfaceAttrs[static_cast<size_t>(si)].id == 0 || st.alignments[static_cast<size_t>(ai)].id == 0) {
+    log.push_back("CREATEPROFILEFROMSURFACE — a source has no stable drawing identifier."); return;
+  }
+  CadSurfaceProfile profile;
+  profile.id = st.nextEntityId++;
+  profile.name = name;
+  profile.surfaceId = st.cadSurfaceAttrs[static_cast<size_t>(si)].id;
+  profile.alignmentId = st.alignments[static_cast<size_t>(ai)].id;
+  profile.sampleInterval = values[0];
+  CadCoord::LocalFromWorld(st, values[1], values[2], &profile.viewX, &profile.viewY);
+  profile.horizontalScale = values[3]; profile.verticalScale = values[4];
+  PushUndoSnapshot(st, "Create surface profile");
+  st.surfaceProfiles.push_back(profile);
+  st.alignments[static_cast<size_t>(ai)].profileIds.push_back(profile.id);
+  RefreshSurfaceProfilesForSurface(st, st.cadSurfaces[static_cast<size_t>(si)]);
+  if (st.surfaceProfiles.back().sourceStatus.empty())
+    log.push_back("CREATEPROFILEFROMSURFACE — profile \"" + name + "\" sampled and profile view placed.");
+  else
+    log.push_back("CREATEPROFILEFROMSURFACE — profile \"" + name + "\" unavailable: " +
+                  st.surfaceProfiles.back().sourceStatus + " Last saved view retained.");
+}
+
+void RunSurfaceProfileView(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const auto f = SplitCommaFields(args);
+  if (f.size() != 5) { log.push_back("PROFILEVIEW — usage: <profile>, viewX, viewY, horizontal scale, vertical scale."); return; }
+  auto it = std::find_if(st.surfaceProfiles.begin(), st.surfaceProfiles.end(), [&](const auto& p) { return p.name == StringUtil::trimCopy(f[0]); });
+  if (it == st.surfaceProfiles.end()) { log.push_back("PROFILEVIEW — no saved profile named \"" + f[0] + "\"."); return; }
+  double v[4]{};
+  for (size_t i = 0; i < 4; ++i) { char* end = nullptr; v[i] = std::strtod(f[i + 1].c_str(), &end); if (!end || *end != '\0' || !std::isfinite(v[i])) { log.push_back("PROFILEVIEW — origin and scales must be finite numbers."); return; } }
+  if (v[2] <= 0.0 || v[3] <= 0.0) { log.push_back("PROFILEVIEW — scales must be positive."); return; }
+  const int si = FindSurfaceIndexById(st, it->surfaceId);
+  if (si < 0) { log.push_back("PROFILEVIEW — source surface is missing; the last saved view remains unchanged."); return; }
+  PushUndoSnapshot(st, "Move profile view");
+  CadCoord::LocalFromWorld(st, v[0], v[1], &it->viewX, &it->viewY);
+  it->horizontalScale = v[2]; it->verticalScale = v[3];
+  RefreshSurfaceProfilesForSurface(st, st.cadSurfaces[static_cast<size_t>(si)]);
+  log.push_back("PROFILEVIEW — \"" + it->name + "\" view updated.");
+}
+
 static void CommitQuickProfileLocal(AppCommandState& st, const CadSurface& s, double x0, double y0, double x1,
                                     double y1, std::vector<std::string>& log) {
   auto q = MakeSurfaceQuery(st, s);
@@ -4339,6 +5395,8 @@ void RunQuickProfile(AppCommandState& st, const std::string& args, std::vector<s
     StartQuickProfileCommand(st, f[0], log);
     return;
   }
+  if (f.size() == 2 && !f[0].empty() && RunQuickProfileAlongAlignment(st, f[0], f[1], log))  // REQ-500 AC3
+    return;
   if (f.size() != 5 || f[0].empty()) {
     log.push_back("QUICKPROFILE — usage: QUICKPROFILE <surface>[, <x1>, <y1>, <x2>, <y2>].");
     return;
@@ -4519,8 +5577,18 @@ void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector
     return;
   }
   if (name.empty()) {
+    const bool hasEditableSurface = std::any_of(st.cadSurfaces.begin(), st.cadSurfaces.end(),
+        [](const CadSurface& surface) { return !surface.dataShortcutReadOnly; });
+    if (!hasEditableSurface) {
+      log.push_back("SURFACEREBUILD — all surfaces are read-only project references.");
+      return;
+    }
     PushUndoSnapshot(st, "Rebuild surfaces");
     for (size_t i = 0; i < st.cadSurfaces.size(); ++i) {
+      if (st.cadSurfaces[i].dataShortcutReadOnly) {
+        log.push_back("SURFACEREBUILD — reference \"" + st.cadSurfaces[i].name + "\" skipped; it is refreshed from its project source.");
+        continue;
+      }
       BuildSurfaceFromSources(st, st.cadSurfaces[i], log);
       ReDrapeLinkedToSurface(st, i, log);  // ADR-069 (b)
     }
@@ -4530,6 +5598,10 @@ void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector
   const int si = FindSurfaceIndex(st, name);
   if (si < 0) {
     log.push_back("SURFACEREBUILD — no surface named \"" + name + "\".");
+    return;
+  }
+  if (st.cadSurfaces[static_cast<size_t>(si)].dataShortcutReadOnly) {
+    log.push_back("SURFACEREBUILD — surface reference \"" + name + "\" is read-only; refresh it from the project source.");
     return;
   }
   PushUndoSnapshot(st, "Rebuild surface");
@@ -4558,6 +5630,7 @@ void RunSurfaceAddFile(AppCommandState& st, const std::string& args, std::vector
     return;
   }
   CadSurfacePointFile pf;
+  if (SurfaceRefusesPointEdits(st.cadSurfaces[static_cast<size_t>(si)], "SURFACEADDFILE", log)) return;
   pf.path = f[1];
   if (f.size() >= 3 && !f[2].empty()) {
     const std::string lay = StringUtil::toLowerAsciiCopy(f[2]);
@@ -4585,6 +5658,7 @@ void RunSurfaceAddFile(AppCommandState& st, const std::string& args, std::vector
 
   PushUndoSnapshot(st, "Link point file to surface");
   CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  if (SurfaceRefusesPointEdits(s, "SURFACEIMPORTFILE", log)) return;
   log.push_back("SURFACEADDFILE — linked \"" + pf.path + "\" to \"" + s.name + "\" (" +
                 std::to_string(probe.size()) + " point(s)" +
                 (skipped > 0 ? ", " + std::to_string(skipped) + " row(s) unreadable" : "") + ").");
@@ -4891,6 +5965,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
     }
     PushUndoSnapshot(st, "Surface style");
     st.cadSurfaces[static_cast<size_t>(si)].styleName = f[1];
+    (void)RefreshSurfaceLabelValues(st, st.cadSurfaces[static_cast<size_t>(si)], false);
     BumpCadGpuCache(st);
     log.push_back("SURFSTYLE — surface \"" + st.cadSurfaces[static_cast<size_t>(si)].name +
                   "\" now uses style \"" + f[1] + "\".");
@@ -5357,13 +6432,18 @@ void ExecuteToolspaceCommand(AppCommandState& st, const std::string& args, std::
       StringUtil::trimCopy(args.substr(0, args.find_first_of(" \t,"))));
 
   const auto dumpTree = [&]() {
-    const bool settings = (st.toolspaceTab == AppCommandState::ToolspaceTab::Settings);
-    log.push_back(std::string("TOOLSPACE — tab: ") + (settings ? "Settings" : "Prospector"));
+    std::string tabName = "Prospector";
     std::vector<std::string> lines;
-    if (settings)
+    if (st.toolspaceTab == AppCommandState::ToolspaceTab::Project) {
+      tabName = "Project";
+      AppendToolspaceProjectLines(st, &lines);
+    } else if (st.toolspaceTab == AppCommandState::ToolspaceTab::Settings) {
+      tabName = "Settings";
       AppendToolspaceSettingsLines(st, &lines);
-    else
+    } else {
       AppendToolspaceProspectorLines(st, &lines);
+    }
+    log.push_back("TOOLSPACE — tab: " + tabName);
     for (const std::string& line : lines)
       log.push_back(std::string("TOOLSPACE  ") + line);
   };
@@ -5401,7 +6481,7 @@ void ExecuteToolspaceCommand(AppCommandState& st, const std::string& args, std::
     log.push_back("TOOLSPACE — closed.");
     return;
   }
-  log.push_back("TOOLSPACE — usage: TOOLSPACE [PROSPECTOR|SETTINGS|LIST|CLOSE]. Unknown \"" +
+  log.push_back("TOOLSPACE — usage: TOOLSPACE [PROJECT|PROSPECTOR|SETTINGS|LIST|CLOSE]. Unknown \"" +
                 StringUtil::trimCopy(args) + "\".");
 }
 
@@ -5816,7 +6896,682 @@ void RunCatchmentCommand(AppCommandState& st, const std::string& args, std::vect
 
 } // namespace
 
+std::unique_ptr<ISurfaceQuery> MakeSurfaceQueryForCommands(const AppCommandState& st, const CadSurface& surf) {
+  return MakeSurfaceQuery(st, surf);  // REQ-497: alignment commands read the same ground the QUICKPROFILE command does
+}
+
+bool MoveSelectedBlockRefsToSurface(AppCommandState& st, size_t surfaceIndex, std::vector<std::string>& log) {
+  if (surfaceIndex >= st.cadSurfaces.size()) {
+    log.push_back("Move to Surface — the selected surface no longer exists.");
+    return false;
+  }
+  const auto query = MakeSurfaceQuery(st, st.cadSurfaces[surfaceIndex]);
+  if (!query) {
+    log.push_back("Move to Surface — the selected surface has no built data.");
+    return false;
+  }
+  std::vector<std::pair<size_t, double>> elevations;
+  for (const SelectedEntity& selected : st.selection) {
+    if (selected.type != SelectedEntity::Type::BlockRef || selected.index < 0 ||
+        static_cast<size_t>(selected.index) >= st.cadBlockRefs.size())
+      continue;
+    const CadBlockRef& block = st.cadBlockRefs[static_cast<size_t>(selected.index)];
+    double z = 0.0;
+    if (!query->elevationAt(block.xf.x, block.xf.y, &z)) {
+      log.push_back("Move to Surface — a selected block is outside the surface; no blocks were moved.");
+      return false;
+    }
+    elevations.emplace_back(static_cast<size_t>(selected.index), z);
+  }
+  if (elevations.empty()) {
+    log.push_back("Move to Surface — select one or more block references first.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Move blocks to surface");
+  for (const auto& [index, z] : elevations)
+    st.cadBlockRefs[index].xf.z = static_cast<float>(z);
+  BumpCadGpuCache(st);
+  log.push_back("Move to Surface — moved " + std::to_string(elevations.size()) + " block reference(s) to \"" +
+                st.cadSurfaces[surfaceIndex].name + "\".");
+  return true;
+}
+
+bool SetSurfaceDisplayLod(AppCommandState& st, size_t surfaceIndex, bool reduced) {
+  if (surfaceIndex >= st.cadSurfaces.size() || st.cadSurfaces[surfaceIndex].reducedDisplayLod == reduced)
+    return false;
+  PushUndoSnapshot(st, reduced ? "Reduced surface display detail" : "High surface display detail");
+  st.cadSurfaces[surfaceIndex].reducedDisplayLod = reduced;
+  BumpCadGpuCache(st);
+  return true;
+}
+
+bool AttachModelRasterImage(AppCommandState& st, const std::string& path, float x, float y,
+                            float width, float height, float rotationRad, std::vector<std::string>& log) {
+  if (path.empty() || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) ||
+      !std::isfinite(height) || !std::isfinite(rotationRad) || width <= 0.f || height <= 0.f) {
+    log.push_back("IMAGEATTACH — path and finite placement with positive width and height are required; no image was added.");
+    return false;
+  }
+  CadRasterImage image;
+  std::string why;
+  double localX = 0.0, localY = 0.0;
+  CadCoord::LocalFromWorld(st, x, y, &localX, &localY);
+  if (!MakeSheetRasterImage(path, static_cast<float>(localX), static_cast<float>(localY),
+                            width, height, rotationRad, &image, &why)) {
+    log.push_back("IMAGEATTACH — image \"" + path + "\" could not be read (" + why + "); no image was added.");
+    return false;
+  }
+  EnsureEntityIds(st);
+  image.id = AllocEntityId(st);
+  image.layer = st.currentLayer.empty() ? "0" : st.currentLayer;
+  PushUndoSnapshot(st, "Attach image");
+  st.cadRasterImages.push_back(std::move(image));
+  BumpCadGpuCache(st);
+  log.push_back("IMAGEATTACH — attached \"" + path + "\" as image " +
+                std::to_string(st.cadRasterImages.back().id) + ".");
+  return true;
+}
+
+bool SetModelRasterDrape(AppCommandState& st, size_t imageIndex, size_t surfaceIndex,
+                         std::vector<std::string>& log) {
+  if (imageIndex >= st.cadRasterImages.size()) {
+    log.push_back("SURFDRAPE — the selected image no longer exists; no change was made.");
+    return false;
+  }
+  if (surfaceIndex >= st.cadSurfaces.size() || !st.cadSurfaces[surfaceIndex].tin ||
+      st.cadSurfaces[surfaceIndex].tin->indices.empty()) {
+    log.push_back("SURFDRAPE — the selected surface has no built TIN; no change was made.");
+    return false;
+  }
+  EnsureEntityIds(st);
+  const std::uint64_t surfaceId = st.cadSurfaceAttrs[surfaceIndex].id;
+  if (surfaceId == 0) {
+    log.push_back("SURFDRAPE — the selected surface has no stable identity; no change was made.");
+    return false;
+  }
+  if (st.cadRasterImages[imageIndex].surfaceId == surfaceId) {
+    log.push_back("SURFDRAPE — the image is already draped on this surface.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Drape image on surface");
+  st.cadRasterImages[imageIndex].surfaceId = surfaceId;
+  BumpCadGpuCache(st);
+  log.push_back("SURFDRAPE — image " + std::to_string(st.cadRasterImages[imageIndex].id) +
+                " is draped on \"" + st.cadSurfaces[surfaceIndex].name + "\".");
+  return true;
+}
+
+void RunSurfaceLodCommand(AppCommandState& st, const std::string& args, bool reduced,
+                          std::vector<std::string>& log) {
+  const char* command = reduced ? "SURFLODLOW" : "SURFLODHIGH";
+  const std::vector<std::string> fields = SplitCommaFields(args);
+  if (fields.size() != 1 || fields.front().empty()) {
+    log.push_back(std::string(command) + " — usage: " + command + " <surface name>.");
+    return;
+  }
+  const int index = FindSurfaceIndex(st, fields.front());
+  if (index < 0) {
+    log.push_back(std::string(command) + " — no surface named \"" + fields.front() + "\".");
+    return;
+  }
+  const bool changed = SetSurfaceDisplayLod(st, static_cast<size_t>(index), reduced);
+  log.push_back(std::string(command) + " — \"" + st.cadSurfaces[static_cast<size_t>(index)].name +
+                (changed ? (reduced ? "\" now uses Reduced display detail." : "\" now uses High display detail.")
+                         : (reduced ? "\" already uses Reduced display detail." : "\" already uses High display detail.")));
+}
+
+void RunMoveToSurfaceCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> fields = SplitCommaFields(args);
+  if (fields.size() != 1 || fields.front().empty()) {
+    log.push_back("MOVETOSURFACE — usage: MOVETOSURFACE <surface name> (select block references first).");
+    return;
+  }
+  const int index = FindSurfaceIndex(st, fields.front());
+  if (index < 0) {
+    log.push_back("MOVETOSURFACE — no surface named \"" + fields.front() + "\".");
+    return;
+  }
+  MoveSelectedBlockRefsToSurface(st, static_cast<size_t>(index), log);
+}
+
+namespace {
+
+bool SurfaceSightVisible(const CadTin& tin, double ox, double oy, double oz,
+                         double tx, double ty, double tz, double* obstructionX = nullptr,
+                         double* obstructionY = nullptr, double* obstructionZ = nullptr,
+                         bool* fullyCovered = nullptr) {
+  struct Interval { double first, last; };
+  std::vector<Interval> intervals;
+  const double dx = tx - ox, dy = ty - oy;
+  for (size_t ti = 0; ti + 2 < tin.indices.size(); ti += 3) {
+    const std::uint32_t ia = tin.indices[ti], ib = tin.indices[ti + 1], ic = tin.indices[ti + 2];
+    if ((static_cast<size_t>(std::max({ia, ib, ic})) + 1) * 3 > tin.vertsXyz.size()) continue;
+    const double ax = tin.vertsXyz[static_cast<size_t>(ia) * 3], ay = tin.vertsXyz[static_cast<size_t>(ia) * 3 + 1];
+    const double bx = tin.vertsXyz[static_cast<size_t>(ib) * 3], by = tin.vertsXyz[static_cast<size_t>(ib) * 3 + 1];
+    const double cx = tin.vertsXyz[static_cast<size_t>(ic) * 3], cy = tin.vertsXyz[static_cast<size_t>(ic) * 3 + 1];
+    const double area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    if (std::abs(area) <= 1.e-15) continue;
+    const double orientation = area > 0.0 ? 1.0 : -1.0;
+    double first = 0.0, last = 1.0;
+    const std::array<std::pair<double,double>, 3> a = {{{ax,ay},{bx,by},{cx,cy}}};
+    const std::array<std::pair<double,double>, 3> b = {{{bx,by},{cx,cy},{ax,ay}}};
+    bool intersects = true;
+    for (size_t edge = 0; edge < 3; ++edge) {
+      const double ex = b[edge].first - a[edge].first, ey = b[edge].second - a[edge].second;
+      const double f0 = orientation * (ex * (oy - a[edge].second) - ey * (ox - a[edge].first));
+      const double slope = orientation * (ex * dy - ey * dx);
+      if (std::abs(slope) <= 1.e-15) { if (f0 < -1.e-10) { intersects = false; break; } continue; }
+      const double crossing = (-1.e-10 - f0) / slope;
+      if (slope > 0.0) first = std::max(first, crossing); else last = std::min(last, crossing);
+      if (first > last) { intersects = false; break; }
+    }
+    if (intersects && last >= 0.0 && first <= 1.0) intervals.push_back({std::clamp(first,0.0,1.0), std::clamp(last,0.0,1.0)});
+  }
+  std::sort(intervals.begin(), intervals.end(), [](const Interval& a, const Interval& b) { return a.first < b.first; });
+  double coveredThrough = 0.0;
+  bool covered = !intervals.empty();
+  for (const Interval& interval : intervals) {
+    if (interval.first > coveredThrough + 1.e-9) { covered = false; break; }
+    coveredThrough = std::max(coveredThrough, interval.last);
+  }
+  covered = covered && coveredThrough >= 1.0 - 1.e-9;
+  if (fullyCovered) *fullyCovered = covered;
+  if (!covered) return false;
+  for (const Interval& interval : intervals) {
+    double z0 = 0.0, z1 = 0.0;
+    const double x0 = ox + dx * interval.first, y0 = oy + dy * interval.first;
+    const double x1 = ox + dx * interval.last, y1 = oy + dy * interval.last;
+    if (!TinElevationAt(tin.vertsXyz, tin.indices, x0, y0, &z0) ||
+        !TinElevationAt(tin.vertsXyz, tin.indices, x1, y1, &z1)) {
+      if (fullyCovered) *fullyCovered = false;
+      return false;
+    }
+    const double d0 = z0 - (oz + (tz - oz) * interval.first);
+    const double d1 = z1 - (oz + (tz - oz) * interval.last);
+    if (d0 > 0.002 || d1 > 0.002 || (d0 <= 0.002 && d1 > 0.002)) {
+      double t = interval.first;
+      if (d0 <= 0.002 && d1 > 0.002 && d1 != d0)
+        t += (interval.last - interval.first) * (0.002 - d0) / (d1 - d0);
+      if (obstructionX) *obstructionX = ox + dx * t;
+      if (obstructionY) *obstructionY = oy + dy * t;
+      if (obstructionZ) (void)TinElevationAt(tin.vertsXyz, tin.indices, ox + dx * t, oy + dy * t, obstructionZ);
+      return false;
+    }
+  }
+  return true;
+}
+
+void AddSurfaceResultLine(AppCommandState& st, double ax, double ay, double az,
+                          double bx, double by, double bz, const char* color) {
+  st.userLinesFlat.insert(st.userLinesFlat.end(), {ax, ay, az, bx, by, bz});
+  EntityAttributes attrs = MakeNewEntityAttrs(st);
+  attrs.color = color;
+  st.userLineAttrs.push_back(std::move(attrs));
+}
+
+void RunSurfaceVisibility(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() < 2) {
+    log.push_back("SURFACEVISIBILITY — usage: SURFACEVISIBILITY <surface>, LOS|ZVI, coordinates...");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFACEVISIBILITY — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  const CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  const auto query = MakeSurfaceQueryForCommands(st, surface);
+  if (!query || !surface.tin || surface.tin->indices.empty()) {
+    log.push_back("SURFACEVISIBILITY — surface \"" + surface.name + "\" has no built TIN.");
+    return;
+  }
+  const std::string mode = StringUtil::toLowerAsciiCopy(f[1]);
+  auto number = [&](size_t i, double* out) {
+    if (i >= f.size()) return false;
+    char* end = nullptr;
+    *out = std::strtod(f[i].c_str(), &end);
+    return end && *end == '\0' && std::isfinite(*out);
+  };
+  auto worldToLocal = [&](double wx, double wy, double* x, double* y) {
+    CadCoord::LocalFromWorld(st, wx, wy, x, y);
+  };
+  if (mode == "los") {
+    if (f.size() != 8) {
+      log.push_back("SURFACEVISIBILITY — LOS usage: SURFACEVISIBILITY <surface>, LOS, eyeX, eyeY, eyeHeight, targetX, targetY, targetHeight.");
+      return;
+    }
+    double wx0 = 0.0, wy0 = 0.0, eye = 0.0, wx1 = 0.0, wy1 = 0.0, target = 0.0;
+    if (!number(2, &wx0) || !number(3, &wy0) || !number(4, &eye) || !number(5, &wx1) ||
+        !number(6, &wy1) || !number(7, &target) || eye < 0.0 || target < 0.0) {
+      log.push_back("SURFACEVISIBILITY — LOS coordinates and heights must be finite; heights cannot be negative.");
+      return;
+    }
+    double x0 = 0.0, y0 = 0.0, x1 = 0.0, y1 = 0.0, g0 = 0.0, g1 = 0.0;
+    worldToLocal(wx0, wy0, &x0, &y0);
+    worldToLocal(wx1, wy1, &x1, &y1);
+    if (!query->elevationAt(x0, y0, &g0) || !query->elevationAt(x1, y1, &g1)) {
+      log.push_back("SURFACEVISIBILITY — eye or target is outside the surface; no result was created.");
+      return;
+    }
+    const double z0 = g0 + eye, z1 = g1 + target;
+    double bx = std::numeric_limits<double>::quiet_NaN(), by = 0.0, bz = 0.0;
+    bool covered = false;
+    const bool visible = SurfaceSightVisible(*surface.tin, x0, y0, z0, x1, y1, z1, &bx, &by, &bz, &covered);
+    if (!covered) {
+      log.push_back("SURFACEVISIBILITY — the line crosses an area outside the surface; no result was created.");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface line of sight");
+    if (visible) {
+      AddSurfaceResultLine(st, x0, y0, z0, x1, y1, z1, "#25a55b");
+      log.push_back("SURFACEVISIBILITY LOS — target is visible.");
+    } else {
+      AddSurfaceResultLine(st, x0, y0, z0, bx, by, bz, "#25a55b");
+      AddSurfaceResultLine(st, bx, by, bz, x1, y1, z1, "#d64545");
+      log.push_back("SURFACEVISIBILITY LOS — target is obstructed; first obstruction at " +
+                    std::to_string(bx + st.worldDocumentOriginX) + ", " +
+                    std::to_string(by + st.worldDocumentOriginY) + ".");
+    }
+    BumpCadGpuCache(st);
+    return;
+  }
+  if (mode == "zvi") {
+    if (f.size() != 7) {
+      log.push_back("SURFACEVISIBILITY — ZVI usage: SURFACEVISIBILITY <surface>, ZVI, observerX, observerY, eyeHeight, targetHeight, radius.");
+      return;
+    }
+    double wx = 0.0, wy = 0.0, eye = 0.0, target = 0.0, radius = 0.0, ground = 0.0;
+    if (!number(2, &wx) || !number(3, &wy) || !number(4, &eye) || !number(5, &target) ||
+        !number(6, &radius) || eye < 0.0 || target < 0.0 || radius <= 0.0 || radius > 10000.0) {
+      log.push_back("SURFACEVISIBILITY — ZVI requires finite coordinates, nonnegative heights, and a radius from 0 to 10000.");
+      return;
+    }
+    double ox = 0.0, oy = 0.0;
+    worldToLocal(wx, wy, &ox, &oy);
+    if (!query->elevationAt(ox, oy, &ground)) {
+      log.push_back("SURFACEVISIBILITY — observer is outside the surface; no result was created.");
+      return;
+    }
+    constexpr int side = 32;
+    const double step = 2.0 * radius / side;
+    std::vector<std::pair<CadFilledRegion, std::string>> cells;
+    cells.reserve(side * side);
+    size_t visibleCells = 0, partialCells = 0, hiddenCells = 0;
+    std::vector<std::pair<double,double>> footprint;
+    constexpr int circleSegments = 128;
+    constexpr double circlePi = 3.14159265358979323846;
+    footprint.reserve(circleSegments);
+    for (int i = 0; i < circleSegments; ++i) {
+      const double angle = 2.0 * circlePi * static_cast<double>(i) / circleSegments;
+      footprint.emplace_back(ox + radius * std::cos(angle), oy + radius * std::sin(angle));
+    }
+    const auto clipAxis = [](const std::vector<std::pair<double,double>>& input, int axis, double bound,
+                             bool keepGreater) {
+      std::vector<std::pair<double,double>> output;
+      if (input.empty()) return output;
+      const auto coordinate = [axis](const auto& p) { return axis == 0 ? p.first : p.second; };
+      const auto inside = [&](const auto& p) {
+        return keepGreater ? coordinate(p) >= bound - 1.e-10 : coordinate(p) <= bound + 1.e-10;
+      };
+      auto previous = input.back();
+      bool previousInside = inside(previous);
+      for (const auto& current : input) {
+        const bool currentInside = inside(current);
+        if (currentInside != previousInside) {
+          const double denominator = coordinate(current) - coordinate(previous);
+          if (std::abs(denominator) > 1.e-15) {
+            const double t = (bound - coordinate(previous)) / denominator;
+            output.emplace_back(previous.first + t * (current.first - previous.first),
+                                previous.second + t * (current.second - previous.second));
+          }
+        }
+        if (currentInside) output.push_back(current);
+        previous = current;
+        previousInside = currentInside;
+      }
+      return output;
+    };
+    for (int row = 0; row < side; ++row) for (int col = 0; col < side; ++col) {
+      const double x0 = ox - radius + col * step, x1 = x0 + step;
+      const double y0 = oy - radius + row * step, y1 = y0 + step;
+      std::vector<std::pair<double,double>> polygon = clipAxis(footprint, 0, x0, true);
+      polygon = clipAxis(polygon, 0, x1, false);
+      polygon = clipAxis(polygon, 1, y0, true);
+      polygon = clipAxis(polygon, 1, y1, false);
+      if (polygon.size() < 3) continue;
+      int visiblePoints = 0;
+      bool completeSightCoverage = true;
+      std::vector<double> vertexZ;
+      vertexZ.reserve(polygon.size());
+      for (const auto& p : polygon) {
+        double targetGround = 0.0;
+        if (!query->elevationAt(p.first, p.second, &targetGround)) {
+          completeSightCoverage = false;
+          break;
+        }
+        vertexZ.push_back(targetGround);
+        bool sightCovered = false;
+        if (SurfaceSightVisible(*surface.tin, ox, oy, ground + eye, p.first, p.second,
+                                targetGround + target, nullptr, nullptr, nullptr, &sightCovered)) ++visiblePoints;
+        completeSightCoverage = completeSightCoverage && sightCovered;
+      }
+      if (!completeSightCoverage || vertexZ.size() != polygon.size()) continue;
+      const bool fullyVisible = visiblePoints == static_cast<int>(polygon.size());
+      const bool fullyHidden = visiblePoints == 0;
+      if (fullyVisible) ++visibleCells;
+      else if (fullyHidden) ++hiddenCells;
+      else ++partialCells;
+      CadFilledRegion region;
+      region.vertsXyz.reserve(polygon.size() * 3);
+      for (size_t i = 0; i < polygon.size(); ++i) {
+        region.vertsXyz.push_back(polygon[i].first);
+        region.vertsXyz.push_back(polygon[i].second);
+        region.vertsXyz.push_back(vertexZ[i]);
+      }
+      region.loopStart = {0};
+      cells.emplace_back(std::move(region), fullyVisible ? "#35a86b" : fullyHidden ? "#d64545" : "#e4b844");
+    }
+    if (cells.empty()) {
+      log.push_back("SURFACEVISIBILITY — the requested area has no surface coverage.");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface zone of visual influence");
+    for (auto& [region, color] : cells) {
+      st.cadFilledRegions.push_back(std::move(region));
+      EntityAttributes attrs = MakeNewEntityAttrs(st);
+      attrs.color = color;
+      st.cadFilledRegionAttrs.push_back(std::move(attrs));
+    }
+    EnsureAttrCounts(st);
+    BumpCadGpuCache(st);
+    log.push_back("SURFACEVISIBILITY ZVI — " + std::to_string(visibleCells) + " visible cell(s), " +
+                  std::to_string(partialCells) + " partly visible cell(s), " +
+                  std::to_string(hiddenCells) + " hidden cell(s).");
+    return;
+  }
+  log.push_back("SURFACEVISIBILITY — choose LOS or ZVI.");
+}
+
+void RunSurfaceLabel(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() < 2) {
+    log.push_back("SURFLABEL — usage: SURFLABEL <surface>, SPOT, x, y | SLOPE, x1, y1, x2, y2 | CONTOUR, elevation, x, y | CONTOUR, elevation, GUIDE, x1, y1, ... | WATERSHED.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, StringUtil::trimCopy(f[0]));
+  if (si < 0) { log.push_back("SURFLABEL — no surface named \"" + f[0] + "\"."); return; }
+  CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  if (!surface.tin || surface.tin->indices.empty()) { log.push_back("SURFLABEL — surface \"" + surface.name + "\" has no built TIN."); return; }
+  const std::string kind = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(f[1]));
+  std::vector<std::vector<double>> values;
+  std::vector<std::pair<double,double>> anchors;
+  auto parse = [&](size_t i, double* value) {
+    if (i >= f.size()) return false;
+    char* end = nullptr; *value = std::strtod(f[i].c_str(), &end);
+    return end && *end == '\0' && std::isfinite(*value);
+  };
+  auto local = [&](double wx, double wy) { double x = 0.0, y = 0.0; CadCoord::LocalFromWorld(st, wx, wy, &x, &y); return std::pair<double,double>{x,y}; };
+  auto query = [&](double x, double y, double* z) { return TinElevationAt(surface.tin->vertsXyz, surface.tin->indices, x, y, z); };
+  if (kind == "spot" && f.size() == 4) {
+    double x = 0.0, y = 0.0, z = 0.0;
+    if (!parse(2, &x) || !parse(3, &y)) { log.push_back("SURFLABEL — spot coordinates must be finite numbers."); return; }
+    const auto p = local(x, y);
+    if (!query(p.first, p.second, &z)) { log.push_back("SURFLABEL — point is outside surface \"" + surface.name + "\"."); return; }
+    values.push_back({p.first,p.second}); anchors.push_back(p);
+  } else if (kind == "slope" && f.size() == 6) {
+    double x0 = 0.0, y0 = 0.0, x1 = 0.0, y1 = 0.0, z0 = 0.0, z1 = 0.0;
+    if (!parse(2,&x0) || !parse(3,&y0) || !parse(4,&x1) || !parse(5,&y1)) { log.push_back("SURFLABEL — slope coordinates must be finite numbers."); return; }
+    const auto a = local(x0,y0), b = local(x1,y1);
+    if (std::hypot(b.first-a.first,b.second-a.second) <= 1.e-9 || !query(a.first,a.second,&z0) || !query(b.first,b.second,&z1)) {
+      log.push_back("SURFLABEL — slope endpoints must be distinct and both covered by surface \"" + surface.name + "\"."); return;
+    }
+    values.push_back({a.first,a.second,b.first,b.second}); anchors.push_back({(a.first+b.first)*0.5,(a.second+b.second)*0.5});
+  } else if (kind == "contour" && f.size() == 5) {
+    double level = 0.0, wx = 0.0, wy = 0.0, z = 0.0;
+    if (!parse(2,&level) || !parse(3,&wx) || !parse(4,&wy)) { log.push_back("SURFLABEL — contour elevation and coordinates must be finite numbers."); return; }
+    const auto p = local(wx,wy);
+    if (!query(p.first,p.second,&z) || std::abs(z-level) > 0.01) { log.push_back("SURFLABEL — selected point is not on the requested contour of surface \"" + surface.name + "\"."); return; }
+    values.push_back({level}); anchors.push_back(p);
+  } else if (kind == "contour" && f.size() >= 8 &&
+             StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(f[3])) == "guide" && (f.size() - 4) % 2 == 0) {
+    double level = 0.0;
+    if (!parse(2, &level) || f.size() < 8) {
+      log.push_back("SURFLABEL — repeated contour labels need an elevation and at least two guide points."); return;
+    }
+    std::vector<std::pair<double,double>> guide;
+    for (size_t i = 4; i < f.size(); i += 2) {
+      double wx = 0.0, wy = 0.0;
+      if (!parse(i, &wx) || !parse(i + 1, &wy)) {
+        log.push_back("SURFLABEL — guide coordinates must be finite numbers."); return;
+      }
+      guide.push_back(local(wx, wy));
+    }
+    const auto& verts = surface.tin->vertsXyz;
+    const auto& indices = surface.tin->indices;
+    auto addUnique = [](std::vector<std::pair<double,double>>& points, double x, double y) {
+      if (std::none_of(points.begin(), points.end(), [&](const auto& p) { return std::hypot(p.first-x,p.second-y) < 1.e-8; }))
+        points.emplace_back(x, y);
+    };
+    std::vector<std::pair<std::pair<double,double>,std::pair<double,double>>> contourLines;
+    for (size_t ti = 0; ti + 2 < indices.size(); ti += 3) {
+      std::vector<std::pair<double,double>> points;
+      for (int e = 0; e < 3; ++e) {
+        const size_t ia = static_cast<size_t>(indices[ti + static_cast<size_t>(e)]) * 3;
+        const size_t ib = static_cast<size_t>(indices[ti + static_cast<size_t>((e + 1) % 3)]) * 3;
+        if (ia + 2 >= verts.size() || ib + 2 >= verts.size()) continue;
+        const double za = verts[ia + 2], zb = verts[ib + 2];
+        if (level < std::min(za,zb) || level > std::max(za,zb) || za == zb) continue;
+        const double t = (level - za) / (zb - za);
+        addUnique(points, verts[ia] + (verts[ib] - verts[ia]) * t, verts[ia + 1] + (verts[ib + 1] - verts[ia + 1]) * t);
+      }
+      if (points.size() == 2) contourLines.emplace_back(points[0], points[1]);
+    }
+    for (size_t gi = 1; gi < guide.size(); ++gi) {
+      const double px = guide[gi-1].first, py = guide[gi-1].second;
+      const double rx = guide[gi].first-px, ry = guide[gi].second-py;
+      for (const auto& segment : contourLines) {
+        const double qx = segment.first.first, qy = segment.first.second;
+        const double sx = segment.second.first-qx, sy = segment.second.second-qy;
+        const double den = rx*sy-ry*sx;
+        if (std::abs(den) < 1.e-12) continue;
+        const double t = ((qx-px)*sy-(qy-py)*sx)/den;
+        const double u = ((qx-px)*ry-(qy-py)*rx)/den;
+        if (t < -1.e-9 || t > 1.0+1.e-9 || u < -1.e-9 || u > 1.0+1.e-9) continue;
+        const double x = px + t*rx, y = py + t*ry;
+        if (std::none_of(anchors.begin(), anchors.end(), [&](const auto& a) { return std::hypot(a.first-x,a.second-y) < 0.01; })) {
+          anchors.emplace_back(x,y);
+          values.push_back({level});
+        }
+      }
+    }
+    if (anchors.empty()) { log.push_back("SURFLABEL — guide does not cross the requested contour on surface \"" + surface.name + "\"."); return; }
+  } else if (kind == "watershed" && f.size() == 2) {
+    const WatershedResult watersheds = ComputeWatershed(surface.tin->vertsXyz, surface.tin->indices);
+    if (!watersheds.ok || watersheds.basins.empty()) { log.push_back("SURFLABEL — no watershed basins are available on surface \"" + surface.name + "\"."); return; }
+    for (const WatershedBasin& basin : watersheds.basins) {
+      values.push_back({basin.drainX,basin.drainY}); anchors.push_back({basin.drainX,basin.drainY});
+    }
+  } else {
+    log.push_back("SURFLABEL — choose SPOT, SLOPE, CONTOUR, or WATERSHED with the documented arguments."); return;
+  }
+  EnsureEntityIds(st);
+  if (static_cast<size_t>(si) >= st.cadSurfaceAttrs.size() || st.cadSurfaceAttrs[static_cast<size_t>(si)].id == 0) {
+    log.push_back("SURFLABEL — surface has no stable drawing identifier."); return;
+  }
+  PushUndoSnapshot(st, "Surface labels");
+  for (size_t i = 0; i < values.size(); ++i) {
+    CadAnnotation label;
+    label.insX = static_cast<float>(anchors[i].first); label.insY = static_cast<float>(anchors[i].second);
+    label.surfaceLabelForId = st.cadSurfaceAttrs[static_cast<size_t>(si)].id;
+    label.surfaceLabelKind = kind == "spot" ? 1 : kind == "slope" ? 2 : kind == "contour" ? 3 : 4;
+    label.surfaceLabelValues = values[i];
+    label.plottedHeightInches = st.defaultPlottedTextHeightInches;
+    StampActiveTextStyleOnNewText(st, label);
+    st.cadAnnotations.push_back(std::move(label));
+    st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
+  }
+  RefreshSurfaceLabelValues(st, surface);
+  BumpCadGpuCache(st);
+  log.push_back("SURFLABEL — " + std::to_string(values.size()) + " linked label(s) added to \"" + surface.name + "\".");
+}
+
+void RunSurfaceLegend(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() < 2) { log.push_back("SURFACELEGEND — usage: SURFACELEGEND <surface>, ELEVATION|SLOPE|SLOPEARROW|CONTOUR|WATERSHED, x, y."); return; }
+  const int si = FindSurfaceIndex(st, StringUtil::trimCopy(f[0]));
+  if (si < 0) { log.push_back("SURFACELEGEND — no surface named \"" + f[0] + "\"."); return; }
+  CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  if (!surface.tin || surface.tin->indices.empty()) { log.push_back("SURFACELEGEND — surface \"" + surface.name + "\" has no built TIN."); return; }
+  const std::string kind = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(f[1]));
+  double wx = 0.0, wy = 0.0;
+  auto number = [&](size_t i, double* out) { if (i >= f.size()) return false; char* end = nullptr; *out = std::strtod(f[i].c_str(), &end); return end && *end == '\0' && std::isfinite(*out); };
+  if (f.size() != 4 || !number(2,&wx) || !number(3,&wy)) { log.push_back("SURFACELEGEND — insertion X and Y must be finite numbers."); return; }
+  const SurfaceStyle* style = SurfaceStyles::Find(st.surfaceStyles, surface.styleName);
+  CadTable table; table.cols = 3;
+  CadCoord::LocalFromWorld(st, wx, wy, &table.insX, &table.insY);
+  table.insZ = CadCommitElevation(st); table.surfaceLegendKind = kind;
+  EnsureEntityIds(st);
+  if (static_cast<size_t>(si) >= st.cadSurfaceAttrs.size() || st.cadSurfaceAttrs[static_cast<size_t>(si)].id == 0) { log.push_back("SURFACELEGEND — surface has no stable drawing identifier."); return; }
+  table.surfaceLegendForId = st.cadSurfaceAttrs[static_cast<size_t>(si)].id;
+  table.cells = {"Range", "Upper bound", "Color"};
+  const int p = st.displayLinearPrecision;
+  if ((kind == "elevation" && style && style->analysisMode == SurfaceAnalysisMode::Elevation) ||
+      (kind == "slope" && style && style->analysisMode == SurfaceAnalysisMode::Slope) ||
+      (kind == "slopearrow" && style)) {
+    const bool arrows = kind == "slopearrow";
+    const auto& bands = arrows ? style->arrowBands : style->bands;
+    double lower = -std::numeric_limits<double>::infinity();
+    for (const SurfaceBand& band : bands) {
+      table.cells.push_back(std::isfinite(lower) ? "(" + FormatLinear(lower,p) + ", " + FormatLinear(band.upperBound,p) + "]" : "≤ " + FormatLinear(band.upperBound,p));
+      table.cells.push_back(FormatLinear(band.upperBound,p)); table.cells.push_back(band.color); lower = band.upperBound;
+    }
+  } else if (kind == "contour" && style) {
+    std::vector<double> levels = style->userContourFt;
+    const SurfaceStats stats = ComputeSurfaceStats(surface.tin->vertsXyz, surface.tin->indices, static_cast<int>(surface.breaklines.size()), surface.isVolumeSurface());
+    if (levels.empty() && stats.built && style->minorIntervalFt > 0.0) {
+      const int first = static_cast<int>(std::ceil(stats.minZ / style->minorIntervalFt)), last = static_cast<int>(std::floor(stats.maxZ / style->minorIntervalFt));
+      if (last - first < 1000) for (int n = first; n <= last; ++n) levels.push_back(n * style->minorIntervalFt);
+    }
+    for (double level : levels) { table.cells.push_back("Contour"); table.cells.push_back(FormatLinear(level,p)); table.cells.push_back("—"); }
+  } else if (kind == "watershed") {
+    const WatershedResult result = ComputeWatershed(surface.tin->vertsXyz, surface.tin->indices);
+    for (const WatershedBasin& basin : result.basins) { table.cells.push_back("Basin " + std::to_string(basin.id)); table.cells.push_back(FormatLinear(basin.area2d,p) + " sq ft"); table.cells.push_back(basin.drain == DrainKind::Depression ? "depression" : basin.drain == DrainKind::Flat ? "flat" : "boundary"); }
+  }
+  if (table.cells.size() <= 3) { log.push_back("SURFACELEGEND — the requested analysis has no computed rows on surface \"" + surface.name + "\"."); return; }
+  if (const TextStyle* ts = ActiveTextStyle(st)) table.fontFamily = ts->fontFamily;
+  table.plottedHeightInches = st.defaultPlottedTextHeightInches;
+  CadTableFitToContent(&table, st.modelUnitsPerPlottedInch);
+  PushUndoSnapshot(st, "Surface analysis legend");
+  st.cadTables.push_back(std::move(table));
+  AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});
+  EnsureAttrCounts(st); BumpCadGpuCache(st);
+  log.push_back("SURFACELEGEND — linked " + kind + " table added for \"" + surface.name + "\".");
+}
+
+void RunSurfaceCrossings(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.empty() || f[0].empty()) {
+    log.push_back("SURFCROSSBL — usage: SURFCROSSBL <surface>[, RESOLVE, x, y, HIGHER|LOWER|AVERAGE|TRIM-A|TRIM-B|elevation].");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFCROSSBL — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  if (surface.dataShortcutReadOnly && f.size() > 1 && StringUtil::toLowerAsciiCopy(f[1]) != "list") {
+    log.push_back("SURFCROSSBL — surface reference \"" + surface.name + "\" is read-only.");
+    return;
+  }
+  if (surface.kind != SurfaceKind::Tin || surface.breaklines.size() < 2) {
+    log.push_back("SURFCROSSBL — the selected surface has fewer than two breaklines to compare.");
+    return;
+  }
+  CadSurface candidate = surface;
+  std::vector<std::string> ignored;
+  SurfaceBuildInputs inputs = ResolveSurfaceInputs(st, candidate, ignored);
+  if (inputs.inputsIncomplete) {
+    log.push_back("SURFCROSSBL — cannot resolve crossings because the surface definition is incomplete.");
+    return;
+  }
+  const auto issues = TinFindCrossingConflicts(inputs.constraints);
+  auto logIssue = [&](const TinCrossingIssue& issue) {
+    if (issue.constraintIndexA >= inputs.constraintSourceIds.size() || issue.constraintIndexB >= inputs.constraintSourceIds.size())
+      return;
+    log.push_back("SURFCROSSBL — breakline IDs " + std::to_string(inputs.constraintSourceIds[issue.constraintIndexA]) +
+                  " and " + std::to_string(inputs.constraintSourceIds[issue.constraintIndexB]) + " cross at (" +
+                  std::to_string(issue.x) + ", " + std::to_string(issue.y) +
+                  "); elevation difference " + std::to_string(issue.zFromA - issue.zFromB) + ".");
+  };
+  if (f.size() == 1 || (f.size() == 2 && StringUtil::toLowerAsciiCopy(f[1]) == "list")) {
+    if (issues.empty()) log.push_back("SURFCROSSBL — no unresolved interior breakline crossings on \"" + surface.name + "\".");
+    else for (const TinCrossingIssue& issue : issues) logIssue(issue);
+    return;
+  }
+  if (f.size() != 5 || StringUtil::toLowerAsciiCopy(f[1]) != "resolve") {
+    log.push_back("SURFCROSSBL — usage: SURFCROSSBL <surface>, RESOLVE, x, y, HIGHER|LOWER|AVERAGE|TRIM-A|TRIM-B|elevation.");
+    return;
+  }
+  char *ex = nullptr, *ey = nullptr;
+  const double wx = std::strtod(f[2].c_str(), &ex), wy = std::strtod(f[3].c_str(), &ey);
+  if (!ex || *ex != '\0' || !ey || *ey != '\0' || !std::isfinite(wx) || !std::isfinite(wy)) {
+    log.push_back("SURFCROSSBL — crossing coordinates must be finite numbers.");
+    return;
+  }
+  double x = 0.0, y = 0.0;
+  CadCoord::LocalFromWorld(st, wx, wy, &x, &y);
+  const TinCrossingIssue* selected = nullptr;
+  for (const TinCrossingIssue& issue : issues)
+    if (std::hypot(issue.x - wx, issue.y - wy) <= 0.05) {
+      selected = &issue; break;
+    }
+  if (!selected || selected->constraintIndexA >= inputs.constraintSourceIds.size() ||
+      selected->constraintIndexB >= inputs.constraintSourceIds.size()) {
+    log.push_back("SURFCROSSBL — no unresolved crossing was found within 0.05 drawing units of that location.");
+    return;
+  }
+  CadSurfaceCrossingCorrection correction;
+  correction.entityA = inputs.constraintSourceIds[selected->constraintIndexA];
+  correction.entityB = inputs.constraintSourceIds[selected->constraintIndexB];
+  correction.x = x; correction.y = y;
+  const std::string action = StringUtil::toLowerAsciiCopy(f[4]);
+  if (action == "higher") correction.kind = CadSurfaceCrossingCorrection::Kind::Higher;
+  else if (action == "lower") correction.kind = CadSurfaceCrossingCorrection::Kind::Lower;
+  else if (action == "average") correction.kind = CadSurfaceCrossingCorrection::Kind::Average;
+  else if (action == "trim-a") correction.kind = CadSurfaceCrossingCorrection::Kind::TrimA;
+  else if (action == "trim-b") correction.kind = CadSurfaceCrossingCorrection::Kind::TrimB;
+  else {
+    char* ez = nullptr;
+    correction.customElevation = std::strtod(f[4].c_str(), &ez);
+    if (!ez || *ez != '\0' || !std::isfinite(correction.customElevation)) {
+      log.push_back("SURFCROSSBL — choose HIGHER, LOWER, AVERAGE, TRIM-A, TRIM-B, or a numeric elevation.");
+      return;
+    }
+    correction.kind = CadSurfaceCrossingCorrection::Kind::Custom;
+  }
+  PushUndoSnapshot(st, "Resolve surface breakline crossing");
+  surface.crossingCorrections.erase(std::remove_if(surface.crossingCorrections.begin(), surface.crossingCorrections.end(),
+      [&](const CadSurfaceCrossingCorrection& existing) {
+        return existing.entityA == correction.entityA && existing.entityB == correction.entityB &&
+               std::hypot(existing.x - correction.x, existing.y - correction.y) <= 0.05;
+      }), surface.crossingCorrections.end());
+  surface.crossingCorrections.push_back(correction);
+  BumpCadGpuCache(st);
+  BuildSurfaceFromSources(st, surface, log);
+  log.push_back("SURFCROSSBL — surface-local crossing decision saved; source breaklines were not changed.");
+}
+
+}  // namespace
+
 void EnsureEntityIds(AppCommandState& st) {
+  // Model raster IMAGEs carry their own stable ID in CadRasterImage rather than a parallel
+  // EntityAttributes array. Keep the shared drawing counter above those IDs so loading and then
+  // attaching another raster cannot recycle an existing image identity.
+  for (const CadRasterImage& image : st.cadRasterImages)
+    if (image.id >= st.nextEntityId && image.id != std::numeric_limits<std::uint64_t>::max())
+      st.nextEntityId = image.id + 1;
   // Geometry has not changed since the last sweep, so nothing can be missing an id. This is what
   // lets callers invoke it unconditionally — including once a frame — without paying for a walk.
   if (st.entityIdSweepRevision == st.cadGpuRevision)
@@ -6011,7 +7766,7 @@ void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, floa
     const float ty = std::cos(mid);
     ann->insX = mx + bisx * alongN + tx * alongT;
     ann->insY = my + bisy * alongN + ty * alongT;
-    ann->rotationRad = std::atan2(bisy, bisx);
+    ann->rotationRad = 0.f;  // angular text is horizontal (REQ-477, issue #804)
     return;
   }
   if (ann->kind != CadAnnotation::Kind::DimAligned && ann->kind != CadAnnotation::Kind::DimLinear)
@@ -6053,6 +7808,7 @@ bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const float dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAligned;
+  d.dimensionStyleName = st.activeDimensionStyle.name;
   d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
   d.dimExt1X = x1;
   d.dimExt1Y = y1;
@@ -6062,7 +7818,7 @@ bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cu
   d.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
   d.fontFamily = st.activeDimensionStyle.textFont;
   d.text = DimensionStyles::FormatLinearDim(static_cast<double>(len), st.activeDimensionStyle);
-  d.rotationRad = std::atan2(vy, vx);
+  d.rotationRad = CadDimReadableTextRotation(std::atan2(vy, vx));
   const float hWorld = CadAnnotationHeightWorld(d, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &d.insX, &d.insY);
   *out = std::move(d);
@@ -6141,6 +7897,7 @@ bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy,
   }
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimLinear;
+  d.dimensionStyleName = st.activeDimensionStyle.name;
   d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
   d.dimExt1X = x1;
   d.dimExt1Y = y1;
@@ -6159,7 +7916,7 @@ bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy,
     tx = 0.f;
     ty = (y2 >= y1) ? 1.f : -1.f;
   }
-  d.rotationRad = std::atan2(ty, tx);
+  d.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
   const float hWorld = CadAnnotationHeightWorld(d, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &d.insX, &d.insY);
   *out = std::move(d);
@@ -6226,18 +7983,16 @@ std::string CadFormatBearingCwNorthDegMinSec(float bearingDegClockwiseFromNorth)
   return std::string(buf);
 }
 
-void CadDimRefreshMeasurementText(CadAnnotation* ann, int linearPrecision, const AngleDisplaySettings& angle) {
-  if (!ann)
+void CadDimRefreshMeasurementText(CadAnnotation* ann, const DimensionStyle& style, const AngleDisplaySettings& angle) {
+  if (!ann || !ann->dimensionTextOverride.empty())
     return;
   if (ann->kind == CadAnnotation::Kind::DimAligned || ann->kind == CadAnnotation::Kind::DimLinear) {
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (!CadDimAnyGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
       return;
-    {
-      DimensionStyle tmp = DimensionStyles::Default();
-      tmp.unitPrecision = linearPrecision;
-      ann->text = DimensionStyles::FormatLinearDim(static_cast<double>(ml), tmp);
-    }
+    // REQ-459 (issue #804): the value uses the dimension style's unit scale, format and precision, the same
+    // formatting the commit path uses, so moving a dimension never changes its number.
+    ann->text = DimensionStyles::FormatLinearDim(static_cast<double>(ml), style);
   } else if (ann->kind == CadAnnotation::Kind::DimAngular) {
     float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
     if (!CadDimAngularComputeFrame(*ann, &a1, &a2, &sweep, &bisx, &bisy, &theta))
@@ -6261,7 +8016,7 @@ void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float mupi) {
   const float lift = 1.12f * hWorld;
   ann->insX = mx + bisx * lift;
   ann->insY = my + bisy * lift;
-  ann->rotationRad = std::atan2(bisy, bisx);
+  ann->rotationRad = 0.f;  // angular text is horizontal (REQ-477, issue #804)
 }
 
 bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out) {
@@ -6271,6 +8026,7 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const float vx = st.dimAngVx, vy = st.dimAngVy;
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAngular;
+  d.dimensionStyleName = st.activeDimensionStyle.name;
   d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
   d.dimAngVertexX = vx;
   d.dimAngVertexY = vy;
@@ -6482,6 +8238,8 @@ void OpenTableCellEditor(AppCommandState& st, int tableIndex, int cellIndex) {
   if (tableIndex < 0 || static_cast<size_t>(tableIndex) >= st.cadTables.size() || cellIndex < 0)
     return;
   CadTable& t = st.cadTables[static_cast<size_t>(tableIndex)];
+  if (CadTableCellIsSurveyPointData(st.tableStyles, t, cellIndex))
+    return;
   const int n = CadTableRowCount(t) * std::max(t.cols, 1);
   if (cellIndex >= n)
     return;
@@ -6500,8 +8258,12 @@ void CommitTableCellEditor(AppCommandState& st, std::vector<std::string>& log) {
   const int ti = st.tableCellEditorIndex;
   const int ci = st.tableCellEditorCell;
   if (ti >= 0 && static_cast<size_t>(ti) < st.cadTables.size() && ci >= 0) {
-    PushUndoSnapshot(st, "Edit table cell");
     CadTable& t = st.cadTables[static_cast<size_t>(ti)];
+    if (CadTableCellIsSurveyPointData(st.tableStyles, t, ci)) {
+      CancelTableCellEditor(st);
+      return;
+    }
+    PushUndoSnapshot(st, "Edit table cell");
     while (static_cast<int>(t.cells.size()) <= ci)
       t.cells.emplace_back();
     t.cells[static_cast<size_t>(ci)] = st.tableCellEditorBuf;
@@ -6741,6 +8503,7 @@ void ResetAllCadDraftTools(AppCommandState& st) {
   ResetEllipseDraft(st);
   st.splineDraftPoints.clear();
   st.splineMethod = AppCommandState::SplineMethod::Fit;
+  ResetCadDrawInquiryDrafts(st);
   ResetRectDraft(st);
   ResetTextCmdDraft(st);
   ResetMtextDraft(st);
@@ -6832,16 +8595,23 @@ struct CmdEntry {
 
 const CmdEntry kRegistry[] = {
     {"line", "l", "Draw line segments"},
+    {"centermark", "", "Add a center mark to the selected circles and arcs"},
+    {"centerline", "", "Draw a centerline between the two selected lines"},
     {"circle", "c", "Draw a circle"},
     {"polyline", "pl", "Draw a connected polyline"},
     {"3dpoly", "3dp, 3dpolyline", "Draw a polyline whose vertices each carry their own elevation"},
-    {"featureline", "fl", "Draw a feature line: named 3D linework with per-vertex elevations (REQ-087)"},
-    {"grading", "grd", "Side slopes from a feature line out to a surface, giving the daylight line (REQ-398)"},
+    {"featureline", "fl",
+     "Draw a feature line: named 3D linework with per-vertex elevations "
+     "(REQ-087)"},
+    {"grading", "grd",
+     "Side slopes from a feature line out to a surface, giving the daylight "
+     "line (REQ-398)"},
     {"featurelinelist", "fllist", "List every feature line and its vertices"},
     {"rect", "rectang, rectangle", "Draw a rectangle (two opposite corners)"},
     {"trimstate", "", "TRIM mode: 0 = draw a line to trim (default), 1 = pick cutting edges"},
     {"bench", "",
-     "REQ-100 frame-budget benchmark: BENCH [segments] | BENCH SURFACE [points] | BENCH MESH [triangles] | BENCH SOLID [count]"},
+     "REQ-100 frame-budget benchmark: BENCH [segments] | BENCH SURFACE "
+     "[points] | BENCH MESH [triangles] | BENCH SOLID [count]"},
     {"visualstyle", "vs, vscurrent", "Viewport visual style: 2D / HIDDEN / SHADED"},
     {"perspective", "projection, persp", "View projection: ON (perspective) / OFF (orthographic)"},
     {"sectionclip", "sclip, clip", "Live section clip by the UCS plane: ON / OFF / FLIP / <offset>"},
@@ -6849,44 +8619,79 @@ const CmdEntry kRegistry[] = {
     {"fov", "lens", "Perspective field of view, in degrees"},
     {"crosshair3d", "cursor3d, xhair3d", "3D crosshair cursor showing the UCS axes: ON / OFF"},
     {"importmodel", "gltf, import3d", "Import a glTF/GLB 3D model as reference geometry"},
-    {"pointcloudattach", "importpointcloud", "Import a point cloud (E57, PTS, PTX, LAS, or LAZ) as reference geometry (REQ-172)"},
-    {"exportpts", "", "Export the selected point cloud(s) (or all, if none selected) to a PTS file (REQ-172)"},
-    {"exportptx", "", "Export the selected point cloud(s) (or all, if none selected) to a PTX file (REQ-172)"},
-    {"exportlas", "", "Export the selected point cloud(s) (or all, if none selected) to a LAS file (REQ-172)"},
-    {"exportlaz", "", "Export the selected point cloud(s) (or all, if none selected) to a LAZ file (REQ-172)"},
-    // The seven primitive solids (REQ-313 / ADR-045). Each takes a base point in the active UCS and
-    // then its exact dimensions; the UCS supplies the orientation.
+    {"pointcloudattach", "importpointcloud",
+     "Import a point cloud (E57, PTS, PTX, LAS, or LAZ) as reference geometry "
+     "(REQ-172)"},
+    {"exportpts", "",
+     "Export the selected point cloud(s) (or all, if none selected) to a PTS "
+     "file (REQ-172)"},
+    {"exportptx", "",
+     "Export the selected point cloud(s) (or all, if none selected) to a PTX "
+     "file (REQ-172)"},
+    {"exportlas", "",
+     "Export the selected point cloud(s) (or all, if none selected) to a LAS "
+     "file (REQ-172)"},
+    {"exportlaz", "",
+     "Export the selected point cloud(s) (or all, if none selected) to a LAZ "
+     "file (REQ-172)"},
+    // The seven primitive solids (REQ-313 / ADR-045). Each takes a base point
+    // in the active UCS and then its exact dimensions; the UCS supplies the
+    // orientation.
     {"box", "", "Create a box solid: BOX <X,Y[,Z]> <length> <width> <height>"},
     {"wedge", "we", "Create a wedge solid: WEDGE <X,Y[,Z]> <length> <width> <height>"},
-    {"pyramid", "pyr", "Create a pyramid solid: PYRAMID <X,Y[,Z]> <sides> <base r> <top r> <height>"},
+    {"pyramid", "pyr",
+     "Create a pyramid solid: PYRAMID <X,Y[,Z]> <sides> <base r> <top r> "
+     "<height>"},
     {"cylinder", "cyl", "Create a cylinder solid: CYLINDER <X,Y[,Z]> <radius> <height>"},
     {"cone", "", "Create a cone solid: CONE <X,Y[,Z]> <base radius> <top radius> <height>"},
     {"sphere", "sph", "Create a sphere solid: SPHERE <X,Y[,Z]> <radius>"},
     {"torus", "tor", "Create a torus solid: TORUS <X,Y[,Z]> <radius> <tube radius>"},
     {"presspull", "pp",
-     "Move a solid FACE, or turn a closed shape into a solid: PRESSPULL, select a target, then a distance"},
+     "Move a solid FACE, or turn a closed shape into a solid: PRESSPULL, "
+     "select a target, then a distance"},
     {"solidlist", "solids", "List every solid: kind, layer, volume, surface area, topology counts"},
     {"massprop", "massproperties, solidmassprop, massp",
-     "Mass properties of every solid: volume, area, centroid, inertia tensor, principal axes (REQ-349)"},
-    {"section",     "", "Cross-section of solids by a plane through three points (or the UCS), as a closed polyline"},
-    {"solidcheck", "scheck", "Check every solid (or the selection): closed, manifold, oriented, self-intersecting"},
-    {"polysolid", "psolid", "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, H/W/J, O object)"},
-    {"revcloud", "", "Revision cloud: click corners round an area, or O to convert a closed shape (A arc length, R reverse, D delete original)"},
+     "Mass properties of every solid: volume, area, centroid, inertia tensor, "
+     "principal axes (REQ-349)"},
+    {"section",     "",
+     "Cross-section of solids by a plane through three points (or the UCS), as "
+     "a closed polyline"},
+    {"solidcheck", "scheck",
+     "Check every solid (or the selection): closed, manifold, oriented, "
+     "self-intersecting"},
+    {"polysolid", "psolid",
+     "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, "
+     "H/W/J, O object)"},
+    {"revcloud", "",
+     "Revision cloud: click corners round an area, or O to convert a closed "
+     "shape (A arc length, R reverse, D delete original)"},
     {"piperun", "pipe",
-     "Route a pipe run: PIPERUN, nominal size [class], wall thickness (Enter = schedule 40), then "
+     "Route a pipe run: PIPERUN, nominal size [class], wall thickness (Enter = "
+     "schedule 40), then "
      "points (U undo, END/Enter finishes)"},
     {"pipesys", "pipenet, pipingsystem",
-     "Named piping networks: PIPESYS NEW/ADD/REMOVE/RENAME/DELETE/LIST <name> (ADD/REMOVE use the "
+     "Named piping networks: PIPESYS NEW/ADD/REMOVE/RENAME/DELETE/LIST <name> "
+     "(ADD/REMOVE use the "
      "current pipe-run selection)"},
     {"pipecatalog", "pcat",
-     "Look up a fitting in the library by size/class/type: PIPECATALOG <part type> <size> [class]"},
-    {"isolines", "", "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report"},
-    {"extrude", "ext", "Extrude a selected closed polyline or circle into a solid: EXTRUDE <height>"},
+     "Look up a fitting in the library by size/class/type: PIPECATALOG <part "
+     "type> <size> [class]"},
+    {"isolines", "",
+     "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to "
+     "report"},
+    {"extrude", "ext",
+     "Extrude a selected closed polyline or circle into a solid: EXTRUDE "
+     "<height>"},
     {"revolve", "rev", "Revolve a selected closed polyline or circle about an axis into a solid"},
-    {"slice", "sl", "Cut selected solids with a plane (three points), keeping one side or both"},
-    {"loft", "lft", "Loft a solid through two or more selected closed polylines or circles, in pick order"},
+    {"slice", "sl",
+     "Cut selected solids with a plane (three points), keeping one side or "
+     "both"},
+    {"loft", "lft",
+     "Loft a solid through two or more selected closed polylines or circles, "
+     "in pick order"},
     {"sweep", "swp",
-     "Sweep a closed profile along a line, arc or open polyline path (T twist, A path-alignment)"},
+     "Sweep a closed profile along a line, arc or open polyline path (T twist, "
+     "A path-alignment)"},
     {"union", "uni", "Combine two selected solids into one"},
     {"subtract", "su", "Subtract the second selected solid from the first"},
     {"intersect", "in", "Keep only the volume two selected solids share"},
@@ -6894,6 +8699,19 @@ const CmdEntry kRegistry[] = {
     {"arc", "", "Draw an arc"},
     {"ellipse", "el", "Draw an ellipse"},
     {"spline", "spl", "Draw a fit-point or control-vertex spline (CV, Close, End, Undo)"},
+    {"point", "", "Place CAD point entities (PDMODE / PDSIZE control the marker)"},
+    {"pdmode", "", "Point display mode: 0 dot, 1 none, 2 plus, 3 X, 4 tick; +32 circle, +64 square"},
+    {"pdsize", "", "Point display size: 0 = 5% of view, negative = percent, positive = drawing units"},
+    {"leader", "le", "Draw a leader: points, then Mtext or None annotation"},
+    {"mleader", "ml", "Draw a multileader: arrow tip, landing, then label"},
+    {"pedit", "pe", "Edit a polyline (Close, Open, Join, Reverse, Edit vertex, Fit, Spline, Decurve)"},
+    {"measure", "me", "Place points at a measured interval along an object"},
+    {"divide", "div", "Place points that divide an object into equal segments"},
+    {"area", "aa", "Measure the area and perimeter of points or a closed object"},
+    {"list", "li", "List type, layer, space and geometry of selected objects"},
+    {"dataextraction", "", "Extract selected objects to an Excel or CSV file: type, layer, text, coordinates"},
+    {"table", "", "Insert an empty table: style, columns, rows, then the insertion point"},
+    {"addpointtable", "", "Add a point table of survey points in a point table style (dialog in the editor)"},
     {"hatch", "h, bhatch", "Fill a closed area (pick an internal point)"},
     {"text", "", "Place single-line text"},
     {"mtext", "mt", "Place multiline text"},
@@ -6901,39 +8719,122 @@ const CmdEntry kRegistry[] = {
     {"dimlinear", "dli", "Linear dimension"},
     {"dimangular", "dan", "Angular dimension"},
     {"dimsty", "dimstyle, dsty", "Dimension style editor"},
+    {"tablestyle", "tsty", "Drawing table style manager"},
+    {"msty", "mleaderstyle, mlsty", "Multileader style editor"},
     {"id", "", "Identify point coordinates"},
     {"inverse", "inv", "Inverse between two points"},
     {"dist", "di", "3D distance between two points: dX, dY, dZ, slope distance"},
     {"surfelev", "se", "Surface elevation at a point; grade between two"},
     {"designatebreakline", "dbl", "Add a picked line/polyline as a surface breakline"},
     {"designatecontour", "dcon", "Add a picked line/polyline as a surface contour source"},
-    {"designateboundary", "dbd", "Add a picked closed polyline as a surface boundary (outer/hide/show/clip)"},
-    {"surfacecreate", "sfcreate", "Create a surface from point groups: SURFACECREATE <name>, <group>[, <group>…]"},
-    {"surfacecreategrid", "sfgrid", "Create a grid surface: SURFACECREATEGRID <name>, ox, oy, sx, sy, cols, rows[, z…]"},
+    {"designateboundary", "dbd",
+     "Add a picked closed polyline as a surface boundary "
+     "(outer/hide/show/clip)"},
+    {"surfacecreate", "sfcreate",
+     "Create a surface from point groups: SURFACECREATE <name>, <group>[, "
+     "<group>…]"},
+    {"surfacecreategrid", "sfgrid",
+     "Create a grid surface: SURFACECREATEGRID <name>, ox, oy, sx, sy, cols, "
+     "rows[, z…]"},
     {"surfacecreatecorr", "sfcorr", "Create a corridor surface: SURFACECREATECORR <name>"},
     {"surfacecreatevolgrid", "sfvolgrid", "Grid volume surface: SURFACECREATEVOLGRID <name>, <base>, <comparison>"},
     {"surfswapedge", "sfswap", "Swap a TIN interior edge: SURFSWAPEDGE <surface>[, <x>, <y>]"},
     {"surfaceaddpoint", "sfaddpt", "Add a TIN definition point: SURFACEADDPOINT <surface>[, <x>, <y>, <z>]"},
-    {"surfacemovepoint", "sfmovept", "Move a TIN definition point: SURFACEMOVEPOINT <surface>[, <x1>, <y1>, <x2>, <y2>, <z2>]"},
+    {"surfacemovepoint", "sfmovept",
+     "Move a TIN definition point: SURFACEMOVEPOINT <surface>[, <x1>, <y1>, "
+     "<x2>, <y2>, <z2>]"},
+    {"surflodlow", "", "Set a surface to Reduced viewport detail: SURFLODLOW <surface>"},
+    {"imageattach", "", "Attach a readable model-space image: IMAGEATTACH <path>, x, y, width, height, rotation-degrees"},
+    {"surfdrape", "", "Drape an image onto a surface: SURFDRAPE <surface>, <image-id>"},
+    {"createdatashortcut", "", "Register a project surface source: CREATEDATASHORTCUT <surface>"},
+    {"createsurfacereference", "", "Create a read-only project surface reference: CREATESURFACEREFERENCE <source-drawing-rel>, <source-surface-id>, <name>"},
+    {"surflodhigh", "", "Set a surface to full viewport detail: SURFLODHIGH <surface>"},
+    {"movetosurface", "", "Move selected block references to a surface: MOVETOSURFACE <surface>"},
+    {"surfacevisibility", "surfvis", "Surface LOS or ZVI analysis: SURFACEVISIBILITY <surface>, LOS|ZVI, ..."},
+    {"surfcrossbl", "", "List or resolve surface-local breakline crossings: SURFCROSSBL <surface>, ..."},
     {"surfdelline", "sfdelline", "Delete an interior TIN edge: SURFDELLINE <surface>[, <x>, <y>]"},
-    {"surfacedelpoint", "sfdelpt", "Delete nearest TIN definition point: SURFACEDELPOINT <surface>[, <x>, <y>]"},
-    {"quickprofile", "qprof", "Quick profile along two points: QUICKPROFILE <surface>[, <x1>, <y1>, <x2>, <y2>]"},
+    {"surfacedelpoint", "sfdelpt",
+     "Delete nearest TIN definition point: SURFACEDELPOINT <surface>[, <x>, "
+     "<y>]"},
+    {"quickprofile", "qprof",
+     "Quick profile along two points: QUICKPROFILE <surface>[, <x1>, <y1>, "
+     "<x2>, <y2>]"},
+    {"alignment", "createalignment", "Create an alignment (no arguments: the Create Alignment dialog): ALIGNMENT <name>[, <description>[, <station>[, <layer>[, <style>]]]][, TYPE=][, LABELSET=]"},
+    {"alignmentadd", "", "Add tangent, curve or spiral: ALIGNMENTADD <name>, TANGENT|TANGENTTO|CURVE|CURVELEN|SPIRAL, ..."},
+    {"alignmentlist", "", "Report alignments, stations and entities: ALIGNMENTLIST [<name>]"},
+    {"alignmentdelete", "", "Delete an alignment: ALIGNMENTDELETE <name>"},
+    {"createviewframes", "", "Create view frames along an alignment: CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale or AUTO>, <overlap>[, CENTRED|LEFT|RIGHT]"},
+    {"viewframedelete", "", "Delete an alignment's view frame groups: VIEWFRAMEDELETE <alignment>"},
+    {"createsheets", "", "Create paper sheets from view frames: CREATESHEETS <alignment>[, <frames>] (frames: ALL or names such as VF-1 VF-3)"},
+    {"createsamplelines", "", "Create sample lines along an alignment: CREATESAMPLELINES <alignment>, <start station>, <end station>, <interval>, <left swath>, <right swath>[, <surface>]"},
+    {"createsectionsheets", "", "Create section sheets from sample lines: CREATESECTIONSHEETS <alignment>, <sample lines>, <sections per sheet>, <axis elevation>"},
+    {"createdesignprofile", "", "Create an empty design profile on an alignment: CREATEDESIGNPROFILE <alignment>, <profile name>"},
+    {"profilepvi", "", "Add or edit a vertical point of a design profile: PROFILEPVI <profile>, <station>, <elevation>[, <curve length>]"},
+    {"profiledelpvi", "", "Remove a vertical point from a design profile: PROFILEDELPVI <profile>, <station>"},
+    {"profilequery", "", "Report a design profile at a station: PROFILEQUERY <profile>, <station>"},
+    {"profilelist", "", "List the design profiles in the drawing: PROFILELIST"},
+    {"profiledelete", "", "Delete a design profile: PROFILEDELETE <profile>"},
+    {"getstationoffset", "", "Station and offset of a point: GETSTATIONOFFSET <alignment>[, <x>, <y> | , POINT, <number>][, SURFACE=<surface>] (alignment alone: pick until ESC)"},
+    {"getpointfromstationoffset", "", "Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset>"},
+    {"createalignmentfromobjects", "createalignmententities", "Alignment from lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS (pick them) | <name>[, START=][, FILLET=][, REVERSE][, ERASE]"},
+    {"alignmentlayout", "", "Lay out an alignment by PIs: ALIGNMENTLAYOUT <name>[, CURVES|NOCURVES][, FROM=<x> <y>][, DIRECTION=<deg>]"},
+    {"alignmentcurvesettings", "", "Curve and spiral settings for the layout: ALIGNMENTCURVESETTINGS [RADIUS=][, SPIRALIN=][, SPIRALOUT=]"},
+    {"alignmentmeta", "", "Alignment metadata: ALIGNMENTMETA <alignment>, SET, <name>, <value> | REMOVE, <name> | LIST"},
+    {"stationformat", "", "How stations are written: STATIONFORMAT [DELIMITER=+|-|_|/|C|K|NONE][, DIGITS=][, DECIMALS=][, PREFIX=][, SUFFIX=] | DEFAULT"},
+    {"alignmentedit", "", "Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|STARTRADIUS|DELTA|DIRECTION|CONSTRAINT|DEGREE|TANGENTLENGTH|CHORD|EXTERNAL|MIDORDINATE|A, <value> | THROUGH, <x>, <y>"},
+    {"alignmentlock", "", "Lock a parameter: ALIGNMENTLOCK <name>, <entity#>, RADIUS|LENGTH|BEARING|STATION, ON|OFF"},
+    {"alignmentinsert", "", "Insert a tangent, curve or spiral: ALIGNMENTINSERT <name>, <after#>, TANGENT|CURVE|SPIRAL, ..."},
+    {"alignmentremove", "", "Remove an entity: ALIGNMENTREMOVE <name>, <entity#>"},
+    {"alignmentcontinuity", "", "Set or list continuity checks: ALIGNMENTCONTINUITY <name>, C0|C1|C2 | LIST"},
+    {"reversealignment", "", "Reverse alignment direction and stationing: REVERSEALIGNMENT <name>"},
+    {"alignmentstation", "", "Starting station, reference point and station equations: ALIGNMENTSTATION <name>, START|REFERENCE|EQ, ..."},
+    {"alignmentstyle", "", "Alignment display styles: ALIGNMENTSTYLE LIST|NEW|DELETE|ASSIGN|SHOW|HIDE|COLOR|SET|CURRENT|MARKER, ..."},
+    {"alignmentlabelset", "", "Alignment label sets: ALIGNMENTLABELSET LIST|NEW|DELETE|ASSIGN|MAJORINTERVAL|MINORINTERVAL|SHOW|HIDE|STYLE|GEOMETRY, ..."},
+    {"alignmentlabelstyle", "", "Alignment label styles (text style, height, colour, precision, prefix/suffix, orientation): ALIGNMENTLABELSTYLE LIST|NEW|DELETE|SET, ..."},
+    {"alignmentreport", "", "Alignment report (text/CSV): ALIGNMENTREPORT [<name>][, TXT|CSV[, <path>]]"},
+    {"offsetalignment", "", "Create offset alignments: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (L12 left, R12 right)"},
+    {"alignmentdetach", "", "Make a linked offset independent: ALIGNMENTDETACH <name>"},
+    {"alignmentintersect", "", "Intersections: ALIGNMENTINTERSECT <a>, <b> | <a>, LINE, ... | <a>, CIRCLE, ..."},
+    {"editalignment", "", "Open the Alignment Layout table: EDITALIGNMENT [<name>]"},
+    {"alignmentsurface", "", "Ground elevation along an alignment: ALIGNMENTSURFACE <alignment>, <surface>, STATION=<sta>[, OFFSET=<off>] | INTERVAL=<n>"},
+    {"alignmentlabel", "", "Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS | SEGMENT, <entity#> | CLEAR"},
+    {"featurelinefromalignment", "", "Feature line from an alignment: FEATURELINEFROMALIGNMENT <alignment>[, INTERVAL=<n>][, TOL=<n>][, SURFACE=<name> | Z=<value>]"},
+    {"alignmentprops", "", "Alignment properties: ALIGNMENTPROPS <alignment>, NAME|DESCRIPTION|STYLE|LAYER|START, <value>"},
+    {"alignmentinverse", "", "Distance along an alignment: ALIGNMENTINVERSE <alignment>, STA|PT, ... [, CHORD]"},
+    {"alignmentbearing", "", "Bearing at a station: ALIGNMENTBEARING <alignment>, <station>"},
+    {"alignmentdistance", "", "Distance along an alignment to a point: ALIGNMENTDISTANCE <alignment>, <x>, <y>"},
+    {"alignmentcheckset", "", "Design check sets: ALIGNMENTCHECKSET NEW|DELETE|LIST|SET|LOAD|SAVE, ..."},
+    {"alignmentcriteria", "", "Apply a check set to an alignment: ALIGNMENTCRITERIA <alignment>, <set>|NONE"},
+    {"alignmentspeed", "", "Design speed from a station: ALIGNMENTSPEED <alignment>, <station>, <speed>|CLEAR"},
+    {"alignmentcheck", "", "Check an alignment against its design criteria: ALIGNMENTCHECK <alignment>"},
+    {"editalignmentstyle", "", "Open the Alignment Style editor: EDITALIGNMENTSTYLE [<style>]"},
+    {"alignmenttable", "", "Insert a line, curve, spiral, segment or equation table: ALIGNMENTTABLE <name>, LINE|CURVE|SPIRAL|SEGMENT|EQUATIONS[, STATIC|DYNAMIC][, SPLIT=<rows>][, STYLE=<name>][, <x>, <y>]"},
     {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT [TABLE]"},
     {"voltable", "", "Insert a TABLE of the last volume report: VOLTABLE"},
     {"volcsv", "", "Write CSV of volume results: VOLCSV [<path>]"},
     {"volumesurface", "volsurf", "Create a TIN volume surface: VOLUMESURFACE <name>, <base>, <comparison>"},
     {"surfacerename", "sfrename", "Rename a surface: SURFACERENAME <old>, <new>"},
     {"surfacedelete", "sfdelete", "Delete a surface: SURFACEDELETE <name>"},
-    {"surfacerebuild", "sfrebuild", "Rebuild a surface now (all surfaces if no name): SURFACEREBUILD [<name>]"},
+    {"surfacerebuild", "sfrebuild",
+     "Rebuild a surface now (all surfaces if no name): SURFACEREBUILD "
+     "[<name>]"},
     {"surfacelist", "sflist", "List every surface and its full definition"},
     {"surfacestats", "sfstats", "Surface statistics: SURFACESTATS [<name>]"},
     {"watershed", "wshed", "Watershed basins: WATERSHED [<name>]"},
     {"waterdrop", "wdrop", "Water-drop path: WATERDROP <name>[, <x>, <y>] | WATERDROP EXTRACT"},
-    {"catchment", "catch", "Catchment at an outlet: CATCHMENT <name>[, <x>, <y>] | CATCHMENT EXTRACT"},
-    {"undesignate", "undes", "Remove one definition item: UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY|POINTFILE|CONTOUR>, <n>"},
-    {"surfaceaddfile", "sfaddfile", "Link a point file into a surface: SURFACEADDFILE <surface>, <path>[, <layout>[, HEADER]]"},
+    {"catchment", "catch",
+     "Catchment at an outlet: CATCHMENT <name>[, <x>, <y>] | CATCHMENT "
+     "EXTRACT"},
+    {"undesignate", "undes",
+     "Remove one definition item: UNDESIGNATE <surface>, "
+     "<BREAKLINE|BOUNDARY|POINTFILE|CONTOUR>, <n>"},
+    {"surfaceaddfile", "sfaddfile",
+     "Link a point file into a surface: SURFACEADDFILE <surface>, <path>[, "
+     "<layout>[, HEADER]]"},
     {"surfaceimportfile", "sfimportfile", "Import a linked point file into the drawing and break the link"},
-    {"flelev", "", "Feature line elevations: FLELEV <n> [SET|GRADEAHEAD|GRADEBACK|RAISE|INSERT|DELETE …]"},
+    {"flelev", "",
+     "Feature line elevations: FLELEV <n> "
+     "[SET|GRADEAHEAD|GRADEBACK|RAISE|INSERT|DELETE …]"},
     {"flelevedit", "", "Open the feature line elevation editor: FLELEVEDIT [<n>]"},
     {"plotscale", "pscale", "Set the plot scale"},
     {"gizmo", "", "Show the 3D gizmo on every selection: GIZMO MOVE | ROTATE | SCALE | OFF"},
@@ -6962,8 +8863,12 @@ const CmdEntry kRegistry[] = {
     {"zoomextents", "ze", "Zoom to drawing extents"},
     {"zoomwindow", "zw", "Zoom to a window"},
     {"pan", "p", "Pan the view (drag with the left mouse button)"},
-    {"ucsfollow", "", "0 = changing the UCS leaves the view alone; 1 = it switches to a plan view"},
-    {"ucs", "", "Define the User Coordinate System (N names one; restore/delete in the View Manager)"},
+    {"ucsfollow", "",
+     "0 = changing the UCS leaves the view alone; 1 = it switches to a plan "
+     "view"},
+    {"ucs", "",
+     "Define the User Coordinate System (N names one; restore/delete in the "
+     "View Manager)"},
     {"plan", "", "View the XY plane of a coordinate system (does not change the UCS)"},
     {"orbit", "3dorbit, 3do", "Free orbit the model view (drag with the left mouse button)"},
     {"isolateobjects", "isolate", "Hide everything except the selection"},
@@ -6975,7 +8880,12 @@ const CmdEntry kRegistry[] = {
     {"viewpoints", "vwpts", "View / edit survey points"},
     {"importpoints", "imppts", "Import survey points"},
     {"exportpoints", "exppts", "Export survey points"},
-    {"exportlandxml", "", "Export survey points, TIN surfaces and feature lines to LandXML 1.2: EXPORTLANDXML [<path>]"},
+    {"exportlandxml", "",
+     "Export survey points, TIN surfaces and feature lines to LandXML 1.2: "
+     "EXPORTLANDXML [<path>]"},
+    {"importlandxml", "",
+     "Import survey points, TIN surfaces and feature lines from LandXML 1.2: "
+     "IMPORTLANDXML [<path>]"},
     {"traverse", "trav, traverseeditor", "Open the LSA Editor"},
     {"select", "", "Build a selection set"},
     {"help", "", "Show command help"},
@@ -6984,18 +8894,43 @@ const CmdEntry kRegistry[] = {
     {"layer", "la", "Open the Layer manager"},
     {"style", "st, ddstyle", "Text style manager: create / edit named text styles"},
     {"surfstyle", "ss", "Surface style editor: contours, triangles, border (REQ-070)"},
-    {"extract", "", "Bake a surface's displayed contours into polylines: EXTRACT <surface>[, <layer>]"},
-    {"padsolid", "pad", "Cut/fill solids for a pad: select the boundary, then PADSOLID <surface>, <elevation>"},
-    {"volumes", "vol", "Cut/fill/net volume between two surfaces: VOLUMES <base>, <comparison>[, <clip id>]"},
-    {"voldash", "", "Volume Dashboard: live cut/fill/net panel between two surfaces (REQ-073)"},
+    {"extract", "",
+     "Bake a surface's displayed contours into polylines: EXTRACT <surface>[, "
+     "<layer>]"},
+    {"padsolid", "pad",
+     "Cut/fill solids for a pad: select the boundary, then PADSOLID <surface>, "
+     "<elevation>"},
+    {"gradinggroup", "",
+     "Grading group: GRADINGGROUP <name>[, Add/Remove/List] with selected "
+     "grading results"},
+    {"gradinginfill", "",
+     "GRADINGINFILL <group>: add selected closed feature-line interiors to a grading group"},
+    {"volumes", "vol",
+     "Cut/fill/net volume between two surfaces: VOLUMES <base>, <comparison>[, "
+     "<clip id>]"},
+    {"voldash", "",
+     "Volume Dashboard: live cut/fill/net panel between two surfaces "
+     "(REQ-073)"},
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"drawingsettings", "editdrawingsettings", "Drawing Settings: units, scale and the drawing's settings"},
-    {"projectsettings", "", "Project Settings: the project's coordinate system, units and defaults (REQ-375)"},
-    {"projecthealth", "", "Project Health: linked, missing and unsaved files before you pack or hand over (REQ-379)"},
-    {"packproject", "", "Pack Project: write the whole project as one .gspack file to send (REQ-380)"},
-    {"turnover", "", "Create Turnover: record which project files were handed to whom, and when (REQ-381)"},
-    {"openpack", "", "Open Packed Project: unpack a .gspack into a folder and open it (REQ-380)"},
-    {"adddrawing", "", "Add Drawing to Project: bring an existing drawing and its points into this project (REQ-378)"},
+    {"projectsettings", "",
+     "Project Settings: the project's coordinate system, units and defaults "
+     "(REQ-375)"},
+    {"projecthealth", "",
+     "Project Health: linked, missing and unsaved files before you pack or "
+     "hand over (REQ-379)"},
+    {"packproject", "",
+     "Pack Project: write the whole project as one .gspack file to send "
+     "(REQ-380)"},
+    {"turnover", "",
+     "Create Turnover: record which project files were handed to whom, and "
+     "when (REQ-381)"},
+    {"openpack", "",
+     "Open Packed Project: unpack a .gspack into a folder and open it "
+     "(REQ-380)"},
+    {"adddrawing", "",
+     "Add Drawing to Project: bring an existing drawing and its points into "
+     "this project (REQ-378)"},
     {"geomarkpoint", "", "Place a Position Marker at a picked point (geolocated drawing)"},
     {"geomarklatlong", "", "Place a Position Marker at a typed latitude and longitude"},
     {"georeorientmarker", "", "Set the geographic marker: a design point, then north"},
@@ -7005,19 +8940,26 @@ const CmdEntry kRegistry[] = {
     {"overkill",     "ok", "Remove duplicate geometry"},
     {"align",        "al", "Align objects to others"},
     {"quickselect",  "qs", "Select by object properties"},
-    {"view", "v, ddview", "Named views: VIEW [Save/Restore/Delete/?] <name>, or VIEW alone for the View Manager"},
-    // SELECTSIMILAR had no registry entry at all (issue 05): the function existed, was declared in
-    // the header and was perfectly reachable, but its only caller in the whole codebase was one
-    // right-click menu item - so nothing could invoke it by name, users included, and it had zero
-    // possible test coverage.
+    {"view", "v, ddview",
+     "Named views: VIEW [Save/Restore/Delete/?] <name>, or VIEW alone for the "
+     "View Manager"},
+    // SELECTSIMILAR had no registry entry at all (issue 05): the function
+    // existed, was declared in the header and was perfectly reachable, but its
+    // only caller in the whole codebase was one right-click menu item - so
+    // nothing could invoke it by name, users included, and it had zero possible
+    // test coverage.
     {"selectsimilar", "sesim", "Select entities matching the current selection's type, layer and colour"},
     {"paste",        "", "Paste from clipboard"},
     {"pasteorig",    "po", "Paste at original coordinates"},
     {"mview",        "rectviewport, rectvp", "Rectangular paper-space viewport (two clicks)"},
     {"mspace",       "ms", "Edit the model through the selected viewport (floating model space)"},
     {"pspace",       "ps", "Return to paper space from a floating viewport"},
-    {"block", "", "Define a block from the selection: BLOCK <name>, <x>, <y>[, CONVERT|DELETE|RETAIN]"},
-    {"insert", "i", "Insert a block (dialog); or INSERT <name>, <x>, <y>[, sx, sy, rotDeg[, sz, z]]"},
+    {"block", "",
+     "Define a block from the selection: BLOCK <name>, <x>, <y>[, "
+     "CONVERT|DELETE|RETAIN]"},
+    {"insert", "i",
+     "Insert a block (dialog); or INSERT <name>, <x>, <y>[, sx, sy, rotDeg[, "
+     "sz, z]]"},
     {"explode", "x", "Explode selected block references"},
     {"bedit", "", "Open the block editor: BEDIT <name>"},
     {"bsave", "", "Save the block being edited"},
@@ -7156,6 +9098,7 @@ int FuzzySubsequenceScore(std::string_view query, std::string_view cand) {
 static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAngular;
+  d.dimensionStyleName = st.activeDimensionStyle.name;
   d.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
   d.dimAngVertexX = st.dimAngVx;
   d.dimAngVertexY = st.dimAngVy;
@@ -7300,7 +9243,62 @@ bool ParseRadiusOrDiameter(const std::string& raw, float* radiusOut, std::vector
   return true;
 }
 
+void ExecuteCenterMarkFromSelection(AppCommandState& st, std::vector<std::string>& log) {
+  struct Mark { double x, y, z, radius; };
+  std::vector<Mark> marks;
+  for (const SelectedEntity& entity : st.selection) {
+    if (entity.type == SelectedEntity::Type::Circle && entity.index >= 0 &&
+        static_cast<std::size_t>(entity.index) * 4 + 3 < st.userCirclesCxCyZR.size()) {
+      const std::size_t i = static_cast<std::size_t>(entity.index) * 4;
+      marks.push_back({st.userCirclesCxCyZR[i], st.userCirclesCxCyZR[i + 1],
+                       st.userCirclesCxCyZR[i + 2], st.userCirclesCxCyZR[i + 3]});
+    } else if (entity.type == SelectedEntity::Type::Arc && entity.index >= 0 &&
+               static_cast<std::size_t>(entity.index) < st.userArcs.size()) {
+      const CadArc& arc = st.userArcs[static_cast<std::size_t>(entity.index)];
+      marks.push_back({arc.cx, arc.cy, arc.z, arc.r});
+    }
+  }
+  if (marks.empty()) { log.push_back("CENTERMARK — select one or more circles/arcs first, then run CENTERMARK."); return; }
+  PushUndoSnapshot(st, "CENTERMARK");
+  for (const Mark& mark : marks) {
+    const double half = std::max(mark.radius * 0.18, 0.01);
+    const double gap = half * 0.16;
+    st.userLinesFlat.insert(st.userLinesFlat.end(), {mark.x - half, mark.y, mark.z, mark.x - gap, mark.y, mark.z,
+                                                     mark.x + gap, mark.y, mark.z, mark.x + half, mark.y, mark.z,
+                                                     mark.x, mark.y - half, mark.z, mark.x, mark.y - gap, mark.z,
+                                                     mark.x, mark.y + gap, mark.z, mark.x, mark.y + half, mark.z});
+    for (int i = 0; i < 4; ++i) st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+  }
+  BumpCadGpuCache(st);
+  log.push_back("CENTERMARK — center marks created for " + std::to_string(marks.size()) + " selected circle/arc(s).");
+}
+
+void ExecuteCenterlineFromSelection(AppCommandState& st, std::vector<std::string>& log) {
+  std::vector<const SelectedEntity*> lines;
+  for (const SelectedEntity& entity : st.selection)
+    if (entity.type == SelectedEntity::Type::LineSeg && entity.index >= 0 &&
+        static_cast<std::size_t>(entity.index) * 6 + 5 < st.userLinesFlat.size()) lines.push_back(&entity);
+  if (lines.size() != 2) { log.push_back("CENTERLINE — select exactly two lines first, then run CENTERLINE."); return; }
+  const std::size_t a = static_cast<std::size_t>(lines[0]->index) * 6;
+  const std::size_t b = static_cast<std::size_t>(lines[1]->index) * 6;
+  const double ax0 = st.userLinesFlat[a], ay0 = st.userLinesFlat[a + 1], az0 = st.userLinesFlat[a + 2];
+  const double ax1 = st.userLinesFlat[a + 3], ay1 = st.userLinesFlat[a + 4], az1 = st.userLinesFlat[a + 5];
+  double bx0 = st.userLinesFlat[b], by0 = st.userLinesFlat[b + 1], bz0 = st.userLinesFlat[b + 2];
+  double bx1 = st.userLinesFlat[b + 3], by1 = st.userLinesFlat[b + 4], bz1 = st.userLinesFlat[b + 5];
+  const double same = std::hypot(ax0 - bx0, ay0 - by0) + std::hypot(ax1 - bx1, ay1 - by1);
+  const double reverse = std::hypot(ax0 - bx1, ay0 - by1) + std::hypot(ax1 - bx0, ay1 - by0);
+  if (reverse < same) { std::swap(bx0, bx1); std::swap(by0, by1); std::swap(bz0, bz1); }
+  PushUndoSnapshot(st, "CENTERLINE");
+  st.userLinesFlat.insert(st.userLinesFlat.end(), {(ax0 + bx0) * 0.5, (ay0 + by0) * 0.5, (az0 + bz0) * 0.5,
+                                                   (ax1 + bx1) * 0.5, (ay1 + by1) * 0.5, (az1 + bz1) * 0.5});
+  st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  log.push_back("CENTERLINE — centerline created between the two selected lines.");
+}
+
 bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vector<std::string>& log) {
+  if (primary == "centermark") { ExecuteCenterMarkFromSelection(st, log); return true; }
+  if (primary == "centerline") { ExecuteCenterlineFromSelection(st, log); return true; }
   if (primary == "line") {
     StartLineCommand(st, log);
     return true;
@@ -7345,6 +9343,54 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     StartSplineCommand(st, log);
     return true;
   }
+  if (primary == "point") {
+    StartPointCommand(st, log);
+    return true;
+  }
+  if (primary == "pdmode") {
+    ExecutePdModeCommand(st, std::string(), log);
+    return true;
+  }
+  if (primary == "pdsize") {
+    ExecutePdSizeCommand(st, std::string(), log);
+    return true;
+  }
+  if (primary == "leader") {
+    StartLeaderCommand(st, log);
+    return true;
+  }
+  if (primary == "pedit") {
+    StartPeditCommand(st, log);
+    return true;
+  }
+  if (primary == "measure") {
+    StartMeasureCommand(st, log);
+    return true;
+  }
+  if (primary == "divide") {
+    StartDivideCommand(st, log);
+    return true;
+  }
+  if (primary == "area") {
+    StartAreaCommand(st, log);
+    return true;
+  }
+  if (primary == "list") {
+    StartListCommand(st, log);
+    return true;
+  }
+  if (primary == "dataextraction") {
+    StartDataExtractCommand(st, log);
+    return true;
+  }
+  if (primary == "table") {
+    StartTableCommand(st, log);
+    return true;
+  }
+  if (primary == "addpointtable") {
+    StartAddPointTableCommand(st, log);
+    return true;
+  }
   if (primary == "text") {
     StartTextCommand(st, log);
     return true;
@@ -7377,6 +9423,11 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     StartMleaderStyleCommand(st, log);
     return true;
   }
+  if (primary == "tablestyle" || primary == "tsty") {
+    st.showTableStyleDialog = true;
+    log.push_back("TABLESTYLE — table style manager opened.");
+    return true;
+  }
   if (primary == "id") {
     StartIdPointCommand(st, log);
     return true;
@@ -7405,6 +9456,26 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "surfelev") {
     StartSurfaceElevGradeCommand(st, log);
+    return true;
+  }
+  if (primary == "surflodlow") {
+    RunSurfaceLodCommand(st, std::string(), true, log);
+    return true;
+  }
+  if (primary == "surflodhigh") {
+    RunSurfaceLodCommand(st, std::string(), false, log);
+    return true;
+  }
+  if (primary == "movetosurface") {
+    RunMoveToSurfaceCommand(st, std::string(), log);
+    return true;
+  }
+  if (primary == "surfacevisibility") {
+    RunSurfaceVisibility(st, std::string(), log);
+    return true;
+  }
+  if (primary == "surfcrossbl") {
+    RunSurfaceCrossings(st, std::string(), log);
     return true;
   }
   if (primary == "watershed") {
@@ -8270,6 +10341,35 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       hits.push_back(e);
     }
   }
+  // REQ-480: an alignment is tested as the curve it draws (sampled to a hundredth of a unit), by the same rule as
+  // the arc and spline above.
+  for (size_t ai = 0; ai < st.alignments.size(); ++ai) {
+    if (st.alignments[ai].Empty())
+      continue;
+    curvePts.clear();
+    for (const alignment::Point2& p : st.alignments[ai].SampleForDisplay(0.01))
+      curvePts.push_back(ray3d::Vec3{p.x, p.y, 0.0});
+    if (CurveHitsRect(curvePts)) {
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::Alignment;
+      e.index = static_cast<int>(ai);
+      hits.push_back(e);
+    }
+  }
+  for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
+    const CadPoint& p = st.cadPoints[pi];
+    bool hit = false;
+    if (windowMode)
+      hit = p.x >= mnX && p.x <= mxX && p.y >= mnY && p.y <= mxY;
+    else
+      hit = !(p.x < mnX || p.x > mxX || p.y < mnY || p.y > mxY);
+    if (hit) {
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::Point;
+      e.index = static_cast<int>(pi);
+      hits.push_back(e);
+    }
+  }
   const int nPoly =
       static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < nPoly; ++pi) {
@@ -8447,24 +10547,16 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
     const float H    = patt.pageHeightPts * patt.scale;
     const float cosR = std::cos(patt.rotationDeg * kPdfPi / 180.f);
     const float sinR = std::sin(patt.rotationDeg * kPdfPi / 180.f);
-    // Four corners in world space.
-    float cx[4] = {
-      patt.insertX,
-      patt.insertX + W * cosR,
-      patt.insertX + W * cosR - H * sinR,
-      patt.insertX - H * sinR
-    };
-    float cy[4] = {
-      patt.insertY,
-      patt.insertY + W * sinR,
-      patt.insertY + W * sinR + H * cosR,
-      patt.insertY + H * cosR
-    };
+    float cx[4] = {patt.insertX, patt.insertX + W * cosR, patt.insertX + W * cosR - H * sinR,
+                   patt.insertX - H * sinR};
+    float cy[4] = {patt.insertY, patt.insertY + W * sinR, patt.insertY + W * sinR + H * cosR,
+                   patt.insertY + H * cosR};
     float pmnX = cx[0], pmxX = cx[0], pmnY = cy[0], pmxY = cy[0];
     for (int k = 1; k < 4; ++k) {
       pmnX = std::min(pmnX, cx[k]); pmxX = std::max(pmxX, cx[k]);
       pmnY = std::min(pmnY, cy[k]); pmxY = std::max(pmxY, cy[k]);
     }
+    SPBox(pmnX, pmnY, pmxX, pmxY, &pmnX, &pmnY, &pmxX, &pmxY);
     bool hit = false;
     if (windowMode)
       hit = pmnX >= mnX && pmxX <= mxX && pmnY >= mnY && pmxY <= mxY;
@@ -8590,7 +10682,7 @@ static void RotateCadDimLinearAroundBase(float bx, float by, float rad, CadAnnot
     ann->dimSignedOffset = dmx - ncmx;
   float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
   if (CadDimLinearGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-    ann->rotationRad = std::atan2(ty, tx);
+    ann->rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
 }
 
 /// REQ-103 MIRROR. Same shape as \c RotateCadDimLinearAroundBase, reflecting instead of rotating.
@@ -8620,7 +10712,7 @@ static void ReflectCadDimLinearAcrossLine(float x0, float y0, float x1, float y1
     ann->dimSignedOffset = dmx - ncmx;
   float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
   if (CadDimLinearGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-    ann->rotationRad = std::atan2(ty, tx);
+    ann->rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
 }
 
 static float NormalizeAngleRadMinusPiToPi(float a) {
@@ -8733,6 +10825,57 @@ static void DuplicateSelectedSplines(AppCommandState& st, const F& f) {
     st.cadSplineAttrs.push_back(DuplicatedEntityAttrs(st.cadSplineAttrs[k]));
   }
   BumpCadGpuCache(st);
+}
+
+template <class F>
+static void MapSelectedCadPoints(AppCommandState& st, const F& f) {
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Point || e.index < 0)
+      continue;
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.cadPoints.size())
+      continue;
+    const spline::Vec3 mapped = f(spline::Vec3{st.cadPoints[k].x, st.cadPoints[k].y, st.cadPoints[k].z});
+    st.cadPoints[k].x = mapped.x;
+    st.cadPoints[k].y = mapped.y;
+    st.cadPoints[k].z = mapped.z;
+  }
+}
+
+static void EraseSelectedCadPoints(AppCommandState& st) {
+  std::set<int> ix;
+  for (const auto& e : st.selection)
+    if (e.type == SelectedEntity::Type::Point && e.index >= 0 &&
+        static_cast<size_t>(e.index) < st.cadPoints.size())
+      ix.insert(e.index);
+  for (auto it = ix.rbegin(); it != ix.rend(); ++it) {
+    const size_t k = static_cast<size_t>(*it);
+    st.cadPoints.erase(st.cadPoints.begin() + static_cast<std::ptrdiff_t>(k));
+    if (k < st.cadPointAttrs.size())
+      st.cadPointAttrs.erase(st.cadPointAttrs.begin() + static_cast<std::ptrdiff_t>(k));
+  }
+}
+
+template <class F>
+static void DuplicateSelectedCadPoints(AppCommandState& st, const F& f) {
+  const size_t n0 = st.cadPoints.size();
+  std::vector<size_t> sources;
+  for (const auto& e : st.selection)
+    if (e.type == SelectedEntity::Type::Point && e.index >= 0 && static_cast<size_t>(e.index) < n0)
+      sources.push_back(static_cast<size_t>(e.index));
+  if (sources.empty())
+    return;
+  while (st.cadPointAttrs.size() < n0)
+    st.cadPointAttrs.push_back(MakeNewEntityAttrs(st));
+  for (const size_t k : sources) {
+    CadPoint c = st.cadPoints[k];
+    const spline::Vec3 mapped = f(spline::Vec3{c.x, c.y, c.z});
+    c.x = mapped.x;
+    c.y = mapped.y;
+    c.z = mapped.z;
+    st.cadPoints.push_back(c);
+    st.cadPointAttrs.push_back(DuplicatedEntityAttrs(st.cadPointAttrs[k]));
+  }
 }
 
 /// Visit each selected feature line once as (index, firstVertex, lastVertexExclusive).
@@ -8955,9 +11098,56 @@ static void TransformSelectedPipeRuns(AppCommandState& st, PointFn pt, bool dupl
   }
 }
 
+/// REQ-487.1: map every selected alignment through \p fn (an Alignment transform that returns false to refuse), in place or,
+/// with \p duplicate, as a new INDEPENDENT alignment with a unique name and a fresh id. A linked offset that is moved is
+/// rebuilt from its parent afterwards, so it can never be left displaced from the geometry it is defined by.
+template <typename AlignFn>
+static void TransformSelectedAlignments(AppCommandState& st, AlignFn fn, bool duplicate) {
+  std::set<int> seen;
+  bool changed = false;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Alignment || e.index < 0 || static_cast<size_t>(e.index) >= st.alignments.size())
+      continue;
+    if (!seen.insert(e.index).second)
+      continue;
+    const size_t ix = static_cast<size_t>(e.index);
+    alignment::Alignment a = st.alignments[ix];
+    if (!fn(a))
+      continue;
+    if (duplicate) {
+      a.id = st.nextEntityId++;
+      a.parentId = 0;
+      a.name = UniqueAlignmentName(st, a.name);
+      a.equations = st.alignments[ix].equations;
+      st.alignments.push_back(std::move(a));
+    } else {
+      st.alignments[ix] = std::move(a);
+      changed = true;
+    }
+  }
+  if (changed) {
+    std::vector<std::string> quiet;
+    RefreshAlignmentOffsets(st, quiet);
+  }
+}
+
+static void TranslateSelectedAlignments(AppCommandState& st, double dx, double dy, bool duplicate) {
+  TransformSelectedAlignments(st, [&](alignment::Alignment& a) { a.Translate(dx, dy); return true; }, duplicate);
+}
+
 static void TranslateSelectedPipeRuns(AppCommandState& st, float dx, float dy, float dz, bool duplicate) {
   const ray3d::Vec3 d{static_cast<double>(dx), static_cast<double>(dy), static_cast<double>(dz)};
   TransformSelectedPipeRuns(st, [&](const ray3d::Vec3& p) { return ray3d::Add(p, d); }, duplicate);
+  if (dx != 0.f || dy != 0.f)
+    TranslateSelectedAlignments(st, static_cast<double>(dx), static_cast<double>(dy), duplicate);  // REQ-487.1
+}
+
+static void RotateSelectedAlignments(AppCommandState& st, const ray3d::Vec3& axisPoint, const ray3d::Vec3& axisUnit,
+                                     double angleRad, bool duplicate) {
+  if (std::fabs(axisUnit.z) < 1.0 - 1e-9)
+    return;  // an alignment is horizontal: only a vertical axis keeps it so
+  const double cw = -angleRad * (axisUnit.z > 0.0 ? 1.0 : -1.0);  // ray3d rotates counter-clockwise; azimuths run clockwise
+  TransformSelectedAlignments(st, [&](alignment::Alignment& a) { a.Rotate(axisPoint.x, axisPoint.y, cw); return true; }, duplicate);
 }
 
 static void RotateSelectedPipeRuns(AppCommandState& st, const ray3d::Vec3& axisPoint,
@@ -8966,6 +11156,7 @@ static void RotateSelectedPipeRuns(AppCommandState& st, const ray3d::Vec3& axisP
   TransformSelectedPipeRuns(
       st, [&](const ray3d::Vec3& p) { return ray3d::RotatePointAboutAxis(p, axisPoint, axisUnit, rad); },
       duplicate);
+  RotateSelectedAlignments(st, axisPoint, axisUnit, rad, duplicate);  // REQ-487.1
 }
 
 /// MIRROR's solids and pipe runs, across the plane through \p planePoint with unit normal
@@ -8979,6 +11170,11 @@ static void MirrorSelectedSolidsAndPipeRuns(AppCommandState& st, const ray3d::Ve
   TransformSelectedPipeRuns(
       st, [&](const ray3d::Vec3& p) { return ray3d::ReflectPointAcrossPlane(p, planePoint, planeUnit); },
       /*duplicate=*/true);
+  if (std::fabs(planeUnit.z) < 1e-9) {  // REQ-487.1: a vertical mirror plane keeps an alignment horizontal
+    const double px = planePoint.x, py = planePoint.y;
+    TransformSelectedAlignments(
+        st, [&](alignment::Alignment& a) { return a.Mirror(px, py, px - planeUnit.y, py + planeUnit.x); }, /*duplicate=*/true);
+  }
 }
 
 // dz defaults to 0 so every existing 2D caller (COPY, ARRAY rectangular under the World UCS) is
@@ -9208,6 +11404,9 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
     return spline::Vec3{v.x + dx, v.y + dy, v.z + dz};
   });
+  DuplicateSelectedCadPoints(st, [&](const spline::Vec3& v) {
+    return spline::Vec3{v.x + dx, v.y + dy, v.z + dz};
+  });
 
   // Feature lines (REQ-087). Appended after the loop above rather than inside it only for
   // readability — ForEachSelectedFeatureLine snapshots its ranges, so growing the store mid-walk is
@@ -9228,7 +11427,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
 
 // Paste clipboard geometry into MODEL space with (dx, dy) applied. Builds st.selection from the pasted
 // entities (REQ-038 #5). Caller pushes the undo snapshot.
-static void CommitPasteIntoModel(AppCommandState& st, float dx, float dy) {
+static void CommitPasteIntoModel(AppCommandState& st, double dx, double dy) {
   const CadClipboard& cb = st.clipboard;
   using ST = SelectedEntity::Type;
   st.selection.clear();
@@ -9277,6 +11476,14 @@ static void CommitPasteIntoModel(AppCommandState& st, float dx, float dy) {
     st.cadSplines.push_back(std::move(sp));
     st.cadSplineAttrs.push_back(i < cb.splineAttrs.size() ? cb.splineAttrs[i] : EntityAttributes{});
     st.selection.push_back({ST::Spline, static_cast<int>(st.cadSplines.size()) - 1});
+  }
+  for (size_t i = 0; i < cb.points.size(); ++i) {
+    CadPoint p = cb.points[i];
+    p.x += dx;
+    p.y += dy;
+    st.cadPoints.push_back(p);
+    st.cadPointAttrs.push_back(i < cb.pointAttrs.size() ? cb.pointAttrs[i] : EntityAttributes{});
+    st.selection.push_back({ST::Point, static_cast<int>(st.cadPoints.size()) - 1});
   }
   const int nPoly = static_cast<int>(cb.polyOffsets.size()) - 1;
   for (int pi = 0; pi < nPoly; ++pi) {
@@ -9365,7 +11572,7 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
   const CadClipboard& cb = st.clipboard;
   using PT = PaperEntityRef::Type;
   st.selectedPaperEntities.clear();
-  int skipped = static_cast<int>(cb.splines.size());  // Splines are model-space entities (REQ-443).
+  int skipped = 0;
 
   for (size_t i = 0; i + 5 < cb.lines.size() + 1; i += 6) {
     L.paperLines.push_back(static_cast<float>(cb.lines[i + 0] + dx));
@@ -9415,6 +11622,8 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
       L.paperPolyVerts.push_back(static_cast<float>(cb.polyVerts[(static_cast<size_t>(vi)* 3 + 0)] + dx));
       L.paperPolyVerts.push_back(static_cast<float>(cb.polyVerts[(static_cast<size_t>(vi)* 3 + 1)] + dy));
       L.paperPolyVerts.push_back(static_cast<float>(cb.polyVerts[(static_cast<size_t>(vi)* 3 + 2)]));
+      L.paperPolyVertsBulge.push_back(static_cast<size_t>(vi) < cb.polyVertsBulge.size() ? cb.polyVertsBulge[static_cast<size_t>(vi)]
+                                                                                       : 0.f);
     }
     if (L.paperPolyOffsets.empty())
       L.paperPolyOffsets.push_back(baseVert);
@@ -9465,13 +11674,45 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
     L.paperBlockRefAttrs.push_back(i < cb.blockRefAttrs.size() ? cb.blockRefAttrs[i] : EntityAttributes{});
     st.selectedPaperEntities.push_back({PT::Block, static_cast<int>(L.paperBlockRefs.size()) - 1});
   }
+  for (size_t i = 0; i < cb.splines.size(); ++i) {
+    CadSpline sp = cb.splines[i];
+    spline::MapPoints(&sp, [&](const spline::Vec3& p) { return spline::Vec3{p.x + dx, p.y + dy, 0.0}; });
+    L.paperSplines.push_back(std::move(sp));
+    L.paperSplineAttrs.push_back(i < cb.splineAttrs.size() ? cb.splineAttrs[i] : EntityAttributes{});
+    st.selectedPaperEntities.push_back({PT::Spline, static_cast<int>(L.paperSplines.size()) - 1});
+  }
+  for (size_t i = 0; i < cb.points.size(); ++i) {
+    CadPoint p = cb.points[i];
+    p.x += dx;
+    p.y += dy;
+    p.z = 0.0;
+    L.paperPoints.push_back(p);
+    L.paperPointAttrs.push_back(i < cb.pointAttrs.size() ? cb.pointAttrs[i] : EntityAttributes{});
+    st.selectedPaperEntities.push_back({PT::Point, static_cast<int>(L.paperPoints.size()) - 1});
+  }
   BumpCadGpuCache(st);
   return skipped;
 }
 
+}  // namespace
+
+// Shared with CREATEVIEWFRAMES (REQ-517.6): true when the active tab's project is read-only.
+bool ActiveProjectPointsReadOnly(const AppCommandState& st) {
+  const int tab = st.activeDrawingIdx;
+  if (tab <= 0 || tab >= static_cast<int>(st.drawingTabs.size())) return false;
+  const auto& drawing = st.drawingTabs[static_cast<size_t>(tab)];
+  if (drawing.projectUid == 0 || drawing.pointsMode == AppCommandState::DrawingTab::PointsMode::Detached) return false;
+  for (const auto& project : st.openProjects)
+    if (project.uid == drawing.projectUid) return project.readOnly;
+  return false;
+}
+
+namespace {
+
 // Paste clipboard geometry into the ACTIVE space (model or the active paper layout) with (dx, dy) applied.
 // Routes by ActivePaperGeometryTarget (ADR-009/013). Caller pushes the undo snapshot.
-static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, std::vector<std::string>& log) {
+
+static void CommitPasteFromClipboard(AppCommandState& st, double dx, double dy, std::vector<std::string>& log) {
   // A pasted entity is a *different* entity and must not inherit its source's identity (REQ-076).
   // Cleared on the clipboard rather than on the destination arrays because this is the one place
   // both paste paths (PASTE and PASTEORIG) and both destination spaces pass through; the next
@@ -9484,16 +11725,47 @@ static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, st
   ClearEntityIdsFrom(st.clipboard.annotationAttrs, 0);
   ClearEntityIdsFrom(st.clipboard.filledRegionAttrs, 0);
   ClearEntityIdsFrom(st.clipboard.splineAttrs, 0);  // REQ-443: pasted spline receives fresh identity.
+  ClearEntityIdsFrom(st.clipboard.pointAttrs, 0);
   ClearEntityIdsFrom(st.clipboard.blockRefAttrs, 0);
   if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
     st.selection.clear();  // crossing into paper: model selection no longer applies
-    const int skipped = CommitPasteIntoPaper(st, *L, dx, dy);
+    const int skipped = CommitPasteIntoPaper(st, *L, static_cast<float>(dx), static_cast<float>(dy));
     if (skipped > 0)
       log.push_back("PASTE — " + std::to_string(skipped) +
-                    " object(s) skipped (paper space does not store dimensions or splines).");
+                    " object(s) skipped (paper space does not store dimensions).");
+    if (!st.clipboard.surveyPoints.empty())
+      log.push_back("PASTE — " + std::to_string(st.clipboard.surveyPoints.size()) +
+                    " survey point(s) not pasted: survey points belong to model space.");
   } else {
     ClearPaperEntitySelection(st);
     CommitPasteIntoModel(st, dx, dy);
+    st.selectedSurveyPointIndices.clear();
+    if (ActiveProjectPointsReadOnly(st) && !st.clipboard.surveyPoints.empty()) {
+      log.push_back("PASTE — survey points not pasted: this project is open read-only.");
+    } else {
+      for (const SurveyPoint& source : st.clipboard.surveyPoints) {
+        SurveyPoint copy = source;
+        copy.easting += dx;
+        copy.northing += dy;
+        auto existing = std::find_if(st.surveyPoints.begin(), st.surveyPoints.end(),
+                                     [&](const SurveyPoint& p) { return p.id == copy.id; });
+        if (st.clipboardPasteOverwrite && existing != st.surveyPoints.end()) {
+          const size_t index = static_cast<size_t>(existing - st.surveyPoints.begin());
+          copy.labelMtextAnnId = existing->labelMtextAnnId;
+          *existing = std::move(copy);
+          EnsureSurveyPointLabelMtext(st, index, &log);
+          st.selectedSurveyPointIndices.push_back(static_cast<int>(index));
+        } else {
+          copy.labelMtextAnnId = 0;
+          st.surveyPoints.push_back(std::move(copy));
+          EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, &log);
+          st.selectedSurveyPointIndices.push_back(static_cast<int>(st.surveyPoints.size() - 1));
+        }
+      }
+      if (!st.clipboard.surveyPoints.empty())
+        log.push_back("PASTE — " + std::to_string(st.clipboard.surveyPoints.size()) + " survey point(s) pasted.");
+    }
+    st.clipboardPasteOverwrite = false;
   }
 }
 
@@ -9579,7 +11851,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
           RotateAroundBase(bx, by, rad, &c.dimExt2X, &c.dimExt2Y);
           float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
           if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-            c.rotationRad = std::atan2(ty, tx);
+            c.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
         } else {
           float xs[4] = {c.boxMinX, c.boxMaxX, c.boxMaxX, c.boxMinX};
           float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
@@ -9724,6 +11996,11 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
     RotateAroundBase(bx, by, rad, &x, &y);
     return spline::Vec3{x, y, v.z};
   });
+  DuplicateSelectedCadPoints(st, [&](const spline::Vec3& v) {
+    double x = v.x, y = v.y;
+    RotateAroundBase(bx, by, rad, &x, &y);
+    return spline::Vec3{x, y, v.z};
+  });
 
   // Feature lines (REQ-087) — the same append as the translated path, differing only in the point
   // function, which is exactly why both go through AppendFeatureLineCopy.
@@ -9770,6 +12047,9 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
     return ray3d::RotateVectorAboutAxis({x, y, z}, axisUnit, rad);
   };
   DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
+    return ray3d::RotatePointAboutAxis(v, axisPoint, axisUnit, rad);
+  });
+  DuplicateSelectedCadPoints(st, [&](const spline::Vec3& v) {
     return ray3d::RotatePointAboutAxis(v, axisPoint, axisUnit, rad);
   });
   // Solids and pipe runs are copied too (REQ-351) — about any axis, since `brep::Rotate` turns
@@ -9936,7 +12216,7 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
           RotateAroundBase(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad, &c.dimExt2X, &c.dimExt2Y);
           float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
           if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-            c.rotationRad = std::atan2(ty, tx);
+            c.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
         } else {
           float xs[4] = {c.boxMinX, c.boxMaxX, c.boxMaxX, c.boxMinX};
           float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
@@ -10193,6 +12473,9 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
       DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
         return ray3d::ReflectPointAcrossPlane(v, planePoint, normal);
       });
+      DuplicateSelectedCadPoints(st, [&](const spline::Vec3& v) {
+        return ray3d::ReflectPointAcrossPlane(v, planePoint, normal);
+      });
     }
   }
 
@@ -10292,7 +12575,7 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
           ReflectPtAcrossLine(x0, y0, x1, y1, &c.dimExt2X, &c.dimExt2Y);
           float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
           if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-            c.rotationRad = std::atan2(ty, tx);
+            c.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
         } else {
           // Generic fallback (DimAngular and anything else): reflect insertion point + AABB
           // corners and re-fit — the same weaker path ROTATE takes for these kinds.
@@ -10558,6 +12841,11 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     RotateAroundBase(bx, by, rad, &x, &y);
     return spline::Vec3{x, y, v.z};
   });
+  MapSelectedCadPoints(st, [&](const spline::Vec3& v) {
+    double x = v.x, y = v.y;
+    RotateAroundBase(bx, by, rad, &x, &y);
+    return spline::Vec3{x, y, v.z};
+  });
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Polyline)
       continue;
@@ -10588,7 +12876,7 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
       RotateAroundBase(bx, by, rad, &a.dimExt2X, &a.dimExt2Y);
       float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
       if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-        a.rotationRad = std::atan2(ty, tx);
+        a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
     } else {
       float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
       float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
@@ -10677,6 +12965,9 @@ static void RotateSelectionInPlaceAboutAxis(AppCommandState& st, const ray3d::Ve
     return ray3d::RotateVectorAboutAxis({x, y, z}, axisUnit, rad);
   };
   MapSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
+    return ray3d::RotatePointAboutAxis(v, axisPoint, axisUnit, rad);
+  });
+  MapSelectedCadPoints(st, [&](const spline::Vec3& v) {
     return ray3d::RotatePointAboutAxis(v, axisPoint, axisUnit, rad);
   });
   size_t refused = 0;
@@ -10979,6 +13270,9 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
   MapSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443: a spline moves by moving its points
     return spline::Vec3{v.x + dx, v.y + dy, v.z + dz};
   });
+  MapSelectedCadPoints(st, [&](const spline::Vec3& v) {
+    return spline::Vec3{v.x + dx, v.y + dy, v.z + dz};
+  });
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::BlockRef)
       continue;
@@ -11040,7 +13334,7 @@ static void ScaleCadDimLinearAroundBase(float bx, float by, float sc, CadAnnotat
     ann->dimSignedOffset = dmx - ncmx;
   float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
   if (CadDimLinearGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-    ann->rotationRad = std::atan2(ty, tx);
+    ann->rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
 }
 
 static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outCx, float* outCy) {
@@ -11319,7 +13613,7 @@ static void ScaleAnnotationAroundBase(const AppCommandState& st, CadAnnotation& 
     ScaleCadDimLinearAroundBase(bx, by, sc, &a);
     ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
-    CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
+    CadDimRefreshMeasurementText(&a, CadDimensionStyleForAnnotation(st, a), CadAngleDisplaySettings(st));
   } else if (a.kind == CadAnnotation::Kind::DimAligned) {
     ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
     ScalePtAroundBase(bx, by, sc, &a.dimExt2X, &a.dimExt2Y);
@@ -11328,8 +13622,8 @@ static void ScaleAnnotationAroundBase(const AppCommandState& st, CadAnnotation& 
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-      a.rotationRad = std::atan2(ty, tx);
-    CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
+      a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
+    CadDimRefreshMeasurementText(&a, CadDimensionStyleForAnnotation(st, a), CadAngleDisplaySettings(st));
   } else if (a.kind == CadAnnotation::Kind::DimAngular) {
     ScalePtAroundBase(bx, by, sc, &a.dimAngVertexX, &a.dimAngVertexY);
     ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
@@ -11338,7 +13632,7 @@ static void ScaleAnnotationAroundBase(const AppCommandState& st, CadAnnotation& 
     ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
     CadDimAngularSyncTextPlacement(&a, st.modelUnitsPerPlottedInch);
-    CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
+    CadDimRefreshMeasurementText(&a, st.activeDimensionStyle, CadAngleDisplaySettings(st));
   }
 }
 
@@ -11368,6 +13662,8 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
     TransformSelectedPipeRuns(
         st, [&](const ray3d::Vec3& p) { return ray3d::Add(base, ray3d::Scale(ray3d::Sub(p, base), k)); },
         /*duplicate=*/false);
+    TransformSelectedAlignments(  // REQ-487.1: the plan scale; an alignment has no elevation to scale
+        st, [&](alignment::Alignment& a) { return a.Scale(static_cast<double>(bx), static_cast<double>(by), k); }, /*duplicate=*/false);
   }
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
@@ -11421,6 +13717,11 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
     el.majVy = static_cast<float>(my - el.cy);
   }
   MapSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
+    double x = v.x, y = v.y;
+    ScalePtAroundBase(bx, by, sc, &x, &y);
+    return spline::Vec3{x, y, v.z};
+  });
+  MapSelectedCadPoints(st, [&](const spline::Vec3& v) {
     double x = v.x, y = v.y;
     ScalePtAroundBase(bx, by, sc, &x, &y);
     return spline::Vec3{x, y, v.z};
@@ -11519,6 +13820,12 @@ static void ScaleSelectionZAboutBase(AppCommandState& st, float bz, float sc) {
         spline::MapPoints(&st.cadSplines[k], [&](const spline::Vec3& v) {
           return spline::Vec3{v.x, v.y, bz + static_cast<double>(sc) * (v.z - bz)};
         });
+      break;
+    }
+    case SelectedEntity::Type::Point: {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.cadPoints.size())
+        st.cadPoints[k].z = bz + static_cast<double>(sc) * (st.cadPoints[k].z - bz);
       break;
     }
     case SelectedEntity::Type::Polyline: {
@@ -11966,6 +14273,25 @@ void ScaleSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, f
     }
     case PaperRef::Type::Leader:  // dropped from the selection above
       break;
+    case PaperRef::Type::Spline: {
+      if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperSplines.size())
+        spline::MapPoints(&L->paperSplines[static_cast<size_t>(r.index)], [&](const spline::Vec3& v) {
+          double x = v.x, y = v.y;
+          ScalePtAroundBase(baseX, baseY, factor, &x, &y);
+          return spline::Vec3{x, y, v.z};
+        });
+      break;
+    }
+    case PaperRef::Type::Point: {
+      if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperPoints.size()) {
+        double x = L->paperPoints[static_cast<size_t>(r.index)].x;
+        double y = L->paperPoints[static_cast<size_t>(r.index)].y;
+        ScalePtAroundBase(baseX, baseY, factor, &x, &y);
+        L->paperPoints[static_cast<size_t>(r.index)].x = x;
+        L->paperPoints[static_cast<size_t>(r.index)].y = y;
+      }
+      break;
+    }
     }
   }
   BumpCadGpuCache(st);
@@ -12290,6 +14616,7 @@ static void ResetArrayDraft(AppCommandState& st) {
   st.arrayItemCount = 0;
   st.arrayFillAngleDeg = 360.f;
   st.arrayRotateItems = true;
+  st.arrayOnPaper = false;
 }
 
 /// The rigid reference point ARRAY hangs the pattern on: the selection centroid in X/Y, and the
@@ -12304,6 +14631,82 @@ static void SetArrayAnchorFromSelection(AppCommandState& st) {
   ray3d::Vec3 anchor3{};
   st.arrayAnchorZ = CadGizmoAnchorWorld(st, &anchor3) ? static_cast<float>(anchor3.z)
                                                       : CadCommitElevation(st);
+}
+
+static void SetArrayAnchorFromPaperSelection(AppCommandState& st) {
+  PaperLayout* layout = ActivePaperGeometryTarget(st);
+  if (!layout || st.selectedPaperEntities.empty()) {
+    st.arrayAnchorX = st.arrayAnchorY = 0.f;
+    return;
+  }
+  const PaperEntityRef ref = st.selectedPaperEntities.front();
+  switch (ref.type) {
+  case PaperEntityRef::Type::Line: {
+    const size_t i = static_cast<size_t>(ref.index) * 6;
+    if (i + 4 < layout->paperLines.size()) {
+      st.arrayAnchorX = (layout->paperLines[i] + layout->paperLines[i + 3]) * .5f;
+      st.arrayAnchorY = (layout->paperLines[i + 1] + layout->paperLines[i + 4]) * .5f;
+      return;
+    }
+    break;
+  }
+  case PaperEntityRef::Type::Circle: {
+    const size_t i = static_cast<size_t>(ref.index) * 3;
+    if (i + 1 < layout->paperCircles.size()) {
+      st.arrayAnchorX = layout->paperCircles[i]; st.arrayAnchorY = layout->paperCircles[i + 1]; return;
+    }
+    break;
+  }
+  case PaperEntityRef::Type::Arc:
+    if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperArcs.size()) {
+      const auto& a = layout->paperArcs[static_cast<size_t>(ref.index)];
+      st.arrayAnchorX = a.cx; st.arrayAnchorY = a.cy; return;
+    }
+    break;
+  case PaperEntityRef::Type::Ellipse:
+    if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperEllipses.size()) {
+      const auto& e = layout->paperEllipses[static_cast<size_t>(ref.index)];
+      st.arrayAnchorX = e.cx; st.arrayAnchorY = e.cy; return;
+    }
+    break;
+  case PaperEntityRef::Type::Polyline:
+    if (ref.index >= 0 && static_cast<size_t>(ref.index + 1) < layout->paperPolyOffsets.size()) {
+      const int first = layout->paperPolyOffsets[static_cast<size_t>(ref.index)];
+      const size_t i = static_cast<size_t>(std::max(first, 0)) * 3;
+      if (i + 1 < layout->paperPolyVerts.size()) {
+        st.arrayAnchorX = layout->paperPolyVerts[i]; st.arrayAnchorY = layout->paperPolyVerts[i + 1]; return;
+      }
+    }
+    break;
+  case PaperEntityRef::Type::Text:
+    if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperTexts.size()) {
+      const auto& a = layout->paperTexts[static_cast<size_t>(ref.index)];
+      st.arrayAnchorX = a.insX; st.arrayAnchorY = a.insY; return;
+    }
+    break;
+  case PaperEntityRef::Type::Block:
+    if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperBlockRefs.size()) {
+      const auto& b = layout->paperBlockRefs[static_cast<size_t>(ref.index)];
+      st.arrayAnchorX = static_cast<float>(b.xf.x); st.arrayAnchorY = static_cast<float>(b.xf.y); return;
+    }
+    break;
+  case PaperEntityRef::Type::Leader:
+    if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperMultileaders.size()) {
+      const auto& l = layout->paperMultileaders[static_cast<size_t>(ref.index)];
+      st.arrayAnchorX = l.label.insX; st.arrayAnchorY = l.label.insY; return;
+    }
+    break;
+  case PaperEntityRef::Type::Table:
+    if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperTables.size()) {
+      const auto& t = layout->paperTables[static_cast<size_t>(ref.index)];
+      st.arrayAnchorX = t.insX; st.arrayAnchorY = t.insY; return;
+    }
+    break;
+  case PaperEntityRef::Type::Spline:
+  case PaperEntityRef::Type::Point:
+    break;
+  }
+  st.arrayAnchorX = st.arrayAnchorY = 0.f;
 }
 
 /// Resolve a viewport click onto the active UCS work plane, anchored at (\p ax,\p ay,\p az) — the
@@ -12373,6 +14776,23 @@ static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>
   const int rows = std::max(st.arrayRows, 1);
   const int levels = std::max(st.arrayLevels, 1);  // GitHub issue #400 increment 2
   PushUndoSnapshot(st, "Array-Rectangular");
+  if (st.arrayOnPaper) {
+    const std::vector<PaperEntityRef> source = st.selectedPaperEntities;
+    std::vector<std::string> transformLog;
+    for (int r = 0; r < rows; ++r) {
+      for (int c = 0; c < cols; ++c) {
+        if (r == 0 && c == 0)
+          continue;
+        st.selectedPaperEntities = source;
+        TranslateSelectedPaperEntities(st, static_cast<float>(c) * st.arrayColSpacing,
+                                       static_cast<float>(r) * st.arrayRowSpacing, true, transformLog, false);
+      }
+    }
+    st.selectedPaperEntities = source;
+    FinishArrayCommand(st, log, cols * rows,
+                       (std::to_string(cols) + " x " + std::to_string(rows)).c_str());
+    return;
+  }
   for (int lv = 0; lv < levels; ++lv) {
     for (int r = 0; r < rows; ++r) {
       for (int c = 0; c < cols; ++c) {
@@ -12411,6 +14831,28 @@ static void CommitArrayPolar(AppCommandState& st, std::vector<std::string>& log)
   const float step = (n <= 1) ? 0.f : (fullTurn ? fillRad / static_cast<float>(n)
                                                 : fillRad / static_cast<float>(n - 1));
   const float anchorX = st.arrayAnchorX, anchorY = st.arrayAnchorY, anchorZ = st.arrayAnchorZ;
+  if (st.arrayOnPaper) {
+    const std::vector<PaperEntityRef> source = st.selectedPaperEntities;
+    std::vector<std::string> transformLog;
+    PushUndoSnapshot(st, "Array-Polar");
+    for (int i = 1; i < n; ++i) {
+      const float angle = step * static_cast<float>(i);
+      const float dx = anchorX - st.arrayCenterX;
+      const float dy = anchorY - st.arrayCenterY;
+      const float targetX = st.arrayCenterX + dx * std::cos(angle) - dy * std::sin(angle);
+      const float targetY = st.arrayCenterY + dx * std::sin(angle) + dy * std::cos(angle);
+      st.selectedPaperEntities = source;
+      if (st.arrayRotateItems) {
+        TranslateSelectedPaperEntities(st, 0.f, 0.f, true, transformLog, false);
+        RotateSelectedPaperEntities(st, st.arrayCenterX, st.arrayCenterY, angle, transformLog, false);
+      } else {
+        TranslateSelectedPaperEntities(st, targetX - anchorX, targetY - anchorY, true, transformLog, false);
+      }
+    }
+    st.selectedPaperEntities = source;
+    FinishArrayCommand(st, log, n, "polar");
+    return;
+  }
   const ray3d::Vec3 axisPoint{static_cast<double>(st.arrayCenterX), static_cast<double>(st.arrayCenterY),
                               static_cast<double>(st.arrayCenterZ)};
   const ucs::Ucs frame = CadActiveUcsStorage(st);
@@ -12505,6 +14947,13 @@ bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector
       return false;
     }
     st.arrayRowSpacing = v;
+    if (st.arrayOnPaper) {
+      // Paper layouts are 2D sheets; a third UCS level has no supported placement transform here.
+      // Commit the 2D grid instead of accepting a level count that would stack coincident copies.
+      st.arrayLevels = 1;
+      CommitArrayRectangular(st, log);
+      return true;
+    }
     st.arrayPhase = AP::Rect_WaitLevels;
     log.push_back("ARRAY Rectangular — number of levels <1 = 2D>:");
     return true;
@@ -12647,6 +15096,14 @@ static void CommitArcThreePoints(AppCommandState& st, float ax, float ay, float 
   log.push_back("ARC complete.");
 }
 
+static std::string DimStyleEntityColor(const DimensionStyle& sty, const EntityAttributes& base) {
+  if (!sty.dimLineColor.empty() && sty.dimLineColor != "ByLayer" && sty.dimLineColor != "ByBlock")
+    return sty.dimLineColor;
+  if (!base.color.empty() && base.color != "ByLayer" && base.color != "ByBlock")
+    return base.color;
+  return std::string("ByLayer");
+}
+
 static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vector<std::string>& log) {
   const float x1 = st.dimE1x, y1 = st.dimE1y;
   const float x2 = st.dimE2x, y2 = st.dimE2y;
@@ -12674,23 +15131,29 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   const float dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimAligned;
+  ann.dimensionStyleName = st.activeDimensionStyle.name;
   ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
   ann.dimExt1X = x1;
   ann.dimExt1Y = y1;
   ann.dimExt2X = x2;
   ann.dimExt2Y = y2;
   ann.dimSignedOffset = dOff;
-  ann.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
-  ann.fontFamily = st.activeDimensionStyle.textFont;
-  ann.rotationRad = std::atan2(vy, vx);
-  ann.text = DimensionStyles::FormatLinearDim(static_cast<double>(len), st.activeDimensionStyle);
+  ann.rotationRad = CadDimReadableTextRotation(std::atan2(vy, vx));
+  DimensionStyles::BakeTextOntoDimension(ann, st.activeDimensionStyle);
+  CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(st, ann), CadAngleDisplaySettings(st));
   const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
   EntityAttributes at = MakeNewEntityAttrs(st);
-  at.color = "#e1b12c";
+  const std::string preferredLayer = at.layer;
+  at.layer = CadVisibleLayerForNewEntity(st, preferredLayer);
+  if (at.layer != preferredLayer)
+    log.push_back("DIMALIGNED — current layer is off or frozen; dimension placed on layer \"" + at.layer + "\".");
+  at.color = DimStyleEntityColor(st.activeDimensionStyle, at);
   PushUndoSnapshot(st, "DIMALIGNED");
   st.cadAnnotations.push_back(std::move(ann));
   st.cadAnnotationAttrs.push_back(at);
+  ClearCadSelection(st);
+  st.selection.push_back({SelectedEntity::Type::Annotation, static_cast<int>(st.cadAnnotations.size()) - 1});
   BumpCadGpuCache(st);
   ResetDimDraft(st);
   log.push_back("DIMALIGNED complete.");
@@ -12726,6 +15189,7 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   }
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimLinear;
+  ann.dimensionStyleName = st.activeDimensionStyle.name;
   ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
   ann.dimExt1X = x1;
   ann.dimExt1Y = y1;
@@ -12733,8 +15197,6 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   ann.dimExt2Y = y2;
   ann.dimSignedOffset = dOff;
   ann.dimLinearVertical = vert;
-  ann.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
-  ann.fontFamily = st.activeDimensionStyle.textFont;
   float tx = 0.f, ty = 0.f;
   if (!vert) {
     tx = (x2 >= x1) ? 1.f : -1.f;
@@ -12743,15 +15205,22 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
     tx = 0.f;
     ty = (y2 >= y1) ? 1.f : -1.f;
   }
-  ann.rotationRad = std::atan2(ty, tx);
-  ann.text = DimensionStyles::FormatLinearDim(static_cast<double>(meas), st.activeDimensionStyle);
+  ann.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
+  DimensionStyles::BakeTextOntoDimension(ann, st.activeDimensionStyle);
+  CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(st, ann), CadAngleDisplaySettings(st));
   const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
   EntityAttributes at = MakeNewEntityAttrs(st);
-  at.color = "#e1b12c";
+  const std::string preferredLayer = at.layer;
+  at.layer = CadVisibleLayerForNewEntity(st, preferredLayer);
+  if (at.layer != preferredLayer)
+    log.push_back("DIMLINEAR — current layer is off or frozen; dimension placed on layer \"" + at.layer + "\".");
+  at.color = DimStyleEntityColor(st.activeDimensionStyle, at);
   PushUndoSnapshot(st, "DIMLINEAR");
   st.cadAnnotations.push_back(std::move(ann));
   st.cadAnnotationAttrs.push_back(at);
+  ClearCadSelection(st);
+  st.selection.push_back({SelectedEntity::Type::Annotation, static_cast<int>(st.cadAnnotations.size()) - 1});
   BumpCadGpuCache(st);
   ResetDimDraft(st);
   log.push_back("DIMLINEAR complete.");
@@ -14002,6 +16471,54 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
   using SP = AppCommandState::ScalePhase;
   using MirP = AppCommandState::MirrorPhase;
 
+  if (st.active == K::PaperRectViewport) {
+    if (st.activeSpaceIndex < 0 || static_cast<size_t>(st.activeSpaceIndex) >= st.paperLayouts.size()) {
+      log.push_back("MVIEW — switch to a paper layout first.");
+      st.active = K::None;
+      return;
+    }
+    if (st.paperVpMode == 1) {
+      PaperRef hit{};
+      const PaperLayout& layout = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+      if (!PickPaperEntityAt(layout, static_cast<float>(wx), static_cast<float>(wy),
+                             std::max(0.12f, CadOffsetEntityPickTolWorld(st)), &hit, &st.blockDefs) ||
+          hit.type != PaperRef::Type::Polyline) {
+        log.push_back("MVIEW Object — pick a closed paper-space polyline.");
+        return;
+      }
+      if (static_cast<size_t>(hit.index) >= layout.paperPolyClosed.size() ||
+          layout.paperPolyClosed[static_cast<size_t>(hit.index)] == 0) {
+        log.push_back("MVIEW Object — the selected polyline is open.");
+        return;
+      }
+      if (AddViewportFromPaperPolyline(st, st.activeSpaceIndex, hit.index, log)) {
+        st.active = K::None;
+        st.paperVpMode = 0;
+        st.paperVpPhase = 0;
+      }
+      return;
+    }
+    const float x = static_cast<float>(wx), y = static_cast<float>(wy);
+    if (st.paperVpPhase == 0) {
+      st.paperVpFirstXIn = x;
+      st.paperVpFirstYIn = y;
+      st.paperVpPhase = 1;
+      log.push_back("MVIEW — click the opposite corner, or type [Fit/2/3/4/Object].");
+      return;
+    }
+    if (std::fabs(x - st.paperVpFirstXIn) < 0.1f || std::fabs(y - st.paperVpFirstYIn) < 0.1f) {
+      log.push_back("MVIEW — viewport corners must be at least 0.1 in apart; pick the opposite corner again.");
+      return;
+    }
+    PushUndoSnapshot(st, "Create MVIEW viewport");
+    AddViewportRect(st, st.activeSpaceIndex, st.paperVpFirstXIn, st.paperVpFirstYIn, x, y);
+    st.active = K::None;
+    st.paperVpPhase = 0;
+    st.paperVpMode = 0;
+    log.push_back("MVIEW — rectangular viewport created.");
+    return;
+  }
+
   // UCS takes its picks here (REQ-154), before anything else looks at them: an origin pick must not
   // also start a selection. It works in WORLD coordinates because a coordinate frame is a
   // world-space object — see CadActiveUcsStorage for why that distinction is load-bearing.
@@ -14021,6 +16538,23 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
   if (st.active == K::Trim) {
     (void)SubmitTrimViewportPick(st, static_cast<float>(wx), static_cast<float>(wy),
                                  CadOffsetEntityPickTolWorld(st), log, pickRay);
+    return;
+  }
+  if (st.active == K::PdfAttach) {
+    using PAP = AppCommandState::PdfAttachPhase;
+    if (st.pdfAttachPhase == PAP::WaitInsertPoint)
+      SubmitPdfAttachInsertPoint(st, static_cast<float>(wx), static_cast<float>(wy), log);
+    return;
+  }
+  if (st.active == K::InsertBlock) {
+    using IPh = AppCommandState::InsertBlockPhase;
+    if (st.insertBlockPhase == IPh::WaitInsertPoint || st.insertBlockPhase == IPh::WaitScale ||
+        st.insertBlockPhase == IPh::WaitRotation || st.insertBlockPhase == IPh::WaitAlignFace) {
+      float wz = CadCommitElevation(st);
+      if (st.viewportSnapPickValid)
+        wz = st.viewportSnapPickLocalZ;
+      SubmitInsertBlockPick(st, static_cast<float>(wx), static_cast<float>(wy), wz, log);
+    }
     return;
   }
   if (st.active == K::None && st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st) &&
@@ -14374,10 +16908,19 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     CommitIdPointAt(st, static_cast<float>(wx), static_cast<float>(wy), log);
     return;
   }
+  if (st.active == K::StationOffsetPick) {  // REQ-484.4
+    CommitStationOffsetPick(st, wx, wy, log);
+    return;
+  }
 
   if (st.active == K::GeoMarkPoint || st.active == K::GeoReorientMarker ||
       st.active == K::DrawingSettingsPick || st.active == K::GeoCaptureArea) {  // REQ-359 / 360 / 364
     SubmitGeoCommandPoint(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::AlignmentLayout || st.active == K::AlignmentFromObjects) {  // REQ-485
+    (void)SubmitAlignmentCommandPoint(st, wx, wy, log);
     return;
   }
 
@@ -14695,6 +17238,9 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     return;
   }
 
+  if (SubmitCadDrawInquiryViewportPick(st, wx, wy, log))
+    return;
+
   if (st.active == K::PipeRun) {
     SubmitPipeRunViewportPick(st, static_cast<float>(wx), static_cast<float>(wy), log);
     return;
@@ -14824,6 +17370,26 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
   if (st.active == K::Array) {
     using AP = AppCommandState::ArrayPhase;
     if (st.arrayPhase == AP::PickSelection) {
+      if (st.arrayOnPaper) {
+        PaperLayout* layout = ActivePaperGeometryTarget(st);
+        PaperRef hit{};
+        if (!layout || !PickPaperEntityAt(*layout, static_cast<float>(wx), static_cast<float>(wy),
+                                          std::max(0.12f, CadOffsetEntityPickTolWorld(st)), &hit,
+                                          &st.blockDefs))
+          return;
+        const auto selected = std::find_if(st.selectedPaperEntities.begin(), st.selectedPaperEntities.end(),
+                                           [&](const PaperEntityRef& item) {
+                                             return item.type == hit.type && item.index == hit.index;
+                                           });
+        if (windowSelectionSubtract) {
+          if (selected != st.selectedPaperEntities.end())
+            st.selectedPaperEntities.erase(selected);
+        } else if (selected == st.selectedPaperEntities.end()) {
+          st.selectedPaperEntities.push_back(hit);
+        }
+        log.push_back("ARRAY — paper selection: " + std::to_string(st.selectedPaperEntities.size()) + " object(s).");
+        return;
+      }
       // A finished box merges into the selection and the phase stays put; DropArrayUnsupportedFrom-
       // Selection and the WaitType advance now happen only on Enter (ProcessCommandLineSubmit).
       if (st.selBoxWaitingSecond)
@@ -14852,6 +17418,11 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
       const ucs::Ucs frame = CadWorkPlaneAnchoredAt(st, st.arrayAnchorX, st.arrayAnchorY, st.arrayAnchorZ);
       const ucs::Point2D local = ucs::WorldToPlane(frame, {px, py, static_cast<double>(pz)});
       st.arrayRowSpacing = static_cast<float>(local.y);
+      if (st.arrayOnPaper) {
+        st.arrayLevels = 1;
+        CommitArrayRectangular(st, log);
+        return;
+      }
       // GitHub issue #400 increment 2: advance to the levels prompt, same as the typed path —
       // this click-driven branch committing directly (skipping levels entirely) was a bug in
       // increment 2, caught while adding increment 3's test coverage.
@@ -14940,7 +17511,7 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
   }
 
   if (st.active == K::Paste && st.modifyPhase == MP::NeedDestination) {
-    CommitClipboardPasteAt(st, static_cast<float>(wx), static_cast<float>(wy), log);  // routes by active space; builds the new selection
+    CommitClipboardPasteAt(st, wx, wy, log);  // routes by active space; builds the new selection
     return;
   }
 
@@ -15338,6 +17909,10 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
       if (k < st.cadSplines.size())
         for (const ray3d::Vec3& v : st.cadSplines[k].ctrl)
           grow(v.x, v.y, v.z);
+      break;
+    case T::Point:
+      if (k < st.cadPoints.size())
+        grow(st.cadPoints[k].x, st.cadPoints[k].y, st.cadPoints[k].z);
       break;
     case T::Arc:
       // The full circle the arc lies on, not the arc's own extent. Conservative by up to a radius,
@@ -16377,14 +18952,115 @@ bool SurfaceSnapElevation(const AppCommandState& st, double x, double y, float* 
 // Public paste entry point (REQ-038): place the clipboard at point (x,y) in the ACTIVE space's coordinates
 // (world for model, paper inches for a paper layout). Used by the model pick path and the paper overlay click.
 // Calls the file-local CommitPasteFromClipboard (visible here via the anonymous namespace's using-directive).
-void CommitClipboardPasteAt(AppCommandState& st, float x, float y, std::vector<std::string>& log) {
+void CommitClipboardPasteAt(AppCommandState& st, double x, double y, std::vector<std::string>& log) {
   if (st.clipboard.empty())
     return;
-  PushUndoSnapshot(st, "Paste");
-  CommitPasteFromClipboard(st, x - st.clipboard.basePtX, y - st.clipboard.basePtY, log);
+  const double dx = x - st.clipboard.basePtX;
+  const double dy = y - st.clipboard.basePtY;
+  if (!st.clipboardPasteResolving && !st.clipboard.surveyPoints.empty() &&
+      !ActivePaperGeometryTarget(st) && !ActiveProjectPointsReadOnly(st)) {
+    std::unordered_set<int> destinationIds;
+    for (const SurveyPoint& point : st.surveyPoints)
+      destinationIds.insert(point.id);
+    const int tab = st.activeDrawingIdx;
+    if (tab > 0 && tab < static_cast<int>(st.drawingTabs.size())) {
+      const uint32_t projectUid = st.drawingTabs[static_cast<size_t>(tab)].projectUid;
+      if (projectUid != 0 && st.drawingTabs[static_cast<size_t>(tab)].pointsMode !=
+                                 AppCommandState::DrawingTab::PointsMode::Detached)
+        for (const auto& project : st.openProjects)
+          if (project.uid == projectUid && project.points)
+            for (const auto& entry : project.points->points)
+              destinationIds.insert(entry.point.id);
+    }
+    std::vector<int> conflicts;
+    for (const SurveyPoint& point : st.clipboard.surveyPoints)
+      if (destinationIds.count(point.id))
+        conflicts.push_back(point.id);
+    if (!conflicts.empty()) {
+      st.pointEditPrompt = {};
+      st.pointEditPrompt.active = true;
+      st.pointEditPrompt.clipboardPaste = true;
+      st.pointEditPrompt.tabIdx = st.activeDrawingIdx;
+      st.pointEditPrompt.conflicts = std::move(conflicts);
+      st.pointEditPrompt.projectUid = tab > 0 && tab < static_cast<int>(st.drawingTabs.size())
+                                          ? st.drawingTabs[static_cast<size_t>(tab)].projectUid : 0;
+      st.pointEditPrompt.projectName = "clipboard paste";
+      st.clipboardPasteResolving = false;
+      st.pendingCopyDx = dx;
+      st.pendingCopyDy = dy;
+      st.active = AppCommandState::Kind::None;
+      st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+      log.push_back("PASTE — point number conflict; choose overwrite, renumber, or cancel.");
+      return;
+    }
+  }
+  st.clipboardPasteResolving = false;
+  PushUndoSnapshot(st, st.clipboardPasteOriginal ? "Paste original" : "Paste");
+  CommitPasteFromClipboard(st, dx, dy, log);
   st.active = AppCommandState::Kind::None;
   st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
-  log.push_back("PASTE complete.");
+  if (st.clipboardPasteOriginal) {
+    log.push_back("PASTEORIG — clipboard contents pasted at original coordinates.");
+    st.clipboardPasteOriginal = false;
+  } else {
+    log.push_back("PASTE complete.");
+  }
+}
+
+void ResolveClipboardPastePointConflict(AppCommandState& st, AppCommandState::PointEditPrompt::Answer answer,
+                                        std::vector<std::string>& log) {
+  if (!st.pointEditPrompt.active || !st.pointEditPrompt.clipboardPaste)
+    return;
+  const std::vector<int> conflicts = st.pointEditPrompt.conflicts;
+  st.pointEditPrompt = {};
+  if (answer == AppCommandState::PointEditPrompt::Answer::Cancel) {
+    st.clipboardPasteOriginal = false;
+    log.push_back("PASTE — cancelled; the drawing and clipboard are unchanged.");
+    return;
+  }
+  std::vector<SurveyPoint> originalPoints = st.clipboard.surveyPoints;
+  if (answer == AppCommandState::PointEditPrompt::Answer::Renumber) {
+    std::unordered_set<int> used;
+    for (const SurveyPoint& point : st.surveyPoints) used.insert(point.id);
+    const int tab = st.activeDrawingIdx;
+    if (tab > 0 && tab < static_cast<int>(st.drawingTabs.size())) {
+      const uint32_t uid = st.drawingTabs[static_cast<size_t>(tab)].projectUid;
+      if (uid != 0 && st.drawingTabs[static_cast<size_t>(tab)].pointsMode !=
+                          AppCommandState::DrawingTab::PointsMode::Detached)
+        for (const auto& project : st.openProjects)
+          if (project.uid == uid && project.points)
+            for (const auto& entry : project.points->points) used.insert(entry.point.id);
+    }
+    int next = st.createPointsNextId - 1;
+    for (const int id : used) next = std::max(next, id);
+    ++next;
+    for (SurveyPoint& point : st.clipboard.surveyPoints) {
+      if (std::find(conflicts.begin(), conflicts.end(), point.id) == conflicts.end()) continue;
+      point.id = next;
+      used.insert(next++);
+      point.labelMtextAnnId = 0;
+    }
+    st.createPointsNextId = std::max(st.createPointsNextId, next);
+  } else if (answer == AppCommandState::PointEditPrompt::Answer::Proceed) {
+    st.clipboardPasteOverwrite = true;
+  }
+  st.clipboardPasteResolving = true;
+  const double x = st.clipboard.basePtX + st.pendingCopyDx;
+  const double y = st.clipboard.basePtY + st.pendingCopyDy;
+  CommitClipboardPasteAt(st, x, y, log);
+  st.clipboard.surveyPoints = std::move(originalPoints);
+  if (answer == AppCommandState::PointEditPrompt::Answer::Proceed) {
+    const int tab = st.activeDrawingIdx;
+    if (tab > 0 && tab < static_cast<int>(st.drawingTabs.size()) &&
+        st.drawingTabs[static_cast<size_t>(tab)].projectUid != 0 &&
+        st.drawingTabs[static_cast<size_t>(tab)].pointsMode != AppCommandState::DrawingTab::PointsMode::Detached) {
+      st.pointEditPrompt.active = true;
+      st.pointEditPrompt.projectUid = st.drawingTabs[static_cast<size_t>(tab)].projectUid;
+      st.pointEditPrompt.tabIdx = tab;
+      st.pointEditPrompt.conflicts = conflicts;
+      st.pointEditPrompt.conflictAnswer = AppCommandState::PointEditPrompt::Answer::Proceed;
+    }
+  }
 }
 
 // Append filled regions fully enclosed by [mnX,mxX]×[mnY,mxY] to the clipboard (REQ-038 addendum). Fills are
@@ -16492,6 +19168,9 @@ static void CopyPaperSelectionToClipboard(AppCommandState& st, PaperLayout& L, s
         cb.polyVerts.push_back(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 0)]);
         cb.polyVerts.push_back(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 1)]);
         cb.polyVerts.push_back(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 2)]);
+        cb.polyVertsBulge.push_back(static_cast<size_t>(vi) < L.paperPolyVertsBulge.size()
+                                       ? L.paperPolyVertsBulge[static_cast<size_t>(vi)]
+                                       : 0.f);
         expandBbox(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 0)], L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 1)]);
       }
       cb.polyOffsets.push_back(baseVert + (v1 - v0));
@@ -16507,6 +19186,26 @@ static void CopyPaperSelectionToClipboard(AppCommandState& st, PaperLayout& L, s
       expandBbox(L.paperTexts[static_cast<size_t>(r.index)].insX, L.paperTexts[static_cast<size_t>(r.index)].insY);
       break;
     }
+    case PaperRef::Type::Spline: {
+      if (static_cast<size_t>(r.index) >= L.paperSplines.size())
+        break;
+      cb.splines.push_back(L.paperSplines[static_cast<size_t>(r.index)]);
+      cb.splineAttrs.push_back(attrAt(L.paperSplineAttrs, r.index));
+      for (const auto& v : L.paperSplines[static_cast<size_t>(r.index)].ctrl)
+        expandBbox(static_cast<float>(v.x), static_cast<float>(v.y));
+      break;
+    }
+    case PaperRef::Type::Point: {
+      if (static_cast<size_t>(r.index) >= L.paperPoints.size())
+        break;
+      const CadPoint& p = L.paperPoints[static_cast<size_t>(r.index)];
+      cb.points.push_back(p);
+      cb.pointAttrs.push_back(attrAt(L.paperPointAttrs, r.index));
+      expandBbox(static_cast<float>(p.x), static_cast<float>(p.y));
+      break;
+    }
+    default:
+      break;
     }
   }
   CopyEnclosedFilledRegions(cb, L.paperFilledRegions, L.paperFilledRegionAttrs, mnX, mnY, mxX, mxY);
@@ -16527,7 +19226,7 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
     CopyPaperSelectionToClipboard(st, *L, log);
     return;
   }
-  if (st.selection.empty()) {
+  if (st.selection.empty() && st.selectedSurveyPointIndices.empty()) {
     log.push_back("COPYCLIP — nothing selected. Select objects first.");
     return;
   }
@@ -16554,8 +19253,8 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
   TagClipboardOrigin(st);  // REQ-383
   cb.fromPaper = false;  // copied from model space
 
-  float mnX = 1e30f, mnY = 1e30f, mxX = -1e30f, mxY = -1e30f;
-  auto expandBbox = [&](float x, float y) {
+  double mnX = 1e300, mnY = 1e300, mxX = -1e300, mxY = -1e300;
+  auto expandBbox = [&](double x, double y) {
     mnX = std::min(mnX, x); mnY = std::min(mnY, y);
     mxX = std::max(mxX, x); mxY = std::max(mxY, y);
   };
@@ -16608,6 +19307,12 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       std::vector<spline::Vec3> points;
       spline::Tessellate(st.cadSplines[k], kSplineSampleTolerance, &points);
       for (const auto& p : points) expandBbox(static_cast<float>(p.x), static_cast<float>(p.y));
+    } else if (e.type == SelectedEntity::Type::Point) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= st.cadPoints.size()) continue;
+      cb.points.push_back(st.cadPoints[k]);
+      cb.pointAttrs.push_back(k < st.cadPointAttrs.size() ? st.cadPointAttrs[k] : EntityAttributes{});
+      expandBbox(static_cast<float>(st.cadPoints[k].x), static_cast<float>(st.cadPoints[k].y));
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
       if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
@@ -16671,6 +19376,13 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
         expandBbox(static_cast<float>(fr.vertsXyz[v]), static_cast<float>(fr.vertsXyz[v + 1]));
     }
   }
+  for (const int index : st.selectedSurveyPointIndices) {
+    if (index < 0 || static_cast<size_t>(index) >= st.surveyPoints.size())
+      continue;
+    const SurveyPoint& point = st.surveyPoints[static_cast<size_t>(index)];
+    cb.surveyPoints.push_back(point);
+    expandBbox(point.easting, point.northing);
+  }
   // Directly-selected fills are copied above; CopyEnclosedFilledRegions adds any *other* fills inside the
   // selection bbox (e.g. a title block's logo hatch carried with its linework — ADR-013 addendum), skipping
   // the ones already taken so they aren't duplicated.
@@ -16680,8 +19392,8 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
     cb.basePtX = 0.f;
     cb.basePtY = 0.f;
   } else {
-    cb.basePtX = (mnX + mxX) * 0.5f;
-    cb.basePtY = (mnY + mxY) * 0.5f;
+    cb.basePtX = (mnX + mxX) * 0.5;
+    cb.basePtY = (mnY + mxY) * 0.5;
   }
 
   // REQ-087 / REQ-201. The clipboard has no feature-line store, so the walk above skips them — and
@@ -16695,12 +19407,145 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       ++featureLinesNotCopied;
   log.push_back("COPYCLIP — " +
                 std::to_string(st.selection.size() - static_cast<size_t>(featureLinesNotCopied)) +
-                " object(s) copied to clipboard.");
+                " object(s) and " + std::to_string(cb.surveyPoints.size()) +
+                " survey point(s) copied to clipboard.");
   if (featureLinesNotCopied > 0)
     log.push_back("COPYCLIP — " + std::to_string(featureLinesNotCopied) + " feature line" +
                   (featureLinesNotCopied == 1 ? "" : "s") +
                   " not copied: the clipboard cannot carry a feature line yet. Use COPY to "
                   "duplicate one in place.");
+}
+
+// Cut (REQ-084 (c) shortcut menu's Clipboard submenu, issue #805): copy the selection, then delete it. The check runs
+// first and refuses with nothing changed unless the clipboard can carry every selected object. The
+// delete that follows erases whatever is selected, so an object the copy does not carry would be lost.
+// The allow-lists below name exactly the types CopySelectionToClipboard and CopyPaperSelectionToClipboard
+// handle. Any type not on them, now or added later, is refused; the message names it when the name is known
+// and says "an object" otherwise.
+namespace {
+bool ClipboardCarriesModelType(SelectedEntity::Type type) {
+  switch (type) {
+  case SelectedEntity::Type::LineSeg: case SelectedEntity::Type::Circle: case SelectedEntity::Type::Arc:
+  case SelectedEntity::Type::Ellipse: case SelectedEntity::Type::Spline: case SelectedEntity::Type::Point:
+  case SelectedEntity::Type::Polyline: case SelectedEntity::Type::Annotation: case SelectedEntity::Type::Table:
+  case SelectedEntity::Type::BlockRef: case SelectedEntity::Type::FilledRegion:
+    return true;
+  default:
+    return false;
+  }
+}
+
+std::string ClipboardCannotCarryModelName(SelectedEntity::Type type) {
+  switch (type) {
+  case SelectedEntity::Type::Surface: return "a surface";
+  case SelectedEntity::Type::FeatureLine: return "a feature line";
+  case SelectedEntity::Type::Mesh: return "a mesh";
+  case SelectedEntity::Type::PdfUnderlay: return "a PDF underlay";
+  case SelectedEntity::Type::Solid: return "a solid";
+  case SelectedEntity::Type::PipeRun: return "a pipe run";
+  case SelectedEntity::Type::PointCloud: return "a point cloud";
+  case SelectedEntity::Type::PositionMarker: return "a position marker";
+  case SelectedEntity::Type::Multileader: return "a multileader";
+  case SelectedEntity::Type::Alignment: return "an alignment";
+  default: return "an object";
+  }
+}
+
+bool ClipboardCarriesPaperType(PaperRef::Type type) {
+  switch (type) {
+  case PaperRef::Type::Line: case PaperRef::Type::Circle: case PaperRef::Type::Arc:
+  case PaperRef::Type::Ellipse: case PaperRef::Type::Polyline: case PaperRef::Type::Text:
+  case PaperRef::Type::Spline: case PaperRef::Type::Point:
+    return true;
+  default:
+    return false;
+  }
+}
+
+std::string ClipboardCannotCarryPaperName(PaperRef::Type type) {
+  switch (type) {
+  case PaperRef::Type::Block: return "a block";
+  case PaperRef::Type::Leader: return "a leader";
+  case PaperRef::Type::Table: return "a table";
+  default: return "an object";
+  }
+}
+}  // namespace
+
+void CutSelectionToClipboard(AppCommandState& st, std::vector<std::string>& log) {
+  const bool paper = ActivePaperGeometryTarget(st) != nullptr;
+  // A stale layout index routes the copy to the model selection while DELETE takes the paper path, so refuse it.
+  if (!paper && st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
+    log.push_back("CUT — not done: the active layout is not available. Switch to model space first.");
+    return;
+  }
+  if (paper) {
+    if (st.selectedPaperEntities.empty() && st.selectedViewports.empty()) {
+      log.push_back("CUT — nothing selected. Select objects first.");
+      return;
+    }
+    if (!st.selectedViewports.empty()) {
+      log.push_back("CUT — not done: a paper viewport cannot be copied to the clipboard, so Cut would erase it "
+                    "for good. Deselect it, then Cut again.");
+      return;
+    }
+    for (const PaperRef& ref : st.selectedPaperEntities) {
+      if (!ClipboardCarriesPaperType(ref.type)) {
+        log.push_back("CUT — not done: " + ClipboardCannotCarryPaperName(ref.type) +
+                      " cannot be copied to the clipboard, so Cut would erase it for good. Deselect it, then Cut again.");
+        return;
+      }
+    }
+  } else {
+    if (st.sectionPlaneSelected) {
+      log.push_back("CUT — not done: a section plane cannot be copied to the clipboard, so Cut would erase it "
+                    "for good. Deselect it, then Cut again.");
+      return;
+    }
+    if (st.selection.empty() && st.selectedSurveyPointIndices.empty()) {
+      log.push_back("CUT — nothing selected. Select objects first.");
+      return;
+    }
+    for (const SelectedEntity& e : st.selection) {
+      if (!ClipboardCarriesModelType(e.type)) {
+        log.push_back("CUT — not done: " + ClipboardCannotCarryModelName(e.type) +
+                      " cannot be copied to the clipboard, so Cut would erase it for good. Deselect it, then Cut again.");
+        return;
+      }
+    }
+  }
+
+  // A survey point and its label are deleted in two steps, and each step pushes an undo frame. The point's step
+  // runs first, so the frame it pushes holds the state from before the whole Cut. The entity step pushes its frame
+  // last, and dropping that frame leaves one undo step for the whole Cut. The history cap is switched off while
+  // both steps run, so neither frame can evict the pre-Cut frame (this matters at the minimum limit of 1). The cap
+  // is restored and enforced afterwards.
+  const bool deletesTwice = !st.selectedSurveyPointIndices.empty() && !st.selection.empty();
+  const int savedHistoryCap = st.undoHistoryMaxSize;
+  if (deletesTwice) st.undoHistoryMaxSize = 0;
+  CopySelectionToClipboard(st, log);
+  StartDeleteCommand(st, log);
+  st.undoHistoryMaxSize = savedHistoryCap;
+  const int idx = st.activeDrawingIdx;
+  if (deletesTwice && idx >= 0 && static_cast<size_t>(idx) < st.documents.size()) {
+    auto& undo = st.documents[static_cast<size_t>(idx)].undoStack;
+    if (!undo.empty() && undo.back().description == "Delete") {
+      undo.pop_back();
+      if (!undo.empty()) undo.back().description = "Cut";
+    }
+    if (savedHistoryCap > 0)
+      while (static_cast<int>(undo.size()) > savedHistoryCap) undo.erase(undo.begin());
+  }
+  // Success is the erase clearing the selection. ExecuteDeleteSelection stops early, and keeps the selection,
+  // when a grading group cannot be rebuilt; the paper erase clears its selection only when it completes.
+  const bool erased = paper ? st.selectedPaperEntities.empty() : st.selection.empty();
+  if (!erased) {
+    log.push_back(deletesTwice
+                      ? "CUT — only the survey points were erased; the lines could not be. Undo restores the survey points."
+                      : "CUT — nothing was erased; the selection could not be removed. The copy is on the clipboard.");
+    return;
+  }
+  log.push_back("CUT — copied to the clipboard and erased. Undo restores the objects.");
 }
 
 /// REQ-383 clauses 1 and 3: true when this paste must not start now — it is blocked, or it waits for
@@ -16727,6 +19572,7 @@ void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   if (PasteWaitsForUser(st, false, log))
     return;
+  st.clipboardPasteOriginal = false;
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Paste;
@@ -16745,9 +19591,8 @@ void StartPasteOrigCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   if (PasteWaitsForUser(st, true, log))
     return;
-  PushUndoSnapshot(st, "Paste original");
-  CommitPasteFromClipboard(st, 0.f, 0.f, log);
-  log.push_back("PASTEORIG — objects pasted at original coordinates.");
+  st.clipboardPasteOriginal = true;
+  CommitClipboardPasteAt(st, st.clipboard.basePtX, st.clipboard.basePtY, log);
 }
 
 void StartOffsetCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -18720,6 +21565,7 @@ static void ReplacePaperPolylineVerts(PaperLayout* L, int pi, const std::vector<
     flat.push_back(0.f);
   }
   L->paperPolyVerts.insert(L->paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3, flat.begin(), flat.end());
+  SyncPolylineBulge(L->paperPolyVertsBulge, L->paperPolyVerts.size());
   for (size_t oi = (static_cast<size_t>(pi)+ 1); oi < L->paperPolyOffsets.size(); ++oi)
     L->paperPolyOffsets[oi] += delta;
 }
@@ -18737,6 +21583,7 @@ static void AppendNewPaperPolyline(PaperLayout* L, const std::vector<std::pair<f
   L->paperPolyOffsets.push_back(base + static_cast<int>(xy.size()));
   L->paperPolyClosed.push_back(closed ? 1u : 0u);
   L->paperPolyAttrs.push_back(std::move(attrs));
+  SyncPolylineBulge(L->paperPolyVertsBulge, L->paperPolyVerts.size());
 }
 
 static bool ApplyBreakToPaperOpenPolyline(AppCommandState& st, PaperLayout* L, int pi, const BreakPoint& p1,
@@ -19243,7 +22090,7 @@ void StartStretchCommand(AppCommandState& st, std::vector<std::string>& log) {
 
 // ================================================================================================
 // FILLET (REQ-103 step 6a, TASK-102). Two picked curves (Line, non-full-circle Arc, or a Polyline
-// segment) get a tangent arc between them (SolveFilletCenter et al., CadCommands.hpp — inline/pure
+// segment) get a tangent arc between them (SolveFilletCenter et al., GoSurvey/Geometry/FilletChamfer.hpp — inline/pure
 // so it's unit-tested independently of this command layer, tests/FilletGeomTests.cpp), then each
 // curve is trimmed/extended to its own tangent point. Two different curves (Case B) reuses
 // LENGTHEN's ApplyLengthenToLine/ToArc/ToPolylineEnd UNCHANGED, converting the known tangent point
@@ -20776,7 +23623,7 @@ bool ApplyFilletToPaperEntities(AppCommandState& st, const PaperEntityRef& first
 // type and simply never see an Arc, since CHAMFER refuses it upstream), the same Case A/B split,
 // the same `cornerTrimMode` toggle, `SolveFilletCenter(c1,c2,0.f,...)` for the two curves'
 // intersection point (FILLET's own radius-0 path). Only the corner-point construction is new
-// (`ChamferPointAtDistance`/`ChamferRayIntersect`, CadCommands.hpp) and the connector is an
+// (`ChamferPointAtDistance`/`ChamferRayIntersect`, GoSurvey/Geometry/FilletChamfer.hpp) and the connector is an
 // ordinary Line, not an Arc.
 // ================================================================================================
 
@@ -21665,7 +24512,7 @@ static void CadAnnotationPreviewRotated(const CadAnnotation& src, float bx, floa
     RotatePtForAnnotationPreview(bx, by, rad, &a.dimExt2X, &a.dimExt2Y);
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-      a.rotationRad = std::atan2(ty, tx);
+      a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
   } else {
     float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
     float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
@@ -21709,7 +24556,7 @@ static void CadAnnotationPreviewScaled(const CadAnnotation& src, float bx, float
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-      a.rotationRad = std::atan2(ty, tx);
+      a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
   } else if (a.kind == CadAnnotation::Kind::DimAngular) {
     ScalePtAroundBase(bx, by, sc, &a.dimAngVertexX, &a.dimAngVertexY);
     ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
@@ -21763,7 +24610,7 @@ static void CadAnnotationPreviewReflected(const CadAnnotation& src, float x0, fl
     ReflectPtAcrossLine(x0, y0, x1, y1, &a.dimExt2X, &a.dimExt2Y);
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-      a.rotationRad = std::atan2(ty, tx);
+      a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
   } else {
     ReflectPtAcrossLine(x0, y0, x1, y1, &a.insX, &a.insY);
     float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
@@ -22152,6 +24999,20 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
         consider(v.x, v.y);
     }
   }
+  // REQ-480 alignments: the exact geometry's bounds (arcs bounded by their extreme points), so ZOOM EXTENTS
+  // frames a drawing that holds only an alignment, grown to take in its labels (D-2026-11-04-c).
+  for (const alignment::Alignment& al : st.alignments) {
+    alignment::Point2 mn{}, mx{};
+    if (!AlignmentLabelSets::LabelledBounds(al, CadAlignmentLabelContext(st), &mn, &mx))
+      continue;
+    consider(mn.x, mn.y);
+    consider(mx.x, mx.y);
+  }
+  for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
+    if (EntityHiddenInViewport(vpFilter, st.cadPointAttrs, pi))
+      continue;
+    consider(st.cadPoints[pi].x, st.cadPoints[pi].y);
+  }
 
   const auto& PV = st.userPolylineVerts;
   const auto& PO = st.userPolylineOffsets;
@@ -22535,6 +25396,32 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       out.push_back(b);
     }
   }
+  for (const alignment::Alignment& al : st.alignments) {  // REQ-480, with its labels (D-2026-11-04-c)
+    alignment::Point2 mn{}, mx{};
+    if (!AlignmentLabelSets::LabelledBounds(al, CadAlignmentLabelContext(st), &mn, &mx))
+      continue;
+    EntityBox b{};
+    EntityBoxGrowZ(b, 0.0, true);
+    b.mnX = mn.x;
+    b.mxX = mx.x;
+    b.mnY = mn.y;
+    b.mxY = mx.y;
+    b.cx = 0.5 * (b.mnX + b.mxX);
+    b.cy = 0.5 * (b.mnY + b.mxY);
+    out.push_back(b);
+  }
+  for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
+    if (EntityHiddenInViewport(vpFilter, st.cadPointAttrs, pi))
+      continue;
+    const CadPoint& p = st.cadPoints[pi];
+    EntityBox b{};
+    b.mnX = b.mxX = p.x;
+    b.mnY = b.mxY = p.y;
+    b.cx = p.x;
+    b.cy = p.y;
+    EntityBoxGrowZ(b, p.z, true);
+    out.push_back(b);
+  }
   const auto& PV = st.userPolylineVerts;
   const auto& PO = st.userPolylineOffsets;
   if (PO.size() >= 2) {
@@ -22794,7 +25681,8 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
     *outSkipped = 0;
   std::vector<EntityBox> ents;
   ents.reserve(st.userLinesFlat.size() / 6 + st.userCirclesCxCyZR.size() / 4 + st.userArcs.size() +
-               st.userEllipses.size() + st.cadSplines.size() + st.cadAnnotations.size() + st.surveyPoints.size() +
+               st.userEllipses.size() + st.cadSplines.size() + st.cadPoints.size() + st.cadAnnotations.size() +
+               st.surveyPoints.size() +
                (st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1));
   CollectEntityBoxes(st, ents, vpFilter);
 
@@ -23061,6 +25949,10 @@ bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, 
     st.resolvedPointZValid = false;
     st.resolvedPointZTyped = false;
   }
+  if (TryParseAlignmentStationSnapStoragePoint(st, raw, lx, ly, outWorldZ, allowRelative, baseLocalX, baseLocalY))
+    return true;
+  if (!st.alignmentStationSnapRejectReason.empty())
+    return false;
   std::string xy;
   double typedZ = 0.0;
   bool hasZ = false;
@@ -23763,16 +26655,38 @@ bool GradingBaselineIsOpen(const AppCommandState& st) {
 void GradingPrompt(AppCommandState& st, std::vector<std::string>& log) {
   st.gradingPhase = AppCommandState::GradingPhase::WaitOptions;
   const std::string surf = GradingDefaultSurface(st);
+  const char* target = "Surface";
+  if (st.gradingTarget == CadGradingDefinition::Target::Distance) target = "Distance";
+  if (st.gradingTarget == CadGradingDefinition::Target::AbsoluteElevation) target = "Absolute";
+  if (st.gradingTarget == CadGradingDefinition::Target::RelativeElevation) target = "Relative";
   std::string msg = "GRADING - Enter to grade, or [Cut/Fill/Surface";
   if (GradingBaselineIsOpen(st))
     msg += "/Side";
-  msg += "] <cut " + FormatSlope(st.gradingCutRun) + ", fill " + FormatSlope(st.gradingFillRun) +
-         ", " + (surf.empty() ? std::string("no surface chosen") : surf);
+  msg += "] or [Target] <cut " + FormatSlope(st.gradingCutRun) + ", fill " + FormatSlope(st.gradingFillRun) +
+         ", " + target + (st.gradingTarget == CadGradingDefinition::Target::Surface
+                               ? ", " + (surf.empty() ? std::string("no surface chosen") : surf)
+                               : ", " + std::to_string(st.gradingTargetValue));
   if (GradingBaselineIsOpen(st))
     msg += st.gradingSideChosen ? (st.gradingSideLeft ? ", side left" : ", side right")
                                 : ", side NOT chosen";
   msg += ">. ESC cancels.";
   log.push_back(msg);
+}
+
+std::string GradingTargetDescription(const AppCommandState& st,
+                                     const CadSurface* surface) {
+  switch (st.gradingTarget) {
+    case CadGradingDefinition::Target::Surface:
+      return surface ? "to " + surface->name : "to the selected surface";
+    case CadGradingDefinition::Target::Distance:
+      return "distance " + std::to_string(st.gradingTargetValue) +
+             " at " + std::to_string(st.gradingDistanceGradePercent) + "% grade";
+    case CadGradingDefinition::Target::AbsoluteElevation:
+      return "absolute elevation " + std::to_string(st.gradingTargetValue);
+    case CadGradingDefinition::Target::RelativeElevation:
+      return "relative elevation change " + std::to_string(st.gradingTargetValue);
+  }
+  return "unknown target";
 }
 
 /// The feature line the command will grade from: the STABLE ID of the one selected, or 0.
@@ -23819,11 +26733,14 @@ bool GradingTakeFeatureLine(AppCommandState& st, std::uint64_t id, std::vector<s
   st.gradingCutRun = def.cutRun;
   st.gradingFillRun = def.fillRun;
   st.gradingSideLeft = def.sideLeft;
+  st.gradingTarget = def.target;
+  st.gradingTargetValue = def.targetValue;
+  st.gradingDistanceGradePercent = def.distanceGradePercent;
   st.gradingSideChosen = true;
   const int si = FindSurfaceIndexById(st, def.surfaceId);
   st.gradingSurface = si >= 0 ? st.cadSurfaces[static_cast<size_t>(si)].name : std::string();
   log.push_back("GRADING - editing \"" + info->name + "\". Enter rebuilds it in place.");
-  if (si < 0)
+  if (si < 0 && def.target == CadGradingDefinition::Target::Surface)
     log.push_back("GRADING - its target surface is gone. Type S to choose another.");
   return true;
 }
@@ -23849,7 +26766,32 @@ void ReplaceFeatureLineVertices(AppCommandState& st, size_t li, const std::vecto
   st.featureLineClosed[li] = static_cast<uint8_t>(closed ? 1 : 0);
 }
 
-/// Project the baseline's side slopes out to the surface and commit the daylight line.
+/// Snapshot the strips between corresponding baseline and daylight stations.
+CadGradingGroupMember BakeGradingMember(const AppCommandState &st,
+                                        std::uint64_t id,
+                                        const ResolvedChain &baseline,
+                                        const ResolvedChain &daylight) {
+  CadGradingGroupMember member;
+  member.gradingId = id;
+  const size_t n = baseline.verts.size();
+  std::vector<std::vector<double>> strips;
+  strips.reserve(n);
+  for (size_t i = 0; i < (baseline.closed ? n : n - 1); ++i) {
+    const size_t j = (i + 1) % n;
+    std::vector<double> strip;
+    strip.reserve(12);
+    for (const auto &v : {baseline.verts[i], baseline.verts[j],
+                          daylight.verts[j], daylight.verts[i]}) {
+      strip.push_back(v[0] - st.worldDocumentOriginX);
+      strip.push_back(v[1] - st.worldDocumentOriginY);
+      strip.push_back(v[2]);
+    }
+    strips.push_back(std::move(strip));
+  }
+  member.strips = std::make_shared<const std::vector<std::vector<double>>>(std::move(strips));
+  return member;
+}
+
 void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   const int bi = GradingBaselineIndex(st);
   if (bi < 0) {
@@ -23859,16 +26801,20 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   const std::string surfName = GradingDefaultSurface(st);
-  const int si = FindSurfaceIndex(st, surfName);
-  if (si < 0) {
-    log.push_back("GRADING - choose a surface first: type S.");
-    return;
-  }
-  const CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
-  std::unique_ptr<ISurfaceQuery> ground = MakeSurfaceQuery(st, surf);
-  if (!ground) {
-    log.push_back("GRADING - \"" + surf.name + "\" has never been built; there is no ground to meet.");
-    return;
+  const int si = st.gradingTarget == CadGradingDefinition::Target::Surface
+                     ? FindSurfaceIndex(st, surfName) : -1;
+  const CadSurface* surf = si >= 0 ? &st.cadSurfaces[static_cast<size_t>(si)] : nullptr;
+  std::unique_ptr<ISurfaceQuery> ground;
+  if (st.gradingTarget == CadGradingDefinition::Target::Surface) {
+    if (!surf) {
+      log.push_back("GRADING - choose a surface first: type S, or T for another target.");
+      return;
+    }
+    ground = MakeSurfaceQuery(st, *surf);
+    if (!ground) {
+      log.push_back("GRADING - \"" + surf->name + "\" has never been built; there is no ground to meet.");
+      return;
+    }
   }
 
   const bool closed = st.featureLineClosed[static_cast<size_t>(bi)] != 0;
@@ -23904,19 +26850,19 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   DaylightSearch search;
   search.stepFt = 1.0;
   search.maxOffsetFt = 1000.0;
-  if (surf.tin && surf.tin->indices.size() >= 3 && surf.tin->vertsXyz.size() >= 6) {
+  if (surf && surf->tin && surf->tin->indices.size() >= 3 && surf->tin->vertsXyz.size() >= 6) {
     // Representative triangle span = sqrt(plan bbox area / triangle count), halved so the march
     // cannot stride over a whole triangle. Clamped so a pathological surface cannot make the search
     // either useless or unbearably slow.
-    double minX = surf.tin->vertsXyz[0], maxX = minX;
-    double minY = surf.tin->vertsXyz[1], maxY = minY;
-    for (size_t k = 0; k + 2 < surf.tin->vertsXyz.size(); k += 3) {
-      minX = std::min(minX, surf.tin->vertsXyz[k]);
-      maxX = std::max(maxX, surf.tin->vertsXyz[k]);
-      minY = std::min(minY, surf.tin->vertsXyz[k + 1]);
-      maxY = std::max(maxY, surf.tin->vertsXyz[k + 1]);
+    double minX = surf->tin->vertsXyz[0], maxX = minX;
+    double minY = surf->tin->vertsXyz[1], maxY = minY;
+    for (size_t k = 0; k + 2 < surf->tin->vertsXyz.size(); k += 3) {
+      minX = std::min(minX, surf->tin->vertsXyz[k]);
+      maxX = std::max(maxX, surf->tin->vertsXyz[k]);
+      minY = std::min(minY, surf->tin->vertsXyz[k + 1]);
+      maxY = std::max(maxY, surf->tin->vertsXyz[k + 1]);
     }
-    const size_t tris = std::max<size_t>(surf.tin->indices.size() / 3, 1);
+    const size_t tris = std::max<size_t>(surf->tin->indices.size() / 3, 1);
     const double area = std::max(1.0, (maxX - minX) * (maxY - minY));
     const double triSpan = std::sqrt(area / static_cast<double>(tris));
     search.stepFt = std::clamp(triSpan * 0.5, 0.05, 10.0);
@@ -23938,10 +26884,43 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
     const double bz = st.featureLineVerts[(static_cast<size_t>(v0)+ k) * 3 + 2];
     const double dx = nxy[static_cast<size_t>(k) * 2 + 0];
     const double dy = nxy[static_cast<size_t>(k) * 2 + 1];
-    if (dx == 0.0 && dy == 0.0)
+    if (dx == 0.0 && dy == 0.0) {
+      ++degenerate;
       continue;
+    }
 
-    const DaylightPoint d = SolveDaylightPoint(*ground, bx, by, bz, dx, dy, slopes, search);
+    DaylightPoint d;
+    if (st.gradingTarget == CadGradingDefinition::Target::Surface) {
+      d = SolveDaylightPoint(*ground, bx, by, bz, dx, dy, slopes, search);
+    } else {
+      double offset = 0.0, z = bz;
+      switch (st.gradingTarget) {
+        case CadGradingDefinition::Target::Distance:
+          offset = st.gradingTargetValue;
+          z += offset * st.gradingDistanceGradePercent / 100.0;
+          break;
+        case CadGradingDefinition::Target::AbsoluteElevation: {
+          z = st.gradingTargetValue;
+          const double delta = z - bz;
+          offset = std::abs(delta) * (delta > 0.0 ? slopes.cutRun : slopes.fillRun);
+          break;
+        }
+        case CadGradingDefinition::Target::RelativeElevation: {
+          const double delta = st.gradingTargetValue;
+          z += delta;
+          offset = std::abs(delta) * (delta > 0.0 ? slopes.cutRun : slopes.fillRun);
+          break;
+        }
+        case CadGradingDefinition::Target::Surface: break;
+      }
+      d.daylighted = true;
+      d.offset = offset;
+      d.x = bx + dx * offset;
+      d.y = by + dy * offset;
+      d.z = z;
+      if (!std::isfinite(d.x) || !std::isfinite(d.y) || !std::isfinite(d.z) ||
+          !std::isfinite(offset) || offset < 0.0) d.daylighted = false;
+    }
     if (!d.daylighted) {
       switch (d.why) {
         case DaylightFailure::BaselineOutsideSurface:
@@ -24000,8 +26979,66 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   def.cutRun = slopes.cutRun;
   def.fillRun = slopes.fillRun;
   def.sideLeft = st.gradingSideLeft;
+  def.target = st.gradingTarget;
+  def.targetValue = st.gradingTargetValue;
+  def.distanceGradePercent = st.gradingDistanceGradePercent;
   const std::string description = "REQ-398 daylight line: cut " + FormatSlope(slopes.cutRun) +
-                                  ", fill " + FormatSlope(slopes.fillRun) + ", to " + surf.name;
+                                  ", fill " + FormatSlope(slopes.fillRun) + ", " +
+                                  GradingTargetDescription(st, surf);
+
+  std::vector<std::pair<size_t, CadSurface>> rebuiltGroups;
+  if (st.gradingEditId != 0) {
+    for (size_t i = 0; i < st.cadSurfaces.size(); ++i) {
+      const auto &group = st.cadSurfaces[i];
+      if (!group.gradingGroup)
+        continue;
+      const auto it = std::find_if(
+          group.gradingMembers.begin(), group.gradingMembers.end(),
+          [&](const auto &m) { return m.gradingId == st.gradingEditId; });
+      if (it == group.gradingMembers.end())
+        continue;
+      if (skippedAny) {
+        log.push_back("GRADING - incomplete daylight cannot rebuild its group; "
+                      "nothing changed.");
+        return;
+      }
+      ResolvedChain baseline, daylight;
+      if (!ResolveDefinitionChain(st, def.baselineId, false, baseline)) {
+        log.push_back("GRADING - missing group baseline; nothing changed.");
+        return;
+      }
+      daylight.closed = emitClosed;
+      for (size_t v = 0; v < out.size(); v += 3)
+        daylight.verts.push_back({out[v] + st.worldDocumentOriginX,
+                                  out[v + 1] + st.worldDocumentOriginY,
+                                  out[v + 2]});
+      if (baseline.verts.size() != daylight.verts.size() || baseline.closed != daylight.closed) {
+        log.push_back("GRADING - incomplete group station correspondence; nothing changed.");
+        return;
+      }
+      CadSurface candidate = group;
+      CadGradingGroupMember rebuilt =
+          BakeGradingMember(st, st.gradingEditId, baseline, daylight);
+      if (it->infill) {
+        std::vector<double> ring;
+        ring.reserve(daylight.verts.size() * 3);
+        for (const auto& point : daylight.verts)
+          ring.insert(ring.end(), {point[0] - st.worldDocumentOriginX,
+                                   point[1] - st.worldDocumentOriginY, point[2]});
+        rebuilt.infill = true;
+        rebuilt.strips = std::make_shared<const std::vector<std::vector<double>>>(
+            std::vector<std::vector<double>>{std::move(ring)});
+      }
+      candidate.gradingMembers[static_cast<size_t>(
+          it - group.gradingMembers.begin())] = std::move(rebuilt);
+      if (!BuildSurfaceFromSources(st, candidate, log)) {
+        log.push_back(
+            "GRADING - group surface could not be rebuilt; nothing changed.");
+        return;
+      }
+      rebuiltGroups.emplace_back(i, std::move(candidate));
+    }
+  }
 
   size_t resultIx = 0;
   const bool editing = st.gradingEditId != 0;
@@ -24042,6 +27079,12 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   }
   BumpCadGpuCache(st);
 
+  for (auto &entry : rebuiltGroups) {
+    st.cadSurfaces[entry.first] = std::move(entry.second);
+    st.cadSurfaces[entry.first].builtAtRevision = st.cadGpuRevision;
+    MarkVolumeSurfacesDirtyForParent(st, st.cadSurfaces[entry.first].name);
+  }
+
   log.push_back("GRADING - daylight line \"" + st.featureLineInfo[resultIx].name + "\" " +
                 (editing ? "rebuilt" : "created") + ", " + std::to_string(got) + " of " +
                 std::to_string(nv) + " stations daylighted.");
@@ -24064,6 +27107,242 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
 
 }  // namespace
 
+namespace {
+
+bool SnapshotGradingMember(const AppCommandState &st, std::uint64_t id,
+                           CadGradingGroupMember &member,
+                           std::vector<std::string> &log) {
+  const int ix = FindEntityIndexById(st.featureLineAttrs, id);
+  if (ix < 0 || static_cast<size_t>(ix) >= st.featureLineInfo.size() ||
+      !st.featureLineInfo[static_cast<size_t>(ix)].grading) {
+    log.push_back(
+        "GRADINGGROUP - select grading results, not ordinary feature lines.");
+    return false;
+  }
+  const auto &def = *st.featureLineInfo[static_cast<size_t>(ix)].grading;
+  ResolvedChain baseline, daylight;
+  if (!ResolveDefinitionChain(st, def.baselineId, false, baseline) ||
+      !ResolveDefinitionChain(st, id, false, daylight) ||
+      baseline.verts.size() != daylight.verts.size() ||
+      baseline.closed != daylight.closed) {
+    log.push_back("GRADINGGROUP - missing baseline or incomplete daylight "
+                  "line; rebuild the grading first.");
+    return false;
+  }
+  member = BakeGradingMember(st, id, baseline, daylight);
+  return true;
+}
+
+} // namespace
+
+/// REQ-404: assign selected grading results to a named ordinary design surface.
+/// Validate and build temporary surfaces before publishing one undoable
+/// membership change.
+void ExecuteGradingGroupCommand(AppCommandState &st, const std::string &args,
+                                std::vector<std::string> &log) {
+  const auto fields = SplitCommaFields(args);
+  const std::string name = fields.empty() ? std::string() : fields[0];
+  const std::string verb =
+      fields.size() > 1 ? StringUtil::toLowerAsciiCopy(fields[1]) : "add";
+  if (name.empty() || fields.size() > 2 ||
+      (verb != "add" && verb != "remove" && verb != "list")) {
+    log.push_back(
+        "GRADINGGROUP - usage: GRADINGGROUP <name>[, Add/Remove/List]. Select "
+        "grading results first; Add creates the group if needed.");
+    return;
+  }
+  const int existing = FindSurfaceIndex(st, name);
+  if (existing >= 0 &&
+      !st.cadSurfaces[static_cast<size_t>(existing)].gradingGroup) {
+    log.push_back("GRADINGGROUP - that name belongs to an ordinary surface. "
+                  "Choose another name.");
+    return;
+  }
+  if (verb == "list") {
+    if (existing < 0) {
+      log.push_back("GRADINGGROUP - no group named \"" + name + "\".");
+      return;
+    }
+    const auto &group = st.cadSurfaces[static_cast<size_t>(existing)];
+    log.push_back("GRADINGGROUP - \"" + name +
+                  "\": " + std::to_string(group.gradingMembers.size()) +
+                  " member(s). Use VOLUMES <ground surface>, " + name +
+                  " for cut/fill/net.");
+    for (const auto &member : group.gradingMembers) {
+      const int ix = FindEntityIndexById(st.featureLineAttrs, member.gradingId);
+      const std::string label =
+          ix >= 0 && static_cast<size_t>(ix) < st.featureLineInfo.size()
+              ? st.featureLineInfo[static_cast<size_t>(ix)].name
+              : "missing grading";
+      log.push_back("  " + label + " (id " + std::to_string(member.gradingId) +
+                    ")");
+    }
+    return;
+  }
+  if (verb == "remove" && existing < 0) {
+    log.push_back("GRADINGGROUP - no group named \"" + name + "\".");
+    return;
+  }
+  EnsureEntityIds(st);
+  std::vector<std::uint64_t> ids;
+  for (const auto &e : st.selection) {
+    if (e.type != SelectedEntity::Type::FeatureLine || e.index < 0 ||
+        static_cast<size_t>(e.index) >= st.featureLineAttrs.size()) {
+      log.push_back("GRADINGGROUP - select only grading results.");
+      return;
+    }
+    const auto id = st.featureLineAttrs[static_cast<size_t>(e.index)].id;
+    if (std::find(ids.begin(), ids.end(), id) == ids.end())
+      ids.push_back(id);
+  }
+  if (ids.empty() && (verb == "remove" || existing >= 0)) {
+    log.push_back("GRADINGGROUP - select grading results to add or remove; use "
+                  "List to inspect the group.");
+    return;
+  }
+  auto candidates = st.cadSurfaces;
+  const size_t target =
+      existing < 0 ? candidates.size() : static_cast<size_t>(existing);
+  if (existing < 0) {
+    CadSurface group;
+    group.name = name;
+    group.gradingGroup = true;
+    candidates.push_back(std::move(group));
+  }
+  std::vector<size_t> changed{target};
+  for (const auto id : ids) {
+    CadGradingGroupMember snapshot;
+    if (verb == "add") {
+      bool foundBaked = false;
+      for (const auto& source : candidates) {
+        if (!source.gradingGroup) continue;
+        const auto member = std::find_if(source.gradingMembers.begin(), source.gradingMembers.end(),
+                                        [id](const auto& m) { return m.gradingId == id; });
+        if (member != source.gradingMembers.end() && !member->infill) {
+          snapshot = *member;
+          foundBaked = true;
+          break;
+        }
+      }
+      if (!foundBaked && !SnapshotGradingMember(st, id, snapshot, log)) return;
+    }
+    for (size_t i = 0; i < candidates.size(); ++i) {
+      auto &group = candidates[i];
+      if (!group.gradingGroup || (verb == "remove" && i != target))
+        continue;
+      const auto end = std::remove_if(
+          group.gradingMembers.begin(), group.gradingMembers.end(),
+          [id](const auto &m) { return m.gradingId == id; });
+      if (end != group.gradingMembers.end()) {
+        group.gradingMembers.erase(end, group.gradingMembers.end());
+        if (std::find(changed.begin(), changed.end(), i) == changed.end())
+          changed.push_back(i);
+      }
+    }
+    if (verb == "add")
+      candidates[target].gradingMembers.push_back(std::move(snapshot));
+  }
+  for (const auto i : changed) {
+    if (!BuildSurfaceFromSources(st, candidates[i], log)) {
+      log.push_back("GRADINGGROUP - nothing changed; the group surface could "
+                    "not be built.");
+      return;
+    }
+  }
+  PushUndoSnapshot(st, "Grading group membership");
+  st.cadSurfaces = std::move(candidates);
+  if (existing < 0)
+    st.cadSurfaceAttrs.push_back(
+        MakeNewObjectAttrs(st, ObjectLayerKind::Surface, name));
+  BumpCadGpuCache(st);
+  for (const auto i : changed) {
+    st.cadSurfaces[i].builtAtRevision = st.cadGpuRevision;
+    MarkVolumeSurfacesDirtyForParent(st, st.cadSurfaces[i].name);
+  }
+  log.push_back("GRADINGGROUP - \"" + name + "\": " +
+                std::to_string(st.cadSurfaces[target].gradingMembers.size()) +
+                " member(s). Use VOLUMES <ground surface>, " + name +
+                " for cut/fill/net.");
+}
+
+void ExecuteGradingInfillCommand(AppCommandState& st, const std::string& name,
+                                 std::vector<std::string>& log) {
+  if (name.empty()) {
+    log.push_back("GRADINGINFILL - usage: GRADINGINFILL <group>. Select closed feature lines.");
+    return;
+  }
+  int existing = FindSurfaceIndex(st, name);
+  if (existing >= 0 && !st.cadSurfaces[static_cast<size_t>(existing)].gradingGroup) {
+    log.push_back("GRADINGINFILL - that name belongs to an ordinary surface.");
+    return;
+  }
+  EnsureEntityIds(st);
+  std::vector<CadGradingGroupMember> infills;
+  for (const auto& selected : st.selection) {
+    if (selected.type != SelectedEntity::Type::FeatureLine || selected.index < 0 ||
+        static_cast<size_t>(selected.index) >= st.featureLineAttrs.size() ||
+        static_cast<size_t>(selected.index) >= st.featureLineClosed.size() ||
+        !st.featureLineClosed[static_cast<size_t>(selected.index)]) {
+      log.push_back("GRADINGINFILL - select only closed feature lines.");
+      return;
+    }
+    const size_t ix = static_cast<size_t>(selected.index);
+    const int first = st.featureLineOffsets[ix], last = st.featureLineOffsets[ix + 1];
+    if (last - first < 3) {
+      log.push_back("GRADINGINFILL - a boundary needs at least three vertices.");
+      return;
+    }
+    CadGradingGroupMember member;
+    member.gradingId = st.featureLineAttrs[ix].id;
+    member.infill = true;
+    std::vector<double> ring;
+    for (int v = first; v < last; ++v) {
+      const size_t p = static_cast<size_t>(v) * 3;
+      const double x = st.featureLineVerts[p], y = st.featureLineVerts[p + 1], z = st.featureLineVerts[p + 2];
+      if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+        log.push_back("GRADINGINFILL - boundary contains a nonfinite coordinate."); return;
+      }
+      ring.insert(ring.end(), {x, y, z});
+    }
+    std::string polygonError;
+    if (!IsSimpleInfillPolygon(ring, &polygonError)) {
+      log.push_back("GRADINGINFILL - " + polygonError + "."); return;
+    }
+    member.strips = std::make_shared<const std::vector<std::vector<double>>>(
+        std::vector<std::vector<double>>{std::move(ring)});
+    infills.push_back(std::move(member));
+  }
+  if (infills.empty()) {
+    log.push_back("GRADINGINFILL - select closed feature lines first."); return;
+  }
+  auto candidates = st.cadSurfaces;
+  const size_t target = existing < 0 ? candidates.size() : static_cast<size_t>(existing);
+  if (existing < 0) { CadSurface group; group.name = name; group.gradingGroup = true; candidates.push_back(std::move(group)); }
+  std::vector<size_t> changed;
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    auto& group = candidates[i];
+    if (!group.gradingGroup) continue;
+    const auto oldSize = group.gradingMembers.size();
+    for (const auto& infill : infills)
+      group.gradingMembers.erase(std::remove_if(group.gradingMembers.begin(), group.gradingMembers.end(),
+        [&](const auto& m) { return m.gradingId == infill.gradingId; }), group.gradingMembers.end());
+    if (group.gradingMembers.size() != oldSize) changed.push_back(i);
+  }
+  for (auto& infill : infills) candidates[target].gradingMembers.push_back(std::move(infill));
+  if (std::find(changed.begin(), changed.end(), target) == changed.end()) changed.push_back(target);
+  for (size_t i : changed) {
+    if (!BuildSurfaceFromSources(st, candidates[i], log)) {
+      log.push_back("GRADINGINFILL - group surface could not be built; nothing changed."); return;
+    }
+  }
+  PushUndoSnapshot(st, "Grading group infill");
+  st.cadSurfaces = std::move(candidates);
+  if (existing < 0) st.cadSurfaceAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Surface, name));
+  BumpCadGpuCache(st);
+  for (size_t i : changed) { st.cadSurfaces[i].builtAtRevision = st.cadGpuRevision; MarkVolumeSurfacesDirtyForParent(st, st.cadSurfaces[i].name); }
+  log.push_back("GRADINGINFILL - added/refreshed " + std::to_string(infills.size()) + " boundary member(s) in \"" + name + "\".");
+}
+
 void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
@@ -24072,6 +27351,13 @@ void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.gradingBaselineId = 0;
   st.gradingSideChosen = false;
   st.gradingEditId = 0;
+  st.gradingTarget = CadGradingDefinition::Target::Surface;
+  st.gradingTargetValue = 0.0;
+  st.gradingDistanceGradePercent = 0.0;
+
+  log.push_back("GRADING - groups: type Group <name>[, Add/Remove/List] for "
+                "selected grading results. Type T for Surface, Distance, Absolute, or Relative targets; "
+                "use GRADINGINFILL <group> on a selected closed feature line to fill its interior.");
 
   if (st.featureLineOffsets.size() < 2) {
     log.push_back("GRADING - the drawing has no feature lines. Draw one with FEATURELINE first: it "
@@ -24079,16 +27365,8 @@ void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.active = AppCommandState::Kind::None;
     return;
   }
-  if (st.cadSurfaces.empty()) {
-    // Said UP FRONT rather than after a round trip through the options prompt. Without this the
-    // conversation is circular: Enter says "choose a surface first: type S", and S says "there are
-    // no surfaces" — two steps to learn the command could never have worked.
-    log.push_back("GRADING - the drawing has no surfaces. The slopes need existing ground to run "
-                  "out to; build one with SURFACECREATE first.");
-    st.active = AppCommandState::Kind::None;
-    return;
-  }
-
+  if (st.cadSurfaces.empty())
+    log.push_back("GRADING - the drawing has no surfaces. Type T to choose Distance, Absolute, or Relative elevation, or build a surface for Surface grading.");
   int n = 0;
   const std::uint64_t id = GradingSelectedFeatureLine(st, &n);
   if (n == 1) {
@@ -24115,7 +27393,65 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
   const std::string tr = StringUtil::trimCopy(line);
   const std::string low = StringUtil::toLowerAsciiCopy(tr);
 
+  if ((st.gradingPhase == P::WaitBaseline ||
+       st.gradingPhase == P::WaitOptions) &&
+      (low == "group" || low == "g" || low.rfind("group ", 0) == 0 ||
+       low.rfind("g ", 0) == 0)) {
+    const size_t space = tr.find(' ');
+    if (space == std::string::npos) {
+      log.push_back("GRADING - type Group <name>[, Add/Remove/List] for "
+                    "selected grading results.");
+      return;
+    }
+    st.active = AppCommandState::Kind::None;
+    st.gradingEditId = 0;
+    st.gradingPhase = P::WaitBaseline;
+    ExecuteGradingGroupCommand(st, StringUtil::trimCopy(tr.substr(space + 1)),
+                               log);
+    return;
+  }
+
   switch (st.gradingPhase) {
+    case P::WaitTargetKind:
+      if (low == "surface" || low == "s") st.gradingTarget = CadGradingDefinition::Target::Surface;
+      else if (low == "distance" || low == "d") st.gradingTarget = CadGradingDefinition::Target::Distance;
+      else if (low == "absolute" || low == "a") st.gradingTarget = CadGradingDefinition::Target::AbsoluteElevation;
+      else if (low == "relative" || low == "r") st.gradingTarget = CadGradingDefinition::Target::RelativeElevation;
+      else { log.push_back("GRADING - target must be Surface, Distance, Absolute, or Relative."); return; }
+      if (st.gradingTarget == CadGradingDefinition::Target::Surface) { GradingPrompt(st, log); return; }
+      st.gradingPhase = P::WaitTargetValue;
+      if (st.gradingTarget == CadGradingDefinition::Target::Distance)
+        log.push_back("GRADING - enter horizontal distance (> 0).");
+      else if (st.gradingTarget == CadGradingDefinition::Target::AbsoluteElevation)
+        log.push_back("GRADING - enter absolute target elevation (finite).");
+      else
+        log.push_back("GRADING - enter target elevation change from the baseline (finite; signed values allowed).");
+      return;
+    case P::WaitTargetValue: {
+      char* end = nullptr;
+      const double value = std::strtod(tr.c_str(), &end);
+      if (tr.empty() || end != tr.c_str() + tr.size() || !std::isfinite(value) ||
+          (st.gradingTarget == CadGradingDefinition::Target::Distance && value <= 0.0)) {
+        log.push_back("GRADING - enter a finite value" + std::string(st.gradingTarget == CadGradingDefinition::Target::Distance ? " greater than zero." : "."));
+        return;
+      }
+      st.gradingTargetValue = value;
+      if (st.gradingTarget == CadGradingDefinition::Target::Distance) {
+        st.gradingPhase = P::WaitDistanceGrade;
+        log.push_back("GRADING - enter signed grade percent (for example -2). Zero is valid.");
+      } else GradingPrompt(st, log);
+      return;
+    }
+    case P::WaitDistanceGrade: {
+      char* end = nullptr;
+      const double value = std::strtod(tr.c_str(), &end);
+      if (tr.empty() || end != tr.c_str() + tr.size() || !std::isfinite(value)) {
+        log.push_back("GRADING - enter a finite signed grade percent."); return;
+      }
+      st.gradingDistanceGradePercent = value;
+      GradingPrompt(st, log);
+      return;
+    }
     case P::WaitCutSlope:
     case P::WaitFillSlope: {
       const bool isCut = st.gradingPhase == P::WaitCutSlope;
@@ -24150,6 +27486,7 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
         return;
       }
       st.gradingSurface = tr;
+      st.gradingTarget = CadGradingDefinition::Target::Surface;
       GradingPrompt(st, log);
       return;
     }
@@ -24193,6 +27530,16 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
                                     : "GRADING - enter surface name. Surfaces: " + names + ".");
         return;
       }
+      if (low == "t" || low == "target") {
+        st.gradingPhase = P::WaitTargetKind;
+        log.push_back("GRADING - target [Surface/Distance/Absolute/Relative].");
+        return;
+      }
+      if (low == "p" || low == "percent") {
+        st.gradingPhase = P::WaitDistanceGrade;
+        log.push_back("GRADING - enter signed grade percent (for example -2). Zero is valid.");
+        return;
+      }
       if (low == "d" || low == "side") {
         if (!GradingBaselineIsOpen(st)) {
           log.push_back("GRADING - this baseline is closed, so outward is away from its interior "
@@ -24211,7 +27558,7 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
         GradingPrompt(st, log);
         return;
       }
-      log.push_back("GRADING - press Enter to grade, or C, F, S" +
+      log.push_back("GRADING - press Enter to grade, or C, F, S, T" +
                     std::string(GradingBaselineIsOpen(st) ? " or D" : "") + " to change a setting.");
       return;
     }
@@ -24633,10 +27980,6 @@ void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void StartSplineCommand(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.activeSpaceIndex != kModelSpaceIndex) {
-    log.push_back("SPLINE — works in model space only.");
-    return;
-  }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
@@ -24664,8 +28007,13 @@ static bool FinishSplineDraft(AppCommandState& st, bool closed, std::vector<std:
     return false;
   }
   PushUndoSnapshot(st, "Create spline");
-  st.cadSplines.push_back(std::move(splineEntity));
-  st.cadSplineAttrs.push_back(MakeNewEntityAttrs(st));
+  if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
+    L->paperSplines.push_back(std::move(splineEntity));
+    L->paperSplineAttrs.push_back(MakeNewEntityAttrs(st));
+  } else {
+    st.cadSplines.push_back(std::move(splineEntity));
+    st.cadSplineAttrs.push_back(MakeNewEntityAttrs(st));
+  }
   BumpCadGpuCache(st);
   st.splineDraftPoints.clear();
   st.active = AppCommandState::Kind::None;
@@ -25272,9 +28620,13 @@ void StartDesignateBreaklineCommand(AppCommandState& st, const std::string& surf
     log.push_back("DESIGNATEBREAKLINE — finish or cancel the active command first.");
     return;
   }
-  if (FindSurfaceIndex(st, surfaceName) < 0) {
+  const int surfaceIndex = FindSurfaceIndex(st, surfaceName);
+  if (surfaceIndex < 0) {
     log.push_back("DESIGNATEBREAKLINE — no surface named \"" + surfaceName + "\".");
     return;
+  }
+  if (st.cadSurfaces[static_cast<size_t>(surfaceIndex)].dataShortcutReadOnly) {
+    log.push_back("DESIGNATEBREAKLINE — surface reference \"" + surfaceName + "\" is read-only."); return;
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
@@ -25293,9 +28645,13 @@ void StartDesignateContourCommand(AppCommandState& st, const std::string& surfac
     log.push_back("DESIGNATECONTOUR — finish or cancel the active command first.");
     return;
   }
-  if (FindSurfaceIndex(st, surfaceName) < 0) {
+  const int surfaceIndex = FindSurfaceIndex(st, surfaceName);
+  if (surfaceIndex < 0) {
     log.push_back("DESIGNATECONTOUR — no surface named \"" + surfaceName + "\".");
     return;
+  }
+  if (st.cadSurfaces[static_cast<size_t>(surfaceIndex)].dataShortcutReadOnly) {
+    log.push_back("DESIGNATECONTOUR — surface reference \"" + surfaceName + "\" is read-only."); return;
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
@@ -25314,9 +28670,13 @@ void StartDesignateBoundaryCommand(AppCommandState& st, const std::string& surfa
     log.push_back("DESIGNATEBOUNDARY — finish or cancel the active command first.");
     return;
   }
-  if (FindSurfaceIndex(st, surfaceName) < 0) {
+  const int surfaceIndex = FindSurfaceIndex(st, surfaceName);
+  if (surfaceIndex < 0) {
     log.push_back("DESIGNATEBOUNDARY — no surface named \"" + surfaceName + "\".");
     return;
+  }
+  if (st.cadSurfaces[static_cast<size_t>(surfaceIndex)].dataShortcutReadOnly) {
+    log.push_back("DESIGNATEBOUNDARY — surface reference \"" + surfaceName + "\" is read-only."); return;
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
@@ -25551,6 +28911,10 @@ void EnsureAttrCounts(AppCommandState& st) {
     st.cadSplineAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
+  while (st.cadPointAttrs.size() < st.cadPoints.size()) {  // REQ-456
+    st.cadPointAttrs.push_back(MakeNewEntityAttrs(st));
+    grew = true;
+  }
   while (st.cadBlockRefAttrs.size() < st.cadBlockRefs.size()) {
     st.cadBlockRefAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
@@ -25584,6 +28948,8 @@ static void CollectLayersUsedInDrawing(const AppCommandState& st, std::set<std::
   for (const auto& a : st.cadMultileaderAttrs)  // REQ-367
     add(a.layer);
   for (const auto& a : st.cadSplineAttrs)  // REQ-443
+    add(a.layer);
+  for (const auto& a : st.cadPointAttrs)  // REQ-456
     add(a.layer);
   for (const auto& a : st.cadBlockRefAttrs)
     add(a.layer);
@@ -25660,6 +29026,9 @@ void StampActiveTextStyleOnNewText(AppCommandState& st, CadAnnotation& a) {
   a.obliqueDeg = s->obliqueDeg;
   a.bold = s->bold;
   a.italic = s->italic;
+  // The style's Annotative setting (D-2026-11-06-a): new text made with an annotative style is annotative.
+  // An object already annotative (survey and position marker labels) stays so.
+  a.annotative = a.annotative || StyleFlag(s->props, "annotative");
 }
 
 static bool ValidNewLayerNameChars(const std::string& n) {
@@ -26004,7 +29373,8 @@ int ApplyResolvedDrape(AppCommandState& st, const std::vector<DrapeResolved>& re
 
 }  // namespace
 
-void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::string>& log) {
+void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::string>& log,
+                            bool invalidateCache) {
   if (si >= st.cadSurfaces.size())
     return;
   const CadSurface& surf = st.cadSurfaces[si];
@@ -26018,7 +29388,7 @@ void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::str
       ResolveDrapeOnto(st, si, linked, /*reportRefusals=*/false, log, nullptr, nullptr);
   const int moved = ApplyResolvedDrape(st, ready, id);
   if (moved > 0) {
-    BumpCadGpuCache(st);
+    if (invalidateCache) BumpCadGpuCache(st);
     log.push_back("DRAPE - " + std::to_string(moved) + " linked object(s) re-draped onto \"" + surf.name +
                   "\".");
   }
@@ -26830,6 +30200,19 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
     if (static_cast<size_t>(idx) * 6 + 5 >= st.userLinesFlat.size())
       return;
     const size_t k = static_cast<size_t>(idx) * 6;
+    if (st.entityGripLengthenMode) {
+      const float x0 = static_cast<float>(st.userLinesFlat[k]);
+      const float y0 = static_cast<float>(st.userLinesFlat[k + 1]);
+      const float x1 = static_cast<float>(st.userLinesFlat[k + 3]);
+      const float y1 = static_cast<float>(st.userLinesFlat[k + 4]);
+      const float fixedX = st.entityGripWhich == 0 ? x1 : x0;
+      const float fixedY = st.entityGripWhich == 0 ? y1 : y0;
+      float along = (x - fixedX) * st.entityGripLengthenDirX + (y - fixedY) * st.entityGripLengthenDirY;
+      if (!(along > 1e-6f) || !std::isfinite(along))
+        along = 1e-6f;
+      x = fixedX + st.entityGripLengthenDirX * along;
+      y = fixedY + st.entityGripLengthenDirY * along;
+    }
     if (st.entityGripWhich == 0) {
       st.userLinesFlat[k] = x;
       st.userLinesFlat[k + 1] = y;
@@ -26837,6 +30220,16 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
       st.userLinesFlat[k + 3] = x;
       st.userLinesFlat[k + 4] = y;
     }
+    return;
+  }
+  case SelectedEntity::Type::Alignment: {  // REQ-487.1: re-derive from the grabbed shape every move, through the solver
+    if (static_cast<size_t>(idx) >= st.alignments.size())
+      return;
+    alignment::Alignment moved;
+    (void)alignment::DragGrip(st.entityGripOrigAlignment, st.entityGripWhich, {static_cast<double>(x), static_cast<double>(y)}, &moved);
+    st.alignments[static_cast<size_t>(idx)] = std::move(moved);
+    std::vector<std::string> quiet;
+    RefreshAlignmentOffsets(st, quiet);
     return;
   }
   case SelectedEntity::Type::Circle: {
@@ -26900,6 +30293,13 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
     // simply not applied, so the curve on screen is always a valid one and the last good shape stands.
     std::string why;
     (void)spline::SetEditablePoint(&sp, which, spline::Vec3{static_cast<double>(x), static_cast<double>(y), old.z}, &why);
+    return;
+  }
+  case SelectedEntity::Type::Point: {
+    if (static_cast<size_t>(idx) >= st.cadPoints.size())
+      return;
+    st.cadPoints[static_cast<size_t>(idx)].x = x;
+    st.cadPoints[static_cast<size_t>(idx)].y = y;
     return;
   }
   case SelectedEntity::Type::Arc: {
@@ -27011,6 +30411,7 @@ EntityAttributes SelectSimilarAttrsOf(const AppCommandState& st, const SelectedE
   case SelectedEntity::Type::Arc:        return pick(st.userArcAttrs, e.index);
   case SelectedEntity::Type::Ellipse:    return pick(st.userEllAttrs, e.index);
   case SelectedEntity::Type::Spline:     return pick(st.cadSplineAttrs, e.index);  // REQ-443
+  case SelectedEntity::Type::Point:      return pick(st.cadPointAttrs, e.index);   // REQ-456
   case SelectedEntity::Type::Annotation: return pick(st.cadAnnotationAttrs, e.index);
   case SelectedEntity::Type::Table:      return pick(st.cadTableAttrs, e.index);
   case SelectedEntity::Type::BlockRef:   return pick(st.cadBlockRefAttrs, e.index);
@@ -27073,6 +30474,11 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
     case SelectedEntity::Type::Spline: {  // REQ-443
       for (size_t i = 0; i < st.cadSplines.size(); ++i)
         consider(SelectedEntity::Type::Spline, static_cast<int>(i));
+      break;
+    }
+    case SelectedEntity::Type::Point: {
+      for (size_t i = 0; i < st.cadPoints.size(); ++i)
+        consider(SelectedEntity::Type::Point, static_cast<int>(i));
       break;
     }
     case SelectedEntity::Type::Annotation: {
@@ -27177,6 +30583,8 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadFilledRegionAttrs.clear();
   st.annotationScales.clear();
   st.currentAnnotationScaleIndex = -1;
+  st.viewportZoomScales.clear();
+  st.currentViewportZoomScaleIndex = -1;
   st.dwgImportedLights.clear();
   st.dwgImportedSunPresent = false;
   st.dwgImportedLightList = {};
@@ -27214,6 +30622,13 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadMultileaderAttrs.clear();
   st.cadSplines.clear();  // REQ-443
   st.cadSplineAttrs.clear();
+  st.cadPoints.clear();  // REQ-456
+  st.cadPointAttrs.clear();
+  st.alignments.clear();  // REQ-480
+  st.sampleLines.clear();  // REQ-519: sample lines belong to the alignments just removed
+  st.profiles.clear();  // REQ-521: profiles belong to the alignments just removed
+  st.pdMode = 0;
+  st.pdSize = 0.0;
   // Pipe runs are CAD geometry too (issue #486 / REQ-345). Left behind, an import into a drawing
   // that already had runs would keep them alongside the imported content — the same "written before
   // pipe runs existed" miss the document snapshot had. The derived solids go with them, the way
@@ -27361,6 +30776,9 @@ int ExplodeSelectedPolylines(AppCommandState& st, std::vector<std::string>& log)
       case T::Arc:          otherKinds.insert("arc"); break;
       case T::Ellipse:      otherKinds.insert("ellipse"); break;
       case T::Spline:       otherKinds.insert("spline"); break;  // REQ-443
+      case T::Point:        otherKinds.insert("point"); break;   // REQ-456
+      case T::PositionMarker: otherKinds.insert("position marker"); break;  // -Wswitch with Point
+      case T::Multileader:    otherKinds.insert("multileader"); break;      // -Wswitch with Point
       case T::Annotation:   otherKinds.insert("text"); break;
       case T::FilledRegion: otherKinds.insert("hatch"); break;
       case T::Mesh:         otherKinds.insert("mesh"); break;
@@ -27773,12 +31191,53 @@ static void EraseSelectedSolidsAndPipeRuns(AppCommandState& st) {
       }
     }
   }
+  // Alignments (REQ-480): erased with the solids and pipe runs, so MIRROR's delete-source takes them too. The
+  // caller's one undo snapshot already covers this removal. Offsets of an erased parent become independent.
+  {
+    std::set<int> alignIx;
+    for (const auto& e : st.selection) {
+      if (e.type == SelectedEntity::Type::Alignment && e.index >= 0 &&
+          static_cast<size_t>(e.index) < st.alignments.size())
+        alignIx.insert(e.index);
+    }
+    for (auto it = alignIx.rbegin(); it != alignIx.rend(); ++it)
+      st.alignments.erase(st.alignments.begin() + static_cast<std::ptrdiff_t>(*it));
+    if (!alignIx.empty()) {
+      std::vector<std::string> quiet;
+      RefreshAlignmentOffsetsOnly(st, quiet);  // feature links are checked by ExecuteDeleteSelection, which logs drops
+      BumpCadGpuCache(st);  // the plan drops the erased alignment and its sample lines and frames at once
+    }
+  }
 }
 
 void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) {
   if (st.selection.empty())
     return;
+  EnsureEntityIds(st);
+  std::vector<std::uint64_t> erasedFeatureIds;
+  for (const auto& e : st.selection)
+    if (e.type == SelectedEntity::Type::FeatureLine && e.index >= 0 &&
+        static_cast<size_t>(e.index) < st.featureLineAttrs.size())
+      erasedFeatureIds.push_back(st.featureLineAttrs[static_cast<size_t>(e.index)].id);
+  std::vector<std::pair<size_t, CadSurface>> rebuiltGroups;
+  std::vector<std::string> rebuiltGroupNames;
+  for (size_t i = 0; i < st.cadSurfaces.size(); ++i) {
+    const auto& source = st.cadSurfaces[i];
+    if (!source.gradingGroup) continue;
+    CadSurface candidate = source;
+    const auto end = std::remove_if(candidate.gradingMembers.begin(), candidate.gradingMembers.end(),
+      [&](const auto& member) { return std::find(erasedFeatureIds.begin(), erasedFeatureIds.end(), member.gradingId) != erasedFeatureIds.end(); });
+    if (end == candidate.gradingMembers.end()) continue;
+    candidate.gradingMembers.erase(end, candidate.gradingMembers.end());
+    if (!BuildSurfaceFromSources(st, candidate, log)) {
+      log.push_back("ERASE - group contribution could not be rebuilt; nothing was deleted.");
+      return;
+    }
+    rebuiltGroups.emplace_back(i, std::move(candidate));
+    rebuiltGroupNames.push_back(source.name);
+  }
   PushUndoSnapshot(st, "Delete");
+  for (auto& [index, candidate] : rebuiltGroups) st.cadSurfaces[index] = std::move(candidate);
   std::set<int> lineIx;
   std::set<int> circIx;
   std::set<int> annIx;
@@ -27911,6 +31370,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
       st.userEllAttrs.erase(st.userEllAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
   EraseSelectedSplines(st);  // REQ-443
+  EraseSelectedCadPoints(st);
 
   // Filled regions (REQ-042): erase from cadFilledRegions + parallel attrs, highest index first.
   std::set<int> fillIx;
@@ -27960,6 +31420,8 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   }
 
   EraseSelectedSolidsAndPipeRuns(st);  // REQ-313 / issue #486; shared with MIRROR's erase-source
+  RefreshFeatureLineLinks(st, log);    // REQ-498.2: a feature line whose alignment was just erased says so here
+
 
   // TIN surfaces (REQ-068: "erasing a surface is undoable in one step" — the caller has already
   // pushed one snapshot for this whole erase, so removing it here is that one step).
@@ -28015,13 +31477,20 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   }
 
   const size_t nDel = lineIx.size() + circIx.size() + annIx.size() + tableIx.size() + arcIx.size() + ellIx.size() +
-                      polyIx.size() + pdfIx.size() + fillIx.size() + meshIx.size() + markerIx.size() +
+                        polyIx.size() + flIx.size() + pdfIx.size() + fillIx.size() + meshIx.size() + markerIx.size() +
                       multileaderIx.size();
   st.selection.clear();
   AbortMtextGripInteraction(st);
   ClearDimGripInteraction(st);
   if (nDel > 0) {
     BumpCadGpuCache(st);
+    for (const auto& name : rebuiltGroupNames) {
+      const int index = FindSurfaceIndex(st, name);
+      if (index >= 0) {
+        st.cadSurfaces[static_cast<size_t>(index)].builtAtRevision = st.cadGpuRevision;
+        MarkVolumeSurfacesDirtyForParent(st, name);
+      }
+    }
     log.push_back("Deleted " + std::to_string(nDel) + " object(s).");
   }
 }
@@ -28144,6 +31613,7 @@ static void EraseMirroredSourceNoUndo(AppCommandState& st) {
       st.userEllAttrs.erase(st.userEllAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
   EraseSelectedSplines(st);  // REQ-443
+  EraseSelectedCadPoints(st);
 
   st.selection.clear();
   AbortMtextGripInteraction(st);
@@ -28192,6 +31662,9 @@ static void DuplicateCadSelectionReflectedAcrossPlane(AppCommandState& st, const
     return ray3d::ReflectVectorAcrossPlane({x, y, z}, planeUnit);
   };
   DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
+    return ray3d::ReflectPointAcrossPlane(v, planePt, planeUnit);
+  });
+  DuplicateSelectedCadPoints(st, [&](const spline::Vec3& v) {
     return ray3d::ReflectPointAcrossPlane(v, planePt, planeUnit);
   });
   const size_t polyVertsBefore = st.userPolylineVerts.size();
@@ -28400,24 +31873,16 @@ bool HandleMirrorText(AppCommandState& st, const std::string& lineIn, std::vecto
   return false;
 }
 
-static bool SegSegIntersectParam(float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy,
-                                 float* tAB) {
-  const float rx = bx - ax;
-  const float ry = by - ay;
-  const float sx = dx - cx;
-  const float sy = dy - cy;
-  const float denom = rx * sy - ry * sx;
-  if (std::fabs(denom) < 1e-12f)
-    return false;
-  /// Solve A + t r = C + u s  =>  t r - u s = C - A  (Cramer's rule on t, u).
-  const float wx = cx - ax;
-  const float wy = cy - ay;
-  const float t = (wx * sy - wy * sx) / denom;
-  const float u = (wx * ry - wy * rx) / denom;
-  if (t >= 0.f && t <= 1.f && u >= 0.f && u <= 1.f) {
-    *tAB = t;
-    return true;
-  }
+static bool SegSegIntersectParamD(double ax, double ay, double bx, double by, double cx, double cy,
+                                  double dx, double dy, double* tAB) {
+  const double rx = bx - ax, ry = by - ay;
+  const double sx = dx - cx, sy = dy - cy;
+  const double denom = rx * sy - ry * sx;
+  if (std::fabs(denom) < 1e-12) return false;
+  const double wx = cx - ax, wy = cy - ay;
+  const double t = (wx * sy - wy * sx) / denom;
+  const double u = (wx * ry - wy * rx) / denom;
+  if (t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0) { *tAB = t; return true; }
   return false;
 }
 
@@ -28427,6 +31892,8 @@ struct TrimTargetEdge {
   int polyIx = -1;
   int vLo = -1;
 };
+
+static double PickDistSqPointSegmentD(double px, double py, double ax, double ay, double bx, double by);
 
 static bool SelectedEntityMatches(const SelectedEntity& a, const SelectedEntity& b) {
   return a.type == b.type && a.index == b.index;
@@ -28438,8 +31905,8 @@ static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& 
   if (cut.type == ST::LineSeg) {
     const size_t k = static_cast<size_t>(cut.index) * 6;
     if (k + 5 < st.userLinesFlat.size())
-      out->push_back({static_cast<float>(st.userLinesFlat[k]), static_cast<float>(st.userLinesFlat[k + 1]),
-                      static_cast<float>(st.userLinesFlat[k + 3]), static_cast<float>(st.userLinesFlat[k + 4])});
+      out->push_back({st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 3],
+                      st.userLinesFlat[k + 4]});
     return;
   }
   if (cut.type == ST::Circle) {
@@ -28646,7 +32113,7 @@ static void BuildTrimCutSegments(const AppCommandState& st, const std::vector<Se
 }
 
 static bool PickClosestTrimTarget(const AppCommandState& st, float wx, float wy, float tolWorld,
-                                  TrimTargetEdge* outRef, float* ax, float* ay, float* bx, float* by,
+                                  TrimTargetEdge* outRef, double* ax, double* ay, double* bx, double* by,
                                   float* outDistSq) {
   if (!outRef || !ax || !ay || !bx || !by || !outDistSq)
     return false;
@@ -28654,16 +32121,13 @@ static bool PickClosestTrimTarget(const AppCommandState& st, float wx, float wy,
   bool any = false;
   float best = 0.f;
   TrimTargetEdge bestR{};
-  float bax = 0.f, bay = 0.f, bbx = 0.f, bby = 0.f;
+  double bax = 0.0, bay = 0.0, bbx = 0.0, bby = 0.0;
 
   const auto& Lf = st.userLinesFlat;
   if (Lf.size() % 6 == 0) {
     for (size_t li = 0; li + 5 < Lf.size(); li += 6) {
-      const float x0 = static_cast<float>(Lf[li]);
-      const float y0 = static_cast<float>(Lf[li + 1]);
-      const float x1 = static_cast<float>(Lf[li + 3]);
-      const float y1 = static_cast<float>(Lf[li + 4]);
-      const float d2 = CadCmdGeom::DistSqPointSegment(wx, wy, x0, y0, x1, y1);
+      const double x0 = Lf[li], y0 = Lf[li + 1], x1 = Lf[li + 3], y1 = Lf[li + 4];
+      const float d2 = static_cast<float>(PickDistSqPointSegmentD(wx, wy, x0, y0, x1, y1));
       if (d2 > tol2)
         continue;
       if (!any || d2 < best - 1e-12f) {
@@ -28687,11 +32151,11 @@ static bool PickClosestTrimTarget(const AppCommandState& st, float wx, float wy,
     const bool closed =
         static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
     auto tryEdge = [&](int vi) {
-      const float x0 = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3)]);
-      const float y0 = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
-      const float x1 = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3)]);
-      const float y1 = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 1)]);
-      const float d2 = CadCmdGeom::DistSqPointSegment(wx, wy, x0, y0, x1, y1);
+      const double x0 = st.userPolylineVerts[(static_cast<size_t>(vi)* 3)];
+      const double y0 = st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)];
+      const double x1 = st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3)];
+      const double y1 = st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 1)];
+      const float d2 = static_cast<float>(PickDistSqPointSegmentD(wx, wy, x0, y0, x1, y1));
       if (d2 > tol2)
         return;
       if (!any || d2 < best - 1e-12f) {
@@ -28725,23 +32189,20 @@ static bool PickClosestTrimTarget(const AppCommandState& st, float wx, float wy,
 
 /// Drawing edge (line or poly segment) whose geometry passes closest to the user-drawn segment \p u1–\p u2.
 static bool PickTrimTargetClosestToDrawnSegment(const AppCommandState& st, float u1x, float u1y, float u2x, float u2y,
-                                                 float tolWorld, TrimTargetEdge* outRef, float* ax, float* ay,
-                                                 float* bx, float* by, float* outDistSq) {
+                                                 float tolWorld, TrimTargetEdge* outRef, double* ax, double* ay,
+                                                 double* bx, double* by, float* outDistSq) {
   if (!outRef || !ax || !ay || !bx || !by || !outDistSq)
     return false;
   const float tol2 = tolWorld * tolWorld;
   bool any = false;
   float best = 0.f;
   TrimTargetEdge bestR{};
-  float bax = 0.f, bay = 0.f, bbx = 0.f, bby = 0.f;
+  double bax = 0.0, bay = 0.0, bbx = 0.0, bby = 0.0;
 
   const auto& Lf = st.userLinesFlat;
   if (Lf.size() % 6 == 0) {
     for (size_t li = 0; li + 5 < Lf.size(); li += 6) {
-      const float x0 = static_cast<float>(Lf[li]);
-      const float y0 = static_cast<float>(Lf[li + 1]);
-      const float x1 = static_cast<float>(Lf[li + 3]);
-      const float y1 = static_cast<float>(Lf[li + 4]);
+      const double x0 = Lf[li], y0 = Lf[li + 1], x1 = Lf[li + 3], y1 = Lf[li + 4];
       const float d2 = CadCmdGeom::MinDistSqSegSeg(u1x, u1y, u2x, u2y, x0, y0, x1, y1);
       if (d2 > tol2)
         continue;
@@ -28766,10 +32227,10 @@ static bool PickTrimTargetClosestToDrawnSegment(const AppCommandState& st, float
     const bool closed =
         static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
     auto tryEdge = [&](int vi) {
-      const float x0 = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3)]);
-      const float y0 = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
-      const float x1 = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3)]);
-      const float y1 = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 1)]);
+      const double x0 = st.userPolylineVerts[(static_cast<size_t>(vi)* 3)];
+      const double y0 = st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)];
+      const double x1 = st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3)];
+      const double y1 = st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 1)];
       const float d2 = CadCmdGeom::MinDistSqSegSeg(u1x, u1y, u2x, u2y, x0, y0, x1, y1);
       if (d2 > tol2)
         return;
@@ -28802,36 +32263,35 @@ static bool PickTrimTargetClosestToDrawnSegment(const AppCommandState& st, float
   return true;
 }
 
-static bool TrimSegmentIntersectPickSide(float ax, float ay, float bx, float by, float pickX, float pickY,
+static bool TrimSegmentIntersectPickSide(double ax, double ay, double bx, double by, double pickX, double pickY,
                                          const std::vector<std::array<double, 4>>& cuts, const AppCommandState& st,
-                                         float fenceFx, float fenceFy, float fenceGx, float fenceGy,
+                                         double fenceFx, double fenceFy, double fenceGx, double fenceGy,
                                          bool useFenceToPickIntersection,
-                                         float* outIx, float* outIy, bool* trimFromA, std::vector<std::string>* log) {
-  float epsGeom = 1e-5f;
+                                         double* outIx, double* outIy, bool* trimFromA, std::vector<std::string>* log) {
+  double epsGeom = 1e-5;
   double dmnX = 0.;
   double dmxX = 0.;
   double dmnY = 0.;
   double dmxY = 0.;
   if (ComputeWorldExtents(st, &dmnX, &dmxX, &dmnY, &dmxY))
-    epsGeom = std::max(1e-8f, static_cast<float>(1e-6 * std::max(dmxX - dmnX, dmxY - dmnY)));
+    epsGeom = std::max(1e-8, 1e-6 * std::max(dmxX - dmnX, dmxY - dmnY));
 
-  const float vx = bx - ax;
-  const float vy = by - ay;
-  const float len2 = vx * vx + vy * vy;
-  if (len2 < 1e-18f) {
+  const double vx = bx - ax;
+  const double vy = by - ay;
+  const double len2 = vx * vx + vy * vy;
+  if (len2 < 1e-24) {
     if (log)
       log->push_back("TRIM — degenerate segment.");
     return false;
   }
-  const float segLen = std::sqrt(len2);
-  const float epsT =
-      std::clamp(segLen > 1e-12f ? epsGeom / segLen : 1e-7f, 1e-9f, 0.05f);
+  const double segLen = std::sqrt(len2);
+  const double epsT = std::clamp(segLen > 1e-12 ? epsGeom / segLen : 1e-9, 1e-12, 0.05);
 
-  std::vector<float> ts;
+  std::vector<double> ts;
   for (const auto& seg : cuts) {
-    float t = 0.f;
-    if (SegSegIntersectParam(ax, ay, bx, by, static_cast<float>(seg[0]), static_cast<float>(seg[1]), static_cast<float>(seg[2]), static_cast<float>(seg[3]), &t)) {
-      if (t > epsT && t < 1.f - epsT)
+    double t = 0.0;
+    if (SegSegIntersectParamD(ax, ay, bx, by, seg[0], seg[1], seg[2], seg[3], &t)) {
+      if (t > epsT && t < 1.0 - epsT)
         ts.push_back(t);
     }
   }
@@ -28843,47 +32303,46 @@ static bool TrimSegmentIntersectPickSide(float ax, float ay, float bx, float by,
 
   std::sort(ts.begin(), ts.end());
   ts.erase(std::unique(ts.begin(), ts.end(),
-                       [&](float a, float b) { return std::fabs(a - b) < std::max(1e-7f, epsGeom / segLen); }),
+                       [&](double a, double b) { return std::fabs(a - b) < std::max(1e-12, epsGeom / segLen); }),
            ts.end());
 
-  const float u =
-      std::clamp(((pickX - ax) * vx + (pickY - ay) * vy) / len2, 0.f, 1.f);
+  const double u = std::clamp(((pickX - ax) * vx + (pickY - ay) * vy) / len2, 0.0, 1.0);
 
-  const float fdx = fenceGx - fenceFx;
-  const float fdy = fenceGy - fenceFy;
-  const float fenceLen2 = fdx * fdx + fdy * fdy;
-  const bool fenceOk = useFenceToPickIntersection && fenceLen2 >= 1e-24f;
+  const double fdx = fenceGx - fenceFx;
+  const double fdy = fenceGy - fenceFy;
+  const double fenceLen2 = fdx * fdx + fdy * fdy;
+  const bool fenceOk = useFenceToPickIntersection && fenceLen2 >= 1e-24;
 
-  float tNear = ts.front();
+  double tNear = ts.front();
   if (fenceOk) {
-    float bestFenceD2 = 1e30f;
-    float bestPickAbs = 1e30f;
-    for (float t : ts) {
-      const float ix = ax + t * vx;
-      const float iy = ay + t * vy;
-      const float df2 = CadCmdGeom::DistSqPointSegment(ix, iy, fenceFx, fenceFy, fenceGx, fenceGy);
-      const float dp = std::fabs(t - u);
-      if (df2 < bestFenceD2 - 1e-18f ||
-          (std::fabs(df2 - bestFenceD2) <= 1e-18f && dp < bestPickAbs - 1e-12f)) {
+    double bestFenceD2 = 1e300;
+    double bestPickAbs = 1e300;
+    for (double t : ts) {
+      const double ix = ax + t * vx;
+      const double iy = ay + t * vy;
+      const double df2 = PickDistSqPointSegmentD(ix, iy, fenceFx, fenceFy, fenceGx, fenceGy);
+      const double dp = std::fabs(t - u);
+      if (df2 < bestFenceD2 - 1e-24 ||
+          (std::fabs(df2 - bestFenceD2) <= 1e-24 && dp < bestPickAbs - 1e-15)) {
         bestFenceD2 = df2;
         bestPickAbs = dp;
         tNear = t;
       }
     }
   } else {
-    float bestAbs = std::fabs(ts.front() - u);
-    for (float t : ts) {
-      const float d = std::fabs(t - u);
-      if (d < bestAbs - 1e-12f) {
+    double bestAbs = std::fabs(ts.front() - u);
+    for (double t : ts) {
+      const double d = std::fabs(t - u);
+      if (d < bestAbs - 1e-15) {
         bestAbs = d;
         tNear = t;
       }
     }
   }
 
-  const float ix = ax + tNear * vx;
-  const float iy = ay + tNear * vy;
-  const float epsParam = std::max(1e-7f, epsGeom / segLen);
+  const double ix = ax + tNear * vx;
+  const double iy = ay + tNear * vy;
+  const double epsParam = std::max(1e-12, epsGeom / segLen);
 
   bool trimA = false;
   if (u < tNear - epsParam)
@@ -28891,8 +32350,8 @@ static bool TrimSegmentIntersectPickSide(float ax, float ay, float bx, float by,
   else if (u > tNear + epsParam)
     trimA = false;
   else {
-    const float dA = (pickX - ax) * (pickX - ax) + (pickY - ay) * (pickY - ay);
-    const float dB = (pickX - bx) * (pickX - bx) + (pickY - by) * (pickY - by);
+    const double dA = (pickX - ax) * (pickX - ax) + (pickY - ay) * (pickY - ay);
+    const double dB = (pickX - bx) * (pickX - bx) + (pickY - by) * (pickY - by);
     trimA = dA <= dB;
   }
 
@@ -28904,19 +32363,19 @@ static bool TrimSegmentIntersectPickSide(float ax, float ay, float bx, float by,
 
 /// AutoCAD-style: shorten segment toward the nearest cutting intersection from the pick (portion containing pick is
 /// removed).
-static bool TrimSegmentToCuttingEdges(AppCommandState& st, const TrimTargetEdge& tgt, float ax, float ay, float bx,
-                                      float by, float pickX, float pickY,
+static bool TrimSegmentToCuttingEdges(AppCommandState& st, const TrimTargetEdge& tgt, double ax, double ay, double bx,
+                                      double by, double pickX, double pickY,
                                       const std::vector<std::array<double, 4>>& cuts, bool useFence,
-                                      float fenceFx, float fenceFy, float fenceGx, float fenceGy,
+                                      double fenceFx, double fenceFy, double fenceGx, double fenceGy,
                                       std::vector<std::string>& log) {
-  float ix = 0.f, iy = 0.f;
+  double ix = 0.0, iy = 0.0;
   bool trimA = false;
   if (!TrimSegmentIntersectPickSide(ax, ay, bx, by, pickX, pickY, cuts, st, fenceFx, fenceFy, fenceGx, fenceGy,
                                     useFence, &ix, &iy, &trimA, &log))
     return false;
 
-  const float rx = ix;
-  const float ry = iy;
+  const double rx = ix;
+  const double ry = iy;
 
   if (tgt.kind == TrimTargetEdge::Line) {
     const size_t k = static_cast<size_t>(tgt.lineIx) * 6;
@@ -28929,9 +32388,9 @@ static bool TrimSegmentToCuttingEdges(AppCommandState& st, const TrimTargetEdge&
       st.userLinesFlat[k + 3] = rx;
       st.userLinesFlat[k + 4] = ry;
     }
-    const float exx = static_cast<float>(st.userLinesFlat[k + 3] - st.userLinesFlat[k]);
-    const float eyy = static_cast<float>(st.userLinesFlat[k + 4] - st.userLinesFlat[k + 1]);
-    if (exx * exx + eyy * eyy < 1e-12f) {
+    const double exx = st.userLinesFlat[k + 3] - st.userLinesFlat[k];
+    const double eyy = st.userLinesFlat[k + 4] - st.userLinesFlat[k + 1];
+    if (exx * exx + eyy * eyy < 1e-24) {
       st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(k),
                              st.userLinesFlat.begin() + (static_cast<std::ptrdiff_t>(k)+ 6));
       if (static_cast<size_t>(tgt.lineIx) < st.userLineAttrs.size())
@@ -29045,6 +32504,11 @@ double CadEntityPickDepthAtPick(const AppCommandState& st, const SelectedEntity&
         st.cadSplines[static_cast<size_t>(e.index)].ctrl.empty())
       return 0.0;
     return st.cadSplines[static_cast<size_t>(e.index)].ctrl.front().z;
+  }
+  case T::Point: {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadPoints.size())
+      return 0.0;
+    return st.cadPoints[static_cast<size_t>(e.index)].z;
   }
   case T::Ellipse: {
     if (static_cast<size_t>(e.index) >= st.userEllipses.size())
@@ -29365,6 +32829,28 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
         bestD2 = std::min(bestD2, d2Segment(sp[i - 1].x, sp[i - 1].y, sp[i - 1].z, sp[i].x, sp[i].y, sp[i].z));
       consider(e, bestD2);
     }
+  }
+  // REQ-480: an alignment is measured against the chords of its display sampling, the metric the spline uses.
+  for (size_t ai = 0; ai < st.alignments.size(); ++ai) {
+    if (st.alignments[ai].Empty())
+      continue;
+    const std::vector<alignment::Point2> ap = st.alignments[ai].SampleForDisplay(0.01);
+    if (ap.size() < 2)
+      continue;
+    SelectedEntity e{};
+    e.type = SelectedEntity::Type::Alignment;
+    e.index = static_cast<int>(ai);
+    double bestD2 = 1e300;
+    for (size_t i = 1; i < ap.size(); ++i)
+      bestD2 = std::min(bestD2, d2Segment(ap[i - 1].x, ap[i - 1].y, 0.0, ap[i].x, ap[i].y, 0.0));
+    consider(e, bestD2);
+  }
+  for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
+    const CadPoint& p = st.cadPoints[pi];
+    SelectedEntity e{};
+    e.type = SelectedEntity::Type::Point;
+    e.index = static_cast<int>(pi);
+    consider(e, d2Segment(p.x, p.y, p.z, p.x, p.y, p.z));
   }
   const int nPoly =
       static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
@@ -30301,7 +33787,8 @@ void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1
     matchTol = std::max(matchTol, static_cast<float>(2e-5 * std::max(mxX - mnX, mxY - mnY)));
 
   TrimTargetEdge tgt{};
-  float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f, dEdge = 0.f;
+  double ax = 0.0, ay = 0.0, bx = 0.0, by = 0.0;
+  float dEdge = 0.f;
   if (!PickTrimTargetClosestToDrawnSegment(st, fenceP1x, fenceP1y, fenceP2x, fenceP2y, matchTol, &tgt, &ax, &ay,
                                            &bx, &by, &dEdge))
     return;
@@ -30311,16 +33798,16 @@ void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1
   if (cuts.empty())
     return;
 
-  float ix = 0.f, iy = 0.f;
+  double ix = 0.0, iy = 0.0;
   bool trimA = false;
   if (!TrimSegmentIntersectPickSide(ax, ay, bx, by, pickPreviewX, pickPreviewY, cuts, st, fenceP1x, fenceP1y,
                                     fenceP2x, fenceP2y, true, &ix, &iy, &trimA, nullptr))
     return;
 
-  const float rx = trimA ? ax : ix;
-  const float ry = trimA ? ay : iy;
-  const float sx = trimA ? ix : bx;
-  const float sy = trimA ? iy : by;
+  const double rx = trimA ? ax : ix;
+  const double ry = trimA ? ay : iy;
+  const double sx = trimA ? ix : bx;
+  const double sy = trimA ? iy : by;
   previewLinesOut->push_back(rx);
   previewLinesOut->push_back(ry);
   previewLinesOut->push_back(0.f);
@@ -30339,7 +33826,8 @@ static void ExecuteDrawnSegmentTrimOnce(AppCommandState& st, float p1x, float p1
   if (ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
     matchTol = std::max(matchTol, static_cast<float>(2e-5 * std::max(mxX - mnX, mxY - mnY)));
   TrimTargetEdge tgt{};
-  float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f, dEdge = 0.f;
+  double ax = 0.0, ay = 0.0, bx = 0.0, by = 0.0;
+  float dEdge = 0.f;
   if (!PickTrimTargetClosestToDrawnSegment(st, p1x, p1y, p2x, p2y, matchTol, &tgt, &ax, &ay, &bx, &by, &dEdge)) {
     log.push_back("TRIM — no segment close enough to your line (draw along the edge to shorten).");
     return;
@@ -31086,7 +34574,8 @@ static bool SubmitPaperTrimPick(AppCommandState& st, float x, float y, float tol
   }
 
   TrimTargetEdge target{};
-  float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f, d2 = 0.f;
+  double ax = 0.0, ay = 0.0, bx = 0.0, by = 0.0;
+  float d2 = 0.f;
   if (!PickClosestTrimTarget(staged, x, y, tol, &target, &ax, &ay, &bx, &by, &d2)) {
     log.push_back("TRIM — nothing to trim at paper-space pick.");
     return false;
@@ -31226,7 +34715,8 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
     return Try3DLineTrim(st, wx, wy, tolWorld, *pickRay, log);
 
   TrimTargetEdge tgt{};
-  float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f, d2 = 0.f;
+  double ax = 0.0, ay = 0.0, bx = 0.0, by = 0.0;
+  float d2 = 0.f;
   if (!PickClosestTrimTarget(st, wx, wy, tolWorld, &tgt, &ax, &ay, &bx, &by, &d2)) {
     // REQ-087 / REQ-201. "Nothing to trim" is a lie when there plainly IS something under the
     // cursor and it happens to be a feature line. Say which it is: trimming one is undefined —
@@ -31271,6 +34761,7 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     paperJoin.userLineAttrs = paper->paperLineAttrs;
     paperJoin.userPolylineOffsets = paper->paperPolyOffsets;
     paperJoin.userPolylineVerts.assign(paper->paperPolyVerts.begin(), paper->paperPolyVerts.end());
+    paperJoin.userPolylineVertsBulge = paper->paperPolyVertsBulge;
     paperJoin.userPolylineClosed = paper->paperPolyClosed;
     paperJoin.userPolylineAttrs = paper->paperPolyAttrs;
 
@@ -31313,6 +34804,7 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     paper->paperLineAttrs = std::move(paperJoin.userLineAttrs);
     paper->paperPolyOffsets = std::move(paperJoin.userPolylineOffsets);
     paper->paperPolyVerts.assign(paperJoin.userPolylineVerts.begin(), paperJoin.userPolylineVerts.end());
+    paper->paperPolyVertsBulge = std::move(paperJoin.userPolylineVertsBulge);
     paper->paperPolyClosed = std::move(paperJoin.userPolylineClosed);
     paper->paperPolyAttrs = std::move(paperJoin.userPolylineAttrs);
     st.selectedPaperEntities.clear();
@@ -31861,7 +35353,7 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 // =============================================================================
-// OVERKILL — batch cleanup of the entire drawing.
+// OVERKILL — batch cleanup of model geometry or the active paper layout.
 //   • Lines: delete zero-length, exact duplicates, merge collinear overlapping
 //            / contiguous segments into the shortest covering segment.
 //   • Circles: delete exact duplicates (same center + radius).
@@ -31871,6 +35363,58 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
 // Tolerance is auto-derived from drawing extents (1e-4 × span, min 1e-6).
 // =============================================================================
 void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
+  if (PaperLayout* layout = ActivePaperGeometryTarget(st)) {
+    PushUndoSnapshot(st, "Overkill paper layout");
+    AppCommandState cleanup;
+    cleanup.activeSpaceIndex = kModelSpaceIndex;
+    cleanup.userLinesFlat.reserve(layout->paperLines.size());
+    for (float value : layout->paperLines)
+      cleanup.userLinesFlat.push_back(value);
+    cleanup.userLineAttrs = layout->paperLineAttrs;
+    cleanup.userArcs = layout->paperArcs;
+    cleanup.userArcAttrs = layout->paperArcAttrs;
+    cleanup.userPolylineOffsets = layout->paperPolyOffsets;
+    cleanup.userPolylineVerts.reserve(layout->paperPolyVerts.size());
+    for (float value : layout->paperPolyVerts)
+      cleanup.userPolylineVerts.push_back(value);
+    cleanup.userPolylineClosed = layout->paperPolyClosed;
+    cleanup.userPolylineVertsBulge = layout->paperPolyVertsBulge;
+    cleanup.userPolylineAttrs = layout->paperPolyAttrs;
+    for (size_t i = 0; i + 2 < layout->paperCircles.size(); i += 3) {
+      cleanup.userCirclesCxCyZR.insert(cleanup.userCirclesCxCyZR.end(),
+                                       {layout->paperCircles[i], layout->paperCircles[i + 1], 0.f,
+                                        layout->paperCircles[i + 2]});
+      PushCircleNormal(cleanup.userCircleNormals);
+    }
+    cleanup.userCircleAttrs = layout->paperCircleAttrs;
+    ExecuteOverkill(cleanup, log);
+    layout->paperLines.clear();
+    layout->paperLines.reserve(cleanup.userLinesFlat.size());
+    for (double value : cleanup.userLinesFlat)
+      layout->paperLines.push_back(static_cast<float>(value));
+    layout->paperLineAttrs = std::move(cleanup.userLineAttrs);
+    layout->paperArcs = std::move(cleanup.userArcs);
+    layout->paperArcAttrs = std::move(cleanup.userArcAttrs);
+    layout->paperPolyOffsets = std::move(cleanup.userPolylineOffsets);
+    layout->paperPolyVerts.clear();
+    layout->paperPolyVerts.reserve(cleanup.userPolylineVerts.size());
+    for (double value : cleanup.userPolylineVerts)
+      layout->paperPolyVerts.push_back(static_cast<float>(value));
+    layout->paperPolyClosed = std::move(cleanup.userPolylineClosed);
+    layout->paperPolyVertsBulge = std::move(cleanup.userPolylineVertsBulge);
+    layout->paperPolyAttrs = std::move(cleanup.userPolylineAttrs);
+    layout->paperCircles.clear();
+    layout->paperCircleAttrs = std::move(cleanup.userCircleAttrs);
+    for (size_t i = 0; i + 3 < cleanup.userCirclesCxCyZR.size(); i += 4) {
+      layout->paperCircles.insert(layout->paperCircles.end(),
+                                  {static_cast<float>(cleanup.userCirclesCxCyZR[i]),
+                                   static_cast<float>(cleanup.userCirclesCxCyZR[i + 1]),
+                                   static_cast<float>(cleanup.userCirclesCxCyZR[i + 3])});
+    }
+    st.selectedPaperEntities.clear();
+    BumpCadGpuCache(st);
+    return;
+  }
   // OVERKILL is a MODEL-space tool and has no paper branch (issue 02). Run from a layout it used to
   // ignore the sheet entirely - the only geometry the user can see, and the reason they ran it -
   // while rewriting every model line, and then report "nothing to clean up", which was accurate
@@ -32624,23 +36168,23 @@ void RunPointCloudImportWorker(AppCommandState::PointCloudImportAsync* job) {
                                         // is what the UI polls) but kept for a future log dump.
     using Format = AppCommandState::PointCloudImportAsync::SourceFormat;
     if (job->format == Format::Pts) {
-      built = pointcloudcache::BuildFromPts(job->sourcePath, job->cachePath, buildLog,
+      built = pointcloudcache_io::BuildFromPts(job->sourcePath, job->cachePath, buildLog,
                                             &errorMessage, &job->pointsStreamed,
                                             &job->pointsFinalized, &job->cancelRequested);
     } else if (job->format == Format::Ptx) {
-      built = pointcloudcache::BuildFromPtx(job->sourcePath, job->cachePath, buildLog,
+      built = pointcloudcache_io::BuildFromPtx(job->sourcePath, job->cachePath, buildLog,
                                             &errorMessage, &job->pointsStreamed,
                                             &job->pointsFinalized, &job->cancelRequested);
     } else if (job->format == Format::Las) {
-      built = pointcloudcache::BuildFromLas(job->sourcePath, job->cachePath, buildLog,
+      built = pointcloudcache_io::BuildFromLas(job->sourcePath, job->cachePath, buildLog,
                                             &errorMessage, &job->pointsStreamed,
                                             &job->pointsFinalized, &job->cancelRequested);
     } else if (job->format == Format::Laz) {
-      built = pointcloudcache::BuildFromLaz(job->sourcePath, job->cachePath, buildLog,
+      built = pointcloudcache_io::BuildFromLaz(job->sourcePath, job->cachePath, buildLog,
                                             &errorMessage, &job->pointsStreamed,
                                             &job->pointsFinalized, &job->cancelRequested);
     } else {
-      built = pointcloudcache::BuildFromE57(job->sourcePath, job->cachePath, buildLog,
+      built = pointcloudcache_io::BuildFromE57(job->sourcePath, job->cachePath, buildLog,
                                             &errorMessage, &job->pointsStreamed,
                                             &job->pointsFinalized, &job->cancelRequested);
     }
@@ -32774,7 +36318,7 @@ PointCloudImportProgress UpdatePointCloudImportProgress(AppCommandState::PointCl
   const std::int64_t leavesRead = job.previewLeavesRead.load(std::memory_order_relaxed);
   const std::int64_t totalLeaves = job.previewTotalLeaves.load(std::memory_order_relaxed);
 
-  // Three real phases, in strict sequence (see pointcloudcache::BuildFromE57 and
+  // Three real phases, in strict sequence (see pointcloudcache_io::BuildFromE57 and
   // RunPointCloudImportWorker): streaming completes fully before the recursive octree split
   // starts, which completes fully before the preview sample is read back. Phase 3 was invisible
   // before this fix — it re-reads the WHOLE cache off disk to subsample it, a real full pass with
@@ -33229,6 +36773,26 @@ bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, fl
   return false;
 }
 
+static int PickPdfUnderlayAt(const AppCommandState& st, double localX, double localY) {
+  constexpr float kPdfPi = 3.14159265f;
+  for (int pi = static_cast<int>(st.pdfAttachments.size()) - 1; pi >= 0; --pi) {
+    const PdfAttachment& att = st.pdfAttachments[static_cast<std::size_t>(pi)];
+    if (att.pageWidthPts <= 0.f || att.pageHeightPts <= 0.f)
+      continue;
+    const float W = att.pageWidthPts * att.scale;
+    const float H = att.pageHeightPts * att.scale;
+    const float cosR = std::cos(att.rotationDeg * kPdfPi / 180.f);
+    const float sinR = std::sin(att.rotationDeg * kPdfPi / 180.f);
+    const float dx = static_cast<float>(localX) - att.insertX;
+    const float dy = static_cast<float>(localY) - att.insertY;
+    const float px = dx * cosR + dy * sinR;
+    const float py = -dx * sinR + dy * cosR;
+    if (px >= 0.f && py >= 0.f && px <= W && py <= H)
+      return pi;
+  }
+  return -1;
+}
+
 ViewportPickResult ResolveViewportPick(const AppCommandState& st, const ViewportPickRequest& rq) {
   ViewportPickResult r;
   const ray3d::Vec3 eo = rq.eyeRay.origin;
@@ -33356,7 +36920,18 @@ ViewportPickResult ResolveViewportPick(const AppCommandState& st, const Viewport
     return r;
   }
 
-  // 5. Filled regions, lowest (REQ-042).
+  // 5. PDF underlays (behind linework; only when nothing closer was hit).
+  if (rq.modelSpace) {
+    const int pdf = PickPdfUnderlayAt(st, rq.rawX, rq.rawY);
+    if (pdf >= 0 && !hiddenAtZ(0.0)) {
+      r.family = ViewportPickFamily::PdfUnderlay;
+      r.entity.type = SelectedEntity::Type::PdfUnderlay;
+      r.entity.index = pdf;
+      return r;
+    }
+  }
+
+  // 6. Filled regions, lowest (REQ-042).
   const int fr = PickFilledRegionAt(st, rq.rawX, rq.rawY, rq.orbitRay);
   if (fr >= 0) {
     r.family = ViewportPickFamily::FilledRegion;
@@ -38246,7 +41821,6 @@ void SubmitSolidViewportPick(AppCommandState& st, float wx, float wy, std::vecto
                   " — this dimension cannot be picked from here; type a value, or orbit the view.");
     return;
   }
-
   int n = 0;
   const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &n);
   if (specs[picking].pick == SolidPickKind::CornerXY) {
@@ -40255,6 +43829,42 @@ void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vect
     return;
   }
 
+  if (verb == "copy") {
+    std::string rest;
+    std::getline(iss, rest);
+    rest = StringUtil::trimCopy(rest);
+    int sourceIx = -1;
+    size_t sourceLen = 0;
+    for (size_t i = 0; i < st.paperLayouts.size(); ++i) {
+      const std::string& candidate = st.paperLayouts[i].name;
+      if (rest == candidate) {
+        sourceIx = static_cast<int>(i);
+        sourceLen = candidate.size();
+        break;
+      }
+      if (rest.size() > candidate.size() && rest.compare(0, candidate.size(), candidate) == 0 &&
+          rest[candidate.size()] == ' ' && candidate.size() > sourceLen) {
+        sourceIx = static_cast<int>(i);
+        sourceLen = candidate.size();
+      }
+    }
+    std::string copyName;
+    if (sourceIx >= 0) {
+      copyName = StringUtil::trimCopy(rest.substr(sourceLen));
+    } else if (rest.empty() && st.activeSpaceIndex >= 0 &&
+               st.activeSpaceIndex < static_cast<int>(st.paperLayouts.size())) {
+      sourceIx = st.activeSpaceIndex;
+    }
+    if (sourceIx < 0) {
+      log.push_back("LAYOUT COPY - use LAYOUT COPY [source layout] [new name], or switch to a paper layout first.");
+      return;
+    }
+    if (copyName.size() > 3 && StringUtil::toLowerAsciiCopy(copyName.substr(0, 3)) == "as ")
+      copyName = StringUtil::trimCopy(copyName.substr(3));
+    CopyPaperLayout(st, sourceIx, copyName, log);
+    return;
+  }
+
   // RENAME and DELETE both need an existing layout. Names may contain spaces, so the same
   // greedy-longest-prefix match PIPESYS RENAME uses (above) resolves <target> against the rest of
   // the line; with nothing left over after the match, the active layout is the default target.
@@ -40318,7 +43928,7 @@ void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vect
     return;
   }
 
-  log.push_back("LAYOUT - unknown option \"" + verb + "\". Use NEW, RENAME or DELETE.");
+  log.push_back("LAYOUT - unknown option \"" + verb + "\". Use NEW, COPY, RENAME or DELETE.");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -40368,6 +43978,10 @@ void HandleVpscaleCommand(const std::string& args, AppCommandState& st, std::vec
                   "exactly one viewport in a paper layout first.");
     return;
   }
+  if (vp->locked) {
+    log.push_back("VPSCALE - viewport display is locked; unlock it before changing the view scale.");
+    return;
+  }
   const std::string typed = StringUtil::trimCopy(args);
   if (typed.empty()) {
     log.push_back("VPSCALE - current viewport scale is " +
@@ -40385,6 +43999,53 @@ void HandleVpscaleCommand(const std::string& args, AppCommandState& st, std::vec
   vp->scaleModelPerPaperIn = mup;
   BumpCadGpuCache(st);
   log.push_back("VPSCALE - viewport scale set to " + PlotScaleLabel(st.drawingInsUnits, mup) + ".");
+}
+
+void HandleVpMatchScaleCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log) {
+  const std::string name = StringUtil::trimCopy(args);
+  if (st.activeSpaceIndex < 0 || st.activeSpaceIndex >= static_cast<int>(st.paperLayouts.size())) {
+    log.push_back("VPMATCHSCALE - switch to a paper layout first.");
+    return;
+  }
+  if (name.empty()) {
+    log.push_back("VPMATCHSCALE - specify a drawing scale name. Usage: VPMATCHSCALE 1:50.");
+    return;
+  }
+  const auto scaleIt = std::find_if(st.annotationScales.begin(), st.annotationScales.end(),
+      [&](const CadAnnotationScale& scale) { return scale.name == name; });
+  if (scaleIt == st.annotationScales.end()) {
+    log.push_back("VPMATCHSCALE - unknown drawing scale \"" + name + "\".");
+    return;
+  }
+  const float modelPerPaperIn = CadAnnotationScaleModelUnitsPerPlottedInch(*scaleIt);
+  if (!(modelPerPaperIn > 1.e-6f) || !std::isfinite(modelPerPaperIn)) {
+    log.push_back("VPMATCHSCALE - drawing scale \"" + name + "\" has an invalid ratio.");
+    return;
+  }
+  std::vector<int> indices = st.selectedViewports;
+  if (indices.empty() && st.selectedViewportIndex >= 0)
+    indices.push_back(st.selectedViewportIndex);
+  std::sort(indices.begin(), indices.end());
+  indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+  auto& viewports = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)].viewports;
+  if (indices.empty() || std::any_of(indices.begin(), indices.end(), [&](int i) {
+        return i < 0 || i >= static_cast<int>(viewports.size()) || viewports[static_cast<size_t>(i)].locked;
+      })) {
+    log.push_back("VPMATCHSCALE - select unlocked paper viewport(s) in the active layout.");
+    return;
+  }
+  if (std::all_of(indices.begin(), indices.end(), [&](int i) {
+        return viewports[static_cast<size_t>(i)].scaleModelPerPaperIn == modelPerPaperIn;
+      })) {
+    log.push_back("VPMATCHSCALE - selected viewport scale already matches \"" + name + "\".");
+    return;
+  }
+  PushUndoSnapshot(st, "Match paper viewport scale");
+  for (int i : indices)
+    viewports[static_cast<size_t>(i)].scaleModelPerPaperIn = modelPerPaperIn;
+  BumpCadGpuCache(st);
+  log.push_back("VPMATCHSCALE - applied \"" + name + "\" to " + std::to_string(indices.size()) +
+                " paper viewport(s).");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -42367,6 +46028,7 @@ auto* AttrsOfSelected(StateT& st, const SelectedEntity& e) {
   case T::PositionMarker: return at(st.cadPositionMarkerAttrs);  // REQ-359
   case T::Multileader:    return at(st.cadMultileaderAttrs);     // REQ-367
   case T::Spline:         return at(st.cadSplineAttrs);          // REQ-443
+  case T::Point:          return at(st.cadPointAttrs);           // REQ-456
   case T::BlockRef:     return at(st.cadBlockRefAttrs);
   case T::Solid:        return at(st.cadSolidAttrs);    // REQ-352
   case T::PipeRun:      return at(st.cadPipeRunAttrs);  // REQ-352
@@ -42560,6 +46222,7 @@ bool CadLineStyleApplies(SelectedEntity::Type t) {
   case T::Arc:
   case T::Ellipse:
   case T::Spline:  // REQ-443
+  case T::Point:   // REQ-456
   case T::Polyline:
   case T::Annotation:
   case T::Table:
@@ -43177,6 +46840,10 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
       log.push_back("ZOOM EXTENTS — no active viewport to frame into.");
       return;
     }
+    if (vp->locked) {  // REQ-518.11: a locked viewport keeps its model centre and scale
+      log.push_back("ZOOM EXTENTS — the viewport is locked; its view is unchanged.");
+      return;
+    }
     double mnX = 0.;
     double mxX = 0.;
     double mnY = 0.;
@@ -43423,9 +47090,7 @@ void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
     log.push_back("MOVE — specify base point (click or type X,Y). ESC to cancel.");
   } else
-    log.push_back(
-        "MOVE — click objects or drag a selection window (Enter when done), then base point and destination. "
-        "ESC cancels.");
+    log.push_back(kSelectObjectsPrompt);
 }
 
 void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -43443,9 +47108,7 @@ void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
     log.push_back("COPY — specify base point (click or type X,Y). ESC to cancel.");
   } else
-    log.push_back(
-        "COPY — click objects or drag a selection window (Enter when done), then base point and destination. "
-        "ESC cancels.");
+    log.push_back(kSelectObjectsPrompt);
 }
 
 void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -43471,9 +47134,7 @@ void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.rotatePhase = AppCommandState::RotatePhase::NeedBase;
     log.push_back("ROTATE — specify base point (click or type X,Y). ESC to cancel.");
   } else
-    log.push_back(
-        "ROTATE — click objects or drag a selection window (Enter when done), then base point, then ° clockwise "
-        "from north / DMS, or R reference. ESC.");
+    log.push_back(kSelectObjectsPrompt);
 }
 
 void StartScaleCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -43498,10 +47159,7 @@ void StartScaleCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
     log.push_back("SCALE — specify base point (click or type X,Y). ESC to cancel.");
   } else
-    log.push_back(
-        "SCALE — click objects or drag a selection window (Enter when done), then base point, then scale: "
-        "second point or factor (>0), or R for two-point reference length then new length (type or two picks). "
-        "ESC cancels.");
+    log.push_back(kSelectObjectsPrompt);
 }
 
 void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -43528,35 +47186,37 @@ void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.mirrorPhase = AppCommandState::MirrorPhase::NeedP1;
     log.push_back("MIRROR — specify first point of mirror line (click or type X,Y). ESC to cancel.");
   } else
-    log.push_back(
-        "MIRROR — click objects or drag a selection window (Enter when done), then first and second point of "
-        "the mirror line. ESC.");
+    log.push_back(kSelectObjectsPrompt);
 }
 
-/// REQ-305. Model-space only (paper-space arraying is out of scope, like path arrays) — mirrors
-/// MOVE/COPY/ROTATE's own Start* shape: a pre-existing selection skips straight to choosing the
-/// array type, otherwise the command opens with the same click-or-window-select every sibling
-/// modify command uses (this fix, D-2026-08-25-n).
+/// REQ-305/483. Mirrors MOVE/COPY/ROTATE's Start* shape: a pre-existing selection skips straight
+/// to choosing the array type, otherwise the command opens with click-or-window selection. Paper
+/// arrays keep their selection and generated geometry in the active layout's native stores.
 void StartArrayCommand(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
-    log.push_back("ARRAY — not available in paper space; switch to model space or a floating viewport.");
-    return;
-  }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Array;
   st.lastCommand = AppCommandState::Kind::Array;
   ResetArrayDraft(st);
+  st.arrayOnPaper = ActivePaperGeometryTarget(st) != nullptr;
   st.selBoxWaitingSecond = false;
+  if (st.arrayOnPaper) {
+    if (!st.selectedPaperEntities.empty()) {
+      st.arrayPhase = AppCommandState::ArrayPhase::WaitType;
+      SetArrayAnchorFromPaperSelection(st);
+      log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
+    } else {
+      log.push_back("ARRAY — click paper objects or drag a selection window, then press Enter to choose type.");
+    }
+    return;
+  }
   DropArrayUnsupportedFromSelection(st, log);
   if (!st.selection.empty()) {
     st.arrayPhase = AppCommandState::ArrayPhase::WaitType;
     SetArrayAnchorFromSelection(st);
     log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
   } else
-    log.push_back(
-        "ARRAY — click objects or drag a selection window (Enter when done), then choose [R]ectangular / "
-        "[P]olar. ESC cancels.");
+    log.push_back(kSelectObjectsPrompt);
 }
 
 static bool HasPaperModifyPhase(const AppCommandState& st);
@@ -43684,6 +47344,49 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.splineMethod = AppCommandState::SplineMethod::Fit;
     log.push_back("SPLINE canceled — nothing was added.");
   }
+  else if (st.active == AppCommandState::Kind::Point) {
+    ResetCadDrawInquiryDrafts(st);
+    log.push_back("POINT canceled.");
+  }
+  else if (st.active == AppCommandState::Kind::Leader) {
+    ResetCadDrawInquiryDrafts(st);
+    log.push_back("LEADER canceled — nothing was added.");
+  }
+  else if (st.active == AppCommandState::Kind::Pedit) {
+    ResetCadDrawInquiryDrafts(st);
+    log.push_back("PEDIT canceled.");
+  }
+  else if (st.active == AppCommandState::Kind::Measure) {
+    ResetCadDrawInquiryDrafts(st);
+    log.push_back("MEASURE canceled.");
+  }
+  else if (st.active == AppCommandState::Kind::Divide) {
+    ResetCadDrawInquiryDrafts(st);
+    log.push_back("DIVIDE canceled.");
+  }
+  else if (st.active == AppCommandState::Kind::Area) {
+    ResetCadDrawInquiryDrafts(st);
+    log.push_back("AREA canceled.");
+  }
+  else if (st.active == AppCommandState::Kind::List) {
+    ResetCadDrawInquiryDrafts(st);
+    log.push_back("LIST canceled.");
+  }
+  else if (st.active == AppCommandState::Kind::DataExtract) {
+    ResetCadDrawInquiryDrafts(st);
+    st.active = AppCommandState::Kind::None;
+    log.push_back("DATAEXTRACTION canceled.");
+  }
+  else if (st.active == AppCommandState::Kind::Table) {
+    ResetCadDrawInquiryDrafts(st);
+    st.active = AppCommandState::Kind::None;
+    log.push_back("TABLE canceled.");
+  }
+  else if (st.active == AppCommandState::Kind::PointTable) {
+    ResetCadDrawInquiryDrafts(st);
+    st.active = AppCommandState::Kind::None;
+    log.push_back("ADDPOINTTABLE canceled.");
+  }
   else if (st.active == AppCommandState::Kind::Rect)
     log.push_back("RECT canceled.");
   else if (st.active == AppCommandState::Kind::TrimState)
@@ -43740,11 +47443,16 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("OFFSET canceled.");
   else if (st.active == AppCommandState::Kind::IdPoint)
     log.push_back("ID canceled.");
+  else if (st.active == AppCommandState::Kind::StationOffsetPick)
+    log.push_back("GETSTATIONOFFSET ended.");
   else if (st.active == AppCommandState::Kind::GeoMarkPoint || st.active == AppCommandState::Kind::GeoMarkLatLong ||
            st.active == AppCommandState::Kind::GeoReorientMarker ||
            st.active == AppCommandState::Kind::DrawingSettingsPick ||
            st.active == AppCommandState::Kind::GeoCaptureArea)  // REQ-359 / REQ-360 / REQ-364
     log.push_back(std::string(AppCommandState::KindName(st.active)) + " canceled.");
+  else if (st.active == AppCommandState::Kind::AlignmentLayout ||
+           st.active == AppCommandState::Kind::AlignmentFromObjects)  // REQ-485
+    CancelAlignmentCommand(st, log);
   else if (st.active == AppCommandState::Kind::SurveyInverse)
     log.push_back("INVERSE canceled.");
   else if (st.active == AppCommandState::Kind::Dist)
@@ -43770,7 +47478,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("PASTE canceled.");
   else if (st.active == AppCommandState::Kind::PaperRectViewport) {
     st.paperVpPhase = 0;
-    log.push_back("Rectangular viewport canceled.");
+    st.paperVpMode = 0;
+    log.push_back("MVIEW canceled.");
   }
   else if (st.active == AppCommandState::Kind::BConnectMode)
     log.push_back("BCONNECTMODE canceled.");
@@ -44218,6 +47927,96 @@ void SubmitViewportPick(AppCommandState& st, double localX, double localY, std::
   SubmitViewportPickImpl(st, localX, localY, log, windowSelectionSubtract, fenceLeftToRightWindowMode, pickRay);
 }
 
+static void ToggleAccumulateSelectedEntity(AppCommandState& st, const SelectedEntity& hit, bool shift) {
+  auto it = std::find_if(st.selection.begin(), st.selection.end(), [&](const SelectedEntity& entity) {
+    return entity.type == hit.type && entity.index == hit.index;
+  });
+  if (shift) {
+    if (it != st.selection.end())
+      st.selection.erase(it);
+  } else if (it == st.selection.end()) {
+    st.selection.push_back(hit);
+  }
+  EnsureAttrCounts(st);
+}
+
+bool SubmitViewportSelectionAccumulateClick(AppCommandState& st, double rawLocalX, double rawLocalY,
+                                            float anchorScreenX, float anchorScreenY, bool shiftModifier,
+                                            bool ctrlModifier, const ray3d::Ray* pickRay,
+                                            float viewportWidthPx, float viewportHeightPx, float orthoHalfH,
+                                            std::vector<std::string>& log, bool beginBoxOnMiss) {
+  using K = AppCommandState::Kind;
+  const bool modelSpace = st.activeSpaceIndex == kModelSpaceIndex;
+  const bool gizmoMoveSubObject =
+      st.active == K::Move3d && st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::SelectObjects;
+  if (modelSpace && ctrlModifier &&
+      ((st.active == K::PressPull &&
+        st.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget) ||
+       gizmoMoveSubObject)) {
+    AbortMtextGripInteraction(st);
+    ClearDimGripInteraction(st);
+    solidpick::Tolerance subTol;
+    subTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(st));
+    subTol.edge = subTol.vertex;
+    const Camera cam = CadViewCamera(st);
+    const ray3d::Ray subRay = pickRay ? *pickRay
+                                      : cam.ScreenRay(anchorScreenX, anchorScreenY, viewportWidthPx,
+                                                      viewportHeightPx);
+    SubmitSubObjectPick(st, subRay, subTol, shiftModifier, log);
+    BumpCadGpuCache(st);
+    return true;
+  }
+
+  const bool solidClickable = modelSpace && (!st.cadSolids.empty() || !st.pipeRunWorldSolids.empty());
+  ViewportPickRequest rq;
+  rq.rawX = rawLocalX;
+  rq.rawY = rawLocalY;
+  rq.orbitRay = CadViewIsPlan(st) ? nullptr : pickRay;
+  rq.eyeRayValid = solidClickable;
+  if (solidClickable) {
+    if (pickRay)
+      rq.eyeRay = *pickRay;
+    else {
+      const Camera cam = CadViewCamera(st);
+      rq.eyeRay = cam.ScreenRay(anchorScreenX, anchorScreenY, viewportWidthPx, viewportHeightPx);
+    }
+  }
+  rq.lineTol = CadOffsetEntityPickTolWorld(st);
+  rq.orthoHalfH = orthoHalfH;
+  rq.viewportHeightPx = viewportHeightPx;
+  rq.modelSpace = modelSpace;
+  const ViewportPickResult accPick = ResolveViewportClickPick(st, rq, CadHoverEntityPickTolWorld(st));
+
+  bool handled = false;
+  const auto toggleHit = [&](const SelectedEntity& entity) {
+    ToggleAccumulateSelectedEntity(st, entity, shiftModifier);
+    handled = true;
+  };
+  if (accPick.family == ViewportPickFamily::Table && accPick.entity.index >= 0)
+    toggleHit(accPick.entity);
+  else if (accPick.family == ViewportPickFamily::Annotation && accPick.entity.index >= 0)
+    toggleHit(accPick.entity);
+  else if (accPick.family == ViewportPickFamily::Linework)
+    toggleHit(accPick.entity);
+  else if (accPick.family == ViewportPickFamily::Solid)
+    toggleHit(accPick.entity);
+  else if (accPick.family == ViewportPickFamily::FilledRegion && accPick.entity.index >= 0)
+    toggleHit(accPick.entity);
+  else if (accPick.family == ViewportPickFamily::PdfUnderlay && accPick.entity.index >= 0)
+    toggleHit(accPick.entity);
+
+  if (handled) {
+    if (!shiftModifier)
+      CadPropCommandSelectionChanged(st, log);
+    return true;
+  }
+  if (!beginBoxOnMiss)
+    return false;
+  BeginSelectionBoxCorner(st, static_cast<float>(rawLocalX), static_cast<float>(rawLocalY), anchorScreenX,
+                          anchorScreenY);
+  return false;
+}
+
 // REQ-101 / decision D-2026-08-17-b: establish the document origin BEFORE a typed coordinate of
 // state-plane magnitude is narrowed into the float local frame.
 //
@@ -44650,6 +48449,15 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
   }
 
+  if (st.active == K::PaperRectViewport && !line.empty()) {
+    const std::string option = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(line));
+    if (option == "fit" || option == "2" || option == "3" || option == "4" || option == "object") {
+      (void)CreateMviewPreset(st, option, log);
+      return;
+    }
+    log.push_back("MVIEW — option must be Fit, 2, 3, 4, or Object; Esc cancels.");
+    return;
+  }
   // #764: typed points for the click-driven paper MOVE/COPY/ROTATE/MIRROR/SCALE gestures.
   if (HandlePaperPhaseText(st, line, log))
     return;
@@ -44717,6 +48525,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
+  if (HandleCadDrawInquiryTextInput(line, st, log))
+    return;
+
   if (line.empty()) {
     // REQ-307 (GitHub #106): paper-space MOVE/COPY/DELETE's selection step never sets st.active, so
     // it cannot be reached by any Kind-keyed branch below — checked first, ahead of all of them, the
@@ -44743,6 +48554,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // PADSOLID shipped with (#150): a command that looks like it is waiting but cannot be told to go.
     if (st.active == K::Grading) {
       ProcessGradingCommandLine(st, line, log);
+      return;
+    }
+    // REQ-485: Enter finishes a layout, ends object picking and accepts the direction - consumed here for the reason
+    // every note in this block gives.
+    if (st.active == K::AlignmentLayout || st.active == K::AlignmentFromObjects) {
+      (void)HandleAlignmentCommandText(st, line, log);
       return;
     }
     // UCS / PLAN (REQ-154). A bare Enter is *meaningful* at several of their prompts — it takes the
@@ -44832,6 +48649,18 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       st.linePhase = AppCommandState::LinePhase::NeedFirstPoint;
       st.lineDraftSegments = 0;
       log.push_back("LINE — specify first point (click or type X,Y / X Y). ESC to cancel.");
+      return;
+    }
+    if ((st.active == K::DimAligned || st.active == K::DimLinear) &&
+        st.dimPhase == AppCommandState::DimPhase::WaitDimLinePt) {
+      float lx = 0.f;
+      float ly = 0.f;
+      CadCoord::LocalFromWorld(st, static_cast<double>(st.uiCursorWorldX), static_cast<double>(st.uiCursorWorldY),
+                               &lx, &ly);
+      if (st.active == K::DimLinear)
+        CommitDimLinearAt(st, lx, ly, log);
+      else
+        CommitDimAlignedAt(st, lx, ly, log);
       return;
     }
     if (st.active == K::Polyline && st.polylinePhase == PP::NeedNextPoint) {
@@ -44995,15 +48824,25 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     } else if (st.active == K::Array) {
       using AP = AppCommandState::ArrayPhase;
       if (st.arrayPhase == AP::PickSelection) {
-        // Matches the old box-finish sequence exactly (finishBox(); DropArrayUnsupportedFrom-
-        // Selection(); check st.selection.empty()), just triggered by Enter instead.
-        DropArrayUnsupportedFromSelection(st, log);
-        if (st.selection.empty())
-          log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
-        else {
-          st.arrayPhase = AP::WaitType;
-          SetArrayAnchorFromSelection(st);
-          log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
+        if (st.arrayOnPaper) {
+          if (st.selectedPaperEntities.empty()) {
+            log.push_back("Nothing selected — click paper objects or drag a selection window, then press Enter.");
+          } else {
+            st.arrayPhase = AP::WaitType;
+            SetArrayAnchorFromPaperSelection(st);
+            log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
+          }
+        } else {
+          // Matches the old box-finish sequence exactly (finishBox(); DropArrayUnsupportedFrom-
+          // Selection(); check st.selection.empty()), just triggered by Enter instead.
+          DropArrayUnsupportedFromSelection(st, log);
+          if (st.selection.empty())
+            log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
+          else {
+            st.arrayPhase = AP::WaitType;
+            SetArrayAnchorFromSelection(st);
+            log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
+          }
         }
       } else if (st.arrayPhase == AP::Rect_WaitLevels) {
         // GitHub issue #400 increment 2: a bare Enter here is "1 level" — the pre-#400 2D grid —
@@ -45235,6 +49074,24 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         ExportLandXmlFile(st, path.c_str(), log);
       return;
     }
+    // `IMPORTLANDXML "<path>"` (issue #1003, REQ-506). Like EXPORTLANDXML the file is part of the command;
+    // the Qt window asks for it with an open dialog when none is typed, then submits this form.
+    if (plotTok == "importlandxml") {
+      std::string path;
+      std::getline(issIdle, path);
+      path = StringUtil::trimCopy(path);
+      if (path.size() >= 2 && path.front() == '"' && path.back() == '"')
+        path = path.substr(1, path.size() - 2);
+      if (st.activeDrawingIdx <= 0 || st.activeDrawingIdx >= static_cast<int>(st.drawingTabs.size()))
+        log.push_back("IMPORTLANDXML — open a drawing first.");
+      else if (path.empty())
+        log.push_back("IMPORTLANDXML — type a file, e.g. IMPORTLANDXML \"site.xml\".");
+      else if (ActiveProjectPointsReadOnly(st))
+        log.push_back("IMPORTLANDXML — this project is read-only; nothing was imported.");
+      else
+        ImportLandXmlFile(st, path.c_str(), log);
+      return;
+    }
     // `VS SHADED` in one line; a bare `VISUALSTYLE` reports the current value and lists the options,
     // the same shape as a system-variable prompt (the TRIMSTATE precedent).
     if (plotTok == "visualstyle" || plotTok == "vs" || plotTok == "vscurrent") {
@@ -45413,6 +49270,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       HandleVpscaleCommand(restOfLine, st, log);
       return;
     }
+    // VPMATCHSCALE (REQ-484): apply a named drawing scale to selected paper viewport(s).
+    if (plotTok == "vpmatchscale") {
+      std::string restOfLine;
+      std::getline(issIdle, restOfLine);
+      HandleVpMatchScaleCommand(restOfLine, st, log);
+      return;
+    }
     // PAGESETUP (REQ-026, issue #751/#753 V3): typed equivalent of "Page Setup Manager…".
     if (plotTok == "pagesetup") {
       StartPageSetupCommand(st, log);
@@ -45444,6 +49308,18 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       std::string restOfLine;
       std::getline(issIdle, restOfLine);
       HandlePipePropCommand(restOfLine, st, log);
+      return;
+    }
+    if (plotTok == "pdmode") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ExecutePdModeCommand(st, rest, log);
+      return;
+    }
+    if (plotTok == "pdsize") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ExecutePdSizeCommand(st, rest, log);
       return;
     }
     if (plotTok == "isolines") {
@@ -45606,6 +49482,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       st.bench.meshTriangleCount = 0;
       st.bench.solidCount = 0;
       st.bench.solidTriangleCount = 0;
+      st.bench.alignmentCount = 0;
+      st.bench.alignmentEntityCount = 0;
 
       // `BENCH SURFACE [points] [frames]` selects the surface cost profile (REQ-100 as amended,
       // ADR-028), `BENCH MESH [triangles] [frames]` the shaded-mesh one (REQ-100 (b)). All three
@@ -45639,6 +49517,21 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           if (issIdle >> v)
             frames = v;
           st.bench.solidCount = count;
+          StartFrameBudgetBench(st, 1, frames, log);
+          return;
+        }
+        // `BENCH ALIGNMENT [count] [entities] [frames]` — REQ-495 acceptance 4: 1 000 alignments of 100 entities.
+        if (lower == "alignment" || lower == "alignments") {
+          int count = 1000, entities = 100;
+          int v = 0;
+          if (issIdle >> v)
+            count = v;
+          if (issIdle >> v)
+            entities = v;
+          if (issIdle >> v)
+            frames = v;
+          st.bench.alignmentCount = std::clamp(count, 1, 100000);
+          st.bench.alignmentEntityCount = std::clamp(entities, 1, 100000);
           StartFrameBudgetBench(st, 1, frames, log);
           return;
         }
@@ -45850,6 +49743,18 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     // REQ-073. `VOLUMES <base surface>, <comparison surface>` — the synchronous command form of
     // the cut/fill/net report, reachable from a headless transcript the way SURFELEV/SURFSTYLE are.
+    if (plotTok == "gradinggroup") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ExecuteGradingGroupCommand(st, StringUtil::trimCopy(rest), log);
+      return;
+    }
+    if (plotTok == "gradinginfill") {
+      std::string name;
+      std::getline(issIdle, name);
+      ExecuteGradingInfillCommand(st, StringUtil::trimCopy(name), log);
+      return;
+    }
     if (plotTok == "volumes" || plotTok == "vol") {
       std::string rest;
       std::getline(issIdle, rest);
@@ -46050,7 +49955,37 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "sfswap" ||         plotTok == "surfaceaddpoint" || plotTok == "sfaddpt" ||
         plotTok == "surfacedelpoint" || plotTok == "sfdelpt" || plotTok == "surfacemovepoint" ||
         plotTok == "sfmovept" || plotTok == "surfdelline" || plotTok == "sfdelline" ||
+        plotTok == "surflodlow" || plotTok == "surflodhigh" || plotTok == "movetosurface" ||
+        plotTok == "imageattach" || plotTok == "surfdrape" || plotTok == "createdatashortcut" ||
+        plotTok == "createsurfacereference" ||
+        plotTok == "surfacevisibility" || plotTok == "surfvis" || plotTok == "surfcrossbl" || plotTok == "surflabel" || plotTok == "surfacelegend" || plotTok == "createprofilefromsurface" || plotTok == "profileview" ||
         plotTok == "quickprofile" || plotTok == "qprof" ||
+        plotTok == "alignment" || plotTok == "createalignment" || plotTok == "alignmentadd" ||
+        plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "createviewframes" || plotTok == "viewframedelete" || plotTok == "createsheets" || plotTok == "createsamplelines" || plotTok == "createsectionsheets" || plotTok == "createdesignprofile" || plotTok == "profilepvi" || plotTok == "profiledelpvi" || plotTok == "profilequery" || plotTok == "profilelist" || plotTok == "profiledelete" || plotTok == "getstationoffset" ||
+        plotTok == "getpointfromstationoffset" || plotTok == "createalignmentfromobjects" ||
+        plotTok == "createalignmententities" || plotTok == "createalignmentlayout" ||
+        plotTok == "alignmentlayout" || plotTok == "alignmentcurvesettings" || plotTok == "stationformat" || plotTok == "alignmentmeta" ||
+        plotTok == "alignmentedit" ||
+        plotTok == "alignmentlock" ||
+        plotTok == "alignmentinsert" ||
+        plotTok == "alignmentremove" ||
+        plotTok == "alignmentcontinuity" ||
+        plotTok == "reversealignment" ||
+        plotTok == "reversealigndirection" ||
+        plotTok == "alignmentstation" ||
+        plotTok == "alignmentstyle" ||
+        plotTok == "alignmentlabelset" ||
+        plotTok == "alignmentlabelstyle" ||
+        plotTok == "alignmentreport" ||
+        plotTok == "offsetalignment" ||
+        plotTok == "alignmentdetach" ||
+        plotTok == "alignmentintersect" ||
+        plotTok == "editalignment" || plotTok == "alignmentsurface" || plotTok == "alignmentlabel" ||
+        plotTok == "alignmenttable" || plotTok == "editalignmentstyle" || plotTok == "featurelinefromalignment" ||
+        plotTok == "alignmentprops" || plotTok == "alignmentinverse" || plotTok == "alignmentbearing" ||
+        plotTok == "alignmentdistance" ||
+        plotTok == "alignmentcheckset" || plotTok == "alignmentcriteria" || plotTok == "alignmentspeed" ||
+        plotTok == "alignmentcheck" ||
         plotTok == "volreport" || plotTok == "voltable" || plotTok == "volcsv") {
       std::string rest;
       std::getline(issIdle, rest);
@@ -46071,10 +50006,178 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunSurfDelPoint(st, rest, log);
       else if (plotTok == "surfacemovepoint" || plotTok == "sfmovept")
         RunSurfMovePoint(st, rest, log);
+      else if (plotTok == "surflodlow")
+        RunSurfaceLodCommand(st, rest, true, log);
+      else if (plotTok == "imageattach") {
+        const std::vector<std::string> fields = SplitCommaFields(rest);
+        auto number = [&](size_t i, float* out) {
+          if (i >= fields.size()) return false;
+          char* end = nullptr;
+          const double value = std::strtod(fields[i].c_str(), &end);
+          if (!end || *end != '\0' || !std::isfinite(value) || std::abs(value) > 1.e30) return false;
+          *out = static_cast<float>(value);
+          return true;
+        };
+        float x = 0.f, y = 0.f, width = 0.f, height = 0.f, rotation = 0.f;
+        if (fields.size() != 6 || fields[0].empty() || !number(1, &x) || !number(2, &y) ||
+            !number(3, &width) || !number(4, &height) || !number(5, &rotation))
+          log.push_back("IMAGEATTACH — usage: IMAGEATTACH <path>, x, y, width, height, rotation-degrees.");
+        else
+          AttachModelRasterImage(st, fields[0], x, y, width, height,
+              rotation * static_cast<float>(3.14159265358979323846 / 180.0), log);
+      }
+      else if (plotTok == "surfdrape") {
+        const std::vector<std::string> fields = SplitCommaFields(rest);
+        char* end = nullptr;
+        const unsigned long long id = fields.size() == 2 ? std::strtoull(fields[1].c_str(), &end, 10) : 0;
+        const int surface = fields.size() == 2 ? FindSurfaceIndex(st, fields[0]) : -1;
+        if (surface < 0 || !end || *end != '\0' || id == 0)
+          log.push_back("SURFDRAPE — usage: SURFDRAPE <surface>, <image-id>.");
+        else {
+          const auto image = std::find_if(st.cadRasterImages.begin(), st.cadRasterImages.end(),
+              [&](const CadRasterImage& candidate) { return candidate.id == static_cast<std::uint64_t>(id); });
+          if (image == st.cadRasterImages.end()) log.push_back("SURFDRAPE — no attached image has ID " + std::to_string(id) + ".");
+          else SetModelRasterDrape(st, static_cast<size_t>(image - st.cadRasterImages.begin()),
+                                   static_cast<size_t>(surface), log);
+        }
+      }
+      else if (plotTok == "createdatashortcut") {
+        const int source = FindSurfaceIndex(st, StringUtil::trimCopy(rest));
+        if (source < 0) log.push_back("CREATEDATASHORTCUT — name an existing source surface.");
+        else CreateSurfaceDataShortcut(st, static_cast<size_t>(source), log);
+      }
+      else if (plotTok == "createsurfacereference") {
+        const std::vector<std::string> fields = SplitCommaFields(rest);
+        char* end = nullptr;
+        const unsigned long long id = fields.size() == 3 ? std::strtoull(fields[1].c_str(), &end, 10) : 0;
+        if (!id || !end || *end != '\0' || fields[0].empty() || fields[2].empty())
+          log.push_back("CREATESURFACEREFERENCE — usage: CREATESURFACEREFERENCE <source-drawing-rel>, <source-surface-id>, <name>.");
+        else CreateSurfaceReference(st, fields[0], static_cast<std::uint64_t>(id), fields[2], log);
+      }
+      else if (plotTok == "surflodhigh")
+        RunSurfaceLodCommand(st, rest, false, log);
+      else if (plotTok == "movetosurface")
+        RunMoveToSurfaceCommand(st, rest, log);
+      else if (plotTok == "surfacevisibility" || plotTok == "surfvis")
+        RunSurfaceVisibility(st, rest, log);
+      else if (plotTok == "surfcrossbl")
+        RunSurfaceCrossings(st, rest, log);
+      else if (plotTok == "surflabel")
+        RunSurfaceLabel(st, rest, log);
+      else if (plotTok == "surfacelegend")
+        RunSurfaceLegend(st, rest, log);
+      else if (plotTok == "createprofilefromsurface")
+        RunCreateSurfaceProfile(st, rest, log);
+      else if (plotTok == "profileview")
+        RunSurfaceProfileView(st, rest, log);
       else if (plotTok == "surfdelline" || plotTok == "sfdelline")
         RunSurfDelLine(st, rest, log);
       else if (plotTok == "quickprofile" || plotTok == "qprof")
         RunQuickProfile(st, rest, log);
+      else if (plotTok == "alignment" || plotTok == "createalignment" || plotTok == "createalignmentlayout")  // REQ-480 / 485
+        RunAlignmentCreate(st, rest, log);
+      else if (plotTok == "alignmentlayout")  // REQ-485.1
+        RunAlignmentLayout(st, rest, log);
+      else if (plotTok == "alignmentcurvesettings")
+        RunAlignmentCurveSettings(st, rest, log);
+      else if (plotTok == "stationformat")  // REQ-483.4
+        RunStationFormat(st, rest, log);
+      else if (plotTok == "alignmentmeta")  // REQ-480.1
+        RunAlignmentMeta(st, rest, log);
+      else if (plotTok == "createalignmententities")  // Civil 3D's command name for Create from Objects
+        RunCreateAlignmentFromObjects(st, rest, log);
+      else if (plotTok == "alignmentadd")
+        RunAlignmentAdd(st, rest, log);
+      else if (plotTok == "alignmentlist")
+        RunAlignmentList(st, rest, log);
+      else if (plotTok == "alignmentdelete")
+        RunAlignmentDelete(st, rest, log);
+      else if (plotTok == "createviewframes")
+        RunCreateViewFrames(st, rest, log);
+      else if (plotTok == "viewframedelete")
+        RunViewFrameDelete(st, rest, log);
+      else if (plotTok == "createsheets")
+        RunCreateSheets(st, rest, log);
+      else if (plotTok == "createsamplelines")
+        RunCreateSampleLines(st, rest, log);
+      else if (plotTok == "createsectionsheets")
+        RunCreateSectionSheets(st, rest, log);
+      else if (plotTok == "createdesignprofile")
+        RunCreateDesignProfile(st, rest, log);
+      else if (plotTok == "profilepvi")
+        RunProfilePvi(st, rest, log);
+      else if (plotTok == "profiledelpvi")
+        RunProfileDelPvi(st, rest, log);
+      else if (plotTok == "profilequery")
+        RunProfileQuery(st, rest, log);
+      else if (plotTok == "profilelist")
+        RunProfileList(st, rest, log);
+      else if (plotTok == "profiledelete")
+        RunProfileDelete(st, rest, log);
+      else if (plotTok == "getstationoffset")
+        RunGetStationOffset(st, rest, log);
+      else if (plotTok == "getpointfromstationoffset")
+        RunGetPointFromStationOffset(st, rest, log);
+      else if (plotTok == "createalignmentfromobjects")
+        RunCreateAlignmentFromObjects(st, rest, log);
+      else if (plotTok == "alignmentedit")
+        RunAlignmentEdit(st, rest, log);
+      else if (plotTok == "alignmentlock")
+        RunAlignmentLock(st, rest, log);
+      else if (plotTok == "alignmentinsert")
+        RunAlignmentInsert(st, rest, log);
+      else if (plotTok == "alignmentremove")
+        RunAlignmentRemove(st, rest, log);
+      else if (plotTok == "alignmentcontinuity")
+        RunAlignmentContinuity(st, rest, log);
+      else if (plotTok == "reversealignment")
+        RunReverseAlignment(st, rest, log);
+      else if (plotTok == "reversealigndirection")
+        RunReverseAlignment(st, rest, log);
+      else if (plotTok == "alignmentstation")
+        RunAlignmentStation(st, rest, log);
+      else if (plotTok == "alignmentstyle")
+        RunAlignmentStyle(st, rest, log);
+      else if (plotTok == "alignmentlabelset")
+        RunAlignmentLabelSet(st, rest, log);
+      else if (plotTok == "alignmentlabelstyle")
+        RunAlignmentLabelStyle(st, rest, log);
+      else if (plotTok == "alignmentreport")
+        RunAlignmentReport(st, rest, log);
+      else if (plotTok == "offsetalignment")
+        RunOffsetAlignment(st, rest, log);
+      else if (plotTok == "alignmentdetach")
+        RunAlignmentDetach(st, rest, log);
+      else if (plotTok == "alignmentintersect")
+        RunAlignmentIntersect(st, rest, log);
+      else if (plotTok == "editalignment")
+        RunEditAlignment(st, rest, log);
+      else if (plotTok == "alignmentsurface")
+        RunAlignmentSurface(st, rest, log);
+      else if (plotTok == "alignmentlabel")
+        RunAlignmentLabel(st, rest, log);
+      else if (plotTok == "alignmenttable")
+        RunAlignmentTable(st, rest, log);
+      else if (plotTok == "editalignmentstyle")
+        RunEditAlignmentStyle(st, rest, log);
+      else if (plotTok == "featurelinefromalignment")
+        RunFeatureLineFromAlignment(st, rest, log);
+      else if (plotTok == "alignmentprops")
+        RunAlignmentProps(st, rest, log);
+      else if (plotTok == "alignmentinverse")
+        RunAlignmentInverse(st, rest, log);
+      else if (plotTok == "alignmentbearing")
+        RunAlignmentBearing(st, rest, log);
+      else if (plotTok == "alignmentdistance")
+        RunAlignmentDistance(st, rest, log);
+      else if (plotTok == "alignmentcheckset")
+        RunAlignmentCheckSet(st, rest, log);
+      else if (plotTok == "alignmentcriteria")
+        RunAlignmentCriteria(st, rest, log);
+      else if (plotTok == "alignmentspeed")
+        RunAlignmentSpeed(st, rest, log);
+      else if (plotTok == "alignmentcheck")
+        RunAlignmentCheck(st, rest, log);
       else if (plotTok == "volreport")
         RunVolReport(st, rest, log);
       else if (plotTok == "voltable")
@@ -46313,6 +50416,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
 
   if (HandleGeoCommandText(st, line, log))  // REQ-359: GEOMARKLATLONG / GEOMARKPOINT / GEOREORIENTMARKER
     return;
+  if (HandleAlignmentCommandText(st, line, log))  // REQ-485: ALIGNMENTLAYOUT / CREATEALIGNMENTFROMOBJECTS
+    return;
 
   if (st.active == K::IdPoint) {
     float px = 0.f;
@@ -46322,6 +50427,16 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     CommitIdPointAt(st, px, py, log);
+    return;
+  }
+  if (st.active == K::StationOffsetPick) {  // REQ-484.4: a typed X,Y instead of a pick
+    float px = 0.f;
+    float py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
+      log.push_back("GETSTATIONOFFSET - pick in the viewport or type X,Y; ESC ends.");
+      return;
+    }
+    CommitStationOffsetPick(st, px, py, log);
     return;
   }
 
@@ -46389,6 +50504,25 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
 
   if (st.active == K::BlockFitting) {
     BlockFittingSubmitLine(st, line, log);
+    return;
+  }
+
+  if (st.active == K::PdfAttach) {
+    using PAP = AppCommandState::PdfAttachPhase;
+    if (st.pdfAttachPhase == PAP::WaitInsertPoint) {
+      float px = 0.f;
+      float py = 0.f;
+      if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
+        log.push_back("PDFATTACH — pick in viewport or type X,Y.");
+        return;
+      }
+      SubmitPdfAttachInsertPoint(st, px, py, log);
+      return;
+    }
+    if (st.pdfAttachPhase == PAP::WaitDialog || st.pdfAttachPhase == PAP::Building)
+      log.push_back("PDFATTACH — complete the attach dialog, or ESC to cancel.");
+    else
+      log.push_back("PDFATTACH — pick the insertion point in the viewport, or ESC to cancel.");
     return;
   }
 
@@ -47164,6 +51298,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       SubmitLineVertex(st, px, py, log);
       return;
     }
+    if (!st.alignmentStationSnapRejectReason.empty()) {
+      log.push_back(st.alignmentStationSnapRejectReason);
+      st.alignmentStationSnapRejectReason.clear();
+      return;
+    }
 
     if (allowRel && st.segmentAngleLockActive) {
       float dist = 0.f;
@@ -47392,14 +51531,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       allowRel = true;
       ax = st.dimE1x;
       ay = st.dimE1y;
-    } else if (linear && st.dimPhase == DP::WaitDimLinePt) {
+    } else if (st.dimPhase == DP::WaitDimLinePt) {
       allowRel = true;
       ax = 0.5f * (st.dimE1x + st.dimE2x);
       ay = 0.5f * (st.dimE1y + st.dimE2y);
     }
     if (!ParseStoragePoint(st, dimTrim, &px, &py, allowRel, ax, ay)) {
-      log.push_back(linear ? "DIMLINEAR — X,Y or @dx,dy; at line step H / V locks orientation; move cursor to unlock."
-                           : "DIMALIGNED — X,Y or @dx,dy from first extension.");
+      log.push_back(linear ? "DIMLINEAR — X,Y or @dx,dy from chord mid; H / V locks orientation."
+                           : "DIMALIGNED — X,Y or @dx,dy from chord mid.");
       return;
     }
     SubmitViewportPick(st, px, py, log, false, false);
@@ -47745,6 +51884,10 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
 
   if (st.active == K::IdPoint)
     return "ID: Pick point (OSNAP when enabled) or type X,Y — logs UCS World | ESC cancel";
+  if (st.active == K::StationOffsetPick)
+    return "GETSTATIONOFFSET: Pick point (OSNAP when enabled) or type X,Y — reports station and offset | ESC ends";
+  if (const char* alignmentPrompt = AlignmentCommandPrompt(st))  // REQ-485
+    return alignmentPrompt;
   if (st.active == K::GeoMarkPoint)  // REQ-359
     return "GEOMARKPOINT: Pick the position or type X,Y | ESC cancel";
   if (st.active == K::GeoMarkLatLong)
@@ -48021,6 +52164,8 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
                   st.splineDraftPoints.size());
     return buf;
   }
+  if (const char* drawInquiry = CadDrawInquiryCommandInputHint(st))
+    return drawInquiry;
   if (st.active == K::Text) {
     switch (st.textPhase) {
     case TP::WaitInsertion:
@@ -48360,6 +52505,16 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
     case K::Arc:        StartArcCommand(st, log);        break;
     case K::Ellipse:    StartEllipseCommand(st, log);    break;
     case K::Spline:     StartSplineCommand(st, log);     break;
+    case K::Point:      StartPointCommand(st, log);      break;
+    case K::Leader:     StartLeaderCommand(st, log);     break;
+    case K::Pedit:      StartPeditCommand(st, log);      break;
+    case K::Measure:    StartMeasureCommand(st, log);    break;
+    case K::Divide:     StartDivideCommand(st, log);     break;
+    case K::Area:       StartAreaCommand(st, log);       break;
+    case K::List:       StartListCommand(st, log);       break;
+    case K::DataExtract: StartDataExtractCommand(st, log); break;
+    case K::Table:      StartTableCommand(st, log);      break;
+    case K::PointTable: StartAddPointTableCommand(st, log); break;
     case K::Text:       StartTextCommand(st, log);       break;
     case K::Mtext:      StartMtextCommand(st, log);      break;
     case K::Mleader:    StartMleaderCommand(st, log);    break;
@@ -48448,6 +52603,7 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
     case T::Arc:        return (size_t)e.index < cmd.userArcAttrs.size()        ? &cmd.userArcAttrs[(size_t)e.index]        : nullptr;
     case T::Ellipse:    return (size_t)e.index < cmd.userEllAttrs.size()        ? &cmd.userEllAttrs[(size_t)e.index]        : nullptr;
     case T::Spline:     return e.index >= 0 && (size_t)e.index < cmd.cadSplineAttrs.size() ? &cmd.cadSplineAttrs[(size_t)e.index] : nullptr;
+    case T::Point:      return e.index >= 0 && (size_t)e.index < cmd.cadPointAttrs.size() ? &cmd.cadPointAttrs[(size_t)e.index] : nullptr;
     case T::Polyline:   return (size_t)e.index < cmd.userPolylineAttrs.size()   ? &cmd.userPolylineAttrs[(size_t)e.index]   : nullptr;
     case T::Annotation: return (size_t)e.index < cmd.cadAnnotationAttrs.size()  ? &cmd.cadAnnotationAttrs[(size_t)e.index]  : nullptr;
     case T::Table:      return (size_t)e.index < cmd.cadTableAttrs.size()       ? &cmd.cadTableAttrs[(size_t)e.index]       : nullptr;
@@ -48466,6 +52622,10 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
     case T::Polyline: if (!typeMatches(OT::Polyline))return false; break;
     case T::Spline:
       if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadSplines.size() || cmd.qsObjectType != OT::All)
+        return false;
+      break;
+    case T::Point:
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadPoints.size() || cmd.qsObjectType != OT::All)
         return false;
       break;
     case T::Annotation: {
@@ -48616,6 +52776,8 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
     for (int i = 0; i < (int)cmd.userArcs.size(); ++i)      addCad({SelectedEntity::Type::Arc, i});
     for (int i = 0; i < (int)cmd.userEllipses.size(); ++i)  addCad({SelectedEntity::Type::Ellipse, i});
     for (int i = 0; i < (int)cmd.cadSplines.size(); ++i)    addCad({SelectedEntity::Type::Spline, i});
+    for (int i = 0; i < (int)cmd.cadPoints.size(); ++i)     addCad({SelectedEntity::Type::Point, i});
+    for (int i = 0; i < (int)cmd.alignments.size(); ++i)    addCad({SelectedEntity::Type::Alignment, i});  // REQ-480
     const int nPoly = std::max(0, (int)cmd.userPolylineOffsets.size() - 1);
     for (int i = 0; i < nPoly; ++i)   addCad({SelectedEntity::Type::Polyline, i});
     for (int i = 0; i < (int)cmd.cadAnnotations.size(); ++i) addCad({SelectedEntity::Type::Annotation, i});

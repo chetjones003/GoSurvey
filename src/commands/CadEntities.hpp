@@ -1,20 +1,25 @@
 #pragma once
 
+#include <GoSurvey/Document/Appearance.hpp>
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <type_traits>
 #include <vector>
 
-#include "util/pointcloudoctree.hpp"
-#include "util/spline.hpp"
-#include "util/ucs.hpp"
+#include <GoSurvey/Document/AppearanceComponent.hpp>
+#include <GoSurvey/Survey/AlignmentStyleData.hpp>
+#include "GoSurvey/PointCloud/OctreeIndex.hpp"
+#include <GoSurvey/Geometry/spline.hpp>
+#include <GoSurvey/Math/ucs.hpp>
 
 /// A SPLINE entity (REQ-443 / issue #803): a 3D NURBS curve - see util/spline.hpp. Kept as the
 /// util type itself, with no wrapper, because it already is the whole entity (points, knots,
@@ -25,6 +30,84 @@ using CadSpline = spline::Spline;
 /// and REQ-101 ("the chord never strays 0.002 ft from the curve"), yet coarse enough to be cheap
 /// per hover. The renderer samples finer.
 inline constexpr double kSplineSampleTolerance = 0.002;
+
+/// A CAD POINT entity (REQ-456 / issue #1019): a location drawn with PDMODE/PDSIZE. Distinct from
+/// a survey point (identity + description) and from a Position Marker (geolocation label).
+struct CadPoint {
+  double x = 0.0;
+  double y = 0.0;
+  double z = 0.0;
+};
+
+/// AutoCAD PDSIZE: positive = drawing units; negative = percent of view height; 0 = 5% of view.
+[[nodiscard]] inline double CadPointMarkerSize(double pdSize, double viewHeight) {
+  assert(std::isfinite(pdSize));
+  assert(std::isfinite(viewHeight));
+  if (pdSize > 0.0)
+    return pdSize;
+  const double h = viewHeight > 1e-12 ? viewHeight : 1.0;
+  if (pdSize < 0.0)
+    return h * (-pdSize) / 100.0;
+  return h * 0.05;
+}
+
+/// One stroke of a POINT marker (x0,y0,z0) → (x1,y1,z1).
+struct CadPointStroke {
+  double x0 = 0.0;
+  double y0 = 0.0;
+  double z0 = 0.0;
+  double x1 = 0.0;
+  double y1 = 0.0;
+  double z1 = 0.0;
+};
+
+/// PDMODE: 0 dot, 1 none, 2 plus, 3 X, 4 tick; +32 circle, +64 square (96 = both).
+inline void CadPointDisplayStrokes(const CadPoint& p, int pdMode, double halfSize,
+                                   std::vector<CadPointStroke>* out) {
+  assert(out != nullptr);
+  assert(std::isfinite(halfSize));
+  out->clear();
+  if (!(halfSize > 0.0) || !std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z))
+    return;
+  const int shape = pdMode & 7;
+  const int surround = pdMode & 96;
+  auto stroke = [&](double x0, double y0, double x1, double y1) {
+    out->push_back(CadPointStroke{x0, y0, p.z, x1, y1, p.z});
+  };
+  if (shape == 0) {
+    const double d = halfSize * 0.15;
+    stroke(p.x - d, p.y, p.x + d, p.y);
+    stroke(p.x, p.y - d, p.x, p.y + d);
+  } else if (shape == 2) {
+    stroke(p.x - halfSize, p.y, p.x + halfSize, p.y);
+    stroke(p.x, p.y - halfSize, p.x, p.y + halfSize);
+  } else if (shape == 3) {
+    stroke(p.x - halfSize, p.y - halfSize, p.x + halfSize, p.y + halfSize);
+    stroke(p.x - halfSize, p.y + halfSize, p.x + halfSize, p.y - halfSize);
+  } else if (shape == 4) {
+    stroke(p.x, p.y, p.x, p.y + halfSize);
+  }
+  if (surround == 32 || surround == 96) {
+    constexpr int kSeg = 16;
+    constexpr double kTwoPi = 6.28318530717958647692;
+    double px = p.x + halfSize;
+    double py = p.y;
+    for (int i = 1; i <= kSeg; ++i) {
+      const double a = kTwoPi * static_cast<double>(i) / static_cast<double>(kSeg);
+      const double nx = p.x + halfSize * std::cos(a);
+      const double ny = p.y + halfSize * std::sin(a);
+      stroke(px, py, nx, ny);
+      px = nx;
+      py = ny;
+    }
+  }
+  if (surround == 64 || surround == 96) {
+    stroke(p.x - halfSize, p.y - halfSize, p.x + halfSize, p.y - halfSize);
+    stroke(p.x + halfSize, p.y - halfSize, p.x + halfSize, p.y + halfSize);
+    stroke(p.x + halfSize, p.y + halfSize, p.x - halfSize, p.y + halfSize);
+    stroke(p.x - halfSize, p.y + halfSize, p.x - halfSize, p.y - halfSize);
+  }
+}
 
 /// How the model viewport draws (REQ-064 / ADR-026 (e)).
 ///
@@ -92,6 +175,8 @@ struct EntityAttributes {
   std::uint64_t id = 0;
   std::string layer = "0";
   std::string color = "ByLayer";
+  /// Named STB plot style. New GoSurvey entities use Normal; imported ByLayer assignments defer to the layer.
+  std::string plotStyleName = "Normal";
   /// "ByLayer", "ByBlock", or a linetype table name such as "Continuous" / "DASHED" / "CENTER".
   std::string linetype = "ByLayer";
   /// Millimetres on paper; \c -1.f means ByLayer (DXF 370 = -1).
@@ -115,15 +200,6 @@ struct EntityAttributes {
   std::string materialName;
 };
 
-/// The linetypes an entity can be given (\ref EntityAttributes::linetype storage) — the Properties
-/// panel's list and the values CHPROP accepts (REQ-356), one list so the two cannot disagree.
-inline constexpr const char* kEntityLinetypeStorage[] = {"ByLayer", "ByBlock", "Continuous", "DASHED", "HIDDEN", "CENTER",
-                                                         "PHANTOM", "DIVIDE", "BORDER"};
-/// The lineweights an entity can be given, in millimetres; \c -1 = ByLayer. Same sharing as above.
-inline constexpr float kEntityLineweightMmPresets[] = {
-    -1.f,  0.f,   0.05f, 0.09f, 0.13f, 0.15f, 0.18f, 0.20f, 0.25f, 0.30f, 0.35f, 0.40f,
-    0.50f, 0.53f, 0.60f, 0.70f, 0.80f, 0.90f, 1.00f, 1.06f, 1.20f, 1.40f, 1.58f, 2.00f, 2.11f};
-
 /// A named text style (REQ-044 / ADR-020): reusable font + size + slant + weight applied to TEXT/MTEXT.
 /// Color is intentionally NOT a style property — it stays a layer/object property (AutoCAD-faithful).
 /// The drawing owns a \c std::vector<TextStyle>; each \ref CadAnnotation references one by \c styleName
@@ -132,34 +208,12 @@ struct TextStyle {
   std::string name;            ///< Unique within the drawing; "Standard" always exists and is not deletable.
   std::string fontFamily;  ///< "" = app default (`romans.shx`); TrueType family or SHX file name.
   float heightInches = 0.125f; ///< Plotted text height in inches (model height = this × drawing scale).
+  float widthFactor = 1.f;     ///< STYLE width factor (1 = normal); retained in drawing data embedded in DWG.
   float obliqueDeg = 0.f;      ///< Slant angle in degrees (>0 shears glyph tops to the right).
   bool bold = false;
   bool italic = false;
-};
-
-/// One drawable component of a surface style (REQ-070 / ADR-036 (d) (i)): the triangle edges, the
-/// border, the major or minor contours, or the points.
-///
-/// The four properties are encoded exactly as \ref EntityAttributes encodes the same four, so the
-/// resolvers the renderer already has (\c ResolveStoredColorForViewport, the lineweight helpers) work
-/// on a component unchanged, and there is no second parsing path to keep in step with the first.
-///
-/// **Layer and plot style are deliberately absent** (ADR-036 (i)). A surface has exactly one layer —
-/// its own \ref EntityAttributes — and GoSurvey has no plot-style table, so a per-component column for
-/// either could be shown but never honoured, and a control the product will not obey is worse than an
-/// absent one.
-struct SurfaceComponentStyle {
-  bool visible = true;
-  /// "ByLayer", a `#RRGGBB` literal, or a named preset — \ref EntityAttributes::color's encoding.
-  std::string color = "ByLayer";
-  std::string linetype = "ByLayer";
-  float lineweightMm = -1.f;  ///< Millimetres on paper; \c -1.f means ByLayer.
-
-  bool operator==(const SurfaceComponentStyle& o) const {
-    return visible == o.visible && color == o.color && linetype == o.linetype &&
-           lineweightMm == o.lineweightMm;
-  }
-  bool operator!=(const SurfaceComponentStyle& o) const { return !(*this == o); }
+  /// Remaining Text Style settings (annotative, upside down, backwards, vertical, big font, ...), keyed by name.
+  std::map<std::string, std::string> props;
 };
 
 /// One band of a surface analysis range table (REQ-072 / ADR-036 (g)).
@@ -364,6 +418,10 @@ struct CadAnnotation {
   /// text, so older drawings render unchanged). Resolution is bake-on-write (see TextStyle.hpp): the
   /// fields above always hold the effective values, so renderers read them directly.
   std::string styleName;
+  /// DIMSTYLE used by native dimensions. Kept separate from STYLE for dimension label text.
+  std::string dimensionStyleName;
+  /// Native DIMENSION user text; empty means regenerate the measured value from DIMSTYLE.
+  std::string dimensionTextOverride;
   /// Oblique (slant) angle in degrees — effective value (from the style unless \c ovOblique). SHX strokes
   /// shear faithfully; TTF approximates (the UI font renderer has no glyph shear).
   float obliqueDeg = 0.f;
@@ -391,6 +449,11 @@ struct CadAnnotation {
   /// of its ~35 read sites into a compile error rather than letting an index-shaped assumption
   /// survive as silently wrong data (the ADR-025 (a) lesson).
   int surveyPointLabelForId = -1;
+  /// Surface-derived label link (REQ-515). A stable surface id plus the stored query values lets
+  /// surface rebuilds refresh the annotation without moving it.
+  std::uint64_t surfaceLabelForId = 0;
+  std::uint8_t surfaceLabelKind = 0;  ///< 1=spot, 2=slope, 3=contour.
+  std::vector<double> surfaceLabelValues;
   /// When true, the label was manually dragged and these world-unit offsets from the point override the global defaults.
   bool surveyLabelHasUserOffset = false;
   float surveyLabelUserOffsetEast = 0.f;
@@ -406,10 +469,21 @@ struct CadMultileader {
   std::vector<float> pathXyz; ///< tip → … → landing, local storage (Z absolute like CadAnnotation::insZ).
   /// Additional arrow branches sharing the same landing / label (Add Leader).
   std::vector<std::vector<float>> extraLeaderPaths;
+  /// Arrowhead length in drawing units, read from the active DWG MLeader context.
+  float arrowSizeWorld = 0.f;
+  /// Associated MTEXT reference rectangle, measured in its text coordinate system (before rotation).
+  /// Zero means derive the dimensions from the embedded annotation's existing world-space bounds.
+  float labelWidthWorld = 0.f;
+  float labelHeightWorld = 0.f;
   /// When true, label height follows viewport/paper scale (issue #622); otherwise model plot scale only.
   bool annotative = false;
   /// When non-empty, draw only at these SCALE dictionary names; empty = every scale (issue #622).
   std::vector<std::string> annotativeVisibleScaleNames;
+  /// REQ-456 LEADER Format: spline-fit path vs straight segments; Arrow vs None arrowhead.
+  bool splinePath = false;
+  bool showArrow = true;
+  /// Drawing-owned MLEADERSTYLE referenced by this object (empty/legacy resolves to Standard).
+  std::string styleName = "Standard";
   CadAnnotation label;        ///< Kind::Mtext at the text side of the landing.
 };
 
@@ -424,6 +498,55 @@ inline void CadMultileaderLandingLocal(const CadMultileader& ml, float* x, float
 
 inline int CadMultileaderBranchCount(const CadMultileader& ml) {
   return 1 + static_cast<int>(ml.extraLeaderPaths.size());
+}
+
+/// Filled arrowhead at the tip of a leader path (first two XYZ triplets). Invalid when the path is
+/// too short, the size is not positive, or the first segment has no XY length.
+struct CadLeaderArrowHead {
+  bool valid = false;
+  float tipX = 0.f;
+  float tipY = 0.f;
+  float tipZ = 0.f;
+  float b1x = 0.f;
+  float b1y = 0.f;
+  float b1z = 0.f;
+  float b2x = 0.f;
+  float b2y = 0.f;
+  float b2z = 0.f;
+};
+
+[[nodiscard]] inline CadLeaderArrowHead CadMultileaderArrow(const CadMultileader& ml, const std::vector<float>& pathXyz,
+                                                           float size) {
+  assert(std::isfinite(size));
+  CadLeaderArrowHead a;
+  if (!ml.showArrow || !(size > 0.f) || pathXyz.size() < 6)
+    return a;
+  assert(pathXyz.size() % 3 == 0);
+  const float x0 = pathXyz[0];
+  const float y0 = pathXyz[1];
+  const float z0 = pathXyz[2];
+  const float dx = pathXyz[3] - x0;
+  const float dy = pathXyz[4] - y0;
+  const float len = std::hypot(dx, dy);
+  if (!(len > 1e-8f))
+    return a;
+  const float ux = dx / len;
+  const float uy = dy / len;
+  const float px = -uy;
+  const float py = ux;
+  const float along = size;
+  const float half = size * 0.35f;
+  a.valid = true;
+  a.tipX = x0;
+  a.tipY = y0;
+  a.tipZ = z0;
+  a.b1x = x0 + ux * along + px * half;
+  a.b1y = y0 + uy * along + py * half;
+  a.b1z = z0;
+  a.b2x = x0 + ux * along - px * half;
+  a.b2y = y0 + uy * along - py * half;
+  a.b2z = z0;
+  return a;
 }
 
 /// A Position Marker (REQ-359 item 3, D-2026-09-29-e): a cross inside a circle at a point, drawn at a
@@ -1115,6 +1238,32 @@ struct CadSurfaceBreakline {
   std::string description;
 };
 
+/// A surface-local decision for one crossing between two referenced breakline segments. The source
+/// linework remains untouched; the definition re-applies the decision at the matching XY crossing.
+struct CadSurfaceCrossingCorrection {
+  enum class Kind : std::uint8_t { Higher, Lower, Average, Custom, TrimA, TrimB };
+  std::uint64_t entityA = 0;
+  std::uint64_t entityB = 0;
+  double x = 0.0, y = 0.0;  ///< Drawing-local crossing coordinate.
+  double customElevation = 0.0;
+  Kind kind = Kind::Average;
+};
+
+/// Saved existing-ground profile and its placed graph view (REQ-513). Source references are stable
+/// drawing entity ids; sampled gaps remain explicit as NaN elevations.
+struct CadSurfaceProfile {
+  std::uint64_t id = 0;
+  std::string name;
+  std::uint64_t surfaceId = 0;
+  std::uint64_t alignmentId = 0;
+  double sampleInterval = 10.0;
+  double viewX = 0.0, viewY = 0.0, horizontalScale = 1.0, verticalScale = 1.0;
+  std::vector<double> stations;
+  std::vector<double> elevations;
+  std::vector<std::uint64_t> viewEntityIds;
+  std::string sourceStatus; ///< transient missing-source report, regenerated from stable source IDs
+};
+
 /// Per-feature-line descriptive data (REQ-087), one entry per line, parallel to
 /// \c featureLineAttrs.
 ///
@@ -1124,11 +1273,28 @@ struct CadSurfaceBreakline {
 /// reopened and rebuilt rather than redrawn. Sources are held by stable entity id (REQ-076), never
 /// by index or name, so a deleted source resolves to nothing instead of to whatever took its place.
 struct CadGradingDefinition {
+  enum class Target : std::uint8_t { Surface, Distance, AbsoluteElevation, RelativeElevation };
   std::uint64_t baselineId = 0;  ///< the baseline feature line
   std::uint64_t surfaceId = 0;   ///< the target surface
   double cutRun = 2.0;           ///< run of run:rise where the baseline sits below ground
   double fillRun = 3.0;          ///< ...and above it
   bool sideLeft = true;          ///< outward side for an open baseline; unused when it is closed
+  Target target = Target::Surface;
+  double targetValue = 0.0;      ///< width, absolute elevation, or relative elevation
+  double distanceGradePercent = 0.0; ///< signed grade for Distance targets
+};
+
+/// Drawing-local named grading criteria. Deliberately excludes baseline/result identities so the
+/// saved values can be applied to a new baseline and produce an independent result.
+struct CadGradingPreset {
+  std::string name;
+  std::uint64_t targetSurfaceId = 0;
+  double cutRun = 2.0;
+  double fillRun = 3.0;
+  bool sideLeft = true;
+  CadGradingDefinition::Target target = CadGradingDefinition::Target::Surface;
+  double targetValue = 0.0;
+  double distanceGradePercent = 0.0;
 };
 
 struct CadFeatureLineInfo {
@@ -1137,6 +1303,13 @@ struct CadFeatureLineInfo {
   /// Present only on a GRADING result. Absent means an ordinary feature line, which is what every
   /// drawing saved before issue #997 loads as.
   std::optional<CadGradingDefinition> grading;
+  /// REQ-498.2: the alignment this line was made from, and how it was sampled and given elevations. Zero id = an ordinary line.
+  std::uint64_t sourceAlignmentId = 0;
+  double sampleInterval = 10.0;   ///< Drawing units between stations along the alignment (REQ-498.1).
+  double chordTolerance = 0.01;   ///< Largest allowed chord sagitta on a curve, drawing units.
+  bool hasSurface = false;        ///< True: Z comes from surfaceName (REQ-497). False: Z is constantZ.
+  std::string surfaceName;
+  double constantZ = 0.0;
 };
 
 /// One row of a feature line's elevation table (REQ-088).
@@ -1176,6 +1349,16 @@ struct CadSurfacePointFile {
 
 enum class SurfaceKind : std::uint8_t { Tin, Grid, TinVolume, GridVolume, Corridor };
 
+/// REQ-404: one member's baked grading strips, in drawing-local XYZ. Separate snapshots
+/// preserve unchanged members when the group membership changes.
+struct CadGradingGroupMember {
+  std::uint64_t gradingId = 0;
+  // Immutable baked geometry is shared by drawing/undo snapshots; replacing a member installs
+  // new strips without copying every coordinate into every snapshot.
+  std::shared_ptr<const std::vector<std::vector<double>>> strips;
+  bool infill = false;
+};
+
 /// A named TIN surface (REQ-068).
 ///
 /// Small and copyable: the heavy triangulation hangs off a shared pointer, so copying a surface —
@@ -1183,7 +1366,16 @@ enum class SurfaceKind : std::uint8_t { Tin, Grid, TinVolume, GridVolume, Corrid
 ///
 /// Surfaces are **not written to DXF**; **DWG** writes a built TIN as `POLYLINE_PFACE` (issue #611).
 /// A surface without a triangulation stays in the export loss list (ADR-028 (f), REQ-201).
+/// Grading groups additionally own per-member baked strips.
 struct CadSurface {
+  bool gradingGroup = false;
+  /// REQ-514: a project data shortcut is a local read-only reference to another drawing's surface.
+  bool dataShortcutReadOnly = false;
+  std::string dataShortcutDrawing;  ///< safe project-relative source drawing path
+  std::uint64_t dataShortcutSurfaceId = 0;
+  /// REQ-508: viewport-only triangle reduction; source/query TIN data is never changed.
+  bool reducedDisplayLod = false;
+  std::vector<CadGradingGroupMember> gradingMembers;
   std::string name;  ///< Unique within the drawing.
   SurfaceKind kind = SurfaceKind::Tin;
   std::string description;
@@ -1224,6 +1416,9 @@ struct CadSurface {
   /// (`BuildSurfaceFromSources`) — REQ-069's "deleting a polyline used as a breakline removes it from
   /// the definition."
   std::vector<CadSurfaceBreakline> breaklines;
+  /// Per-crossing elevation decisions or surface-local segment trims (REQ-509). These never edit
+  /// the shared source entities and are applied during the next TIN rebuild.
+  std::vector<CadSurfaceCrossingCorrection> crossingCorrections;
 
   /// Contour polylines as data sources (REQ-129) — same id/constraint path as breaklines, listed
   /// separately so the Surface Manager can show a Contours node.
@@ -1253,6 +1448,9 @@ struct CadSurface {
 
   /// The built triangulation, or null when the surface has never been built.
   std::shared_ptr<const CadTin> tin;
+  /// True for a triangulation imported from a Civil 3D DWG that has no definition to rebuild from. Tracked
+  /// explicitly (and saved) so a locally built surface that lost its last source is never mistaken for one.
+  bool importedFixedTin = false;
 
   /// What the last build did, kept for the UI and the log (REQ-201). Not persisted — a reload
   /// re-reports on the next build.

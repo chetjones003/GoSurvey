@@ -2,8 +2,8 @@
 
 #include <cmath>
 
-#include "render/Camera.hpp"
-#include "util/ucs.hpp"
+#include <GoSurvey/Renderer/Camera.hpp>
+#include <GoSurvey/Math/ucs.hpp>
 
 /// The 3D crosshair cursor (REQ-310, GitHub #144 / Phase 1 of #120).
 ///

@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "CadCommands.hpp"
-#include "util/brep.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
 
 using Catch::Approx;
 

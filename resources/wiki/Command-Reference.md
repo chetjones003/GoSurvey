@@ -24,8 +24,12 @@ for a compact list inside the program.
 | `FEATURELINELIST` | `FLLIST` | List every feature line and its vertices | [[Commands/featurelinelist]] |
 | `HATCH` | `H`, `BHATCH` | Fill a closed area (pick an internal point) | [[Commands/hatch]] |
 | `LINE` | `L` | Draw line segments | [[Commands/line]] |
+| `PDMODE` | — | CAD point display mode | [[Commands/pdmode]] |
+| `PDSIZE` | — | CAD point display size | [[Commands/pdsize]] |
+| `POINT` | — | Place CAD point markers (`PDMODE` / `PDSIZE`) | [[Commands/point]] |
 | `POLYLINE` | `PL` | Draw a connected polyline | [[Commands/polyline]] |
 | `RECT` | `RECTANG`, `RECTANGLE` | Draw a rectangle (two opposite corners) | [[Commands/rect]] |
+| `SPLINE` | `SPL` | Draw a NURBS spline (Fit or CV) | [[Commands/spline]] |
 
 ### Solids and 3D
 
@@ -57,11 +61,17 @@ for a compact list inside the program.
 
 | Command | Aliases | Description | Details |
 |---|---|---|---|
+| `ADDPOINTTABLE` | — | Table of survey points in a point table style, chosen in a dialog | [[Commands/addpointtable]] |
+| `DATAEXTRACTION` | — | Write the selected objects' type, layer, text and coordinates to an Excel or CSV file | [[Commands/dataextraction]] |
 | `DIMALIGNED` | `DAL` | Aligned dimension | [[Commands/dimaligned]] |
 | `DIMANGULAR` | `DAN` | Angular dimension | [[Commands/dimangular]] |
 | `DIMLINEAR` | `DLI` | Linear dimension | [[Commands/dimlinear]] |
 | `DIMSTY` | `DIMSTYLE`, `DSTY` | Dimension style editor | [[Commands/dimsty]] |
+| `LEADER` | `LE` | Draw a leader (Mtext or None) | [[Commands/leader]] |
+| `MLEADER` | `ML` | Draw a multileader | [[Commands/mleader]] |
 | `MTEXT` | `MT` | Place multiline text | [[Commands/mtext]] |
+| `TABLE` | — | Insert Table dialog and placement preview; typed style/count prompts in scripts | [[Commands/table]] |
+| `MSTY` | `MLEADERSTYLE`, `MLSTY` | Edit the active multileader style | [[Commands/mleader]] |
 | `STYLE` | `ST`, `DDSTYLE` | Text style manager: create / edit named text styles | [[Commands/style]] |
 | `TEXT` | — | Place single-line text | [[Commands/text]] |
 
@@ -81,11 +91,15 @@ for a compact list inside the program.
 | `JOIN` | `J` | Join collinear objects | [[Commands/join]] |
 | `LENGTHEN` | `LEN` | Change an object's length (DElta/Percent/Total/DYnamic) | [[Commands/lengthen]] |
 | `MIRROR` | `MI` | Mirror objects across a line | [[Commands/mirror]] |
+| `DIVIDE` | `DIV` | Place points that divide an object into equal segments | [[Commands/divide]] |
+| `MEASURE` | `ME` | Place points at a measured interval along an object | [[Commands/measure]] |
 | `MOVE` | `M` | Move objects | [[Commands/move]] |
 | `OFFSET` | `O` | Offset at a distance | [[Commands/offset]] |
+| `PEDIT` | `PE` | Edit a polyline (Close, Open, Join, Reverse, Fit, Spline, Decurve) | [[Commands/pedit]] |
 | `OVERKILL` | `OK` | Remove duplicate geometry | [[Commands/overkill]] |
 | `PASTE` | — | Paste from clipboard | [[Commands/paste]] |
 | `PASTEORIG` | `PO` | Paste at original coordinates | [[Commands/pasteorig]] |
+| `CUT` | — | Cut the selection: copy it to the clipboard, then erase it (refused for objects the clipboard cannot carry) | — |
 | `ROTATE` | `RO` | Rotate objects | [[Commands/rotate]] |
 | `SCALE` | `SC` | Scale objects | [[Commands/scale]] |
 | `STRETCH` | `S` | Crossing/window-select, then move only the vertices inside the box | [[Commands/stretch]] |
@@ -134,15 +148,70 @@ for a compact list inside the program.
 
 | Command | Aliases | Description | Details |
 |---|---|---|---|
+| `AREA` | `AA` | Area and perimeter of typed points or a closed object | [[Commands/area]] |
 | `CREATEPOINTS` | `CRTPTS` | Create survey points | [[Commands/createpoints]] |
 | `DIST` | `DI` | 3D distance between two points: dX, dY, dZ, slope distance | [[Commands/dist]] |
 | `EXPORTPOINTS` | `EXPPTS` | Export survey points | [[Commands/exportpoints]] |
 | `ID` | — | Identify point coordinates | [[Commands/id]] |
 | `IMPORTPOINTS` | `IMPPTS` | Import survey points | [[Commands/importpoints]] |
 | `INVERSE` | `INV` | Inverse between two points | [[Commands/inverse]] |
+| `LIST` | `LI` | List type, layer, space and geometry of selected objects | [[Commands/list]] |
 | `SURFELEV` | `SE` | Surface elevation at a point; grade between two | [[Commands/surfelev]] |
 | `TRAVERSE` | `TRAV`, `TRAVERSEEDITOR` | Open the Traverse Editor | [[Commands/traverse]] |
 | `VIEWPOINTS` | `VWPTS` | View / edit survey points | [[Commands/viewpoints]] |
+
+### Alignments
+
+| Command | Aliases | Description | Details |
+|---|---|---|---|
+| `ALIGNMENT` | `CREATEALIGNMENT`, `CREATEALIGNMENTLAYOUT` | Create an alignment: no arguments opens Create Alignment - Layout; ALIGNMENT <name>[, <description>[, <station>[, <layer>[, <style>]]]][, TYPE=][, LABELSET=][, CRITERIA=][, SPEED=] | [[Commands/alignment]] |
+| `ALIGNMENTLAYOUT` | — | Lay out an alignment by PIs: ALIGNMENTLAYOUT <name>[, CURVES\|NOCURVES][, FROM=<x> <y>][, DIRECTION=<deg>] | [[Commands/alignmentlayout]] |
+| `ALIGNMENTCURVESETTINGS` | — | Curve and spiral settings for the layout: ALIGNMENTCURVESETTINGS [RADIUS=][, SPIRALIN=][, SPIRALOUT=] | [[Commands/alignmentcurvesettings]] |
+| `ALIGNMENTADD` | — | Add tangent, curve or spiral: ALIGNMENTADD <name>, TANGENT\|TANGENTTO\|CURVE\|CURVELEN\|SPIRAL, ... | [[Commands/alignmentadd]] |
+| `ALIGNMENTLIST` | — | Report alignments, stations and entities: ALIGNMENTLIST [<name>] | [[Commands/alignmentlist]] |
+| `ALIGNMENTDELETE` | — | Delete an alignment: ALIGNMENTDELETE <name> | [[Commands/alignmentdelete]] |
+| `CREATEVIEWFRAMES` | — | Create view frames along an alignment: CREATEVIEWFRAMES <alignment>, <start station>, <end station>, <sheet>, <scale or AUTO>, <overlap>[, CENTRED, LEFT or RIGHT] | [[Commands/createviewframes]] |
+| `CREATESHEETS` | — | Create paper sheets from view frames: CREATESHEETS <alignment>[, <frames>] (frames: ALL or names such as VF-1 VF-3) | [[Commands/createsheets]] |
+| `CREATESAMPLELINES` | — | Create sample lines along an alignment: CREATESAMPLELINES <alignment>, <start station>, <end station>, <interval>, <left swath>, <right swath>[, <surface>] | [[Commands/createsamplelines]] |
+| `CREATESECTIONSHEETS` | — | Create section sheets from sample lines: CREATESECTIONSHEETS <alignment>, <sample lines>, <sections per sheet>, <axis elevation> | [[Commands/createsectionsheets]] |
+| `CREATEDESIGNPROFILE` | — | Create an empty design profile on an alignment: CREATEDESIGNPROFILE <alignment>, <profile name> | [[Commands/createdesignprofile]] |
+| `PROFILEPVI` | — | Add or edit a vertical point of a design profile: PROFILEPVI <profile>, <station>, <elevation>[, <curve length>] | [[Commands/profilepvi]] |
+| `PROFILEDELPVI` | — | Remove a vertical point from a design profile: PROFILEDELPVI <profile>, <station> | [[Commands/profiledelpvi]] |
+| `PROFILEQUERY` | — | Report a design profile at a station: PROFILEQUERY <profile>, <station> | [[Commands/profilequery]] |
+| `PROFILELIST` | — | List the design profiles in the drawing: PROFILELIST | [[Commands/profilelist]] |
+| `PROFILEDELETE` | — | Delete a design profile: PROFILEDELETE <profile> | [[Commands/profiledelete]] |
+| `GETSTATIONOFFSET` | — | Station and offset of a point: GETSTATIONOFFSET <alignment>[, <x>, <y> \| , POINT, <number>][, SURFACE=<surface>] (alignment alone: pick until ESC) | [[Commands/getstationoffset]] |
+| `GETPOINTFROMSTATIONOFFSET` | — | Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset> | [[Commands/getpointfromstationoffset]] |
+| `CREATEALIGNMENTFROMOBJECTS` | `CREATEALIGNMENTENTITIES` | Alignment from lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS (pick them) \| <name>[, START=][, FILLET=][, REVERSE][, ERASE] | [[Commands/createalignmentfromobjects]] |
+| `ALIGNMENTEDIT` | — | Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING\|LENGTH\|RADIUS\|STARTRADIUS\|DELTA\|DIRECTION\|CONSTRAINT\|DEGREE\|TANGENTLENGTH\|CHORD\|EXTERNAL\|MIDORDINATE\|A, <value> \| THROUGH, <x>, <y> | [[Commands/alignmentedit]] |
+| `ALIGNMENTLOCK` | — | Lock a parameter: ALIGNMENTLOCK <name>, <entity#>, RADIUS\|LENGTH\|BEARING\|STATION, ON\|OFF | [[Commands/alignmentlock]] |
+| `ALIGNMENTINSERT` | — | Insert tangent, curve or spiral: ALIGNMENTINSERT <name>, <after#>, TANGENT\|CURVE\|SPIRAL, ... | [[Commands/alignmentinsert]] |
+| `ALIGNMENTREMOVE` | — | Remove an entity: ALIGNMENTREMOVE <name>, <entity#> | [[Commands/alignmentremove]] |
+| `ALIGNMENTCONTINUITY` | — | Continuity check level: ALIGNMENTCONTINUITY <name>, C0\|C1\|C2 \| LIST | [[Commands/alignmentcontinuity]] |
+| `REVERSEALIGNMENT` | `REVERSEALIGNDIRECTION` | Reverse alignment direction and stationing: REVERSEALIGNMENT <name> | [[Commands/reversealignment]] |
+| `ALIGNMENTSTATION` | — | Starting station, reference point and station equations: ALIGNMENTSTATION <name>, START\|REFERENCE\|EQ, ... | [[Commands/alignmentstation]] |
+| `OFFSETALIGNMENT` | — | Create offset alignments: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (L12 left, R12 right) | [[Commands/offsetalignment]] |
+| `ALIGNMENTDETACH` | — | Make a linked offset independent: ALIGNMENTDETACH <name> | [[Commands/alignmentdetach]] |
+| `ALIGNMENTINTERSECT` | — | Intersections: ALIGNMENTINTERSECT <a>, <b> \| <a>, LINE, ... \| <a>, CIRCLE, ... | [[Commands/alignmentintersect]] |
+| `ALIGNMENTSTYLE` | — | Alignment display styles: ALIGNMENTSTYLE LIST\|NEW\|DELETE\|ASSIGN\|SHOW\|HIDE\|COLOR\|SET\|CURRENT\|MARKER, ... | [[Commands/alignmentstyle]] |
+| `EDITALIGNMENT` | — | Open the Alignment Layout table: EDITALIGNMENT [<name>] | [[Commands/editalignment]] |
+| `ALIGNMENTREPORT` | — | Report an alignment as text or CSV: ALIGNMENTREPORT [<name>][, TXT\|CSV[, <path>]] | [[Commands/alignmentreport]] |
+| `ALIGNMENTSURFACE` | — | Ground elevation along an alignment from a surface: ALIGNMENTSURFACE <alignment>, <surface>, STATION=<sta>[, OFFSET=<off>] \| INTERVAL=<n> | [[Commands/alignmentsurface]] |
+| `ALIGNMENTLABEL` | — | Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS \| SEGMENT, <entity#> \| CLEAR | [[Commands/alignmentlabel]] |
+| `ALIGNMENTLABELSET` | — | Alignment label sets: ALIGNMENTLABELSET LIST\|NEW\|DELETE\|ASSIGN\|MAJORINTERVAL\|MINORINTERVAL\|SHOW\|HIDE\|STYLE\|GEOMETRY, ... | [[Alignments]] |
+| `ALIGNMENTLABELSTYLE` | — | Alignment label styles (text style, height, colour, precision, prefix/suffix, orientation): ALIGNMENTLABELSTYLE LIST\|NEW\|DELETE\|SET, ... | [[Commands/alignmentlabelstyle]] |
+| `ALIGNMENTTABLE` | — | Insert a line, curve, spiral, segment or equation table: ALIGNMENTTABLE <name>, LINE\|CURVE\|SPIRAL\|SEGMENT\|EQUATIONS[, STATIC\|DYNAMIC][, SPLIT=<rows>][, STYLE=<name>][, <x>, <y>] | [[Commands/alignmenttable]] |
+| `FEATURELINEFROMALIGNMENT` | — | Feature line from an alignment: FEATURELINEFROMALIGNMENT <alignment>[, INTERVAL=<n>][, TOL=<n>][, SURFACE=<name> \| Z=<value>] | [[Commands/featurelinefromalignment]] |
+| `ALIGNMENTPROPS` | — | Alignment properties: ALIGNMENTPROPS <alignment>, NAME\|DESCRIPTION\|STYLE\|LAYER\|START, <value> | [[Commands/alignmentprops]] |
+| `ALIGNMENTINVERSE` | — | Distance along an alignment: ALIGNMENTINVERSE <alignment>, STA\|PT, ... [, CHORD] | [[Commands/alignmentinverse]] |
+| `ALIGNMENTBEARING` | — | Bearing at a station: ALIGNMENTBEARING <alignment>, <station> | [[Commands/alignmentbearing]] |
+| `ALIGNMENTDISTANCE` | — | Distance along an alignment to a point: ALIGNMENTDISTANCE <alignment>, <x>, <y> | [[Commands/alignmentdistance]] |
+| `ALIGNMENTCHECKSET` | — | Design check sets: ALIGNMENTCHECKSET NEW\|DELETE\|LIST\|SET\|LOAD\|SAVE, ... | [[Commands/alignmentcheckset]] |
+| `ALIGNMENTCRITERIA` | — | Apply a check set to an alignment: ALIGNMENTCRITERIA <alignment>, <set>\|NONE | [[Commands/alignmentcriteria]] |
+| `ALIGNMENTSPEED` | — | Design speed from a station: ALIGNMENTSPEED <alignment>, <station>, <speed>\|CLEAR | [[Commands/alignmentspeed]] |
+| `ALIGNMENTCHECK` | — | Check an alignment against its design criteria: ALIGNMENTCHECK <alignment> | [[Commands/alignmentcheck]] |
+| `ALIGNMENTMETA` | — | Alignment metadata: ALIGNMENTMETA <alignment>, SET, <name>, <value> \| REMOVE, <name> \| LIST | [[Alignments]] |
+| `STATIONFORMAT` | — | How stations are written: STATIONFORMAT [DELIMITER=+\|-\|_\|/\|C\|K\|NONE][, DIGITS=][, DECIMALS=][, PREFIX=][, SUFFIX=] \| DEFAULT | [[Alignments]] |
 
 ### Surfaces and volumes
 
@@ -260,7 +329,47 @@ for a compact list inside the program.
 |---|---|---|
 | `3DPOLY` | `3DP`, `3DPOLYLINE` | [[Commands/3dpoly]] |
 | `ALIGN` | `AL` | [[Commands/align]] |
+| `ALIGNMENT` | `CREATEALIGNMENT`, `CREATEALIGNMENTLAYOUT` | [[Commands/alignment]] |
+| `ALIGNMENTADD` | — | [[Commands/alignmentadd]] |
+| `ALIGNMENTBEARING` | — | [[Commands/alignmentbearing]] |
+| `ALIGNMENTCONTINUITY` | — | [[Commands/alignmentcontinuity]] |
+| `ALIGNMENTCURVESETTINGS` | — | [[Commands/alignmentcurvesettings]] |
+| `ALIGNMENTDELETE` | — | [[Commands/alignmentdelete]] |
+| `CREATEVIEWFRAMES` | — | [[Commands/createviewframes]] |
+| `CREATESHEETS` | — | [[Commands/createsheets]] |
+| `CREATESAMPLELINES` | — | [[Commands/createsamplelines]] |
+| `CREATESECTIONSHEETS` | — | [[Commands/createsectionsheets]] |
+| `CREATEDESIGNPROFILE` | — | [[Commands/createdesignprofile]] |
+| `PROFILEPVI` | — | [[Commands/profilepvi]] |
+| `PROFILEDELPVI` | — | [[Commands/profiledelpvi]] |
+| `PROFILEQUERY` | — | [[Commands/profilequery]] |
+| `PROFILELIST` | — | [[Commands/profilelist]] |
+| `PROFILEDELETE` | — | [[Commands/profiledelete]] |
+| `ALIGNMENTDETACH` | — | [[Commands/alignmentdetach]] |
+| `ALIGNMENTDISTANCE` | — | [[Commands/alignmentdistance]] |
+| `ALIGNMENTCHECKSET` | — | [[Commands/alignmentcheckset]] |
+| `ALIGNMENTCRITERIA` | — | [[Commands/alignmentcriteria]] |
+| `ALIGNMENTSPEED` | — | [[Commands/alignmentspeed]] |
+| `ALIGNMENTCHECK` | — | [[Commands/alignmentcheck]] |
+| `ALIGNMENTEDIT` | — | [[Commands/alignmentedit]] |
+| `ALIGNMENTINSERT` | — | [[Commands/alignmentinsert]] |
+| `ALIGNMENTINTERSECT` | — | [[Commands/alignmentintersect]] |
+| `ALIGNMENTINVERSE` | — | [[Commands/alignmentinverse]] |
+| `ALIGNMENTLABEL` | — | [[Commands/alignmentlabel]] |
+| `ALIGNMENTLABELSET` | — | [[Alignments]] |
+| `ALIGNMENTLABELSTYLE` | — | [[Commands/alignmentlabelstyle]] |
+| `ALIGNMENTLAYOUT` | — | [[Commands/alignmentlayout]] |
+| `ALIGNMENTLIST` | — | [[Commands/alignmentlist]] |
+| `ALIGNMENTLOCK` | — | [[Commands/alignmentlock]] |
+| `ALIGNMENTPROPS` | — | [[Commands/alignmentprops]] |
+| `ALIGNMENTREMOVE` | — | [[Commands/alignmentremove]] |
+| `ALIGNMENTREPORT` | — | [[Commands/alignmentreport]] |
+| `ALIGNMENTSTATION` | — | [[Commands/alignmentstation]] |
+| `ALIGNMENTSTYLE` | — | [[Commands/alignmentstyle]] |
+| `ALIGNMENTSURFACE` | — | [[Commands/alignmentsurface]] |
+| `ALIGNMENTTABLE` | — | [[Commands/alignmenttable]] |
 | `ARC` | — | [[Commands/arc]] |
+| `AREA` | `AA` | [[Commands/area]] |
 | `ARRAY` | `AR` | [[Commands/array]] |
 | `ATTDEF` | — | [[Commands/attdef]] |
 | `ATTEDIT` | — | [[Commands/attedit]] |
@@ -290,6 +399,7 @@ for a compact list inside the program.
 | `COPY` | `CP` | [[Commands/copy]] |
 | `COPYCLIP` | — | [[Commands/copyclip]] |
 | `COPYSEL` | — | [[Commands/copysel]] |
+| `CREATEALIGNMENTFROMOBJECTS` | `CREATEALIGNMENTENTITIES` | [[Commands/createalignmentfromobjects]] |
 | `CREATEPOINTS` | `CRTPTS` | [[Commands/createpoints]] |
 | `CROSSHAIR3D` | `CURSOR3D`, `XHAIR3D` | [[Commands/crosshair3d]] |
 | `CYLINDER` | `CYL` | [[Commands/cylinder]] |
@@ -302,6 +412,8 @@ for a compact list inside the program.
 | `DIMLINEAR` | `DLI` | [[Commands/dimlinear]] |
 | `DIMSTY` | `DIMSTYLE`, `DSTY` | [[Commands/dimsty]] |
 | `DIST` | `DI` | [[Commands/dist]] |
+| `DIVIDE` | `DIV` | [[Commands/divide]] |
+| `EDITALIGNMENT` | — | [[Commands/editalignment]] |
 | `ELEV` | `UCS` | [[Commands/elev]] |
 | `ELLIPSE` | `EL` | [[Commands/ellipse]] |
 | `EXPLODE` | `X` | [[Commands/explode]] |
@@ -310,11 +422,14 @@ for a compact list inside the program.
 | `EXTRACT` | — | [[Commands/extract]] |
 | `EXTRUDE` | `EXT` | [[Commands/extrude]] |
 | `FEATURELINE` | `FL` | [[Commands/featureline]] |
+| `FEATURELINEFROMALIGNMENT` | — | [[Commands/featurelinefromalignment]] |
 | `FEATURELINELIST` | `FLLIST` | [[Commands/featurelinelist]] |
 | `FILLET` | `F` | [[Commands/fillet]] |
 | `FLELEV` | — | [[Commands/flelev]] |
 | `FLELEVEDIT` | — | [[Commands/flelevedit]] |
 | `FOV` | `LENS` | [[Commands/fov]] |
+| `GETPOINTFROMSTATIONOFFSET` | — | [[Commands/getpointfromstationoffset]] |
+| `GETSTATIONOFFSET` | — | [[Commands/getstationoffset]] |
 | `GIZMO` | — | [[Commands/gizmo]] |
 | `HATCH` | `H`, `BHATCH` | [[Commands/hatch]] |
 | `HELP` | — | [[Commands/help]] |
@@ -329,19 +444,24 @@ for a compact list inside the program.
 | `ISOLINES` | — | [[Commands/isolines]] |
 | `JOIN` | `J` | [[Commands/join]] |
 | `LAYER` | `LA` | [[Commands/layer]] |
+| `LEADER` | `LE` | [[Commands/leader]] |
 | `LENGTHEN` | `LEN` | [[Commands/lengthen]] |
 | `LINE` | `L` | [[Commands/line]] |
+| `LIST` | `LI` | [[Commands/list]] |
 | `LOFT` | `LFT` | [[Commands/loft]] |
 | `MAKEBLOCK` | — | [[Commands/makeblock]] |
+| `MEASURE` | `ME` | [[Commands/measure]] |
 | `MIRROR` | `MI` | [[Commands/mirror]] |
 | `MIRRORSEL` | — | [[Commands/mirrorsel]] |
 | `MKLINE` | — | [[Commands/mkline]] |
+| `MLEADER` | `ML` | [[Commands/mleader]] |
 | `MOVE` | `M` | [[Commands/move]] |
 | `MOVESEL` | — | [[Commands/movesel]] |
 | `MSPACE` | `MS` | [[Commands/mspace]] |
 | `MTEXT` | `MT` | [[Commands/mtext]] |
 | `MVIEW` | `RECTVIEWPORT`, `RECTVP` | [[Commands/mview]] |
 | `OFFSET` | `O` | [[Commands/offset]] |
+| `OFFSETALIGNMENT` | — | [[Commands/offsetalignment]] |
 | `OPTIONS` | `OP`, `SETTINGS` | [[Commands/options]] |
 | `ORBIT` | `3DORBIT`, `3DO` | [[Commands/orbit]] |
 | `OVERKILL` | `OK` | [[Commands/overkill]] |
@@ -351,9 +471,13 @@ for a compact list inside the program.
 | `PASTEORIG` | `PO` | [[Commands/pasteorig]] |
 | `PDFATTACH` | `PA` | [[Commands/pdfattach]] |
 | `PDFVIEW` | `PV` | [[Commands/pdfview]] |
+| `PEDIT` | `PE` | [[Commands/pedit]] |
+| `PDMODE` | — | [[Commands/pdmode]] |
+| `PDSIZE` | — | [[Commands/pdsize]] |
 | `PERSPECTIVE` | `PROJECTION`, `PERSP` | [[Commands/perspective]] |
 | `PLAN` | — | [[Commands/plan]] |
 | `PLOTSCALE` | `PSCALE` | [[Commands/plotscale]] |
+| `POINT` | — | [[Commands/point]] |
 | `POLYLINE` | `PL` | [[Commands/polyline]] |
 | `POLYSOLID` | `PSOLID` | [[Commands/polysolid]] |
 | `PRESSPULL` | `PP` | [[Commands/presspull]] |
@@ -364,6 +488,7 @@ for a compact list inside the program.
 | `QUICKSELECT` | `QS` | [[Commands/quickselect]] |
 | `RECT` | `RECTANG`, `RECTANGLE` | [[Commands/rect]] |
 | `REGEN` | `RE` | [[Commands/regen]] |
+| `REVERSEALIGNMENT` | `REVERSEALIGNDIRECTION` | [[Commands/reversealignment]] |
 | `REVOLVE` | `REV` | [[Commands/revolve]] |
 | `ROTATE` | `RO` | [[Commands/rotate]] |
 | `ROTATESEL` | — | [[Commands/rotatesel]] |
@@ -378,6 +503,7 @@ for a compact list inside the program.
 | `SOLIDCHECK` | `SCHECK` | [[Commands/solidcheck]] |
 | `SOLIDLIST` | `SOLIDS` | [[Commands/solidlist]] |
 | `SPHERE` | `SPH` | [[Commands/sphere]] |
+| `SPLINE` | `SPL` | [[Commands/spline]] |
 | `STRETCH` | `S` | [[Commands/stretch]] |
 | `STYLE` | `ST`, `DDSTYLE` | [[Commands/style]] |
 | `SUBTRACT` | `SU` | [[Commands/subtract]] |
@@ -459,7 +585,6 @@ Some things are only reachable from the interface:
 | Import and Export DXF / DWG | **File** menu |
 | Undo / Redo | `Ctrl+Z` / `Ctrl+Shift+Z`, Edit menu, ribbon |
 | Copy / Paste to clipboard | `Ctrl+C` / `Ctrl+V`, Edit menu, ribbon |
-| Cut | Right-click ▸ Clipboard ▸ Cut, `Ctrl+X` |
 | Options | **View → Settings…** |
 | Plot and Batch Plot | **Layout ribbon** in paper space |
 | Page Setup Manager, Viewports, Move or Copy layout | Right-click a layout tab |

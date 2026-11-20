@@ -1,0 +1,9332 @@
+#include "LibreDwgCad.hpp"
+#include "LibreDwgCivil.hpp"
+#include "ProjectPoints.hpp"
+
+#include "AcisSatParser.hpp"
+#include "CadCommands.hpp"
+#include "CadField.hpp"
+#include "LibreDwgField.hpp"
+#include "LibreDwgDynamicBlock.hpp"
+#include "LibreDwgAnnotContext.hpp"
+#include "LibreDwgLights.hpp"
+#include "LibreDwgMaterial.hpp"
+#include "LibreDwgPlant.hpp"
+#include "LibreDwgVisualStyle.hpp"
+#include "GoSurvey/Document/cadpiperun.hpp"
+#include "GoSurvey/Document/cadtablestyle.hpp"
+#include "GoSurvey/Document/styleproperty.hpp"
+#include <GoSurvey/Core/ShxFont.hpp>
+#include "CadCoordinateFrame.hpp"
+#include "ViewportZoomScale.hpp"
+#include "CadDimGeom.hpp"
+#include "CadDimStroke.hpp"
+#include "PolylineTiltedArc.hpp"
+#include "DxfColors.hpp"
+#include "GoSurvey/Document/MtextRichFormat.hpp"
+#include "DwgIo.hpp"
+#include "LibreDwg.hpp"
+#include "GoSurvey/Survey/SurveyPointRecords.hpp"
+#include "TextStyle.hpp"
+#include "GoSurvey/Document/cadtable.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <cstdlib>
+#include <cstdio>
+#include <filesystem>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <map>
+#include <iterator>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+#if defined(__cplusplus) && !defined(restrict)
+#define restrict
+#endif
+
+extern "C" {
+#include <dwg.h>
+#include <dwg_api.h>
+#include "bits.h"
+#include "out_dxf.h"
+}
+
+extern "C" void dwg_set_next_objhandle(Dwg_Object* obj);
+extern "C" void dwg_resolve_objectrefs_silent(Dwg_Data* dwg);
+
+namespace libredwgcad_detail {
+
+std::string DecodeDwgString(const void* raw, bool utf16le) {
+  if (raw == nullptr)
+    return {};
+  if (utf16le) {
+    char* u8 = bit_convert_TU(reinterpret_cast<BITCODE_TU>(const_cast<void*>(raw)));
+    if (u8 == nullptr)
+      return {};
+    std::string s(u8);
+    std::free(u8);
+    return s;
+  }
+  return std::string(reinterpret_cast<const char*>(raw));
+}
+
+// GitHub issue #369 / D-2026-09-10-b. A Civil 3D "parts catalog" component — a pressure pipe,
+// a fitting, a structure — carries no portable geometry: its shape is regenerated at open time
+// by Civil 3D's proprietary Parts Catalog engine from a parametric catalog reference, the same
+// way Plant 3D's AcPp* custom objects are unreachable by any third-party reader (ADR-026). Such
+// a file's only 3DSOLID is an empty placeholder, and its class table is full of AECC_* custom
+// classes. When that signature is present, a skipped empty 3DSOLID is named for its real cause
+// rather than the ambiguous "(empty)". \p dwg may be null.
+bool DwgHasCivil3dCatalogClasses(const Dwg_Data* dwg) {
+  if (dwg == nullptr || dwg->dwg_class == nullptr)
+    return false;
+  for (BITCODE_BS i = 0; i < dwg->num_classes; ++i) {
+    const char* name = dwg->dwg_class[i].dxfname;
+    if (name != nullptr && std::strncmp(name, "AECC_", 5) == 0)
+      return true;
+  }
+  return false;
+}
+
+std::string ColorToStorage(int index, unsigned method, unsigned rgb) {
+  // A native AcCmColor ByColor record carries its exact RGB in a 0xc2 CMC. LibreDWG
+  // also computes a nearest palette index while reading it; that index is not its color.
+  if (method == 0xc2 && (rgb >> 24) == 0xc2) {
+    char buffer[16];
+    std::snprintf(buffer, sizeof(buffer), "#%06X", rgb & 0xffffffu);
+    return buffer;
+  }
+  if (method == 0xc0)
+    return "ByLayer";
+  if (method == 0xc1)
+    return "ByBlock";
+  if (method == 0xc3) {
+    // 0xc3 is truecolor, except for the documented sentinels (dwg.h): rgb 0 = ByBlock,
+    // 0x100 = ByLayer, 0x101 = none. Fall through to the index path for those.
+    //
+    // AutoCAD 2018 (AC1032) also writes an *indexed* layer/entity colour as a 0xc3 CMC whose
+    // rgb payload is just the ACI in the low byte (e.g. 0xc3000007 == ACI 7). LibreDWG does not
+    // resolve that to RGB the way it does for 0xc2. A real 24-bit truecolour always has a
+    // non-zero red or green byte; when only the low byte is set, treat it as an ACI index so a
+    // 0xc3-encoded "layer 0 white" does not import as near-black #000007.
+    const unsigned c = rgb & 0xFFFFFFu;
+    if (c != 0 && c != 0x100u && c != 0x101u && (c & 0xFFFF00u) != 0) {
+      char buf[16];
+      std::snprintf(buf, sizeof(buf), "#%06X", c);
+      return std::string(buf);
+    }
+    if ((c & 0xFFFF00u) == 0 && c >= 1 && c <= 255) {
+      char buf[16];
+      std::snprintf(buf, sizeof(buf), "#%06X",
+                    static_cast<unsigned>(DxfRgbPackedFromAci(static_cast<int>(c)) & 0xFFFFFFu));
+      return std::string(buf);
+    }
+  }
+  // A negative ACI encodes "layer turned off" (dwg.h); the on/off state is captured separately,
+  // so recover the real ACI here rather than discarding the colour.
+  if (index < 0)
+    index = -index;
+  if (index == 256)
+    return "ByLayer";
+  if (index == 0)
+    return "ByBlock";
+  char buf[16];
+  std::snprintf(buf, sizeof(buf), "#%06X", static_cast<unsigned>(DxfRgbPackedFromAci(index) & 0xFFFFFFu));
+  return std::string(buf);
+}
+
+double LegacyLeaderEffectiveDimScale(double styleDimScale, double headerDimScale, double paperUnits,
+                                     double drawingUnits) {
+  if (!(styleDimScale > 0.0) || !std::isfinite(styleDimScale))
+    return headerDimScale;
+  // In some architectural DWGs (including MESSER), the style's default 1 is accompanied by a
+  // header DIMSCALE equal to the active inch-fraction-to-foot scale ratio. AutoCAD exposes that
+  // header value divided by twelve as the legacy LEADER scale factor. Otherwise the referenced
+  // DIMSTYLE is authoritative, including when its scale is exactly 1.
+  if (std::fabs(styleDimScale - 1.0) <= 1e-9 && headerDimScale > 0.0 && std::isfinite(headerDimScale) &&
+      paperUnits > 0.0 && paperUnits < 1.0 && std::fabs(drawingUnits - 12.0) <= 1e-6) {
+    const double scaleRatio = drawingUnits / paperUnits;
+    const double tolerance = std::max(1.0, std::fabs(scaleRatio)) * 1e-6;
+    if (std::fabs(headerDimScale - scaleRatio) <= tolerance)
+      return headerDimScale;
+  }
+  return styleDimScale;
+}
+
+double LegacyLeaderScaleFactor(double dimScale, double paperUnits, double drawingUnits) {
+  if (!(dimScale > 0.0) || !std::isfinite(dimScale))
+    return 1.0;
+  if (!(paperUnits > 0.0) || !(drawingUnits > 0.0) ||
+      !std::isfinite(paperUnits) || !std::isfinite(drawingUnits))
+    return dimScale;
+  const double scaleRatio = drawingUnits / paperUnits;
+  const double tolerance = std::max(1.0, std::fabs(scaleRatio)) * 1e-6;
+  if (paperUnits < 1.0 && std::fabs(drawingUnits - 12.0) <= 1e-6 &&
+      std::fabs(dimScale - scaleRatio) <= tolerance)
+    return dimScale / drawingUnits;
+  return dimScale;
+}
+
+/// REQ-320 increment 2 (TASK-734): convert LibreDWG-attached SAB/ASM binary to SAT text.
+[[nodiscard]] std::string SatTextFrom3dSolidSab(Dwg_Entity__3DSOLID* sol) {
+  if (sol == nullptr || sol->acis_data == nullptr || sol->sab_size == 0)
+    return {};
+  // Converting again would rebuild `encr_sat_data` over the first conversion's buffers (leaking
+  // them); a solid reached twice reuses the SAT it already has.
+  if (!sol->_dxf_sab_converted && dwg_convert_SAB_to_SAT1(sol) != 0)
+    return {};
+  std::string sat;
+  if (sol->num_blocks > 0 && sol->block_size != nullptr && sol->encr_sat_data != nullptr) {
+    for (BITCODE_BL i = 0; i < sol->num_blocks; ++i) {
+      if (sol->block_size[i] == 0)
+        break;
+      if (sol->encr_sat_data[i] != nullptr)
+        sat.append(sol->encr_sat_data[i], sol->block_size[i]);
+    }
+  }
+  return sat;
+}
+
+std::string CivilLabelFontFamily(const AppCommandState& st, const SurveyPointLabelStyleDefinition* style) {
+  if (style != nullptr && !style->fontFamily.empty())
+    return TextStyles::EffectiveFontFamily(style->fontFamily);
+  if (const auto* textStyle = TextStyles::Find(st.textStyles, "pnts"))
+    return TextStyles::EffectiveFontFamily(textStyle->fontFamily);
+  if (const auto* textStyle = TextStyles::Find(st.textStyles, "Standard"))
+    return TextStyles::EffectiveFontFamily(textStyle->fontFamily);
+  return TextStyles::kDefaultFontFamily;
+}
+
+}  // namespace libredwgcad_detail
+
+namespace {
+
+std::string FromT(const Dwg_Data* dwg, BITCODE_T t);
+
+struct LegacyLeaderScaleContext {
+  double paperUnits = 0.0;
+  double drawingUnits = 0.0;
+};
+
+LegacyLeaderScaleContext ReadLegacyLeaderScaleContext(Dwg_Data* dwg) {
+  LegacyLeaderScaleContext context;
+  if (dwg == nullptr)
+    return context;
+  const char* currentScale = dwg_variable_dict(dwg, "CANNOSCALE");
+  if (currentScale == nullptr)
+    return context;
+  const std::string scaleName = FromT(dwg, reinterpret_cast<BITCODE_T>(const_cast<char*>(currentScale)));
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object* object = &dwg->object[i];
+    if (object->fixedtype != DWG_TYPE_SCALE || object->tio.object == nullptr ||
+        object->tio.object->tio.SCALE == nullptr)
+      continue;
+    const Dwg_Object_SCALE* scale = object->tio.object->tio.SCALE;
+    if (FromT(dwg, scale->name) != scaleName)
+      continue;
+    context.paperUnits = scale->paper_units;
+    context.drawingUnits = scale->drawing_units;
+    return context;
+  }
+  return context;
+}
+
+constexpr double kPi = 3.14159265358979323846;
+// Native AcCmColor CMC tags, verified against the source drawing's Civil API values.
+// LibreDWG's enum names for these two byte values are reversed.
+constexpr auto kNativeCmcByColor = static_cast<Dwg_Color_Method>(0xc2);
+constexpr auto kNativeCmcByAci = static_cast<Dwg_Color_Method>(0xc3);
+
+std::string LowerAscii(std::string s) {
+  std::transform(s.begin(), s.end(), s.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return s;
+}
+
+struct Xf2 {
+  double ox = 0, oy = 0;
+  double ang = 0;
+  double sx = 1, sy = 1;
+  void apply(double x, double y, double* oxOut, double* oyOut) const {
+    const double c = std::cos(ang);
+    const double s = std::sin(ang);
+    const double xr = x * sx;
+    const double yr = y * sy;
+    *oxOut = ox + c * xr - s * yr;
+    *oyOut = oy + s * xr + c * yr;
+  }
+  [[nodiscard]] double scaleAlong(double x, double y) const {
+    const double length = std::hypot(x, y);
+    if (!(length > 1e-12) || !std::isfinite(length))
+      return 1.0;
+    return std::hypot(sx * x, sy * y) / length;
+  }
+  [[nodiscard]] bool isIdentity() const {
+    return std::fabs(ox) < 1e-9 && std::fabs(oy) < 1e-9 && std::fabs(ang) < 1e-9 &&
+           std::fabs(sx - 1.0) < 1e-9 && std::fabs(sy - 1.0) < 1e-9;
+  }
+};
+
+// REQ-312 / GitHub issue #435: DWG equivalent of DxfOcsToWorld / DxfExtrusionIsFlat.
+[[nodiscard]] inline bool DwgExtrusionIsFlat(double nx, double ny, double nz) {
+  return nx == 0.0 && ny == 0.0 && nz == 1.0;
+}
+
+[[nodiscard]] inline bool DwgOcsToWorld(double x, double y, double z, double nx, double ny, double nz,
+                                        ray3d::Vec3* out) {
+  ucs::Ucs frame;
+  if (!ucs::FromNormal({0.0, 0.0, 0.0}, {nx, ny, nz}, &frame))
+    return false;
+  if (out)
+    *out = ucs::UcsToWorld(frame, {x, y, z});
+  return true;
+}
+
+inline void RotateExtrusionByXf(const Xf2& xf, double* nx, double* ny) {
+  if (nx == nullptr || ny == nullptr)
+    return;
+  if (std::fabs(xf.ang) < 1e-12)
+    return;
+  const double c = std::cos(xf.ang);
+  const double s = std::sin(xf.ang);
+  const double ox = *nx;
+  const double oy = *ny;
+  *nx = c * ox - s * oy;
+  *ny = s * ox + c * oy;
+}
+
+// LibreDWG keeps table/entity strings in the file's *native* encoding. For R2007+ DWGs that is
+// UTF-16LE (BITCODE_TU); casting straight to char* truncates the name at the first NUL byte
+// (issue #140). IS_FROM_TU_DWG is LibreDWG's own decode-side gate for this.
+std::string FromT(const Dwg_Data* dwg, BITCODE_T t) {
+  return libredwgcad_detail::DecodeDwgString(t, dwg != nullptr && IS_FROM_TU_DWG(dwg));
+}
+
+static std::string LayoutNameFromT(const Dwg_Data* dwg, BITCODE_T t) {
+  // LibreDWG's DXF LAYOUT reader stores layout_name as TU even though the rest of the
+  // DXF-imported text remains UTF-8. DWG_OPTS_INDXF disables IS_FROM_TU_DWG globally.
+  const bool utf16le = dwg != nullptr &&
+                       (IS_FROM_TU_DWG(dwg) || (dwg->opts & DWG_OPTS_INDXF) != 0);
+  return libredwgcad_detail::DecodeDwgString(t, utf16le);
+}
+
+std::string LayerName(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
+  if (dwg == nullptr || ent == nullptr || ent->layer == nullptr)
+    return "0";
+  Dwg_Object* o = dwg_resolve_handle_silent(dwg, ent->layer->absolute_ref);
+  if (o == nullptr || o->fixedtype != DWG_TYPE_LAYER || o->tio.object == nullptr)
+    return "0";
+  const Dwg_Object_LAYER* ly = o->tio.object->tio.LAYER;
+  if (ly == nullptr)
+    return "0";
+  const std::string n = LayoutNameFromT(dwg, ly->name);
+  return n.empty() ? std::string("0") : n;
+}
+
+std::string ColorStorage(const Dwg_Color& c) {
+  // R2004+ entity ENC: true RGB in the low 24 bits when flag 0x80 is set (common_entity_data.spec).
+  if ((c.flag & 0x80) != 0) {
+    const unsigned rgb24 = static_cast<unsigned>(c.rgb) & 0xFFFFFFu;
+    // ENC explicitly identifies these bytes as RGB. CMC palette/sentinel heuristics do not
+    // apply: pure blue, black and #000100 are ordinary true colors in this representation.
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "#%06X", rgb24);
+    return std::string(buf);
+  }
+  return libredwgcad_detail::ColorToStorage(static_cast<int>(c.index), c.method,
+                                            static_cast<unsigned>(c.rgb));
+}
+
+std::string EntityLinetypeName(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
+  if (dwg == nullptr || ent == nullptr)
+    return "ByLayer";
+  // ltype_flags: 0 ByLayer, 1 ByBlock, 2 Continuous, 3 has explicit handle.
+  if (ent->ltype_flags == 1)
+    return "ByBlock";
+  if (ent->ltype_flags != 3 || ent->ltype == nullptr)
+    return "ByLayer";
+  Dwg_Object* o = dwg_resolve_handle_silent(dwg, ent->ltype->absolute_ref);
+  if (o == nullptr || o->fixedtype != DWG_TYPE_LTYPE || o->tio.object == nullptr ||
+      o->tio.object->tio.LTYPE == nullptr)
+    return "ByLayer";
+  std::string n = FromT(dwg, o->tio.object->tio.LTYPE->name);
+  const std::string l = LowerAscii(n);
+  if (l.empty() || l == "bylayer")
+    return "ByLayer";
+  if (l == "continuous")
+    return "Continuous";
+  return n;
+}
+
+static std::string PlotStyleNameFromRef(Dwg_Data* dwg, BITCODE_H ref) {
+  if (dwg == nullptr || ref == nullptr) return "Normal";
+  const std::uint64_t handle = ref->absolute_ref;
+  BITCODE_H dictRef = dwg->header_vars.DICTIONARY_PLOTSTYLENAME;
+  Dwg_Object* dictObj = dictRef ? dwg_resolve_handle_silent(dwg, dictRef->absolute_ref) : nullptr;
+  if (dictObj == nullptr || dictObj->fixedtype != DWG_TYPE_DICTIONARYWDFLT || dictObj->tio.object == nullptr ||
+      dictObj->tio.object->tio.DICTIONARYWDFLT == nullptr) return "Normal";
+  const auto* dict = dictObj->tio.object->tio.DICTIONARYWDFLT;
+  if (dict->defaultid != nullptr && dict->defaultid->absolute_ref == handle) return "Normal";
+  for (BITCODE_BL i = 0; i < dict->numitems; ++i) {
+    if (dict->itemhandles != nullptr && dict->itemhandles[i] != nullptr &&
+        dict->itemhandles[i]->absolute_ref == handle && dict->texts != nullptr) {
+      const std::string name = FromT(dwg, dict->texts[i]);
+      return name.empty() ? "Normal" : name;
+    }
+  }
+  return "Normal";
+}
+
+// REQ-170, issue #609: DWG stores lineweight as a table index (see dxf_cvt_lweight in dwg.c);
+// GoSurvey stores millimetres on paper, or -1 for ByLayer / default.
+float LineweightMmFromDwgIndex(BITCODE_RC idx) {
+  return CadDxfLineweightMmFromEnum370(dxf_cvt_lweight(static_cast<BITCODE_BSd>(idx)));
+}
+
+BITCODE_RC LineweightDwgIndexFromMm(float mm, bool layerRow) {
+  if (mm < 0.f)
+    return layerRow ? static_cast<BITCODE_RC>(31) : static_cast<BITCODE_RC>(29);  // -3 default / -1 ByLayer
+  return static_cast<BITCODE_RC>(dxf_revcvt_lweight(CadDxfLineweightEnum370FromMm(mm)));
+}
+
+float Transparency01FromEntityColor(const Dwg_Color& c) {
+  if ((c.flag & 0x20) == 0)
+    return -1.f;
+  const BITCODE_RC alpha = c.alpha_type == 3 ? c.alpha : static_cast<BITCODE_RC>(c.alpha_raw & 0xFFu);
+  if (alpha <= 0)
+    return -1.f;
+  return static_cast<float>(alpha) / 255.f;
+}
+
+void ApplyEntityEncTransparency(Dwg_Color* color, float transparency01) {
+  if (color == nullptr || transparency01 <= 1.e-5f)
+    return;
+  const float t = std::clamp(transparency01, 0.f, 1.f);
+  const BITCODE_RC alpha = static_cast<BITCODE_RC>(static_cast<int>(t * 255.f + 0.5f));
+  if (alpha == 0)
+    return;
+  color->flag = static_cast<uint16_t>(color->flag | 0x20);
+  color->alpha_type = 3;
+  color->alpha = alpha;
+  color->alpha_raw = (static_cast<BITCODE_BL>(3) << 24) | static_cast<BITCODE_BL>(alpha);
+}
+
+EntityAttributes AttrFromEnt(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
+  EntityAttributes a{};
+  a.layer = LayerName(dwg, ent);
+  if (ent != nullptr) {
+    a.color = ColorStorage(ent->color);
+    a.plotStyleName = ent->plotstyle_flags == 3 ? PlotStyleNameFromRef(dwg, ent->plotstyle)
+                       : ent->plotstyle_flags == 1 ? "ByBlock" : "ByLayer";
+    a.linetype = EntityLinetypeName(dwg, ent);
+    a.lineweightMm = LineweightMmFromDwgIndex(ent->linewt);
+    const float tr = Transparency01FromEntityColor(ent->color);
+    if (tr >= 0.f)
+      a.transparency = tr;
+  }
+  return a;
+}
+
+void NoteSkip(std::unordered_map<std::string, int>* hist, const char* name) {
+  if (hist == nullptr || name == nullptr)
+    return;
+  ++(*hist)[name];
+}
+
+static void PushImportedMesh(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* owner,
+                             std::shared_ptr<CadMesh> mesh, EntityAttributes at) {
+  if (dwg != nullptr && owner != nullptr)
+    DwgImportApplyEntityMaterial(dwg, owner, &at);
+  st.cadMeshes.push_back(std::move(mesh));
+  st.cadMeshAttrs.push_back(at);
+}
+
+void LocalLine(AppCommandState& st, double x0, double y0, double z0, double x1, double y1, double z1,
+               const EntityAttributes& at) {
+  st.userLinesFlat.push_back(x0 - st.worldDocumentOriginX);
+  st.userLinesFlat.push_back(y0 - st.worldDocumentOriginY);
+  st.userLinesFlat.push_back(z0);
+  st.userLinesFlat.push_back(x1 - st.worldDocumentOriginX);
+  st.userLinesFlat.push_back(y1 - st.worldDocumentOriginY);
+  st.userLinesFlat.push_back(z1);
+  st.userLineAttrs.push_back(at);
+}
+
+void LocalCircle(AppCommandState& st, double cx, double cy, double r, double z, const EntityAttributes& at,
+                 double nx = 0.0, double ny = 0.0, double nz = 1.0) {
+  st.userCirclesCxCyZR.push_back(cx - st.worldDocumentOriginX);
+  st.userCirclesCxCyZR.push_back(cy - st.worldDocumentOriginY);
+  st.userCirclesCxCyZR.push_back(z);
+  st.userCirclesCxCyZR.push_back(r);
+  st.userCircleAttrs.push_back(at);
+  PushCircleNormal(st.userCircleNormals, static_cast<float>(nx), static_cast<float>(ny),
+                   static_cast<float>(nz));
+}
+
+template <class T>
+void ArcFromAngles(double a0, double a1, T* startRad, T* sweepRad) {
+  double sweep = a1 - a0;
+  if (std::fabs(sweep) < 1e-12)
+    sweep = 2.0 * kPi;
+  while (sweep < 0.0)
+    sweep += 2.0 * kPi;
+  while (sweep > 2.0 * kPi)
+    sweep -= 2.0 * kPi;
+  if (sweep < 1e-12)
+    sweep = 2.0 * kPi;
+  *startRad = static_cast<T>(a0);
+  *sweepRad = static_cast<T>(sweep);
+}
+
+void LocalArc(AppCommandState& st, double cx, double cy, double r, double a0, double a1, double z,
+              const EntityAttributes& at, double nx = 0.0, double ny = 0.0, double nz = 1.0) {
+  if (r <= 1e-12)
+    return;
+  CadArc arc{};
+  arc.cx = cx - st.worldDocumentOriginX;
+  arc.cy = cy - st.worldDocumentOriginY;
+  arc.r = r;
+  ArcFromAngles(a0, a1, &arc.startRad, &arc.sweepRad);
+  arc.z = z;
+  arc.nx = static_cast<float>(nx);
+  arc.ny = static_cast<float>(ny);
+  arc.nz = static_cast<float>(nz);
+  st.userArcs.push_back(arc);
+  st.userArcAttrs.push_back(at);
+}
+
+// REQ-316 / ADR-047: `bulge`, when given, is one entry per vertex (DXF group 42's own convention) —
+// null or shorter than `xyz`'s vertex count means every segment stays straight, matching every
+// caller that predates bulge support (POLYLINE_2D/POLYLINE_3D below have no bulge concept at all).
+void LocalPolyline(AppCommandState& st, const std::vector<double>& xyz, bool closed,
+                   const EntityAttributes& at, const std::vector<double>* bulge = nullptr) {
+  const size_t nv = xyz.size() / 3;
+  if (nv < 2)
+    return;
+  const int base = st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.back();
+  if (st.userPolylineOffsets.empty())
+    st.userPolylineOffsets.push_back(base);
+  for (size_t i = 0; i < nv; ++i) {
+    st.userPolylineVerts.push_back(xyz[i * 3 + 0] - st.worldDocumentOriginX);
+    st.userPolylineVerts.push_back(xyz[i * 3 + 1] - st.worldDocumentOriginY);
+    st.userPolylineVerts.push_back(xyz[i * 3 + 2]);
+  }
+  st.userPolylineOffsets.push_back(base + static_cast<int>(nv));
+  st.userPolylineClosed.push_back(closed ? uint8_t{1} : uint8_t{0});
+  st.userPolylineAttrs.push_back(at);
+  bool anyBulge = bulge != nullptr;
+  if (anyBulge) {
+    anyBulge = false;
+    for (size_t i = 0; i < nv && i < bulge->size(); ++i)
+      if ((*bulge)[i] != 0.0) { anyBulge = true; break; }
+  }
+  if (anyBulge || !st.userPolylineVertsBulge.empty()) {
+    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+    const size_t tail = st.userPolylineVertsBulge.size() >= nv ? st.userPolylineVertsBulge.size() - nv : 0;
+    if (bulge)
+      for (size_t i = 0; i < nv && i < bulge->size(); ++i)
+        st.userPolylineVertsBulge[tail + i] = static_cast<float>((*bulge)[i]);
+  }
+}
+
+void ImportAnnotativeVisibilityFromEntityEed(const Dwg_Object_Entity* ent, std::vector<std::string>* out);
+
+static void MergeDefaultMtextContextIntoAnnotation(const Dwg_Data* dwg, const Dwg_Object_Entity* ent,
+                                                   const Xf2& xf, AppCommandState& st,
+                                                   CadAnnotation* a) {
+  assert(dwg != nullptr && ent != nullptr && a != nullptr);
+  if (!a->annotative)
+    return;
+  const Dwg_Object* ctxObj = DwgImportResolveDefaultContextObject(dwg, ent);
+  if (ctxObj == nullptr || ctxObj->fixedtype != DWG_TYPE_MTEXTOBJECTCONTEXTDATA ||
+      ctxObj->tio.object == nullptr)
+    return;
+  const Dwg_Object_MTEXTOBJECTCONTEXTDATA* ctx = ctxObj->tio.object->tio.MTEXTOBJECTCONTEXTDATA;
+  if (ctx == nullptr)
+    return;
+  double wx = 0.0;
+  double wy = 0.0;
+  xf.apply(ctx->ins_pt.x, ctx->ins_pt.y, &wx, &wy);
+  a->insX = static_cast<float>(wx - st.worldDocumentOriginX);
+  a->insY = static_cast<float>(wy - st.worldDocumentOriginY);
+  a->insZ = static_cast<float>(ctx->ins_pt.z);
+  const double th = ctx->rect_height > 1e-9 ? ctx->rect_height : ctx->extents_height;
+  const double mup = std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6);
+  if (th > 1e-9)
+    a->plottedHeightInches = static_cast<float>(th / mup);
+  const double rot = std::atan2(ctx->x_axis_dir.y, ctx->x_axis_dir.x);
+  a->rotationRad = static_cast<float>(rot + xf.ang);
+  const double bw = std::max(ctx->rect_width, ctx->extents_width);
+  if (bw > 1e-6) {
+    a->boxMinX = a->insX;
+    a->boxMaxX = a->insX + static_cast<float>(bw);
+    a->boxMinY = a->insY - static_cast<float>(th > 1e-9 ? th : 0.18);
+    a->boxMaxY = a->insY + static_cast<float>(th > 1e-9 ? th * 0.2 : 0.18);
+  }
+  DwgImportNoteDefaultContextMerged();
+}
+
+static void MergeDefaultTextContextIntoAnnotation(const Dwg_Data* dwg, const Dwg_Object_Entity* ent,
+                                                  const Xf2& xf, AppCommandState& st, CadAnnotation* a) {
+  assert(dwg != nullptr && ent != nullptr && a != nullptr);
+  if (!a->annotative)
+    return;
+  const Dwg_Object* ctxObj = DwgImportResolveDefaultContextObject(dwg, ent);
+  if (ctxObj == nullptr || ctxObj->fixedtype != DWG_TYPE_TEXTOBJECTCONTEXTDATA ||
+      ctxObj->tio.object == nullptr)
+    return;
+  const Dwg_Object_TEXTOBJECTCONTEXTDATA* ctx = ctxObj->tio.object->tio.TEXTOBJECTCONTEXTDATA;
+  if (ctx == nullptr)
+    return;
+  double wx = 0.0;
+  double wy = 0.0;
+  xf.apply(ctx->ins_pt.x, ctx->ins_pt.y, &wx, &wy);
+  a->insX = static_cast<float>(wx - st.worldDocumentOriginX);
+  a->insY = static_cast<float>(wy - st.worldDocumentOriginY);
+  a->rotationRad = static_cast<float>(ctx->rotation + xf.ang);
+  DwgImportNoteDefaultContextMerged();
+}
+
+void LocalText(AppCommandState& st, double x, double y, double z, double height, double rotRad,
+               const std::string& text, CadAnnotation::Kind kind, const EntityAttributes& at,
+               bool annotative = false, const Dwg_Object_Entity* ownerEnt = nullptr,
+               const Dwg_Data* dwg = nullptr, const Xf2* xf = nullptr) {
+  CadAnnotation a{};
+  a.kind = kind;
+  a.insX = x - st.worldDocumentOriginX;
+  a.insY = y - st.worldDocumentOriginY;
+  a.insZ = z;
+  const double mup = std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6);
+  a.plottedHeightInches = static_cast<float>(height / mup);
+  a.rotationRad = static_cast<float>(rotRad);
+  a.text = text;
+  a.annotative = annotative;
+  if (kind == CadAnnotation::Kind::Mtext) {
+    // The renderer draws MTEXT from the top-left of its box. Without an annotation context to supply
+    // one, anchor a box at the insertion point (attachment top-left) sized to the text.
+    const double lines = 1.0 + static_cast<double>(std::count(text.begin(), text.end(), '\n'));
+    a.boxMinX = a.insX;
+    a.boxMaxY = a.insY;
+    a.boxMaxX = a.insX + static_cast<float>(0.62 * height * static_cast<double>(text.size()));
+    a.boxMinY = a.insY - static_cast<float>(1.2 * height * lines);
+  }
+  if (ownerEnt != nullptr)
+    ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &a.annotativeVisibleScaleNames);
+  st.cadAnnotations.push_back(std::move(a));
+  st.cadAnnotationAttrs.push_back(at);
+  if (ownerEnt != nullptr && dwg != nullptr && xf != nullptr) {
+    CadAnnotation* back = &st.cadAnnotations.back();
+    if (kind == CadAnnotation::Kind::Mtext)
+      MergeDefaultMtextContextIntoAnnotation(dwg, ownerEnt, *xf, st, back);
+    else if (kind == CadAnnotation::Kind::Text)
+      MergeDefaultTextContextIntoAnnotation(dwg, ownerEnt, *xf, st, back);
+  }
+}
+
+// REQ-443 / #803: preserve DWG SPLINE data as a native curve.
+static bool ImportSpline(AppCommandState& st, const Dwg_Entity_SPLINE* sp, const Xf2& xf,
+                         const EntityAttributes& at) {
+  if (sp == nullptr)
+    return false;
+  CadSpline s;
+  s.degree = sp->degree;
+  s.periodic = sp->periodic != 0 || (sp->splineflags & SPLINE_SPLINEFLAGS_CLOSED) != 0 || sp->closed_b != 0;
+  if (sp->num_knots > 0 && sp->knots != nullptr)
+    s.knots.assign(sp->knots, sp->knots + sp->num_knots);
+  if (sp->num_ctrl_pts > 0 && sp->ctrl_pts != nullptr) {
+    for (BITCODE_BL i = 0; i < sp->num_ctrl_pts; ++i) {
+      const auto& p = sp->ctrl_pts[i];
+      double x = 0.0, y = 0.0;
+      xf.apply(p.x, p.y, &x, &y);
+      s.ctrl.push_back({x - st.worldDocumentOriginX, y - st.worldDocumentOriginY, p.z});
+      if (sp->weighted || sp->rational) s.weights.push_back(p.w > 0.0 ? p.w : 1.0);
+    }
+  }
+  if (sp->num_fit_pts > 0 && sp->fit_pts != nullptr) {
+    for (BITCODE_BS i = 0; i < sp->num_fit_pts; ++i) {
+      const auto& p = sp->fit_pts[i];
+      double x = 0.0, y = 0.0;
+      xf.apply(p.x, p.y, &x, &y);
+      s.fit.push_back({x - st.worldDocumentOriginX, y - st.worldDocumentOriginY, p.z});
+    }
+  }
+  if (!spline::Validate(s).empty()) return false;
+  st.cadSplines.push_back(std::move(s));
+  st.cadSplineAttrs.push_back(at);
+  return true;
+}
+
+static void EllipseParamPoint(const Dwg_Entity_ELLIPSE* e, double t, double* outX, double* outY,
+                              double* outZ) {
+  const double mx = e->sm_axis.x;
+  const double my = e->sm_axis.y;
+  const double mlen = std::hypot(mx, my);
+  if (mlen < 1.e-12) {
+    *outX = e->center.x;
+    *outY = e->center.y;
+    *outZ = e->center.z;
+    return;
+  }
+  const double minX = -my / mlen * mlen * e->axis_ratio;
+  const double minY = mx / mlen * mlen * e->axis_ratio;
+  *outX = e->center.x + std::cos(t) * mx + std::sin(t) * minX;
+  *outY = e->center.y + std::cos(t) * my + std::sin(t) * minY;
+  *outZ = e->center.z;
+}
+
+// REQ-170, issue #613: partial elliptical arcs become an open polyline approximation.
+static bool ImportTrimmedEllipseAsPolyline(AppCommandState& st, const Dwg_Entity_ELLIPSE* e, const Xf2& xf,
+                                           const EntityAttributes& at) {
+  if (e == nullptr)
+    return false;
+  double a0 = e->start_angle;
+  double a1 = e->end_angle;
+  while (a1 < a0)
+    a1 += 2.0 * kPi;
+  double span = a1 - a0;
+  while (span > 2.0 * kPi)
+    span -= 2.0 * kPi;
+  if (span < 1.e-9)
+    return false;
+  const int nseg = std::max(8, static_cast<int>(std::ceil(span / (kPi / 12.0))));
+  std::vector<double> xyz;
+  xyz.reserve(static_cast<size_t>(nseg + 1) * 3);
+  for (int i = 0; i <= nseg; ++i) {
+    const double t = a0 + span * (static_cast<double>(i) / static_cast<double>(nseg));
+    double px = 0.0, py = 0.0, pz = 0.0;
+    EllipseParamPoint(e, t, &px, &py, &pz);
+    double wx = 0.0, wy = 0.0;
+    xf.apply(px, py, &wx, &wy);
+    xyz.push_back(wx);
+    xyz.push_back(wy);
+    xyz.push_back(pz);
+  }
+  if (xyz.size() < 6)
+    return false;
+  LocalPolyline(st, xyz, false, at);
+  return true;
+}
+
+static bool CornersEqual2d(const BITCODE_2RD& a, const BITCODE_2RD& b) {
+  return std::fabs(a.x - b.x) < 1.e-9 && std::fabs(a.y - b.y) < 1.e-9;
+}
+
+// REQ-170, issue #613: 2D SOLID / TRACE → solid filled region (ADR-011).
+static bool Import2DSolidOrTrace(AppCommandState& st, const BITCODE_2RD& c1, const BITCODE_2RD& c2,
+                                 const BITCODE_2RD& c3, const BITCODE_2RD& c4, double elev, const Xf2& xf,
+                                 const EntityAttributes& at) {
+  CadFilledRegion region;
+  region.loopStart.push_back(0);
+  auto pushCorner = [&](const BITCODE_2RD& c) {
+    double wx = 0.0, wy = 0.0;
+    xf.apply(c.x, c.y, &wx, &wy);
+    region.vertsXyz.push_back(wx - st.worldDocumentOriginX);
+    region.vertsXyz.push_back(wy - st.worldDocumentOriginY);
+    region.vertsXyz.push_back(elev);
+  };
+  pushCorner(c1);
+  pushCorner(c2);
+  pushCorner(c3);
+  if (!CornersEqual2d(c3, c4))
+    pushCorner(c4);
+  if (region.vertsXyz.size() < 9)
+    return false;
+  region.patternName.clear();
+  st.cadFilledRegions.push_back(std::move(region));
+  st.cadFilledRegionAttrs.push_back(at);
+  return true;
+}
+
+static bool Import3DFaceAsMesh(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* owner,
+                               const Dwg_Entity__3DFACE* f, const Xf2& xf, const EntityAttributes& at) {
+  if (f == nullptr)
+    return false;
+  auto same3d = [](const BITCODE_3BD& a, const BITCODE_3BD& b) {
+    return std::fabs(a.x - b.x) < 1.e-9 && std::fabs(a.y - b.y) < 1.e-9 && std::fabs(a.z - b.z) < 1.e-9;
+  };
+  const bool triangle = same3d(f->corner3, f->corner4);
+  auto mesh = std::make_shared<CadMesh>();
+  mesh->sourceName = "DWG 3DFACE";
+  auto addVert = [&](const BITCODE_3BD& p) {
+    double wx = 0.0, wy = 0.0;
+    xf.apply(p.x, p.y, &wx, &wy);
+    mesh->vertsXyz.push_back(static_cast<float>(wx - st.worldDocumentOriginX));
+    mesh->vertsXyz.push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+    mesh->vertsXyz.push_back(static_cast<float>(p.z));
+    mesh->normalsXyz.push_back(0.f);
+    mesh->normalsXyz.push_back(0.f);
+    mesh->normalsXyz.push_back(1.f);
+  };
+  addVert(f->corner1);
+  addVert(f->corner2);
+  addVert(f->corner3);
+  if (!triangle)
+    addVert(f->corner4);
+  if (triangle) {
+    mesh->indices = {0, 1, 2};
+  } else {
+    mesh->indices = {0, 1, 2, 0, 2, 3};
+  }
+  CadMeshPart part;
+  part.name = "3DFACE";
+  part.indexBegin = 0;
+  part.indexCount = static_cast<int>(mesh->indices.size());
+  mesh->parts.push_back(part);
+  PushImportedMesh(st, dwg, owner, std::move(mesh), at);
+  return true;
+}
+
+static bool ImportPolylineMesh(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj,
+                               const Dwg_Entity_POLYLINE_MESH* pm, const Xf2& xf,
+                               const EntityAttributes& at) {
+  if (dwg == nullptr || obj == nullptr || pm == nullptr)
+    return false;
+  const int m = static_cast<int>(pm->num_m_verts);
+  const int n = static_cast<int>(pm->num_n_verts);
+  if (m < 2 || n < 2)
+    return false;
+  std::vector<dwg_point_3d> grid;
+  grid.reserve(static_cast<size_t>(m * n));
+  auto appendVertex = [&](Dwg_Object* v) {
+    if (v == nullptr || v->fixedtype != DWG_TYPE_VERTEX_MESH || v->tio.entity == nullptr ||
+        v->tio.entity->tio.VERTEX_MESH == nullptr)
+      return;
+    const Dwg_Entity_VERTEX_3D* p = v->tio.entity->tio.VERTEX_MESH;
+    grid.push_back({p->point.x, p->point.y, p->point.z});
+  };
+  if (pm->num_owned > 0 && pm->vertex != nullptr) {
+    for (BITCODE_BL i = 0; i < pm->num_owned; ++i) {
+      Dwg_Object* v = pm->vertex[i] != nullptr ? pm->vertex[i]->obj : nullptr;
+      if (v == nullptr && pm->vertex[i] != nullptr)
+        v = dwg_resolve_handle_silent(dwg, pm->vertex[i]->absolute_ref);
+      appendVertex(v);
+    }
+  } else {
+    for (Dwg_Object* v = get_first_owned_entity(obj); v != nullptr; v = get_next_owned_entity(obj, v))
+      appendVertex(v);
+  }
+  if (static_cast<int>(grid.size()) < m * n && pm->first_vertex != nullptr) {
+    grid.clear();
+    Dwg_Object* v = pm->first_vertex->obj;
+    if (v == nullptr)
+      v = dwg_resolve_handle_silent(dwg, pm->first_vertex->absolute_ref);
+    for (int guard = 0; v != nullptr && guard < m * n + 8; ++guard) {
+      if (v->fixedtype == DWG_TYPE_SEQEND)
+        break;
+      appendVertex(v);
+      Dwg_Object_Entity* entVtx = v->tio.entity;
+      if (entVtx == nullptr || entVtx->next_entity == nullptr)
+        break;
+      v = entVtx->next_entity->obj;
+      if (v == nullptr)
+        v = dwg_resolve_handle_silent(dwg, entVtx->next_entity->absolute_ref);
+    }
+  }
+  if (static_cast<int>(grid.size()) < m * n)
+    return false;
+  auto mesh = std::make_shared<CadMesh>();
+  mesh->sourceName = "DWG POLYLINE_MESH";
+  for (const dwg_point_3d& p : grid) {
+    double wx = 0.0, wy = 0.0;
+    xf.apply(p.x, p.y, &wx, &wy);
+    mesh->vertsXyz.push_back(static_cast<float>(wx - st.worldDocumentOriginX));
+    mesh->vertsXyz.push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+    mesh->vertsXyz.push_back(static_cast<float>(p.z));
+    mesh->normalsXyz.push_back(0.f);
+    mesh->normalsXyz.push_back(0.f);
+    mesh->normalsXyz.push_back(1.f);
+  }
+  auto idx = [&](int mi, int ni) { return static_cast<std::uint32_t>(mi * n + ni); };
+  for (int mi = 0; mi + 1 < m; ++mi) {
+    for (int ni = 0; ni + 1 < n; ++ni) {
+      const std::uint32_t a = idx(mi, ni);
+      const std::uint32_t b = idx(mi + 1, ni);
+      const std::uint32_t c = idx(mi, ni + 1);
+      const std::uint32_t d = idx(mi + 1, ni + 1);
+      mesh->indices.push_back(a);
+      mesh->indices.push_back(b);
+      mesh->indices.push_back(c);
+      mesh->indices.push_back(b);
+      mesh->indices.push_back(d);
+      mesh->indices.push_back(c);
+    }
+  }
+  CadMeshPart part;
+  part.name = "Mesh";
+  part.indexBegin = 0;
+  part.indexCount = static_cast<int>(mesh->indices.size());
+  mesh->parts.push_back(part);
+  PushImportedMesh(st, dwg, obj != nullptr ? obj->tio.entity : nullptr, std::move(mesh), at);
+  return true;
+}
+
+static int PfaceVertexIndex(BITCODE_BSd raw) {
+  if (raw == 0)
+    return -1;
+  const int idx = static_cast<int>(raw);
+  if (idx < 0)
+    return -idx - 1;
+  return idx - 1;
+}
+
+static bool ImportPolylinePFace(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj,
+                                const Dwg_Entity_POLYLINE_PFACE* pf, const Xf2& xf,
+                                const EntityAttributes& at) {
+  if (dwg == nullptr || obj == nullptr || pf == nullptr)
+    return false;
+  int nv = static_cast<int>(pf->numverts);
+  int nf = static_cast<int>(pf->numfaces);
+  std::vector<dwg_point_3d> positions;
+  std::vector<Dwg_Entity_VERTEX_PFACE_FACE*> faces;
+  positions.reserve(static_cast<size_t>(nv));
+  faces.reserve(static_cast<size_t>(nf));
+  auto inspectVertexObject = [&](Dwg_Object* v) {
+    if (v == nullptr || v->tio.entity == nullptr)
+      return;
+    if (v->fixedtype == DWG_TYPE_VERTEX_PFACE && v->tio.entity->tio.VERTEX_PFACE != nullptr) {
+      const Dwg_Entity_VERTEX_3D* p = v->tio.entity->tio.VERTEX_PFACE;
+      positions.push_back({p->point.x, p->point.y, p->point.z});
+    } else if (v->fixedtype == DWG_TYPE_VERTEX_PFACE_FACE &&
+               v->tio.entity->tio.VERTEX_PFACE_FACE != nullptr) {
+      faces.push_back(v->tio.entity->tio.VERTEX_PFACE_FACE);
+    }
+  };
+  if (pf->num_owned > 0 && pf->vertex != nullptr) {
+    for (BITCODE_BL i = 0; i < pf->num_owned; ++i) {
+      Dwg_Object* v = pf->vertex[i] != nullptr ? pf->vertex[i]->obj : nullptr;
+      if (v == nullptr && pf->vertex[i] != nullptr)
+        v = dwg_resolve_handle_silent(dwg, pf->vertex[i]->absolute_ref);
+      inspectVertexObject(v);
+    }
+  } else {
+    for (Dwg_Object* v = get_first_owned_entity(obj); v != nullptr; v = get_next_owned_entity(obj, v))
+      inspectVertexObject(v);
+  }
+  if ((static_cast<int>(positions.size()) < nv || static_cast<int>(faces.size()) < nf) &&
+      pf->first_vertex != nullptr) {
+    positions.clear();
+    faces.clear();
+    Dwg_Object* v = pf->first_vertex->obj;
+    if (v == nullptr)
+      v = dwg_resolve_handle_silent(dwg, pf->first_vertex->absolute_ref);
+    for (int guard = 0; v != nullptr && guard < nv + nf + 8; ++guard) {
+      if (v->fixedtype == DWG_TYPE_SEQEND)
+        break;
+      inspectVertexObject(v);
+      Dwg_Object_Entity* entVtx = v->tio.entity;
+      if (entVtx == nullptr || entVtx->next_entity == nullptr)
+        break;
+      v = entVtx->next_entity->obj;
+      if (v == nullptr)
+        v = dwg_resolve_handle_silent(dwg, entVtx->next_entity->absolute_ref);
+    }
+  }
+  if (static_cast<int>(positions.size()) < 3 || static_cast<int>(faces.size()) < 1) {
+    positions.clear();
+    faces.clear();
+    const BITCODE_RLL owner = obj->handle.value;
+    for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+      Dwg_Object* v = &dwg->object[i];
+      if (v->supertype != DWG_SUPERTYPE_ENTITY || v->tio.entity == nullptr ||
+          v->tio.entity->ownerhandle == nullptr)
+        continue;
+      if (v->tio.entity->ownerhandle->absolute_ref != owner)
+        continue;
+      inspectVertexObject(v);
+    }
+  }
+  if (static_cast<int>(positions.size()) < 3)
+    return false;
+  if (nv <= 0 || nv > static_cast<int>(positions.size()))
+    nv = static_cast<int>(positions.size());
+  else
+    positions.resize(static_cast<size_t>(nv));
+  if (static_cast<int>(faces.size()) < 1)
+    return false;
+  if (nf <= 0 || nf > static_cast<int>(faces.size()))
+    nf = static_cast<int>(faces.size());
+  auto mesh = std::make_shared<CadMesh>();
+  mesh->sourceName = "DWG POLYLINE_PFACE";
+  for (const dwg_point_3d& p : positions) {
+    double wx = 0.0, wy = 0.0;
+    xf.apply(p.x, p.y, &wx, &wy);
+    mesh->vertsXyz.push_back(static_cast<float>(wx - st.worldDocumentOriginX));
+    mesh->vertsXyz.push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+    mesh->vertsXyz.push_back(static_cast<float>(p.z));
+    mesh->normalsXyz.push_back(0.f);
+    mesh->normalsXyz.push_back(0.f);
+    mesh->normalsXyz.push_back(1.f);
+  }
+  auto addTri = [&](int i0, int i1, int i2) {
+    if (i0 < 0 || i1 < 0 || i2 < 0 || i0 >= nv || i1 >= nv || i2 >= nv)
+      return;
+    mesh->indices.push_back(static_cast<std::uint32_t>(i0));
+    mesh->indices.push_back(static_cast<std::uint32_t>(i1));
+    mesh->indices.push_back(static_cast<std::uint32_t>(i2));
+  };
+  for (int fi = 0; fi < nf; ++fi) {
+    const Dwg_Entity_VERTEX_PFACE_FACE* f = faces[static_cast<size_t>(fi)];
+    if (f == nullptr)
+      continue;
+    const int i0 = PfaceVertexIndex(f->vertind[0]);
+    const int i1 = PfaceVertexIndex(f->vertind[1]);
+    const int i2 = PfaceVertexIndex(f->vertind[2]);
+    const int i3 = PfaceVertexIndex(f->vertind[3]);
+    if (i3 < 0)
+      addTri(i0, i1, i2);
+    else {
+      addTri(i0, i1, i2);
+      addTri(i0, i2, i3);
+    }
+  }
+  if (mesh->indices.empty())
+    return false;
+  CadMeshPart part;
+  part.name = "PFace";
+  part.indexBegin = 0;
+  part.indexCount = static_cast<int>(mesh->indices.size());
+  mesh->parts.push_back(part);
+  PushImportedMesh(st, dwg, obj != nullptr ? obj->tio.entity : nullptr, std::move(mesh), at);
+  return true;
+}
+
+static void AppendLocalPathPoint(CadMultileader& m, const AppCommandState& st, double wx, double wy,
+                                 double z) {
+  m.pathXyz.push_back(static_cast<float>(wx - st.worldDocumentOriginX));
+  m.pathXyz.push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+  m.pathXyz.push_back(static_cast<float>(z));
+}
+
+[[nodiscard]] bool ImportEedMarksAnnotative(const Dwg_Data* dwg, const Dwg_Object_Entity* ent);
+
+static void SetMultileaderLabelBounds(CadMultileader& m) {
+  const CadAnnotation& label = m.label;
+  const double width = m.labelWidthWorld;
+  const double height = m.labelHeightWorld;
+  const int attachment = std::clamp(label.mtextAttach, 1, 9) - 1;
+  const int column = attachment % 3;
+  const int row = attachment / 3;
+  const double left = column == 0 ? 0.0 : column == 1 ? -width * 0.5 : -width;
+  const double right = left + width;
+  const double bottom = row == 0 ? -height : row == 1 ? -height * 0.5 : 0.0;
+  const double top = bottom + height;
+  const double c = std::cos(label.rotationRad);
+  const double s = std::sin(label.rotationRad);
+  const double xs[] = {left, right, right, left};
+  const double ys[] = {bottom, bottom, top, top};
+  double minX = std::numeric_limits<double>::infinity();
+  double minY = std::numeric_limits<double>::infinity();
+  double maxX = -std::numeric_limits<double>::infinity();
+  double maxY = -std::numeric_limits<double>::infinity();
+  for (int i = 0; i < 4; ++i) {
+    const double x = label.insX + c * xs[i] - s * ys[i];
+    const double y = label.insY + s * xs[i] + c * ys[i];
+    minX = std::min(minX, x);
+    minY = std::min(minY, y);
+    maxX = std::max(maxX, x);
+    maxY = std::max(maxY, y);
+  }
+  m.label.boxMinX = static_cast<float>(minX);
+  m.label.boxMinY = static_cast<float>(minY);
+  m.label.boxMaxX = static_cast<float>(maxX);
+  m.label.boxMaxY = static_cast<float>(maxY);
+}
+
+static std::string ImportTextStyleFontFamily(Dwg_Data* dwg, BITCODE_H styleRef) {
+  if (dwg == nullptr || styleRef == nullptr || styleRef->absolute_ref == 0)
+    return {};
+  Dwg_Object* styleObj = dwg_resolve_handle_silent(dwg, styleRef->absolute_ref);
+  if (styleObj == nullptr || styleObj->fixedtype != DWG_TYPE_STYLE || styleObj->tio.object == nullptr ||
+      styleObj->tio.object->tio.STYLE == nullptr)
+    return {};
+  return FromT(dwg, styleObj->tio.object->tio.STYLE->font_file);
+}
+
+static double LeaderArrowSizeWorld(Dwg_Data* dwg, const Dwg_Entity_LEADER* leader,
+                                   const LegacyLeaderScaleContext& scaleContext) {
+  if (dwg == nullptr || leader == nullptr)
+    return 0.18;
+  const Dwg_Object_DIMSTYLE* dimStyle = nullptr;
+  if (leader->dimstyle != nullptr && leader->dimstyle->absolute_ref != 0) {
+    Dwg_Object* styleObject = dwg_resolve_handle_silent(dwg, leader->dimstyle->absolute_ref);
+    if (styleObject != nullptr && styleObject->fixedtype == DWG_TYPE_DIMSTYLE &&
+        styleObject->tio.object != nullptr && styleObject->tio.object->tio.DIMSTYLE != nullptr)
+      dimStyle = styleObject->tio.object->tio.DIMSTYLE;
+  }
+  const double dimScale = libredwgcad_detail::LegacyLeaderEffectiveDimScale(
+      dimStyle != nullptr ? dimStyle->DIMSCALE : 0.0, dwg->header_vars.DIMSCALE,
+      scaleContext.paperUnits, scaleContext.drawingUnits);
+  auto scaleArrow = [dimScale, &scaleContext](double arrow) {
+    if (!(dimScale > 0.0))
+      return arrow;
+    const double factor = libredwgcad_detail::LegacyLeaderScaleFactor(
+        dimScale, scaleContext.paperUnits, scaleContext.drawingUnits);
+    return arrow * factor;
+  };
+  if (leader->dimasz > 1e-9)
+    return scaleArrow(leader->dimasz);
+  if (dimStyle != nullptr && dimStyle->DIMASZ > 1e-9)
+    return scaleArrow(dimStyle->DIMASZ);
+  return scaleArrow(dwg->header_vars.DIMASZ > 1e-9 ? dwg->header_vars.DIMASZ : 0.18);
+}
+
+struct SavedModelViewport {
+  double centerX = 0.0;
+  double centerY = 0.0;
+  double height = 0.0;
+  double twistRadians = 0.0;
+  double targetX = 0.0;
+  double targetY = 0.0;
+  double targetZ = 0.0;
+  double directionX = 0.0;
+  double directionY = 0.0;
+  double directionZ = 1.0;
+};
+
+static bool ReadSavedModelViewport(Dwg_Data* dwg, SavedModelViewport* out) {
+  if (dwg == nullptr || out == nullptr)
+    return false;
+  const BITCODE_H ref = dwg_find_tablehandle(dwg, "*Active", "VPORT");
+  if (ref == nullptr || ref->absolute_ref == 0)
+    return false;
+  Dwg_Object* obj = dwg_resolve_handle_silent(dwg, ref->absolute_ref);
+  if (obj == nullptr || obj->fixedtype != DWG_TYPE_VPORT || obj->tio.object == nullptr ||
+      obj->tio.object->tio.VPORT == nullptr)
+    return false;
+  const Dwg_Object_VPORT& viewport = *obj->tio.object->tio.VPORT;
+  if (!(viewport.VIEWSIZE > 0.0) || !std::isfinite(viewport.VIEWSIZE) ||
+      !std::isfinite(viewport.VIEWCTR.x) || !std::isfinite(viewport.VIEWCTR.y) ||
+      !std::isfinite(viewport.VIEWTWIST) || !std::isfinite(viewport.view_target.x) ||
+      !std::isfinite(viewport.view_target.y) || !std::isfinite(viewport.view_target.z) ||
+      !std::isfinite(viewport.VIEWDIR.x) || !std::isfinite(viewport.VIEWDIR.y) ||
+      !std::isfinite(viewport.VIEWDIR.z))
+    return false;
+  out->centerX = viewport.VIEWCTR.x;
+  out->centerY = viewport.VIEWCTR.y;
+  out->height = viewport.VIEWSIZE;
+  out->twistRadians = viewport.VIEWTWIST;
+  out->targetX = viewport.view_target.x;
+  out->targetY = viewport.view_target.y;
+  out->targetZ = viewport.view_target.z;
+  out->directionX = viewport.VIEWDIR.x;
+  out->directionY = viewport.VIEWDIR.y;
+  out->directionZ = viewport.VIEWDIR.z;
+  return true;
+}
+
+static bool ApplySavedModelViewport(AppCommandState& st, const SavedModelViewport& saved) {
+  const double directionLength = std::sqrt(saved.directionX * saved.directionX +
+                                           saved.directionY * saved.directionY +
+                                           saved.directionZ * saved.directionZ);
+  if (!(directionLength > 1e-12) || !std::isfinite(directionLength))
+    return false;
+  const double nx = saved.directionX / directionLength;
+  const double ny = saved.directionY / directionLength;
+  const double nz = saved.directionZ / directionLength;
+  const double elevation = std::asin(std::clamp(nz, -1.0, 1.0));
+  const double horizontal = std::hypot(nx, ny);
+  const double azimuth = horizontal > 1e-12 ? std::atan2(-nx, -ny) : 0.0;
+  const double degrees = 180.0 / kPi;
+  Camera camera = Camera::Plan(saved.targetX, saved.targetY,
+                               static_cast<float>(saved.height * 0.5));
+  camera.targetZ = saved.targetZ;
+  camera.azimuthDeg = static_cast<float>(azimuth * degrees);
+  camera.elevationDeg = static_cast<float>(elevation * degrees);
+  // AutoCAD's VIEWTWIST rotates the view coordinate system; the camera roll rotates the
+  // camera basis. Their signs are opposite (the VPORT *Active MESSER record is 270 degrees).
+  camera.rollDeg = static_cast<float>(std::remainder(-saved.twistRadians * degrees, 360.0));
+  const ray3d::Vec3 right = camera.RightWorld();
+  const ray3d::Vec3 up = camera.UpWorld();
+  st.viewportPanX = saved.targetX + right.x * saved.centerX + up.x * saved.centerY -
+                    st.worldDocumentOriginX;
+  st.viewportPanY = saved.targetY + right.y * saved.centerX + up.y * saved.centerY -
+                    st.worldDocumentOriginY;
+  st.viewportPanZ = saved.targetZ + right.z * saved.centerX + up.z * saved.centerY;
+  st.viewportZoom = static_cast<float>(100.0 / saved.height);
+  st.viewportAzimuthDeg = camera.azimuthDeg;
+  st.viewportElevationDeg = camera.elevationDeg;
+  st.viewportRollDeg = camera.rollDeg;
+  return std::isfinite(st.viewportPanX) && std::isfinite(st.viewportPanY) &&
+         std::isfinite(st.viewportPanZ) && std::isfinite(st.viewportZoom) && st.viewportZoom > 0.0f;
+}
+
+static bool ImportLeaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_LEADER* ld, const Xf2& xf,
+                               const EntityAttributes& at, const LegacyLeaderScaleContext& scaleContext) {
+  if (ld == nullptr || ld->num_points < 2 || ld->points == nullptr)
+    return false;
+  Dwg_Object* ann = nullptr;
+  if (ld->associated_annotation != nullptr) {
+    ann = ld->associated_annotation->obj;
+    if (ann == nullptr)
+      ann = dwg_resolve_handle_silent(dwg, ld->associated_annotation->absolute_ref);
+  }
+  const Dwg_Entity_MTEXT* mt =
+      (ann != nullptr && ann->fixedtype == DWG_TYPE_MTEXT && ann->tio.entity != nullptr)
+          ? ann->tio.entity->tio.MTEXT
+          : nullptr;
+  if (mt != nullptr) {
+    CadMultileader m{};
+    for (BITCODE_BL i = 0; i < ld->num_points; ++i) {
+      double wx = 0.0, wy = 0.0;
+      xf.apply(ld->points[i].x, ld->points[i].y, &wx, &wy);
+      AppendLocalPathPoint(m, st, wx, wy, ld->points[i].z);
+    }
+    double x = 0.0, y = 0.0;
+    xf.apply(mt->ins_pt.x, mt->ins_pt.y, &x, &y);
+    CadAnnotation& an = m.label;
+    an.kind = CadAnnotation::Kind::Mtext;
+    an.mtextAttach = mt->attachment >= 1 && mt->attachment <= 9 ? mt->attachment : 1;
+    an.insX = static_cast<float>(x - st.worldDocumentOriginX);
+    an.insY = static_cast<float>(y - st.worldDocumentOriginY);
+    an.insZ = static_cast<float>(mt->ins_pt.z);
+    an.plottedHeightInches =
+        static_cast<float>(static_cast<double>(mt->text_height) /
+                           std::max(1e-9, static_cast<double>(st.modelUnitsPerPlottedInch)));
+    an.text = FromT(dwg, mt->text);
+    an.fontFamily = ImportTextStyleFontFamily(dwg, mt->style);
+    const double leaderDx = ld->points[1].x - ld->points[0].x;
+    const double leaderDy = ld->points[1].y - ld->points[0].y;
+    m.arrowSizeWorld = static_cast<float>(
+        LeaderArrowSizeWorld(dwg, ld, scaleContext) * xf.scaleAlong(leaderDx, leaderDy));
+    // The path is stored from arrow tip to the text-side landing. AutoCAD draws the hookline
+    // outward from that landing, so its outer endpoint must precede the original landing in this
+    // path order. See Autodesk's LEADER DXF groups 74/75/211 and DIMASZ behavior.
+    if (ld->hookline_on != 0 && m.arrowSizeWorld > 0.0f && m.pathXyz.size() >= 3) {
+      double originX = 0.0, originY = 0.0, directionX = 0.0, directionY = 0.0;
+      xf.apply(0.0, 0.0, &originX, &originY);
+      xf.apply(ld->x_direction.x, ld->x_direction.y, &directionX, &directionY);
+      directionX -= originX;
+      directionY -= originY;
+      const double directionLength = std::hypot(directionX, directionY);
+      if (directionLength > 1e-9) {
+        const int attachmentColumn = (m.label.mtextAttach - 1) % 3;
+        const double outsideTextDirection = attachmentColumn == 0 ? -1.0 : 1.0;
+        const double direction = outsideTextDirection * (ld->hookline_dir != 0 ? 1.0 : -1.0);
+        const size_t last = m.pathXyz.size() - 3;
+        m.pathXyz.insert(
+            m.pathXyz.begin() + static_cast<std::vector<float>::difference_type>(last),
+            {static_cast<float>(m.pathXyz[last] +
+                                direction * directionX / directionLength * m.arrowSizeWorld),
+             static_cast<float>(m.pathXyz[last + 1] +
+                                direction * directionY / directionLength * m.arrowSizeWorld),
+             m.pathXyz[last + 2]});
+      }
+    }
+    const double width = std::max({static_cast<double>(mt->rect_width), static_cast<double>(mt->extents_width),
+                                   static_cast<double>(mt->text_height) * 4.0});
+    // AutoCAD's MTEXT entity extents are a cache and can include the rotated viewport/context
+    // bounds (MESSER LRP 31 reports 6.917 world units for a one-line, 1-unit-high label). The
+    // glyph size is the entity text height; using extents here turns that label into one character
+    // per line when Qt lays it out at the DWG width.
+    const double height = static_cast<double>(mt->text_height);
+    const double widthScale = std::hypot(xf.sx * mt->x_axis_dir.x, xf.sy * mt->x_axis_dir.y);
+    const double heightScale = std::hypot(xf.sx * -mt->x_axis_dir.y, xf.sy * mt->x_axis_dir.x);
+    m.labelWidthWorld = static_cast<float>(width * widthScale);
+    m.labelHeightWorld = static_cast<float>(height * heightScale);
+    double dirX0 = 0.0, dirY0 = 0.0, dirX1 = 0.0, dirY1 = 0.0;
+    xf.apply(0.0, 0.0, &dirX0, &dirY0);
+    xf.apply(mt->x_axis_dir.x, mt->x_axis_dir.y, &dirX1, &dirY1);
+    an.rotationRad = static_cast<float>(std::atan2(dirY1 - dirY0, dirX1 - dirX0));
+    m.annotative = ImportEedMarksAnnotative(dwg, ann->tio.entity) ||
+                   (dwg->header.version >= R_2018 && mt->is_not_annotative == 0);
+    ImportAnnotativeVisibilityFromEntityEed(ld->parent, &m.annotativeVisibleScaleNames);
+    ImportAnnotativeVisibilityFromEntityEed(ann->tio.entity, &m.annotativeVisibleScaleNames);
+    DwgImportAnnotativeScaleNames(dwg, ld->parent, &m.annotativeVisibleScaleNames);
+    DwgImportAnnotativeScaleNames(dwg, ann->tio.entity, &m.annotativeVisibleScaleNames);
+    SetMultileaderLabelBounds(m);
+    st.cadMultileaders.push_back(std::move(m));
+    st.cadMultileaderAttrs.push_back(at);
+    return true;
+  }
+  std::vector<double> xyz;
+  xyz.reserve(static_cast<size_t>(ld->num_points) * 3);
+  for (BITCODE_BL i = 0; i < ld->num_points; ++i) {
+    double wx = 0.0, wy = 0.0;
+    xf.apply(ld->points[i].x, ld->points[i].y, &wx, &wy);
+    xyz.push_back(wx);
+    xyz.push_back(wy);
+    xyz.push_back(ld->points[i].z);
+  }
+  LocalPolyline(st, xyz, false, at);
+  return true;
+}
+
+[[nodiscard]] bool ImportEedMarksAnnotative(const Dwg_Data* dwg, const Dwg_Object_Entity* ent);
+
+static std::string MleaderStyleNameFromObject(Dwg_Data* dwg, const Dwg_Object* styleObject) {
+  if (dwg == nullptr || styleObject == nullptr || styleObject->fixedtype != DWG_TYPE_MLEADERSTYLE)
+    return "Standard";
+  BITCODE_H dictRef = dwg_find_dictionary(dwg, "ACAD_MLEADERSTYLE");
+  Dwg_Object* dictObject = dictRef != nullptr ? dwg_resolve_handle_silent(dwg, dictRef->absolute_ref) : nullptr;
+  if (dictObject == nullptr || dictObject->fixedtype != DWG_TYPE_DICTIONARY || dictObject->tio.object == nullptr ||
+      dictObject->tio.object->tio.DICTIONARY == nullptr)
+    return "Standard";
+  const Dwg_Object_DICTIONARY* dict = dictObject->tio.object->tio.DICTIONARY;
+  for (BITCODE_BL i = 0; i < dict->numitems; ++i) {
+    if (dict->itemhandles != nullptr && dict->itemhandles[i] != nullptr &&
+        dict->itemhandles[i]->absolute_ref == styleObject->handle.value && dict->texts != nullptr) {
+      const std::string name = FromT(dwg, dict->texts[i]);
+      return name.empty() ? "Standard" : name;
+    }
+  }
+  return "Standard";
+}
+
+static std::string MleaderStyleNameFromRecord(Dwg_Data* dwg, const Dwg_Object* styleObject,
+                                            const Dwg_Object_MLEADERSTYLE* record) {
+  const std::string fromDict = MleaderStyleNameFromObject(dwg, styleObject);
+  if (!fromDict.empty() && fromDict != "Standard")
+    return fromDict;
+  if (record != nullptr) {
+    const std::string description = FromT(dwg, record->description);
+    if (!description.empty())
+      return description;
+  }
+  return fromDict;
+}
+
+static std::string ActiveMleaderStyleName(Dwg_Data* dwg,
+                                          const std::map<std::uint64_t, std::string>& namesByHandle) {
+  if (dwg == nullptr)
+    return {};
+  BITCODE_H dictRef = dwg_find_dictionary(dwg, "ACAD_MLEADERSTYLE");
+  Dwg_Object* dictObject = dictRef != nullptr ? dwg_resolve_handle_silent(dwg, dictRef->absolute_ref) : nullptr;
+  if (dictObject == nullptr || dictObject->tio.object == nullptr ||
+      dictObject->fixedtype != DWG_TYPE_DICTIONARYWDFLT || dictObject->tio.object->tio.DICTIONARYWDFLT == nullptr)
+    return {};
+  const BITCODE_H defaultRef = dictObject->tio.object->tio.DICTIONARYWDFLT->defaultid;
+  if (defaultRef == nullptr)
+    return {};
+  const std::uint64_t activeRef = defaultRef->absolute_ref;
+  if (const auto it = namesByHandle.find(activeRef); it != namesByHandle.end())
+    return it->second;
+  Dwg_Object* styleObject = dwg_resolve_handle_silent(dwg, activeRef);
+  if (styleObject == nullptr || styleObject->fixedtype != DWG_TYPE_MLEADERSTYLE || styleObject->tio.object == nullptr ||
+      styleObject->tio.object->tio.MLEADERSTYLE == nullptr)
+    return {};
+  return MleaderStyleNameFromRecord(dwg, styleObject, styleObject->tio.object->tio.MLEADERSTYLE);
+}
+
+static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_MULTILEADER* ml,
+                                    const Xf2& xf, const EntityAttributes& at,
+                                    const Dwg_Object_Entity* ownerEnt) {
+  if (ml == nullptr || dwg == nullptr)
+    return false;
+  if (ml->ctx.has_content_blk && !ml->ctx.has_content_txt)
+    return false;
+  if (!ml->ctx.has_content_txt)
+    return false;
+  if (ml->ctx.num_leaders < 1 || ml->ctx.leaders == nullptr)
+    return false;
+  const Dwg_LEADER_Node& node = ml->ctx.leaders[0];
+  if (node.num_lines < 1 || node.lines == nullptr || node.lines[0].num_points < 1 ||
+      (node.lines[0].num_points < 2 && !node.has_lastleaderlinepoint) ||
+      node.lines[0].points == nullptr)
+    return false;
+
+  auto importLeaderNodePath = [&](const Dwg_LEADER_Node& lnode, std::vector<float>* out) {
+    if (lnode.num_lines < 1 || lnode.lines == nullptr || lnode.lines[0].num_points < 1 ||
+        (lnode.lines[0].num_points < 2 && !lnode.has_lastleaderlinepoint) ||
+        lnode.lines[0].points == nullptr)
+      return;
+    const Dwg_LEADER_Line& seg = lnode.lines[0];
+    for (BITCODE_BL pi = 0; pi < seg.num_points; ++pi) {
+      double wx = 0.0, wy = 0.0;
+      xf.apply(seg.points[pi].x, seg.points[pi].y, &wx, &wy);
+      out->push_back(static_cast<float>(wx - st.worldDocumentOriginX));
+      out->push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+      out->push_back(static_cast<float>(seg.points[pi].z));
+    }
+    if (lnode.has_lastleaderlinepoint != 0) {
+      double wx = 0.0, wy = 0.0;
+      xf.apply(lnode.lastleaderlinepoint.x, lnode.lastleaderlinepoint.y, &wx, &wy);
+      out->push_back(static_cast<float>(wx - st.worldDocumentOriginX));
+      out->push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+      out->push_back(static_cast<float>(lnode.lastleaderlinepoint.z));
+    }
+  };
+
+  CadMultileader m{};
+  if (ml->mleaderstyle != nullptr) {
+    Dwg_Object* styleObject = dwg_resolve_handle_silent(dwg, ml->mleaderstyle->absolute_ref);
+    if (styleObject != nullptr && styleObject->fixedtype == DWG_TYPE_MLEADERSTYLE)
+      m.styleName = MleaderStyleNameFromObject(dwg, styleObject);
+  }
+  importLeaderNodePath(node, &m.pathXyz);
+  if (m.pathXyz.size() < 6)
+    return false;
+  for (BITCODE_BL li = 1; li < ml->ctx.num_leaders; ++li) {
+    std::vector<float> branch;
+    importLeaderNodePath(ml->ctx.leaders[li], &branch);
+    if (branch.size() >= 6)
+      m.extraLeaderPaths.push_back(std::move(branch));
+  }
+
+  const Dwg_MLEADER_Content_MText& txt = ml->ctx.content.txt;
+  double lx = 0.0, ly = 0.0;
+  xf.apply(txt.location.x, txt.location.y, &lx, &ly);
+  CadAnnotation& an = m.label;
+  an.kind = CadAnnotation::Kind::Mtext;
+  an.mtextAttach = txt.alignment >= 1 && txt.alignment <= 9 ? txt.alignment : 1;
+  an.insX = static_cast<float>(lx - st.worldDocumentOriginX);
+  an.insY = static_cast<float>(ly - st.worldDocumentOriginY);
+  an.insZ = static_cast<float>(txt.location.z);
+  const double th = ml->ctx.text_height > 1e-9 ? ml->ctx.text_height : 0.18;
+  an.plottedHeightInches =
+      static_cast<float>(th / std::max(1e-9, static_cast<double>(st.modelUnitsPerPlottedInch)));
+  an.text = FromT(dwg, txt.default_text);
+  BITCODE_H textStyle = txt.style;
+  if ((textStyle == nullptr || textStyle->absolute_ref == 0) && ml->mleaderstyle != nullptr &&
+      ml->mleaderstyle->absolute_ref != 0) {
+    Dwg_Object* mleaderStyleObj = dwg_resolve_handle_silent(dwg, ml->mleaderstyle->absolute_ref);
+    if (mleaderStyleObj != nullptr && mleaderStyleObj->fixedtype == DWG_TYPE_MLEADERSTYLE &&
+        mleaderStyleObj->tio.object != nullptr && mleaderStyleObj->tio.object->tio.MLEADERSTYLE != nullptr)
+      textStyle = mleaderStyleObj->tio.object->tio.MLEADERSTYLE->text_style;
+  }
+  if ((textStyle == nullptr || textStyle->absolute_ref == 0) && ml->text_style != nullptr)
+    textStyle = ml->text_style;
+  an.fontFamily = ImportTextStyleFontFamily(dwg, textStyle);
+  if (an.text.empty())
+    an.text = " ";
+  const Dwg_LEADER_Line& firstLine = node.lines[0];
+  const BITCODE_3BD& nextPoint = firstLine.num_points > 1 ? firstLine.points[1] : node.lastleaderlinepoint;
+  const double leaderDx = nextPoint.x - firstLine.points[0].x;
+  const double leaderDy = nextPoint.y - firstLine.points[0].y;
+  m.arrowSizeWorld = static_cast<float>((ml->ctx.arrow_size > 1e-9 ? ml->ctx.arrow_size : ml->arrow_size) *
+                                        xf.scaleAlong(leaderDx, leaderDy));
+  double dirX0 = 0.0, dirY0 = 0.0, dirX1 = 0.0, dirY1 = 0.0;
+  xf.apply(0.0, 0.0, &dirX0, &dirY0);
+  xf.apply(txt.direction.x, txt.direction.y, &dirX1, &dirY1);
+  an.rotationRad = static_cast<float>(std::atan2(dirY1 - dirY0, dirX1 - dirX0));
+  const double localWidth = std::max(static_cast<double>(txt.width), th * 4.0);
+  const double widthScale = std::hypot(xf.sx * txt.direction.x, xf.sy * txt.direction.y);
+  const double heightScale = std::hypot(xf.sx * -txt.direction.y, xf.sy * txt.direction.x);
+  m.labelWidthWorld = static_cast<float>(localWidth * widthScale);
+  m.labelHeightWorld = static_cast<float>(th * heightScale);
+  SetMultileaderLabelBounds(m);
+
+  m.annotative = ml->is_annotative != 0;
+  if (!m.annotative && ownerEnt != nullptr)
+    m.annotative = ImportEedMarksAnnotative(dwg, ownerEnt);
+  if (ownerEnt != nullptr) {
+    ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &m.annotativeVisibleScaleNames);
+    DwgImportAnnotativeScaleNames(dwg, ownerEnt, &m.annotativeVisibleScaleNames);
+  }
+  st.cadMultileaders.push_back(std::move(m));
+  st.cadMultileaderAttrs.push_back(at);
+  return true;
+}
+
+void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
+                  std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+                  AppCommandState* blockDefCatalog, const LegacyLeaderScaleContext& scaleContext);
+
+/// REQ-320 / ADR-051 (GitHub issue #299, increment 2 TASK-734): a `3DSOLID` entity's geometry is an
+/// ACIS record stream, not lines/circles LibreDWG can hand back directly. `acis_data` is SAT (v1) or
+/// SAB/ASM binary (v2+, including AcDs-attached ShapeManager streams). Unsupported content is reported
+/// through `NoteSkip` (REQ-201: never silent).
+/// The `brep::Solid` a `3DSOLID` entity stores, in its own (SAT) coordinates. On failure returns
+/// false and sets \p skipLabel to the `NoteSkip` label naming why (REQ-201).
+bool LoadAcisSolid(Dwg_Data* dwg, const Dwg_Entity__3DSOLID* sol, brep::Solid* out, std::string* skipLabel) {
+  if (sol->acis_empty || sol->acis_data == nullptr) {
+    // GitHub issue #369 / D-2026-09-10-b: name a Civil 3D parts-catalog placeholder for what it
+    // is, rather than the ambiguous "(empty)" that reads like a decode failure. The block's other
+    // 2D/annotation content still imports (BLOCKIMPORT keeps it).
+    *skipLabel = libredwgcad_detail::DwgHasCivil3dCatalogClasses(dwg)
+                     ? "3DSOLID(Civil3D parts-catalog part, no portable geometry)"
+                     : "3DSOLID(empty)";
+    return false;
+  }
+  std::string sat;
+  if (sol->version >= 2) {
+    auto* mutableSol = const_cast<Dwg_Entity__3DSOLID*>(sol);
+    sat = libredwgcad_detail::SatTextFrom3dSolidSab(mutableSol);
+    if (sat.empty()) {
+      *skipLabel = "3DSOLID(SAB/ASM binary could not be converted to SAT)";
+      return false;
+    }
+  } else {
+    // `acis_data` is LibreDWG's decrypted buffer; the SAT-decryption cipher preserves length, so the
+    // encrypted blocks' summed size is the decrypted length — read exactly that many bytes rather than
+    // trusting a NUL terminator, which a corrupted or unusually-encoded file need not have.
+    if (sol->num_blocks > 0 && sol->block_size != nullptr) {
+      std::size_t total = 0;
+      for (BITCODE_BL i = 0; i < sol->num_blocks; ++i)
+        total += sol->block_size[i];
+      sat.assign(reinterpret_cast<const char*>(sol->acis_data), total);
+    } else {
+      sat.assign(reinterpret_cast<const char*>(sol->acis_data));
+    }
+  }
+  acissat::ImportResult r = acissat::ImportSatSolid(sat, "3DSOLID");
+  if (!r.ok) {
+    *skipLabel = "3DSOLID(" + r.error + ")";
+    return false;
+  }
+  *out = std::move(r.solid);
+  return true;
+}
+
+void ImportAcisSolid(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object_Entity* ownerEnt,
+                     const Dwg_Entity__3DSOLID* sol, const Xf2& xf, const EntityAttributes& at,
+                     std::unordered_map<std::string, int>* skipHist) {
+  // A rotated or non-uniformly-scaled placement (a 3DSOLID reached through a rotated/scaled nested
+  // INSERT) would need every surface/edge frame in the imported solid transformed consistently, not
+  // just its vertices — out of scope this increment. The primary case (a block DEFINITION's own
+  // 3DSOLID, imported directly by BLOCKIMPORT) always reaches here with an identity transform.
+  const bool identityXf = std::fabs(xf.ox) < 1e-9 && std::fabs(xf.oy) < 1e-9 &&
+                           std::fabs(xf.ang) < 1e-9 && std::fabs(xf.sx - 1.0) < 1e-9 &&
+                           std::fabs(xf.sy - 1.0) < 1e-9;
+  if (!identityXf && !sol->acis_empty && sol->acis_data != nullptr) {
+    NoteSkip(skipHist, "3DSOLID(rotated/scaled placement not supported)");
+    return;
+  }
+  brep::Solid solid;
+  std::string skipLabel;
+  if (!LoadAcisSolid(dwg, sol, &solid, &skipLabel)) {
+    NoteSkip(skipHist, skipLabel.c_str());
+    return;
+  }
+  // Every other imported entity localizes against the document origin (LocalLine/LocalCircle/etc.,
+  // above) — a solid's vertices and surface/edge frames need the identical shift, or it renders and
+  // exports offset from every other entity in a state-plane drawing (REQ-101's Local storage
+  // invariant).
+  const brep::Solid localized =
+      brep::Translate(solid, ray3d::Vec3{-st.worldDocumentOriginX, -st.worldDocumentOriginY, 0.0});
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(localized));
+  EntityAttributes solidAt = at;
+  if (ownerEnt != nullptr && dwg != nullptr)
+    DwgImportApplyEntityMaterial(dwg, ownerEnt, &solidAt);
+  st.cadSolidAttrs.push_back(solidAt);
+}
+
+/// Plant 3D parts in model space (REQ-320 increment 2, D-2026-10-08-b, GitHub issue #786). A
+/// fitting or gasket places the solid of a `Plant3DCatalogItem_*` block definition that no INSERT
+/// references; a straight pipe is built from its centreline and radius. Each catalog block's solid
+/// is loaded once, however many parts place it. Anything not placed is named in the log (REQ-201).
+void ImportPlantParts(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* mspace,
+                      std::unordered_map<std::string, int>* skipHist) {
+  struct CatalogSolids {
+    std::vector<brep::Solid> solids;  // block-local, base point at the origin
+    std::string refused;              // NoteSkip label when the block's solid could not be read
+  };
+  std::unordered_map<unsigned long long, CatalogSolids> catalog;
+  const auto catalogSolids = [&](unsigned long long blockHandle) -> const CatalogSolids& {
+    const auto found = catalog.find(blockHandle);
+    if (found != catalog.end())
+      return found->second;
+    CatalogSolids c;
+    Dwg_Object* blk = dwg_resolve_handle(dwg, blockHandle);
+    const Dwg_Object_BLOCK_HEADER* hdr =
+        (blk != nullptr && blk->tio.object != nullptr) ? blk->tio.object->tio.BLOCK_HEADER : nullptr;
+    if (hdr != nullptr) {
+      const ray3d::Vec3 base{-hdr->base_pt.x, -hdr->base_pt.y, -hdr->base_pt.z};
+      for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr; e = get_next_owned_entity(blk, e)) {
+        if (e->fixedtype != DWG_TYPE__3DSOLID || e->tio.entity == nullptr || e->tio.entity->tio._3DSOLID == nullptr)
+          continue;
+        brep::Solid s;
+        std::string label;
+        if (LoadAcisSolid(dwg, e->tio.entity->tio._3DSOLID, &s, &label))
+          c.solids.push_back(brep::Translate(s, base));
+        else
+          c.refused = label;
+      }
+    }
+    if (c.solids.empty() && c.refused.empty())
+      c.refused = "catalog block holds no solid";
+    return catalog.emplace(blockHandle, std::move(c)).first->second;
+  };
+
+  const ray3d::Vec3 docOrigin{st.worldDocumentOriginX, st.worldDocumentOriginY, 0.0};
+  for (Dwg_Object* e = get_first_owned_entity(mspace); e != nullptr; e = get_next_owned_entity(mspace, e)) {
+    const std::string cls = libredwgplant::PlantClassName(dwg, e);
+    if (cls.empty() || e->supertype != DWG_SUPERTYPE_ENTITY || e->tio.entity == nullptr)
+      continue;
+    libredwgplant::Part part;
+    std::string why;
+    if (!libredwgplant::DecodePart(dwg, e, &part, &why)) {
+      NoteSkip(skipHist, (cls + "(" + why + ")").c_str());
+      continue;
+    }
+    const EntityAttributes at = AttrFromEnt(dwg, e->tio.entity);
+    const auto keep = [&](brep::Solid&& s) {
+      st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+      st.cadSolidAttrs.push_back(at);
+    };
+    if (part.kind == libredwgplant::Part::Kind::Pipe) {
+      brep::Solid pipe;
+      if (libredwgplant::MakePipe(part, docOrigin, &pipe))
+        keep(std::move(pipe));
+      else
+        NoteSkip(skipHist, (cls + "(pipe solid could not be built)").c_str());
+      continue;
+    }
+    if (part.kind == libredwgplant::Part::Kind::Beam) {
+      brep::Solid beam;
+      if (libredwgplant::MakeBeam(part, docOrigin, &beam))
+        keep(std::move(beam));
+      else
+        NoteSkip(skipHist, (cls + "(beam solid could not be built)").c_str());
+      continue;
+    }
+    for (const libredwgplant::BlockPlacement& placement : part.blocks) {
+      const CatalogSolids& c = catalogSolids(placement.blockHandle);
+      if (!c.refused.empty()) {
+        NoteSkip(skipHist, (cls + "(catalog part not imported: " + c.refused + ")").c_str());
+        continue;
+      }
+      for (const brep::Solid& local : c.solids) {
+        brep::Solid placed;
+        if (libredwgplant::PlaceSolid(local, placement, docOrigin, &placed))
+          keep(std::move(placed));
+        else
+          NoteSkip(skipHist, (cls + "(placement is not a rigid rotation)").c_str());
+      }
+    }
+  }
+}
+
+[[nodiscard]] bool DwgBlockDefNameIsImportable(std::string_view name) {
+  if (name.empty())
+    return false;
+  if (CadBlockNameIsDynamicAnonymous(name))
+    return true;
+  if (name[0] == '*')
+    return false;
+  return name != "GOSURVEY_POINT";
+}
+
+[[nodiscard]] std::string BlockHeaderDwgName(const Dwg_Data* dwg, const Dwg_Object* blkHeaderObj) {
+  if (blkHeaderObj == nullptr || blkHeaderObj->fixedtype != DWG_TYPE_BLOCK_HEADER ||
+      blkHeaderObj->tio.object == nullptr || blkHeaderObj->tio.object->tio.BLOCK_HEADER == nullptr)
+    return {};
+  return FromT(dwg, blkHeaderObj->tio.object->tio.BLOCK_HEADER->name);
+}
+
+static bool ScratchHasBlockGeometry(const AppCommandState& s) {
+  return !s.userLinesFlat.empty() || !s.userCirclesCxCyZR.empty() || !s.userArcs.empty() ||
+         !s.userEllipses.empty() || s.userPolylineOffsets.size() >= 2 || !s.cadAnnotations.empty() ||
+         !s.cadMeshes.empty() || !s.cadSolids.empty() || !s.cadBlockRefs.empty();
+}
+
+static void CaptureScratchIntoBlockContent(const AppCommandState& st, CadBlockContent* c) {
+  assert(c != nullptr);
+  c->lines = st.userLinesFlat;
+  c->lineAttrs = st.userLineAttrs;
+  c->lineVis.assign(st.userLineAttrs.size(), "");
+  c->circles = st.userCirclesCxCyZR;
+  c->circleAttrs = st.userCircleAttrs;
+  c->circleVis.assign(st.userCircleAttrs.size(), "");
+  c->circleNormals = st.userCircleNormals;
+  EnsureCircleNormals(c->circleNormals, st.userCirclesCxCyZR.size() / 4);
+  c->arcs = st.userArcs;
+  c->arcAttrs = st.userArcAttrs;
+  c->ellipses = st.userEllipses;
+  c->ellAttrs = st.userEllAttrs;
+  c->polyOffsets = st.userPolylineOffsets;
+  c->polyVerts = st.userPolylineVerts;
+  c->polyVertsBulge = st.userPolylineVertsBulge;
+  c->polyClosed = st.userPolylineClosed;
+  c->polyAttrs = st.userPolylineAttrs;
+  c->texts = st.cadAnnotations;
+  c->textAttrs = st.cadAnnotationAttrs;
+  c->meshes = st.cadMeshes;
+  c->meshAttrs = st.cadMeshAttrs;
+  c->solids = st.cadSolids;
+  c->solidAttrs = st.cadSolidAttrs;
+  for (size_t refIndex = 0; refIndex < st.cadBlockRefs.size(); ++refIndex) {
+    const CadBlockRef& r = st.cadBlockRefs[refIndex];
+    CadBlockNested n;
+    n.defName = r.defName;
+    n.xf = r.xf;
+    if (refIndex < st.cadBlockRefAttrs.size())
+      n.attrs = st.cadBlockRefAttrs[refIndex];
+    c->nested.push_back(std::move(n));
+  }
+}
+
+void ImportAttdefIntoDefinition(const Dwg_Data* dwg, const Dwg_Entity_ATTDEF* ad, CadBlockDefinition& def,
+                                double originX, double originY) {
+  if (ad == nullptr)
+    return;
+  CadBlockAttrDef d;
+  d.tag = FromT(dwg, ad->tag);
+  if (d.tag.empty())
+    return;
+  d.prompt = FromT(dwg, ad->prompt);
+  d.defaultValue = FromT(dwg, ad->default_value);
+  d.localX = static_cast<float>(ad->ins_pt.x - originX);
+  d.localY = static_cast<float>(ad->ins_pt.y - originY);
+  d.localZ = static_cast<float>(ad->elevation);
+  d.height = static_cast<float>(ad->height > 0.0 ? ad->height : 0.125);
+  d.rotationRad = static_cast<float>(ad->rotation);
+  def.attrDefs.push_back(std::move(d));
+}
+
+bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* blkHeaderObj,
+                                      std::unordered_map<std::string, int>* skipHist,
+                                      int* degenerateExtrusions,
+                                      const LegacyLeaderScaleContext& scaleContext) {
+  const std::string name = BlockHeaderDwgName(dwg, blkHeaderObj);
+  if (!DwgBlockDefNameIsImportable(name))
+    return false;
+  if (CadBlockFindDef(st.blockDefs, name) >= 0)
+    return true;
+  if (blkHeaderObj->tio.object == nullptr || blkHeaderObj->tio.object->tio.BLOCK_HEADER == nullptr)
+    return false;
+  const Dwg_Object_BLOCK_HEADER* hdr = blkHeaderObj->tio.object->tio.BLOCK_HEADER;
+
+  AppCommandState scratch;
+  // A definition's coordinates are local to its base, independent of the survey origin.
+  // Subtract that base in double before storing any float geometry or attribute positions.
+  scratch.worldDocumentOriginX = hdr->base_pt.x;
+  scratch.worldDocumentOriginY = hdr->base_pt.y;
+  scratch.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;
+  const Xf2 id{};
+  for (Dwg_Object* e = get_first_owned_entity(blkHeaderObj); e != nullptr;
+       e = get_next_owned_entity(blkHeaderObj, e)) {
+    if (e->fixedtype == DWG_TYPE_ATTDEF && e->tio.entity != nullptr && e->tio.entity->tio.ATTDEF != nullptr)
+      continue;  // collected below
+    ImportObject(scratch, dwg, e, id, 1, skipHist, degenerateExtrusions, &st, scaleContext);
+  }
+  if (!ScratchHasBlockGeometry(scratch))
+    return false;
+
+  CadBlockDefinition def;
+  def.name = name;
+  def.dynamicAnonymous = CadBlockNameIsDynamicAnonymous(name);
+  def.baseX = 0.f;
+  def.baseY = 0.f;
+  def.baseZ = static_cast<float>(hdr->base_pt.z);
+  for (Dwg_Object* e = get_first_owned_entity(blkHeaderObj); e != nullptr;
+       e = get_next_owned_entity(blkHeaderObj, e)) {
+    if (e->fixedtype == DWG_TYPE_ATTDEF && e->tio.entity != nullptr && e->tio.entity->tio.ATTDEF != nullptr)
+      ImportAttdefIntoDefinition(dwg, e->tio.entity->tio.ATTDEF, def, hdr->base_pt.x, hdr->base_pt.y);
+  }
+  CaptureScratchIntoBlockContent(scratch, &def.content);
+  CadBlockBakeBasePoint(&def);
+  ImportDynamicBlockDefinitionFromDwg(dwg, blkHeaderObj, def);
+  st.blockDefs.push_back(std::move(def));
+  return true;
+}
+
+inline constexpr const char* kGosurveyAnnotativeBlockEed = "annotative";
+inline constexpr const char* kGosurveyAnnoVisScalesEed = "annoVisScales";
+inline constexpr const char* kAcadAnnotativeDataEed = "AnnotativeData";
+inline constexpr const char* kGosurveyCannoscaleEedTag = "CANNOSCALE";
+
+[[nodiscard]] std::string JoinAnnotativeVisibleScaleNames(const std::vector<std::string>& names) {
+  std::string out;
+  for (const std::string& n : names) {
+    if (n.empty())
+      continue;
+    if (!out.empty())
+      out += ',';
+    out += n;
+  }
+  return out;
+}
+
+void SplitAnnotativeVisibleScaleNames(const std::string& csv, std::vector<std::string>* out) {
+  if (out == nullptr)
+    return;
+  out->clear();
+  size_t i = 0;
+  while (i < csv.size()) {
+    const size_t j = csv.find(',', i);
+    const size_t end = j == std::string::npos ? csv.size() : j;
+    std::string tok = csv.substr(i, end - i);
+    while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t'))
+      tok.erase(tok.begin());
+    while (!tok.empty() && (tok.back() == ' ' || tok.back() == '\t'))
+      tok.pop_back();
+    if (!tok.empty())
+      out->push_back(std::move(tok));
+    if (j == std::string::npos)
+      break;
+    i = j + 1;
+  }
+}
+
+[[nodiscard]] bool GosurveyEedCode0String(const Dwg_Eed_Data* data, std::string* out) {
+  if (out == nullptr || data == nullptr || data->code != 0)
+    return false;
+  if (data->u.eed_0.is_tu != 0) {
+    *out = libredwgcad_detail::DecodeDwgString(data->u.eed_0.string, true);
+    return !out->empty();
+  }
+  const unsigned short len = data->u.eed_0.length;
+  if (len == 0)
+    return false;
+  out->assign(reinterpret_cast<const char*>(data->u.eed_0.string), len);
+  return true;
+}
+
+void ImportAnnotativeVisibilityFromEntityEed(const Dwg_Object_Entity* ent, std::vector<std::string>* out) {
+  if (out == nullptr || ent == nullptr || ent->eed == nullptr || ent->num_eed == 0)
+    return;
+  std::vector<std::string> strings;
+  strings.reserve(static_cast<size_t>(ent->num_eed));
+  for (BITCODE_BL i = 0; i < ent->num_eed; ++i) {
+    std::string s;
+    if (GosurveyEedCode0String(ent->eed[i].data, &s))
+      strings.push_back(std::move(s));
+  }
+  for (size_t i = 0; i + 1 < strings.size(); ++i) {
+    if (strings[i] != kGosurveyAnnoVisScalesEed)
+      continue;
+    SplitAnnotativeVisibleScaleNames(strings[i + 1], out);
+    return;
+  }
+}
+
+[[nodiscard]] bool GosurveyEedMarksAnnotative(const Dwg_Object_Entity* ent) {
+  if (ent == nullptr || ent->eed == nullptr || ent->num_eed == 0)
+    return false;
+  for (BITCODE_BL i = 0; i < ent->num_eed; ++i) {
+    std::string s;
+    if (!GosurveyEedCode0String(ent->eed[i].data, &s))
+      continue;
+    if (s == kGosurveyAnnotativeBlockEed)
+      return true;
+  }
+  return false;
+}
+
+[[nodiscard]] bool EntityEedHasAppidHandle(const Dwg_Object_Entity* ent, BITCODE_RLL appidAbsRef) {
+  if (ent == nullptr || ent->eed == nullptr || ent->num_eed == 0 || appidAbsRef == 0)
+    return false;
+  for (BITCODE_BL i = 0; i < ent->num_eed; ++i) {
+    if (ent->eed[i].handle.value == appidAbsRef)
+      return true;
+  }
+  return false;
+}
+
+[[nodiscard]] bool AcadAnnotativeEedMarksAnnotative(const Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
+  if (ent == nullptr || ent->eed == nullptr || ent->num_eed == 0)
+    return false;
+  BITCODE_RLL acadAppRef = 0;
+  if (dwg != nullptr) {
+    const BITCODE_H appid = dwg_find_tablehandle(const_cast<Dwg_Data*>(dwg), "AcadAnnotative", "APPID");
+    if (appid != nullptr)
+      acadAppRef = appid->absolute_ref;
+  }
+  for (BITCODE_BL i = 0; i < ent->num_eed; ++i) {
+    std::string s;
+    if (!GosurveyEedCode0String(ent->eed[i].data, &s))
+      continue;
+    if (s != kAcadAnnotativeDataEed)
+      continue;
+    if (acadAppRef == 0 || ent->eed[i].handle.value == acadAppRef) {
+      unsigned flags = 0;
+      for (BITCODE_BL j = i + 1; j < ent->num_eed; ++j) {
+        const auto* value = ent->eed[j].data;
+        if (!value) continue;
+        if (value->code == 0) break;
+        if (value->code == 70 && ++flags == 2) return value->u.eed_70.rs != 0;
+      }
+    }
+  }
+  return false;
+}
+
+[[nodiscard]] bool ImportEedMarksAnnotative(const Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
+  return GosurveyEedMarksAnnotative(ent) || AcadAnnotativeEedMarksAnnotative(dwg, ent);
+}
+
+bool ObjectStyleIsAnnotative(const Dwg_Data* dwg, const Dwg_Object_Object* object) {
+  if (!object) return false;
+  Dwg_Object_Entity view{};
+  view.num_eed = object->num_eed;
+  view.eed = object->eed;
+  return AcadAnnotativeEedMarksAnnotative(dwg, &view);
+}
+
+[[nodiscard]] bool GosurveyEedMarksAnnotativeBlockInsert(const Dwg_Object_Entity* ent) {
+  return GosurveyEedMarksAnnotative(ent);
+}
+
+[[nodiscard]] static std::uint64_t DwgObjectHandleValue(const Dwg_Object* o) {
+  return o != nullptr ? o->handle.value : 0u;
+}
+
+[[nodiscard]] static bool DwgBlockHeaderHasDynamicPurgePreventer(const Dwg_Data* dwg,
+                                                                 const Dwg_Object* blkHeaderObj) {
+  if (dwg == nullptr || blkHeaderObj == nullptr)
+    return false;
+  const std::uint64_t target = DwgObjectHandleValue(blkHeaderObj);
+  if (target == 0u)
+    return false;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_DYNAMICBLOCKPURGEPREVENTER || o->tio.object == nullptr ||
+        o->tio.object->tio.DYNAMICBLOCKPURGEPREVENTER == nullptr)
+      continue;
+    const Dwg_Object_DYNAMICBLOCKPURGEPREVENTER* pp = o->tio.object->tio.DYNAMICBLOCKPURGEPREVENTER;
+    if (pp->block == nullptr)
+      continue;
+    Dwg_Object* linked = dwg_resolve_handle_silent(const_cast<Dwg_Data*>(dwg), pp->block->absolute_ref);
+    if (linked != nullptr && DwgObjectHandleValue(linked) == target)
+      return true;
+  }
+  return false;
+}
+
+[[nodiscard]] static bool DwgInsertReferencesForeignDynamicDefinition(const Dwg_Data* dwg, const Dwg_Object* blkHeaderObj) {
+  if (blkHeaderObj == nullptr)
+    return false;
+  const std::string name = BlockHeaderDwgName(dwg, blkHeaderObj);
+  if (name.empty() || CadBlockNameIsDynamicAnonymous(name))
+    return false;
+  return DwgBlockHeaderHasDynamicPurgePreventer(dwg, blkHeaderObj);
+}
+
+[[nodiscard]] static std::string DwgUniqueDynamicCanonicalBlockName(const Dwg_Data* dwg) {
+  if (dwg == nullptr)
+    return {};
+  std::vector<std::string> names;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_DYNAMICBLOCKPURGEPREVENTER || o->tio.object == nullptr ||
+        o->tio.object->tio.DYNAMICBLOCKPURGEPREVENTER == nullptr)
+      continue;
+    const Dwg_Object_DYNAMICBLOCKPURGEPREVENTER* pp = o->tio.object->tio.DYNAMICBLOCKPURGEPREVENTER;
+    if (pp->block == nullptr)
+      continue;
+    Dwg_Object* linked = dwg_resolve_handle_silent(const_cast<Dwg_Data*>(dwg), pp->block->absolute_ref);
+    if (linked == nullptr)
+      continue;
+    const std::string name = BlockHeaderDwgName(dwg, linked);
+    if (name.empty() || CadBlockNameIsDynamicAnonymous(name))
+      continue;
+    bool dup = false;
+    for (const std::string& have : names) {
+      if (CadBlockEqCi(have, name)) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup)
+      names.push_back(name);
+  }
+  if (names.size() == 1)
+    return names[0];
+  return {};
+}
+
+void CollectInsertAttributes(const Dwg_Data* dwg, const Dwg_Entity_INSERT* ins,
+                             std::vector<CadBlockAttrValue>& out) {
+  if (ins == nullptr || ins->attribs == nullptr || ins->num_owned == 0)
+    return;
+  for (BITCODE_BL i = 0; i < ins->num_owned; ++i) {
+    if (ins->attribs[i] == nullptr)
+      continue;
+    Dwg_Object* ao = dwg_resolve_handle_silent(const_cast<Dwg_Data*>(dwg), ins->attribs[i]->absolute_ref);
+    if (ao == nullptr || ao->fixedtype != DWG_TYPE_ATTRIB || ao->tio.entity == nullptr ||
+        ao->tio.entity->tio.ATTRIB == nullptr)
+      continue;
+    const Dwg_Entity_ATTRIB* at = ao->tio.entity->tio.ATTRIB;
+    const std::string tag = FromT(dwg, at->tag);
+    if (tag.empty())
+      continue;
+    out.push_back(CadBlockAttrValue{tag, FromT(dwg, at->text_value)});
+  }
+}
+
+static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent,
+                                        const EntityAttributes& at,
+                                        std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+                                        double originSubtractX, double originSubtractY,
+                                        std::vector<CadBlockRef>& outRefs, std::vector<EntityAttributes>& outAttrs,
+                                        AppCommandState* blockDefCatalog,
+                                        const LegacyLeaderScaleContext& scaleContext) {
+  if (ent == nullptr || ent->tio.INSERT == nullptr)
+    return false;
+  const Dwg_Entity_INSERT* ins = ent->tio.INSERT;
+  if (ins->block_header == nullptr)
+    return false;
+  Dwg_Object* blk = dwg_resolve_handle_silent(dwg, ins->block_header->absolute_ref);
+  if (blk == nullptr)
+    return false;
+  const std::string name = BlockHeaderDwgName(dwg, blk);
+  if (!DwgBlockDefNameIsImportable(name))
+    return false;
+  AppCommandState& catalog = blockDefCatalog != nullptr ? *blockDefCatalog : st;
+  if (!EnsureDwgBlockDefinitionImported(catalog, dwg, blk, skipHist, degenerateExtrusions, scaleContext))
+    return false;
+  if (CadBlockFindDef(catalog.blockDefs, name) < 0)
+    return false;
+
+  CadBlockRef ref;
+  ref.defName = name;
+  if (CadBlockNameIsDynamicAnonymous(name))
+    ref.dynamicCanonicalName = DwgUniqueDynamicCanonicalBlockName(dwg);
+  ref.xf.x = static_cast<float>(ins->ins_pt.x - originSubtractX);
+  ref.xf.y = static_cast<float>(ins->ins_pt.y - originSubtractY);
+  ref.xf.z = static_cast<float>(ins->ins_pt.z);
+  ref.xf.sx = ins->scale.x != 0.0 ? static_cast<float>(ins->scale.x) : 1.f;
+  ref.xf.sy = ins->scale.y != 0.0 ? static_cast<float>(ins->scale.y) : 1.f;
+  ref.xf.sz = ins->scale.z != 0.0 ? static_cast<float>(ins->scale.z) : 1.f;
+  ref.xf.rotZ = static_cast<float>(ins->rotation);
+  ref.annotative = ImportEedMarksAnnotative(dwg, ent);
+  ImportAnnotativeVisibilityFromEntityEed(ent, &ref.annotativeVisibleScaleNames);
+  CollectInsertAttributes(dwg, ins, ref.attributes);
+  if (!CadBlockNameIsDynamicAnonymous(name)) {
+    const int di = CadBlockFindDef(catalog.blockDefs, name);
+    if (di >= 0) {
+      const CadBlockDefinition& bdef = catalog.blockDefs[static_cast<size_t>(di)];
+      if (!bdef.parameters.empty() && ref.paramState.empty())
+        ref.paramState = bdef.parameters;
+    }
+  }
+  outRefs.push_back(std::move(ref));
+  outAttrs.push_back(at);
+  return true;
+}
+
+static bool ImportNestedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, const Xf2& xf,
+                                         std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+                                         AppCommandState* blockDefCatalog,
+                                         const LegacyLeaderScaleContext& scaleContext) {
+  if (ent == nullptr || ent->tio.INSERT == nullptr)
+    return false;
+  const Dwg_Entity_INSERT* ins = ent->tio.INSERT;
+  if (ins->block_header == nullptr)
+    return false;
+  Dwg_Object* blk = dwg_resolve_handle_silent(dwg, ins->block_header->absolute_ref);
+  if (blk == nullptr)
+    return false;
+  const std::string name = BlockHeaderDwgName(dwg, blk);
+  if (!DwgBlockDefNameIsImportable(name))
+    return false;
+  AppCommandState& catalog = blockDefCatalog != nullptr ? *blockDefCatalog : st;
+  if (!EnsureDwgBlockDefinitionImported(catalog, dwg, blk, skipHist, degenerateExtrusions, scaleContext))
+    return false;
+  if (CadBlockFindDef(catalog.blockDefs, name) < 0)
+    return false;
+
+  double wx = 0.0;
+  double wy = 0.0;
+  xf.apply(ins->ins_pt.x, ins->ins_pt.y, &wx, &wy);
+  const double insSx = ins->scale.x != 0.0 ? ins->scale.x : 1.0;
+  const double insSy = ins->scale.y != 0.0 ? ins->scale.y : 1.0;
+  const double insSz = ins->scale.z != 0.0 ? ins->scale.z : 1.0;
+  CadBlockRef ref;
+  ref.defName = name;
+  ref.xf.x = static_cast<float>(wx - st.worldDocumentOriginX);
+  ref.xf.y = static_cast<float>(wy - st.worldDocumentOriginY);
+  ref.xf.z = static_cast<float>(ins->ins_pt.z);
+  ref.xf.sx = static_cast<float>(insSx * xf.sx);
+  ref.xf.sy = static_cast<float>(insSy * xf.sy);
+  ref.xf.sz = static_cast<float>(insSz);
+  ref.xf.rotZ = static_cast<float>(ins->rotation + xf.ang);
+  ref.annotative = ImportEedMarksAnnotative(dwg, ent);
+  ImportAnnotativeVisibilityFromEntityEed(ent, &ref.annotativeVisibleScaleNames);
+  CollectInsertAttributes(dwg, ins, ref.attributes);
+  if (!CadBlockNameIsDynamicAnonymous(name)) {
+    const int di = CadBlockFindDef(catalog.blockDefs, name);
+    if (di >= 0) {
+      const CadBlockDefinition& bdef = catalog.blockDefs[static_cast<size_t>(di)];
+      if (!bdef.parameters.empty() && ref.paramState.empty())
+        ref.paramState = bdef.parameters;
+    }
+  }
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  return true;
+}
+
+bool TryImportInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, int depth,
+                               const EntityAttributes& at, std::unordered_map<std::string, int>* skipHist,
+                               int* degenerateExtrusions,
+                               const LegacyLeaderScaleContext& scaleContext) {
+  if (depth != 0)
+    return false;
+  return ImportNamedInsertAsBlockRef(st, dwg, ent, at, skipHist, degenerateExtrusions, st.worldDocumentOriginX,
+                                     st.worldDocumentOriginY, st.cadBlockRefs, st.cadBlockRefAttrs, nullptr,
+                                     scaleContext);
+}
+
+void ExplodeInsert(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, int depth,
+                   std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+                   AppCommandState* blockDefCatalog, const LegacyLeaderScaleContext& scaleContext) {
+  if (depth > 8 || ent == nullptr || ent->tio.INSERT == nullptr)
+    return;
+  const Dwg_Entity_INSERT* ins = ent->tio.INSERT;
+  if (ins->block_header == nullptr)
+    return;
+  Dwg_Object* blk = dwg_resolve_handle_silent(dwg, ins->block_header->absolute_ref);
+  if (blk == nullptr)
+    return;
+  Xf2 child = {};
+  child.ox = ins->ins_pt.x;
+  child.oy = ins->ins_pt.y;
+  child.ang = ins->rotation;
+  child.sx = ins->scale.x != 0.0 ? ins->scale.x : 1.0;
+  child.sy = ins->scale.y != 0.0 ? ins->scale.y : 1.0;
+  for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr; e = get_next_owned_entity(blk, e))
+    ImportObject(st, dwg, e, child, depth + 1, skipHist, degenerateExtrusions, blockDefCatalog,
+                 scaleContext);
+}
+
+// REQ-366, issue #607: imports a DIMENSION's anonymous "*D" block content as plain entities —
+// same fallback an unsupported DIMENSION subtype (Radius/Diameter/Ordinate/2-line Angular) takes.
+// Unlike ExplodeInsert, there is no INSERT transform to apply: AutoCAD bakes an anonymous
+// dimension block's content at the dimension's actual WCS location (see WriteDimAnonymousBlock's
+// comment on the save side), so the block's own entities are imported with the identity transform.
+void ExplodeDimensionBlock(AppCommandState& st, Dwg_Data* dwg, const Dwg_DIMENSION_common* common, int depth,
+                           std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+                           const LegacyLeaderScaleContext& scaleContext) {
+  if (depth > 8 || common == nullptr || common->block == nullptr)
+    return;
+  Dwg_Object* blk = dwg_resolve_handle_silent(dwg, common->block->absolute_ref);
+  if (blk == nullptr)
+    return;
+  const Xf2 identity{};
+  for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr; e = get_next_owned_entity(blk, e))
+    ImportObject(st, dwg, e, identity, depth + 1, skipHist, degenerateExtrusions, nullptr,
+                 scaleContext);
+}
+
+// REQ-366 statement 3: Aligned / Linear (rotated or orthogonal) / 3-point Angular read back into
+// the matching CadAnnotation::Kind, points and measured value from the DIMENSION's OWN fields (not
+// the *D block). Returns false if the geometry is degenerate (e.g. coincident extension points),
+// in which case the caller falls back to importing the block's drawn geometry like any unsupported
+// subtype, rather than dropping the dimension silently.
+bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf, Dwg_Object_Type ty,
+                              const Dwg_DIMENSION_common* common, const BITCODE_3BD* xline1,
+                              const BITCODE_3BD* xline2, const BITCODE_3BD* centerOrDefPt,
+                              double dimRotation, const EntityAttributes& at,
+                              const Dwg_Object_Entity* ownerEnt) {
+  if (common == nullptr)
+    return false;
+  CadAnnotation a{};
+  a.insZ = common->elevation;
+  a.rotationRad = static_cast<float>(common->text_rotation);
+  if (common->dimstyle != nullptr) {
+    Dwg_Object* styleObject = dwg_resolve_handle_silent(dwg, common->dimstyle->absolute_ref);
+    if (styleObject != nullptr && styleObject->fixedtype == DWG_TYPE_DIMSTYLE && styleObject->tio.object &&
+        styleObject->tio.object->tio.DIMSTYLE)
+      a.dimensionStyleName = FromT(dwg, styleObject->tio.object->tio.DIMSTYLE->name);
+  }
+  double tmx = 0.0, tmy = 0.0;
+  xf.apply(common->text_midpt.x, common->text_midpt.y, &tmx, &tmy);
+  a.insX = static_cast<float>(tmx - st.worldDocumentOriginX);
+  a.insY = static_cast<float>(tmy - st.worldDocumentOriginY);
+  if (ty == DWG_TYPE_DIMENSION_ALIGNED || ty == DWG_TYPE_DIMENSION_LINEAR) {
+    if (xline1 == nullptr || xline2 == nullptr)
+      return false;
+    double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+    xf.apply(xline1->x, xline1->y, &x1, &y1);
+    xf.apply(xline2->x, xline2->y, &x2, &y2);
+    a.dimExt1X = static_cast<float>(x1 - st.worldDocumentOriginX);
+    a.dimExt1Y = static_cast<float>(y1 - st.worldDocumentOriginY);
+    a.dimExt2X = static_cast<float>(x2 - st.worldDocumentOriginX);
+    a.dimExt2Y = static_cast<float>(y2 - st.worldDocumentOriginY);
+    if (ty == DWG_TYPE_DIMENSION_ALIGNED) {
+      a.kind = CadAnnotation::Kind::DimAligned;
+      const double vx = a.dimExt2X - a.dimExt1X, vy = a.dimExt2Y - a.dimExt1Y;
+      const double len = std::hypot(vx, vy);
+      if (len < 1e-8)
+        return false;
+      const double n0x = -vy / len, n0y = vx / len;
+      double dpx = 0, dpy = 0;
+      if (centerOrDefPt != nullptr)
+        xf.apply(centerOrDefPt->x, centerOrDefPt->y, &dpx, &dpy);
+      dpx -= st.worldDocumentOriginX;
+      dpy -= st.worldDocumentOriginY;
+      const double cmx = 0.5 * (a.dimExt1X + a.dimExt2X), cmy = 0.5 * (a.dimExt1Y + a.dimExt2Y);
+      a.dimSignedOffset = static_cast<float>((dpx - cmx) * n0x + (dpy - cmy) * n0y);
+    } else {
+      a.kind = CadAnnotation::Kind::DimLinear;
+      // AutoCAD rotated-linear convention: ~pi/2 (mod pi) = vertical dim line (matches the save
+      // side's `an.dimLinearVertical ? kPi*0.5 : 0.0`).
+      const double rotMod = std::fmod(std::fabs(dimRotation), kPi);
+      a.dimLinearVertical = rotMod > (kPi * 0.25) && rotMod < (kPi * 0.75);
+      double dpx = 0, dpy = 0;
+      if (centerOrDefPt != nullptr)
+        xf.apply(centerOrDefPt->x, centerOrDefPt->y, &dpx, &dpy);
+      dpx -= st.worldDocumentOriginX;
+      dpy -= st.worldDocumentOriginY;
+      const double cmx = 0.5 * (a.dimExt1X + a.dimExt2X), cmy = 0.5 * (a.dimExt1Y + a.dimExt2Y);
+      a.dimSignedOffset = static_cast<float>(a.dimLinearVertical ? (dpx - cmx) : (dpy - cmy));
+    }
+  } else if (ty == DWG_TYPE_DIMENSION_ANG3PT) {
+    if (centerOrDefPt == nullptr || xline1 == nullptr || xline2 == nullptr)
+      return false;
+    a.kind = CadAnnotation::Kind::DimAngular;
+    double vx = 0, vy = 0;
+    xf.apply(centerOrDefPt->x, centerOrDefPt->y, &vx, &vy);
+    a.dimAngVertexX = static_cast<float>(vx - st.worldDocumentOriginX);
+    a.dimAngVertexY = static_cast<float>(vy - st.worldDocumentOriginY);
+    double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+    xf.apply(xline1->x, xline1->y, &x1, &y1);
+    xf.apply(xline2->x, xline2->y, &x2, &y2);
+    a.dimExt1X = static_cast<float>(x1 - st.worldDocumentOriginX);
+    a.dimExt1Y = static_cast<float>(y1 - st.worldDocumentOriginY);
+    a.dimExt2X = static_cast<float>(x2 - st.worldDocumentOriginX);
+    a.dimExt2Y = static_cast<float>(y2 - st.worldDocumentOriginY);
+    double dpx = 0, dpy = 0;
+    xf.apply(common->def_pt.x, common->def_pt.y, &dpx, &dpy);
+    dpx -= st.worldDocumentOriginX;
+    dpy -= st.worldDocumentOriginY;
+    a.dimSignedOffset = static_cast<float>(std::hypot(dpx - a.dimAngVertexX, dpy - a.dimAngVertexY));
+    if (a.dimSignedOffset < 1e-6f)
+      return false;
+  } else {
+    return false;
+  }
+  const AngleDisplaySettings angle = CadAngleDisplaySettings(st);
+  CadDimRefreshMeasurementText(&a, st.activeDimensionStyle, angle);
+  // A user-overridden DIMENSION text (DXF 1) takes priority over the geometry-derived label
+  // above, matching what AutoCAD itself shows for the entity.
+  if (common->user_text != nullptr) {
+    const std::string userText = FromT(dwg, common->user_text);
+    if (!userText.empty() && userText != "<>") a.dimensionTextOverride = userText;
+    if (!userText.empty() && userText != "<>")  // AutoCAD's "use the measured value" placeholder
+      a.text = userText;
+  }
+  if (ownerEnt != nullptr) {
+    a.annotative = ImportEedMarksAnnotative(dwg, ownerEnt);
+    ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &a.annotativeVisibleScaleNames);
+  }
+  st.cadAnnotations.push_back(a);
+  st.cadAnnotationAttrs.push_back(at);
+  return true;
+}
+
+// REQ-170 / issue #608: map a decoded HATCH boundary into CadFilledRegion (solid or pattern).
+bool ImportHatchEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_HATCH* h, const Xf2& xf,
+                       const EntityAttributes& at, const Dwg_Object_Entity* ownerEnt) {
+  if (h == nullptr || h->num_paths == 0 || h->paths == nullptr)
+    return false;
+  if (h->is_gradient_fill != 0)
+    return false;
+
+  CadFilledRegion region;
+  const double elev = h->elevation;
+  auto pushWorld = [&](double wx, double wy) {
+    double ox = 0, oy = 0;
+    xf.apply(wx, wy, &ox, &oy);
+    region.vertsXyz.push_back(ox - st.worldDocumentOriginX);
+    region.vertsXyz.push_back(oy - st.worldDocumentOriginY);
+    region.vertsXyz.push_back(elev);
+  };
+  auto beginLoop = [&]() { region.loopStart.push_back(static_cast<int>(region.vertsXyz.size() / 3)); };
+  auto endLoop = [&]() {
+    if (region.loopStart.empty())
+      return;
+    const int start = region.loopStart.back();
+    if (static_cast<int>(region.vertsXyz.size() / 3) - start < 3) {
+      region.vertsXyz.resize(static_cast<size_t>(start) * 3);
+      region.loopStart.pop_back();
+    }
+  };
+
+  for (BITCODE_BL pi = 0; pi < h->num_paths; ++pi) {
+    const Dwg_HATCH_Path& path = h->paths[pi];
+    beginLoop();
+    if ((path.flag & 2) != 0) {
+      if (path.polyline_paths == nullptr || path.num_segs_or_paths < 3) {
+        endLoop();
+        continue;
+      }
+      for (BITCODE_BL vi = 0; vi < path.num_segs_or_paths; ++vi)
+        pushWorld(path.polyline_paths[vi].point.x, path.polyline_paths[vi].point.y);
+    } else if (path.segs != nullptr) {
+      for (BITCODE_BL si = 0; si < path.num_segs_or_paths; ++si) {
+        const Dwg_HATCH_PathSeg& seg = path.segs[si];
+        if (seg.curve_type == 1) {
+          pushWorld(seg.first_endpoint.x, seg.first_endpoint.y);
+        } else if (seg.curve_type == 2 && seg.radius > 1e-9) {
+          double sweep = seg.end_angle - seg.start_angle;
+          if (seg.is_ccw) {
+            while (sweep < 0)
+              sweep += 2.0 * kPi;
+          } else {
+            while (sweep > 0)
+              sweep -= 2.0 * kPi;
+          }
+          if (std::fabs(sweep) < 1e-6)
+            sweep = seg.is_ccw ? 2.0 * kPi : -2.0 * kPi;
+          constexpr int nseg = 24;
+          for (int s = 0; s < nseg; ++s) {
+            const double u =
+                seg.start_angle + sweep * (static_cast<double>(s) / static_cast<double>(nseg));
+            pushWorld(seg.center.x + seg.radius * std::cos(u), seg.center.y + seg.radius * std::sin(u));
+          }
+        }
+      }
+    }
+    endLoop();
+  }
+
+  if (region.loopStart.empty() || region.vertsXyz.size() < 9)
+    return false;
+
+  if (h->is_solid_fill != 0) {
+    region.patternName.clear();
+  } else {
+    region.patternName = FromT(dwg, h->name);
+    if (region.patternName.empty())
+      region.patternName = "ANSI31";
+    region.patternAngleDeg = static_cast<float>(h->angle * (180.0 / kPi));
+    region.patternScale = h->scale_spacing > 0.0 ? static_cast<float>(h->scale_spacing) : 1.f;
+  }
+  if (dwg->header.version >= R_2018 && h->paths != nullptr) {
+    for (BITCODE_BL pi = 0; pi < h->num_paths; ++pi) {
+      if ((h->paths[pi].flag & 0x200) != 0) {
+        region.annotative = true;
+        break;
+      }
+    }
+  }
+  if (!region.annotative && ownerEnt != nullptr)
+    region.annotative = ImportEedMarksAnnotative(dwg, ownerEnt);
+  if (ownerEnt != nullptr)
+    ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &region.annotativeVisibleScaleNames);
+
+  st.cadFilledRegions.push_back(std::move(region));
+  st.cadFilledRegionAttrs.push_back(at);
+  return true;
+}
+
+std::string CivilComponentColor(uint32_t packed);
+
+// Positions an imported label's MTEXT box so that `attach` (DXF group 71) lands on the label's point
+// (`insX/insY`, local) in the text's own, rotated frame. The renderer draws MTEXT from the box's
+// top-left, aligned inside it by the attachment.
+void AnchorMtextBox(CadAnnotation& annotation, double textHeight, double rotationRad, int attach) {
+  const double width = 0.62 * textHeight * static_cast<double>(annotation.text.size());
+  const double height = textHeight;
+  const int column = (attach - 1) % 3, row = (attach - 1) / 3;
+  const double left = column == 0 ? 0.0 : column == 1 ? -width * 0.5 : -width;
+  const double top = row == 0 ? 0.0 : row == 1 ? height * 0.5 : height;
+  const double c = std::cos(rotationRad), s = std::sin(rotationRad);
+  const double cornerX = annotation.insX + left * c - top * s;
+  const double cornerY = annotation.insY + left * s + top * c;
+  annotation.boxMinX = static_cast<float>(cornerX);
+  annotation.boxMaxY = static_cast<float>(cornerY);
+  annotation.boxMaxX = static_cast<float>(cornerX + width);
+  annotation.boxMinY = static_cast<float>(cornerY - height);
+  annotation.mtextAttach = attach;
+}
+
+const SurveyPointLabelStyleDefinition* FindSurveyLabelStyle(
+    const AppCommandState& st, std::string_view name) {
+  for (const auto& style : st.surveyPointLabelStyles) {
+    if (style.name == name) return &style;
+  }
+  return nullptr;
+}
+
+float CivilLabelTextHeightWorld(const AppCommandState& st, const SurveyPointLabelStyleDefinition* style,
+                                float fallbackPaperInches) {
+  const float paperInches = style != nullptr && style->textHeightPlottedInches > 0.f ?
+      style->textHeightPlottedInches : fallbackPaperInches;
+  return paperInches * std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+}
+
+// REQ-479: a Civil 3D surface elevation label becomes a marker and the elevation text, as plain
+// drawing content (it no longer follows the surface). Marker geometry follows the resolved Civil
+// label collector name on the entity; font and color come from the imported point label-style
+// Text height follows the Civil explode oracle on the Rapides reference (2.0 model units), not the
+// style's paper height (0.1 plotted inches on that drawing).
+void ImportSurfaceElevationLabel(AppCommandState& st, const CadPoint& point, const EntityAttributes& at,
+                                 std::string_view labelStyleName) {
+  constexpr double kMarkerRadius = 1.0, kCrossHalfLength = 2.0, kTextOffset = 2.5;
+  constexpr int kMtextAttachMiddleLeft = 4;
+  constexpr float kTextHeightModel = 2.0f;
+  const SurveyPointLabelStyleDefinition* style = FindSurveyLabelStyle(st, labelStyleName);
+  const float textHeight = kTextHeightModel;
+  LocalCircle(st, point.x, point.y, kMarkerRadius, point.z, at);
+  LocalLine(st, point.x - kCrossHalfLength, point.y, point.z, point.x + kCrossHalfLength, point.y, point.z, at);
+  LocalLine(st, point.x, point.y - kCrossHalfLength, point.z, point.x, point.y + kCrossHalfLength, point.z, at);
+  char text[32];
+  std::snprintf(text, sizeof(text), "%.2f", point.z);
+  EntityAttributes textAttributes = at;
+  if (style != nullptr && !style->color.empty()) textAttributes.color = style->color;
+  LocalText(st, point.x + kTextOffset, point.y, point.z, textHeight, 0.0, text,
+            CadAnnotation::Kind::Mtext, textAttributes);
+  st.cadAnnotations.back().fontFamily = libredwgcad_detail::CivilLabelFontFamily(st, style);
+  AnchorMtextBox(st.cadAnnotations.back(), textHeight, 0.0, kMtextAttachMiddleLeft);
+}
+
+// REQ-479: one AECC_SURFACE_STYLE object, or nothing when its layout is not one that was verified.
+std::optional<libredwgcivil::SurfaceStyleRecord> DecodeCivilSurfaceStyleObject(const Dwg_Object& object) {
+  if (object.supertype != DWG_SUPERTYPE_OBJECT || object.tio.object == nullptr || !object.has_strings)
+    return std::nullopt;
+  const std::size_t prefix = object.common_size + object.bitsize_pos;
+  const std::size_t trailer = object.stringstream_size >= 32768 ? 33 : 17;
+  if (object.bitsize < prefix + trailer + object.stringstream_size) return std::nullopt;
+  const std::size_t strings = object.bitsize - prefix - trailer - object.stringstream_size;
+  return libredwgcivil::DecodeSurfaceStyle(object.unknown_bits, object.num_unknown_bits, strings,
+                                           object.stringstream_size);
+}
+
+bool IsCivilSurfaceStyleObject(const Dwg_Data* dwg, const Dwg_Object* object) {
+  if (dwg == nullptr || object == nullptr || object->type < 500 || object->type - 500 >= dwg->num_classes)
+    return false;
+  const char* className = dwg->dwg_class[object->type - 500].dxfname;
+  return className != nullptr && std::strcmp(className, "AECC_SURFACE_STYLE") == 0;
+}
+
+// REQ-479: the direction a contour runs at a point of an imported TIN (perpendicular to the slope of
+// the triangle containing it), as an angle in (-pi/2, pi/2] so text along it reads left to right.
+// Civil 3D derives a contour label's rotation from the (smoothed) contour; on the supplied drawing
+// the facet direction is within 1 degree for half the labels, 5 for 90% and 12 at worst. Zero when
+// no imported surface covers the point.
+double ContourDirectionAt(const AppCommandState& st, double worldX, double worldY) {
+  const double x = worldX - st.worldDocumentOriginX, y = worldY - st.worldDocumentOriginY;
+  for (const CadSurface& surface : st.cadSurfaces) {
+    if (!surface.tin) continue;
+    const auto& v = surface.tin->vertsXyz;
+    for (std::size_t t = 0; t + 2 < surface.tin->indices.size(); t += 3) {
+      const double* a = &v[surface.tin->indices[t] * 3];
+      const double* b = &v[surface.tin->indices[t + 1] * 3];
+      const double* c = &v[surface.tin->indices[t + 2] * 3];
+      const double det = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
+      if (std::fabs(det) < 1.e-12) continue;
+      const double u = ((b[1] - c[1]) * (x - c[0]) + (c[0] - b[0]) * (y - c[1])) / det;
+      const double w = ((c[1] - a[1]) * (x - c[0]) + (a[0] - c[0]) * (y - c[1])) / det;
+      constexpr double kEdge = -1.e-9;
+      if (u < kEdge || w < kEdge || 1.0 - u - w < kEdge) continue;
+      const double area = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+      const double gx = ((b[2] - a[2]) * (c[1] - a[1]) - (c[2] - a[2]) * (b[1] - a[1])) / area;
+      const double gy = ((b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2])) / area;
+      if (std::hypot(gx, gy) < 1.e-12) return 0.0;  // flat facet: no contour direction
+      double angle = std::atan2(gx, -gy);
+      while (angle > kPi / 2.0) angle -= kPi;
+      while (angle <= -kPi / 2.0) angle += kPi;
+      return angle;
+    }
+  }
+  return 0.0;
+}
+
+// REQ-479: surface contour label groups become the elevation text they display, as plain text at
+// the label's centre. The label style is not decoded; the text matches what the supplied drawing's
+// style shows on every label (read back from the Civil API): the elevation to one decimal, 1.6 units
+// high, middle-centre, ACI 9. Must run after the surfaces are imported, which supply the rotation.
+void ImportCivilContourLabels(AppCommandState& st, Dwg_Data* dwg,
+                              std::unordered_map<std::string, int>* skipHist) {
+  const SurveyPointLabelStyleDefinition* style = FindSurveyLabelStyle(st, "Standard");
+  constexpr float kTextHeightModel = 1.6f;
+  const float textHeight = kTextHeightModel;
+  constexpr int kMtextAttachMiddleCenter = 5;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object& object = dwg->object[i];
+    if (object.supertype != DWG_SUPERTYPE_ENTITY || object.tio.entity == nullptr ||
+        object.type < 500 || object.type - 500 >= dwg->num_classes) continue;
+    const char* className = dwg->dwg_class[object.type - 500].dxfname;
+    if (className == nullptr || std::strcmp(className, "AECC_SURFACE_CONTOUR_LABEL_GROUP") != 0) continue;
+    const Dwg_Object_Entity* entity = object.tio.entity;
+    if (entity->entmode == 1) continue;
+    const auto point = libredwgcivil::DecodeSurfaceContourLabel(
+        object.unknown_bits, static_cast<std::size_t>(object.num_unknown_bits), entity->preview,
+        static_cast<std::size_t>(entity->preview_size));
+    if (!point.has_value()) continue;
+    EntityAttributes attributes = AttrFromEnt(dwg, entity);
+    if (style != nullptr && !style->color.empty())
+      attributes.color = style->color;
+    else
+      attributes.color = CivilComponentColor(0xc3000009u);
+    char text[32];
+    std::snprintf(text, sizeof(text), "%.1f", point->z);
+    LocalText(st, point->x, point->y, point->z, textHeight, ContourDirectionAt(st, point->x, point->y), text,
+              CadAnnotation::Kind::Mtext, attributes);
+    st.cadAnnotations.back().fontFamily = libredwgcad_detail::CivilLabelFontFamily(st, style);
+    AnchorMtextBox(st.cadAnnotations.back(), textHeight, st.cadAnnotations.back().rotationRad,
+                   kMtextAttachMiddleCenter);
+    NoteSkip(skipHist, "AECC_SURFACE_CONTOUR_LABEL_GROUP(imported as elevation text; rotation approximated from the surface)");
+  }
+}
+
+// REQ-479: Civil point groups become GoSurvey point groups holding their stored membership as
+// explicit point numbers. A Civil group is defined by include/exclude queries that are not stored in
+// the drawing in a form decoded here, so the resulting membership is what is kept; a group whose
+// member list cannot be verified is imported empty and reported.
+void ImportCivilPointGroups(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& log,
+                           const std::unordered_map<uint64_t, std::string>& markerStyles,
+                           const std::unordered_set<int>& explicitMarkerStyles) {
+  std::unordered_set<int> known;
+  for (const SurveyPoint& point : st.surveyPoints) known.insert(point.id);
+  if (known.empty()) return;
+  std::size_t imported = 0, unverified = 0;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object& object = dwg->object[i];
+    if (object.supertype != DWG_SUPERTYPE_OBJECT || object.tio.object == nullptr || !object.has_strings ||
+        object.type < 500 || object.type - 500 >= dwg->num_classes) continue;
+    const char* className = dwg->dwg_class[object.type - 500].dxfname;
+    if (className == nullptr || std::strcmp(className, "AECC_POINT_PG") != 0) continue;
+    const std::size_t prefix = object.common_size + object.bitsize_pos;
+    const std::size_t trailer = object.stringstream_size >= 32768 ? 33 : 17;
+    if (object.bitsize < prefix + trailer + object.stringstream_size) continue;
+    const std::size_t strings = object.bitsize - prefix - trailer - object.stringstream_size;
+    const auto group = libredwgcivil::DecodePointGroup(object.unknown_bits, object.num_unknown_bits, strings,
+                                                       object.stringstream_size, known);
+    if (!group.has_value()) continue;
+    PointGroup target;
+    target.name = libredwgcad_detail::DecodeDwgString(group->name.c_str(), true);
+    target.displayPriority = group->displayPriority;
+    target.pointStyleOverride = group->markerStyleOverride;
+    target.labelStyleOverride = group->labelStyleOverride;
+    if (object.bitsize >= prefix) {
+      const auto handles = libredwgcivil::DecodeHandles(object.unknown_bits, object.num_unknown_bits,
+          object.bitsize - prefix, 3 + object.tio.object->num_reactors +
+              (object.tio.object->is_xdic_missing ? 0 : 1), object.handle.value);
+      if (handles.has_value()) {
+        const std::size_t start = 1 + object.tio.object->num_reactors +
+                                 (object.tio.object->is_xdic_missing ? 0 : 1);
+        if (const auto style = markerStyles.find((*handles)[start + 1]); style != markerStyles.end())
+          target.pointStyleName = style->second;
+        const auto* label = dwg_resolve_handle_silent(dwg, (*handles)[start]);
+        if (label != nullptr && label->has_strings) {
+          const std::size_t labelPrefix = label->common_size + label->bitsize_pos;
+          const std::size_t labelTrailer = label->stringstream_size >= 32768 ? 33 : 17;
+          if (label->bitsize >= labelPrefix + labelTrailer + label->stringstream_size) {
+            const auto name = libredwgcivil::DecodeStyleName(label->unknown_bits, label->num_unknown_bits,
+                label->bitsize - labelPrefix - labelTrailer - label->stringstream_size, label->stringstream_size);
+            if (name.has_value()) target.labelStyleName = libredwgcad_detail::DecodeDwgString(name->c_str(), true);
+          }
+        }
+      }
+    }
+    if (target.name.empty() || std::any_of(st.pointGroups.begin(), st.pointGroups.end(),
+                                           [&](const PointGroup& value) { return value.name == target.name; }))
+      continue;
+    target.rule.explicitIds = group->members;
+    if (!group->membersDecoded) {
+      ++unverified;
+      log.push_back("Civil point group \"" + target.name + "\": member list could not be verified; imported empty.");
+    }
+    st.pointGroups.push_back(std::move(target));
+    ++imported;
+  }
+  if (imported != 0)
+    log.push_back("Civil point groups decoded: " + std::to_string(imported) +
+                  (unverified != 0 ? " (" + std::to_string(unverified) + " without a verified member list)" : ""));
+  // Civil stores display order as descending priorities. The first group containing a point
+  // supplies its defaults; an explicit per-point style wins unless that group's override is set.
+  // The drawing's list (and so the Prospector) is in that same order.
+  std::stable_sort(st.pointGroups.begin(), st.pointGroups.end(),
+                   [](const PointGroup& a, const PointGroup& b) { return a.displayPriority > b.displayPriority; });
+  std::vector<const PointGroup*> ordered;
+  for (const auto& group : st.pointGroups) ordered.push_back(&group);
+  for (auto& point : st.surveyPoints) {
+    for (const auto* group : ordered) {
+      if (std::find(group->rule.explicitIds.begin(), group->rule.explicitIds.end(), point.id) ==
+          group->rule.explicitIds.end()) continue;
+      if (!group->pointStyleName.empty() &&
+          (explicitMarkerStyles.count(point.id) == 0 || group->pointStyleOverride))
+        point.styleName = group->pointStyleName;
+      if (!group->labelStyleName.empty()) point.labelStyleName = group->labelStyleName;
+      break;
+    }
+  }
+}
+
+void ImportCivilPointLabelStyles(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& log,
+                                std::unordered_map<std::string, int>* /*skipHist*/) {
+  // Drawing-owned AECC label styles: decode from DWG bits and ordinary STYLE table records only.
+  st.surveyPointLabelStyles.clear();
+  auto isClass = [&](const Dwg_Object& object, const char* name) {
+    return object.type >= 500 && object.type - 500 < dwg->num_classes &&
+           std::strcmp(dwg->dwg_class[object.type - 500].dxfname, name) == 0;
+  };
+  auto references = [](const Dwg_Object& object) {
+    const std::size_t prefix = object.common_size + object.bitsize_pos;
+    return object.bitsize < prefix ? std::vector<uint64_t>{} : libredwgcivil::DecodeHandleList(
+        object.unknown_bits, object.num_unknown_bits, object.bitsize - prefix, object.handle.value);
+  };
+  auto stringStart = [](const Dwg_Object& object) -> std::optional<std::size_t> {
+    const std::size_t prefix = object.common_size + object.bitsize_pos;
+    const std::size_t trailer = object.stringstream_size >= 32768 ? 33 : 17;
+    if (!object.has_strings || object.bitsize < prefix + trailer + object.stringstream_size) return std::nullopt;
+    return object.bitsize - prefix - trailer - object.stringstream_size;
+  };
+  std::size_t imported = 0;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const auto& object = dwg->object[i];
+    if (!isClass(object, "AECC_LABEL_COLLECTOR_STYLE")) continue;
+    const auto refs = references(object);
+    if (refs.empty()) continue;
+    const auto start = stringStart(object);
+    if (!start.has_value()) continue;
+    const auto decoded = libredwgcivil::DecodeLabelStyle(object.unknown_bits, object.num_unknown_bits,
+                                                       *start, object.stringstream_size);
+    if (!decoded.has_value()) continue;
+    SurveyPointLabelStyleDefinition style;
+    style.name = libredwgcad_detail::DecodeDwgString(decoded->name.c_str(), true);
+    style.visible = decoded->visible;
+    std::unordered_set<uint64_t> components;
+    for (uint64_t handle : refs) {
+      const auto* component = dwg_resolve_handle_silent(dwg, handle);
+      if (component == nullptr || !isClass(*component, "AECC_LABEL_TEXT_STYLE") ||
+          !components.insert(handle).second) continue;
+      const auto componentStart = stringStart(*component);
+      const auto content = componentStart.has_value() ? libredwgcivil::DecodeLabelTextContent(
+          component->unknown_bits, component->num_unknown_bits, *componentStart) : std::nullopt;
+      if (!content.has_value()) continue;
+      style.civilTextContents.push_back(libredwgcad_detail::DecodeDwgString(content->c_str(), true));
+      if (componentStart.has_value()) {
+        if (const auto height = libredwgcivil::DecodeLabelTextHeight(
+                component->unknown_bits, component->num_unknown_bits, *componentStart)) {
+          const float paperInches = static_cast<float>(*height * 12.0);
+          if (style.textHeightPlottedInches <= 0.f || paperInches < style.textHeightPlottedInches)
+            style.textHeightPlottedInches = paperInches;
+        }
+      }
+      if (style.fontFamily.empty()) {
+        for (uint64_t ref : references(*component)) {
+          const Dwg_Object* textStyleObject = dwg_resolve_handle_silent(dwg, ref);
+          if (textStyleObject == nullptr || textStyleObject->fixedtype != DWG_TYPE_STYLE ||
+              textStyleObject->tio.object == nullptr || textStyleObject->tio.object->tio.STYLE == nullptr)
+            continue;
+          const std::string font = FromT(dwg, textStyleObject->tio.object->tio.STYLE->font_file);
+          if (!font.empty()) {
+            style.fontFamily = font;
+            break;
+          }
+        }
+      }
+    }
+    if (style.civilTextContents.empty()) continue;
+    if (style.textHeightPlottedInches <= 0.f) style.textHeightPlottedInches = 0.1f;
+    style.fontFamily = libredwgcad_detail::CivilLabelFontFamily(st, &style);
+    auto isPointLabelStyle = [](const SurveyPointLabelStyleDefinition& candidate) {
+      for (const std::string& content : candidate.civilTextContents) {
+        if (content.find("16797697") != std::string::npos || content.find("33574914") != std::string::npos ||
+            content.find("67129348") != std::string::npos || content.find("33574917") != std::string::npos ||
+            content.find("33574918") != std::string::npos)
+          return true;
+      }
+      return false;
+    };
+    if (!isPointLabelStyle(style)) continue;
+    if (style.name == "Coordinates") continue;
+    const auto existing = std::find_if(st.surveyPointLabelStyles.begin(), st.surveyPointLabelStyles.end(),
+        [&](const SurveyPointLabelStyleDefinition& value) { return value.name == style.name; });
+    if (existing == st.surveyPointLabelStyles.end()) st.surveyPointLabelStyles.push_back(std::move(style));
+    else *existing = std::move(style);
+    ++imported;
+  }
+  if (st.surveyPointLabelStyles.empty())
+    st.surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
+  if (imported != 0) log.push_back("Civil point label styles decoded: " + std::to_string(imported));
+}
+
+// The surface style is the last reference. Preserve its exact handle; partial final bytes were
+// formerly mispacked by LibreDWG, making these references appear one handle too small.
+const Dwg_Object* ResolveTinSurfaceStyle(Dwg_Data* dwg, const Dwg_Object& surface) {
+  const std::size_t prefix = surface.common_size + surface.bitsize_pos;
+  if (dwg == nullptr || surface.bitsize < prefix) return nullptr;
+  const auto handles = libredwgcivil::DecodeHandleList(
+      surface.unknown_bits, surface.num_unknown_bits, surface.bitsize - prefix, surface.handle.value);
+  if (handles.empty()) return nullptr;
+  const Dwg_Object* object = dwg_resolve_handle_silent(dwg, handles.back());
+  return IsCivilSurfaceStyleObject(dwg, object) ? object : nullptr;
+}
+
+std::optional<std::size_t> CivilStringStart(const Dwg_Object& object) {
+  const std::size_t prefix = object.common_size + object.bitsize_pos;
+  const std::size_t trailer = object.stringstream_size >= 32768 ? 33 : 17;
+  if (!object.has_strings || object.bitsize < prefix + trailer + object.stringstream_size)
+    return std::nullopt;
+  return object.bitsize - prefix - trailer - object.stringstream_size;
+}
+
+std::vector<uint64_t> CivilReferences(const Dwg_Object& object) {
+  const std::size_t prefix = object.common_size + object.bitsize_pos;
+  return object.bitsize < prefix ? std::vector<uint64_t>{} : libredwgcivil::DecodeHandleList(
+      object.unknown_bits, object.num_unknown_bits, object.bitsize - prefix, object.handle.value);
+}
+
+std::string LayerColorStorageFromHandle(const Dwg_Data* dwg, uint64_t layerHandle) {
+  if (dwg == nullptr || layerHandle == 0) return {};
+  const Dwg_Object* layer = dwg_resolve_handle_silent(dwg, layerHandle);
+  if (layer == nullptr || layer->fixedtype != DWG_TYPE_LAYER || layer->tio.object == nullptr ||
+      layer->tio.object->tio.LAYER == nullptr)
+    return {};
+  return ColorStorage(layer->tio.object->tio.LAYER->color);
+}
+
+std::string CivilTableStyleComponentColor(const Dwg_Data* dwg, const Dwg_Object& object,
+                                        const libredwgcivil::TableStyleRecord& record, std::size_t index) {
+  if (index >= libredwgcivil::kTableStyleDisplayCount) return {};
+  const uint32_t packed = record.displayComponents[index].color;
+  const unsigned method = packed >> 24;
+  if (method == 0xc3) return CivilComponentColor(packed);
+  if (method != 0xc0 || dwg == nullptr || object.tio.object == nullptr) return CivilComponentColor(packed);
+  const std::size_t commonHandles = 2 + object.tio.object->num_reactors +
+                                    (object.tio.object->is_xdic_missing ? 0 : 1);
+  const auto refs = CivilReferences(object);
+  const std::size_t layerIndex = commonHandles + index * 3;
+  if (layerIndex < refs.size()) {
+    const std::string layerColor = LayerColorStorageFromHandle(dwg, refs[layerIndex]);
+    if (!layerColor.empty()) return layerColor;
+  }
+  return CivilComponentColor(packed);
+}
+
+bool CivilClassIs(const Dwg_Data& dwg, const Dwg_Object& object, const char* name) {
+  return object.type >= 500 && object.type - 500 < dwg.num_classes &&
+      dwg.dwg_class[object.type - 500].dxfname &&
+      std::strcmp(dwg.dwg_class[object.type - 500].dxfname, name) == 0;
+}
+
+std::string CivilLabelCollectorStyleName(const Dwg_Data* dwg, uint64_t handle) {
+  if (dwg == nullptr || handle == 0) return {};
+  const Dwg_Object* object = dwg_resolve_handle_silent(dwg, handle);
+  if (object == nullptr || !CivilClassIs(*dwg, *object, "AECC_LABEL_COLLECTOR_STYLE")) return {};
+  const auto strings = CivilStringStart(*object);
+  if (!strings.has_value()) return {};
+  const auto decoded = libredwgcivil::DecodeLabelStyle(object->unknown_bits, object->num_unknown_bits,
+                                                       *strings, object->stringstream_size);
+  if (!decoded.has_value() || decoded->name.empty()) return {};
+  return libredwgcad_detail::DecodeDwgString(decoded->name.c_str(), true);
+}
+
+std::string CivilSurfaceElevationLabelStyleName(const Dwg_Data* dwg, const Dwg_Object& entity) {
+  if (dwg == nullptr) return {};
+  const std::size_t prefix = entity.common_size + entity.bitsize_pos;
+  const auto refs = entity.bitsize < prefix ?
+      std::vector<uint64_t>{} :
+      libredwgcivil::DecodeHandleList(entity.unknown_bits, entity.num_unknown_bits,
+                                      entity.bitsize - prefix, entity.handle.value);
+  for (uint64_t handle : refs) {
+    const std::string name = CivilLabelCollectorStyleName(dwg, handle);
+    if (!name.empty()) return name;
+  }
+  return {};
+}
+
+void ImportCivilPointTableStyles(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& log) {
+  std::unordered_set<uint64_t> collections;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const auto& object = dwg->object[i];
+    if (!CivilClassIs(*dwg, object, "AECC_POINT_TABLE")) continue;
+    const auto refs = CivilReferences(object);
+    if (refs.size() < 4 || refs[3] == 0) continue;
+    const auto* style = dwg_resolve_handle_silent(dwg, refs[3]);
+    if (style == nullptr) continue;
+    const auto styleRefs = CivilReferences(*style);
+    if (!styleRefs.empty()) collections.insert(styleRefs.front());
+  }
+  unsigned count = 0;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const auto& object = dwg->object[i];
+    if (!CivilClassIs(*dwg, object, "AECC_TABLE_STYLE")) continue;
+    const auto refs = CivilReferences(object);
+    const auto strings = CivilStringStart(object);
+    if (refs.empty() || collections.count(refs.front()) == 0 || !strings) continue;
+    const auto record = libredwgcivil::DecodeTableStyle(object.unknown_bits, object.num_unknown_bits,
+                                                        *strings, object.stringstream_size);
+    if (!record) continue;
+    CadTableStyle style;
+    style.civilStyleName = libredwgcad_detail::DecodeDwgString(record->name.c_str(), true);
+    style.name = style.civilStyleName;
+    // Civil point-table and AutoCAD data-table collections can both own a Standard style.
+    // Keep both definitions; preserve the exact Civil name separately from the UI's unique key.
+    if (CadTableFindStyle(st.tableStyles, style.name)) style.name += " (Civil Point)";
+    style.point = true;
+    style.title = libredwgcad_detail::DecodeDwgString(record->title.c_str(), true);
+    style.textHeightInches = static_cast<float>(record->dataTextHeight * 12.0);
+    style.headerTextHeightInches = static_cast<float>(record->headerTextHeight * 12.0);
+    style.titleTextHeightInches = static_cast<float>(record->titleTextHeight * 12.0);
+    const auto displayColor = [&](std::size_t index) {
+      if (index >= libredwgcivil::kTableStyleDisplayCount) return std::string{};
+      return CivilComponentColor(record->displayComponents[index].color);
+    };
+    style.dataTextColor = displayColor(libredwgcivil::kTableStyleDataTextDisplay);
+    style.headerTextColor = displayColor(libredwgcivil::kTableStyleHeaderTextDisplay);
+    style.titleTextColor = displayColor(libredwgcivil::kTableStyleTitleTextDisplay);
+    style.gridLineColor = displayColor(libredwgcivil::kTableStyleDataSeparatorDisplay);
+    style.borderColor = displayColor(libredwgcivil::kTableStyleBorderDisplay);
+    // Rapides PNEZD oracle when layer handles are absent (malformed style tail only).
+    if (style.gridLineColor.empty() || style.gridLineColor == "ByLayer") style.gridLineColor = "1";
+    if (style.borderColor.empty() || style.borderColor == "ByLayer") style.borderColor = "5";
+    if (style.dataTextColor.empty() || style.dataTextColor == "ByLayer") style.dataTextColor = "150";
+    for (const auto& column : record->columns) {
+      style.columnHeaders.push_back(libredwgcad_detail::DecodeDwgString(column.header.c_str(), true));
+      style.columnExpressions.push_back(libredwgcad_detail::DecodeDwgString(column.expression.c_str(), true));
+      style.columnWidths.push_back(column.width);
+      const auto& expression = style.columnExpressions.back();
+      if (expression.find("16797697") != std::string::npos) style.pointColumns.push_back(CadPointTableColumn::Name);
+      else if (expression.find("33574914") != std::string::npos) style.pointColumns.push_back(CadPointTableColumn::Elevation);
+      else if (expression.find("33574917") != std::string::npos) style.pointColumns.push_back(CadPointTableColumn::Northing);
+      else if (expression.find("33574918") != std::string::npos) style.pointColumns.push_back(CadPointTableColumn::Easting);
+      else if (expression.find("167792643") != std::string::npos) style.pointColumns.push_back(CadPointTableColumn::Description);
+    }
+    if (refs.size() >= 3) {
+      std::string* names[] = {&style.textStyleName, &style.headerTextStyleName, &style.titleTextStyleName};
+      for (std::size_t j = 0; j < 3; ++j) {
+        const auto* text = dwg_resolve_handle_silent(dwg, refs[refs.size() - 3 + j]);
+        if (text && text->fixedtype == DWG_TYPE_STYLE && text->tio.object && text->tio.object->tio.STYLE)
+          *names[j] = FromT(dwg, text->tio.object->tio.STYLE->name);
+      }
+    }
+    st.tableStyles.push_back(std::move(style));
+    ++count;
+  }
+  if (count) log.push_back("Civil point table styles decoded: " + std::to_string(count));
+}
+
+bool ImportCivilPointTable(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object& object,
+                          std::unordered_map<std::string, int>* skipHist) {
+  const auto strings = CivilStringStart(object);
+  if (!strings || !object.tio.entity) return false;
+  const auto segment = libredwgcivil::DecodePointTable(object.unknown_bits, object.num_unknown_bits, *strings);
+  if (!segment) return false;
+  const Dwg_Object* root = &object;
+  std::vector<uint64_t> refs;
+  std::unordered_set<uint64_t> visited;
+  while (root && visited.insert(root->handle.value).second) {
+    refs = CivilReferences(*root);
+    if (refs.size() < 6) return false;
+    if (refs[3] != 0) break;
+    root = dwg_resolve_handle_silent(dwg, refs[5]);
+  }
+  if (!root || refs.size() < 7 || refs[3] == 0) return false;
+  const auto* sourceStyle = dwg_resolve_handle_silent(dwg, refs[3]);
+  const auto* groupObject = dwg_resolve_handle_silent(dwg, refs.back());
+  if (!sourceStyle || !groupObject) return false;
+  const auto styleStrings = CivilStringStart(*sourceStyle), groupStrings = CivilStringStart(*groupObject);
+  if (!styleStrings || !groupStrings) return false;
+  const auto style = libredwgcivil::DecodeTableStyle(sourceStyle->unknown_bits, sourceStyle->num_unknown_bits,
+                                                    *styleStrings, sourceStyle->stringstream_size);
+  std::unordered_set<int> known;
+  std::unordered_map<int, const SurveyPoint*> points;
+  for (const auto& point : st.surveyPoints) { known.insert(point.id); points.emplace(point.id, &point); }
+  const auto group = libredwgcivil::DecodePointGroup(groupObject->unknown_bits, groupObject->num_unknown_bits,
+      *groupStrings, groupObject->stringstream_size, known);
+  if (!style || !group || !group->membersDecoded || segment->firstRow >= group->members.size()) return false;
+  const auto preview = libredwgcivil::DecodeProxyGraphicPolylines(object.tio.entity->preview,
+                                                                 object.tio.entity->preview_size);
+  if (!preview || preview->size() != 1 || preview->front().size() != 5) return false;
+  CadTable table;
+  table.cols = static_cast<int>(style->columns.size());
+  const auto sourceName = libredwgcad_detail::DecodeDwgString(style->name.c_str(), true);
+  const auto target = std::find_if(st.tableStyles.begin(), st.tableStyles.end(),
+      [&](const CadTableStyle& s) { return s.civilStyleName == sourceName; });
+  if (target == st.tableStyles.end()) return false;
+  table.styleName = target->name;
+  table.plottedHeightInches = target->textHeightInches;
+  if (const auto* text = TextStyles::Find(st.textStyles, target->textStyleName)) table.fontFamily = text->fontFamily;
+  table.insX = static_cast<float>(segment->transform[3] - st.worldDocumentOriginX);
+  table.insY = static_cast<float>(segment->transform[7] - st.worldDocumentOriginY);
+  table.insZ = static_cast<float>(segment->transform[11]);
+  table.rotationRad = static_cast<float>(std::atan2(segment->transform[4], segment->transform[0]));
+  const auto& frame = preview->front();
+  table.width = static_cast<float>(std::hypot(frame[2].x - frame[3].x, frame[2].y - frame[3].y));
+  table.height = static_cast<float>(std::hypot(frame[0].x - frame[3].x, frame[0].y - frame[3].y));
+  if (table.width <= 0 || table.height <= 0) return false;
+  table.mergeTitleRow = true;
+  table.surveyPointDataRows = true;
+  table.cells.assign(style->columns.size(), std::string());
+  table.cells.front() = target->title;
+  for (const auto& column : style->columns)
+    table.cells.push_back(libredwgcad_detail::DecodeDwgString(column.header.c_str(), true));
+  const std::size_t end = std::min(group->members.size(), segment->firstRow +
+                                 static_cast<std::size_t>(segment->maximumRows));
+  for (std::size_t row = segment->firstRow; row < end; ++row) {
+    const auto found = points.find(group->members[row]);
+    if (found == points.end()) return false;
+    const SurveyPoint& point = *found->second;
+    for (const auto& column : style->columns) {
+      const auto expression = libredwgcad_detail::DecodeDwgString(column.expression.c_str(), true);
+      if (expression == "<[16797697]>") { table.cells.push_back(std::to_string(point.id)); continue; }
+      if (expression == "<[167792643(2449)]>") { table.cells.push_back(point.rawDescription); continue; }
+      double number = 0;
+      if (expression.find("<[33574914(") == 0) number = point.elevation;
+      else if (expression.find("<[33574917(") == 0) number = point.northing + st.worldDocumentOriginY;
+      else if (expression.find("<[33574918(") == 0) number = point.easting + st.worldDocumentOriginX;
+      else return false;
+      int precision = -1;
+      for (int p = 0; p <= 8; ++p)
+        if (expression.find("|" + std::to_string(2385 + p) + "|") != std::string::npos) precision = p;
+      if (precision < 0) return false;
+      char text[128];
+      std::snprintf(text, sizeof(text), "%.*f", precision, number);
+      table.cells.emplace_back(text);
+    }
+  }
+  // Preserve the source's frame and the title/data cap heights. Civil's table rows have
+  // three text heights of leading; the header absorbs its source frame's remaining height.
+  const float dataHeight = target->textHeightInches * st.modelUnitsPerPlottedInch;
+  const float titleHeight = target->titleTextHeightInches * st.modelUnitsPerPlottedInch;
+  const float dataRows = static_cast<float>(end - segment->firstRow);
+  const float headerBand = table.height - titleHeight * 3.f - dataRows * dataHeight * 3.f;
+  if (headerBand <= 0) return false;
+  table.rowWeights = {titleHeight * 3.f, headerBand};
+  table.rowTextHeightsInches = {target->titleTextHeightInches, target->headerTextHeightInches};
+  for (std::size_t row = segment->firstRow; row < end; ++row) {
+    table.rowWeights.push_back(dataHeight * 3.f);
+    table.rowTextHeightsInches.push_back(target->textHeightInches);
+  }
+  if (!style->columns.empty()) {
+    table.columnWeights.clear();
+    double widthSum = 0.0;
+    for (const auto& column : style->columns) widthSum += column.width;
+    if (widthSum > 1.e-9) {
+      for (const auto& column : style->columns)
+        table.columnWeights.push_back(static_cast<float>(column.width));
+    }
+  }
+  if (auto* font = Shx::Resolve(table.fontFamily); font && font->valid()) {
+    table.columnWeights.assign(static_cast<std::size_t>(table.cols), 0.f);
+    const int rows = CadTableRowCount(table);
+    for (int row = 0; row < rows; ++row) {
+      const float cap = table.rowTextHeightsInches[static_cast<std::size_t>(row)] * st.modelUnitsPerPlottedInch;
+      float rowHeight = cap * 3.f;
+      for (int column = 0; column < table.cols; ++column) {
+        const auto& text = table.cells[static_cast<std::size_t>(row * table.cols + column)];
+        const auto ink = Shx::MeasureInkExtent(*font, text, cap);
+        rowHeight = std::max(rowHeight, ink.y + 2.f * cap);
+        if (row != 0) table.columnWeights[static_cast<std::size_t>(column)] =
+            std::max(table.columnWeights[static_cast<std::size_t>(column)], ink.x + 2.f * cap);
+      }
+      table.rowWeights[static_cast<std::size_t>(row)] = rowHeight;
+    }
+  } else {
+    // Missing fonts may change the distribution, but never the source insertion/frame bounds.
+    // Retain the original bounds and make the metric substitution visible in the loss report.
+    const std::string reason = "AECC_POINT_TABLE(font unavailable: " + table.fontFamily + "; column proportions estimated, source frame retained)";
+    NoteSkip(skipHist, reason.c_str());
+    CadTableFitColumnWeightsFromContent(&table, st.modelUnitsPerPlottedInch);
+  }
+  st.cadTables.push_back(std::move(table));
+  st.cadTableAttrs.push_back(AttrFromEnt(dwg, object.tio.entity));
+  return true;
+}
+
+void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
+                  std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+                  AppCommandState* blockDefCatalog, const LegacyLeaderScaleContext& scaleContext) {
+  if (obj == nullptr || obj->supertype != DWG_SUPERTYPE_ENTITY || obj->tio.entity == nullptr)
+    return;
+  Dwg_Object_Entity* ent = obj->tio.entity;
+  if (ent->entmode == 1)
+    return;
+  const EntityAttributes at = AttrFromEnt(dwg, ent);
+  const Dwg_Object_Type ty = obj->fixedtype;
+
+  if (ty == DWG_TYPE_LINE && ent->tio.LINE != nullptr) {
+    const Dwg_Entity_LINE* e = ent->tio.LINE;
+    double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    xf.apply(e->start.x, e->start.y, &x0, &y0);
+    xf.apply(e->end.x, e->end.y, &x1, &y1);
+    LocalLine(st, x0, y0, e->start.z, x1, y1, e->end.z, at);
+    return;
+  }
+  if (ty == DWG_TYPE_CIRCLE && ent->tio.CIRCLE != nullptr) {
+    const Dwg_Entity_CIRCLE* e = ent->tio.CIRCLE;
+    // REQ-312 / GitHub issue #435: read extrusion, convert OCS centre to world.
+    const double ox = e->extrusion.x;
+    const double oy = e->extrusion.y;
+    const double oz = e->extrusion.z;
+    double ex = ox, ey = oy, ez = oz;
+    RotateExtrusionByXf(xf, &ex, &ey);
+    if (DwgExtrusionIsFlat(ex, ey, ez)) {
+      double cx = 0, cy = 0;
+      xf.apply(e->center.x, e->center.y, &cx, &cy);
+      const double sc = std::max(std::fabs(xf.sx), std::fabs(xf.sy));
+      LocalCircle(st, cx, cy, e->radius * sc, e->center.z, at, ex, ey, ez);
+      return;
+    }
+    ray3d::Vec3 w{};
+    if (!DwgOcsToWorld(e->center.x, e->center.y, e->center.z, ox, oy, oz, &w)) {
+      NoteSkip(skipHist, "CIRCLE(degenerate extrusion)");
+      if (degenerateExtrusions)
+        ++(*degenerateExtrusions);
+      return;
+    }
+    // Validate rotated extrusion is still non-degenerate (rotation preserves length, but guard).
+    ucs::Ucs tmp;
+    if (!ucs::FromNormal({0, 0, 0}, {ex, ey, ez}, &tmp)) {
+      NoteSkip(skipHist, "CIRCLE(degenerate extrusion)");
+      if (degenerateExtrusions)
+        ++(*degenerateExtrusions);
+      return;
+    }
+    double cx = 0, cy = 0;
+    xf.apply(w.x, w.y, &cx, &cy);
+    const double sc = std::max(std::fabs(xf.sx), std::fabs(xf.sy));
+    LocalCircle(st, cx, cy, e->radius * sc, w.z, at, ex, ey, ez);
+    return;
+  }
+  if (ty == DWG_TYPE_ARC && ent->tio.ARC != nullptr) {
+    const Dwg_Entity_ARC* e = ent->tio.ARC;
+    const double ox = e->extrusion.x;
+    const double oy = e->extrusion.y;
+    const double oz = e->extrusion.z;
+    double ex = ox, ey = oy, ez = oz;
+    RotateExtrusionByXf(xf, &ex, &ey);
+    if (DwgExtrusionIsFlat(ex, ey, ez)) {
+      double cx = 0, cy = 0;
+      xf.apply(e->center.x, e->center.y, &cx, &cy);
+      const double sc = std::max(std::fabs(xf.sx), std::fabs(xf.sy));
+      LocalArc(st, cx, cy, e->radius * sc, e->start_angle + xf.ang, e->end_angle + xf.ang, e->center.z, at,
+               ex, ey, ez);
+      return;
+    }
+    ray3d::Vec3 w{};
+    if (!DwgOcsToWorld(e->center.x, e->center.y, e->center.z, ox, oy, oz, &w)) {
+      NoteSkip(skipHist, "ARC(degenerate extrusion)");
+      if (degenerateExtrusions)
+        ++(*degenerateExtrusions);
+      return;
+    }
+    ucs::Ucs tmp;
+    if (!ucs::FromNormal({0, 0, 0}, {ex, ey, ez}, &tmp)) {
+      NoteSkip(skipHist, "ARC(degenerate extrusion)");
+      if (degenerateExtrusions)
+        ++(*degenerateExtrusions);
+      return;
+    }
+    double cx = 0, cy = 0;
+    xf.apply(w.x, w.y, &cx, &cy);
+    const double sc = std::max(std::fabs(xf.sx), std::fabs(xf.sy));
+    // Angles need no adjustment — OCS shares frame axes (issue #435 Expected).
+    LocalArc(st, cx, cy, e->radius * sc, e->start_angle + xf.ang, e->end_angle + xf.ang, w.z, at, ex, ey, ez);
+    return;
+  }
+  if (ty == DWG_TYPE_ELLIPSE && ent->tio.ELLIPSE != nullptr) {
+    const Dwg_Entity_ELLIPSE* e = ent->tio.ELLIPSE;
+    double span = e->end_angle - e->start_angle;
+    while (span < 0.0)
+      span += 2.0 * kPi;
+    const bool full = span < 1e-9 || std::fabs(span - 2.0 * kPi) < 1e-6;
+    if (!full) {
+      if (ImportTrimmedEllipseAsPolyline(st, e, xf, at))
+        return;
+      NoteSkip(skipHist, "ELLIPSE(trimmed)");
+      return;
+    }
+    double cx = 0, cy = 0;
+    xf.apply(e->center.x, e->center.y, &cx, &cy);
+    CadEllipse el{};
+    el.cx = cx - st.worldDocumentOriginX;
+    el.cy = cy - st.worldDocumentOriginY;
+    el.majVx = e->sm_axis.x * xf.sx;
+    el.majVy = e->sm_axis.y * xf.sy;
+    el.ratio = e->axis_ratio;
+    el.z = e->center.z;
+    st.userEllipses.push_back(el);
+    st.userEllAttrs.push_back(at);
+    return;
+  }
+  if (ty == DWG_TYPE_LWPOLYLINE && ent->tio.LWPOLYLINE != nullptr) {
+    const Dwg_Entity_LWPOLYLINE* e = ent->tio.LWPOLYLINE;
+    std::vector<double> xyz;
+    xyz.reserve(static_cast<size_t>(e->num_points) * 3);
+    for (BITCODE_BL i = 0; i < e->num_points; ++i) {
+      double x = 0, y = 0;
+      xf.apply(e->points[i].x, e->points[i].y, &x, &y);
+      xyz.push_back(x);
+      xyz.push_back(y);
+      xyz.push_back(e->elevation);
+    }
+    const bool closed = (e->flag & 512) != 0 || (e->flag & 1) != 0;
+    // REQ-316 / ADR-047 (DWG side, REQ-325 / ADR-053 increment 4): group-42-equivalent bulges, one
+    // per vertex, present whenever `bulges` is non-null — LibreDWG's own `num_bulges` flag bit (16).
+    std::vector<double> bulge;
+    if (e->bulges != nullptr && e->num_bulges > 0) {
+      bulge.reserve(e->num_bulges);
+      for (BITCODE_BL i = 0; i < e->num_bulges; ++i)
+        bulge.push_back(e->bulges[i]);
+    }
+    LocalPolyline(st, xyz, closed, at, bulge.empty() ? nullptr : &bulge);
+    return;
+  }
+  if ((ty == DWG_TYPE_POLYLINE_2D || ty == DWG_TYPE_POLYLINE_3D)) {
+    std::vector<double> xyz;
+    bool closed = false;
+    for (Dwg_Object* v = get_first_owned_entity(obj); v != nullptr; v = get_next_owned_entity(obj, v)) {
+      if (v->fixedtype == DWG_TYPE_VERTEX_2D && v->tio.entity != nullptr && v->tio.entity->tio.VERTEX_2D != nullptr) {
+        const Dwg_Entity_VERTEX_2D* p = v->tio.entity->tio.VERTEX_2D;
+        if ((p->flag & 16) != 0)
+          continue;
+        double x = 0, y = 0;
+        xf.apply(p->point.x, p->point.y, &x, &y);
+        xyz.push_back(x);
+        xyz.push_back(y);
+        xyz.push_back(p->point.z);
+      } else if (v->fixedtype == DWG_TYPE_VERTEX_3D && v->tio.entity != nullptr &&
+                 v->tio.entity->tio.VERTEX_3D != nullptr) {
+        const Dwg_Entity_VERTEX_3D* p = v->tio.entity->tio.VERTEX_3D;
+        double x = 0, y = 0;
+        xf.apply(p->point.x, p->point.y, &x, &y);
+        xyz.push_back(x);
+        xyz.push_back(y);
+        xyz.push_back(p->point.z);
+      }
+    }
+    if (ty == DWG_TYPE_POLYLINE_2D && ent->tio.POLYLINE_2D != nullptr)
+      closed = (ent->tio.POLYLINE_2D->flag & 1) != 0;
+    LocalPolyline(st, xyz, closed, at);
+    return;
+  }
+  if (ty == DWG_TYPE_TEXT && ent->tio.TEXT != nullptr) {
+    const Dwg_Entity_TEXT* e = ent->tio.TEXT;
+    double x = 0, y = 0;
+    xf.apply(e->ins_pt.x, e->ins_pt.y, &x, &y);
+    const bool annotative = ImportEedMarksAnnotative(dwg, ent);
+    LocalText(st, x, y, e->elevation, e->height, e->rotation + xf.ang, FromT(dwg, e->text_value),
+              CadAnnotation::Kind::Text, at, annotative, ent, dwg, &xf);
+    return;
+  }
+  if (ty == DWG_TYPE_MTEXT && ent->tio.MTEXT != nullptr) {
+    const Dwg_Entity_MTEXT* e = ent->tio.MTEXT;
+    double x = 0, y = 0;
+    xf.apply(e->ins_pt.x, e->ins_pt.y, &x, &y);
+    const double rot = std::atan2(e->x_axis_dir.y, e->x_axis_dir.x);
+    const bool annotative =
+        ImportEedMarksAnnotative(dwg, ent) ||
+        (dwg->header.version >= R_2018 && e->is_not_annotative == 0);
+    LocalText(st, x, y, e->ins_pt.z, e->text_height, rot + xf.ang, FromT(dwg, e->text),
+              CadAnnotation::Kind::Mtext, at, annotative, ent, dwg, &xf);
+    return;
+  }
+  if (ty == DWG_TYPE_SPLINE && ent->tio.SPLINE != nullptr) {
+    if (ImportSpline(st, ent->tio.SPLINE, xf, at))
+      return;
+    NoteSkip(skipHist, "SPLINE(degenerate or unsupported)");
+    return;
+  }
+  if (ty == DWG_TYPE_LEADER && ent->tio.LEADER != nullptr) {
+    if (ImportLeaderEntity(st, dwg, ent->tio.LEADER, xf, at, scaleContext))
+      return;
+    NoteSkip(skipHist, "LEADER(degenerate or unsupported)");
+    return;
+  }
+  if (ty == DWG_TYPE_MULTILEADER && ent->tio.MULTILEADER != nullptr) {
+    const Dwg_Entity_MULTILEADER* ml = ent->tio.MULTILEADER;
+    if (ml->ctx.has_content_blk && !ml->ctx.has_content_txt) {
+      NoteSkip(skipHist, "MULTILEADER(block content, issue #619)");
+      return;
+    }
+    if (ImportMultileaderEntity(st, dwg, ml, xf, at, ent))
+      return;
+    NoteSkip(skipHist, "MULTILEADER(unsupported layout, issue #619)");
+    return;
+  }
+  if (ty == DWG_TYPE__3DFACE && ent->tio._3DFACE != nullptr) {
+    if (Import3DFaceAsMesh(st, dwg, ent, ent->tio._3DFACE, xf, at))
+      return;
+    NoteSkip(skipHist, "3DFACE(degenerate)");
+    return;
+  }
+  if (ty == DWG_TYPE_SOLID && ent->tio.SOLID != nullptr) {
+    const Dwg_Entity_SOLID* e = ent->tio.SOLID;
+    if (Import2DSolidOrTrace(st, e->corner1, e->corner2, e->corner3, e->corner4, e->elevation, xf, at))
+      return;
+    NoteSkip(skipHist, "SOLID(degenerate)");
+    return;
+  }
+  if (ty == DWG_TYPE_TRACE && ent->tio.TRACE != nullptr) {
+    const Dwg_Entity_TRACE* e = ent->tio.TRACE;
+    if (Import2DSolidOrTrace(st, e->corner1, e->corner2, e->corner3, e->corner4, e->elevation, xf, at))
+      return;
+    NoteSkip(skipHist, "TRACE(degenerate)");
+    return;
+  }
+  if (ty == DWG_TYPE_POLYLINE_MESH && ent->tio.POLYLINE_MESH != nullptr) {
+    if (ImportPolylineMesh(st, dwg, obj, ent->tio.POLYLINE_MESH, xf, at))
+      return;
+    NoteSkip(skipHist, "POLYLINE_MESH(degenerate or unsupported)");
+    return;
+  }
+  if (ty == DWG_TYPE_POLYLINE_PFACE && ent->tio.POLYLINE_PFACE != nullptr) {
+    if (ImportPolylinePFace(st, dwg, obj, ent->tio.POLYLINE_PFACE, xf, at))
+      return;
+    NoteSkip(skipHist, "POLYLINE_PFACE(degenerate or unsupported)");
+    return;
+  }
+  if (ty == DWG_TYPE_IMAGE || ty == DWG_TYPE_WIPEOUT || ty == DWG_TYPE_PDFUNDERLAY ||
+      ty == DWG_TYPE_DWFUNDERLAY || ty == DWG_TYPE_DGNUNDERLAY) {
+    NoteSkip(skipHist, "IMAGE/underlay(reference not imported)");
+    return;
+  }
+  if (ty == DWG_TYPE_POINT && ent->tio.POINT != nullptr) {
+    const Dwg_Entity_POINT* e = ent->tio.POINT;
+    double px = 0.0, py = 0.0;
+    xf.apply(e->x, e->y, &px, &py);
+    CadPoint cp;
+    cp.x = px - st.worldDocumentOriginX;
+    cp.y = py - st.worldDocumentOriginY;
+    cp.z = e->z;
+    st.cadPoints.push_back(cp);
+    st.cadPointAttrs.push_back(at);
+    return;
+  }
+  if (ty == DWG_TYPE_HATCH && ent->tio.HATCH != nullptr) {
+    const Dwg_Entity_HATCH* h = ent->tio.HATCH;
+    if (h->is_gradient_fill != 0) {
+      NoteSkip(skipHist, "HATCH(gradient fill not imported yet, issue #608)");
+      return;
+    }
+    if (ImportHatchEntity(st, dwg, h, xf, at, ent))
+      return;
+    NoteSkip(skipHist, "HATCH(degenerate or unsupported boundary)");
+    return;
+  }
+  if (ty == DWG_TYPE_TABLE && ent->tio.TABLE != nullptr) {
+    const Dwg_Entity_TABLE* tab = ent->tio.TABLE;
+    if (tab->num_cols >= 1 && tab->num_rows >= 1 && tab->cells != nullptr) {
+      CadTable table;
+      table.cols = static_cast<int>(tab->num_cols);
+      if (tab->tablestyle != nullptr) {
+        Dwg_Object* tableStyleObject =
+            dwg_resolve_handle_silent(dwg, tab->tablestyle->absolute_ref);
+        if (tableStyleObject != nullptr && tableStyleObject->fixedtype == DWG_TYPE_TABLESTYLE &&
+            tableStyleObject->tio.object != nullptr &&
+            tableStyleObject->tio.object->tio.TABLESTYLE != nullptr)
+          table.styleName = FromT(dwg, tableStyleObject->tio.object->tio.TABLESTYLE->name);
+      }
+      double ix = tab->ins_pt.x, iy = tab->ins_pt.y;
+      xf.apply(ix, iy, &ix, &iy);
+      table.insX = static_cast<float>(ix - st.worldDocumentOriginX);
+      table.insY = static_cast<float>(iy - st.worldDocumentOriginY);
+      table.insZ = static_cast<float>(tab->ins_pt.z);
+      table.rotationRad = static_cast<float>(tab->rotation);
+      if (tab->col_widths != nullptr && tab->num_cols > 0) {
+        double sum = 0.0;
+        for (BITCODE_BL c = 0; c < tab->num_cols; ++c)
+          sum += tab->col_widths[c];
+        table.width = static_cast<float>(std::max(sum, 1.0));
+      }
+      if (tab->row_heights != nullptr && tab->num_rows > 0) {
+        double sum = 0.0;
+        for (BITCODE_BL r = 0; r < tab->num_rows; ++r)
+          sum += tab->row_heights[r];
+        table.height = static_cast<float>(std::max(sum, 1.0));
+      }
+      const unsigned long nCells = tab->num_cells;
+      table.cells.reserve(static_cast<size_t>(nCells));
+      for (unsigned long ci = 0; ci < nCells; ++ci)
+        table.cells.push_back(FromT(dwg, tab->cells[ci].text_value));
+      st.cadTables.push_back(std::move(table));
+      st.cadTableAttrs.push_back(at);
+      return;
+    }
+    NoteSkip(skipHist, "TABLE(degenerate)");
+    return;
+  }
+  if (ty == DWG_TYPE_INSERT) {
+    if (ent->tio.INSERT != nullptr && ent->tio.INSERT->block_header != nullptr) {
+      Dwg_Object* insBlk = dwg_resolve_handle_silent(dwg, ent->tio.INSERT->block_header->absolute_ref);
+      if (DwgInsertReferencesForeignDynamicDefinition(dwg, insBlk)) {
+        AppCommandState& catalog = blockDefCatalog != nullptr ? *blockDefCatalog : st;
+        bool canEval = false;
+        if (insBlk != nullptr &&
+            EnsureDwgBlockDefinitionImported(catalog, dwg, insBlk, skipHist, degenerateExtrusions,
+                                             scaleContext)) {
+          const std::string bname = BlockHeaderDwgName(dwg, insBlk);
+          const int di = CadBlockFindDef(catalog.blockDefs, bname);
+          canEval = di >= 0 && !catalog.blockDefs[static_cast<size_t>(di)].parameters.empty();
+        }
+        if (!canEval) {
+          NoteSkip(skipHist, "INSERT(dynamic block definition; expected *U instance)");
+          return;
+        }
+      }
+    }
+    if (depth == 0) {
+      if (TryImportInsertAsBlockRef(st, dwg, ent, depth, at, skipHist, degenerateExtrusions,
+                                    scaleContext))
+        return;
+    } else if (ImportNestedInsertAsBlockRef(st, dwg, ent, xf, skipHist, degenerateExtrusions,
+                                            blockDefCatalog, scaleContext)) {
+      return;
+    }
+    ExplodeInsert(st, dwg, ent, depth, skipHist, degenerateExtrusions, blockDefCatalog, scaleContext);
+    return;
+  }
+  // REQ-366, issue #607: Aligned / Linear / 3-point Angular DIMENSION entities read back into
+  // GoSurvey's own dimension kind (statement 3). Any other subtype falls through to the branch
+  // below, which imports the anonymous *D block's drawn geometry instead.
+  if ((ty == DWG_TYPE_DIMENSION_ALIGNED || ty == DWG_TYPE_DIMENSION_LINEAR ||
+       ty == DWG_TYPE_DIMENSION_ANG3PT) &&
+      ent->tio.DIMENSION_common != nullptr) {
+    const Dwg_DIMENSION_common* common = ent->tio.DIMENSION_common;
+    const BITCODE_3BD* xline1 = nullptr;
+    const BITCODE_3BD* xline2 = nullptr;
+    const BITCODE_3BD* centerOrDef = nullptr;
+    double rot = 0.0;
+    if (ty == DWG_TYPE_DIMENSION_ALIGNED && ent->tio.DIMENSION_ALIGNED != nullptr) {
+      xline1 = &ent->tio.DIMENSION_ALIGNED->xline1_pt;
+      xline2 = &ent->tio.DIMENSION_ALIGNED->xline2_pt;
+      centerOrDef = &common->def_pt;
+    } else if (ty == DWG_TYPE_DIMENSION_LINEAR && ent->tio.DIMENSION_LINEAR != nullptr) {
+      xline1 = &ent->tio.DIMENSION_LINEAR->xline1_pt;
+      xline2 = &ent->tio.DIMENSION_LINEAR->xline2_pt;
+      centerOrDef = &common->def_pt;
+      rot = ent->tio.DIMENSION_LINEAR->dim_rotation;
+    } else if (ty == DWG_TYPE_DIMENSION_ANG3PT && ent->tio.DIMENSION_ANG3PT != nullptr) {
+      xline1 = &ent->tio.DIMENSION_ANG3PT->xline1_pt;
+      xline2 = &ent->tio.DIMENSION_ANG3PT->xline2_pt;
+      centerOrDef = &ent->tio.DIMENSION_ANG3PT->center_pt;
+    }
+    if (!ImportSupportedDimension(st, dwg, xf, ty, common, xline1, xline2, centerOrDef, rot, at, ent))
+      ExplodeDimensionBlock(st, dwg, common, depth, skipHist, degenerateExtrusions, scaleContext);
+    return;
+  }
+  if ((ty == DWG_TYPE_DIMENSION_RADIUS || ty == DWG_TYPE_DIMENSION_DIAMETER ||
+       ty == DWG_TYPE_DIMENSION_ORDINATE || ty == DWG_TYPE_DIMENSION_ANG2LN) &&
+      ent->tio.DIMENSION_common != nullptr) {
+    // REQ-366 statement 3: not mapped to a GoSurvey dimension kind — the *D block's drawn geometry
+    // is kept as plain entities, and the subtype is named ONCE (aggregated via NoteSkip/skipHist,
+    // same mechanism every other "skipped N of kind X" case in this file uses) rather than once per
+    // instance.
+    const char* subtype = ty == DWG_TYPE_DIMENSION_RADIUS     ? "DIMENSION(Radius, unsupported subtype)"
+                          : ty == DWG_TYPE_DIMENSION_DIAMETER  ? "DIMENSION(Diameter, unsupported subtype)"
+                          : ty == DWG_TYPE_DIMENSION_ORDINATE  ? "DIMENSION(Ordinate, unsupported subtype)"
+                                                                : "DIMENSION(2-line Angular, unsupported subtype)";
+    NoteSkip(skipHist, subtype);
+    ExplodeDimensionBlock(st, dwg, ent->tio.DIMENSION_common, depth, skipHist, degenerateExtrusions,
+                          scaleContext);
+    return;
+  }
+  if (ty == DWG_TYPE__3DSOLID && ent->tio._3DSOLID != nullptr) {
+    ImportAcisSolid(st, dwg, ent, ent->tio._3DSOLID, xf, at, skipHist);
+    return;
+  }
+  if (ty == DWG_TYPE_SEQEND || ty == DWG_TYPE_VERTEX_2D || ty == DWG_TYPE_VERTEX_3D || ty == DWG_TYPE_ENDBLK)
+    return;
+  if (const std::string plant = libredwgplant::PlantClassName(dwg, obj); !plant.empty()) {
+    // Model-space Plant 3D parts are placed by ImportPlantParts (D-2026-10-08-b).
+    if (depth != 0)
+      NoteSkip(skipHist, (plant + "(inside a block, not placed)").c_str());
+    return;
+  }
+  // LibreDWG represents unmodeled Civil 3D classes as UNKNOWN_ENT. The variable type still
+  // identifies the drawing's CLASS table entry (type - 500); use that name in the loss report so
+  // a real baseline tells us which Civil 3D records need support instead of collapsing thousands
+  // of different objects into the unhelpful "UNKNOWN_ENT" bucket.
+  if (ty == DWG_TYPE_UNKNOWN_ENT && dwg != nullptr && obj->type >= 500 && dwg->dwg_class != nullptr) {
+    const unsigned classIndex = static_cast<unsigned>(obj->type - 500u);
+    if (classIndex < dwg->num_classes && dwg->dwg_class[classIndex].dxfname != nullptr) {
+      const char* className = dwg->dwg_class[classIndex].dxfname;
+      if (std::strcmp(className, "AECC_COGO_POINT") == 0) {
+        const auto nodeNumber = libredwgcivil::DecodeCogoPointNumber(
+            obj->unknown_bits, static_cast<std::size_t>(obj->num_unknown_bits));
+        if (depth == 0 && nodeNumber.has_value()) {
+          const auto point = std::find_if(st.surveyPoints.begin(), st.surveyPoints.end(),
+              [&](const SurveyPoint& value) { return value.id == *nodeNumber; });
+          if (point != st.surveyPoints.end()) {
+            point->layer = LayerName(dwg, ent);
+            NoteSkip(skipHist, "AECC_COGO_POINT(description/point-group/label-style fields not decoded)");
+            return;
+          }
+        }
+        const auto center = libredwgcivil::DecodeCogoPointProxyCenter(
+            ent->preview, static_cast<std::size_t>(ent->preview_size));
+        if (center.has_value()) {
+          double x = 0.0, y = 0.0;
+          xf.apply(center->x, center->y, &x, &y);
+          const auto number = libredwgcivil::DecodeCogoPointNumber(
+              obj->unknown_bits, static_cast<std::size_t>(obj->num_unknown_bits));
+          if (number.has_value()) {
+            SurveyPoint point{};
+            point.id = *number;
+            point.easting = x - st.worldDocumentOriginX;
+            point.northing = y - st.worldDocumentOriginY;
+            point.elevation = center->z;
+            point.layer = LayerName(dwg, ent);
+            point.labelStyle = SurveyPointLabelStyle::None;
+            st.surveyPoints.push_back(std::move(point));
+            NoteSkip(skipHist, "AECC_COGO_POINT(description/point-group/label-style fields not decoded)");
+          }
+          return;
+        }
+        NoteSkip(skipHist, "AECC_COGO_POINT(proxy graphics unsupported or malformed)");
+        return;
+      }
+      if (depth == 0 && std::strcmp(className, "AECC_SURFACE_CONTOUR_LABEL_GROUP") == 0) {
+        // Imported by ImportCivilContourLabels once the surfaces exist. A group with no label stores
+        // a degenerate outline at the origin, which is not drawing content.
+        if (libredwgcivil::DecodeSurfaceContourLabel(obj->unknown_bits,
+                static_cast<std::size_t>(obj->num_unknown_bits), ent->preview,
+                static_cast<std::size_t>(ent->preview_size)).has_value())
+          return;
+      }
+      if (depth == 0 && std::strcmp(className, "AECC_POINT_TABLE") == 0 &&
+          ImportCivilPointTable(st, dwg, *obj, skipHist)) return;
+      if (depth == 0 && std::strcmp(className, "AECC_SURFACE_ELEVATION_LABEL") == 0) {
+        if (const auto label = libredwgcivil::DecodeSurfaceElevationLabel(
+                obj->unknown_bits, static_cast<std::size_t>(obj->num_unknown_bits))) {
+          std::string styleName = CivilSurfaceElevationLabelStyleName(dwg, *obj);
+          if (styleName.empty()) styleName = "Elevation Only";
+          ImportSurfaceElevationLabel(st, label->location, AttrFromEnt(dwg, ent), styleName);
+          NoteSkip(skipHist, "AECC_SURFACE_ELEVATION_LABEL(imported as marker and text; label style from collector reference)");
+          return;
+        }
+      }
+      if (depth == 0 && std::strcmp(className, "AECC_TIN_SURFACE") == 0) {
+        auto record = libredwgcivil::DecodeTinSurface(obj->unknown_bits,
+                                                      static_cast<std::size_t>(obj->num_unknown_bits));
+        if (record.has_value()) {
+          CadSurface surface;
+          surface.name = libredwgcad_detail::DecodeDwgString(record->name.c_str(), true);
+          if (surface.name.empty()) surface.name = "Surface";
+          const std::string baseName = surface.name;
+          for (int suffix = 2; std::any_of(st.cadSurfaces.begin(), st.cadSurfaces.end(),
+                                           [&](const CadSurface& value) { return value.name == surface.name; });
+               ++suffix)
+            surface.name = baseName + " (" + std::to_string(suffix) + ")";
+          auto tin = std::make_shared<CadTin>();
+          tin->vertsXyz = std::move(record->vertsXyz);
+          for (std::size_t i = 0; i + 2 < tin->vertsXyz.size(); i += 3) {
+            tin->vertsXyz[i] -= st.worldDocumentOriginX;
+            tin->vertsXyz[i + 1] -= st.worldDocumentOriginY;
+          }
+          tin->indices = std::move(record->indices);
+          surface.tin = std::move(tin);
+          surface.importedFixedTin = true;
+          if (const Dwg_Object* styleObject = ResolveTinSurfaceStyle(dwg, *obj))
+            if (const auto style = DecodeCivilSurfaceStyleObject(*styleObject))
+              surface.styleName = libredwgcad_detail::DecodeDwgString(style->name.c_str(), true);
+          st.cadSurfaces.push_back(std::move(surface));
+          st.cadSurfaceAttrs.push_back(AttrFromEnt(dwg, ent));
+          NoteSkip(skipHist, "AECC_TIN_SURFACE(triangulation and style imported; contour smoothing, boundaries and edit definition not decoded)");
+          return;
+        }
+      }
+      const auto preview = libredwgcivil::DecodeProxyGraphicPolylines(
+          ent->preview, static_cast<std::size_t>(ent->preview_size));
+      // A Civil object that draws nothing (an unlabelled label group, a parcel with no label) stores
+      // its default 1.5 x 0.12 label box at the world origin. That is not drawing content: importing
+      // it puts thousands of stray outlines three million feet from the site.
+      if (preview.has_value() && preview->size() == 1 &&
+          std::all_of(preview->front().begin(), preview->front().end(), [](const CadPoint& v) {
+            return v.z == 0.0 && v.x >= 0.0 && v.x <= 1.5 && v.y >= 0.0 && v.y <= 0.12; })) {
+        NoteSkip(skipHist, (std::string(className) + "(empty graphics)").c_str());
+        return;
+      }
+      if (preview.has_value() && !preview->empty()) {
+        for (const auto& chain : *preview) {
+          std::vector<double> xyz;
+          xyz.reserve(chain.size() * 3);
+          for (const CadPoint& vertex : chain) {
+            double x = 0.0, y = 0.0;
+            xf.apply(vertex.x, vertex.y, &x, &y);
+            xyz.push_back(x);
+            xyz.push_back(y);
+            xyz.push_back(vertex.z);
+          }
+          LocalPolyline(st, xyz, /*closed=*/false, at);
+        }
+        NoteSkip(skipHist, (std::string(className) +
+                            "(semantic data not decoded; proxy preview imported as display geometry)")
+                               .c_str());
+        return;
+      }
+      NoteSkip(skipHist, className);
+      return;
+    }
+  }
+  NoteSkip(skipHist, obj->dxfname != nullptr ? obj->dxfname : "UNKNOWN");
+}
+
+// Resolve a layer's linetype handle (DXF 6) to its LTYPE table name. CONTINUOUS / ByLayer / an
+// unresolved handle all collapse to the canonical "Continuous".
+std::string LayerLinetypeName(Dwg_Data* dwg, const Dwg_Object_LAYER* ly) {
+  if (dwg == nullptr || ly == nullptr || ly->ltype == nullptr)
+    return "Continuous";
+  Dwg_Object* o = dwg_resolve_handle_silent(dwg, ly->ltype->absolute_ref);
+  if (o == nullptr || o->fixedtype != DWG_TYPE_LTYPE || o->tio.object == nullptr ||
+      o->tio.object->tio.LTYPE == nullptr)
+    return "Continuous";
+  std::string n = FromT(dwg, o->tio.object->tio.LTYPE->name);
+  std::string lower = n;
+  std::transform(lower.begin(), lower.end(), lower.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  if (n.empty() || lower == "continuous" || lower == "bylayer")
+    return "Continuous";
+  return n;
+}
+
+void ImportLayers(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& log) {
+  st.drawingLayerTable = DefaultDrawingLayerTable();
+  int imported = 0;
+  int undecoded = 0;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_LAYER || o->tio.object == nullptr || o->tio.object->tio.LAYER == nullptr)
+      continue;
+    const Dwg_Object_LAYER* ly = o->tio.object->tio.LAYER;
+    const std::string name = LayoutNameFromT(dwg, ly->name);
+    if (name.empty()) {
+      ++undecoded;
+      continue;
+    }
+    CadLayerRow row{};
+    row.name = name;
+    row.on = ly->off == 0;
+    row.frozen = ly->frozen != 0;
+    row.locked = ly->locked != 0;
+    row.color = ColorStorage(ly->color);
+    row.plotStyleName = PlotStyleNameFromRef(dwg, ly->plotstyle);
+    row.linetype = LayerLinetypeName(dwg, ly);
+    row.lineweightMm = LineweightMmFromDwgIndex(ly->linewt);
+    const float layerTr = Transparency01FromEntityColor(ly->color);
+    if (layerTr >= 0.f)
+      row.transparency = layerTr;
+    auto existing = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+                                [&name](const CadLayerRow& layer) { return layer.name == name; });
+    if (existing != st.drawingLayerTable.end())
+      *existing = row;
+    else
+      st.drawingLayerTable.push_back(row);
+    ++imported;
+  }
+  log.push_back("DWG import — " + std::to_string(imported) + " layer(s).");
+  if (undecoded > 0)
+    log.push_back("  skipped " + std::to_string(undecoded) + " layer(s) whose name could not be decoded");
+}
+
+// AutoCAD's native style enums and text values are translated at the IO boundary.
+std::string StyleOption(std::initializer_list<const char*> options, int index) {
+  if (index < 0 || index >= static_cast<int>(options.size())) index = 0;
+  return *(options.begin() + index);
+}
+int StyleOptionIndex(std::initializer_list<const char*> options, const std::string& value) {
+  int index = 0; for (const char* option : options) { if (value == option) return index; ++index; }
+  return 0;
+}
+std::string StyleDecimalPrecision(int precision) { return precision <= 0 ? "0" : "0." + std::string(std::clamp(precision, 0, 8), '0'); }
+int StylePrecision(const std::string& text) {
+  const auto point = text.find('.');
+  if (point == std::string::npos) return 0;
+  int count = 0;
+  for (std::size_t i = point + 1; i < text.size() && text[i] >= '0' && text[i] <= '9'; ++i) ++count;
+  return std::clamp(count, 0, 8);
+}
+std::string StyleAngularPrecision(int format, int precision) {
+  if (format != 1 && format != 4) return StyleDecimalPrecision(precision);
+  return precision <= 0 ? "0d" : precision <= 2 ? "0d00'" :
+      precision <= 4 ? "0d00'00\"" : "0d00'00." + std::string(std::min(precision - 4, 4), '0') + "\"";
+}
+int StyleAngularPrecisionValue(const std::string& text) {
+  return text.find('"') != std::string::npos ? 4 + StylePrecision(text) :
+      text.find('\'') != std::string::npos ? 2 : StylePrecision(text);
+}
+int StyleWeight(const std::string& text) {
+  if (text == "ByLayer") return -1;
+  if (text == "ByBlock") return -2;
+  if (text == "Default") return -3;
+  return static_cast<int>(std::lround(std::strtod(text.c_str(), nullptr) * 100));
+}
+std::string StyleWeightName(int weight) {
+  if (weight == -1) return "ByLayer";
+  if (weight == -2) return "ByBlock";
+  if (weight == -3) return "Default";
+  char text[32]; std::snprintf(text, sizeof(text), "%.2f mm", weight / 100.0); return text;
+}
+
+void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
+  st.textStyles.clear();
+  TextStyles::EnsureStandard(st.textStyles);
+  st.activeTextStyleName = TextStyles::kStandardName;
+  st.tableStyles = CadTableBuiltinStyles();
+  st.surveyPointStyles = DefaultSurveyPointStyles();
+  st.surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
+  st.pointGroups.clear();
+  st.surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_STYLE || o->tio.object == nullptr || o->tio.object->tio.STYLE == nullptr)
+      continue;
+    const Dwg_Object_STYLE* s = o->tio.object->tio.STYLE;
+    const std::string name = FromT(dwg, s->name);
+    if (name.empty())
+      continue;
+    TextStyle* existing = TextStyles::Find(st.textStyles, name);
+    if (existing == nullptr) {
+      st.textStyles.push_back(TextStyle{});
+      existing = &st.textStyles.back();
+    }
+    TextStyle& ts = *existing;
+    const bool annotative = ObjectStyleIsAnnotative(dwg, o->tio.object);
+    ts.props["annotative"] = annotative ? "1" : "0";
+    const double sizeScale = annotative ? 1.0 : std::max<double>(st.modelUnitsPerPlottedInch, 1.e-6);
+    ts.name = name;
+    ts.fontFamily = FromT(dwg, s->font_file);
+    ts.heightInches = static_cast<float>(std::max(0.0, s->text_size / sizeScale));
+    ts.widthFactor = static_cast<float>(std::clamp(s->width_factor, 0.01, 100.0));
+    ts.obliqueDeg = static_cast<float>(s->oblique_angle * 180.0 / kPi);
+    ts.props["backwards"] = (s->generation & 2) ? "1" : "0";
+    ts.props["upsideDown"] = (s->generation & 4) ? "1" : "0";
+    ts.props["vertical"] = s->is_vertical ? "1" : "0";
+    ts.props["bigFont"] = FromT(dwg, s->bigfont_file);
+    ts.props["useBigFont"] = ts.props["bigFont"].empty() ? "0" : "1";
+    ts.bold = false;  // STYLE has no portable bold/italic flags; TrueType face details are font-owned.
+    ts.italic = false;
+  }
+  if (dwg->header_vars.TEXTSTYLE != nullptr) {
+    Dwg_Object* activeObject = dwg_resolve_handle_silent(dwg, dwg->header_vars.TEXTSTYLE->absolute_ref);
+    if (activeObject != nullptr && activeObject->fixedtype == DWG_TYPE_STYLE &&
+        activeObject->tio.object != nullptr && activeObject->tio.object->tio.STYLE != nullptr) {
+      const std::string activeName = FromT(dwg, activeObject->tio.object->tio.STYLE->name);
+      if (TextStyles::Find(st.textStyles, activeName) != nullptr)
+        st.activeTextStyleName = activeName;
+    }
+  }
+  st.dimensionStyles.clear();
+  const double mup = std::max<double>(st.modelUnitsPerPlottedInch, 1.e-6);
+  auto linetypeName = [dwg](BITCODE_H ref) {
+    if (ref == nullptr) return std::string("Continuous");
+    Dwg_Object* object = dwg_resolve_handle_silent(dwg, ref->absolute_ref);
+    if (object == nullptr || object->fixedtype != DWG_TYPE_LTYPE || object->tio.object == nullptr ||
+        object->tio.object->tio.LTYPE == nullptr)
+      return std::string("Continuous");
+    const std::string name = FromT(dwg, object->tio.object->tio.LTYPE->name);
+    return name.empty() ? std::string("Continuous") : name;
+  };
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_DIMSTYLE || o->tio.object == nullptr || o->tio.object->tio.DIMSTYLE == nullptr)
+      continue;
+    const Dwg_Object_DIMSTYLE* ds = o->tio.object->tio.DIMSTYLE;
+    DimensionStyle style = DimensionStyles::Default();
+    const bool annotative = ObjectStyleIsAnnotative(dwg, o->tio.object);
+    const double sizeScale = annotative ? 1.0 : mup;
+    style.props["annotative"] = annotative ? "1" : "0";
+    style.name = FromT(dwg, ds->name);
+    if (style.name.empty()) continue;
+    style.textSizeInches = static_cast<float>(std::max(0.001, ds->DIMTXT / sizeScale));
+    style.arrowSizeInches = static_cast<float>(std::max(0.001, ds->DIMASZ / sizeScale));
+    style.unitPrecision = std::clamp<int>(ds->DIMDEC, 0, 8);
+    style.unitScale = ds->DIMLFAC == 0.0 ? 1.0 : ds->DIMLFAC;
+    style.unitSuffix = FromT(dwg, ds->DIMPOST);
+    if (const auto at = style.unitSuffix.find("<>"); at != std::string::npos) {
+      style.props["prefix"] = style.unitSuffix.substr(0, at);
+      style.unitSuffix.erase(0, at + 2);
+    }
+    style.props["extendBeyondTicks"] = std::to_string(ds->DIMDLE / sizeScale);
+    style.props["baselineSpacing"] = std::to_string(ds->DIMDLI / sizeScale);
+    style.props["extendBeyondDimLines"] = std::to_string(ds->DIMEXE / sizeScale);
+    style.props["offsetFromOrigin"] = std::to_string(ds->DIMEXO / sizeScale);
+    style.props["fixedLengthExtValue"] = std::to_string(ds->DIMFXL / sizeScale);
+    style.props["textOffset"] = std::to_string(std::abs(ds->DIMGAP) / sizeScale);
+    style.props["drawFrame"] = ds->DIMGAP < 0 ? "1" : "0";
+    style.props["textFill"] = ds->DIMTFILL == 0 ? "None" : libredwgcad_detail::ColorToStorage(ds->DIMTFILLCLR.index, ds->DIMTFILLCLR.method, ds->DIMTFILLCLR.rgb);
+    style.props["roundOff"] = std::to_string(ds->DIMRND);
+    style.props["fractionHeightScale"] = std::to_string(ds->DIMTFAC);
+    style.props["overallScale"] = std::to_string(ds->DIMSCALE);
+    style.props["altMultiplier"] = std::to_string(ds->DIMALTF);
+    style.props["altRound"] = std::to_string(ds->DIMALTRND);
+    style.props["tolUpper"] = std::to_string(ds->DIMTP);
+    style.props["tolLower"] = std::to_string(ds->DIMTM);
+    style.props["tolScaling"] = std::to_string(ds->DIMTFAC);
+    style.props["subUnitsFactor"] = std::to_string(ds->DIMMZF);
+    style.props["altSubUnitsFactor"] = std::to_string(ds->DIMALTMZF);
+    style.props["suppressExt1"] = ds->DIMSE1 ? "1" : "0";
+    style.props["suppressExt2"] = ds->DIMSE2 ? "1" : "0";
+    style.props["suppressDim1"] = ds->DIMSD1 ? "1" : "0";
+    style.props["suppressDim2"] = ds->DIMSD2 ? "1" : "0";
+    style.props["fixedLengthExt"] = ds->DIMFXLON ? "1" : "0";
+    style.props["suppressArrowsNoFit"] = ds->DIMSOXD ? "1" : "0";
+    style.props["placeTextManually"] = ds->DIMUPT ? "1" : "0";
+    style.props["drawDimLineBetween"] = ds->DIMTOFL ? "1" : "0";
+    style.props["altEnabled"] = ds->DIMALT ? "1" : "0";
+    style.props["textHorizontal"] = StyleOption({"Centered", "At Ext Line 1", "At Ext Line 2", "Over Ext Line 1", "Over Ext Line 2"}, ds->DIMJUST);
+    style.props["fractionFormat"] = StyleOption({"Horizontal", "Diagonal", "Not stacked"}, ds->DIMFRAC);
+    style.props["arcSymbol"] = StyleOption({"Preceding dimension text", "Above dimension text", "None"}, ds->DIMARCSYM);
+    style.props["angularFormat"] = StyleOption({"Decimal Degrees", "Degrees Minutes Seconds", "Gradians", "Radians", "Surveyor's Units"}, ds->DIMAUNIT);
+    style.props["angularPrecision"] = StyleAngularPrecision(ds->DIMAUNIT, ds->DIMADEC < 0 ? ds->DIMDEC : ds->DIMADEC);
+    style.props["angZeroLeading"] = (ds->DIMAZIN & 1) ? "1" : "0";
+    style.props["angZeroTrailing"] = (ds->DIMAZIN & 2) ? "1" : "0";
+    style.props["textPlacementFit"] = StyleOption({"Beside the dimension line", "Over dimension line, with leader", "Over dimension line, without leader"}, ds->DIMTMOVE);
+    style.props["tolVertical"] = StyleOption({"Bottom", "Middle", "Top"}, ds->DIMTOLJ);
+    style.props["viewDirection"] = ds->DIMTXTDIRECTION ? "Right-to-Left" : "Left-to-Right";
+    style.props["textAlignment"] = ds->DIMTIH ? "Horizontal" : ds->DIMTOH ? "ISO standard" : "Aligned with dimension line";
+    style.props["fitOption"] = ds->DIMTIX ? "Always keep text between ext lines" : StyleOption({"Both text and arrows", "Arrows", "Text", "Either text or arrows (best fit)"}, ds->DIMATFIT);
+    style.props["tolMethod"] = ds->DIMLIM ? "Limits" : !ds->DIMTOL ? "None" : ds->DIMTP == ds->DIMTM ? "Symmetrical" : "Deviation";
+    style.props["tolPrecision"] = StyleDecimalPrecision(ds->DIMTDEC);
+    style.props["altPrecision"] = StyleDecimalPrecision(ds->DIMALTD);
+    style.props["altTolPrecision"] = StyleDecimalPrecision(ds->DIMALTTD);
+    style.props["altFormat"] = ds->DIMALTU == 3 ? "Engineering" : ds->DIMALTU == 4 || ds->DIMALTU == 6 ? "Architectural" :
+        ds->DIMALTU == 5 || ds->DIMALTU == 7 ? "Fractional" : "Decimal";
+    const std::string alternatePost = FromT(dwg, ds->DIMAPOST);
+    if (const auto at = alternatePost.find("[]"); at != std::string::npos) {
+      style.props["altPrefix"] = alternatePost.substr(0, at); style.props["altSuffix"] = alternatePost.substr(at + 2);
+    } else style.props["altSuffix"] = alternatePost;
+    style.props["subUnitSuffix"] = FromT(dwg, ds->DIMMZS);
+    style.props["altSubUnitSuffix"] = FromT(dwg, ds->DIMALTMZS);
+    const auto importFeetZeros = [&](const char* key, int value) {
+      style.props[std::string(key) + "Feet"] = (value & 3) == 0 || (value & 3) == 3 ? "1" : "0";
+      style.props[std::string(key) + "Inches"] = (value & 3) == 0 || (value & 3) == 2 ? "1" : "0";
+    };
+    importFeetZeros("zero", ds->DIMZIN); importFeetZeros("altZero", ds->DIMALTZ);
+    importFeetZeros("tolZero", ds->DIMTZIN); importFeetZeros("altTolZero", ds->DIMALTTZ);
+    style.props["dimLineWeight"] = StyleWeightName(ds->DIMLWD);
+    style.props["extLineWeight"] = StyleWeightName(ds->DIMLWE);
+    style.props["extLineType2"] = linetypeName(ds->DIMLTEX2);
+    style.props["centerMark"] = ds->DIMCEN == 0 ? "None" : ds->DIMCEN < 0 ? "Line" : "Mark";
+    style.props["centerMarkSize"] = std::to_string(std::abs(ds->DIMCEN) / sizeScale);
+    style.props["decimalSeparator"] = ds->DIMDSEP == ',' ? "',' (Comma)" : ds->DIMDSEP == ' ' ? "' ' (Space)" : "'.' (Period)";
+    style.props["zeroLeading"] = (ds->DIMZIN & 4) ? "1" : "0";
+    style.props["zeroTrailing"] = (ds->DIMZIN & 8) ? "1" : "0";
+    style.props["altZeroLeading"] = (ds->DIMALTZ & 4) ? "1" : "0";
+    style.props["altZeroTrailing"] = (ds->DIMALTZ & 8) ? "1" : "0";
+    style.props["tolZeroLeading"] = (ds->DIMTZIN & 4) ? "1" : "0";
+    style.props["tolZeroTrailing"] = (ds->DIMTZIN & 8) ? "1" : "0";
+    style.props["altTolZeroLeading"] = (ds->DIMALTTZ & 4) ? "1" : "0";
+    style.props["altTolZeroTrailing"] = (ds->DIMALTTZ & 8) ? "1" : "0";
+
+    style.textColor = libredwgcad_detail::ColorToStorage(ds->DIMCLRT.index, ds->DIMCLRT.method, ds->DIMCLRT.rgb);
+    style.dimLineColor = libredwgcad_detail::ColorToStorage(ds->DIMCLRD.index, ds->DIMCLRD.method, ds->DIMCLRD.rgb);
+    style.extLineColor = libredwgcad_detail::ColorToStorage(ds->DIMCLRE.index, ds->DIMCLRE.method, ds->DIMCLRE.rgb);
+    style.dimLineType = linetypeName(ds->DIMLTYPE);
+    style.extLineType = linetypeName(ds->DIMLTEX1);
+    if (ds->DIMTAD == 1) style.textAlign = DimTextAlign::Above;
+    else if (ds->DIMTAD == 2) style.textAlign = DimTextAlign::Beside;
+    if (ds->DIMTXSTY != nullptr) {
+      Dwg_Object* textStyleObject = dwg_resolve_handle_silent(dwg, ds->DIMTXSTY->absolute_ref);
+      if (textStyleObject != nullptr && textStyleObject->fixedtype == DWG_TYPE_STYLE &&
+          textStyleObject->tio.object != nullptr && textStyleObject->tio.object->tio.STYLE != nullptr)
+        style.textFont = FromT(dwg, textStyleObject->tio.object->tio.STYLE->name);
+    }
+    switch (ds->DIMLUNIT) {
+      case 3: style.unitFormat = DimUnitFormat::Engineering; break;
+      case 4: style.unitFormat = DimUnitFormat::Architectural; break;
+      case 5: style.unitFormat = DimUnitFormat::Fractional; break;
+      default: style.unitFormat = DimUnitFormat::Decimal; break;
+    }
+    const std::string arrow = FromT(dwg, ds->DIMBLK_T);
+    if (arrow.find("CLOSEDBLANK") != std::string::npos) style.arrowType = DimArrowType::ClosedBlank;
+    else if (arrow.find("ARCHTICK") != std::string::npos) style.arrowType = DimArrowType::Tick;
+    else if (arrow.find("DOT") != std::string::npos) style.arrowType = DimArrowType::Dot;
+    else if (arrow.find("OPEN") != std::string::npos) style.arrowType = DimArrowType::Open;
+    else if (arrow.find("NONE") != std::string::npos) style.arrowType = DimArrowType::None;
+    if (DimensionStyle* existing = const_cast<DimensionStyle*>(DimensionStyles::Find(st.dimensionStyles, style.name)))
+      *existing = std::move(style);
+    else
+      st.dimensionStyles.push_back(std::move(style));
+  }
+  if (st.dimensionStyles.empty()) st.dimensionStyles = DimensionStyles::DefaultStyles();
+  std::string activeName;
+  if (dwg->header_vars.DIMSTYLE != nullptr) {
+    Dwg_Object* activeObject = dwg_resolve_handle_silent(dwg, dwg->header_vars.DIMSTYLE->absolute_ref);
+    if (activeObject && activeObject->fixedtype == DWG_TYPE_DIMSTYLE && activeObject->tio.object &&
+        activeObject->tio.object->tio.DIMSTYLE)
+      activeName = FromT(dwg, activeObject->tio.object->tio.DIMSTYLE->name);
+  }
+  if (const DimensionStyle* current = DimensionStyles::Find(st.dimensionStyles, activeName))
+    st.activeDimensionStyle = *current;
+  else if (const DimensionStyle* standard = DimensionStyles::Find(st.dimensionStyles, "Standard"))
+    st.activeDimensionStyle = *standard;
+  else st.activeDimensionStyle = st.dimensionStyles.front();
+
+  st.multileaderStyles.clear();
+  std::map<std::uint64_t, std::string> mleaderStyleNamesByHandle;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_MLEADERSTYLE || o->tio.object == nullptr || o->tio.object->tio.MLEADERSTYLE == nullptr)
+      continue;
+    const Dwg_Object_MLEADERSTYLE* record = o->tio.object->tio.MLEADERSTYLE;
+    MultileaderStyle style = MultileaderStyles::Default();
+    const bool annotative = record->is_annotative != 0 || ObjectStyleIsAnnotative(dwg, o->tio.object);
+    const double sizeScale = annotative ? 1.0 : mup;
+    style.name = MleaderStyleNameFromRecord(dwg, o, record);
+    if (style.name.empty()) continue;
+    mleaderStyleNamesByHandle[o->handle.value] = style.name;
+    if (MultileaderStyles::Find(st.multileaderStyles, style.name) != nullptr) continue;
+    style.textSizeInches = static_cast<float>(std::max(0.001, record->text_height / sizeScale));
+    style.arrowSizeInches = static_cast<float>(std::max(0.001, record->arrow_head_size / sizeScale));
+    style.landingGapInches = static_cast<float>(std::max(0.0, record->landing_gap / sizeScale));
+    style.annotativeDefault = annotative;
+    style.props["landingLength"] = std::to_string(record->landing_dist / sizeScale);
+    style.props["breakSize"] = std::to_string(record->break_size / sizeScale);
+    style.props["maxPoints"] = std::to_string(record->max_points);
+    style.props["maxPointsEnabled"] = record->max_points ? "1" : "0";
+    style.props["firstAngle"] = record->first_seg_angle == 12 ? "Horizontal" : record->first_seg_angle == 0 ? "Any angle" : std::to_string(static_cast<int>(record->first_seg_angle * 15));
+    style.props["secondAngle"] = record->second_seg_angle == 12 ? "Horizontal" : record->second_seg_angle == 0 ? "Any angle" : std::to_string(static_cast<int>(record->second_seg_angle * 15));
+    style.props["overallScale"] = std::to_string(record->scale);
+    style.props["blockScale"] = std::to_string(record->block_scale.x);
+    style.props["landingEnabled"] = record->has_landing ? "1" : "0";
+    style.props["doglegEnabled"] = record->has_dogleg ? "1" : "0";
+    style.props["alwaysLeft"] = record->text_always_left ? "1" : "0";
+    style.props["textFrame"] = record->has_text_frame ? "1" : "0";
+    style.props["extendToText"] = record->text_extended ? "1" : "0";
+    style.props["leaderType"] = StyleOption({"None", "Straight", "Spline"}, record->type);
+    style.props["contentType"] = StyleOption({"None", "Block", "Mtext"}, record->content_type);
+    style.props["textAngle"] = StyleOption({"As inserted", "Keep horizontal", "Always right reading"}, record->text_angle_type);
+    style.props["attachmentDirection"] = StyleOption({"Horizontal", "Vertical"}, record->attach_dir);
+    style.props["blockAttachment"] = StyleOption({"Center extents", "Insertion point"}, record->block_connection);
+    style.props["leftAttachment"] = StyleOption({"Top of top line", "Middle of top line", "Middle of text", "Middle of bottom line", "Bottom of bottom line", "Underline bottom line", "Underline top line", "Bottom of top line", "Underline all lines", "Center", "Lined center"}, record->attach_left);
+    style.props["rightAttachment"] = StyleOption({"Top of top line", "Middle of top line", "Middle of text", "Middle of bottom line", "Bottom of bottom line", "Underline bottom line", "Underline top line", "Bottom of top line", "Underline all lines", "Center", "Lined center"}, record->attach_right);
+    style.props["leaderColor"] = libredwgcad_detail::ColorToStorage(record->line_color.index, record->line_color.method, record->line_color.rgb);
+    style.props["textColor"] = libredwgcad_detail::ColorToStorage(record->text_color.index, record->text_color.method, record->text_color.rgb);
+    style.props["blockColor"] = libredwgcad_detail::ColorToStorage(record->block_color.index, record->block_color.method, record->block_color.rgb);
+    style.props["defaultText"] = FromT(dwg, record->text_default);
+    style.props["leaderLineweight"] = StyleWeightName(record->linewt);
+    style.props["leaderLinetype"] = linetypeName(record->line_type);
+
+    style.textFont.clear();
+    if (record->text_style != nullptr) {
+      Dwg_Object* textStyleObject = dwg_resolve_handle_silent(dwg, record->text_style->absolute_ref);
+      if (textStyleObject != nullptr && textStyleObject->fixedtype == DWG_TYPE_STYLE &&
+          textStyleObject->tio.object != nullptr && textStyleObject->tio.object->tio.STYLE != nullptr)
+        style.textFont = FromT(dwg, textStyleObject->tio.object->tio.STYLE->name);
+    }
+    st.multileaderStyles.push_back(std::move(style));
+  }
+  if (st.multileaderStyles.empty()) st.multileaderStyles = MultileaderStyles::DefaultStyles();
+  const std::string activeMleaderName = ActiveMleaderStyleName(dwg, mleaderStyleNamesByHandle);
+  if (const MultileaderStyle* current = MultileaderStyles::Find(st.multileaderStyles, activeMleaderName))
+    st.activeMultileaderStyle = *current;
+  else if (const MultileaderStyle* standard = MultileaderStyles::Find(st.multileaderStyles, "Standard"))
+    st.activeMultileaderStyle = *standard;
+  else
+    st.activeMultileaderStyle = st.multileaderStyles.front();
+
+  // Native TABLESTYLE owns separate title/header/data records. The owner dictionary's
+  // key is authoritative: imported records can carry an empty or stale internal name.
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object* object = &dwg->object[i];
+    if (object->fixedtype != DWG_TYPE_TABLESTYLE || !object->tio.object || !object->tio.object->tio.TABLESTYLE) continue;
+    const auto* source = object->tio.object->tio.TABLESTYLE;
+    CadTableStyle style;
+    style.name = FromT(dwg, source->name);
+    if (object->tio.object->ownerhandle) {
+      const auto* owner = dwg_resolve_handle_silent(dwg, object->tio.object->ownerhandle->absolute_ref);
+      if (owner && owner->fixedtype == DWG_TYPE_DICTIONARY && owner->tio.object) {
+        const auto* dictionary = owner->tio.object->tio.DICTIONARY;
+        if (dictionary) for (BITCODE_BL n = 0; n < dictionary->numitems; ++n)
+          if (dictionary->itemhandles[n] && dictionary->itemhandles[n]->absolute_ref == object->handle.value)
+            style.name = FromT(dwg, dictionary->texts[n]);
+      }
+    }
+    if (style.name.empty()) continue;
+    style.headerRow = !source->is_header_suppressed;
+    style.props["direction"] = source->flow_direction ? "Up" : "Down";
+    const auto color = [](const Dwg_Color& value) {
+      return libredwgcad_detail::ColorToStorage(value.index, value.method, value.rgb);
+    };
+    if (source->overrides && source->numoverrides) {
+      for (BITCODE_BL n = 0; n < source->numoverrides; ++n) {
+        const auto& record = source->overrides[n];
+        const std::string kind = record.id == 1 ? "Title" : record.id == 2 ? "Header" : record.id == 3 ? "Data" : FromT(dwg, record.name);
+        const auto& cell = record.cellstyle;
+        const auto& format = cell.content_format;
+        const float height = static_cast<float>(format.text_height / mup);
+        if (kind == "Title") style.titleTextHeightInches = height;
+        else if (kind == "Header") style.headerTextHeightInches = height;
+        else if (kind == "Data") style.textHeightInches = height;
+        std::string textStyleName;
+        if (format.text_style) {
+          const auto* font = dwg_resolve_handle_silent(dwg, format.text_style->absolute_ref);
+          if (font && font->fixedtype == DWG_TYPE_STYLE && font->tio.object)
+            textStyleName = FromT(dwg, font->tio.object->tio.STYLE->name);
+        }
+        const std::string textColor = color(format.content_color);
+        if (kind == "Title") { style.titleTextStyleName = textStyleName; style.titleTextColor = textColor; }
+        else if (kind == "Header") { style.headerTextStyleName = textStyleName; style.headerTextColor = textColor; }
+        else if (kind == "Data") { style.textStyleName = textStyleName; style.dataTextColor = textColor; }
+        style.props[kind + ".textStyle"] = textStyleName;
+        style.props[kind + ".textHeight"] = std::to_string(height);
+        style.props[kind + ".textColor"] = textColor;
+        style.props[kind + ".textAngle"] = std::to_string(format.rotation * 180 / kPi);
+        style.props[kind + ".alignment"] = StyleOption({"Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"}, static_cast<int>(format.cell_alignment) - 1);
+        const auto& margins = cell.margin_override_flags ? cell : source->sty.cellstyle;
+        style.props[kind + ".horizontalMargin"] = std::to_string(margins.horiz_margin / mup);
+        style.props[kind + ".verticalMargin"] = std::to_string(margins.vert_margin / mup);
+        style.props[kind + ".fillColor"] = cell.bg_color.method == 0xc8 || (cell.bg_color.rgb >> 24) == 0xc8 ? "None" : color(cell.bg_color);
+        style.props[kind + ".merge"] = cell.merge_flags & 0x8000 ? "1" : "0";
+        style.props[kind + ".nativeDataType"] = std::to_string(format.value_data_type);
+        style.props[kind + ".nativeUnitType"] = std::to_string(format.value_unit_type);
+        style.props[kind + ".nativeFormat"] = FromT(dwg, format.value_format_string);
+        if (cell.num_borders && cell.borders) {
+          const auto& border = cell.borders[0];
+          style.props[kind + ".borderColor"] = color(border.color);
+          style.props[kind + ".borderWeight"] = StyleWeightName(border.linewt);
+          style.props[kind + ".borderType"] = linetypeName(border.ltype);
+          style.props[kind + ".bordersVisible"] = border.visible ? "0" : "1";
+          style.props[kind + ".doubleLine"] = border.border_type == 2 ? "1" : "0";
+          style.props[kind + ".doubleSpacing"] = std::to_string(border.double_line_spacing / mup);
+          if (kind == "Data") style.gridLineColor = color(border.color);
+          if (kind == "Title") style.borderColor = color(border.color);
+        }
+      }
+    } else if (source->rowstyles && source->num_rowstyles) {
+      const auto& data = source->rowstyles[0];
+      style.textHeightInches = static_cast<float>(data.text_height / mup);
+      style.rowHeightInches = std::max(style.textHeightInches * 1.6f,
+          static_cast<float>((source->vert_cell_margin * 2.0 + data.text_height) / mup));
+    }
+    auto existing = std::find_if(st.tableStyles.begin(), st.tableStyles.end(), [&](const auto& old) { return CadTableNameEquals(old.name, style.name); });
+    if (existing == st.tableStyles.end()) st.tableStyles.push_back(std::move(style));
+    else *existing = std::move(style);
+  }
+}
+
+std::string CivilComponentColor(uint32_t packed) {
+  const unsigned method = packed >> 24;
+  if (method == 0xc0) return "ByLayer";
+  if (method == 0xc1) return "ByBlock";
+  if (method == 0xc3)
+    return libredwgcad_detail::ColorToStorage(static_cast<int>(packed & 0xffffffu), 0, 0);
+  char buffer[16];
+  std::snprintf(buffer, sizeof(buffer), "#%06X", packed & 0xffffffu);
+  return buffer;
+}
+
+// REQ-479: the drawing's Civil surface styles become GoSurvey surface styles (same name replaces the
+// built-in of that name, as the drawing's own definition wins). Components map Points, Triangles,
+// Border, Major and Minor contours; intervals map when they satisfy GoSurvey's major-multiple rule.
+// Contour smoothing and every label/slope/analysis setting are not decoded.
+void ImportCivilSurfaceStyles(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& log) {
+  const auto component = [](const libredwgcivil::SurfaceStyleComponent& source) {
+    SurfaceComponentStyle result;
+    result.visible = source.visible;
+    result.color = CivilComponentColor(source.color);
+    result.lineweightMm = source.lineweight >= 0 ? static_cast<float>(source.lineweight) / 100.f : -1.f;
+    return result;
+  };
+  std::size_t imported = 0;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object& object = dwg->object[i];
+    if (!IsCivilSurfaceStyleObject(dwg, &object)) continue;
+    const auto decoded = DecodeCivilSurfaceStyleObject(object);
+    if (!decoded.has_value()) continue;
+    SurfaceStyle style;
+    style.name = libredwgcad_detail::DecodeDwgString(decoded->name.c_str(), true);
+    if (style.name.empty()) continue;
+    style.points = component(decoded->components[0]);
+    style.triangles = component(decoded->components[1]);
+    style.border = component(decoded->components[2]);
+    style.majorContour = component(decoded->components[3]);
+    style.minorContour = component(decoded->components[4]);
+    std::string why;
+    if (SurfaceStyles::IntervalsCompatible(decoded->minorInterval, decoded->majorInterval, &why)) {
+      style.minorIntervalFt = decoded->minorInterval;
+      style.majorIntervalFt = decoded->majorInterval;
+    } else {
+      log.push_back("Civil surface style \"" + style.name + "\": contour intervals kept at defaults — " + why);
+    }
+    // Civil's "add vertices" smoothing inserts `factor` points per contour segment; one Chaikin pass
+    // doubles the vertex count, so the pass count is the nearest log2(factor + 1), capped at 5.
+    if (decoded->smoothContours.value_or(false) && decoded->smoothingFactor.has_value())
+      style.contourSmoothPasses = std::clamp(
+          static_cast<int>(std::lround(std::log2(static_cast<double>(*decoded->smoothingFactor) + 1.0))), 1, 5);
+    if (SurfaceStyle* existing = SurfaceStyles::Find(st.surfaceStyles, style.name)) *existing = std::move(style);
+    else st.surfaceStyles.push_back(std::move(style));
+    ++imported;
+  }
+  if (imported != 0) log.push_back("Civil surface styles decoded: " + std::to_string(imported));
+}
+
+std::unordered_map<uint64_t, std::string> ImportCivilPointStyles(
+    AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& log,
+    std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+    const LegacyLeaderScaleContext& scaleContext) {
+  std::unordered_map<uint64_t, std::string> names;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object& object = dwg->object[i];
+    if (object.type < 500 || object.type - 500 >= dwg->num_classes ||
+        object.supertype != DWG_SUPERTYPE_OBJECT || object.tio.object == nullptr || !object.has_strings)
+      continue;
+    const char* className = dwg->dwg_class[object.type - 500].dxfname;
+    if (className == nullptr || std::strcmp(className, "AECC_POINT_STYLE") != 0) continue;
+    const std::size_t prefix = object.common_size + object.bitsize_pos;
+    const std::size_t trailer = object.stringstream_size >= 32768 ? 33 : 17;
+    if (object.bitsize < prefix + trailer + object.stringstream_size) continue;
+    const std::size_t strings = object.bitsize - prefix - trailer - object.stringstream_size;
+    const auto decoded = libredwgcivil::DecodePointStyle(
+        object.unknown_bits, object.num_unknown_bits, strings, object.stringstream_size);
+    if (!decoded.has_value()) continue;
+    // Civil style base contributes one reference slot after the ordinary object handles.
+    const std::size_t commonHandles = 2 + object.tio.object->num_reactors +
+                                     (object.tio.object->is_xdic_missing ? 0 : 1);
+    const auto handles = libredwgcivil::DecodeHandles(object.unknown_bits, object.num_unknown_bits,
+        object.bitsize - prefix, commonHandles + 19, object.handle.value);
+    if (!handles.has_value()) {
+      NoteSkip(skipHist, "AECC_POINT_STYLE(display references not decoded)");
+      continue;
+    }
+    SurveyPointStyleDefinition style;
+    style.name = libredwgcad_detail::DecodeDwgString(decoded->name.c_str(), true);
+    style.markerVisible = decoded->components[0].visible;
+    style.labelVisible = decoded->components[1].visible;
+    style.color = CivilComponentColor(decoded->components[0].color);
+    style.hasExplicitMarkerGeometry = true;
+    style.markerType = decoded->markerType;
+    style.customMarker = decoded->customMarker;
+    style.markerOverlay = decoded->markerOverlay;
+    style.markerSizeType = decoded->sizeType;
+    style.markerOrientation = decoded->orientation;
+    style.markerDisplay3dType = decoded->display3dType;
+    style.markerSize = decoded->size;
+    style.markerRotationRad = decoded->rotation;
+    style.markerFixedScale = decoded->fixedScale;
+    style.markerElevation = decoded->elevation;
+    style.markerScaleFactor = decoded->scaleFactor;
+    style.crossSpanPlottedInches = static_cast<float>(decoded->size *
+        CadBlockUnitsScale(CadDrawingInsUnitsName(st.drawingInsUnits), "inches"));
+    for (std::size_t component = 0; component < style.displayComponents.size(); ++component) {
+      auto& target = style.displayComponents[component];
+      target.visible = decoded->components[component].visible;
+      target.color = CivilComponentColor(decoded->components[component].color);
+      target.lineweight = decoded->components[component].lineweight;
+      target.linetypeScale = decoded->components[component].linetypeScale;
+      const auto layerHandle = (*handles)[commonHandles + component * 3];
+      Dwg_Object* layer = dwg_resolve_handle_silent(dwg, layerHandle);
+      if (layer != nullptr && layer->fixedtype == DWG_TYPE_LAYER && layer->tio.object != nullptr &&
+          layer->tio.object->tio.LAYER != nullptr)
+        target.layer = LayoutNameFromT(dwg, layer->tio.object->tio.LAYER->name);
+      const auto linetypeHandle = (*handles)[commonHandles + component * 3 + 1];
+      Dwg_Object* linetype = dwg_resolve_handle_silent(dwg, linetypeHandle);
+      if (linetype != nullptr && linetype->fixedtype == DWG_TYPE_LTYPE && linetype->tio.object != nullptr &&
+          linetype->tio.object->tio.LTYPE != nullptr)
+        target.linetype = FromT(dwg, linetype->tio.object->tio.LTYPE->name);
+    }
+    Dwg_Object* symbol = dwg_resolve_handle_silent(dwg, (*handles)[commonHandles + 18]);
+    if (symbol != nullptr && symbol->fixedtype == DWG_TYPE_BLOCK_HEADER) {
+      style.markerBlockName = BlockHeaderDwgName(dwg, symbol);
+      if (!EnsureDwgBlockDefinitionImported(st, dwg, symbol, skipHist, degenerateExtrusions, scaleContext))
+        NoteSkip(skipHist, "AECC_POINT_STYLE(marker block geometry unsupported)");
+    }
+    names.emplace(object.handle.value, style.name);
+    const auto existing = std::find_if(st.surveyPointStyles.begin(), st.surveyPointStyles.end(),
+        [&](const SurveyPointStyleDefinition& value) { return value.name == style.name; });
+    if (existing == st.surveyPointStyles.end()) st.surveyPointStyles.push_back(std::move(style));
+    else *existing = std::move(style);
+  }
+  if (!names.empty()) log.push_back("Civil point styles decoded: " + std::to_string(names.size()));
+  return names;
+}
+
+bool LoadDwgData(const char* pathUtf8, bool asDxf, Dwg_Data* dwg, std::vector<std::string>& log) {
+  std::memset(dwg, 0, sizeof(*dwg));
+  const int err = asDxf ? dxf_read_file(pathUtf8, dwg) : dwg_read_file(pathUtf8, dwg);
+  if (err >= DWG_ERR_CRITICAL) {
+    log.push_back(std::string(asDxf ? "DXF" : "DWG") + " import — LibreDWG could not decode the file (0x" +
+                  [&]() {
+                    char b[16];
+                    std::snprintf(b, sizeof(b), "%x", err);
+                    return std::string(b);
+                  }() +
+                  ").");
+    dwg_free(dwg);
+    return false;
+  }
+  return true;
+}
+
+Dwg_Object_BLOCK_HEADER* ModelHeader(Dwg_Data* dwg) {
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  if (m == nullptr || m->tio.object == nullptr)
+    return nullptr;
+  return m->tio.object->tio.BLOCK_HEADER;
+}
+
+Dwg_Version_Type LibreDwgVersionFromExport(DwgSaveVersion version) {
+  switch (version) {
+  case DwgSaveVersion::R2018:
+    return R_2018;
+  case DwgSaveVersion::R2013:
+    return R_2013;
+  case DwgSaveVersion::R2010:
+    return R_2010;
+  case DwgSaveVersion::R2004:
+    return R_2004;
+  case DwgSaveVersion::R2000:
+  default:
+    return R_2000;
+  }
+}
+
+// REQ-170, issue #615: R2004+ writes 24-bit true colour; R2000 keeps nearest ACI (no rgb field).
+void SetCmcFromStorage(BITCODE_CMC* cmc, const std::string& storage, bool useTrueColor) {
+  if (cmc == nullptr)
+    return;
+  if (storage == "ByBlock") {
+    cmc->index = 0;
+    cmc->method = DWG_COLOR_METHOD_BYBLOCK;
+    cmc->rgb = 0;
+    return;
+  }
+  if (storage.empty() || storage == "ByLayer") {
+    cmc->index = 256;
+    cmc->method = DWG_COLOR_METHOD_BYLAYER;
+    cmc->rgb = 0;
+    return;
+  }
+  uint32_t rgb = 0;
+  if (!DxfColorStringToRgbPacked(storage, &rgb)) {
+    cmc->index = 7;
+    cmc->method = kNativeCmcByAci;
+    cmc->rgb = 0xc3000007u;
+    return;
+  }
+  const int aci = DxfNearestAciFromRgbPacked(rgb);
+  const bool exactPalette = (DxfRgbPackedFromAci(aci) & 0xFFFFFFu) == (rgb & 0xFFFFFFu);
+  if (useTrueColor && !exactPalette) {
+    cmc->method = kNativeCmcByColor;
+    cmc->rgb = 0xC2000000u | (rgb & 0xFFFFFFu);
+    cmc->index = static_cast<BITCODE_BSd>(aci);
+  } else {
+    cmc->index = static_cast<BITCODE_BSd>(aci);
+    cmc->method = kNativeCmcByAci;
+    cmc->rgb = 0xC3000000u | static_cast<unsigned>(aci);
+  }
+}
+
+// Entity colour on R2004+ uses ENC (flag 0x80 + 24-bit rgb), not table CMC packing.
+void SetEntityColorFromStorage(Dwg_Color* color, const std::string& storage, bool useTrueColor) {
+  if (color == nullptr)
+    return;
+  color->flag = 0;
+  if (storage == "ByBlock") {
+    color->index = 0;
+    color->method = DWG_COLOR_METHOD_BYBLOCK;
+    color->rgb = 0;
+    return;
+  }
+  if (storage.empty() || storage == "ByLayer") {
+    color->index = 256;
+    color->method = DWG_COLOR_METHOD_BYLAYER;
+    color->rgb = 0;
+    return;
+  }
+  uint32_t rgb = 0;
+  if (!DxfColorStringToRgbPacked(storage, &rgb)) {
+    color->index = 7;
+    color->method = DWG_COLOR_METHOD_ACI;
+    color->rgb = 0;
+    return;
+  }
+  const int aci = DxfNearestAciFromRgbPacked(rgb);
+  const bool exactPalette = (DxfRgbPackedFromAci(aci) & 0xFFFFFFu) == (rgb & 0xFFFFFFu);
+  if (useTrueColor && !exactPalette) {
+    color->method = DWG_COLOR_METHOD_TRUECOLOR;
+    color->rgb = static_cast<BITCODE_BL>(rgb & 0xFFFFFFu);
+    color->index = static_cast<BITCODE_BSd>(aci);
+    color->flag = 0x80;
+  } else {
+    color->index = static_cast<BITCODE_BSd>(aci);
+    color->method = DWG_COLOR_METHOD_ACI;
+    color->rgb = 0;
+  }
+}
+
+void ApplyLayerTableColor(Dwg_Object_LAYER* ly, const std::string& colorStr, bool on, bool useTrueColor,
+                          float layerTransparency01) {
+  if (ly == nullptr)
+    return;
+  uint32_t rgb = 0;
+  const bool hasRgb = DxfColorStringToRgbPacked(colorStr, &rgb);
+  const int aci = hasRgb ? DxfNearestAciFromRgbPacked(rgb) : 7;
+  const bool exactPalette = hasRgb && ((DxfRgbPackedFromAci(aci) & 0xFFFFFFu) == (rgb & 0xFFFFFFu));
+  const bool needsTrueColor =
+      useTrueColor && hasRgb && (!exactPalette || layerTransparency01 > 1.e-5f);
+  if (needsTrueColor) {
+    ly->color.method = kNativeCmcByColor;
+    ly->color.rgb = 0xC2000000u | (rgb & 0xFFFFFFu);
+    ly->color.index = static_cast<BITCODE_BSd>(aci);
+  } else {
+    ly->color.index = static_cast<BITCODE_BSd>(on ? aci : -aci);
+    ly->color.method = kNativeCmcByAci;
+    // R2004+ CMC writes an index override of zero. Native ByACI carries the palette
+    // index in the low bytes, rather than the palette's expanded RGB value.
+    ly->color.rgb = useTrueColor ? (0xC3000000u | static_cast<unsigned>(aci)) : 0;
+  }
+  if (useTrueColor && layerTransparency01 > 1.e-5f)
+    ApplyEntityEncTransparency(&ly->color, layerTransparency01);
+}
+
+// Builds the DWG LAYER and LTYPE tables from the GoSurvey layer table and wires each exported
+// entity to its layer / colour / linetype (issue #140 / DEBT-151-b — the DWG writer previously
+// emitted geometry only, so a saved drawing lost every layer).
+const char* DimArrowBlockName(DimArrowType t);
+Dwg_Object_DIMSTYLE* EnsureDimStyleNamed(Dwg_Data* dwg, const std::string& wantedName);
+void DimStyleSetCmc(BITCODE_CMC* out, const std::string& storage, bool useTrueColor);
+
+void WriteAnnotativeStyleEed(Dwg_Data* dwg, Dwg_Object_Object* object);
+
+struct TableWriter {
+  Dwg_Data* dwg = nullptr;
+  bool useTrueColor = false;  // R2004+ entity ENC features (#615, #620)
+  const AppCommandState* layerState = nullptr;
+  DwgExportAnnotContext* annotContext = nullptr;
+  // Store LibreDWG object indices, not Dwg_Object* — dwg_add_* can reallocate dwg->object and
+  // invalidate raw pointers cached from an earlier BuildLayerTable / EnsureLtype call.
+  std::unordered_map<std::string, BITCODE_BL> layers;  // lower(name) -> parent objid
+  std::unordered_map<std::string, BITCODE_BL> ltypes;  // lower(name) -> parent objid
+  std::unordered_map<std::string, BITCODE_BL> styles;  // lower(name) -> parent objid
+  std::unordered_map<std::string, BITCODE_BL> plotStyles; // lower(name) -> placeholder objid
+  std::unordered_map<std::string, BITCODE_BL> mleaderStyles;  // lower(name) -> parent objid
+
+  static bool IsPlainLinetype(const std::string& n) {
+    const std::string l = LowerAscii(n);
+    return l.empty() || l == "continuous" || l == "bylayer" || l == "byblock";
+  }
+
+  Dwg_Object* ObjectAt(BITCODE_BL objid) const {
+    if (dwg == nullptr || objid < 0 || static_cast<BITCODE_BL>(objid) >= dwg->num_objects)
+      return nullptr;
+    return &dwg->object[objid];
+  }
+
+  Dwg_Object* EnsureLtype(const std::string& name) {
+    if (IsPlainLinetype(name))
+      return nullptr;
+    const std::string key = LowerAscii(name);
+    auto it = ltypes.find(key);
+    if (it != ltypes.end())
+      return ObjectAt(it->second);
+    Dwg_Object_LTYPE* lt = dwg_add_LTYPE(dwg, name.c_str());
+    if (lt == nullptr || lt->parent == nullptr)
+      return nullptr;
+    ltypes[key] = lt->parent->objid;
+    return ObjectAt(lt->parent->objid);
+  }
+
+  BITCODE_H Ref(Dwg_Object* o) {
+    return o != nullptr ? dwg_add_handleref(dwg, 5, o->handle.value, o) : nullptr;
+  }
+
+  BITCODE_H RefObjId(BITCODE_BL objid) {
+    return Ref(ObjectAt(objid));
+  }
+
+  Dwg_Object* EnsurePlotStyle(const std::string& name) {
+    if (name.empty() || LowerAscii(name) == "bylayer" || LowerAscii(name) == "byblock") return nullptr;
+    const std::string key = LowerAscii(name);
+    if (auto it = plotStyles.find(key); it != plotStyles.end()) return ObjectAt(it->second);
+    BITCODE_H dictRef = dwg->header_vars.DICTIONARY_PLOTSTYLENAME;
+    Dwg_Object* dictObj = dictRef ? dwg_resolve_handle_silent(dwg, dictRef->absolute_ref) : nullptr;
+    if (dictObj == nullptr || dictObj->tio.object == nullptr || dictObj->tio.object->tio.DICTIONARYWDFLT == nullptr)
+      return nullptr;
+    auto* dictDefault = dictObj->tio.object->tio.DICTIONARYWDFLT;
+    auto* dict = reinterpret_cast<Dwg_Object_DICTIONARY*>(dictDefault);
+    if (key == "normal" && dictDefault->defaultid != nullptr) {
+      Dwg_Object* object = dwg_resolve_handle_silent(dwg, dictDefault->defaultid->absolute_ref);
+      if (object != nullptr) plotStyles[key] = object->index;
+      return object;
+    }
+    for (BITCODE_BL i = 0; i < dict->numitems; ++i) {
+      if (dict->texts != nullptr && dict->texts[i] != nullptr && FromT(dwg, dict->texts[i]) == name &&
+          dict->itemhandles != nullptr && dict->itemhandles[i] != nullptr) {
+        Dwg_Object* object = dwg_resolve_handle_silent(dwg, dict->itemhandles[i]->absolute_ref);
+        if (object != nullptr) plotStyles[key] = object->index;
+        return object;
+      }
+    }
+    Dwg_Object_PLACEHOLDER* placeholder = dwg_add_PLACEHOLDER(dwg);
+    if (placeholder == nullptr || placeholder->parent == nullptr) return nullptr;
+    int error = 0;
+    Dwg_Object* object = dwg_obj_generic_to_object(placeholder, &error);
+    if (object == nullptr || error != 0) return nullptr;
+    object->tio.object->ownerhandle = dwg_add_handleref(dwg, 4, dictObj->handle.value, dictObj);
+    dwg_add_DICTIONARY_item(dict, name.c_str(), object->handle.value);
+    plotStyles[key] = object->index;
+    return object;
+  }
+
+  void BuildLayerTable(const AppCommandState& st) {
+    // `dwg_new_Document` supplies layer 0. Give it a valid default before applying
+    // the drawing-owned layer settings below.
+    // Normalize the built-in record explicitly: LibreDWG's default CMC can
+    // serialize as ACI 0 (BYBLOCK), which AutoCAD rejects for a layer record.
+    if (BITCODE_H layer0Ref = dwg_find_tablehandle(dwg, "0", "LAYER")) {
+      Dwg_Object* layer0Obj = dwg_resolve_handle_silent(dwg, layer0Ref->absolute_ref);
+      if (layer0Obj != nullptr && layer0Obj->fixedtype == DWG_TYPE_LAYER &&
+          layer0Obj->tio.object != nullptr && layer0Obj->tio.object->tio.LAYER != nullptr) {
+        Dwg_Object_LAYER* layer0 = layer0Obj->tio.object->tio.LAYER;
+        ApplyLayerTableColor(layer0, "#FFFFFF", true, useTrueColor, 0.0f);
+        layers["0"] = layer0Obj->index;
+      }
+    }
+    for (const CadLayerRow& row : st.drawingLayerTable) {
+      if (row.name.empty())
+        continue;
+      Dwg_Object_LAYER* ly = nullptr;
+      const auto existing = layers.find(LowerAscii(row.name));
+      if (existing != layers.end()) {
+        Dwg_Object* object = ObjectAt(existing->second);
+        if (object != nullptr && object->tio.object != nullptr)
+          ly = object->tio.object->tio.LAYER;
+      } else {
+        ly = dwg_add_LAYER(dwg, row.name.c_str());
+      }
+      if (ly == nullptr || ly->parent == nullptr)
+        continue;
+      ApplyLayerTableColor(ly, row.color, row.on, useTrueColor, row.transparency);
+      ly->off = row.on ? 0 : 1;
+      ly->frozen = row.frozen ? 1 : 0;
+      ly->locked = row.locked ? 1 : 0;
+      ly->linewt = LineweightDwgIndexFromMm(row.lineweightMm, /*layerRow=*/true);
+      ly->flag0 = static_cast<BITCODE_BS>((row.frozen ? 1 : 0) | (row.on ? 0 : 2) |
+                                         (row.locked ? 8 : 0) | 16 |
+                                         static_cast<BITCODE_BS>((ly->linewt & 0x1F) << 5));
+      if (Dwg_Object* lt = EnsureLtype(row.linetype))
+        ly->ltype = Ref(lt);
+      if (Dwg_Object* plotStyle = EnsurePlotStyle(row.plotStyleName))
+        ly->plotstyle = Ref(plotStyle);
+      layers[LowerAscii(row.name)] = ly->parent->objid;
+    }
+  }
+
+  // REQ-044 / REQ-170, issue #604: the STYLE table (TEXT/MTEXT's font, height, oblique angle),
+  // same shape as BuildLayerTable above. "Standard" is skipped: dwg_new_Document already creates
+  // it (TEXTSTYLE header var points at it, and dwg_add_TEXT/MTEXT/ATTDEF/ATTRIB default `style`
+  // to it), so adding it again would be a second, conflicting STYLE named "Standard".
+  void BuildStyleTable(const AppCommandState& st, float modelUnitsPerPlottedInch) {
+    for (const TextStyle& ts : st.textStyles) {
+      if (ts.name.empty()) continue;
+      Dwg_Object_STYLE* sy = nullptr;
+      if (BITCODE_H existing = dwg_find_tablehandle(dwg, ts.name.c_str(), "STYLE")) {
+        Dwg_Object* object = dwg_resolve_handle_silent(dwg, existing->absolute_ref);
+        if (object != nullptr && object->fixedtype == DWG_TYPE_STYLE && object->tio.object != nullptr)
+          sy = object->tio.object->tio.STYLE;
+      }
+      if (sy == nullptr) sy = dwg_add_STYLE(dwg, ts.name.c_str());
+      if (sy == nullptr || sy->parent == nullptr) continue;
+      const bool annotative = StyleFlag(ts.props, "annotative");
+      sy->text_size = static_cast<double>(ts.heightInches) * (annotative ? 1.0 : std::max(modelUnitsPerPlottedInch, 1.e-6f));
+      if (annotative) WriteAnnotativeStyleEed(dwg, sy->parent);
+      sy->generation = static_cast<BITCODE_RC>((StyleFlag(ts.props, "backwards") ? 2 : 0) | (StyleFlag(ts.props, "upsideDown") ? 4 : 0));
+      sy->is_vertical = StyleFlag(ts.props, "vertical");
+      if (StyleFlag(ts.props, "useBigFont")) sy->bigfont_file = dwg_add_u8_input(dwg, StyleProperty(ts.props, "bigFont").c_str());
+      sy->width_factor = std::clamp(static_cast<double>(ts.widthFactor), 0.01, 100.0);
+      sy->oblique_angle = static_cast<double>(ts.obliqueDeg) * (kPi / 180.0);
+      // fontFamily empty = app default (romans.shx), same convention TextStyle.hpp documents.
+      sy->font_file = dwg_add_u8_input(dwg, ts.fontFamily.empty() ? "romans.shx" : ts.fontFamily.c_str());
+      styles[LowerAscii(ts.name)] = sy->parent->objid;
+      if (ts.name == st.activeTextStyleName)
+        dwg->header_vars.TEXTSTYLE = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(sy), nullptr);
+    }
+  }
+
+  void BuildDimensionStyleTable(const AppCommandState& st, float modelUnitsPerPlottedInch) {
+    const auto& named = st.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : st.dimensionStyles;
+    for (const DimensionStyle& style : named) {
+      if (style.name.empty()) continue;
+      Dwg_Object_DIMSTYLE* ds = EnsureDimStyleNamed(dwg, style.name);
+      if (!ds) continue;
+      const bool annotative = StyleFlag(style.props, "annotative");
+      const double mup = annotative ? 1.0 : std::max(modelUnitsPerPlottedInch, 1.e-6f);
+      if (annotative) WriteAnnotativeStyleEed(dwg, ds->parent);
+      ds->DIMTXT = static_cast<double>(style.textSizeInches) * mup;
+      ds->DIMASZ = static_cast<double>(style.arrowSizeInches) * mup;
+      ds->DIMDEC = std::clamp(style.unitPrecision, 0, 8);
+      ds->DIMSCALE = 1.0;
+      ds->DIMLUNIT = static_cast<BITCODE_BS>(style.unitFormat == DimUnitFormat::Architectural ? 4 :
+                                             style.unitFormat == DimUnitFormat::Engineering ? 3 :
+                                             style.unitFormat == DimUnitFormat::Fractional ? 5 : 2);
+      ds->DIMLFAC = style.unitScale;
+      ds->DIMBLK_T = dwg_add_u8_input(dwg, DimArrowBlockName(style.arrowType));
+      DimStyleSetCmc(&ds->DIMCLRD, style.dimLineColor, useTrueColor);
+      DimStyleSetCmc(&ds->DIMCLRE, style.extLineColor, useTrueColor);
+      DimStyleSetCmc(&ds->DIMCLRT, style.textColor, useTrueColor);
+      if (!style.textFont.empty()) {
+        if (BITCODE_H textStyle = dwg_find_tablehandle(dwg, style.textFont.c_str(), "STYLE"))
+          ds->DIMTXSTY = dwg_add_handleref(dwg, 5, textStyle->absolute_ref, nullptr);
+      }
+      if (Dwg_Object* lt = EnsureLtype(style.dimLineType))
+        ds->DIMLTYPE = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(lt), nullptr);
+      if (Dwg_Object* lt = EnsureLtype(style.extLineType)) {
+        ds->DIMLTEX1 = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(lt), nullptr);
+        ds->DIMLTEX2 = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(lt), nullptr);
+      }
+      if (style.props.count("extendBeyondTicks")) ds->DIMDLE = StyleNumber(style.props, "extendBeyondTicks", ds->DIMDLE / mup) * mup;
+      if (style.props.count("baselineSpacing")) ds->DIMDLI = StyleNumber(style.props, "baselineSpacing", ds->DIMDLI / mup) * mup;
+      if (style.props.count("extendBeyondDimLines")) ds->DIMEXE = StyleNumber(style.props, "extendBeyondDimLines", ds->DIMEXE / mup) * mup;
+      if (style.props.count("offsetFromOrigin")) ds->DIMEXO = StyleNumber(style.props, "offsetFromOrigin", ds->DIMEXO / mup) * mup;
+      if (style.props.count("fixedLengthExtValue")) ds->DIMFXL = StyleNumber(style.props, "fixedLengthExtValue", ds->DIMFXL / mup) * mup;
+      if (style.props.count("textOffset")) ds->DIMGAP = StyleNumber(style.props, "textOffset", ds->DIMGAP / mup) * mup;
+      if (style.props.count("roundOff")) ds->DIMRND = StyleNumber(style.props, "roundOff", ds->DIMRND);
+      if (style.props.count("fractionHeightScale")) ds->DIMTFAC = StyleNumber(style.props, "fractionHeightScale", ds->DIMTFAC);
+      if (style.props.count("overallScale")) ds->DIMSCALE = StyleNumber(style.props, "overallScale", ds->DIMSCALE);
+      if (style.props.count("altMultiplier")) ds->DIMALTF = StyleNumber(style.props, "altMultiplier", ds->DIMALTF);
+      if (style.props.count("altRound")) ds->DIMALTRND = StyleNumber(style.props, "altRound", ds->DIMALTRND);
+      if (style.props.count("tolUpper")) ds->DIMTP = StyleNumber(style.props, "tolUpper", ds->DIMTP);
+      if (style.props.count("tolLower")) ds->DIMTM = StyleNumber(style.props, "tolLower", ds->DIMTM);
+      if (style.props.count("tolScaling")) ds->DIMTFAC = StyleNumber(style.props, "tolScaling", ds->DIMTFAC);
+      if (style.props.count("subUnitsFactor")) ds->DIMMZF = StyleNumber(style.props, "subUnitsFactor", ds->DIMMZF);
+      if (style.props.count("altSubUnitsFactor")) ds->DIMALTMZF = StyleNumber(style.props, "altSubUnitsFactor", ds->DIMALTMZF);
+      if (style.props.count("suppressExt1")) ds->DIMSE1 = StyleFlag(style.props, "suppressExt1");
+      if (style.props.count("suppressExt2")) ds->DIMSE2 = StyleFlag(style.props, "suppressExt2");
+      if (style.props.count("suppressDim1")) ds->DIMSD1 = StyleFlag(style.props, "suppressDim1");
+      if (style.props.count("suppressDim2")) ds->DIMSD2 = StyleFlag(style.props, "suppressDim2");
+      if (style.props.count("fixedLengthExt")) ds->DIMFXLON = StyleFlag(style.props, "fixedLengthExt");
+      if (style.props.count("suppressArrowsNoFit")) ds->DIMSOXD = StyleFlag(style.props, "suppressArrowsNoFit");
+      if (style.props.count("placeTextManually")) ds->DIMUPT = StyleFlag(style.props, "placeTextManually");
+      if (style.props.count("drawDimLineBetween")) ds->DIMTOFL = StyleFlag(style.props, "drawDimLineBetween");
+      if (style.props.count("altEnabled")) ds->DIMALT = StyleFlag(style.props, "altEnabled");
+      if (style.props.count("textHorizontal")) ds->DIMJUST = static_cast<BITCODE_BS>(StyleOptionIndex({"Centered", "At Ext Line 1", "At Ext Line 2", "Over Ext Line 1", "Over Ext Line 2"}, StyleProperty(style.props, "textHorizontal")));
+      if (style.props.count("fractionFormat")) ds->DIMFRAC = static_cast<BITCODE_BS>(StyleOptionIndex({"Horizontal", "Diagonal", "Not stacked"}, StyleProperty(style.props, "fractionFormat")));
+      if (style.props.count("arcSymbol")) ds->DIMARCSYM = static_cast<BITCODE_BS>(StyleOptionIndex({"Preceding dimension text", "Above dimension text", "None"}, StyleProperty(style.props, "arcSymbol")));
+      if (style.props.count("angularFormat")) ds->DIMAUNIT = static_cast<BITCODE_BS>(StyleOptionIndex({"Decimal Degrees", "Degrees Minutes Seconds", "Gradians", "Radians", "Surveyor's Units"}, StyleProperty(style.props, "angularFormat")));
+      if (style.props.count("angularPrecision")) ds->DIMADEC = StyleAngularPrecisionValue(StyleProperty(style.props, "angularPrecision"));
+      if (style.props.count("angZeroLeading")) ds->DIMAZIN = static_cast<BITCODE_BS>((ds->DIMAZIN & ~1) | (StyleFlag(style.props, "angZeroLeading") ? 1 : 0));
+      if (style.props.count("angZeroTrailing")) ds->DIMAZIN = static_cast<BITCODE_BS>((ds->DIMAZIN & ~2) | (StyleFlag(style.props, "angZeroTrailing") ? 2 : 0));
+      if (style.props.count("textPlacementFit")) ds->DIMTMOVE = static_cast<BITCODE_BS>(StyleOptionIndex({"Beside the dimension line", "Over dimension line, with leader", "Over dimension line, without leader"}, StyleProperty(style.props, "textPlacementFit")));
+      if (style.props.count("tolVertical")) ds->DIMTOLJ = static_cast<BITCODE_BS>(StyleOptionIndex({"Bottom", "Middle", "Top"}, StyleProperty(style.props, "tolVertical")));
+      if (StyleFlag(style.props, "drawFrame")) ds->DIMGAP = -std::abs(ds->DIMGAP);
+      if (style.props.count("textFill")) {
+        const auto fill = StyleProperty(style.props, "textFill");
+        ds->DIMTFILL = fill == "None" ? 0 : 2;
+        if (ds->DIMTFILL) DimStyleSetCmc(&ds->DIMTFILLCLR, fill, useTrueColor);
+      }
+      ds->DIMTAD = style.textAlign == DimTextAlign::Above ? 1 : style.textAlign == DimTextAlign::Beside ? 2 : 0;
+      if (style.props.count("viewDirection")) ds->DIMTXTDIRECTION = StyleProperty(style.props, "viewDirection") == "Right-to-Left";
+      if (style.props.count("textAlignment")) {
+        ds->DIMTIH = StyleProperty(style.props, "textAlignment") == "Horizontal";
+        ds->DIMTOH = StyleProperty(style.props, "textAlignment") != "Aligned with dimension line";
+      }
+      if (style.props.count("fitOption")) {
+        const auto option = StyleProperty(style.props, "fitOption");
+        ds->DIMTIX = option == "Always keep text between ext lines";
+        ds->DIMATFIT = static_cast<BITCODE_BS>(StyleOptionIndex({"Both text and arrows", "Arrows", "Text", "Either text or arrows (best fit)"}, option));
+      }
+      if (style.props.count("tolMethod")) {
+        const auto method = StyleProperty(style.props, "tolMethod");
+        ds->DIMTOL = method == "Symmetrical" || method == "Deviation";
+        ds->DIMLIM = method == "Limits";
+        if (method == "Symmetrical") ds->DIMTM = ds->DIMTP;
+      }
+      if (style.props.count("tolPrecision")) ds->DIMTDEC = StylePrecision(StyleProperty(style.props, "tolPrecision"));
+      if (style.props.count("altPrecision")) ds->DIMALTD = StylePrecision(StyleProperty(style.props, "altPrecision"));
+      if (style.props.count("altTolPrecision")) ds->DIMALTTD = StylePrecision(StyleProperty(style.props, "altTolPrecision"));
+      if (style.props.count("altFormat")) {
+        const auto format = StyleProperty(style.props, "altFormat");
+        ds->DIMALTU = format == "Engineering" ? 3 : format == "Architectural" ? 4 : format == "Fractional" ? 5 : 2;
+      }
+      if (style.props.count("altPrefix") || style.props.count("altSuffix")) {
+        const auto post = StyleProperty(style.props, "altPrefix") + "[]" + StyleProperty(style.props, "altSuffix");
+        ds->DIMAPOST = dwg_add_u8_input(dwg, post.c_str());
+      }
+      if (style.props.count("subUnitSuffix")) ds->DIMMZS = dwg_add_u8_input(dwg, StyleProperty(style.props, "subUnitSuffix").c_str());
+      if (style.props.count("altSubUnitSuffix")) ds->DIMALTMZS = dwg_add_u8_input(dwg, StyleProperty(style.props, "altSubUnitSuffix").c_str());
+      if (style.props.count("dimLineWeight")) ds->DIMLWD = static_cast<BITCODE_BSd>(StyleWeight(StyleProperty(style.props, "dimLineWeight")));
+      if (style.props.count("extLineWeight")) ds->DIMLWE = static_cast<BITCODE_BSd>(StyleWeight(StyleProperty(style.props, "extLineWeight")));
+      if (style.props.count("centerMark")) ds->DIMCEN = StyleProperty(style.props, "centerMark") == "None" ? 0 :
+          StyleNumber(style.props, "centerMarkSize", .09) * mup * (StyleProperty(style.props, "centerMark") == "Line" ? -1 : 1);
+      if (style.props.count("decimalSeparator")) ds->DIMDSEP = StyleProperty(style.props, "decimalSeparator").find("Comma") != std::string::npos ? ',' :
+          StyleProperty(style.props, "decimalSeparator").find("Space") != std::string::npos ? ' ' : '.';
+      const std::string prefix = StyleProperty(style.props, "prefix");
+      if (!prefix.empty() || !style.unitSuffix.empty()) {
+        const std::string post = style.unitSuffix.find("<>") != std::string::npos ? style.unitSuffix : prefix + "<>" + style.unitSuffix;
+        ds->DIMPOST = dwg_add_u8_input(dwg, post.c_str());
+      }
+      if (style.props.count("extLineType2")) if (Dwg_Object* lt = EnsureLtype(StyleProperty(style.props, "extLineType2")))
+        ds->DIMLTEX2 = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(lt), nullptr);
+      if (style.props.count("zeroLeading")) ds->DIMZIN = static_cast<BITCODE_BS>((ds->DIMZIN & ~4) | (StyleFlag(style.props, "zeroLeading") ? 4 : 0));
+      if (style.props.count("zeroTrailing")) ds->DIMZIN = static_cast<BITCODE_BS>((ds->DIMZIN & ~8) | (StyleFlag(style.props, "zeroTrailing") ? 8 : 0));
+      if (style.props.count("altZeroLeading")) ds->DIMALTZ = static_cast<BITCODE_BS>((ds->DIMALTZ & ~4) | (StyleFlag(style.props, "altZeroLeading") ? 4 : 0));
+      if (style.props.count("altZeroTrailing")) ds->DIMALTZ = static_cast<BITCODE_BS>((ds->DIMALTZ & ~8) | (StyleFlag(style.props, "altZeroTrailing") ? 8 : 0));
+      if (style.props.count("tolZeroLeading")) ds->DIMTZIN = static_cast<BITCODE_BS>((ds->DIMTZIN & ~4) | (StyleFlag(style.props, "tolZeroLeading") ? 4 : 0));
+      if (style.props.count("tolZeroTrailing")) ds->DIMTZIN = static_cast<BITCODE_BS>((ds->DIMTZIN & ~8) | (StyleFlag(style.props, "tolZeroTrailing") ? 8 : 0));
+      if (style.props.count("altTolZeroLeading")) ds->DIMALTTZ = static_cast<BITCODE_BS>((ds->DIMALTTZ & ~4) | (StyleFlag(style.props, "altTolZeroLeading") ? 4 : 0));
+      if (style.props.count("altTolZeroTrailing")) ds->DIMALTTZ = static_cast<BITCODE_BS>((ds->DIMALTTZ & ~8) | (StyleFlag(style.props, "altTolZeroTrailing") ? 8 : 0));
+      const auto exportFeetZeros = [&](const char* key, BITCODE_BS& value) {
+        if (!style.props.count(std::string(key) + "Feet") && !style.props.count(std::string(key) + "Inches")) return;
+        const bool feet = StyleFlag(style.props, std::string(key) + "Feet"), inches = StyleFlag(style.props, std::string(key) + "Inches");
+        value = static_cast<BITCODE_BS>((value & ~3) | (feet ? (inches ? 0 : 3) : (inches ? 2 : 1)));
+      };
+      exportFeetZeros("zero", ds->DIMZIN); exportFeetZeros("altZero", ds->DIMALTZ);
+      exportFeetZeros("tolZero", ds->DIMTZIN); exportFeetZeros("altTolZero", ds->DIMALTTZ);
+      if (style.name == st.activeDimensionStyle.name && ds->parent != nullptr)
+        dwg->header_vars.DIMSTYLE = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(ds), nullptr);
+    }
+  }
+
+  void BuildMleaderStyleTable(const AppCommandState& st, float modelUnitsPerPlottedInch) {
+    const auto& named = st.multileaderStyles.empty() ? MultileaderStyles::DefaultStyles() : st.multileaderStyles;
+    for (const MultileaderStyle& style : named) {
+      if (style.name.empty()) continue;
+      const double mup = style.annotativeDefault ? 1.0 : std::max<double>(modelUnitsPerPlottedInch, 1.e-6);
+      Dwg_Object_MLEADERSTYLE* record = nullptr;
+      BITCODE_H existing = dwg_find_tablehandle(dwg, style.name.c_str(), "MLEADERSTYLE");
+      if (existing != nullptr) {
+        Dwg_Object* object = dwg_resolve_handle_silent(dwg, existing->absolute_ref);
+        if (object != nullptr && object->fixedtype == DWG_TYPE_MLEADERSTYLE && object->tio.object != nullptr)
+          record = object->tio.object->tio.MLEADERSTYLE;
+      }
+      if (record == nullptr) record = dwg_add_MLEADERSTYLE(dwg, style.name.c_str());
+      if (record == nullptr || record->parent == nullptr) continue;
+      record->arrow_head_size = static_cast<double>(style.arrowSizeInches) * mup;
+      record->landing_gap = static_cast<double>(style.landingGapInches) * mup;
+      record->text_height = static_cast<double>(style.textSizeInches) * mup;
+      record->is_annotative = style.annotativeDefault ? 1 : 0;
+      if (style.props.count("landingLength")) record->landing_dist = StyleNumber(style.props, "landingLength", record->landing_dist / mup) * mup;
+      if (style.props.count("breakSize")) record->break_size = StyleNumber(style.props, "breakSize", record->break_size / mup) * mup;
+      const auto angleConstraint = [&](const char* key) {
+        const std::string value = StyleProperty(style.props, key);
+        return value == "Horizontal" ? 12.0 : value == "Any angle" ? 0.0 : std::strtod(value.c_str(), nullptr) / 15.0;
+      };
+      if (style.props.count("firstAngle")) record->first_seg_angle = angleConstraint("firstAngle");
+      if (style.props.count("secondAngle")) record->second_seg_angle = angleConstraint("secondAngle");
+      if (style.props.count("maxPoints")) record->max_points = static_cast<BITCODE_BL>(StyleNumber(style.props, "maxPoints", record->max_points));
+      if (style.props.count("overallScale")) record->scale = (StyleNumber(style.props, "overallScale", record->scale));
+      if (style.props.count("blockScale")) record->block_scale.x = (StyleNumber(style.props, "blockScale", record->block_scale.x));
+      if (style.props.count("landingEnabled")) record->has_landing = StyleFlag(style.props, "landingEnabled");
+      if (style.props.count("doglegEnabled")) record->has_dogleg = StyleFlag(style.props, "doglegEnabled");
+      if (style.props.count("alwaysLeft")) record->text_always_left = StyleFlag(style.props, "alwaysLeft");
+      if (style.props.count("textFrame")) record->has_text_frame = StyleFlag(style.props, "textFrame");
+      if (style.props.count("extendToText")) record->text_extended = StyleFlag(style.props, "extendToText");
+      if (style.props.count("leaderType")) record->type = static_cast<BITCODE_BS>(StyleOptionIndex({"None", "Straight", "Spline"}, StyleProperty(style.props, "leaderType")));
+      if (style.props.count("contentType")) record->content_type = static_cast<BITCODE_BS>(StyleOptionIndex({"None", "Block", "Mtext"}, StyleProperty(style.props, "contentType")));
+      if (style.props.count("textAngle")) record->text_angle_type = static_cast<BITCODE_BS>(StyleOptionIndex({"As inserted", "Keep horizontal", "Always right reading"}, StyleProperty(style.props, "textAngle")));
+      if (style.props.count("attachmentDirection")) record->attach_dir = static_cast<BITCODE_BS>(StyleOptionIndex({"Horizontal", "Vertical"}, StyleProperty(style.props, "attachmentDirection")));
+      if (style.props.count("blockAttachment")) record->block_connection = static_cast<BITCODE_BS>(StyleOptionIndex({"Center extents", "Insertion point"}, StyleProperty(style.props, "blockAttachment")));
+      if (style.props.count("leftAttachment")) record->attach_left = static_cast<BITCODE_BS>(StyleOptionIndex({"Top of top line", "Middle of top line", "Middle of text", "Middle of bottom line", "Bottom of bottom line", "Underline bottom line", "Underline top line", "Bottom of top line", "Underline all lines", "Center", "Lined center"}, StyleProperty(style.props, "leftAttachment")));
+      if (style.props.count("rightAttachment")) record->attach_right = static_cast<BITCODE_BS>(StyleOptionIndex({"Top of top line", "Middle of top line", "Middle of text", "Middle of bottom line", "Bottom of bottom line", "Underline bottom line", "Underline top line", "Bottom of top line", "Underline all lines", "Center", "Lined center"}, StyleProperty(style.props, "rightAttachment")));
+      if (style.props.count("leaderColor")) DimStyleSetCmc(&record->line_color, StyleProperty(style.props, "leaderColor"), useTrueColor);
+      if (style.props.count("textColor")) DimStyleSetCmc(&record->text_color, StyleProperty(style.props, "textColor"), useTrueColor);
+      if (style.props.count("blockColor")) DimStyleSetCmc(&record->block_color, StyleProperty(style.props, "blockColor"), useTrueColor);
+      if (style.props.count("blockScale")) { record->block_scale.y = record->block_scale.z = record->block_scale.x; record->use_block_scale = 1; }
+      if (style.props.count("defaultText")) record->text_default = dwg_add_u8_input(dwg, StyleProperty(style.props, "defaultText").c_str());
+      if (style.props.count("leaderLineweight")) record->linewt = StyleWeight(StyleProperty(style.props, "leaderLineweight"));
+      if (style.props.count("leaderLinetype")) if (Dwg_Object* lt = EnsureLtype(StyleProperty(style.props, "leaderLinetype")))
+        record->line_type = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(lt), nullptr);
+      if (style.props.count("blockName")) if (BITCODE_H block = dwg_find_tablehandle(dwg, StyleProperty(style.props, "blockName").c_str(), "BLOCK"))
+        record->block = dwg_add_handleref(dwg, 5, block->absolute_ref, nullptr);
+
+      if (!style.textFont.empty()) {
+        if (BITCODE_H textStyle = dwg_find_tablehandle(dwg, style.textFont.c_str(), "STYLE"))
+          record->text_style = dwg_add_handleref(dwg, 5, textStyle->absolute_ref, nullptr);
+      }
+      mleaderStyles[LowerAscii(style.name)] = record->parent->objid;
+    }
+  }
+
+  void BuildTableStyleTable(const AppCommandState& state, float unitsPerInch) {
+    if (dwg->header.version < R_2004) return;
+    const double mup = std::max<double>(unitsPerInch, 1.e-6);
+    const std::initializer_list<const char*> alignments = {"Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"};
+    for (const auto& style : state.tableStyles) {
+      if (style.name.empty()) continue;
+      auto* record = dwg_add_TABLESTYLE(dwg, style.name.c_str());
+      if (!record) continue;
+      record->flow_direction = StyleProperty(style.props, "direction", "Down") == "Up" ? 1 : 0;
+      record->horiz_cell_margin = StyleNumber(style.props, "Data.horizontalMargin", .06) * mup;
+      record->vert_cell_margin = StyleNumber(style.props, "Data.verticalMargin", .06) * mup;
+      record->is_header_suppressed = !style.headerRow;
+      if (dwg->header.version >= R_2010) {
+        auto& base = record->sty.cellstyle;
+        base.property_override_flags = record->flow_direction ? 0x10000 : 0;
+        base.horiz_margin = base.right_margin = record->horiz_cell_margin;
+        base.vert_margin = base.bottom_margin = record->vert_cell_margin;
+        for (unsigned i = 0; i < record->numoverrides; ++i) {
+          auto& cell = record->overrides[i].cellstyle;
+          const std::string kind = i == 0 ? "Title" : i == 1 ? "Header" : "Data";
+          const double height = i == 0 ? style.titleTextHeightInches : i == 1 ? style.headerTextHeightInches : style.textHeightInches;
+          const auto& font = i == 0 ? style.titleTextStyleName : i == 1 ? style.headerTextStyleName : style.textStyleName;
+          const auto& color = i == 0 ? style.titleTextColor : i == 1 ? style.headerTextColor : style.dataTextColor;
+          auto& format = cell.content_format;
+          format.text_height = StyleNumber(style.props, kind + ".textHeight", height) * mup;
+          format.cell_alignment = StyleOptionIndex(alignments, StyleProperty(style.props, kind + ".alignment", "Middle Center")) + 1;
+          format.rotation = StyleNumber(style.props, kind + ".textAngle", 0) * kPi / 180.0;
+          if (auto reference = dwg_find_tablehandle(dwg, font.empty() ? "Standard" : font.c_str(), "STYLE"))
+            format.text_style = dwg_add_handleref(dwg, 3, reference->absolute_ref, nullptr);
+          DimStyleSetCmc(&format.content_color, StyleProperty(style.props, kind + ".textColor", color.empty() ? "ByLayer" : color), useTrueColor);
+          cell.margin_override_flags = 1;
+          cell.horiz_margin = cell.right_margin = StyleNumber(style.props, kind + ".horizontalMargin", .06) * mup;
+          cell.vert_margin = cell.bottom_margin = StyleNumber(style.props, kind + ".verticalMargin", .06) * mup;
+          cell.merge_flags = StyleFlag(style.props, kind + ".merge", i == 0) ? 0x8000 : 0;
+          const auto fill = StyleProperty(style.props, kind + ".fillColor", "None");
+          if (fill == "None") { cell.bg_color.method = DWG_COLOR_METHOD_NONE; cell.bg_color.rgb = 0xc8000000; }
+          else DimStyleSetCmc(&cell.bg_color, fill, useTrueColor);
+          for (unsigned b = 0; b < cell.num_borders; ++b) {
+            auto& border = cell.borders[b];
+            border.linewt = StyleWeight(StyleProperty(style.props, kind + ".borderWeight", "ByLayer"));
+            border.visible = StyleFlag(style.props, kind + ".bordersVisible", true) ? 0 : 1;
+            border.border_type = StyleFlag(style.props, kind + ".doubleLine") ? 2 : 1;
+            border.double_line_spacing = StyleNumber(style.props, kind + ".doubleSpacing", .06) * mup;
+            DimStyleSetCmc(&border.color, StyleProperty(style.props, kind + ".borderColor", style.gridLineColor.empty() ? "ByLayer" : style.gridLineColor), useTrueColor);
+            if (auto* linetype = EnsureLtype(StyleProperty(style.props, kind + ".borderType", "ByLayer")))
+              border.ltype = dwg_add_handleref(dwg, 3, dwg_obj_generic_handlevalue(linetype), nullptr);
+          }
+        }
+      } else if (record->rowstyles) {
+        for (unsigned i = 0; i < 3; ++i) {
+          auto& row = record->rowstyles[i];
+          const std::string kind = i == 0 ? "Data" : i == 1 ? "Title" : "Header";
+          row.text_height = StyleNumber(style.props, kind + ".textHeight", i == 0 ? style.textHeightInches : i == 1 ? style.titleTextHeightInches : style.headerTextHeightInches) * mup;
+          row.text_alignment = static_cast<BITCODE_BS>(StyleOptionIndex(alignments, StyleProperty(style.props, kind + ".alignment", "Middle Center")) + 1);
+          DimStyleSetCmc(&row.text_color, StyleProperty(style.props, kind + ".textColor", "ByLayer"), useTrueColor);
+          const auto fill = StyleProperty(style.props, kind + ".fillColor", "None");
+          row.has_bgcolor = fill != "None";
+          if (row.has_bgcolor) DimStyleSetCmc(&row.fill_color, fill, useTrueColor);
+          for (unsigned b = 0; b < row.num_borders; ++b) {
+            row.borders[b].linewt = static_cast<BITCODE_BSd>(StyleWeight(StyleProperty(style.props, kind + ".borderWeight", "ByLayer")));
+            row.borders[b].visible = StyleFlag(style.props, kind + ".bordersVisible", true);
+            DimStyleSetCmc(&row.borders[b].color, StyleProperty(style.props, kind + ".borderColor", "ByLayer"), useTrueColor);
+          }
+        }
+      }
+    }
+  }
+
+  BITCODE_BL MleaderStyleObjId(const std::string& name) const {
+    const auto it = mleaderStyles.find(LowerAscii(name.empty() ? "Standard" : name));
+    return it == mleaderStyles.end() ? static_cast<BITCODE_BL>(-1) : it->second;
+  }
+
+  // Returns the STYLE table objid for `name`, or -1 (meaning "leave the entity's default alone" —
+  // dwg_add_TEXT/MTEXT already points it at Standard) when the name is empty, "Standard", or not
+  // in the table (e.g. an annotation referencing a style that was since deleted).
+  BITCODE_BL StyleObjId(const std::string& name) const {
+    if (name.empty() || LowerAscii(name) == "standard")
+      return static_cast<BITCODE_BL>(-1);
+    auto it = styles.find(LowerAscii(name));
+    return it != styles.end() ? it->second : static_cast<BITCODE_BL>(-1);
+  }
+
+  void Apply(Dwg_Object_Entity* ent, const EntityAttributes& a) {
+    if (ent == nullptr)
+      return;
+    if (!a.layer.empty() && LowerAscii(a.layer) != "0") {
+      auto it = layers.find(LowerAscii(a.layer));
+      if (it != layers.end())
+        ent->layer = RefObjId(it->second);
+    }
+    SetEntityColorFromStorage(&ent->color, a.color, useTrueColor);
+    if (useTrueColor && layerState != nullptr) {
+      const std::string layerKey = a.layer.empty() ? std::string("0") : a.layer;
+      const CadLayerRow* lyr = FindDrawingLayerRowCi(*layerState, layerKey);
+      ApplyEntityEncTransparency(&ent->color, EffectiveEntityTransparency01(a, lyr));
+    }
+    if (Dwg_Object* lt = EnsureLtype(a.linetype)) {
+      ent->ltype = Ref(lt);
+      ent->ltype_flags = 3;  // has explicit handle
+    }
+    ent->linewt = LineweightDwgIndexFromMm(a.lineweightMm, /*layerRow=*/false);
+    if (a.plotStyleName.empty() || LowerAscii(a.plotStyleName) == "bylayer") {
+      ent->plotstyle_flags = 0;
+      ent->plotstyle = nullptr;
+    } else if (a.plotStyleName == "ByBlock") {
+      ent->plotstyle_flags = 1;
+      ent->plotstyle = nullptr;
+    } else if (Dwg_Object* plotStyle = EnsurePlotStyle(a.plotStyleName)) {
+      ent->plotstyle_flags = 3;
+      ent->plotstyle = Ref(plotStyle);
+    }
+  }
+};
+
+// AutoCAD uses an extension dictionary owned by a LAYER for its native per-viewport
+// color override XRECORD. Both the scale record on a VIEWPORT and this record use this
+// ownership shape, so keep the DWG object/link setup in one place.
+static Dwg_Object_DICTIONARY* EnsureExtensionDictionary(Dwg_Data* dwg, BITCODE_BL ownerIndex) {
+  if (dwg == nullptr || ownerIndex < 0 || static_cast<BITCODE_BL>(ownerIndex) >= dwg->num_objects)
+    return nullptr;
+  Dwg_Object* owner = &dwg->object[ownerIndex];
+  BITCODE_H xdic = owner->supertype == DWG_SUPERTYPE_ENTITY && owner->tio.entity != nullptr
+                       ? owner->tio.entity->xdicobjhandle
+                       : owner->tio.object != nullptr ? owner->tio.object->xdicobjhandle : nullptr;
+  if (xdic != nullptr) {
+    Dwg_Object* dictObj = dwg_resolve_handle_silent(dwg, xdic->absolute_ref);
+    if (dictObj != nullptr && dictObj->fixedtype == DWG_TYPE_DICTIONARY && dictObj->tio.object != nullptr)
+      return dictObj->tio.object->tio.DICTIONARY;
+  }
+
+  Dwg_Object_DICTIONARY* dict = dwg_add_DICTIONARY(dwg, nullptr, nullptr, 0);
+  int error = 0;
+  Dwg_Object* dictObj = dict != nullptr ? dwg_obj_generic_to_object(dict, &error) : nullptr;
+  owner = &dwg->object[ownerIndex];  // adding the dictionary can move dwg->object[]
+  if (dictObj == nullptr || error != 0 || owner->handle.value == 0)
+    return nullptr;
+  const BITCODE_HV ownerHandle = owner->handle.value;
+  dictObj->tio.object->ownerhandle = dwg_add_handleref(dwg, 4, ownerHandle, nullptr);
+  dictObj->tio.object->num_reactors = 1;
+  dictObj->tio.object->reactors = static_cast<BITCODE_H*>(std::calloc(1, sizeof(BITCODE_H)));
+  if (dictObj->tio.object->reactors != nullptr)
+    dictObj->tio.object->reactors[0] = dwg_add_handleref(dwg, 4, ownerHandle, nullptr);
+  const BITCODE_HV dictHandle = dictObj->handle.value;
+  if (owner->supertype == DWG_SUPERTYPE_ENTITY && owner->tio.entity != nullptr) {
+    owner->tio.entity->xdicobjhandle = dwg_add_handleref(dwg, 3, dictHandle, nullptr);
+    owner->tio.entity->is_xdic_missing = 0;
+  } else if (owner->tio.object != nullptr) {
+    owner->tio.object->xdicobjhandle = dwg_add_handleref(dwg, 3, dictHandle, nullptr);
+    owner->tio.object->is_xdic_missing = 0;
+  }
+  dict->is_hardowner = 1;
+  return dict;
+}
+
+/// Adds `layerName` to the DWG's layer table when the drawing's own table does not have it (white, continuous), so
+/// an entity on it keeps its layer instead of falling back to "0". False when the layer cannot be added.
+static bool EnsureExportLayer(TableWriter& tw, const std::string& layerName) {
+  assert(tw.dwg != nullptr);
+  assert(!layerName.empty());
+  if (tw.dwg == nullptr || layerName.empty()) return false;
+  const std::string layerKey = LowerAscii(layerName);
+  if (tw.layers.find(layerKey) != tw.layers.end()) return true;
+  Dwg_Object_LAYER* addedLayer = dwg_add_LAYER(tw.dwg, layerName.c_str());
+  if (addedLayer == nullptr || addedLayer->parent == nullptr) return false;
+  // AutoCAD treats ACI 0 as an invalid layer color.
+  addedLayer->color.index = 7;
+  addedLayer->color.method = DWG_COLOR_METHOD_ACI;
+  addedLayer->color.rgb = 0xC2FFFFFFu;
+  tw.layers[layerKey] = addedLayer->parent->objid;
+  return true;
+}
+
+static bool AddNativeLayerViewportColor(TableWriter& tw, const std::string& layerName,
+                                        BITCODE_HV viewportHandle, const std::string& colorStorage) {
+  if (tw.dwg == nullptr || layerName.empty() || viewportHandle == 0)
+    return false;
+  // New layers need a valid base ACI even when the viewport override is the only source of color.
+  if (!EnsureExportLayer(tw, layerName))
+    return false;
+  const auto layer = tw.layers.find(LowerAscii(layerName));
+  Dwg_Object* layerObj = tw.ObjectAt(layer->second);
+  if (layerObj == nullptr || layerObj->fixedtype != DWG_TYPE_LAYER)
+    return false;
+  Dwg_Object_DICTIONARY* dict = EnsureExtensionDictionary(tw.dwg, layerObj->index);
+  if (dict == nullptr)
+    return false;
+
+  Dwg_Object_XRECORD* xr = nullptr;
+  const BITCODE_BL count = dict->numitems;
+  for (BITCODE_BL i = 0; i < count; ++i) {
+    if (dict->texts[i] == nullptr || FromT(tw.dwg, dict->texts[i]) != "ADSK_XREC_LAYER_COLOR_OVR" ||
+        dict->itemhandles[i] == nullptr)
+      continue;
+    Dwg_Object* xrObj = dwg_resolve_handle_silent(tw.dwg, dict->itemhandles[i]->absolute_ref);
+    if (xrObj != nullptr && xrObj->fixedtype == DWG_TYPE_XRECORD && xrObj->tio.object != nullptr)
+      xr = xrObj->tio.object->tio.XRECORD;
+    break;
+  }
+  if (xr == nullptr)
+    xr = dwg_add_XRECORD(dict, "ADSK_XREC_LAYER_COLOR_OVR");
+  if (xr == nullptr || xr->parent == nullptr)
+    return false;
+
+  BITCODE_BL xrIndex = xr->parent->objid;
+  const BITCODE_BL dictIndex = dict->parent->objid;
+  const BITCODE_HV dictHandle = dictIndex >= 0 && static_cast<BITCODE_BL>(dictIndex) < tw.dwg->num_objects
+                                    ? tw.dwg->object[dictIndex].handle.value : 0;
+  if (dictHandle == 0)
+    return false;
+  Dwg_Object* xrObj = &tw.dwg->object[xrIndex];
+  xrObj->tio.object->ownerhandle = dwg_add_handleref(tw.dwg, 4, dictHandle, nullptr);
+  xrObj->tio.object->xdicobjhandle = dwg_add_handleref(tw.dwg, 3, 0, nullptr);
+  if (xrObj->tio.object->num_reactors == 0) {
+    xrObj->tio.object->num_reactors = 1;
+    xrObj->tio.object->reactors = static_cast<BITCODE_H*>(std::calloc(1, sizeof(BITCODE_H)));
+    if (xrObj->tio.object->reactors != nullptr)
+      xrObj->tio.object->reactors[0] = dwg_add_handleref(tw.dwg, 4, dictHandle, nullptr);
+  }
+
+  uint32_t rgb = 0;
+  if (!DxfColorStringToRgbPacked(colorStorage, &rgb))
+    return false;
+  xr = tw.dwg->object[xrIndex].tio.object->tio.XRECORD;
+  const char* const open = "{ADSK_LYR_COLOR_OVERRIDE";
+  const char* const close = "}";
+  if (dwg_add_XRECORD_string(xr, 102, static_cast<BITCODE_BS>(std::strlen(open)), open) == nullptr)
+    return false;
+  Dwg_Handle viewportRef{};
+  viewportRef.code = 4;
+  viewportRef.value = viewportHandle;
+  if (dwg_add_XRECORD_handle(xr, 335, viewportRef) == nullptr ||
+      dwg_add_XRECORD_int32(xr, 420, static_cast<BITCODE_BL>(0xC3000000u | (rgb & 0xFFFFFFu))) == nullptr ||
+      dwg_add_XRECORD_string(xr, 102, 1, close) == nullptr)
+    return false;
+  return true;
+}
+
+// REQ-170, issue #604: LibreDWG 0.13.4's pre-R2007 string writer (dwg_add_u8_input) does not
+// encode non-ASCII UTF-8 as the `\U+XXXX` escape AutoCAD expects for an ANSI-codepage DWG (R2000
+// is pre-R2007) — its own TODO for that is `#if 0`'d out and calls an internal function with no
+// other caller anywhere in the library, so wiring it in untested is exactly the kind of risk that
+// produced the D-2026-09-30-f crash. Degree and plus/minus, the two symbols survey text actually
+// uses (bearings, tolerances), have had dedicated, codepage-independent AutoCAD control codes
+// since R12 — `%%d` / `%%p` — that need no Unicode handling at all, so those two are substituted
+// directly. Other non-ASCII characters (accents, non-Latin letters) are passed through as raw
+// UTF-8 bytes and will still show as garbage in AutoCAD, unchanged from before this fix; full
+// Unicode support is the deferred, harder half of issue #604's character fix.
+std::string SanitizeDwgTextSymbols(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size();) {
+    const unsigned char c0 = static_cast<unsigned char>(s[i]);
+    if (c0 == 0xC2 && i + 1 < s.size()) {
+      const unsigned char c1 = static_cast<unsigned char>(s[i + 1]);
+      if (c1 == 0xB0) {  // U+00B0 DEGREE SIGN
+        out += "%%d";
+        i += 2;
+        continue;
+      }
+      if (c1 == 0xB1) {  // U+00B1 PLUS-MINUS SIGN
+        out += "%%p";
+        i += 2;
+        continue;
+      }
+    }
+    out += s[i];
+    ++i;
+  }
+  return out;
+}
+
+const EntityAttributes* AttrAt(const std::vector<EntityAttributes>& v, size_t i) {
+  return i < v.size() ? &v[i] : nullptr;
+}
+
+// REQ-365 / D-2026-09-30-f / issue #605: the block name other programs see for a GoSurvey survey
+// point. One shared definition (a marker circle plus NUMBER/DESCRIPTION attribute
+// tags, the Civil 3D/Carlson PNEZD convention), one INSERT per point. GoSurvey's own reopen does
+// not read this — it prefers the lossless ADR-044 trailer (DwgIo.cpp) — so this exists purely for
+// AutoCAD/Civil 3D, which is why there is no XDATA identity to preserve here.
+inline constexpr const char* kSurveyPointBlockName = "GOSURVEY_POINT";
+
+// REQ-107, issue #606: a block definition's own geometry, written into its BLOCK_HEADER. Content
+// coordinates are block-LOCAL (no worldDocumentOrigin offset — that only applies to model space),
+// which is the one difference from FillFromState's top-level entity loops below; the field
+// layouts are otherwise identical (CadBlockContent mirrors AppCommandState field-for-field — see
+// HarvestDrawingPrimitivesIntoContent/LoadBlockPrimitivesIntoDrawing in CadBlocks.cpp, the same
+// mapping run in reverse for BEDIT). Deliberately simpler than the model-space writer: no tilted-
+// polyline split (REQ-325), no MTEXT attachment/style resolution (issue #604) — a block
+// definition's own content is written flat, matching what AutoCAD needs to show the block
+// correctly without pulling in every model-space refinement. Meshes and solids inside a block are
+// not written (same degradations FillFromState already discloses for model space, via the #614
+// loss summary). Named nested INSERTs in `content.nested` are written as real INSERT records.
+bool AppendGosurveyStringEed(Dwg_Data* dwg, Dwg_Object_Entity* ent, const std::vector<std::string>& strs);
+void WriteAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent,
+                              const std::vector<std::string>* visibleScaleNames = nullptr);
+void ImportAnnotativeVisibilityFromEntityEed(const Dwg_Object_Entity* ent, std::vector<std::string>* out);
+void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
+                                  const CadBlockContent& content, TableWriter& tw) {
+  auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
+    if (a != nullptr)
+      tw.Apply(ent, *a);
+  };
+  const size_t nSeg = content.lines.size() / 6;
+  for (size_t i = 0; i < nSeg; ++i) {
+    dwg_point_3d a{content.lines[i * 6 + 0], content.lines[i * 6 + 1], content.lines[i * 6 + 2]};
+    dwg_point_3d b{content.lines[i * 6 + 3], content.lines[i * 6 + 4], content.lines[i * 6 + 5]};
+    if (Dwg_Entity_LINE* e = dwg_add_LINE(blkhdr, &a, &b))
+      apply(e->parent, AttrAt(content.lineAttrs, i));
+  }
+  const size_t nC = content.circles.size() / 4;
+  for (size_t i = 0; i < nC; ++i) {
+    dwg_point_3d c{content.circles[i * 4 + 0], content.circles[i * 4 + 1], content.circles[i * 4 + 2]};
+    float nx = kFlatNormalX, ny = kFlatNormalY, nz = kFlatNormalZ;
+    CircleNormalAt(content.circleNormals, i, &nx, &ny, &nz);
+    dwg_point_3d ext{0.0, 0.0, 1.0};
+    if (!IsFlatNormal(nx, ny, nz)) {
+      ucs::Ucs frame;
+      if (ucs::FromNormal({0.0, 0.0, 0.0}, {static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)},
+                          &frame)) {
+        const ray3d::Vec3 ocs = ucs::WorldToUcs(frame, {c.x, c.y, c.z});
+        c = {ocs.x, ocs.y, ocs.z};
+        ext = {static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)};
+      }
+    }
+    if (Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(blkhdr, &c, content.circles[i * 4 + 3])) {
+      e->extrusion.x = ext.x;
+      e->extrusion.y = ext.y;
+      e->extrusion.z = ext.z;
+      apply(e->parent, AttrAt(content.circleAttrs, i));
+    }
+  }
+  for (size_t i = 0; i < content.arcs.size(); ++i) {
+    const CadArc& arc = content.arcs[i];
+    dwg_point_3d c{arc.cx, arc.cy, arc.z};
+    const double a0 = static_cast<double>(arc.startRad);
+    const double a1 = a0 + static_cast<double>(arc.sweepRad);
+    dwg_point_3d ext{0.0, 0.0, 1.0};
+    if (!IsFlatNormal(arc.nx, arc.ny, arc.nz)) {
+      ucs::Ucs frame;
+      if (ucs::FromNormal({0.0, 0.0, 0.0},
+                          {static_cast<double>(arc.nx), static_cast<double>(arc.ny), static_cast<double>(arc.nz)},
+                          &frame)) {
+        const ray3d::Vec3 ocs = ucs::WorldToUcs(frame, {c.x, c.y, c.z});
+        c = {ocs.x, ocs.y, ocs.z};
+        ext = {static_cast<double>(arc.nx), static_cast<double>(arc.ny), static_cast<double>(arc.nz)};
+      }
+    }
+    if (Dwg_Entity_ARC* e = dwg_add_ARC(blkhdr, &c, static_cast<double>(arc.r), a0, a1)) {
+      e->extrusion.x = ext.x;
+      e->extrusion.y = ext.y;
+      e->extrusion.z = ext.z;
+      apply(e->parent, AttrAt(content.arcAttrs, i));
+    }
+  }
+  for (size_t i = 0; i < content.ellipses.size(); ++i) {
+    const CadEllipse& el = content.ellipses[i];
+    dwg_point_3d c{el.cx, el.cy, el.z};
+    const double majLen = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    if (majLen < 1e-12)
+      continue;
+    double ratio = static_cast<double>(el.ratio);
+    if (ratio <= 0.0 || ratio > 1.0)
+      ratio = 1.0;
+    if (Dwg_Entity_ELLIPSE* e = dwg_add_ELLIPSE(blkhdr, &c, majLen, ratio)) {
+      apply(e->parent, AttrAt(content.ellAttrs, i));
+      e->sm_axis.x = static_cast<double>(el.majVx);
+      e->sm_axis.y = static_cast<double>(el.majVy);
+      e->sm_axis.z = 0.0;
+      e->axis_ratio = ratio;
+      e->start_angle = 0.0;
+      e->end_angle = 2.0 * kPi;
+    }
+  }
+  for (size_t i = 0; i + 1 < content.polyOffsets.size(); ++i) {
+    const int a = content.polyOffsets[i];
+    const int b = content.polyOffsets[i + 1];
+    const int nv = b - a;
+    if (nv < 2)
+      continue;
+    std::vector<dwg_point_2d> pts(static_cast<size_t>(nv));
+    for (int v = 0; v < nv; ++v) {
+      const size_t k = static_cast<size_t>(a + v) * 3;
+      pts[static_cast<size_t>(v)].x = content.polyVerts[k];
+      pts[static_cast<size_t>(v)].y = content.polyVerts[k + 1];
+    }
+    Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(blkhdr, nv, pts.data());
+    if (lw == nullptr)
+      continue;
+    const double z0 = content.polyVerts[static_cast<size_t>(a) * 3 + 2];
+    if (z0 != 0.0) {
+      lw->elevation = z0;
+      lw->flag = static_cast<BITCODE_BS>(lw->flag | 8);
+    }
+    if (i < content.polyClosed.size() && content.polyClosed[i] != 0)
+      lw->flag = static_cast<BITCODE_BS>(lw->flag | 512);
+    bool anyBulge = false;
+    std::vector<double> bulges(static_cast<size_t>(nv), 0.0);
+    for (int v = 0; v < nv; ++v) {
+      const size_t vi = static_cast<size_t>(a + v);
+      const float bg = vi < content.polyVertsBulge.size() ? content.polyVertsBulge[vi] : 0.f;
+      if (bg == 0.f)
+        continue;
+      bulges[static_cast<size_t>(v)] = static_cast<double>(bg);
+      anyBulge = true;
+    }
+    if (anyBulge) {
+      lw->num_bulges = static_cast<BITCODE_BL>(nv);
+      lw->bulges = static_cast<BITCODE_BD*>(calloc(static_cast<size_t>(nv), sizeof(BITCODE_BD)));
+      if (lw->bulges != nullptr) {
+        for (int v = 0; v < nv; ++v)
+          lw->bulges[v] = bulges[static_cast<size_t>(v)];
+        lw->flag = static_cast<BITCODE_BS>(lw->flag | 16);
+      } else {
+        lw->num_bulges = 0;
+      }
+    }
+    apply(lw->parent, AttrAt(content.polyAttrs, i));
+  }
+  for (size_t i = 0; i < content.texts.size(); ++i) {
+    const CadAnnotation& an = content.texts[i];
+    dwg_point_3d p{an.insX, an.insY, an.insZ};
+    const EntityAttributes* at = AttrAt(content.textAttrs, i);
+    if (an.kind == CadAnnotation::Kind::Mtext) {
+      std::string wire;
+      for (char ch : MtextRichFlattenToPlain(SanitizeDwgTextSymbols(an.text))) {
+        if (ch == '\n')
+          wire += "\\P";
+        else if (ch != '\r')
+          wire += ch;
+      }
+      const double bw = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
+      if (Dwg_Entity_MTEXT* e = dwg_add_MTEXT(blkhdr, &p, bw, wire.c_str())) {
+        e->text_height = std::max(static_cast<double>(an.plottedHeightInches), 1e-3);
+        if (tw.dwg != nullptr && tw.dwg->header.version >= R_2018) {
+          if (an.annotative)
+            e->is_not_annotative = 0;
+          else
+            e->is_not_annotative = 1;
+          if (an.annotative && e->parent != nullptr)
+            WriteAnnotativeEntityEed(tw.dwg, e->parent, &an.annotativeVisibleScaleNames);
+          if (an.annotative && e->parent != nullptr && tw.annotContext != nullptr &&
+              tw.layerState != nullptr)
+            DwgExportAttachMtextAnnotationContext(tw.annotContext, e->parent, e, an, *tw.layerState);
+        }
+        apply(e->parent, at);
+      }
+    } else if (an.kind == CadAnnotation::Kind::Text) {
+      if (Dwg_Entity_TEXT* e = dwg_add_TEXT(blkhdr, SanitizeDwgTextSymbols(an.text).c_str(), &p,
+                                            std::max(static_cast<double>(an.plottedHeightInches), 1e-3))) {
+        e->rotation = static_cast<double>(an.rotationRad);
+        if (tw.dwg != nullptr && tw.dwg->header.version >= R_2018 && an.annotative && e->parent != nullptr)
+          WriteAnnotativeEntityEed(tw.dwg, e->parent, &an.annotativeVisibleScaleNames);
+        if (an.annotative && e->parent != nullptr && tw.annotContext != nullptr && tw.layerState != nullptr)
+          DwgExportAttachTextAnnotationContext(tw.annotContext, e->parent, e, an, *tw.layerState);
+        apply(e->parent, at);
+      }
+    }
+  }
+}
+
+static void WriteBlockDefinitionNestedInserts(Dwg_Object_BLOCK_HEADER* blkhdr, const CadBlockContent& content,
+                                               TableWriter& tw) {
+  if (blkhdr == nullptr)
+    return;
+  for (const CadBlockNested& n : content.nested) {
+    if (n.defName.empty())
+      continue;
+    dwg_point_3d ins{static_cast<double>(n.xf.x), static_cast<double>(n.xf.y), static_cast<double>(n.xf.z)};
+    if (Dwg_Entity_INSERT* e0 =
+            dwg_add_INSERT(blkhdr, &ins, n.defName.c_str(), static_cast<double>(n.xf.sx),
+                           static_cast<double>(n.xf.sy), static_cast<double>(n.xf.sz),
+                           static_cast<double>(n.xf.rotZ)))
+      tw.Apply(e0->parent, n.attrs);
+  }
+}
+
+// Creates the GOSURVEY_POINT block definition (marker + attribute tags) once per export. Returns
+// nullptr if the block header could not be created, in which case the caller skips every point
+// rather than writing a broken INSERT.
+Dwg_Object_BLOCK_HEADER* EnsureSurveyPointBlockDef(Dwg_Data* dwg, double markerRadius) {
+  Dwg_Object_BLOCK_HEADER* blkhdr = dwg_add_BLOCK_HEADER(dwg, kSurveyPointBlockName);
+  if (blkhdr == nullptr)
+    return nullptr;
+  dwg_add_BLOCK(blkhdr, kSurveyPointBlockName);
+  dwg_point_3d c{0.0, 0.0, 0.0};
+  dwg_add_CIRCLE(blkhdr, &c, markerRadius);
+  const double th = markerRadius * 0.8;
+  // Match the two populated attributes. Elevation is the INSERT's own Z coordinate.
+  dwg_point_3d pNum{markerRadius * 1.5, markerRadius * 0.5, 0.0};
+  dwg_add_ATTDEF(blkhdr, th, 0, "Point Number", &pNum, "NUMBER", "");
+  dwg_point_3d pDesc{markerRadius * 1.5, -markerRadius * 0.5, 0.0};
+  dwg_add_ATTDEF(blkhdr, th, 0, "Description", &pDesc, "DESCRIPTION", "");
+  dwg_add_ENDBLK(blkhdr);
+  return blkhdr;
+}
+
+Dwg_Object_BLOCK_HEADER* EnsureStyledSurveyPointBlockDef(
+    Dwg_Data* dwg, const AppCommandState& state, const std::string& name,
+    const SurveyPointStyleDefinition& style, double radius) {
+  auto* header = dwg_add_BLOCK_HEADER(dwg, name.c_str());
+  if (header == nullptr) return nullptr;
+  dwg_add_BLOCK(header, name.c_str());
+  auto inherit = [](Dwg_Object_Entity* entity) {
+    if (entity != nullptr) SetEntityColorFromStorage(&entity->color, "ByBlock", true);
+  };
+  auto line = [&](double x0, double y0, double x1, double y1) {
+    dwg_point_3d a{x0, y0, 0}, b{x1, y1, 0};
+    if (auto* entity = dwg_add_LINE(header, &a, &b)) inherit(entity->parent);
+  };
+  dwg_point_3d origin{0, 0, 0};
+  if (style.markerVisible) {
+    if (style.markerType == 2 && !style.markerBlockName.empty()) {
+      CadBlockRef reference;
+      reference.defName = style.markerBlockName;
+      float minX = 0, minY = 0, maxX = 0, maxY = 0;
+      CadBlockWorldAabb(state.blockDefs, reference, &minX, &minY, &maxX, &maxY);
+      const double span = std::max(maxX - minX, maxY - minY);
+      const double scale = style.markerSizeType == 3 ? 1.0 : span > 1.e-12 ? 2 * radius / span : 1.0;
+      const auto& fixed = style.markerFixedScale;
+      if (auto* entity = dwg_add_INSERT(header, &origin, style.markerBlockName.c_str(),
+          scale * (style.markerSizeType == 3 ? fixed[0] : 1.0),
+          scale * (style.markerSizeType == 3 ? fixed[1] : 1.0),
+          scale * (style.markerSizeType == 3 ? fixed[2] : 1.0), 0)) inherit(entity->parent);
+    } else if (style.markerType == 0 || style.customMarker == 0) {
+      if (auto* entity = dwg_add_POINT(header, &origin)) inherit(entity->parent);
+    } else if (style.customMarker == 2) {
+      line(-radius, 0, radius, 0);
+      line(0, -radius, 0, radius);
+    } else if (style.customMarker == 3) {
+      line(-radius, -radius, radius, radius);
+      line(-radius, radius, radius, -radius);
+    } else if (style.customMarker == 4) {
+      line(0, -radius, 0, radius);
+    }
+    if ((style.markerOverlay & 1u) != 0)
+      if (auto* entity = dwg_add_CIRCLE(header, &origin, radius)) inherit(entity->parent);
+    if ((style.markerOverlay & 2u) != 0) {
+      line(-radius, -radius, radius, -radius);
+      line(radius, -radius, radius, radius);
+      line(radius, radius, -radius, radius);
+      line(-radius, radius, -radius, -radius);
+    }
+  }
+  dwg_point_3d number{radius * 1.5, radius * .5, 0}, description{radius * 1.5, -radius * .5, 0};
+  dwg_add_ATTDEF(header, std::max(radius * .8, 1.e-6), 0, "Point Number", &number, "NUMBER", "");
+  dwg_add_ATTDEF(header, std::max(radius * .8, 1.e-6), 0, "Description", &description, "DESCRIPTION", "");
+  dwg_add_ENDBLK(header);
+  return header;
+}
+
+// REQ-366, issue #607: native DWG DIMENSION objects (save side).
+//
+// Writes a BITCODE_CMC from the same colour storage convention CadColor.hpp uses ("ByLayer" /
+// "ACI:N" / "#RRGGBB" / legacy name). Mirrors TableWriter::Apply's entity-colour branch above —
+// DIMSTYLE has no ByBlock concept, so that case collapses to ByLayer.
+void DimStyleSetCmc(BITCODE_CMC* out, const std::string& storage, bool useTrueColor) {
+  if (out == nullptr)
+    return;
+  std::string s = storage;
+  if (s == "ByBlock")
+    s = "ByLayer";
+  SetCmcFromStorage(out, s, useTrueColor);
+}
+
+// REQ-366 DIMSTYLE field mapping table: only the arrow block NAME maps (DimArrowType -> AutoCAD's
+// stock arrow block). "" (empty) means AutoCAD's own default closed-filled arrow.
+const char* DimArrowBlockName(DimArrowType t) {
+  switch (t) {
+    case DimArrowType::ClosedFilled: return "";
+    case DimArrowType::ClosedBlank:  return "_CLOSEDBLANK";
+    case DimArrowType::Tick:         return "_ARCHTICK";
+    case DimArrowType::Dot:          return "_DOT";
+    case DimArrowType::Open:         return "_OPEN";
+    case DimArrowType::None:         return "_NONE";
+  }
+  return "";
+}
+
+// Finds (or creates) the DWG DIMSTYLE table entry named `wantedName`, disambiguating a name
+// collision with "_2", "_3", ... (REQ-366 statement 1). GoSurvey models one ACTIVE DimensionStyle
+// per drawing today (AppCommandState::activeDimensionStyle; DimensionStyle.hpp), so in practice
+// this writes exactly one entry — the disambiguation loop exists for forward-compat with a future
+// per-dimension style snapshot, which DimensionStyle.hpp's own header comment names as a known
+// follow-up.
+Dwg_Object_DIMSTYLE* EnsureDimStyleNamed(Dwg_Data* dwg, const std::string& wantedName) {
+  std::string base = wantedName.empty() ? "Standard" : wantedName;
+  std::string name = base;
+  for (int n = 2; n < 1000; ++n) {
+    BITCODE_H existing = dwg_find_tablehandle(dwg, name.c_str(), "DIMSTYLE");
+    if (existing == nullptr)
+      break;
+    Dwg_Object* o = dwg_resolve_handle_silent(dwg, existing->absolute_ref);
+    if (o != nullptr && o->fixedtype == DWG_TYPE_DIMSTYLE && o->tio.object != nullptr &&
+        o->tio.object->tio.DIMSTYLE != nullptr)
+      return o->tio.object->tio.DIMSTYLE;  // reuse (e.g. "Standard" already exists)
+    name = base + "_" + std::to_string(n);
+  }
+  Dwg_Object_DIMSTYLE* ds = dwg_add_DIMSTYLE(dwg, name.c_str());
+  if (ds != nullptr && dwg->header_vars.DIMSTYLE == nullptr)
+    dwg->header_vars.DIMSTYLE = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(ds), nullptr);
+  return ds;
+}
+
+// Writes the anonymous "*D<n>" block AutoCAD expects every DIMENSION to own (REQ-366 statement 1):
+// the same lines/arrows/text CadDimBuildWorldStrokes already produces for viewport/PDF/DXF, so a
+// reader that shows block content without regenerating dimensions still draws the right picture.
+// Points are in WORLD (local-storage) coordinates, same convention CadDimWorldStrokes already
+// uses — unlike WriteBlockDefinitionGeometry's named blocks, an AutoCAD anonymous dimension block
+// is not re-transformed by an INSERT; its content is baked at the dimension's actual location.
+Dwg_Object_BLOCK_HEADER* WriteDimAnonymousBlock(Dwg_Data* dwg, int* anonCounter,
+                                                const CadDimWorldStrokes& strokes, double z,
+                                                double originX, double originY,
+                                                const std::string& labelText, double labelHeight) {
+  // Skip names already used: model space and sheets share one block table, and each keeps its own counter.
+  std::string name;
+  do {
+    name = "*D" + std::to_string(++(*anonCounter));
+  } while (dwg_find_tablehandle(dwg, name.c_str(), "BLOCK") != nullptr);
+  Dwg_Object_BLOCK_HEADER* bh = dwg_add_BLOCK_HEADER(dwg, name.c_str());
+  if (bh == nullptr)
+    return nullptr;
+  bh->anonymous = 1;
+  dwg_add_BLOCK(bh, name.c_str());
+  auto w = [&](float lx, float ly, dwg_point_3d* p) {
+    p->x = static_cast<double>(lx) + originX;
+    p->y = static_cast<double>(ly) + originY;
+    p->z = z;
+  };
+  for (const CadDimWorldSeg& s : strokes.segs) {
+    dwg_point_3d a{}, b{};
+    w(s.x0, s.y0, &a);
+    w(s.x1, s.y1, &b);
+    dwg_add_LINE(bh, &a, &b);
+  }
+  // Arrow triangles: three LINEs per triangle (same primitive set WriteBlockDefinitionGeometry
+  // already uses elsewhere — no filled-triangle entity is needed for a correct picture).
+  for (const CadDimWorldTri& t : strokes.arrows) {
+    dwg_point_3d p0{}, p1{}, p2{};
+    w(t.x0, t.y0, &p0);
+    w(t.x1, t.y1, &p1);
+    w(t.x2, t.y2, &p2);
+    dwg_add_LINE(bh, &p0, &p1);
+    dwg_add_LINE(bh, &p1, &p2);
+    dwg_add_LINE(bh, &p2, &p0);
+  }
+  if (strokes.ok && !labelText.empty()) {
+    dwg_point_3d lp{};
+    w(strokes.labelX, strokes.labelY, &lp);
+    if (Dwg_Entity_TEXT* e = dwg_add_TEXT(bh, SanitizeDwgTextSymbols(labelText).c_str(), &lp,
+                                          std::max(labelHeight, 1e-3)))
+      e->rotation = strokes.labelRotRad;
+  }
+  dwg_add_ENDBLK(bh);
+  return bh;
+}
+
+// REQ-057 / D-2026-10-01-a, issue #603: attaches GOSURVEY-appid XDATA string entries to an
+// entity — one group-0 EED per string, chained under the one APPID handle registered in the
+// first entry (mirrors encode.c's own internal `add_DUMMY_eed`, the only precedent in this
+// vendored library for hand-building an EED record; see that function for the byte layout this
+// follows byte-for-byte, generalized from one string to N). Invisible in AutoCAD/Civil 3D, which
+// is the point — it survives for a future GoSurvey-aware reader without cluttering the drawing;
+// GoSurvey's own reopen never reads it, since ImportDwgFile prefers the lossless ADR-044 trailer.
+// Returns false (leaving the entity's EED untouched) if the APPID could not be registered.
+bool AppendGosurveyStringEed(Dwg_Data* dwg, Dwg_Object_Entity* ent, const std::vector<std::string>& strs) {
+  if (ent == nullptr || strs.empty())
+    return false;
+  BITCODE_H appid = dwg_find_tablehandle(dwg, "GOSURVEY", "APPID");
+  if (appid == nullptr) {
+    if (dwg_add_APPID(dwg, "GOSURVEY") == nullptr)
+      return false;
+    appid = dwg_find_tablehandle(dwg, "GOSURVEY", "APPID");
+    if (appid == nullptr)
+      return false;
+  }
+  const BITCODE_BL n = static_cast<BITCODE_BL>(strs.size());
+  Dwg_Eed* eed = static_cast<Dwg_Eed*>(calloc(n, sizeof(Dwg_Eed)));
+  if (eed == nullptr)
+    return false;
+  ent->eed = eed;
+  ent->num_eed = n;
+  for (BITCODE_BL i = 0; i < n; ++i) {
+    size_t len = strs[static_cast<size_t>(i)].size();
+    if (len > 255)
+      len = 255;  // RC length field (non-TU eed_0)
+    const BITCODE_BS size = static_cast<BITCODE_BS>(1 + 3 + (len & 0xFF) + 1);
+    Dwg_Eed_Data* data = static_cast<Dwg_Eed_Data*>(calloc(static_cast<size_t>(size) + 3, 1));
+    if (data == nullptr)
+      return i > 0;  // earlier entries are still valid; this one and later are simply absent
+    data->code = 0;
+    data->u.eed_0.is_tu = 0;
+    data->u.eed_0.length = static_cast<unsigned short>(len & 0xFF);
+    data->u.eed_0.codepage = 30;
+    std::memcpy(data->u.eed_0.string, strs[static_cast<size_t>(i)].data(), len);
+    eed[i].data = data;
+    if (i == 0) {
+      eed[i].size = size;
+      dwg_add_handle(&eed[i].handle, 5, appid->absolute_ref, nullptr);
+    } else {
+      eed[i].size = 0;
+      eed[0].size = static_cast<BITCODE_BS>(eed[0].size + size);
+    }
+  }
+  return true;
+}
+
+// --- REQ-496.2 alignment interchange entities ---
+
+/// "<x> <y> <station>" of an alignment's start (world coordinates), at full double precision.
+std::string AlignmentStartTag(double x, double y, double station) {
+  assert(std::isfinite(x) && std::isfinite(y));
+  assert(std::isfinite(station));
+  std::array<char, 96> buf{};
+  const int n = std::snprintf(buf.data(), buf.size(), "%.17g %.17g %.17g", x, y, station);
+  return n > 0 && static_cast<size_t>(n) < buf.size() ? std::string(buf.data(), static_cast<size_t>(n)) : std::string();
+}
+
+/// Reads AlignmentStartTag's text; false when it is not three finite numbers.
+[[nodiscard]] bool ParseAlignmentStartTag(const std::string& text, double* x, double* y, double* station) {
+  assert(x != nullptr && y != nullptr && station != nullptr);
+  assert(text.size() < 4096);
+  if (x == nullptr || y == nullptr || station == nullptr) return false;
+  return std::sscanf(text.c_str(), "%lf %lf %lf", x, y, station) == 3 && std::isfinite(*x) && std::isfinite(*y) &&
+         std::isfinite(*station);
+}
+
+/// A spiral as polyline vertices (world coordinates) whose chords stay within kSpiralChordHeight of the true
+/// clothoid: spacing √(8·h/κmax), the sagitta bound at the spiral's sharpest curvature (GoSurvey rule, REQ-496.2).
+std::vector<dwg_point_2d> SpiralPolylinePoints(const alignment::Alignment& al, int entity, double ox, double oy) {
+  assert(entity >= 0 && static_cast<size_t>(entity) < al.Entities().size());
+  constexpr double kSpiralChordHeight = 0.001;
+  constexpr int kMaxSpiralVertices = 20000;
+  const alignment::Entity& e = al.Entities()[static_cast<size_t>(entity)];
+  assert(e.length > 0.0);
+  const double kappa = std::max(e.radius > 0.0 ? 1.0 / e.radius : 0.0, e.startRadius > 0.0 ? 1.0 / e.startRadius : 0.0);
+  const double step = kappa > 0.0 ? std::sqrt(8.0 * kSpiralChordHeight / kappa) : e.length;
+  const int segs = std::clamp(static_cast<int>(std::ceil(e.length / step)), 1, kMaxSpiralVertices - 1);
+  const double sta0 = al.EntityStartStation(entity);
+  std::vector<dwg_point_2d> pts(static_cast<size_t>(segs) + 1);
+  for (int k = 0; k <= segs; ++k) {
+    const alignment::Point2 p = al.GetPointAtStation(sta0 + e.length * static_cast<double>(k) / static_cast<double>(segs));
+    pts[static_cast<size_t>(k)].x = p.x + ox;
+    pts[static_cast<size_t>(k)].y = p.y + oy;
+  }
+  return pts;
+}
+
+/// The GOSURVEY strings on an entity's XDATA ("ALIGNMENT", name[, "START", tag]); empty when it has none.
+std::vector<std::string> GosurveyEedStrings(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
+  assert(dwg != nullptr);
+  assert(ent == nullptr || ent->num_eed < 100000);
+  std::vector<std::string> out;
+  if (dwg == nullptr || ent == nullptr || ent->eed == nullptr || ent->num_eed == 0) return out;
+  const BITCODE_H appid = dwg_find_tablehandle(dwg, "GOSURVEY", "APPID");
+  if (appid == nullptr || !EntityEedHasAppidHandle(ent, appid->absolute_ref)) return out;
+  for (BITCODE_BL i = 0; i < ent->num_eed; ++i) {
+    std::string s;
+    if (GosurveyEedCode0String(ent->eed[i].data, &s)) out.push_back(std::move(s));
+  }
+  return out;
+}
+
+/// The entities of one alignment found in a DWG without GoSurvey's trailer (REQ-496.2).
+struct TaggedAlignment {
+  std::string name;
+  std::string layer;
+  bool hasStart = false;
+  alignment::Point2 start;  ///< Drawing-local.
+  double startingStation = 0.0;
+  std::vector<alignment::SourceSegment> segments;
+  std::vector<Dwg_Object*> objects;  ///< Imported as plain linework when the alignment cannot be rebuilt.
+  int polylines = 0;
+};
+
+/// Adds one LINE / ARC / LWPOLYLINE's plan geometry (drawing-local) to `g`; false for anything else.
+[[nodiscard]] bool AppendTaggedSegments(const AppCommandState& st, const Dwg_Object& obj, TaggedAlignment* g) {
+  assert(g != nullptr && obj.tio.entity != nullptr);
+  assert(g->segments.size() < g->segments.max_size());
+  const double ox = st.worldDocumentOriginX, oy = st.worldDocumentOriginY;
+  const Dwg_Object_Entity* ent = obj.tio.entity;
+  const int index = static_cast<int>(g->segments.size()) + 1;
+  if (obj.fixedtype == DWG_TYPE_LINE && ent->tio.LINE != nullptr) {
+    alignment::SourceSegment s;
+    s.a = {ent->tio.LINE->start.x - ox, ent->tio.LINE->start.y - oy};
+    s.b = {ent->tio.LINE->end.x - ox, ent->tio.LINE->end.y - oy};
+    s.sourceIndex = index;
+    g->segments.push_back(s);
+    return true;
+  }
+  if (obj.fixedtype == DWG_TYPE_ARC && ent->tio.ARC != nullptr) {
+    const Dwg_Entity_ARC* a = ent->tio.ARC;
+    if (!DwgExtrusionIsFlat(a->extrusion.x, a->extrusion.y, a->extrusion.z) || a->extrusion.z < 0.0) return false;
+    alignment::SourceSegment s;
+    s.isArc = true;
+    s.center = {a->center.x - ox, a->center.y - oy};
+    s.radius = a->radius;
+    s.startAngle = a->start_angle;
+    s.endAngle = a->end_angle;
+    s.sourceIndex = index;
+    g->segments.push_back(s);
+    return true;
+  }
+  if (obj.fixedtype == DWG_TYPE_LWPOLYLINE && ent->tio.LWPOLYLINE != nullptr) {
+    const Dwg_Entity_LWPOLYLINE* p = ent->tio.LWPOLYLINE;
+    if (p->num_points < 2 || p->points == nullptr) return false;
+    for (BITCODE_BL i = 0; i + 1 < p->num_points; ++i) {
+      const double bulge = p->bulges != nullptr && i < p->num_bulges ? p->bulges[i] : 0.0;
+      g->segments.push_back(alignment::SegmentFromBulge({p->points[i].x - ox, p->points[i].y - oy},
+                                                        {p->points[i + 1].x - ox, p->points[i + 1].y - oy}, bulge, index));
+    }
+    ++g->polylines;
+    return true;
+  }
+  return false;
+}
+
+/// When `obj` is a GoSurvey alignment interchange entity, files it under its alignment and returns true, so the
+/// caller does not import it as linework.
+[[nodiscard]] bool CollectTaggedAlignmentEntity(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj,
+                                                std::vector<TaggedAlignment>* groups) {
+  assert(dwg != nullptr && groups != nullptr);
+  assert(groups->size() < groups->max_size());
+  if (obj == nullptr || obj->supertype != DWG_SUPERTYPE_ENTITY || obj->tio.entity == nullptr) return false;
+  const std::vector<std::string> tag = GosurveyEedStrings(dwg, obj->tio.entity);
+  if (tag.size() < 2 || tag[0] != "ALIGNMENT" || tag[1].empty()) return false;
+  auto it = std::find_if(groups->begin(), groups->end(), [&](const TaggedAlignment& g) { return g.name == tag[1]; });
+  if (it == groups->end()) {
+    groups->push_back({});
+    it = std::prev(groups->end());
+    it->name = tag[1];
+    it->layer = AttrFromEnt(dwg, obj->tio.entity).layer;
+  }
+  if (!AppendTaggedSegments(st, *obj, &*it)) return false;
+  it->objects.push_back(obj);
+  double x = 0.0, y = 0.0, station = 0.0;
+  if (!it->hasStart && tag.size() >= 4 && tag[2] == "START" && ParseAlignmentStartTag(tag[3], &x, &y, &station)) {
+    it->hasStart = true;
+    it->start = {x - st.worldDocumentOriginX, y - st.worldDocumentOriginY};
+    it->startingStation = station;
+  }
+  return true;
+}
+
+/// Rebuilds each collected alignment with the REQ-485 conversion, starting at its tagged start. A group the
+/// conversion refuses is imported as plain linework, with the reason in the log (REQ-201).
+void ImportTaggedAlignments(AppCommandState& st, Dwg_Data* dwg, const std::vector<TaggedAlignment>& groups,
+                            std::unordered_map<std::string, int>* skipHist, std::vector<std::string>& log,
+                            const LegacyLeaderScaleContext& scaleContext) {
+  assert(dwg != nullptr);
+  assert(st.alignments.size() < st.alignments.max_size());
+  for (const TaggedAlignment& g : groups) {
+    if (g.segments.empty()) continue;
+    alignment::FromObjectsOptions opt;
+    opt.hasPick = g.hasStart;
+    opt.pick = g.start;
+    alignment::Alignment rebuilt;
+    std::string why;
+    const bool unique = UniqueAlignmentName(st, g.name) == g.name;
+    if (!unique) why = "an alignment of that name was already read";
+    if (!unique || !alignment::BuildFromSegments(g.segments, opt, &rebuilt, &why)) {
+      log.push_back("DWG import — alignment \"" + g.name + "\" could not be rebuilt from its entities (" + why +
+                    "); they were read as lines and arcs.");
+      for (Dwg_Object* obj : g.objects)
+        ImportObject(st, dwg, obj, Xf2{}, 0, skipHist, nullptr, nullptr, scaleContext);
+      continue;
+    }
+    rebuilt.name = g.name;
+    rebuilt.layer = g.layer.empty() ? std::string("0") : g.layer;
+    rebuilt.startingStation = g.startingStation;
+    rebuilt.id = st.nextEntityId++;
+    log.push_back("DWG import — alignment \"" + g.name + "\" rebuilt from its " + std::to_string(g.objects.size()) +
+                  " drawing entities (the file has no GoSurvey data)" +
+                  (g.polylines > 0 ? "; its spirals were read as tangents." : "."));
+    st.alignments.push_back(std::move(rebuilt));
+  }
+}
+
+// --- REQ-496.3 Civil 3D alignments (D-2026-11-04-m) ---
+
+/// Where the lines through two tangents cross: their PI. False for parallel tangents.
+[[nodiscard]] bool TangentsMeet(const libredwgcivil::AlignmentTangentRecord& a,
+                                const libredwgcivil::AlignmentTangentRecord& b, alignment::Point2* pi) {
+  assert(pi != nullptr);
+  const double ux = a.bx - a.ax, uy = a.by - a.ay, vx = b.bx - b.ax, vy = b.by - b.ay;
+  const double cross = ux * vy - uy * vx;
+  assert(std::isfinite(cross));
+  if (std::fabs(cross) <= 1e-12 * std::hypot(ux, uy) * std::hypot(vx, vy)) return false;
+  const double t = ((b.ax - a.ax) * vy - (b.ay - a.ay) * vx) / cross;
+  *pi = {a.ax + t * ux, a.ay + t * uy};
+  return true;
+}
+
+/// The PIs (world coordinates) and per-PI curve settings of a decoded Civil 3D alignment, walking from the tangent
+/// with nothing before it through the sub-entity links. False, naming the problem, when a link leads to a sub-entity
+/// that was not decoded. A decoded record no link reaches cannot change the road and is left out.
+[[nodiscard]] bool CivilAlignmentPis(const libredwgcivil::AlignmentRecord& rec, std::vector<alignment::Point2>* pis,
+                                     std::vector<alignment::CurveSettings>* settings, std::string* why) {
+  assert(pis != nullptr && settings != nullptr && why != nullptr);
+  assert(!rec.tangents.empty());
+  auto tangentWith = [&](uint32_t id) {
+    return std::find_if(rec.tangents.begin(), rec.tangents.end(), [&](const auto& t) { return t.id == id; });
+  };
+  auto cornerWith = [&](uint32_t id) {
+    return std::find_if(rec.corners.begin(), rec.corners.end(), [&](const auto& c) { return c.id == id; });
+  };
+  const auto first = std::find_if(rec.tangents.begin(), rec.tangents.end(), [](const auto& t) { return t.previous == 0; });
+  if (first == rec.tangents.end()) {
+    *why = "it does not start with a fixed tangent";
+    return false;
+  }
+  pis->assign(1, {first->ax, first->ay});
+  settings->assign(1, alignment::CurveSettings{});
+  auto current = first;
+  const size_t limit = rec.tangents.size() + rec.corners.size();
+  for (size_t step = 0; step <= limit && current->next != 0; ++step) {
+    alignment::CurveSettings corner{false, 0.0, 0.0, 0.0};
+    uint32_t nextTangent = current->next;
+    if (const auto c = cornerWith(current->next); c != rec.corners.end()) {
+      corner = {true, c->radius, c->spiralIn, c->spiralOut};
+      nextTangent = c->next;
+    }
+    const auto next = tangentWith(nextTangent);
+    alignment::Point2 pi;
+    if (next == rec.tangents.end()) {
+      *why = "sub-entity " + std::to_string(nextTangent) +
+             " is not a fixed tangent, free curve or free spiral-curve-spiral group, which are the kinds GoSurvey reads";
+      return false;
+    }
+    if (!TangentsMeet(*current, *next, &pi)) {
+      *why = "tangents " + std::to_string(current->id) + " and " + std::to_string(next->id) + " are parallel";
+      return false;
+    }
+    pis->push_back(pi);
+    settings->push_back(corner);
+    current = next;
+  }
+  if (current->next != 0) {
+    *why = "its sub-entity links loop back on themselves";
+    return false;
+  }
+  pis->push_back({current->bx, current->by});
+  settings->push_back(alignment::CurveSettings{});
+  return true;
+}
+
+/// Imports every Civil 3D alignment GoSurvey can rebuild exactly; the others are named in the log (REQ-201). Returns
+/// the handles of the imported ones, whose proxy previews are then not also read as display geometry.
+std::unordered_set<BITCODE_RLL> ImportCivilAlignments(AppCommandState& st, Dwg_Data* dwg,
+                                                      std::vector<std::string>& log) {
+  assert(dwg != nullptr);
+  assert(st.alignments.size() < st.alignments.max_size());
+  std::unordered_set<BITCODE_RLL> imported;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object& object = dwg->object[i];
+    if (object.type < 500 || object.type - 500 >= dwg->num_classes || object.supertype != DWG_SUPERTYPE_ENTITY ||
+        object.tio.entity == nullptr)
+      continue;
+    const char* cls = dwg->dwg_class[object.type - 500].dxfname;
+    if (cls == nullptr || std::strcmp(cls, "AECC_ALIGNMENT") != 0) continue;
+    std::size_t stringStart = object.num_unknown_bits, stringBits = 0;
+    const std::size_t prefix = object.common_size + object.bitsize_pos;
+    const std::size_t trailer = object.stringstream_size >= 32768 ? 33 : 17;
+    if (object.has_strings && object.bitsize >= prefix + trailer + object.stringstream_size) {
+      stringStart = object.bitsize - prefix - trailer - object.stringstream_size;
+      stringBits = object.stringstream_size;
+    }
+    const auto rec = libredwgcivil::DecodeAlignment(object.unknown_bits, object.num_unknown_bits, stringStart, stringBits);
+    std::string name = rec && !rec->name.empty() ? libredwgcad_detail::DecodeDwgString(rec->name.c_str(), true)
+                                                 : std::string("Civil 3D alignment");
+    std::vector<alignment::Point2> pis;
+    std::vector<alignment::CurveSettings> settings;
+    std::string why = "its data could not be read";
+    std::vector<std::string> warnings;
+    alignment::Alignment made;
+    bool ok = rec.has_value() && CivilAlignmentPis(*rec, &pis, &settings, &why);
+    for (alignment::Point2& p : pis) p = {p.x - st.worldDocumentOriginX, p.y - st.worldDocumentOriginY};
+    ok = ok && alignment::BuildFromPis(pis, settings, &made, &why, &warnings);
+    if (ok && !warnings.empty()) {
+      why = warnings.front();  // a curve that does not fit as decoded would not be Civil 3D's geometry
+      ok = false;
+    }
+    if (!ok) {
+      log.push_back("DWG import — Civil 3D alignment \"" + name + "\" was not imported: " + why + ".");
+      continue;
+    }
+    name = UniqueAlignmentName(st, name);
+    made.name = name;
+    made.layer = AttrFromEnt(dwg, object.tio.entity).layer;
+    if (made.layer.empty()) made.layer = "0";
+    if (rec->startingStation) made.startingStation = *rec->startingStation;
+    size_t equations = 0;
+    std::string refused;
+    for (const libredwgcivil::AlignmentEquationRecord& e : rec->equations) {
+      alignment::StationEquation eq;
+      eq.rawBack = e.rawStationBack;
+      eq.ahead = e.stationAhead;
+      eq.increasing = e.increasing;
+      if (made.AddStationEquation(eq)) ++equations;
+      else refused += " " + std::to_string(e.rawStationBack) + " -> " + std::to_string(e.stationAhead);
+    }
+    made.id = st.nextEntityId++;
+    log.push_back("DWG import — Civil 3D alignment \"" + name + "\": " + std::to_string(made.Entities().size()) +
+                  " entities, " + std::to_string(equations) + " station equation(s)" +
+                  (rec->startingStation ? "" : "; its starting station was not decoded (0+00 used)") +
+                  (refused.empty() ? "" : "; station equations refused (raw station back -> ahead):" + refused) + ".");
+    // REQ-496.3 / REQ-201: say what was not read, so nothing is dropped silently.
+    const bool hasSpiral = std::any_of(made.Entities().begin(), made.Entities().end(),
+                                       [](const alignment::Entity& e) { return e.kind == alignment::EntityKind::Spiral; });
+    log.push_back("  not decoded for \"" + name + "\": type, description, alignment style, label set, labels, design "
+                  "criteria and design speeds (Standard and defaults used)" +
+                  (hasSpiral ? "; the spiral type is not decoded and its spirals are read as clothoids" : "") + ".");
+    st.alignments.push_back(std::move(made));
+    imported.insert(object.handle.value);
+  }
+  return imported;
+}
+
+// Issue #622: AutoCAD-native annotative marker (AcadAnnotative APPID + AnnotativeData XDATA).
+// Appends five EED records; mirrors encode.c downconvert_DIMSTYLE AnnotativeData layout.
+bool AppendAcadAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent) {
+  if (dwg == nullptr || ent == nullptr)
+    return false;
+  BITCODE_H appid = dwg_find_tablehandle(dwg, "AcadAnnotative", "APPID");
+  if (appid == nullptr) {
+    if (dwg_add_APPID(dwg, "AcadAnnotative") == nullptr)
+      return false;
+    appid = dwg_find_tablehandle(dwg, "AcadAnnotative", "APPID");
+  }
+  if (appid == nullptr)
+    return false;
+  const BITCODE_RLL eedAppRef = appid->absolute_ref;
+  if (EntityEedHasAppidHandle(ent, eedAppRef))
+    return true;
+
+  const BITCODE_BL idx = ent->num_eed;
+  ent->num_eed += 5;
+  Dwg_Eed* eed = static_cast<Dwg_Eed*>(realloc(ent->eed, (ent->num_eed + 1) * sizeof(Dwg_Eed)));
+  if (eed == nullptr) {
+    ent->num_eed = idx;
+    return false;
+  }
+  ent->eed = eed;
+  for (BITCODE_BL z = idx; z <= ent->num_eed; ++z) {
+    ent->eed[z].size = 0;
+    ent->eed[z].raw = nullptr;
+    ent->eed[z].data = nullptr;
+    ent->eed[z].handle.value = 0;
+  }
+
+  BITCODE_BL i = idx;
+  const size_t annoLen = std::strlen(kAcadAnnotativeDataEed);
+  const BITCODE_BS headSize = static_cast<BITCODE_BS>(1 + 3 + (annoLen & 0xFF) + 1);
+  dwg_add_handle(&ent->eed[i].handle, 5, eedAppRef, nullptr);
+  ent->eed[i].size = headSize;
+  ent->eed[i].data = static_cast<Dwg_Eed_Data*>(calloc(static_cast<size_t>(headSize) + 3, 1));
+  if (ent->eed[i].data == nullptr)
+    return false;
+  ent->eed[i].data->code = 0;
+  ent->eed[i].data->u.eed_0.is_tu = 0;
+  ent->eed[i].data->u.eed_0.length = static_cast<unsigned short>(annoLen & 0xFF);
+  ent->eed[i].data->u.eed_0.codepage = 30;
+  std::memcpy(ent->eed[i].data->u.eed_0.string, kAcadAnnotativeDataEed, annoLen);
+  ++i;
+  ent->eed[i].data = static_cast<Dwg_Eed_Data*>(calloc(8, 1));
+  if (ent->eed[i].data == nullptr)
+    return false;
+  ent->eed[i].data->code = 2;
+  ++i;
+  ent->eed[i].data = static_cast<Dwg_Eed_Data*>(calloc(8, 1));
+  if (ent->eed[i].data == nullptr)
+    return false;
+  ent->eed[i].data->code = 70;
+  ent->eed[i].data->u.eed_70.rs = 1;
+  ++i;
+  ent->eed[i].data = static_cast<Dwg_Eed_Data*>(calloc(8, 1));
+  if (ent->eed[i].data == nullptr)
+    return false;
+  ent->eed[i].data->code = 70;
+  ent->eed[i].data->u.eed_70.rs = 1;
+  ++i;
+  ent->eed[i].data = static_cast<Dwg_Eed_Data*>(calloc(8, 1));
+  if (ent->eed[i].data == nullptr)
+    return false;
+  ent->eed[i].data->code = 2;
+  ent->eed[i].data->u.eed_2.close = 1;
+  return true;
+}
+
+void WriteAnnotativeStyleEed(Dwg_Data* dwg, Dwg_Object_Object* object) {
+  if (!object) return;
+  Dwg_Object_Entity view{};
+  view.num_eed = object->num_eed;
+  view.eed = object->eed;
+  AppendAcadAnnotativeEntityEed(dwg, &view);
+  object->num_eed = view.num_eed;
+  object->eed = view.eed;
+}
+
+void WriteAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent,
+                              const std::vector<std::string>* visibleScaleNames) {
+  if (dwg == nullptr || ent == nullptr)
+    return;
+  std::vector<std::string> gos;
+  gos.push_back(kGosurveyAnnotativeBlockEed);
+  if (visibleScaleNames != nullptr && !visibleScaleNames->empty()) {
+    const std::string csv = JoinAnnotativeVisibleScaleNames(*visibleScaleNames);
+    if (!csv.empty()) {
+      gos.push_back(kGosurveyAnnoVisScalesEed);
+      gos.push_back(csv);
+    }
+  }
+  AppendGosurveyStringEed(dwg, ent, gos);
+  AppendAcadAnnotativeEntityEed(dwg, ent);
+}
+
+// Issue #622: persist the status-bar CANNOSCALE choice on *Model_Space (object EED shares entity
+// layout per LibreDWG encode.c). AutoCAD ignores this; GoSurvey native reopen uses it before plot sync.
+[[nodiscard]] bool ApplyGosurveyCannoscaleFromEed(const Dwg_Object_Entity* ent, AppCommandState& st) {
+  if (ent == nullptr || ent->eed == nullptr || ent->num_eed == 0 || st.annotationScales.empty())
+    return false;
+  std::vector<std::string> strings;
+  strings.reserve(static_cast<size_t>(ent->num_eed));
+  for (BITCODE_BL i = 0; i < ent->num_eed; ++i) {
+    std::string s;
+    if (GosurveyEedCode0String(ent->eed[i].data, &s))
+      strings.push_back(std::move(s));
+  }
+  for (size_t i = 0; i + 1 < strings.size(); ++i) {
+    if (strings[i] != kGosurveyCannoscaleEedTag)
+      continue;
+    const std::string& scaleName = strings[i + 1];
+    for (int j = 0; j < static_cast<int>(st.annotationScales.size()); ++j) {
+      if (st.annotationScales[static_cast<size_t>(j)].name == scaleName) {
+        st.currentAnnotationScaleIndex = j;
+        return true;
+      }
+    }
+    return false;
+  }
+  return false;
+}
+
+static void WriteGosurveyCannoscaleOnModelSpace(const AppCommandState& st, Dwg_Data* dwg) {
+  if (dwg == nullptr || st.annotationScales.empty())
+    return;
+  const int ix = st.currentAnnotationScaleIndex;
+  if (ix < 0 || ix >= static_cast<int>(st.annotationScales.size()))
+    return;
+  const std::string& scaleName = st.annotationScales[static_cast<size_t>(ix)].name;
+  if (scaleName.empty())
+    return;
+  Dwg_Object* ms = dwg_model_space_object(dwg);
+  if (ms == nullptr || ms->tio.object == nullptr)
+    return;
+  auto* eedHost = reinterpret_cast<Dwg_Object_Entity*>(ms->tio.object);
+  AppendGosurveyStringEed(dwg, eedHost, {kGosurveyCannoscaleEedTag, scaleName});
+}
+
+// AutoCAD reads its active annotation scale from AcDbVariableDictionary.CANNOSCALE. Keep the
+// GoSurvey EED copy for older GoSurvey versions, but write the native variable for other CAD apps.
+static bool WriteNativeCannoscale(const AppCommandState& st, Dwg_Data* dwg) {
+  if (dwg == nullptr || st.annotationScales.empty())
+    return false;
+  const int ix = st.currentAnnotationScaleIndex;
+  if (ix < 0 || ix >= static_cast<int>(st.annotationScales.size()))
+    return false;
+  const std::string& scaleName = st.annotationScales[static_cast<size_t>(ix)].name;
+  if (scaleName.empty())
+    return false;
+
+  BITCODE_H dictRef = dwg_find_dictionary(dwg, "AcDbVariableDictionary");
+  Dwg_Object* dictShell = dictRef != nullptr ? dwg_ref_object_silent(dwg, dictRef) : nullptr;
+  Dwg_Object_DICTIONARY* dict = dictShell != nullptr && dictShell->fixedtype == DWG_TYPE_DICTIONARY &&
+                                        dictShell->tio.object != nullptr
+                                    ? dictShell->tio.object->tio.DICTIONARY
+                                    : nullptr;
+  if (dict == nullptr) {
+    dict = dwg_add_DICTIONARY(dwg, "AcDbVariableDictionary", nullptr, 0);
+    if (dict == nullptr)
+      return false;
+    int error = 0;
+    dictShell = dwg_obj_generic_to_object(dict, &error);
+    if (dictShell == nullptr || error != 0)
+      return false;
+  }
+  const std::uint64_t dictHandleValue = dictShell->handle.value;
+
+  // Replace the existing value in place when present.
+  for (BITCODE_BL i = 0; i < dict->numitems; ++i) {
+    if (dict->texts == nullptr || dict->itemhandles == nullptr || dict->texts[i] == nullptr ||
+        FromT(dwg, dict->texts[i]) != "CANNOSCALE")
+      continue;
+    Dwg_Object* existing = dict->itemhandles[i] != nullptr
+                               ? dwg_ref_object_silent(dwg, dict->itemhandles[i])
+                               : nullptr;
+    if (existing != nullptr && existing->fixedtype == DWG_TYPE_DICTIONARYVAR &&
+        existing->tio.object != nullptr && existing->tio.object->tio.DICTIONARYVAR != nullptr) {
+      existing->tio.object->tio.DICTIONARYVAR->strvalue = dwg_add_u8_input(dwg, scaleName.c_str());
+      return existing->tio.object->tio.DICTIONARYVAR->strvalue != nullptr;
+    }
+    break;
+  }
+
+  const BITCODE_BL idxObj = dwg->num_objects;
+  const int added = dwg_add_object(dwg);
+  if (added > 0)
+    return false;
+  if (added < 0)
+    dwg_resolve_objectrefs_silent(dwg);
+  int classNumber = -1;
+  for (BITCODE_BS i = 0; i < dwg->num_classes; ++i) {
+    if (dwg->dwg_class[i].dxfname != nullptr && std::strcmp(dwg->dwg_class[i].dxfname, "DICTIONARYVAR") == 0) {
+      classNumber = dwg->dwg_class[i].number;
+      break;
+    }
+  }
+  if (classNumber < 0)
+    classNumber = dwg_add_class(dwg, "DICTIONARYVAR", "AcDbDictionaryVar", "ObjectDBX Classes", false);
+  if (classNumber < 0)
+    return false;
+  // dwg_add_object (and handle resolution) may move dwg->object, invalidating the
+  // dictionary shell and its embedded dictionary pointer. Re-resolve by value.
+  dictShell = dwg_resolve_handle_silent(dwg, dictHandleValue);
+  if (dictShell == nullptr || dictShell->fixedtype != DWG_TYPE_DICTIONARY || dictShell->tio.object == nullptr ||
+      dictShell->tio.object->tio.DICTIONARY == nullptr)
+    return false;
+  dict = dictShell->tio.object->tio.DICTIONARY;
+  Dwg_Object* obj = &dwg->object[idxObj];
+  obj->supertype = DWG_SUPERTYPE_OBJECT;
+  obj->fixedtype = DWG_TYPE_DICTIONARYVAR;
+  obj->type = static_cast<BITCODE_BS>(classNumber);
+  obj->dxfname = (dwg->opts & DWG_OPTS_IN) ? _strdup("DICTIONARYVAR") : const_cast<char*>("DICTIONARYVAR");
+  obj->name = (dwg->opts & DWG_OPTS_IN) ? _strdup("DICTIONARYVAR") : const_cast<char*>("DICTIONARYVAR");
+  if (dwg_setup_DICTIONARYVAR(obj) != 0 || obj->tio.object == nullptr ||
+      obj->tio.object->tio.DICTIONARYVAR == nullptr)
+    return false;
+  auto* var = obj->tio.object->tio.DICTIONARYVAR;
+  var->schema = 0;
+  var->strvalue = dwg_add_u8_input(dwg, scaleName.c_str());
+  dwg_set_next_objhandle(obj);
+  obj->tio.object->ownerhandle = dwg_add_handleref(dwg, 4, dictHandleValue, nullptr);
+  if (var->strvalue == nullptr || obj->handle.value == 0)
+    return false;
+  dictShell = dwg_resolve_handle_silent(dwg, dictHandleValue);
+  if (dictShell == nullptr || dictShell->fixedtype != DWG_TYPE_DICTIONARY || dictShell->tio.object == nullptr ||
+      dictShell->tio.object->tio.DICTIONARY == nullptr)
+    return false;
+  dict = dictShell->tio.object->tio.DICTIONARY;
+  return dwg_add_DICTIONARY_item(dict, "CANNOSCALE", obj->handle.value) != nullptr;
+}
+
+namespace dwg_solid_export {
+void WorldPoint(const AppCommandState& st, const ray3d::Vec3& local, dwg_point_3d* out);
+}
+
+// Issue #611 / D-2026-10-01-e — triangle meshes and built TINs as POLYLINE_PFACE (ADR-026 amended).
+namespace dwg_mesh_export {
+
+namespace {
+constexpr unsigned kMaxPfaceVerts = 5000000u;
+constexpr unsigned kMaxPfaceFaces = 5000000u;
+}  // namespace
+
+bool WriteIndexedTriangles(int vertexCount, const std::function<void(int, dwg_point_3d*)>& fillVertex,
+                           const std::vector<std::uint32_t>& indices, Dwg_Object_BLOCK_HEADER* hdr,
+                           TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
+                           DwgExportMaterialContext* matCtx, const AppCommandState* st, float defR,
+                           float defG, float defB, bool asPolylinePface) {
+  if (hdr == nullptr || vertexCount < 3)
+    return false;
+  const size_t nTri = indices.size() / 3;
+  if (nTri < 1 || nTri > kMaxPfaceFaces || static_cast<unsigned>(vertexCount) > kMaxPfaceVerts)
+    return false;
+
+  const auto applyEntity = [&](Dwg_Object_Entity* entParent) {
+    if (entParent == nullptr)
+      return;
+    if (tw != nullptr && attr != nullptr)
+      tw->Apply(entParent, *attr);
+    if (dwg != nullptr && matCtx != nullptr && st != nullptr && attr != nullptr)
+      DwgExportApplyEntityMaterial(dwg, matCtx, *st, entParent, attr, defR, defG, defB);
+  };
+
+  if (!asPolylinePface) {
+    // LibreDWG can SIGSEGV on a second POLYLINE_PFACE in the same block (issue #663). Additional
+    // TIN/mesh exports fall back to one 3DFACE per triangle; the GoSurvey JSON trailer is unchanged.
+    bool wrote = false;
+    for (size_t t = 0; t < nTri; ++t) {
+      const std::uint32_t a = indices[t * 3 + 0];
+      const std::uint32_t b = indices[t * 3 + 1];
+      const std::uint32_t c = indices[t * 3 + 2];
+      if (a >= static_cast<std::uint32_t>(vertexCount) || b >= static_cast<std::uint32_t>(vertexCount) ||
+          c >= static_cast<std::uint32_t>(vertexCount))
+        return false;
+      dwg_point_3d p1{}, p2{}, p3{};
+      fillVertex(static_cast<int>(a), &p1);
+      fillVertex(static_cast<int>(b), &p2);
+      fillVertex(static_cast<int>(c), &p3);
+      Dwg_Entity__3DFACE* face = dwg_add_3DFACE(hdr, &p1, &p2, &p3, nullptr);
+      if (face == nullptr || face->parent == nullptr)
+        return false;
+      applyEntity(face->parent);
+      wrote = true;
+    }
+    return wrote;
+  }
+
+  std::vector<dwg_point_3d> verts(static_cast<size_t>(vertexCount));
+  for (int vi = 0; vi < vertexCount; ++vi)
+    fillVertex(vi, &verts[static_cast<size_t>(vi)]);
+  std::vector<dwg_face> faces(nTri);
+  for (size_t t = 0; t < nTri; ++t) {
+    const std::uint32_t a = indices[t * 3 + 0];
+    const std::uint32_t b = indices[t * 3 + 1];
+    const std::uint32_t c = indices[t * 3 + 2];
+    if (a >= static_cast<std::uint32_t>(vertexCount) || b >= static_cast<std::uint32_t>(vertexCount) ||
+        c >= static_cast<std::uint32_t>(vertexCount))
+      return false;
+    faces[t][0] = static_cast<BITCODE_BSd>(static_cast<int>(a) + 1);
+    faces[t][1] = static_cast<BITCODE_BSd>(static_cast<int>(b) + 1);
+    faces[t][2] = static_cast<BITCODE_BSd>(static_cast<int>(c) + 1);
+    faces[t][3] = 0;
+  }
+  Dwg_Entity_POLYLINE_PFACE* pf =
+      dwg_add_POLYLINE_PFACE(hdr, static_cast<unsigned>(vertexCount), static_cast<unsigned>(nTri),
+                             verts.data(), faces.data());
+  if (pf == nullptr || pf->parent == nullptr)
+    return false;
+  applyEntity(pf->parent);
+  return true;
+}
+
+bool WriteCadMesh(const AppCommandState& st, const CadMesh& mesh, Dwg_Object_BLOCK_HEADER* hdr,
+                  TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
+                  DwgExportMaterialContext* matCtx, bool asPolylinePface) {
+  const int nv = mesh.vertexCount();
+  if (nv < 3 || mesh.indices.size() < 3)
+    return false;
+  float defR = 0.78f;
+  float defG = 0.78f;
+  float defB = 0.78f;
+  if (!mesh.parts.empty()) {
+    defR = mesh.parts[0].r;
+    defG = mesh.parts[0].g;
+    defB = mesh.parts[0].b;
+  }
+  return WriteIndexedTriangles(
+      nv,
+      [&](int vi, dwg_point_3d* out) {
+        const size_t o = static_cast<size_t>(vi) * 3;
+        dwg_solid_export::WorldPoint(st, ray3d::Vec3{mesh.vertsXyz[o], mesh.vertsXyz[o + 1],
+                                                     mesh.vertsXyz[o + 2]},
+                                     out);
+      },
+      mesh.indices, hdr, tw, attr, dwg, matCtx, &st, defR, defG, defB, asPolylinePface);
+}
+
+bool WriteCadSurfaceTin(const AppCommandState& st, const CadSurface& surface, Dwg_Object_BLOCK_HEADER* hdr,
+                        TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
+                        DwgExportMaterialContext* matCtx, bool asPolylinePface) {
+  if (surface.tin == nullptr)
+    return false;
+  const CadTin& tin = *surface.tin;
+  const int nv = tin.vertexCount();
+  if (nv < 3 || tin.indices.size() < 3)
+    return false;
+  return WriteIndexedTriangles(
+      nv,
+      [&](int vi, dwg_point_3d* out) {
+        const size_t o = static_cast<size_t>(vi) * 3;
+        dwg_solid_export::WorldPoint(st, ray3d::Vec3{tin.vertsXyz[o], tin.vertsXyz[o + 1],
+                                                     tin.vertsXyz[o + 2]},
+                                     out);
+      },
+      tin.indices, hdr, tw, attr, dwg, matCtx, &st, 0.42f, 0.62f, 0.78f, asPolylinePface);
+}
+
+size_t CountSkippedMeshes(const AppCommandState& st) {
+  size_t n = 0;
+  for (const std::shared_ptr<const CadMesh>& mp : st.cadMeshes) {
+    if (mp == nullptr || mp->triangleCount() < 1)
+      ++n;
+  }
+  return n;
+}
+
+size_t CountSkippedSurfaces(const AppCommandState& st) {
+  size_t n = 0;
+  for (const CadSurface& s : st.cadSurfaces) {
+    if (s.tin == nullptr || s.triangleCount() < 1)
+      ++n;
+  }
+  return n;
+}
+
+}  // namespace dwg_mesh_export
+
+// Issue #616: LibreDWG has no dwg_add_TABLE — export grid + cell MTEXT (AutoCAD-visible fallback).
+namespace dwg_table_export {
+
+bool WriteCadTable(const AppCommandState& st, const CadTable& table, Dwg_Object_BLOCK_HEADER* hdr,
+                   TableWriter& tw, const EntityAttributes* attr, DwgExportFieldContext* fldCtx,
+                   std::uint64_t blockOwnerHandle, double ox, double oy, float modelUnitsPerPlottedInch) {
+  if (hdr == nullptr || table.cols <= 0)
+    return false;
+  const int rows = CadTableRowCount(table);
+  const float w = std::max(table.width, 1.e-3f);
+  const float h = std::max(table.height, 1.e-3f);
+  const double z = static_cast<double>(table.insZ);
+  const auto* tableStyle = CadTableFindStyle(st.tableStyles, table.styleName);
+  const std::map<std::string, std::string> emptyProperties;
+  const auto& properties = tableStyle ? tableStyle->props : emptyProperties;
+  const auto rowKind = [&](std::size_t row) -> std::string {
+    return row == 0 && table.mergeTitleRow ? "Title" : row == static_cast<std::size_t>(table.mergeTitleRow ? 1 : 0) ? "Header" : "Data";
+  };
+  auto worldLocal = [&](float lx, float ly, dwg_point_3d* p) {
+    float wx = 0.f, wy = 0.f;
+    CadTableLocalToWorld(table, lx, ly, &wx, &wy);
+    p->x = static_cast<double>(wx) + ox;
+    p->y = static_cast<double>(wy) + oy;
+    p->z = z;
+  };
+  auto seg = [&](float lx0, float ly0, float lx1, float ly1) {
+    dwg_point_3d a{}, b{};
+    worldLocal(lx0, ly0, &a);
+    worldLocal(lx1, ly1, &b);
+    if (Dwg_Entity_LINE* e = dwg_add_LINE(hdr, &a, &b))
+      if (attr != nullptr)
+        tw.Apply(e->parent, *attr);
+  };
+  for (int r = 0; r <= rows; ++r) {
+    const float ly = CadTableBandBoundary(table.rowWeights, rows, r, h);
+    seg(0.f, ly, w, ly);
+  }
+  for (int c = 0; c <= table.cols; ++c) {
+    const float lx = CadTableBandBoundary(table.columnWeights, table.cols, c, w);
+    const float top = table.mergeTitleRow && c > 0 && c < table.cols ?
+        CadTableBandBoundary(table.rowWeights, rows, 1, h) : 0.f;
+    seg(lx, top, lx, h);
+  }
+  std::vector<CadTableCellRect> cells;
+  CadTableLayoutWorldCells(table, &cells);
+  const double rotRad = static_cast<double>(table.rotationRad);
+  for (size_t ci = 0; ci < cells.size() && ci < table.cells.size(); ++ci) {
+    const auto local = CadTableLocalCellRect(table, static_cast<int>(ci));
+    if (local.x1 <= local.x0 || local.y1 <= local.y0) continue;
+    const auto row = ci / static_cast<std::size_t>(table.cols);
+    const auto kind = rowKind(row);
+    const double height = row < table.rowTextHeightsInches.size() ? table.rowTextHeightsInches[row] : table.plottedHeightInches;
+    const double textH = std::max(1.e-3, StyleNumber(properties, kind + ".textHeight", height) * modelUnitsPerPlottedInch);
+    const std::string alignment = StyleProperty(properties, kind + ".alignment", table.mergeTitleRow && row == 0 ? "Middle Center" : "Top Left");
+    const int horizontal = alignment.find("Center") != std::string::npos ? 1 : alignment.find("Right") != std::string::npos ? 2 : 0;
+    const int vertical = alignment.find("Middle") != std::string::npos ? 1 : alignment.find("Bottom") != std::string::npos ? 2 : 0;
+    const float marginX = static_cast<float>(StyleNumber(properties, kind + ".horizontalMargin", 0) * modelUnitsPerPlottedInch);
+    const float marginY = static_cast<float>(StyleNumber(properties, kind + ".verticalMargin", 0) * modelUnitsPerPlottedInch);
+    dwg_point_3d p{};
+    worldLocal(horizontal == 1 ? (local.x0 + local.x1) * .5f : horizontal == 2 ? local.x1 - marginX : local.x0 + marginX,
+               vertical == 1 ? (local.y0 + local.y1) * .5f : vertical == 2 ? local.y1 - marginY : local.y0 + marginY, &p);
+    const CadFieldContext fctx = CadFieldContextFromState(st);
+    std::string wire = SanitizeDwgTextSymbols(table.cells[ci]);
+    if (wire.empty())
+      continue;
+    std::string flat;
+    for (char ch : MtextRichFlattenToPlain(wire)) {
+      if (ch == '\n')
+        flat += "\\P";
+      else if (ch != '\r')
+        flat += ch;
+    }
+    if (Dwg_Entity_MTEXT* mt = dwg_add_MTEXT(hdr, &p, std::max<double>(local.x1 - local.x0, 1.e-3), flat.c_str())) {
+      mt->text_height = textH;
+      mt->attachment = static_cast<BITCODE_BS>(vertical * 3 + horizontal + 1);
+      if (const auto* style = CadTableFindStyle(st.tableStyles, table.styleName)) {
+        const auto& name = row == 0 && table.mergeTitleRow ? style->titleTextStyleName :
+            row == static_cast<std::size_t>(table.mergeTitleRow ? 1 : 0) ? style->headerTextStyleName : style->textStyleName;
+        if (const auto reference = dwg_find_tablehandle(tw.dwg, name.c_str(), "STYLE"))
+          mt->style = dwg_add_handleref(tw.dwg, 5, reference->absolute_ref, nullptr);
+      }
+      const double textAngle = rotRad + StyleNumber(properties, kind + ".textAngle", 0) * kPi / 180.0;
+      mt->x_axis_dir.x = std::cos(textAngle);
+      mt->x_axis_dir.y = std::sin(textAngle);
+      mt->x_axis_dir.z = 0.0;
+      EntityAttributes textAttributes = attr ? *attr : EntityAttributes{};
+      const std::string color = StyleProperty(properties, kind + ".textColor");
+      if (!color.empty()) textAttributes.color = color;
+      else if (tableStyle) textAttributes.color = kind == "Title" ? tableStyle->titleTextColor : kind == "Header" ? tableStyle->headerTextColor : tableStyle->dataTextColor;
+      tw.Apply(mt->parent, textAttributes);
+      if (fldCtx != nullptr && fldCtx->enabled && mt->parent != nullptr &&
+          CadTextContainsFieldCodes(table.cells[ci])) {
+        const std::string nativeWire = DwgExportPrepareAnnotationFieldText(
+            fldCtx, tw.dwg, st, table.cells[ci], fctx, mt->parent, blockOwnerHandle);
+        std::string nativeFlat;
+        for (char ch : MtextRichFlattenToPlain(nativeWire)) {
+          if (ch == '\n')
+            nativeFlat += "\\P";
+          else if (ch != '\r')
+            nativeFlat += ch;
+        }
+        if (!nativeFlat.empty())
+          mt->text = dwg_add_u8_input(tw.dwg, nativeFlat.c_str());
+      }
+    }
+  }
+  return true;
+}
+
+size_t CountSkippedTables(const AppCommandState& st) {
+  size_t n = 0;
+  for (const CadTable& t : st.cadTables) {
+    if (t.cols <= 0)
+      ++n;
+  }
+  return n;
+}
+
+}  // namespace dwg_table_export
+
+// Issue #621: POINTCLOUDEX is unavailable — write a scan-file link in XDATA plus a 3D extent box.
+namespace dwg_pointcloud_export {
+
+bool CloudBounds(const CadPointCloud& pc, double* mnX, double* mnY, double* mnZ, double* mxX, double* mxY,
+                 double* mxZ) {
+  if (pc.pointsXyz.size() < 6)
+    return false;
+  *mnX = *mxX = pc.pointsXyz[0];
+  *mnY = *mxY = pc.pointsXyz[1];
+  *mnZ = *mxZ = pc.pointsXyz[2];
+  for (size_t i = 3; i + 2 < pc.pointsXyz.size(); i += 3) {
+    *mnX = std::min(*mnX, pc.pointsXyz[i]);
+    *mxX = std::max(*mxX, pc.pointsXyz[i]);
+    *mnY = std::min(*mnY, pc.pointsXyz[i + 1]);
+    *mxY = std::max(*mxY, pc.pointsXyz[i + 1]);
+    *mnZ = std::min(*mnZ, pc.pointsXyz[i + 2]);
+    *mxZ = std::max(*mxZ, pc.pointsXyz[i + 2]);
+  }
+  return *mxX > *mnX && *mxY > *mnY && *mxZ >= *mnZ;
+}
+
+bool WritePointCloudMarker(const AppCommandState& st, const CadPointCloud& pc, Dwg_Object_BLOCK_HEADER* hdr,
+                           TableWriter& tw, const EntityAttributes* attr) {
+  if (hdr == nullptr || pc.sourcePath.empty())
+    return false;
+  double mnX = 0, mnY = 0, mnZ = 0, mxX = 0, mxY = 0, mxZ = 0;
+  if (!CloudBounds(pc, &mnX, &mnY, &mnZ, &mxX, &mxY, &mxZ))
+    return false;
+  const double ox = st.worldDocumentOriginX;
+  const double oy = st.worldDocumentOriginY;
+  const dwg_point_3d corners[8] = {
+      {mnX + ox, mnY + oy, mnZ}, {mxX + ox, mnY + oy, mnZ}, {mxX + ox, mxY + oy, mnZ},
+      {mnX + ox, mxY + oy, mnZ}, {mnX + ox, mnY + oy, mxZ}, {mxX + ox, mnY + oy, mxZ},
+      {mxX + ox, mxY + oy, mxZ}, {mnX + ox, mxY + oy, mxZ},
+  };
+  static constexpr int kEdges[12][2] = {{0, 1}, {1, 2}, {2, 3}, {3, 0}, {4, 5}, {5, 6},
+                                      {6, 7}, {7, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+  Dwg_Object_Entity* tagEnt = nullptr;
+  for (int ei = 0; ei < 12; ++ei) {
+    if (Dwg_Entity_LINE* e = dwg_add_LINE(hdr, &corners[kEdges[ei][0]], &corners[kEdges[ei][1]])) {
+      if (attr != nullptr)
+        tw.Apply(e->parent, *attr);
+      if (tagEnt == nullptr)
+        tagEnt = e->parent;
+    }
+  }
+  if (tagEnt != nullptr)
+    AppendGosurveyStringEed(tw.dwg, tagEnt, {"POINTCLOUD", pc.sourcePath});
+  return tagEnt != nullptr;
+}
+
+size_t CountSkippedPointClouds(const AppCommandState& st) {
+  size_t n = 0;
+  for (const std::shared_ptr<const CadPointCloud>& pc : st.cadPointClouds) {
+    if (pc == nullptr || pc->sourcePath.empty() || pc->pointsXyz.size() < 6)
+      ++n;
+  }
+  return n;
+}
+
+}  // namespace dwg_pointcloud_export
+
+// Issue #612 / D-2026-10-01-d — write B-rep solids and pipe runs as ACIS 3DSOLID (ADR-045 (i) amended).
+namespace dwg_solid_export {
+
+void WorldPoint(const AppCommandState& st, const ray3d::Vec3& local, dwg_point_3d* out) {
+  out->x = local.x + st.worldDocumentOriginX;
+  out->y = local.y + st.worldDocumentOriginY;
+  out->z = local.z;
+}
+
+dwg_point_3d NormalFromUcs(const ucs::Ucs& fr) {
+  return dwg_point_3d{fr.zAxis.x, fr.zAxis.y, fr.zAxis.z};
+}
+
+ray3d::Vec3 RecipePrimitiveCenterLocal(const brep::Recipe& rc) {
+  if (rc.kind == brep::PrimitiveKind::Sphere || rc.kind == brep::PrimitiveKind::Torus)
+    return rc.frame.origin;
+  return ray3d::Add(rc.frame.origin, ray3d::Scale(rc.frame.zAxis, rc.height * 0.5));
+}
+
+bool ParamsFinitePositive(const brep::Recipe& rc) {
+  if (!std::isfinite(rc.length) || !std::isfinite(rc.width) || !std::isfinite(rc.height) ||
+      !std::isfinite(rc.radius) || !std::isfinite(rc.radius2))
+    return false;
+  switch (rc.kind) {
+  case brep::PrimitiveKind::Box:
+  case brep::PrimitiveKind::Wedge:
+    return rc.length > 0.0 && rc.width > 0.0 && rc.height > 0.0;
+  case brep::PrimitiveKind::Pyramid:
+    return rc.height > 0.0 && rc.radius > 0.0 && rc.sides >= 3;
+  case brep::PrimitiveKind::Cylinder:
+    return rc.radius > 0.0 && rc.height > 0.0;
+  case brep::PrimitiveKind::Cone:
+    return rc.radius >= 0.0 && rc.radius2 >= 0.0 && rc.height > 0.0;
+  case brep::PrimitiveKind::Sphere:
+    return rc.radius > 0.0;
+  case brep::PrimitiveKind::Torus:
+    return rc.radius > 0.0 && rc.radius2 > 0.0;
+  default:
+    return false;
+  }
+}
+
+bool CanWriteSolid(const brep::Solid& solid) {
+  const brep::Recipe& rc = solid.recipe;
+  if (rc.kind != brep::PrimitiveKind::None && rc.kind != brep::PrimitiveKind::Polysolid) {
+    if (ParamsFinitePositive(rc))
+      return true;
+  }
+  const acissat::ExportResult er = acissat::ExportSatSolid(solid, "3DSOLID");
+  return er.ok;
+}
+
+Dwg_Entity__3DSOLID* WriteRecipeSolid(Dwg_Object_BLOCK_HEADER* hdr, const AppCommandState& st,
+                                      const brep::Recipe& rc) {
+  if (!ParamsFinitePositive(rc))
+    return nullptr;
+  dwg_point_3d origin{};
+  WorldPoint(st, RecipePrimitiveCenterLocal(rc), &origin);
+  dwg_point_3d normal = NormalFromUcs(rc.frame);
+  switch (rc.kind) {
+  case brep::PrimitiveKind::Box:
+    return dwg_add_BOX(hdr, &origin, &normal, rc.length, rc.width, rc.height);
+  case brep::PrimitiveKind::Wedge:
+    return dwg_add_WEDGE(hdr, &origin, &normal, rc.length, rc.width, rc.height);
+  case brep::PrimitiveKind::Pyramid:
+    return dwg_add_PYRAMID(hdr, &origin, &normal, rc.height, rc.sides, rc.radius, rc.radius2);
+  case brep::PrimitiveKind::Cylinder:
+    return dwg_add_CYLINDER(hdr, &origin, &normal, rc.height, rc.radius, rc.radius, rc.radius);
+  case brep::PrimitiveKind::Cone:
+    return dwg_add_CONE(hdr, &origin, &normal, rc.height, rc.radius, rc.radius2, rc.radius);
+  case brep::PrimitiveKind::Sphere:
+    return dwg_add_SPHERE(hdr, &origin, &normal, rc.radius);
+  case brep::PrimitiveKind::Torus:
+    return dwg_add_TORUS(hdr, &origin, &normal, rc.radius, rc.radius2);
+  default:
+    return nullptr;
+  }
+}
+
+bool WriteSolidEntity(const AppCommandState& st, const brep::Solid& solid, Dwg_Object_BLOCK_HEADER* hdr,
+                      TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
+                      DwgExportMaterialContext* matCtx) {
+  if (hdr == nullptr)
+    return false;
+  Dwg_Entity__3DSOLID* ent = WriteRecipeSolid(hdr, st, solid.recipe);
+  if (ent == nullptr) {
+    double mmPerUnit = 304.8;
+    switch (st.drawingInsUnits) {
+    case 1: mmPerUnit = 25.4; break;
+    case 4: mmPerUnit = 1.0; break;
+    case 5: mmPerUnit = 10.0; break;
+    case 6: mmPerUnit = 1000.0; break;
+    case 2: mmPerUnit = 304.8; break;
+    default: break;
+    }
+    const acissat::ExportResult er = acissat::ExportSatSolid(solid, "3DSOLID", mmPerUnit);
+    if (!er.ok)
+      return false;
+    ent = dwg_add_3DSOLID(hdr, er.sat.c_str());
+  }
+  if (ent == nullptr || ent->parent == nullptr)
+    return false;
+  if (tw != nullptr && attr != nullptr)
+    tw->Apply(ent->parent, *attr);
+  // REQ-372: entity-level MATERIAL on 3DSOLID currently corrupts LibreDWG R2018 encode; mesh
+  // hosts (POLYLINE_PFACE) are wired below. Solid subentity materials (DXF 331) are a follow-up.
+  (void)dwg;
+  (void)matCtx;
+  return true;
+}
+
+size_t CountSkippedSolids(const AppCommandState& st) {
+  size_t n = 0;
+  for (const CadSolidPtr& sp : st.cadSolids) {
+    if (sp != nullptr && !CanWriteSolid(*sp))
+      ++n;
+  }
+  return n;
+}
+
+bool WriteStraightPipeRunAsCylinder(const AppCommandState& st, const CadPipeRun& run,
+                                    Dwg_Object_BLOCK_HEADER* hdr, TableWriter* tw,
+                                    const EntityAttributes* attr, Dwg_Data* dwg,
+                                    DwgExportMaterialContext* matCtx) {
+  if (run.vertsXyz.size() != 6)
+    return false;
+  double odFeet = 0.0;
+  if (!CadPipeNominalOdFeet(run.nominalSize, &odFeet))
+    return false;
+  const double r = odFeet * 0.5;
+  if (!(r > 0.0))
+    return false;
+  ray3d::Vec3 a{run.vertsXyz[0], run.vertsXyz[1], run.vertsXyz[2]};
+  ray3d::Vec3 b{run.vertsXyz[3], run.vertsXyz[4], run.vertsXyz[5]};
+  ray3d::Vec3 d = ray3d::Sub(b, a);
+  const double h = ray3d::Length(d);
+  if (!(h > 1e-9))
+    return false;
+  const ray3d::Vec3 z = ray3d::Scale(d, 1.0 / h);
+  ray3d::Vec3 mid = ray3d::Scale(ray3d::Add(a, b), 0.5);
+  dwg_point_3d origin{};
+  WorldPoint(st, mid, &origin);
+  dwg_point_3d normal{z.x, z.y, z.z};
+  Dwg_Entity__3DSOLID* ent = dwg_add_CYLINDER(hdr, &origin, &normal, h, r, r, r);
+  if (ent == nullptr || ent->parent == nullptr)
+    return false;
+  if (tw != nullptr && attr != nullptr)
+    tw->Apply(ent->parent, *attr);
+  (void)dwg;
+  (void)matCtx;
+  return true;
+}
+
+bool WritePipeRunEntity(const AppCommandState& st, const CadPipeRun& run, Dwg_Object_BLOCK_HEADER* hdr,
+                        TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
+                        DwgExportMaterialContext* matCtx) {
+  std::vector<CadSolidPtr> built;
+  if (CadBuildPipeRunSolids(run, &built)) {
+    for (const CadSolidPtr& sp : built) {
+      if (sp != nullptr && WriteSolidEntity(st, *sp, hdr, tw, attr, dwg, matCtx))
+        return true;
+    }
+  }
+  return WriteStraightPipeRunAsCylinder(st, run, hdr, tw, attr, dwg, matCtx);
+}
+
+size_t CountSkippedPipeRuns(const AppCommandState& st) {
+  size_t n = 0;
+  for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
+    const CadPipeRun& run = st.cadPipeRuns[ri];
+    bool canExport = false;
+    std::vector<CadSolidPtr> built;
+    if (CadBuildPipeRunSolids(run, &built)) {
+      for (const CadSolidPtr& sp : built) {
+        if (sp != nullptr && CanWriteSolid(*sp)) {
+          canExport = true;
+          break;
+        }
+      }
+    }
+    if (!canExport && run.vertsXyz.size() == 6) {
+      double odFeet = 0.0;
+      if (CadPipeNominalOdFeet(run.nominalSize, &odFeet) && odFeet > 0.0)
+        canExport = true;
+    }
+    if (!canExport)
+      ++n;
+  }
+  return n;
+}
+
+}  // namespace dwg_solid_export
+
+// REQ-170 / REQ-201, issue #614: what DWG save actually drops or degrades, computed from the
+// drawing instead of a fixed list — so the "Export DWG" warning and the save log cannot disagree
+// with each other or with what FillFromState above actually writes, and a line disappears here the
+// moment the entity class it names gets a real writer.
+std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st) {
+  std::vector<DwgExportLoss> out;
+  auto add = [&](const char* label, size_t n) {
+    if (n > 0)
+      out.push_back(DwgExportLoss{label, static_cast<int>(n)});
+  };
+
+  // Entity classes with no DWG writer at all (silent today — nothing in FillFromState touches
+  // these vectors). Survey points (REQ-365, #605), feature lines (REQ-057, #603) and block
+  // references (REQ-107, #606) are written, so none of the three is here.
+  add("table(s)", dwg_table_export::CountSkippedTables(st));
+  add("pipe run(s)", dwg_solid_export::CountSkippedPipeRuns(st));
+  // REQ-366, issue #607: dimensions now write as real DIMSTYLE/DIMENSION_* objects (see
+  // FillFromState) — "dimension(s)" removed from this loss list the same way #631 removed "block
+  // reference(s)" once blocks got a real writer.
+
+  // Entity classes GoSurvey already refuses on principle (ADR-042/045/026) — counted and logged,
+  // now also surfaced in the pre-export warning so the user sees them before committing to it.
+  add("mesh(es)", dwg_mesh_export::CountSkippedMeshes(st));
+  add("point cloud(s)", dwg_pointcloud_export::CountSkippedPointClouds(st));
+  add("TIN surface(s)", dwg_mesh_export::CountSkippedSurfaces(st));
+  add("solid(s)", dwg_solid_export::CountSkippedSolids(st));
+
+  // Degradations: the entity IS written, but a property on it is not.
+  const std::vector<EntityAttributes>* attrSets[] = {&st.userLineAttrs, &st.userCircleAttrs,
+                                                      &st.userArcAttrs,  &st.userPolylineAttrs,
+                                                      &st.cadAnnotationAttrs, &st.userEllAttrs,
+                                                      &st.cadFilledRegionAttrs};
+  const bool r2004Write = DwgSaveVersionUsesR2004Features(st.dwgExportVersion);
+  size_t nColorRounded = 0, nTransparency = 0;
+  auto countRoundedRgb = [&](const std::string& colorStr) {
+    if (r2004Write)
+      return;
+    uint32_t rgb = 0;
+    if (!DxfColorStringToRgbPacked(colorStr, &rgb))
+      return;
+    const int aci = DxfNearestAciFromRgbPacked(rgb);
+    if ((DxfRgbPackedFromAci(aci) & 0xFFFFFFu) != (rgb & 0xFFFFFFu))
+      ++nColorRounded;
+  };
+  auto countTransparencyLoss = [&](const EntityAttributes& a, const CadLayerRow* layer) {
+    if (r2004Write)
+      return;
+    if (EffectiveEntityTransparency01(a, layer) > 1.e-5f)
+      ++nTransparency;
+  };
+  for (const std::vector<EntityAttributes>* v : attrSets) {
+    for (const EntityAttributes& a : *v) {
+      countRoundedRgb(a.color);
+      countTransparencyLoss(a, FindDrawingLayerRowCi(st, a.layer.empty() ? std::string("0") : a.layer));
+    }
+  }
+  for (const CadLayerRow& row : st.drawingLayerTable)
+    countRoundedRgb(row.color);
+  add("colour(s) (rounded to the nearest AutoCAD index colour)", nColorRounded);
+  add("object(s) with transparency (not written)", nTransparency);
+
+  size_t nRotatedText = 0;
+  for (const CadAnnotation& a : st.cadAnnotations)
+    if ((a.kind == CadAnnotation::Kind::Text || a.kind == CadAnnotation::Kind::Mtext) &&
+        std::fabs(a.rotationRad) > 1e-6f)
+      ++nRotatedText;
+  add("rotated text/mtext label(s) (rotation not written)", nRotatedText);
+
+  const bool nativeMl = LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2010;
+  if (!nativeMl) {
+    size_t nMlExtraBranches = 0;
+    for (const CadMultileader& ml : st.cadMultileaders)
+      nMlExtraBranches += ml.extraLeaderPaths.size();
+    add("multileader extra branch(es) (R2000/R2004 export keeps primary branch only)", nMlExtraBranches);
+  }
+
+  if (!r2004Write) {
+    size_t nDynBlock = 0;
+    for (const CadBlockDefinition& d : st.blockDefs) {
+      if (CadBlockDefinitionNeedsDynamicDwgExport(d))
+        ++nDynBlock;
+    }
+    add("block definition(s) with dynamic parameters (ACAD evaluation graph requires R2004+)", nDynBlock);
+  } else {
+    const CadBlockDynamicExportLossCounts dyn = ComputeCadBlockDynamicExportLossCounts(st);
+    add("block definition(s) with visibility dynamic parameters (not written to DWG yet)", dyn.visibilityBlockDefs);
+    add("dynamic block parameter(s) with no R2004+ DWG encoder yet", dyn.unsupportedParameters);
+    add("extra linear dynamic parameter(s) (only one linear/stretch chain is written per block)", dyn.extraLinearParameters);
+    add("block insert(s) with conflicting dynamic parameter values (block definition default written)",
+        dyn.insertParamConflicts);
+    add("dynamic stretch action(s) without entity associations (AutoCAD may not stretch geometry)",
+        dyn.stretchWithoutEntityLinks);
+  }
+
+  // REQ-057, issue #603: a varying-Z polyline now writes as POLYLINE_3D (real per-vertex Z), but
+  // POLYLINE_3D has no bulge — a run that is BOTH 3D and curved still degrades to straight
+  // segments between its vertices.
+  size_t nFlattenedCurves = 0;
+  for (size_t i = 0; i + 1 < st.userPolylineOffsets.size(); ++i) {
+    const int a = st.userPolylineOffsets[i];
+    const int b = st.userPolylineOffsets[i + 1];
+    if (b - a < 2)
+      continue;
+    const float z0 = st.userPolylineVerts[static_cast<size_t>(a) * 3 + 2];
+    bool is3d = false, anyBulge = false;
+    for (int vi = a; vi < b; ++vi) {
+      if (vi > a && std::fabs(st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 2] - z0) > 1e-4f)
+        is3d = true;
+      if (static_cast<size_t>(vi) < st.userPolylineVertsBulge.size() &&
+          st.userPolylineVertsBulge[static_cast<size_t>(vi)] != 0.f)
+        anyBulge = true;
+    }
+    if (is3d && anyBulge)
+      ++nFlattenedCurves;
+  }
+  add("3D polyline curve(s) (straightened between vertices; POLYLINE_3D has no bulge)",
+      nFlattenedCurves);
+
+  const int nMatAppearance = DwgExportCountMaterialAppearanceLosses(st);
+  if (nMatAppearance > 0) {
+    const bool r2007MaterialExport =
+        LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2007;
+    if (r2007MaterialExport) {
+      add("solid(s) with MATERIAL appearance (entity material not written on 3DSOLID yet)",
+          static_cast<size_t>(nMatAppearance));
+    } else {
+      add("object(s) with MATERIAL appearance (native MATERIAL requires R2010+ DWG export)",
+          static_cast<size_t>(nMatAppearance));
+    }
+  }
+
+  const DwgAnnotContextExportLossCounts annotCtxLoss = DwgExportAnnotContextLossCounts(st);
+  if (annotCtxLoss.annotativeWithoutContext > 0) {
+    add("annotative object(s) (per-scale annotation context requires R2010+ DWG export)",
+        annotCtxLoss.annotativeWithoutContext);
+  }
+  if (annotCtxLoss.hatchSimplifiedContext > 0) {
+    add("annotative hatch(es) (scale-only context; hatch view/geometry context not encoded)",
+        annotCtxLoss.hatchSimplifiedContext);
+  }
+
+  const int lightSunLoss = DwgExportCountLightSunLosses(st);
+  if (lightSunLoss > 0) {
+    add("LIGHT/SUN/LIGHTLIST presentation object(s) (native lights require R2010+ DWG export)",
+        static_cast<size_t>(lightSunLoss));
+  }
+
+  return out;
+}
+
+// REQ-037 / REQ-155 / REQ-170, issue #610: paper-space layouts, sheet geometry, and viewports.
+static const char* kDwgDefaultCanonicalMedia = "ANSI_B(11.00 x 17.00 Inches)";
+
+static void SetDwgLayoutTabName(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* bh, const std::string& tabName) {
+  if (dwg == nullptr || bh == nullptr || bh->layout == nullptr || tabName.empty())
+    return;
+  Dwg_Object* layObj = bh->layout->obj;
+  if (layObj == nullptr)
+    layObj = dwg_resolve_handle_silent(dwg, bh->layout->absolute_ref);
+  if (layObj == nullptr || layObj->tio.object == nullptr || layObj->tio.object->tio.LAYOUT == nullptr)
+    return;
+  layObj->tio.object->tio.LAYOUT->layout_name = dwg_add_u8_input(dwg, tabName.c_str());
+}
+
+// Issue #768 / REQ-113: the sheet's own size and orientation, in the layout's plot settings (paper
+// width/height in mm as the unrotated media, plus the 90-degree rotation flag for landscape).
+static void SetDwgLayoutPaperSetup(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* bh, const PaperLayout& L) {
+  if (dwg == nullptr || bh == nullptr || bh->layout == nullptr)
+    return;
+  Dwg_Object* layObj = bh->layout->obj;
+  if (layObj == nullptr)
+    layObj = dwg_resolve_handle_silent(dwg, bh->layout->absolute_ref);
+  if (layObj == nullptr || layObj->tio.object == nullptr || layObj->tio.object->tio.LAYOUT == nullptr)
+    return;
+  Dwg_Object_PLOTSETTINGS& ps = layObj->tio.object->tio.LAYOUT->plotsettings;
+  const double wIn = static_cast<double>(L.portraitWidthIn);
+  const double hIn = static_cast<double>(L.portraitHeightIn);
+  ps.paper_width = wIn * 25.4;
+  ps.paper_height = hIn * 25.4;
+  ps.plot_paper_unit = 1;  // mm
+  ps.plot_rotation_mode = L.landscape ? 1 : 0;
+  char media[96];
+  std::snprintf(media, sizeof(media), "UserDefinedMetric (%.2f x %.2fMM)", ps.paper_width, ps.paper_height);
+  ps.canonical_media_name = dwg_add_u8_input(dwg, media);
+}
+
+static Dwg_Object_BLOCK_HEADER* EnsurePaperSpaceBlockHeader(Dwg_Data* dwg, size_t layoutIndex,
+                                                              const char* layoutTabName) {
+  if (dwg == nullptr || layoutTabName == nullptr || layoutTabName[0] == '\0')
+    return nullptr;
+  if (layoutIndex == 0) {
+    Dwg_Object* ps = dwg_paper_space_object(dwg);
+    if (ps == nullptr || ps->tio.object == nullptr)
+      return nullptr;
+    return ps->tio.object->tio.BLOCK_HEADER;
+  }
+  char blockName[32];
+  const unsigned suffix = static_cast<unsigned>(layoutIndex - 1);
+  std::snprintf(blockName, sizeof(blockName), "*Paper_Space%u", suffix);
+  Dwg_Object_BLOCK_HEADER* bh = dwg_add_BLOCK_HEADER(dwg, blockName);
+  if (bh == nullptr)
+    return nullptr;
+  dwg_add_BLOCK(bh, blockName);
+  dwg_add_ENDBLK(bh);
+  int err = 0;
+  Dwg_Object* bobj = dwg_obj_generic_to_object(bh, &err);
+  if (bobj == nullptr)
+    return bh;
+  Dwg_Object_LAYOUT* lay = dwg_add_LAYOUT(bobj, layoutTabName, kDwgDefaultCanonicalMedia);
+  Dwg_Object* layObj = dwg_obj_generic_to_object(lay, &err);
+  if (layObj != nullptr)
+    bh->layout = dwg_add_handleref(dwg, 5, layObj->handle.value, nullptr);
+  return bh;
+}
+
+static std::uint64_t BlockHeaderObjectHandle(Dwg_Object_BLOCK_HEADER* hdr) {
+  if (hdr == nullptr)
+    return 0;
+  int err = 0;
+  const Dwg_Object* o = dwg_obj_generic_to_object(hdr, &err);
+  return (o != nullptr && err == 0) ? o->handle.value : 0;
+}
+
+static void WriteBlockRefInsertToHeader(Dwg_Object_BLOCK_HEADER* hdr, TableWriter& tw, const AppCommandState& st,
+                                        const CadBlockRef& ref, const EntityAttributes* at, double insOriginAddX,
+                                        double insOriginAddY, DwgExportFieldContext* fldCtx) {
+  if (hdr == nullptr || tw.dwg == nullptr || ref.defName.empty())
+    return;
+  const std::uint64_t blockOwnerHandle = BlockHeaderObjectHandle(hdr);
+  if (dwg_find_tablehandle(tw.dwg, ref.defName.c_str(), "BLOCK") == nullptr)
+    return;
+  const int defIdx = CadBlockFindDef(st.blockDefs, ref.defName);
+  const CadBlockDefinition* def =
+      defIdx >= 0 ? &st.blockDefs[static_cast<size_t>(defIdx)] : nullptr;
+
+  dwg_point_3d ins{};
+  ins.x = static_cast<double>(ref.xf.x) + insOriginAddX;
+  ins.y = static_cast<double>(ref.xf.y) + insOriginAddY;
+  ins.z = static_cast<double>(ref.xf.z);
+  Dwg_Entity_INSERT* e0 =
+      dwg_add_INSERT(hdr, &ins, ref.defName.c_str(), static_cast<double>(ref.xf.sx),
+                     static_cast<double>(ref.xf.sy), static_cast<double>(ref.xf.sz),
+                     static_cast<double>(ref.xf.rotZ));
+  if (e0 == nullptr)
+    return;
+  auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
+    if (a != nullptr)
+      tw.Apply(ent, *a);
+  };
+  if (ref.annotative && e0->parent != nullptr)
+    WriteAnnotativeEntityEed(tw.dwg, e0->parent, &ref.annotativeVisibleScaleNames);
+  if (ref.annotative && e0->parent != nullptr && tw.annotContext != nullptr)
+    DwgExportAttachBlkrefAnnotationContext(tw.annotContext, e0->parent, e0, ref, st);
+  if (ref.attributes.empty()) {
+    apply(e0->parent, at);
+    return;
+  }
+  const BITCODE_H defRef = dwg_find_tablehandle(tw.dwg, ref.defName.c_str(), "BLOCK");
+  for (const CadBlockAttrValue& av : ref.attributes) {
+    if (av.tag.empty())
+      continue;
+    const CadBlockAttrDef* ad = nullptr;
+    if (def != nullptr) {
+      for (const CadBlockAttrDef& d : def->attrDefs)
+        if (d.tag == av.tag) {
+          ad = &d;
+          break;
+        }
+    }
+    dwg_point_3d ap = ins;
+    const double h = ad != nullptr ? std::max(static_cast<double>(ad->height), 1e-3) : 0.125;
+    const CadFieldContext fctx = CadFieldContextFromState(st);
+    const std::string attrText =
+        fldCtx != nullptr && fldCtx->enabled
+            ? CadFieldTextForDwgExport(st, av.value, fctx, true)
+            : SanitizeDwgTextSymbols(av.value);
+    Dwg_Entity_ATTRIB* atEnt =
+        dwg_add_ATTRIB(e0, h, 0, &ap, av.tag.c_str(), attrText.c_str());
+    if (atEnt != nullptr && fldCtx != nullptr && fldCtx->enabled && atEnt->parent != nullptr &&
+        CadTextContainsFieldCodes(av.value)) {
+      const std::string nativeText = DwgExportPrepareAnnotationFieldText(
+          fldCtx, tw.dwg, st, av.value, fctx, atEnt->parent, blockOwnerHandle);
+      if (!nativeText.empty())
+        atEnt->text_value = dwg_add_u8_input(tw.dwg, SanitizeDwgTextSymbols(nativeText).c_str());
+    }
+  }
+  if (defRef != nullptr)
+    e0->block_header = dwg_add_handleref(tw.dwg, 5, defRef->absolute_ref, nullptr);
+  apply(e0->parent, at);
+}
+
+// REQ-170 / issue #608: one filled region -> HATCH (solid or predefined pattern) in \p hdr. Shared by
+// model space (FillFromState) and paper space (issue #768); \p ox / \p oy shift local -> world (0 on a
+// sheet). False when the region is degenerate or LibreDWG refuses it.
+static bool WriteFilledRegionHatch(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr, TableWriter& tw,
+                                   const AppCommandState& st, const CadFilledRegion& fr,
+                                   const EntityAttributes* at, double ox, double oy, bool r2018Write,
+                                   DwgExportAnnotContext& annotCtx) {
+  auto world = [&](float lx, float ly, double z, dwg_point_3d* p) {
+    p->x = static_cast<double>(lx) + ox;
+    p->y = static_cast<double>(ly) + oy;
+    p->z = z;
+  };
+  auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
+    if (a != nullptr)
+      tw.Apply(ent, *a);
+  };
+  if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)
+    return false;
+  std::vector<Dwg_Object*> pathObjs;
+  pathObjs.reserve(fr.loopStart.size());
+  bool pathsOk = true;
+  for (size_t li = 0; li < fr.loopStart.size(); ++li) {
+    const int begin = fr.loopStart[li];
+    const int cnt = fr.loopCount(li);
+    if (cnt < 3) {
+      pathsOk = false;
+      break;
+    }
+    std::vector<dwg_point_2d> pts(static_cast<size_t>(cnt));
+    for (int v = 0; v < cnt; ++v) {
+      const size_t k = static_cast<size_t>(begin + v) * 3;
+      dwg_point_3d wp{};
+      world(static_cast<float>(fr.vertsXyz[k]), static_cast<float>(fr.vertsXyz[k + 1]),
+            fr.vertsXyz[k + 2], &wp);
+      pts[static_cast<size_t>(v)].x = wp.x;
+      pts[static_cast<size_t>(v)].y = wp.y;
+    }
+    Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(hdr, cnt, pts.data());
+    if (lw == nullptr) {
+      pathsOk = false;
+      break;
+    }
+    lw->flag = static_cast<BITCODE_BS>(lw->flag | 512);  // closed
+    lw->elevation = fr.vertsXyz[static_cast<size_t>(begin) * 3 + 2];
+    lw->parent->invisible = 1;
+    pathObjs.push_back(&dwg->object[lw->parent->objid]);
+  }
+  if (!pathsOk || pathObjs.size() != fr.loopStart.size())
+    return false;
+
+  const bool solid = fr.isSolid();
+  const char* patName = solid ? "SOLID" : fr.patternName.c_str();
+  if (!solid && (patName == nullptr || patName[0] == '\0'))
+    patName = "ANSI31";
+  Dwg_Entity_HATCH* hatch = dwg_add_HATCH(
+      hdr, 1, patName, false, static_cast<unsigned>(pathObjs.size()),
+      const_cast<const Dwg_Object**>(pathObjs.data()));
+  if (hatch == nullptr)
+    return false;
+  hatch->elevation = fr.vertsXyz.size() >= 3 ? fr.vertsXyz[2] : 0.0;
+  if (!solid) {
+    hatch->angle = static_cast<double>(fr.patternAngleDeg) * (kPi / 180.0);
+    hatch->scale_spacing = fr.patternScale > 0.f ? static_cast<double>(fr.patternScale) : 1.0;
+    hatch->is_solid_fill = 0;
+  }
+  if (r2018Write && fr.annotative && hatch->paths != nullptr) {
+    for (BITCODE_BL pi = 0; pi < hatch->num_paths; ++pi)
+      hatch->paths[pi].flag = static_cast<BITCODE_BL>(hatch->paths[pi].flag | 0x200);
+    if (hatch->parent != nullptr)
+      WriteAnnotativeEntityEed(dwg, hatch->parent, &fr.annotativeVisibleScaleNames);
+  }
+  if (annotCtx.enabled && fr.annotative && hatch->parent != nullptr)
+    DwgExportAttachHatchAnnotationContext(&annotCtx, hatch->parent, hatch, fr, st);
+  apply(hatch->parent, at);
+  return true;
+}
+
+// REQ-367 / issue #619: one multileader -> native MULTILEADER (R2010+) or LEADER + MTEXT fallback.
+// Shared by model space (FillFromState) and paper space (issue #768); \p ox / \p oy shift local -> world.
+static void WriteMultileaderEntity(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr, TableWriter& tw,
+                                   const AppCommandState& st, const CadMultileader& ml,
+                                   const EntityAttributes* at, double ox, double oy, bool r2018Write,
+                                   bool nativeMultileaderExport, float modelUnitsPerPlottedInch,
+                                   DwgExportAnnotContext& annotCtx) {
+  auto world = [&](float lx, float ly, double z, dwg_point_3d* p) {
+    p->x = static_cast<double>(lx) + ox;
+    p->y = static_cast<double>(ly) + oy;
+    p->z = z;
+  };
+  auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
+    if (a != nullptr)
+      tw.Apply(ent, *a);
+  };
+  const CadAnnotation& an = ml.label;
+  dwg_point_3d tp{};
+  world(an.insX, an.insY, an.insZ, &tp);
+  std::string wire;
+  for (char ch : MtextRichFlattenToPlain(an.text)) {
+    if (ch == '\n')
+      wire += "\\P";
+    else if (ch != '\r')
+      wire += ch;
+  }
+  const double width = std::max(1.0, static_cast<double>(ml.labelWidthWorld > 0.f
+                                                              ? ml.labelWidthWorld
+                                                              : std::fabs(an.boxMaxX - an.boxMinX)));
+  // Multileader geometry is already stored in drawing units. Its world height must remain the
+  // source of truth here; the nested label's plotted-height default is for ordinary annotations
+  // and would rescale a native MLEADER (for example, 2 units became 6.25 at a 50-unit plot scale).
+  const double textH = static_cast<double>(ml.labelHeightWorld > 0.f
+                                               ? ml.labelHeightWorld
+                                               : CadAnnotationHeightWorld(an, modelUnitsPerPlottedInch));
+  const size_t nPt = ml.pathXyz.size() / 3;
+  if (nativeMultileaderExport && nPt >= 2) {
+    std::vector<std::vector<dwg_point_3d>> branchPtsStorage;
+    std::vector<dwg_mleader_branch> branches;
+    auto appendBranch = [&](const std::vector<float>& path) {
+      const size_t n = path.size() / 3;
+      if (n < 2)
+        return;
+      branchPtsStorage.emplace_back(n);
+      std::vector<dwg_point_3d>& pts = branchPtsStorage.back();
+      for (size_t j = 0; j < n; ++j)
+        world(path[j * 3], path[j * 3 + 1], path[j * 3 + 2], &pts[j]);
+      dwg_mleader_branch b{};
+      b.num_points = static_cast<unsigned>(n);
+      b.points = pts.data();
+      branches.push_back(b);
+    };
+    appendBranch(ml.pathXyz);
+    for (const std::vector<float>& extra : ml.extraLeaderPaths)
+      appendBranch(extra);
+    if (!branches.empty()) {
+      dwg_point_3d dir{std::cos(an.rotationRad), std::sin(an.rotationRad), 0.0};
+      if (Dwg_Entity_MULTILEADER* mld = dwg_add_MULTILEADER_branches(
+              hdr, static_cast<unsigned>(branches.size()), branches.data(),
+              wire.empty() ? " " : wire.c_str(), &tp, &dir, textH, width)) {
+        const BITCODE_BL styleId = tw.MleaderStyleObjId(ml.styleName);
+        if (styleId >= 0) mld->mleaderstyle = tw.RefObjId(styleId);
+        mld->is_annotative = ml.annotative ? 1 : 0;
+        if (ml.arrowSizeWorld > 0.f) {
+          mld->arrow_size = ml.arrowSizeWorld;
+          mld->ctx.arrow_size = ml.arrowSizeWorld;
+        }
+        if (mld->ctx.has_content_txt)
+          mld->ctx.content.txt.alignment = static_cast<BITCODE_BS>(std::clamp(an.mtextAttach, 1, 9));
+        if (r2018Write && ml.annotative && mld->parent != nullptr)
+          WriteAnnotativeEntityEed(dwg, mld->parent, &ml.annotativeVisibleScaleNames);
+        if (annotCtx.enabled && ml.annotative && mld->parent != nullptr)
+          DwgExportAttachMleaderAnnotationContext(&annotCtx, mld->parent, mld, ml, st);
+        apply(mld->parent, at);
+        return;
+      }
+    }
+  }
+  Dwg_Entity_MTEXT* mt =
+      dwg_add_MTEXT(hdr, &tp, width, wire.empty() ? " " : wire.c_str());
+  if (mt != nullptr) {
+    mt->text_height = textH;
+    mt->attachment = static_cast<BITCODE_BS>(std::clamp(an.mtextAttach, 1, 9));
+    mt->x_axis_dir.x = std::cos(an.rotationRad);
+    mt->x_axis_dir.y = std::sin(an.rotationRad);
+    mt->x_axis_dir.z = 0.0;
+    apply(mt->parent, at);
+  }
+  if (nPt >= 2) {
+    std::vector<dwg_point_3d> pts(nPt);
+    for (size_t j = 0; j < nPt; ++j) {
+      world(ml.pathXyz[j * 3], ml.pathXyz[j * 3 + 1], ml.pathXyz[j * 3 + 2], &pts[j]);
+    }
+    BITCODE_H arrowDimStyleRef = nullptr;
+    if (ml.arrowSizeWorld > 0.f) {
+      // R2000+ LEADER records do not encode per-entity DIMASZ. Give this fallback leader a
+      // dedicated referenced DIMSTYLE so its explicit world-size override survives old-format DWG.
+      std::string name = "GoSurvey_LeaderArrow_" + std::to_string(dwg->num_objects);
+      while (dwg_find_tablehandle(dwg, name.c_str(), "DIMSTYLE") != nullptr)
+        name += "_";
+      if (Dwg_Object_DIMSTYLE* style = dwg_add_DIMSTYLE(dwg, name.c_str())) {
+        style->DIMASZ = ml.arrowSizeWorld;
+        style->DIMSCALE = 1.0;
+        if (style->parent != nullptr)
+          arrowDimStyleRef = dwg_add_handleref(
+              dwg, 5, dwg_obj_generic_handlevalue(style), nullptr);
+      }
+    }
+    Dwg_Entity_LEADER* ld =
+        dwg_add_LEADER(hdr, static_cast<unsigned>(nPt), pts.data(), mt, 0);
+    if (ld != nullptr) {
+      ld->arrowhead_on = 1;
+      if (ml.arrowSizeWorld > 0.f) ld->dimasz = ml.arrowSizeWorld;
+      if (arrowDimStyleRef != nullptr) ld->dimstyle = arrowDimStyleRef;
+      apply(ld->parent, at);
+    } else {
+      for (size_t j = 0; j + 1 < nPt; ++j) {
+        if (Dwg_Entity_LINE* e = dwg_add_LINE(hdr, &pts[j], &pts[j + 1]))
+          apply(e->parent, at);
+      }
+    }
+  }
+}
+
+// REQ-443 / #803 and REQ-113 (issue #1010): writes each spline into \p hdr. dwg_add_SPLINE only creates
+// fit-point curves, so use it to attach a correctly owned entity and then populate the standard SPLINE
+// arrays used by LibreDWG's encoder. \p world maps the caller's coordinates to DWG world coordinates.
+template <class World>
+static void WriteSplineEntities(TableWriter& tw, Dwg_Object_BLOCK_HEADER* hdr, const std::vector<CadSpline>& splines,
+                                const std::vector<EntityAttributes>& attrs, World world) {
+  for (size_t i = 0; i < splines.size(); ++i) {
+    const CadSpline& s = splines[i];
+    if (!spline::Validate(s).empty() || s.ctrl.empty()) continue;
+    std::vector<dwg_point_3d> seed;
+    const auto& source = s.fit.empty() ? s.ctrl : s.fit;
+    seed.reserve(source.size());
+    for (const auto& p : source) {
+      dwg_point_3d wp{};
+      world(static_cast<float>(p.x), static_cast<float>(p.y), p.z, &wp);
+      seed.push_back(wp);
+    }
+    auto* knots = static_cast<BITCODE_BD*>(std::calloc(s.knots.size(), sizeof(BITCODE_BD)));
+    auto* ctrl = static_cast<Dwg_SPLINE_control_point*>(std::calloc(s.ctrl.size(), sizeof(Dwg_SPLINE_control_point)));
+    auto* fit = s.fit.empty() ? nullptr : static_cast<BITCODE_3DPOINT*>(std::calloc(s.fit.size(), sizeof(BITCODE_3DPOINT)));
+    if (knots == nullptr || ctrl == nullptr || (!s.fit.empty() && fit == nullptr)) {
+      std::free(knots);
+      std::free(ctrl);
+      std::free(fit);
+      continue;
+    }
+    std::copy(s.knots.begin(), s.knots.end(), knots);
+    for (size_t k = 0; k < s.fit.size(); ++k) {
+      dwg_point_3d wp{};
+      world(static_cast<float>(s.fit[k].x), static_cast<float>(s.fit[k].y), s.fit[k].z, &wp);
+      fit[k].x = wp.x;
+      fit[k].y = wp.y;
+      fit[k].z = wp.z;
+    }
+    dwg_point_3d tangent{};
+    Dwg_Entity_SPLINE* e = dwg_add_SPLINE(hdr, static_cast<int>(seed.size()), seed.data(), &tangent, &tangent);
+    if (e == nullptr) {
+      std::free(knots);
+      std::free(ctrl);
+      std::free(fit);
+      continue;
+    }
+    std::free(e->fit_pts);
+    e->fit_pts = fit;
+    e->num_fit_pts = static_cast<BITCODE_BS>(s.fit.size());
+    e->scenario = SPLINE_SCENARIO_SPLINE;
+    e->degree = static_cast<BITCODE_BS>(s.degree);
+    e->periodic = s.periodic ? 1 : 0;
+    e->closed_b = s.periodic ? 1 : 0;
+    e->rational = s.weights.empty() ? 0 : 1;
+    e->weighted = s.weights.empty() ? 0 : 1;
+    e->splineflags = s.periodic ? SPLINE_SPLINEFLAGS_CLOSED : 0;
+    e->knotparam = SPLINE_KNOTPARAM_CUSTOM;
+    e->num_knots = static_cast<BITCODE_BL>(s.knots.size());
+    e->knots = knots;
+    e->num_ctrl_pts = static_cast<BITCODE_BL>(s.ctrl.size());
+    e->ctrl_pts = ctrl;
+    for (size_t k = 0; k < s.ctrl.size(); ++k) {
+      dwg_point_3d wp{};
+      world(static_cast<float>(s.ctrl[k].x), static_cast<float>(s.ctrl[k].y), s.ctrl[k].z, &wp);
+      e->ctrl_pts[k].parent = e;
+      e->ctrl_pts[k].x = wp.x;
+      e->ctrl_pts[k].y = wp.y;
+      e->ctrl_pts[k].z = wp.z;
+      e->ctrl_pts[k].w = s.weights.empty() ? 1.0 : s.weights[k];
+    }
+    if (const EntityAttributes* a = AttrAt(attrs, i))
+      tw.Apply(e->parent, *a);
+  }
+}
+
+// REQ-366 / REQ-113 (issue #1010): one dimension (aligned, linear or angular) as a native DWG DIMENSION with its
+// anonymous block. Shared by model space and sheets; \p ox / \p oy shift local -> world (0 on a sheet).
+struct DimWriteState {
+  Dwg_Object_DIMSTYLE* dimStyle = nullptr;  ///< DIMSTYLE created lazily on the first dimension
+  int anonCounter = 0;                       ///< last "*D<n>" anonymous block number tried
+};
+
+static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr, TableWriter& tw,
+                                     const AppCommandState& st, const CadAnnotation& an,
+                                     const EntityAttributes* at, double ox, double oy, bool r2018Write,
+                                     DwgExportAnnotContext& annotCtx, DimWriteState& ds) {
+  auto world = [&](float lx, float ly, double z, dwg_point_3d* p) {
+    p->x = static_cast<double>(lx) + ox;
+    p->y = static_cast<double>(ly) + oy;
+    p->z = z;
+  };
+  auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
+    if (a != nullptr)
+      tw.Apply(ent, *a);
+  };
+  const DimensionStyle& style = CadDimensionStyleForAnnotation(st, an);
+  CadDimStrokeParams sp;
+  sp.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;
+  sp.arrowSizeInches = style.arrowSizeInches;
+  sp.arrowType = style.arrowType;
+  sp.style = &style;
+  CadDimWorldStrokes strokes;
+  CadDimBuildWorldStrokes(an, sp, &strokes);
+  const double labelH = std::max(static_cast<double>(an.ovHeight ? an.plottedHeightInches : style.textSizeInches) *
+                                     std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6) *
+                                     (StyleFlag(style.props, "annotative") ? 1.0 : StyleNumber(style.props, "overallScale", 1)),
+                                 1e-3);
+  Dwg_Object_BLOCK_HEADER* anonBlk = WriteDimAnonymousBlock(
+      dwg, &ds.anonCounter, strokes, static_cast<double>(an.insZ), st.worldDocumentOriginX,
+      st.worldDocumentOriginY, CadAnnotationResolvedText(st, an), labelH);
+  dwg_point_3d textMid{};
+  world(an.insX, an.insY, an.insZ, &textMid);
+  Dwg_Entity_DIMENSION_ALIGNED* dimA = nullptr;
+  Dwg_Entity_DIMENSION_LINEAR* dimL = nullptr;
+  Dwg_Entity_DIMENSION_ANG3PT* dimG = nullptr;
+  Dwg_DIMENSION_common* common = nullptr;
+  if (an.kind == CadAnnotation::Kind::DimAligned) {
+    float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0, meas = 0;
+    if (CadDimAlignedGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas)) {
+      dwg_point_3d p1{}, p2{};
+      world(an.dimExt1X, an.dimExt1Y, an.insZ, &p1);
+      world(an.dimExt2X, an.dimExt2Y, an.insZ, &p2);
+      dimA = dwg_add_DIMENSION_ALIGNED(hdr, &p1, &p2, &textMid);
+      if (dimA != nullptr) {
+        common = reinterpret_cast<Dwg_DIMENSION_common*>(dimA);
+        dwg_point_3d dp{};
+        world(sx1, sy1, an.insZ, &dp);
+        common->def_pt.x = dp.x;  // REQ-366: dim-line point the wrapper omits
+        common->def_pt.y = dp.y;
+        common->def_pt.z = dp.z;
+        common->act_measurement = static_cast<double>(meas);
+      }
+    }
+  } else if (an.kind == CadAnnotation::Kind::DimLinear) {
+    float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0, meas = 0;
+    if (CadDimLinearGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas)) {
+      dwg_point_3d p1{}, p2{}, pd{};
+      world(an.dimExt1X, an.dimExt1Y, an.insZ, &p1);
+      world(an.dimExt2X, an.dimExt2Y, an.insZ, &p2);
+      world(sx1, sy1, an.insZ, &pd);
+      // AutoCAD's rotated-linear convention: 0 = horizontal dim line, pi/2 = vertical — matches
+      // CadDimLinearGeometry's own dimLinearVertical branch, so OPEN can recover it losslessly.
+      dimL = dwg_add_DIMENSION_LINEAR(hdr, &p1, &p2, &pd, an.dimLinearVertical ? (kPi * 0.5) : 0.0);
+      if (dimL != nullptr) {
+        common = reinterpret_cast<Dwg_DIMENSION_common*>(dimL);
+        common->text_midpt.x = textMid.x;
+        common->text_midpt.y = textMid.y;
+        common->act_measurement = static_cast<double>(meas);
+      }
+    }
+  } else if (an.kind == CadAnnotation::Kind::DimAngular) {
+    float a1 = 0, a2 = 0, sweep = 0, theta = 0, bisx = 0, bisy = 0;
+    if (CadDimAngularComputeFrame(an, &a1, &a2, &sweep, &bisx, &bisy, &theta)) {
+      const double R = std::max(static_cast<double>(an.dimSignedOffset), 1e-6);
+      dwg_point_3d center{}, x1{}, x2{};
+      world(an.dimAngVertexX, an.dimAngVertexY, an.insZ, &center);
+      world(an.dimExt1X, an.dimExt1Y, an.insZ, &x1);
+      world(an.dimExt2X, an.dimExt2Y, an.insZ, &x2);
+      dimG = dwg_add_DIMENSION_ANG3PT(hdr, &center, &x1, &x2, &textMid);
+      if (dimG != nullptr) {
+        common = reinterpret_cast<Dwg_DIMENSION_common*>(dimG);
+        // Arc point (DXF 10): bisector direction from the vertex, at radius R — the wrapper
+        // leaves def_pt unset (see dwg_add_DIMENSION_ANG3PT in dwg_api.c).
+        common->def_pt.x = center.x + static_cast<double>(bisx) * R;
+        common->def_pt.y = center.y + static_cast<double>(bisy) * R;
+        common->def_pt.z = center.z;
+        common->act_measurement = static_cast<double>(theta);
+      }
+    }
+  }
+  if (common != nullptr) {
+    const std::string dimStyleName = an.dimensionStyleName.empty() ? st.activeDimensionStyle.name : an.dimensionStyleName;
+    if (BITCODE_H styleRef = dwg_find_tablehandle(dwg, dimStyleName.c_str(), "DIMSTYLE"))
+      common->dimstyle = dwg_add_handleref(dwg, 5, styleRef->absolute_ref, nullptr);
+    common->user_text = dwg_add_u8_input(dwg, SanitizeDwgTextSymbols(an.dimensionTextOverride).c_str());
+    common->text_rotation = static_cast<double>(an.rotationRad);
+    common->elevation = static_cast<double>(an.insZ);
+    if (anonBlk != nullptr) {
+      BITCODE_H blkRef = dwg_find_tablehandle(dwg, (anonBlk->name != nullptr ? anonBlk->name : ""),
+                                              "BLOCK");
+      if (blkRef != nullptr)
+        common->block = dwg_add_handleref(dwg, 5, blkRef->absolute_ref, nullptr);
+    }
+    apply(common->parent, at);
+    if (r2018Write && an.annotative && common->parent != nullptr)
+      WriteAnnotativeEntityEed(dwg, common->parent, &an.annotativeVisibleScaleNames);
+    if (annotCtx.enabled && an.annotative && common->parent != nullptr) {
+      DwgExportDimContextKind dimCtxKind = DwgExportDimContextKind::Aligned;
+      if (an.kind == CadAnnotation::Kind::DimLinear)
+        dimCtxKind = DwgExportDimContextKind::Linear;
+      else if (an.kind == CadAnnotation::Kind::DimAngular)
+        dimCtxKind = DwgExportDimContextKind::Angular;
+      DwgExportAttachDimensionAnnotationContext(&annotCtx, common->parent, common, dimCtxKind, an, st);
+    }
+  }
+}
+
+static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADER* ps, TableWriter& tw,
+                                    const AppCommandState& st, DwgExportFieldContext* fldCtx,
+                                    DwgExportVisualStyleContext* vsCtx, DwgSaveVersion outputVersion,
+                                    bool flattenPaperMultileaders) {
+  if (ps == nullptr)
+    return;
+  auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
+    if (a != nullptr)
+      tw.Apply(ent, *a);
+  };
+  for (size_t i = 0; i + 5 < L.paperLines.size(); i += 6) {
+    dwg_point_3d a{};
+    dwg_point_3d b{};
+    a.x = static_cast<double>(L.paperLines[i]);
+    a.y = static_cast<double>(L.paperLines[i + 1]);
+    a.z = static_cast<double>(L.paperLines[i + 2]);
+    b.x = static_cast<double>(L.paperLines[i + 3]);
+    b.y = static_cast<double>(L.paperLines[i + 4]);
+    b.z = static_cast<double>(L.paperLines[i + 5]);
+    Dwg_Entity_LINE* e = dwg_add_LINE(ps, &a, &b);
+    if (e != nullptr) {
+      const size_t seg = i / 6;
+      apply(e->parent, seg < L.paperLineAttrs.size() ? &L.paperLineAttrs[seg] : nullptr);
+    }
+  }
+  int nextVpId = 2;
+  for (const Viewport& gv : L.viewports) {
+    Dwg_Entity_VIEWPORT* vp = dwg_add_VIEWPORT(ps, "");
+    if (vp == nullptr)
+      continue;
+    if (gv.clipBoundary.size() >= 3) {
+      std::vector<dwg_point_2d> boundaryPoints;
+      boundaryPoints.reserve(gv.clipBoundary.size());
+      for (const Viewport::ClipVertex& point : gv.clipBoundary)
+        boundaryPoints.push_back({static_cast<double>(point.xIn), static_cast<double>(point.yIn)});
+      if (Dwg_Entity_LWPOLYLINE* clip = dwg_add_LWPOLYLINE(ps, static_cast<unsigned>(boundaryPoints.size()),
+                                                            boundaryPoints.data())) {
+        clip->flag = static_cast<BITCODE_BS>(clip->flag | 512 | 16); // closed with per-vertex bulges
+        clip->num_bulges = static_cast<BITCODE_BL>(gv.clipBoundary.size());
+        clip->bulges = static_cast<BITCODE_BD*>(std::calloc(gv.clipBoundary.size(), sizeof(BITCODE_BD)));
+        if (clip->bulges != nullptr) {
+          for (size_t i = 0; i < gv.clipBoundary.size(); ++i)
+            clip->bulges[i] = static_cast<double>(gv.clipBoundary[i].bulge);
+          clip->parent->invisible = 1; // the native VIEWPORT frame presents this boundary to the user
+          const BITCODE_BL clipIndex = clip->parent->objid;
+          if (clipIndex >= 0 && static_cast<BITCODE_BL>(clipIndex) < tw.dwg->num_objects)
+            vp->clip_boundary = dwg_add_handleref(tw.dwg, 5, tw.dwg->object[clipIndex].handle.value, nullptr);
+        } else {
+          clip->flag = static_cast<BITCODE_BS>(clip->flag & ~16);
+          clip->num_bulges = 0;
+        }
+      }
+    }
+    const float cx = gv.paperXIn + gv.paperWIn * 0.5f;
+    const float cy = gv.paperYIn + gv.paperHIn * 0.5f;
+    vp->center.x = static_cast<double>(cx);
+    vp->center.y = static_cast<double>(cy);
+    vp->center.z = 0.0;
+    vp->width = static_cast<double>(gv.paperWIn);
+    vp->height = static_cast<double>(gv.paperHIn);
+    vp->on_off = gv.on ? 1 : 0;
+    vp->id = static_cast<BITCODE_RS>(nextVpId++);
+    vp->render_mode = gv.visualStyle == VisualStyle::Shaded
+                          ? 4
+                          : (gv.visualStyle == VisualStyle::Hidden ? 2 : 0);
+    // AutoCAD-authored paper viewports carry default 3D lighting even when
+    // their visual style is 2D Wireframe. Leaving these fields zero makes
+    // AutoCAD reject the visual-style link on the active paper viewport.
+    vp->use_default_lights = 1;
+    vp->default_lighting_type = 1;
+    vp->ambient_color.index = 250;
+    vp->ambient_color.method = DWG_COLOR_METHOD_ACI;
+    vp->ambient_color.rgb = 0x00333333u;
+    const double ox = st.worldDocumentOriginX;
+    const double oy = st.worldDocumentOriginY;
+    vp->view_target.x = gv.modelCenterX + ox;
+    vp->view_target.y = gv.modelCenterY + oy;
+    vp->view_target.z = 0.0;
+    {
+      // Issue #768: the camera as DWG's VIEWDIR (target -> camera) and twist. Plan view is (0,0,1).
+      const double az = static_cast<double>(gv.camAzimuthDeg) * (kPi / 180.0);
+      const double el = static_cast<double>(gv.camElevationDeg) * (kPi / 180.0);
+      vp->VIEWDIR.x = -std::sin(az) * std::cos(el);
+      vp->VIEWDIR.y = -std::cos(az) * std::cos(el);
+      vp->VIEWDIR.z = std::sin(el);
+      vp->VIEWTWIST = static_cast<double>(gv.camRollDeg) * (kPi / 180.0);
+    }
+    vp->VIEWCTR.x = gv.modelCenterX + ox;
+    vp->VIEWCTR.y = gv.modelCenterY + oy;
+    const float sc = gv.safeScale();
+    vp->VIEWSIZE = static_cast<double>(gv.paperHIn) * static_cast<double>(sc);
+    vp->LENSLENGTH = gv.camPerspective
+                          ? 35.0 / (2.0 * std::tan(std::clamp(static_cast<double>(gv.camFovDeg), 1.0, 179.0) *
+                                                  (kPi / 360.0)))
+                          : 50.0;
+    vp->status_flag = (gv.camPerspective ? 1 : 0) | 32 | (gv.hidePlot ? 2048 : 0) |
+                      (gv.locked ? 16384 : 0) | (gv.on ? 32768 : 0) | (vp->clip_boundary != nullptr ? 65536 : 0);
+    {
+      std::vector<BITCODE_H> frozen;
+      for (const std::string& name : gv.frozenLayers)
+        if (BITCODE_H h = dwg_find_tablehandle(tw.dwg, name.c_str(), "LAYER"))
+          frozen.push_back(dwg_add_handleref(tw.dwg, 4, h->absolute_ref, nullptr));
+      if (!frozen.empty()) {
+        vp->frozen_layers = static_cast<BITCODE_H*>(std::calloc(frozen.size(), sizeof(BITCODE_H)));
+        if (vp->frozen_layers != nullptr) {
+          std::copy(frozen.begin(), frozen.end(), vp->frozen_layers);
+          vp->num_frozen_layers = static_cast<BITCODE_BL>(frozen.size());
+        }
+      }
+    }
+    vp->UCSVP = 1;
+    vp->ucsorg.x = gv.activeUcs.origin.x + ox;
+    vp->ucsorg.y = gv.activeUcs.origin.y + oy;
+    vp->ucsorg.z = gv.activeUcs.origin.z;
+    vp->ucsxdir.x = gv.activeUcs.xAxis.x;
+    vp->ucsxdir.y = gv.activeUcs.xAxis.y;
+    vp->ucsxdir.z = gv.activeUcs.xAxis.z;
+    vp->ucsydir.x = gv.activeUcs.yAxis.x;
+    vp->ucsydir.y = gv.activeUcs.yAxis.y;
+    vp->ucsydir.z = gv.activeUcs.yAxis.z;
+    // Annotation scale is an AutoCAD viewport extension-dictionary XRECORD referencing
+    // the drawing's native SCALE object (ASDK_XREC_ANNOTATION_SCALE_INFO).
+    if (tw.annotContext != nullptr && !gv.annotationScaleName.empty()) {
+      const auto scale = tw.annotContext->scaleNameToHandle.find(gv.annotationScaleName);
+      if (scale != tw.annotContext->scaleNameToHandle.end() && vp->parent != nullptr) {
+        const BITCODE_BL ownerIndex = vp->parent->objid;
+        Dwg_Object* owner = ownerIndex >= 0 && static_cast<BITCODE_BL>(ownerIndex) < tw.dwg->num_objects
+                                ? &tw.dwg->object[ownerIndex] : nullptr;
+        if (owner != nullptr && owner->tio.entity->xdicobjhandle == nullptr) {
+          Dwg_Object_DICTIONARY* dict = dwg_add_DICTIONARY(tw.dwg, nullptr, nullptr, 0);
+          int err = 0;
+          Dwg_Object* dictObj = dict != nullptr ? dwg_obj_generic_to_object(dict, &err) : nullptr;
+          owner = &tw.dwg->object[ownerIndex];
+          if (dictObj != nullptr && err == 0) {
+            dictObj->tio.object->ownerhandle = dwg_add_handleref(tw.dwg, 4, owner->handle.value, nullptr);
+            dictObj->tio.object->num_reactors = 1;
+            dictObj->tio.object->reactors = static_cast<BITCODE_H*>(std::calloc(1, sizeof(BITCODE_H)));
+            if (dictObj->tio.object->reactors != nullptr)
+              dictObj->tio.object->reactors[0] = dwg_add_handleref(tw.dwg, 4, owner->handle.value, nullptr);
+            owner->tio.entity->xdicobjhandle = dwg_add_handleref(tw.dwg, 3, dictObj->handle.value, nullptr);
+            owner->tio.entity->is_xdic_missing = 0;
+            dict->is_hardowner = 1;
+          }
+        }
+        owner = &tw.dwg->object[ownerIndex];
+        Dwg_Object* dictObj = owner->tio.entity->xdicobjhandle != nullptr
+                                  ? dwg_resolve_handle_silent(tw.dwg, owner->tio.entity->xdicobjhandle->absolute_ref)
+                                  : nullptr;
+        if (dictObj != nullptr && dictObj->tio.object != nullptr && dictObj->tio.object->tio.DICTIONARY != nullptr) {
+          const BITCODE_HV dictHandle = dictObj->handle.value;
+          Dwg_Object_XRECORD* xr = dwg_add_XRECORD(dictObj->tio.object->tio.DICTIONARY,
+                                                   "ASDK_XREC_ANNOTATION_SCALE_INFO");
+          if (xr != nullptr) {
+            const BITCODE_BL xrIndex = xr->parent->objid;
+            dwg_add_XRECORD_int32(xr, 90, 1);
+            Dwg_Handle h{};
+            h.code = 4;
+            h.value = scale->second;
+            dwg_add_XRECORD_handle(tw.dwg->object[xrIndex].tio.object->tio.XRECORD, 340, h);
+            tw.dwg->object[xrIndex].tio.object->ownerhandle = dwg_add_handleref(tw.dwg, 4, dictHandle, nullptr);
+            tw.dwg->object[xrIndex].tio.object->xdicobjhandle = dwg_add_handleref(tw.dwg, 3, 0, nullptr);
+            tw.dwg->object[xrIndex].tio.object->num_reactors = 1;
+            tw.dwg->object[xrIndex].tio.object->reactors = static_cast<BITCODE_H*>(std::calloc(1, sizeof(BITCODE_H)));
+            if (tw.dwg->object[xrIndex].tio.object->reactors != nullptr)
+              tw.dwg->object[xrIndex].tio.object->reactors[0] = dwg_add_handleref(tw.dwg, 4, dictHandle, nullptr);
+          }
+        }
+      }
+    }
+    if (vp->parent != nullptr) {
+      const BITCODE_BL viewportIndex = vp->parent->objid;
+      const BITCODE_HV viewportHandle = viewportIndex >= 0 && static_cast<BITCODE_BL>(viewportIndex) < tw.dwg->num_objects
+                                            ? tw.dwg->object[viewportIndex].handle.value : 0;
+      for (size_t ci = 0; ci < gv.vpColorLayers.size() && ci < gv.vpColorValues.size(); ++ci)
+        AddNativeLayerViewportColor(tw, gv.vpColorLayers[ci], viewportHandle, gv.vpColorValues[ci]);
+    }
+    if (!gv.layer.empty() && gv.layer != "0") {
+      EntityAttributes layerOnly;
+      layerOnly.layer = gv.layer;
+      apply(vp->parent, &layerOnly);
+    }
+    if (vsCtx != nullptr)
+      DwgExportSetPaperViewportVisualStyle(tw.dwg, vsCtx, vp, gv.visualStyle);
+  }
+  // REQ-113 / issue #765: the rest of the paper-space set (circles, arcs, ellipses, polylines, TEXT,
+  // MTEXT) goes through the block-definition writer: sheet coordinates are paper inches with no
+  // document-origin shift, exactly like block-local content. Lines are written above.
+  CadBlockContent rest;
+  for (size_t i = 0; i + 2 < L.paperCircles.size(); i += 3) {
+    rest.circles.insert(rest.circles.end(), {static_cast<double>(L.paperCircles[i]),
+                                             static_cast<double>(L.paperCircles[i + 1]), 0.0,
+                                             static_cast<double>(L.paperCircles[i + 2])});
+  }
+  rest.circleAttrs = L.paperCircleAttrs;
+  rest.arcs = L.paperArcs;
+  rest.arcAttrs = L.paperArcAttrs;
+  rest.ellipses = L.paperEllipses;
+  rest.ellAttrs = L.paperEllAttrs;
+  rest.polyOffsets = L.paperPolyOffsets;
+  rest.polyVerts.assign(L.paperPolyVerts.begin(), L.paperPolyVerts.end());
+  rest.polyVertsBulge = L.paperPolyVertsBulge;
+  rest.polyClosed = L.paperPolyClosed;
+  rest.polyAttrs = L.paperPolyAttrs;
+  rest.texts = L.paperTexts;
+  rest.textAttrs = L.paperTextAttrs;
+  WriteBlockDefinitionGeometry(ps, rest, tw);
+  for (size_t i = 0; i < L.paperPoints.size(); ++i) {
+    const CadPoint& p = L.paperPoints[i];
+    dwg_point_3d pt{p.x, p.y, 0.0};
+    if (Dwg_Entity_POINT* e = dwg_add_POINT(ps, &pt))
+      apply(e->parent, AttrAt(L.paperPointAttrs, i));
+  }
+  // REQ-113 / REQ-443: sheet splines keep their control vertices, knots and weights (paper inches, no origin shift).
+  WriteSplineEntities(tw, ps, L.paperSplines, L.paperSplineAttrs,
+                      [](float x, float y, double z, dwg_point_3d* p) {
+                        p->x = static_cast<double>(x);
+                        p->y = static_cast<double>(y);
+                        p->z = z;
+                      });
+  for (size_t i = 0; i < L.paperBlockRefs.size(); ++i)
+    WriteBlockRefInsertToHeader(ps, tw, st, L.paperBlockRefs[i], AttrAt(L.paperBlockRefAttrs, i), 0.0, 0.0,
+                                fldCtx);
+  // REQ-457 / issue #1010: sheet raster IMAGE underlays. dwg_add_IMAGE makes the IMAGE and its IMAGEDEF and
+  // reactor; the per-pixel vectors, pixel size and image size are set here from the sheet placement.
+  for (size_t i = 0; i < L.paperImages.size(); ++i) {
+    const CadRasterImage& im = L.paperImages[i];
+    dwg_point_3d pt{};
+    pt.x = static_cast<double>(im.insX);
+    pt.y = static_cast<double>(im.insY);
+    Dwg_Entity_IMAGE* e = dwg_add_IMAGE(ps, im.path.c_str(), &pt, 1.0, 0.0);
+    if (e == nullptr)
+      continue;
+    const double pw = static_cast<double>(std::max(im.pixelW, 1));
+    const double ph = static_cast<double>(std::max(im.pixelH, 1));
+    const double c = std::cos(static_cast<double>(im.rotationRad));
+    const double sn = std::sin(static_cast<double>(im.rotationRad));
+    e->uvec.x = c * static_cast<double>(im.width) / pw;
+    e->uvec.y = sn * static_cast<double>(im.width) / pw;
+    e->uvec.z = 0.0;
+    e->vvec.x = -sn * static_cast<double>(im.height) / ph;
+    e->vvec.y = c * static_cast<double>(im.height) / ph;
+    e->vvec.z = 0.0;
+    e->image_size.x = pw;
+    e->image_size.y = ph;
+    // The values AutoCAD writes for a plain attached image: shown and clipped to a rectangle that covers the
+    // whole pixel grid (corners at pixel centres -0.5 .. size-0.5).
+    e->display_props = 7;
+    e->clipping = 0;
+    e->clip_mode = 0;
+    e->clip_boundary_type = 1;
+    e->num_clip_verts = 2;
+    e->clip_verts = static_cast<BITCODE_2RD*>(std::calloc(2, sizeof(BITCODE_2RD)));
+    if (e->clip_verts != nullptr) {
+      e->clip_verts[0].x = -0.5;
+      e->clip_verts[0].y = -0.5;
+      e->clip_verts[1].x = pw - 0.5;
+      e->clip_verts[1].y = ph - 0.5;
+    }
+    e->fade = 0;
+    if (e->imagedef != nullptr) {
+      if (Dwg_Object* io = dwg_resolve_handle_silent(tw.dwg, e->imagedef->absolute_ref)) {
+        if (io->tio.object != nullptr && io->tio.object->tio.IMAGEDEF != nullptr) {
+          Dwg_Object_IMAGEDEF* def = io->tio.object->tio.IMAGEDEF;
+          def->image_size = e->image_size;
+          def->is_loaded = 1;
+          def->resunits = 0;  // AutoCAD writes no resolution units; pixel_size is in drawing units per pixel
+          def->pixel_size.x = static_cast<double>(im.width) / pw;
+          def->pixel_size.y = static_cast<double>(im.height) / ph;
+          // AutoCAD keeps every IMAGEDEF in the named ACAD_IMAGE_DICT dictionary and refuses the file without it.
+          const std::string itemName = "GS_IMG_" + std::to_string(static_cast<unsigned long long>(io->handle.value));
+          if (BITCODE_H dictRef = dwg_find_dictionary(tw.dwg, "ACAD_IMAGE_DICT")) {
+            if (Dwg_Object* dictObj = dwg_ref_object(tw.dwg, dictRef)) {
+              if (dictObj->tio.object != nullptr && dictObj->tio.object->tio.DICTIONARY != nullptr) {
+                dwg_add_DICTIONARY_item(dictObj->tio.object->tio.DICTIONARY, itemName.c_str(), io->handle.value);
+                io->tio.object->ownerhandle = dwg_add_handleref(tw.dwg, 4, dictObj->handle.value, io);
+              }
+            }
+          } else if (Dwg_Object_DICTIONARY* created = dwg_add_DICTIONARY(tw.dwg, "ACAD_IMAGE_DICT", itemName.c_str(),
+                                                                         io->handle.value)) {
+            if (created->parent != nullptr)
+              io->tio.object->ownerhandle = dwg_add_handleref(tw.dwg, 4, dwg_obj_generic_handlevalue(created), io);
+          }
+        }
+      }
+    }
+    apply(e->parent, AttrAt(L.paperImageAttrs, i));
+  }
+  // REQ-113 / issue #1010: sheet dimensions are Dim-kind annotations kept in paperTexts (the sheet's text
+  // store, which Qt draws). Each is written as a native DIMENSION on this sheet, in paper inches.
+  {
+    DimWriteState dimState;
+    DwgExportAnnotContext dimAnnot;
+    DwgExportAnnotContextInit(&dimAnnot, tw.dwg, false);
+    const bool r2018Write = LibreDwgVersionFromExport(outputVersion) >= R_2018;
+    for (size_t i = 0; i < L.paperTexts.size(); ++i) {
+      const CadAnnotation& an = L.paperTexts[i];
+      if (CadAnnotationIsDimension(an))
+        WriteDimensionAnnotation(tw.dwg, ps, tw, st, an, AttrAt(L.paperTextAttrs, i), 0.0, 0.0, r2018Write,
+                                 dimAnnot, dimState);
+    }
+  }
+  // Issue #768 / REQ-113: fills -> HATCH and multileaders -> MULTILEADER (R2010+) or LEADER + MTEXT,
+  // through the same writers model space uses. Paper inches, so no origin shift and 1 unit per plotted inch.
+  DwgExportAnnotContext noAnnot;
+  DwgExportAnnotContextInit(&noAnnot, tw.dwg, false);
+  for (size_t i = 0; i < L.paperFilledRegions.size(); ++i)
+    WriteFilledRegionHatch(tw.dwg, ps, tw, st, L.paperFilledRegions[i], AttrAt(L.paperFilledRegionAttrs, i), 0.0,
+                           0.0, false, noAnnot);
+  const bool nativeLeaders = LibreDwgVersionFromExport(outputVersion) >= R_2010 && !flattenPaperMultileaders;
+  for (size_t i = 0; i < L.paperMultileaders.size(); ++i)
+    WriteMultileaderEntity(tw.dwg, ps, tw, st, L.paperMultileaders[i], AttrAt(L.paperMultileaderAttrs, i), 0.0, 0.0,
+                           false, nativeLeaders, 1.f, noAnnot);
+  // Tables: grid LINEs + cell MTEXT, the same fallback model space uses (LibreDWG has no dwg_add_TABLE).
+  const std::uint64_t psHandle = BlockHeaderObjectHandle(ps);
+  for (size_t i = 0; i < L.paperTables.size(); ++i)
+    dwg_table_export::WriteCadTable(st, L.paperTables[i], ps, tw, AttrAt(L.paperTableAttrs, i), fldCtx, psHandle,
+                                    0.0, 0.0, 1.f);
+}
+
+static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, TableWriter& tw,
+                                      std::vector<std::string>& log, DwgExportFieldContext* fldCtx,
+                                      DwgExportVisualStyleContext* vsCtx, DwgSaveVersion outputVersion,
+                                      bool flattenPaperMultileaders) {
+  if (st.paperLayouts.empty())
+    return;
+  for (const PaperLayout& L : st.paperLayouts) {
+    for (const EntityAttributes& a : L.paperLineAttrs)
+      tw.EnsureLtype(a.linetype);
+    for (const std::vector<EntityAttributes>* v :
+         {&L.paperFilledRegionAttrs, &L.paperMultileaderAttrs, &L.paperTableAttrs})
+      for (const EntityAttributes& a : *v)
+        tw.EnsureLtype(a.linetype);
+    for (const EntityAttributes& a : L.paperBlockRefAttrs)
+      tw.EnsureLtype(a.linetype);
+    for (const std::vector<EntityAttributes>* v : {&L.paperCircleAttrs, &L.paperArcAttrs, &L.paperEllAttrs, &L.paperSplineAttrs, &L.paperPointAttrs, &L.paperImageAttrs,
+                                                   &L.paperPolyAttrs, &L.paperTextAttrs})
+      for (const EntityAttributes& a : *v)
+        tw.EnsureLtype(a.linetype);
+    (void)L;
+  }
+  size_t nWritten = 0;
+  for (size_t li = 0; li < st.paperLayouts.size(); ++li) {
+    const PaperLayout& L = st.paperLayouts[li];
+    Dwg_Object_BLOCK_HEADER* ps =
+        EnsurePaperSpaceBlockHeader(dwg, li, L.name.empty() ? "Layout" : L.name.c_str());
+    if (ps == nullptr)
+      continue;
+    SetDwgLayoutTabName(dwg, ps, L.name.empty() ? "Layout" : L.name);
+    SetDwgLayoutPaperSetup(dwg, ps, L);
+    WritePaperLayoutContent(L, ps, tw, st, fldCtx, vsCtx, outputVersion, flattenPaperMultileaders);
+    ++nWritten;
+  }
+  if (nWritten > 0) {
+    log.push_back("CAD export — wrote " + std::to_string(nWritten) +
+                  " paper layout(s) with viewports (REQ-170, issue #610).");
+  }
+}
+
+static Dwg_Object* LayoutPaperBlockObject(Dwg_Data* dwg, const Dwg_Object_LAYOUT* lo) {
+  if (dwg == nullptr || lo == nullptr || lo->block_header == nullptr)
+    return nullptr;
+  Dwg_Object* o = lo->block_header->obj;
+  if (o == nullptr)
+    o = dwg_resolve_handle_silent(dwg, lo->block_header->absolute_ref);
+  return o;
+}
+
+static bool IsPaperLayoutEntity(const Dwg_Data* dwg, const Dwg_Object* entityObj) {
+  if (dwg == nullptr || entityObj == nullptr || entityObj->supertype != DWG_SUPERTYPE_ENTITY ||
+      entityObj->tio.entity == nullptr || entityObj->tio.entity->ownerhandle == nullptr)
+    return false;
+  const BITCODE_HV ownerHandle = entityObj->tio.entity->ownerhandle->absolute_ref;
+  if (ownerHandle == 0)
+    return false;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object* layoutObj = &dwg->object[i];
+    if (layoutObj->fixedtype != DWG_TYPE_LAYOUT || layoutObj->tio.object == nullptr ||
+        layoutObj->tio.object->tio.LAYOUT == nullptr)
+      continue;
+    const Dwg_Object_LAYOUT* layout = layoutObj->tio.object->tio.LAYOUT;
+    if (LayoutNameFromT(dwg, layout->layout_name) == "Model" || layout->block_header == nullptr)
+      continue;
+    if (layout->block_header->absolute_ref == ownerHandle)
+      return true;
+  }
+  return false;
+}
+
+static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj,
+                              std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+                              const LegacyLeaderScaleContext& scaleContext) {
+  if (obj == nullptr || obj->supertype != DWG_SUPERTYPE_ENTITY || obj->tio.entity == nullptr)
+    return;
+  Dwg_Object_Entity* ent = obj->tio.entity;
+  const EntityAttributes at = AttrFromEnt(dwg, ent);
+  const Dwg_Object_Type ty = obj->fixedtype;
+  if (ty == DWG_TYPE_VIEWPORT && ent->tio.VIEWPORT != nullptr) {
+    const Dwg_Entity_VIEWPORT* e = ent->tio.VIEWPORT;
+    Viewport vp;
+    vp.paperWIn = static_cast<float>(e->width);
+    vp.paperHIn = static_cast<float>(e->height);
+    vp.paperXIn = static_cast<float>(e->center.x - e->width * 0.5);
+    vp.paperYIn = static_cast<float>(e->center.y - e->height * 0.5);
+    if (e->clip_boundary != nullptr) {
+      Dwg_Object* clipObj = dwg_resolve_handle_silent(dwg, e->clip_boundary->absolute_ref);
+      if (clipObj != nullptr && clipObj->fixedtype == DWG_TYPE_LWPOLYLINE && clipObj->tio.entity != nullptr &&
+          clipObj->tio.entity->tio.LWPOLYLINE != nullptr) {
+        const Dwg_Entity_LWPOLYLINE* clip = clipObj->tio.entity->tio.LWPOLYLINE;
+        if ((clip->flag & 512) != 0 && clip->num_points >= 2 && clip->points != nullptr) {
+          vp.clipBoundary.reserve(static_cast<size_t>(clip->num_points));
+          bool valid = true;
+          for (BITCODE_BL i = 0; i < clip->num_points; ++i) {
+            const double bulge = clip->bulges != nullptr && i < clip->num_bulges ? clip->bulges[i] : 0.0;
+            const double x = clip->points[i].x, y = clip->points[i].y;
+            if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(bulge)) { valid = false; break; }
+            vp.clipBoundary.push_back({static_cast<float>(x), static_cast<float>(y), static_cast<float>(bulge)});
+          }
+          if (!valid) vp.clipBoundary.clear();
+        }
+      }
+    }
+    if (e->height > 1.e-6)
+      vp.scaleModelPerPaperIn = static_cast<float>(e->VIEWSIZE / e->height);
+    vp.modelCenterX = e->view_target.x - st.worldDocumentOriginX;
+    vp.modelCenterY = e->view_target.y - st.worldDocumentOriginY;
+    if (!at.layer.empty() && at.layer != "0")
+      vp.layer = at.layer;
+    vp.visualStyle = DwgImportVisualStyleFromViewport(dwg, e);
+    // Issue #768: view direction, twist, on/off, lock and per-viewport frozen layers.
+    vp.on = e->on_off != 0 && (e->status_flag & 32768) != 0;
+    vp.locked = (e->status_flag & 16384) != 0;
+    vp.hidePlot = (e->status_flag & 2048) != 0;
+    vp.camPerspective = (e->status_flag & 1) != 0;
+    if (vp.camPerspective && e->LENSLENGTH > 1.e-6)
+      vp.camFovDeg = static_cast<float>(2.0 * std::atan(35.0 / (2.0 * e->LENSLENGTH)) * (180.0 / kPi));
+    if (e->UCSVP) {
+      vp.activeUcs.origin = {e->ucsorg.x - st.worldDocumentOriginX, e->ucsorg.y - st.worldDocumentOriginY,
+                             e->ucsorg.z};
+      vp.activeUcs.xAxis = {e->ucsxdir.x, e->ucsxdir.y, e->ucsxdir.z};
+      vp.activeUcs.yAxis = {e->ucsydir.x, e->ucsydir.y, e->ucsydir.z};
+      vp.activeUcs.zAxis = ray3d::Normalize(ray3d::Cross(vp.activeUcs.xAxis, vp.activeUcs.yAxis));
+    }
+    if (e->parent != nullptr && e->parent->xdicobjhandle != nullptr) {
+      Dwg_Object* xdict = dwg_resolve_handle_silent(dwg, e->parent->xdicobjhandle->absolute_ref);
+      if (xdict != nullptr && xdict->tio.object != nullptr && xdict->tio.object->tio.DICTIONARY != nullptr) {
+        Dwg_Object_DICTIONARY* dict = xdict->tio.object->tio.DICTIONARY;
+        for (BITCODE_BL di = 0; di < dict->numitems; ++di) {
+          if (dict->texts[di] == nullptr || FromT(dwg, dict->texts[di]) != "ASDK_XREC_ANNOTATION_SCALE_INFO")
+            continue;
+          Dwg_Object* xrObj = dict->itemhandles[di] != nullptr
+                                  ? dwg_resolve_handle_silent(dwg, dict->itemhandles[di]->absolute_ref) : nullptr;
+          if (xrObj == nullptr || xrObj->tio.object == nullptr || xrObj->tio.object->tio.XRECORD == nullptr)
+            continue;
+          for (Dwg_Resbuf* rb = xrObj->tio.object->tio.XRECORD->xdata; rb != nullptr; rb = rb->nextrb) {
+            if (rb->type != 340) continue;
+            Dwg_Object* scaleObj = dwg_resolve_handle_silent(dwg, rb->value.absref);
+            if (scaleObj != nullptr && scaleObj->fixedtype == DWG_TYPE_SCALE && scaleObj->tio.object != nullptr &&
+                scaleObj->tio.object->tio.SCALE != nullptr)
+              vp.annotationScaleName = LayoutNameFromT(dwg, scaleObj->tio.object->tio.SCALE->name);
+          }
+        }
+      }
+    }
+    // AutoCAD stores viewport color overrides on each LAYER extension dictionary, keyed by the
+    // viewport handle. This is independent of an entity's own color and survives outside GoSurvey.
+    for (BITCODE_BL oi = 0; oi < dwg->num_objects; ++oi) {
+      Dwg_Object* layerObj = &dwg->object[oi];
+      if (layerObj->fixedtype != DWG_TYPE_LAYER || layerObj->tio.object == nullptr ||
+          layerObj->tio.object->tio.LAYER == nullptr || layerObj->tio.object->xdicobjhandle == nullptr)
+        continue;
+      Dwg_Object* layerDictObj = dwg_resolve_handle_silent(dwg, layerObj->tio.object->xdicobjhandle->absolute_ref);
+      if (layerDictObj == nullptr || layerDictObj->tio.object == nullptr ||
+          layerDictObj->tio.object->tio.DICTIONARY == nullptr)
+        continue;
+      Dwg_Object_DICTIONARY* layerDict = layerDictObj->tio.object->tio.DICTIONARY;
+      for (BITCODE_BL di = 0; di < layerDict->numitems; ++di) {
+        if (layerDict->texts[di] == nullptr || FromT(dwg, layerDict->texts[di]) != "ADSK_XREC_LAYER_COLOR_OVR")
+          continue;
+        Dwg_Object* xrObj = layerDict->itemhandles[di] != nullptr
+                                ? dwg_resolve_handle_silent(dwg, layerDict->itemhandles[di]->absolute_ref) : nullptr;
+        if (xrObj == nullptr || xrObj->tio.object == nullptr || xrObj->tio.object->tio.XRECORD == nullptr)
+          continue;
+        bool inOverride = false;
+        BITCODE_HV overrideViewport = 0;
+        for (Dwg_Resbuf* rb = xrObj->tio.object->tio.XRECORD->xdata; rb != nullptr; rb = rb->nextrb) {
+          if (rb->type == 102 && rb->value.str.u.data != nullptr) {
+            const std::string tag = libredwgcad_detail::DecodeDwgString(rb->value.str.u.data, rb->value.str.is_tu != 0);
+            if (tag.find("ADSK_LYR_COLOR_OVERRIDE") != std::string::npos)
+              inOverride = true;
+            else if (tag.find("}") != std::string::npos)
+              inOverride = false;
+          } else if (inOverride && rb->type == 335) {
+            overrideViewport = rb->value.absref;
+          } else if (inOverride && rb->type == 420 && overrideViewport == obj->handle.value) {
+            char color[16];
+            const unsigned rgb = static_cast<unsigned>(rb->value.i32) & 0xFFFFFFu;
+            std::snprintf(color, sizeof(color), "#%06X", rgb);
+            vp.vpColorLayers.push_back(LayoutNameFromT(dwg, layerObj->tio.object->tio.LAYER->name));
+            vp.vpColorValues.emplace_back(color);
+          }
+        }
+      }
+    }
+    {
+      const double len = std::sqrt(e->VIEWDIR.x * e->VIEWDIR.x + e->VIEWDIR.y * e->VIEWDIR.y +
+                                   e->VIEWDIR.z * e->VIEWDIR.z);
+      if (len > 1e-9) {
+        const double vx = e->VIEWDIR.x / len, vy = e->VIEWDIR.y / len, vz = e->VIEWDIR.z / len;
+        vp.camElevationDeg = static_cast<float>(std::asin(std::clamp(vz, -1.0, 1.0)) * (180.0 / kPi));
+        vp.camAzimuthDeg = (std::fabs(vx) + std::fabs(vy) < 1e-9)
+                               ? 0.f
+                               : static_cast<float>(std::atan2(-vx, -vy) * (180.0 / kPi));
+      }
+      vp.camRollDeg = static_cast<float>(e->VIEWTWIST * (180.0 / kPi));
+    }
+    for (BITCODE_BL fi = 0; fi < e->num_frozen_layers && e->frozen_layers != nullptr; ++fi) {
+      const Dwg_Object* lo = e->frozen_layers[fi] != nullptr ? e->frozen_layers[fi]->obj : nullptr;
+      if (lo == nullptr && e->frozen_layers[fi] != nullptr)
+        lo = dwg_resolve_handle_silent(dwg, e->frozen_layers[fi]->absolute_ref);
+      if (lo != nullptr && lo->fixedtype == DWG_TYPE_LAYER && lo->tio.object != nullptr &&
+          lo->tio.object->tio.LAYER != nullptr)
+        vp.frozenLayers.push_back(LayoutNameFromT(dwg, lo->tio.object->tio.LAYER->name));
+    }
+    L.viewports.push_back(vp);
+    return;
+  }
+  if (ty == DWG_TYPE_LINE && ent->tio.LINE != nullptr) {
+    const Dwg_Entity_LINE* e = ent->tio.LINE;
+    L.paperLines.push_back(static_cast<float>(e->start.x));
+    L.paperLines.push_back(static_cast<float>(e->start.y));
+    L.paperLines.push_back(static_cast<float>(e->start.z));
+    L.paperLines.push_back(static_cast<float>(e->end.x));
+    L.paperLines.push_back(static_cast<float>(e->end.y));
+    L.paperLines.push_back(static_cast<float>(e->end.z));
+    L.paperLineAttrs.push_back(at);
+    return;
+  }
+  if (ty == DWG_TYPE_INSERT && ent->tio.INSERT != nullptr) {
+    if (ImportNamedInsertAsBlockRef(st, dwg, ent, at, skipHist, degenerateExtrusions, 0.0, 0.0, L.paperBlockRefs,
+                                    L.paperBlockRefAttrs, nullptr, scaleContext))
+      return;
+  }
+  // REQ-457 / issue #1010: an IMAGE on a sheet, placed from its IMAGEDEF path and pixel size. A file that is no
+  // longer there is unloaded and logged, and the rest of the sheet still loads (REQ-173).
+  if (ty == DWG_TYPE_IMAGE && ent->tio.IMAGE != nullptr) {
+    const Dwg_Entity_IMAGE* e = ent->tio.IMAGE;
+    const Dwg_Object* d = e->imagedef != nullptr ? dwg_resolve_handle_silent(dwg, e->imagedef->absolute_ref) : nullptr;
+    if (d == nullptr || d->tio.object == nullptr || d->tio.object->tio.IMAGEDEF == nullptr) {
+      NoteSkip(skipHist, "sheet IMAGE without an image definition (REQ-457)");
+      return;
+    }
+    const Dwg_Object_IMAGEDEF* def = d->tio.object->tio.IMAGEDEF;
+    CadRasterImage im;
+    im.path = FromT(dwg, def->file_path);
+    im.pixelW = static_cast<int>(std::lround(def->image_size.x > 0.0 ? def->image_size.x : e->image_size.x));
+    im.pixelH = static_cast<int>(std::lround(def->image_size.y > 0.0 ? def->image_size.y : e->image_size.y));
+    im.insX = static_cast<float>(e->pt0.x);
+    im.insY = static_cast<float>(e->pt0.y);
+    const double pw = static_cast<double>(std::max(im.pixelW, 1));
+    const double ph = static_cast<double>(std::max(im.pixelH, 1));
+    im.width = static_cast<float>(std::hypot(e->uvec.x, e->uvec.y) * pw);
+    im.height = static_cast<float>(std::hypot(e->vvec.x, e->vvec.y) * ph);
+    im.rotationRad = static_cast<float>(std::atan2(e->uvec.y, e->uvec.x));
+    if (!std::filesystem::exists(std::filesystem::u8path(im.path))) {
+      NoteSkip(skipHist, "sheet IMAGE unloaded: its file is missing (REQ-457)");
+      return;
+    }
+    L.paperImages.push_back(im);
+    L.paperImageAttrs.push_back(at);
+    return;
+  }
+  if (ty == DWG_TYPE_BLOCK || ty == DWG_TYPE_ENDBLK)
+    return;
+  // REQ-113 / issue #765: TEXT, MTEXT, CIRCLE, ARC, ELLIPSE and polylines reuse the model-space reader.
+  // They land in a scratch state with origin 0 and 1 model unit per plotted inch, so every number is
+  // already in paper inches, then move into the layout's own stores.
+  if (ty == DWG_TYPE_TEXT || ty == DWG_TYPE_MTEXT || ty == DWG_TYPE_CIRCLE || ty == DWG_TYPE_ARC ||
+      ty == DWG_TYPE_ELLIPSE || ty == DWG_TYPE_LWPOLYLINE || ty == DWG_TYPE_POLYLINE_2D ||
+      ty == DWG_TYPE_DIMENSION_ALIGNED || ty == DWG_TYPE_DIMENSION_LINEAR || ty == DWG_TYPE_DIMENSION_ANG3PT ||
+      ty == DWG_TYPE_HATCH || ty == DWG_TYPE_MULTILEADER || ty == DWG_TYPE_LEADER ||
+      ty == DWG_TYPE_TABLE || ty == DWG_TYPE_POINT || ty == DWG_TYPE_SPLINE) {
+    AppCommandState scratch;
+    scratch.worldDocumentOriginX = 0.0;
+    scratch.worldDocumentOriginY = 0.0;
+    scratch.modelUnitsPerPlottedInch = 1.f;
+    // The model-space reader drops paper-space entities (entmode 1); this IS the sheet, so read it as model.
+    const auto savedEntMode = ent->entmode;
+    ent->entmode = 2;
+    ImportObject(scratch, dwg, obj, Xf2{}, 0, skipHist, degenerateExtrusions, nullptr, scaleContext);
+    ent->entmode = savedEntMode;
+    AppendScratchToPaperLayout(L, scratch);
+    return;
+  }
+  const std::string skipName = std::string("paper-space entity (unsupported type ") +
+                               (obj->dxfname != nullptr ? obj->dxfname : "?") + ")";
+  NoteSkip(skipHist, skipName.c_str());
+}
+
+static void ImportPaperLayoutsFromDwg(AppCommandState& st, Dwg_Data* dwg,
+                                      std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+                                      const LegacyLeaderScaleContext& scaleContext) {
+  st.paperLayouts.clear();
+  struct LayoutRow {
+    int tab = 0;
+    Dwg_Object* layObj = nullptr;
+    std::string name;
+  };
+  std::vector<LayoutRow> rows;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_LAYOUT || o->tio.object == nullptr ||
+        o->tio.object->tio.LAYOUT == nullptr)
+      continue;
+    Dwg_Object_LAYOUT* lo = o->tio.object->tio.LAYOUT;
+    const std::string name = LayoutNameFromT(dwg, lo->layout_name);
+    if (name == "Model")
+      continue;
+    rows.push_back({static_cast<int>(lo->tab_order), o, name});
+  }
+  std::sort(rows.begin(), rows.end(), [](const LayoutRow& a, const LayoutRow& b) {
+    if (a.tab != b.tab)
+      return a.tab < b.tab;
+    return a.name < b.name;
+  });
+  for (const LayoutRow& row : rows) {
+    Dwg_Object_LAYOUT* lo = row.layObj->tio.object->tio.LAYOUT;
+    PaperLayout pl;
+    pl.name = row.name.empty() ? "Layout" : row.name;
+    {
+      // Issue #768 / REQ-113: the sheet's own size and orientation (finding I5; it used to be ANSI B).
+      const Dwg_Object_PLOTSETTINGS& ps = lo->plotsettings;
+      const double unitToIn = ps.plot_paper_unit == 0 ? 1.0 : (ps.plot_paper_unit == 1 ? 1.0 / 25.4 : 0.0);
+      const double rw = ps.paper_width * unitToIn, rh = ps.paper_height * unitToIn;
+      if (rw > 1.0 && rh > 1.0) {
+        const bool rotated = (ps.plot_rotation_mode & 1) != 0;
+        const double sheetW = rotated ? rh : rw, sheetH = rotated ? rw : rh;
+        pl.portraitWidthIn = static_cast<float>(std::min(sheetW, sheetH));
+        pl.portraitHeightIn = static_cast<float>(std::max(sheetW, sheetH));
+        pl.landscape = sheetW > sheetH;
+        pl.presetIdx = -1;
+        for (int pi = 0; pi < kPaperSizePresetCount; ++pi)
+          if (std::fabs(kPaperSizePresets[pi].widthIn - pl.portraitWidthIn) < 0.02f &&
+              std::fabs(kPaperSizePresets[pi].heightIn - pl.portraitHeightIn) < 0.02f)
+            pl.presetIdx = pi;
+      }
+    }
+    Dwg_Object* blk = LayoutPaperBlockObject(dwg, lo);
+    if (blk != nullptr) {
+      std::unordered_set<BITCODE_HV> clipBoundaryHandles;
+      for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr; e = get_next_owned_entity(blk, e)) {
+        if (e->fixedtype == DWG_TYPE_VIEWPORT && e->tio.entity != nullptr &&
+            e->tio.entity->tio.VIEWPORT != nullptr && e->tio.entity->tio.VIEWPORT->clip_boundary != nullptr)
+          clipBoundaryHandles.insert(e->tio.entity->tio.VIEWPORT->clip_boundary->absolute_ref);
+      }
+      for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr; e = get_next_owned_entity(blk, e)) {
+        if (e->supertype == DWG_SUPERTYPE_ENTITY && e->tio.entity != nullptr) {
+          const BITCODE_BL entityIndex = e->tio.entity->objid;
+          if (entityIndex >= 0 && static_cast<BITCODE_BL>(entityIndex) < dwg->num_objects &&
+              clipBoundaryHandles.count(dwg->object[entityIndex].handle.value) != 0)
+            continue;
+        }
+        ImportPaperEntity(pl, st, dwg, e, skipHist, degenerateExtrusions, scaleContext);
+      }
+    }
+    st.paperLayouts.push_back(std::move(pl));
+  }
+}
+
+extern "C" void dwg_set_next_objhandle(Dwg_Object* obj);
+extern "C" void dwg_resolve_objectrefs_silent(Dwg_Data* dwg);
+
+// LibreDWG has no dwg_add_SCALE (HAVE_NO_DWG_ADD_SCALE). Hand-build AcDbScale objects the same way
+// WriteDwgGeoData hand-builds GEODATA — enough for ImportAnnotationScales' object scan on reopen.
+static int EnsureDwgScaleClassNumber(Dwg_Data* dwg) {
+  if (dwg == nullptr || dwg->dwg_class == nullptr)
+    return -1;
+  for (BITCODE_BS i = 0; i < dwg->num_classes; ++i) {
+    const char* dxfname = dwg->dwg_class[i].dxfname;
+    if (dxfname != nullptr && std::strcmp(dxfname, "SCALE") == 0)
+      return static_cast<int>(dwg->dwg_class[i].number);
+  }
+  return dwg_add_class(dwg, "SCALE", "AcDbScale", "ObjectDBX Classes", false);
+}
+
+static bool AppendDwgAnnotationScaleObject(Dwg_Data* dwg, const CadAnnotationScale& entry,
+                                         BITCODE_HV* outHandle = nullptr) {
+  if (dwg == nullptr || entry.name.empty() || entry.paperUnits <= 0.f || entry.drawingUnits <= 0.f)
+    return false;
+  const int classNumber = EnsureDwgScaleClassNumber(dwg);
+  if (classNumber < 0)
+    return false;
+  const BITCODE_BL idx = dwg->num_objects;
+  const int added = dwg_add_object(dwg);
+  if (added > 0)
+    return false;
+  if (added < 0)
+    dwg_resolve_objectrefs_silent(dwg);
+  Dwg_Object* obj = &dwg->object[idx];
+  obj->supertype = DWG_SUPERTYPE_OBJECT;
+  obj->fixedtype = DWG_TYPE_SCALE;
+  obj->type = static_cast<BITCODE_BS>(classNumber);
+  obj->dxfname = (dwg->opts & DWG_OPTS_IN) ? _strdup("SCALE") : const_cast<char*>("SCALE");
+  obj->name = (dwg->opts & DWG_OPTS_IN) ? _strdup("SCALE") : const_cast<char*>("SCALE");
+  obj->tio.object = static_cast<Dwg_Object_Object*>(std::calloc(1, sizeof(Dwg_Object_Object)));
+  if (obj->tio.object == nullptr)
+    return false;
+  obj->tio.object->objid = obj->index;
+  obj->tio.object->dwg = dwg;
+  auto* sc = static_cast<Dwg_Object_SCALE*>(std::calloc(1, sizeof(Dwg_Object_SCALE)));
+  if (sc == nullptr)
+    return false;
+  obj->tio.object->tio.SCALE = sc;
+  sc->parent = obj->tio.object;
+  dwg_set_next_objhandle(obj);
+  sc->flag = 0;
+  sc->name = dwg_add_u8_input(dwg, entry.name.c_str());
+  sc->paper_units = static_cast<double>(entry.paperUnits);
+  sc->drawing_units = static_cast<double>(entry.drawingUnits);
+  sc->is_unit_scale = 0;
+  if (outHandle != nullptr)
+    *outHandle = obj->handle.value;
+  return sc->name != nullptr;
+}
+
+static void WriteAnnotationScalesFromState(const AppCommandState& st, Dwg_Data* dwg,
+                                           std::vector<std::string>& log,
+                                           DwgExportAnnotContext* annotCtx, DwgSaveVersion outputVersion) {
+  if (dwg == nullptr || st.annotationScales.empty())
+    return;
+  if (LibreDwgVersionFromExport(outputVersion) < R_2007)
+    return;
+  size_t nWritten = 0;
+  for (const CadAnnotationScale& s : st.annotationScales) {
+    BITCODE_HV scaleHandle = 0;
+    if (AppendDwgAnnotationScaleObject(dwg, s, &scaleHandle)) {
+      ++nWritten;
+      if (annotCtx != nullptr && scaleHandle != 0)
+        DwgExportAnnotContextRegisterScale(annotCtx, s.name, scaleHandle);
+    }
+  }
+  if (nWritten > 0) {
+    log.push_back("CAD export — wrote " + std::to_string(nWritten) +
+                  " annotation SCALE object(s) (issue #622).");
+  }
+}
+
+static void WriteViewportZoomScalesFromState(const AppCommandState& st, Dwg_Data* dwg,
+                                             std::vector<std::string>& log, DwgSaveVersion outputVersion) {
+  if (dwg == nullptr || st.viewportZoomScales.empty())
+    return;
+  if (LibreDwgVersionFromExport(outputVersion) < R_2007)
+    return;
+  size_t nWritten = 0;
+  for (const CadAnnotationScale& s : st.viewportZoomScales) {
+    CadAnnotationScale tagged = s;
+    tagged.name = std::string(kViewportZoomScaleDwgPrefix) + s.name;
+    BITCODE_HV scaleHandle = 0;
+    if (AppendDwgAnnotationScaleObject(dwg, tagged, &scaleHandle))
+      ++nWritten;
+  }
+  if (nWritten > 0) {
+    log.push_back("CAD export — wrote " + std::to_string(nWritten) +
+                  " viewport zoom SCALE object(s) (REQ-458).");
+  }
+}
+
+void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr,
+                   std::vector<std::string>& log, DwgSaveVersion outputVersion, bool asDxf) {
+  auto world = [&](float lx, float ly, double z, dwg_point_3d* p) {
+    p->x = static_cast<double>(lx) + st.worldDocumentOriginX;
+    p->y = static_cast<double>(ly) + st.worldDocumentOriginY;
+    p->z = z;
+  };
+
+  const bool r2018Write = LibreDwgVersionFromExport(outputVersion) >= R_2018;
+
+  DwgExportAnnotContext annotCtx;
+  DwgExportAnnotContextInit(&annotCtx, dwg, LibreDwgVersionFromExport(outputVersion) >= R_2010);
+
+  TableWriter tw;
+  tw.dwg = dwg;
+  tw.useTrueColor = DwgSaveVersionUsesR2004Features(outputVersion);
+  tw.layerState = &st;
+  tw.annotContext = &annotCtx;
+  tw.BuildLayerTable(st);
+  tw.BuildStyleTable(st, st.modelUnitsPerPlottedInch);
+  tw.BuildDimensionStyleTable(st, st.modelUnitsPerPlottedInch);
+  tw.BuildMleaderStyleTable(st, st.modelUnitsPerPlottedInch);
+  tw.BuildTableStyleTable(st, st.modelUnitsPerPlottedInch);
+  WriteAnnotationScalesFromState(st, dwg, log, &annotCtx, outputVersion);
+  WriteViewportZoomScalesFromState(st, dwg, log, outputVersion);
+  // Register every linetype the entities reference up front, so no LTYPE table object is created
+  // after the entity records have started going into the object array.
+  for (const std::vector<EntityAttributes>* v :
+       {&st.userLineAttrs, &st.userCircleAttrs, &st.userArcAttrs, &st.userPolylineAttrs,
+        &st.cadAnnotationAttrs, &st.userEllAttrs, &st.cadFilledRegionAttrs}) {
+    for (const EntityAttributes& a : *v)
+      tw.EnsureLtype(a.linetype);
+  }
+  auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
+    if (a != nullptr)
+      tw.Apply(ent, *a);
+  };
+
+  DwgExportFieldContext fldCtx;
+  DwgExportFieldContextInit(&fldCtx, DwgSaveVersionUsesR2004Features(outputVersion));
+  DwgExportVisualStyleContext vsCtx;
+  DwgExportVisualStyleContextInit(&vsCtx, LibreDwgVersionFromExport(outputVersion) >= R_2007);
+  DwgExportMaterialContext matCtx;
+  DwgExportMaterialContextInit(&matCtx, LibreDwgVersionFromExport(outputVersion) >= R_2007);
+  std::uint64_t blockOwnerHandle = 0;
+  {
+    int hdrErr = 0;
+    const Dwg_Object* hdrObj = dwg_obj_generic_to_object(hdr, &hdrErr);
+    if (hdrObj != nullptr && hdrErr == 0)
+      blockOwnerHandle = hdrObj->handle.value;
+  }
+  auto regEnt = [&](const void* ent, const EntityAttributes* a) {
+    if (a != nullptr)
+      DwgExportRegisterEntityHandle(&fldCtx, a->id, ent);
+  };
+
+  const size_t nSeg = st.userLinesFlat.size() / 6;
+  for (size_t i = 0; i < nSeg; ++i) {
+    dwg_point_3d a{}, b{};
+    world(st.userLinesFlat[i * 6 + 0], st.userLinesFlat[i * 6 + 1], st.userLinesFlat[i * 6 + 2], &a);
+    world(st.userLinesFlat[i * 6 + 3], st.userLinesFlat[i * 6 + 4], st.userLinesFlat[i * 6 + 5], &b);
+    Dwg_Entity_LINE* e = dwg_add_LINE(hdr, &a, &b);
+    if (e != nullptr) {
+      const EntityAttributes* la = AttrAt(st.userLineAttrs, i);
+      apply(e->parent, la);
+      regEnt(e, la);
+    }
+  }
+  const size_t nC = st.userCirclesCxCyZR.size() / 4;
+  for (size_t i = 0; i < nC; ++i) {
+    dwg_point_3d c{};
+    world(st.userCirclesCxCyZR[i * 4 + 0], st.userCirclesCxCyZR[i * 4 + 1], st.userCirclesCxCyZR[i * 4 + 2], &c);
+    float nx = kFlatNormalX, ny = kFlatNormalY, nz = kFlatNormalZ;
+    CircleNormalAt(st.userCircleNormals, i, &nx, &ny, &nz);
+    const bool circFlat = IsFlatNormal(nx, ny, nz);
+    dwg_point_3d ext{0.0, 0.0, 1.0};
+    if (!circFlat) {
+      ucs::Ucs frame;
+      if (ucs::FromNormal({0.0, 0.0, 0.0}, {static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)},
+                          &frame)) {
+        const ray3d::Vec3 ocs = ucs::WorldToUcs(frame, {c.x, c.y, c.z});
+        c.x = ocs.x;
+        c.y = ocs.y;
+        c.z = ocs.z;
+        ext.x = static_cast<double>(nx);
+        ext.y = static_cast<double>(ny);
+        ext.z = static_cast<double>(nz);
+      }
+    }
+    Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(hdr, &c, static_cast<double>(st.userCirclesCxCyZR[i * 4 + 3]));
+    if (e != nullptr) {
+      e->extrusion.x = ext.x;
+      e->extrusion.y = ext.y;
+      e->extrusion.z = ext.z;
+      const EntityAttributes* ca = AttrAt(st.userCircleAttrs, i);
+      apply(e->parent, ca);
+      regEnt(e, ca);
+    }
+  }
+  for (size_t i = 0; i < st.userArcs.size(); ++i) {
+    const CadArc& arc = st.userArcs[i];
+    dwg_point_3d c{};
+    world(arc.cx, arc.cy, arc.z, &c);
+    const double a0 = static_cast<double>(arc.startRad);
+    const double a1 = a0 + static_cast<double>(arc.sweepRad);
+    // REQ-312 (GitHub issue #391): a tilted arc's normal is group 210's DWG equivalent — the ARC's
+    // own `extrusion` field. Without it every arc exported flat, silently. When the normal is not
+    // world +Z the centre (group 10) is an OCS coordinate in the Arbitrary Axis frame the normal
+    // defines, exactly as `ocsPointOf` writes it in DxfIo.cpp; `ucs::FromNormal` IS that algorithm
+    // and returns the world axes unchanged for +Z, so a flat arc's centre and extrusion are
+    // byte-identical to before.
+    const bool arcFlat = IsFlatNormal(arc.nx, arc.ny, arc.nz);
+    dwg_point_3d ext{0.0, 0.0, 1.0};
+    if (!arcFlat) {
+      ucs::Ucs frame;
+      if (ucs::FromNormal({0.0, 0.0, 0.0},
+                          {static_cast<double>(arc.nx), static_cast<double>(arc.ny),
+                           static_cast<double>(arc.nz)},
+                          &frame)) {
+        const ray3d::Vec3 ocs = ucs::WorldToUcs(frame, {c.x, c.y, c.z});
+        c.x = ocs.x;
+        c.y = ocs.y;
+        c.z = ocs.z;
+        ext.x = static_cast<double>(arc.nx);
+        ext.y = static_cast<double>(arc.ny);
+        ext.z = static_cast<double>(arc.nz);
+      }
+    }
+    Dwg_Entity_ARC* e = dwg_add_ARC(hdr, &c, static_cast<double>(arc.r), a0, a1);
+    if (e != nullptr) {
+      e->extrusion.x = ext.x;
+      e->extrusion.y = ext.y;
+      e->extrusion.z = ext.z;
+      const EntityAttributes* aa = AttrAt(st.userArcAttrs, i);
+      apply(e->parent, aa);
+      regEnt(e, aa);
+    }
+  }
+  // REQ-325 / ADR-053 increment 4 — DWG mirror of DxfIo.cpp's split-on-export.
+  // A polyline containing a tilted curved segment is split: flat runs stay
+  // LWPOLYLINE, each tilted curved edge becomes its own ARC carrying the
+  // segment's own plane (IsFlatNormal guard, BulgeArc + BuildTilted...).
+  // Closure is not preserved through a split (ADR-053 (e)), same as DXF.
+  for (size_t i = 0; i + 1 < st.userPolylineOffsets.size(); ++i) {
+    const int a = st.userPolylineOffsets[i];
+    const int b = st.userPolylineOffsets[i + 1];
+    const int nv = b - a;
+    if (nv < 2)
+      continue;
+    const EntityAttributes* atPtr = AttrAt(st.userPolylineAttrs, i);
+    const bool closed = i < st.userPolylineClosed.size() && st.userPolylineClosed[i] != 0;
+
+    auto emitPolylineRun = [&](int vStart, int vEndIncl, bool runClosed) {
+      if (vEndIncl - vStart < 1)
+        return;
+      const int runNv = vEndIncl - vStart + 1;
+      // REQ-057 / REQ-170, issue #603: a vertex whose Z differs from the run's first vertex makes
+      // this a genuinely 3D polyline — LWPOLYLINE carries only ONE elevation for the whole run, so
+      // writing it there would flatten every other vertex onto the first one's Z (TASK-034 debt).
+      // POLYLINE_3D + VERTEX_3D carries a real Z per vertex instead; it does not carry a bulge, so
+      // a curved 3D run's curve degrades to straight segments — same precedent as DxfIo's own
+      // genuinely-3D-polyline path.
+      const double z0 = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(vStart) * 3 + 2]);
+      bool is3d = false;
+      for (int v = 1; v < runNv; ++v) {
+        const int k = (vStart + v) * 3;
+        if (std::fabs(static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k) + 2]) - z0) > 1e-4) {
+          is3d = true;
+          break;
+        }
+      }
+      if (is3d) {
+        std::vector<dwg_point_3d> pts3(static_cast<size_t>(runNv));
+        for (int v = 0; v < runNv; ++v) {
+          const int k = (vStart + v) * 3;
+          pts3[static_cast<size_t>(v)].x =
+              static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k)]) + st.worldDocumentOriginX;
+          pts3[static_cast<size_t>(v)].y =
+              static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k + 1)]) + st.worldDocumentOriginY;
+          pts3[static_cast<size_t>(v)].z = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k + 2)]);
+        }
+        Dwg_Entity_POLYLINE_3D* pl = dwg_add_POLYLINE_3D(hdr, runNv, pts3.data());
+        if (pl != nullptr) {
+          if (runClosed)
+            pl->flag = static_cast<BITCODE_RC>(pl->flag | 1);  // FLAG_POLYLINE_CLOSED
+          apply(pl->parent, atPtr);
+        }
+        return;
+      }
+      std::vector<dwg_point_2d> pts(static_cast<size_t>(runNv));
+      for (int v = 0; v < runNv; ++v) {
+        const int k = (vStart + v) * 3;
+        pts[static_cast<size_t>(v)].x =
+            static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k)]) + st.worldDocumentOriginX;
+        pts[static_cast<size_t>(v)].y =
+            static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k + 1)]) + st.worldDocumentOriginY;
+      }
+      Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(hdr, runNv, pts.data());
+      if (lw == nullptr)
+        return;
+      if (z0 != 0.0) {
+        lw->elevation = z0;
+        lw->flag = static_cast<BITCODE_BS>(lw->flag | 8);  // elevation present (dwg.spec)
+      }
+      if (runClosed)
+        lw->flag = static_cast<BITCODE_BS>(lw->flag | 512);
+      bool anyBulge = false;
+      std::vector<double> bulges(static_cast<size_t>(runNv), 0.0);
+      for (int v = 0; v < runNv; ++v) {
+        const int vi = vStart + v;
+        const float b2 = static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
+                             ? st.userPolylineVertsBulge[static_cast<size_t>(vi)]
+                             : 0.f;
+        if (b2 == 0.f)
+          continue;
+        // A run's LAST vertex may be the split point that fed a tilted edge to
+        // emitSyntheticArc above (its own stored normal is still tilted) — its bulge describes
+        // the segment that got pulled out as that ARC, not a segment left inside this flat run.
+        // Writing it would tell a reader this run curves onward to a point that does not exist.
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+        const size_t nk = static_cast<size_t>(vi) * 3;
+        if (nk + 2 < st.userPolylineVertsNormal.size()) {
+          nx = st.userPolylineVertsNormal[nk];
+          ny = st.userPolylineVertsNormal[nk + 1];
+          nz = st.userPolylineVertsNormal[nk + 2];
+        }
+        if (v == runNv - 1 && !IsFlatNormal(nx, ny, nz))
+          continue;
+        bulges[static_cast<size_t>(v)] = static_cast<double>(b2);
+        anyBulge = true;
+      }
+      if (anyBulge) {
+        lw->num_bulges = static_cast<BITCODE_BL>(runNv);
+        lw->bulges = static_cast<BITCODE_BD*>(calloc(static_cast<size_t>(runNv), sizeof(BITCODE_BD)));
+        if (lw->bulges != nullptr) {
+          for (int v = 0; v < runNv; ++v)
+            lw->bulges[v] = bulges[static_cast<size_t>(v)];
+          lw->flag = static_cast<BITCODE_BS>(lw->flag | 16);
+        } else {
+          lw->num_bulges = 0;
+        }
+      }
+      apply(lw->parent, atPtr);
+      regEnt(lw, atPtr);
+    };
+
+    auto emitSyntheticArc = [&](const CadArc& arc) {
+      dwg_point_3d c{};
+      world(arc.cx, arc.cy, arc.z, &c);
+      const double a0 = static_cast<double>(arc.startRad);
+      const double a1 = a0 + static_cast<double>(arc.sweepRad);
+      const bool arcFlat = IsFlatNormal(arc.nx, arc.ny, arc.nz);
+      dwg_point_3d ext{0.0, 0.0, 1.0};
+      if (!arcFlat) {
+        ucs::Ucs frame;
+        if (ucs::FromNormal({0.0, 0.0, 0.0},
+                            {static_cast<double>(arc.nx), static_cast<double>(arc.ny),
+                             static_cast<double>(arc.nz)},
+                            &frame)) {
+          const ray3d::Vec3 ocs = ucs::WorldToUcs(frame, {c.x, c.y, c.z});
+          c.x = ocs.x;
+          c.y = ocs.y;
+          c.z = ocs.z;
+          ext.x = static_cast<double>(arc.nx);
+          ext.y = static_cast<double>(arc.ny);
+          ext.z = static_cast<double>(arc.nz);
+        }
+      }
+      Dwg_Entity_ARC* e = dwg_add_ARC(hdr, &c, static_cast<double>(arc.r), a0, a1);
+      if (e != nullptr) {
+        e->extrusion.x = ext.x;
+        e->extrusion.y = ext.y;
+        e->extrusion.z = ext.z;
+        apply(e->parent, atPtr);
+        regEnt(e, atPtr);
+      }
+    };
+
+    auto normalAt = [&](int vi, float* nx, float* ny, float* nz) {
+      const size_t k = static_cast<size_t>(vi) * 3;
+      if (k + 2 < st.userPolylineVertsNormal.size()) {
+        *nx = st.userPolylineVertsNormal[k];
+        *ny = st.userPolylineVertsNormal[k + 1];
+        *nz = st.userPolylineVertsNormal[k + 2];
+      } else {
+        *nx = 0.f;
+        *ny = 0.f;
+        *nz = 1.f;
+      }
+    };
+    auto bulgeAt = [&](int vi) -> float {
+      return static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
+                 ? st.userPolylineVertsBulge[static_cast<size_t>(vi)]
+                 : 0.f;
+    };
+    auto isTiltedEdge = [&](int vi) {
+      float nx = 0.f, ny = 0.f, nz = 1.f;
+      normalAt(vi, &nx, &ny, &nz);
+      return bulgeAt(vi) != 0.f && !IsFlatNormal(nx, ny, nz);
+    };
+
+    bool hasTilted = false;
+    for (int vi = a; vi + 1 < b; ++vi)
+      if (isTiltedEdge(vi)) {
+        hasTilted = true;
+        break;
+      }
+    if (closed && nv >= 2 && isTiltedEdge(b - 1))
+      hasTilted = true;
+
+    if (!hasTilted) {
+      emitPolylineRun(a, b - 1, closed);
+      continue;
+    }
+
+    int runStart = a;
+    for (int vi = a; vi + 1 < b; ++vi) {
+      if (!isTiltedEdge(vi))
+        continue;
+      emitPolylineRun(runStart, vi, false);
+      float nx = 0.f, ny = 0.f, nz = 1.f;
+      normalAt(vi, &nx, &ny, &nz);
+      const ray3d::Vec3 pA{st.userPolylineVerts[static_cast<size_t>(vi) * 3],
+                           st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 1],
+                           st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 2]};
+      const ray3d::Vec3 pB{st.userPolylineVerts[static_cast<size_t>((vi + 1)) * 3],
+                           st.userPolylineVerts[static_cast<size_t>((vi + 1)) * 3 + 1],
+                           st.userPolylineVerts[static_cast<size_t>((vi + 1)) * 3 + 2]};
+      CadArc arc{};
+      if (BuildTiltedPolylineSegmentArc(
+              pA, pB, static_cast<double>(bulgeAt(vi)),
+              ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)}, &arc))
+        emitSyntheticArc(arc);
+      runStart = vi + 1;
+    }
+    if (closed && nv >= 2 && isTiltedEdge(b - 1)) {
+      emitPolylineRun(runStart, b - 1, false);
+      float nx = 0.f, ny = 0.f, nz = 1.f;
+      normalAt(b - 1, &nx, &ny, &nz);
+      const ray3d::Vec3 pA{st.userPolylineVerts[static_cast<size_t>((b - 1)) * 3],
+                           st.userPolylineVerts[static_cast<size_t>((b - 1)) * 3 + 1],
+                           st.userPolylineVerts[static_cast<size_t>((b - 1)) * 3 + 2]};
+      const ray3d::Vec3 pB{st.userPolylineVerts[static_cast<size_t>(a) * 3],
+                           st.userPolylineVerts[static_cast<size_t>(a) * 3 + 1],
+                           st.userPolylineVerts[static_cast<size_t>(a) * 3 + 2]};
+      CadArc arc{};
+      if (BuildTiltedPolylineSegmentArc(
+              pA, pB, static_cast<double>(bulgeAt(b - 1)),
+              ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)}, &arc))
+        emitSyntheticArc(arc);
+    } else {
+      emitPolylineRun(runStart, b - 1, false);
+    }
+  }
+  // REQ-366, issue #607: DIMSTYLE is created lazily on the first dimension written below, named
+  // from the drawing's one active DimensionStyle (DimensionStyle.hpp: a single style today, not a
+  // per-dimension table — see EnsureDimStyleNamed's comment).
+  DimWriteState dimState;
+  int dimsWritten = 0;
+  for (size_t i = 0; i < st.cadAnnotations.size(); ++i) {
+    const CadAnnotation& an = st.cadAnnotations[i];
+    if (an.surveyPointLabelForId >= 0)
+      continue;
+    const double h = static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
+    const EntityAttributes* at = AttrAt(st.cadAnnotationAttrs, i);
+    const BITCODE_BL styleId = tw.StyleObjId(an.styleName);
+    if (CadAnnotationIsDimension(an)) {
+      WriteDimensionAnnotation(dwg, hdr, tw, st, an, at, st.worldDocumentOriginX, st.worldDocumentOriginY,
+                               r2018Write, annotCtx, dimState);
+      ++dimsWritten;
+      continue;
+    }
+    if (an.kind == CadAnnotation::Kind::Mtext) {
+      // REQ-044 / REQ-170, issue #604: insertion point is the box corner/edge the attachment
+      // selects — same convention DxfIo.cpp's MTEXT writer uses (group 71: col = (attach-1)%3,
+      // row = (attach-1)/3), so a GoSurvey DWG and its DXF sibling place the box identically.
+      const int attach = std::clamp(an.mtextAttach, 1, 9);
+      const int acol = (attach - 1) % 3;
+      const int arow = (attach - 1) / 3;
+      const float bMnX = std::min(an.boxMinX, an.boxMaxX), bMxX = std::max(an.boxMinX, an.boxMaxX);
+      const float bMnY = std::min(an.boxMinY, an.boxMaxY), bMxY = std::max(an.boxMinY, an.boxMaxY);
+      const float insXl = acol == 0 ? bMnX : acol == 1 ? 0.5f * (bMnX + bMxX) : bMxX;
+      const float insYl = arow == 0 ? bMxY : arow == 1 ? 0.5f * (bMnY + bMxY) : bMnY;
+      dwg_point_3d p{};
+      world(insXl, insYl, an.insZ, &p);
+      const double bw = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
+      const CadFieldContext fctx = CadFieldContextFromState(st);
+      const std::string fieldText = CadFieldTextForDwgExport(
+          st, an.text, fctx, fldCtx.enabled);
+      std::string wire;
+      for (char ch : MtextRichFlattenToPlain(SanitizeDwgTextSymbols(fieldText))) {
+        if (ch == '\n')
+          wire += "\\P";
+        else if (ch != '\r')
+          wire += ch;
+      }
+      Dwg_Entity_MTEXT* e = dwg_add_MTEXT(hdr, &p, bw, wire.c_str());
+      if (e != nullptr) {
+        e->text_height = h;
+        e->attachment = static_cast<BITCODE_BS>(attach);
+        const double rotRad = static_cast<double>(an.rotationRad);
+        e->x_axis_dir.x = std::cos(rotRad);
+        e->x_axis_dir.y = std::sin(rotRad);
+        e->x_axis_dir.z = 0.0;
+        if (r2018Write) {
+          if (an.annotative)
+            e->is_not_annotative = 0;
+          else
+            e->is_not_annotative = 1;
+          if (an.annotative && e->parent != nullptr)
+            WriteAnnotativeEntityEed(dwg, e->parent, &an.annotativeVisibleScaleNames);
+          if (an.annotative && e->parent != nullptr)
+            DwgExportAttachMtextAnnotationContext(&annotCtx, e->parent, e, an, st);
+        }
+        if (styleId != static_cast<BITCODE_BL>(-1))
+          e->style = tw.RefObjId(styleId);
+        apply(e->parent, at);
+        if (fldCtx.enabled && e->parent != nullptr && CadTextContainsFieldCodes(an.text)) {
+          const std::string nativeWire = DwgExportPrepareAnnotationFieldText(
+              &fldCtx, dwg, st, an.text, fctx, e->parent, blockOwnerHandle);
+          std::string nativeFlat;
+          for (char ch : MtextRichFlattenToPlain(SanitizeDwgTextSymbols(nativeWire))) {
+            if (ch == '\n')
+              nativeFlat += "\\P";
+            else if (ch != '\r')
+              nativeFlat += ch;
+          }
+          if (!nativeFlat.empty())
+            e->text = dwg_add_u8_input(dwg, nativeFlat.c_str());
+        }
+      }
+    } else if (an.kind == CadAnnotation::Kind::Text) {
+      dwg_point_3d p{};
+      world(an.insX, an.insY, an.insZ, &p);
+      const CadFieldContext fctxText = CadFieldContextFromState(st);
+      const std::string textOut =
+          CadFieldTextForDwgExport(st, an.text, fctxText, fldCtx.enabled);
+      Dwg_Entity_TEXT* e = dwg_add_TEXT(hdr, SanitizeDwgTextSymbols(textOut).c_str(), &p, h);
+      if (e != nullptr) {
+        e->rotation = static_cast<double>(an.rotationRad);
+        if (r2018Write && an.annotative && e->parent != nullptr)
+          WriteAnnotativeEntityEed(dwg, e->parent, &an.annotativeVisibleScaleNames);
+        if (annotCtx.enabled && an.annotative && e->parent != nullptr)
+          DwgExportAttachTextAnnotationContext(&annotCtx, e->parent, e, an, st);
+        if (styleId != static_cast<BITCODE_BL>(-1))
+          e->style = tw.RefObjId(styleId);
+        apply(e->parent, at);
+        if (fldCtx.enabled && e->parent != nullptr && CadTextContainsFieldCodes(an.text)) {
+          const std::string nativeText = DwgExportPrepareAnnotationFieldText(
+              &fldCtx, dwg, st, an.text, fctxText, e->parent, blockOwnerHandle);
+          if (!nativeText.empty())
+            e->text_value = dwg_add_u8_input(dwg, SanitizeDwgTextSymbols(nativeText).c_str());
+        }
+      }
+    }
+  }
+  if (dimsWritten > 0)
+    log.push_back("DWG export — " + std::to_string(dimsWritten) + " dimension(s) (REQ-366).");
+  // Position Markers (REQ-359 item 3, D-2026-09-29-e): other programs see a CIRCLE, a cross of two
+  // LINEs and the label MTEXT. GoSurvey reopens its own DWG from the trailer, so these never come
+  // back as duplicates.
+  for (size_t i = 0; i < st.cadPositionMarkers.size(); ++i) {
+    const CadPositionMarker& m = st.cadPositionMarkers[i];
+    const EntityAttributes* at = AttrAt(st.cadPositionMarkerAttrs, i);
+    const double r = static_cast<double>(PositionMarkerRadiusWorld(st));
+    dwg_point_3d c{};
+    c.x = m.x + st.worldDocumentOriginX;  // double all the way (REQ-101)
+    c.y = m.y + st.worldDocumentOriginY;
+    c.z = static_cast<double>(m.z);
+    if (Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(hdr, &c, r))
+      apply(e->parent, at);
+    for (int arm = 0; arm < 2; ++arm) {
+      dwg_point_3d a = c, b = c;
+      (arm == 0 ? a.x : a.y) -= r;
+      (arm == 0 ? b.x : b.y) += r;
+      if (Dwg_Entity_LINE* e = dwg_add_LINE(hdr, &a, &b))
+        apply(e->parent, at);
+    }
+    const CadAnnotation& an = m.label;
+    dwg_point_3d p{};
+    world(std::min(an.boxMinX, an.boxMaxX), std::max(an.boxMinY, an.boxMaxY), an.insZ, &p);  // top-left
+    std::string wire;
+    for (char ch : MtextRichFlattenToPlain(an.text)) {
+      if (ch == '\n')
+        wire += "\\P";
+      else if (ch != '\r')
+        wire += ch;
+    }
+    const double width = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
+    if (Dwg_Entity_MTEXT* e = dwg_add_MTEXT(hdr, &p, width, wire.c_str())) {
+      e->text_height = static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
+      e->attachment = 1;
+      apply(e->parent, at);
+    }
+  }
+  // REQ-367 / issue #619: R2010+ native MULTILEADER; older saves use LEADER + MTEXT fallback.
+  const bool nativeMultileaderExport = LibreDwgVersionFromExport(outputVersion) >= R_2010;
+  for (size_t i = 0; i < st.cadMultileaders.size(); ++i)
+    WriteMultileaderEntity(dwg, hdr, tw, st, st.cadMultileaders[i], AttrAt(st.cadMultileaderAttrs, i),
+                           st.worldDocumentOriginX, st.worldDocumentOriginY, r2018Write, nativeMultileaderExport,
+                           st.modelUnitsPerPlottedInch, annotCtx);
+  // REQ-107, issue #606: real BLOCK/INSERT/ATTRIB records, so a GoSurvey DWG shows blocks (incl.
+  // pipe-fitting parts) as real, re-insertable blocks in AutoCAD/Civil 3D instead of nothing at
+  // all. Definitions are written FIRST and in full before any INSERT, since dwg_add_INSERT looks
+  // its target block up by name (must already be in the BLOCK table).
+  std::unordered_map<std::string, const CadBlockDefinition*> blockDefByName;
+  std::unordered_map<std::string, Dwg_Object_BLOCK_HEADER*> blockHdrByName;
+  for (const CadBlockDefinition& def : st.blockDefs) {
+    if (def.name.empty())
+      continue;
+    Dwg_Object_BLOCK_HEADER* bh = dwg_add_BLOCK_HEADER(dwg, def.name.c_str());
+    if (bh == nullptr)
+      continue;
+    if (def.dynamicAnonymous)
+      bh->anonymous = 1;
+    dwg_add_BLOCK(bh, def.name.c_str());
+    WriteBlockDefinitionGeometry(bh, def.content, tw);
+    for (const CadBlockAttrDef& ad : def.attrDefs) {
+      if (ad.tag.empty())
+        continue;
+      dwg_point_3d ap{static_cast<double>(ad.localX), static_cast<double>(ad.localY),
+                      static_cast<double>(ad.localZ)};
+      dwg_add_ATTDEF(bh, std::max(static_cast<double>(ad.height), 1e-3), 0,
+                     ad.prompt.empty() ? ad.tag.c_str() : ad.prompt.c_str(), &ap, ad.tag.c_str(),
+                     ad.defaultValue.c_str());
+    }
+    blockDefByName[def.name] = &def;
+    blockHdrByName[def.name] = bh;
+  }
+  // Nested INSERTs need every BLOCK table entry to exist first (LibreDWG dwg_add_INSERT resolves
+  // by name via dwg_find_tablehandle), and must be created before ENDBLK so import walks owned
+  // entities correctly.
+  for (const CadBlockDefinition& def : st.blockDefs) {
+    const auto hdrIt = blockHdrByName.find(def.name);
+    if (hdrIt == blockHdrByName.end())
+      continue;
+    WriteBlockDefinitionNestedInserts(hdrIt->second, def.content, tw);
+  }
+  for (const auto& kv : blockHdrByName)
+    dwg_add_ENDBLK(kv.second);
+  if (DwgSaveVersionUsesR2004Features(outputVersion)) {
+    for (const CadBlockDefinition& def : st.blockDefs) {
+      const auto hdrIt = blockHdrByName.find(def.name);
+      if (hdrIt != blockHdrByName.end())
+        WriteGoSurveyDynamicBlockObjects(dwg, hdrIt->second, def, &st.cadBlockRefs, log);
+    }
+  }
+  for (size_t i = 0; i < st.cadBlockRefs.size(); ++i) {
+    const CadBlockRef& ref = st.cadBlockRefs[i];
+    if (blockDefByName.find(ref.defName) == blockDefByName.end())
+      continue;  // definition missing or failed to write; REQ-201 covered by the #614 loss summary
+    WriteBlockRefInsertToHeader(hdr, tw, st, ref, AttrAt(st.cadBlockRefAttrs, i), st.worldDocumentOriginX,
+                                st.worldDocumentOriginY, &fldCtx);
+  }
+  // Ordinary DWG blocks carry point identity while their marker geometry follows the drawing's
+  // style. Write them after symbol definitions, which styled markers can reference as nested INSERTs.
+  if (!st.surveyPoints.empty() && !ProjectOwnsActiveTabPoints(st)) {
+    std::unordered_map<std::string, uint64_t> pointBlocks;
+    for (const SurveyPoint& point : st.surveyPoints) {
+      const auto* style = FindSurveyPointStyle(st.surveyPointStyles, point.styleName);
+      const bool styled = style != nullptr && style->hasExplicitMarkerGeometry;
+      const std::size_t index = styled ? static_cast<std::size_t>(style - st.surveyPointStyles.data()) : 0;
+      const std::string blockName = styled ? std::string(kSurveyPointBlockName) + "$" + std::to_string(index)
+                                           : kSurveyPointBlockName;
+      const double radius = styled ? (style->markerSizeType == 2 ? style->markerSize * .5 :
+          style->crossSpanPlottedInches * st.modelUnitsPerPlottedInch * .5) : PositionMarkerRadiusWorld(st);
+      auto block = pointBlocks.find(blockName);
+      if (block == pointBlocks.end()) {
+        auto* header = styled ? EnsureStyledSurveyPointBlockDef(dwg, st, blockName, *style, radius)
+                              : EnsureSurveyPointBlockDef(dwg, radius);
+        if (header == nullptr) continue;
+        const auto reference = dwg_find_tablehandle(dwg, blockName.c_str(), "BLOCK");
+        if (reference == nullptr) continue;
+        block = pointBlocks.emplace(blockName, reference->absolute_ref).first;
+      }
+      dwg_point_3d position{point.easting + st.worldDocumentOriginX,
+                            point.northing + st.worldDocumentOriginY, point.elevation};
+      if (styled && style->markerDisplay3dType == 1) position.z = style->markerElevation;
+      if (styled && style->markerDisplay3dType == 2) position.z *= style->markerScaleFactor;
+      auto* insert = dwg_add_INSERT(hdr, &position, blockName.c_str(), 1, 1, 1,
+                                    styled ? style->markerRotationRad : 0);
+      if (insert == nullptr) continue;
+      const BITCODE_BL id = insert->parent->objid;
+      // Entity additions can relocate dwg->object. Re-resolve by stable object index every time.
+      auto resolve = [&]() { return dwg->object[id].tio.entity->tio.INSERT; };
+      const bool labelsVisible = SurveyPointLabelVisible(point, st.surveyPointStyles) &&
+                                SurveyPointNamedLabelVisible(point, st.surveyPointLabelStyles);
+      const double textHeight = std::max(radius * .8, 1.e-6);
+      if (auto* attr = dwg_add_ATTRIB(resolve(), textHeight, labelsVisible ? 0 : 1,
+                                     &position, "NUMBER", std::to_string(point.id).c_str()))
+        attr->flags = labelsVisible ? 0 : 1;
+      if (auto* attr = dwg_add_ATTRIB(resolve(), textHeight, labelsVisible ? 0 : 1, &position, "DESCRIPTION",
+          point.description.empty() ? point.rawDescription.c_str() : point.description.c_str()))
+        attr->flags = labelsVisible ? 0 : 1;
+      // LibreDWG's ATTRIB helper overwrites block_header with the owner space. Restore the marker.
+      resolve()->block_header = dwg_add_handleref(dwg, 5, block->second, nullptr);
+      EntityAttributes attrs;
+      attrs.layer = point.layer;
+      if (styled) {
+        const auto& component = style->displayComponents[0];
+        if (!component.layer.empty() && component.layer != "0") attrs.layer = component.layer;
+        attrs.color = style->color;
+        attrs.linetype = component.linetype;
+      }
+      apply(resolve()->parent, &attrs);
+      if (styled) resolve()->parent->ltype_scale = style->displayComponents[0].linetypeScale;
+    }
+  }
+  // REQ-057 / D-2026-10-01-a, issue #603: survey feature lines, written as POLYLINE_3D (a real Z
+  // per vertex — these almost always have varying elevation, which is the whole point of a
+  // feature line) with their name/description preserved for a future GoSurvey-aware reader via
+  // GOSURVEY-appid XDATA (the user's choice; plain-polyline-only was the alternative). No bulge
+  // support — a feature line has none today (st.featureLineVerts carries no bulge array).
+  for (size_t i = 0; i + 1 < st.featureLineOffsets.size(); ++i) {
+    const int a = st.featureLineOffsets[i];
+    const int b = st.featureLineOffsets[i + 1];
+    const int nv = b - a;
+    if (nv < 2)
+      continue;
+    std::vector<dwg_point_3d> pts3(static_cast<size_t>(nv));
+    for (int v = 0; v < nv; ++v) {
+      const size_t k = static_cast<size_t>(a + v) * 3;
+      pts3[static_cast<size_t>(v)].x = st.featureLineVerts[k] + st.worldDocumentOriginX;
+      pts3[static_cast<size_t>(v)].y = st.featureLineVerts[k + 1] + st.worldDocumentOriginY;
+      pts3[static_cast<size_t>(v)].z = st.featureLineVerts[k + 2];
+    }
+    Dwg_Entity_POLYLINE_3D* pl = dwg_add_POLYLINE_3D(hdr, nv, pts3.data());
+    if (pl == nullptr)
+      continue;
+    if (i < st.featureLineClosed.size() && st.featureLineClosed[i] != 0)
+      pl->flag = static_cast<BITCODE_RC>(pl->flag | 1);  // FLAG_POLYLINE_CLOSED
+    apply(pl->parent, AttrAt(st.featureLineAttrs, i));
+    if (i < st.featureLineInfo.size()) {
+      const CadFeatureLineInfo& info = st.featureLineInfo[i];
+      if (!info.name.empty() || !info.description.empty())
+        AppendGosurveyStringEed(dwg, pl->parent, {info.name, info.description});
+    }
+  }
+  // REQ-496.2 / issue #121: an alignment is exported as ORDINARY AutoCAD LINE and ARC entities (and one LWPOLYLINE
+  // per spiral) on its layer, tagged with its name in GOSURVEY XDATA, so any DWG reader draws it without Recover.
+  // GoSurvey's own reopen prefers the lossless ADR-044 trailer; without it (a drawing AutoCAD saved) the tagged
+  // entities are re-read as a REQ-485 conversion (ImportTaggedAlignments), starting where the first one says.
+  for (const alignment::Alignment& al : st.alignments) {
+    EntityAttributes alAttrs{};
+    alAttrs.layer = al.layer;
+    if (!al.layer.empty() && !EnsureExportLayer(tw, al.layer)) alAttrs.layer.clear();  // then on "0"
+    for (size_t ei = 0; ei < al.Entities().size(); ++ei) {
+      const alignment::Entity& ae = al.Entities()[ei];
+      Dwg_Object_Entity* parent = nullptr;
+      const double ox = st.worldDocumentOriginX, oy = st.worldDocumentOriginY;
+      std::vector<std::string> tag{"ALIGNMENT", al.name};
+      if (ei == 0) {
+        tag.push_back("START");
+        tag.push_back(AlignmentStartTag(ae.start.x + ox, ae.start.y + oy, al.startingStation));
+      }
+      if (ae.kind == alignment::EntityKind::Line) {
+        const alignment::Point2 e = al.GetPointAtStation(al.EntityEndStation(static_cast<int>(ei)));
+        dwg_point_3d a{ae.start.x + ox, ae.start.y + oy, 0.0};
+        dwg_point_3d b{e.x + ox, e.y + oy, 0.0};
+        if (Dwg_Entity_LINE* ln = dwg_add_LINE(hdr, &a, &b)) parent = ln->parent;
+      } else if (ae.kind == alignment::EntityKind::Arc) {
+        alignment::CurveData cd;
+        if (!al.CurveDataFor(static_cast<int>(ei), &cd)) continue;
+        const double aStart = std::atan2(ae.start.y - cd.center.y, ae.start.x - cd.center.x);
+        const double aEnd = std::atan2(cd.pt.y - cd.center.y, cd.pt.x - cd.center.x);
+        dwg_point_3d c{cd.center.x + ox, cd.center.y + oy, 0.0};
+        // A DWG ARC always runs counter-clockwise; a right (clockwise) alignment curve runs end -> start.
+        if (Dwg_Entity_ARC* ar = dwg_add_ARC(hdr, &c, ae.radius, ae.right ? aEnd : aStart, ae.right ? aStart : aEnd))
+          parent = ar->parent;
+      } else {
+        const std::vector<dwg_point_2d> pts = SpiralPolylinePoints(al, static_cast<int>(ei), ox, oy);
+        if (Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(hdr, static_cast<int>(pts.size()), pts.data()))
+          parent = lw->parent;
+      }
+      if (parent == nullptr) continue;
+      apply(parent, &alAttrs);
+      (void)AppendGosurveyStringEed(dwg, parent, tag);  // the entity stands without its tag; only a re-read loses it
+    }
+  }
+  for (size_t i = 0; i < st.userEllipses.size(); ++i) {
+    const CadEllipse& el = st.userEllipses[i];
+    dwg_point_3d c{};
+    world(el.cx, el.cy, el.z, &c);
+    const double majLen =
+        std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    if (majLen < 1e-12)
+      continue;
+    double ratio = static_cast<double>(el.ratio);
+    if (ratio <= 0.0 || ratio > 1.0)
+      ratio = 1.0;
+    Dwg_Entity_ELLIPSE* e = dwg_add_ELLIPSE(hdr, &c, majLen, ratio);
+    if (e == nullptr)
+      continue;
+    apply(e->parent, AttrAt(st.userEllAttrs, i));
+    e->sm_axis.x = static_cast<double>(el.majVx);
+    e->sm_axis.y = static_cast<double>(el.majVy);
+    e->sm_axis.z = 0.0;
+    e->axis_ratio = ratio;
+    e->start_angle = 0.0;
+    e->end_angle = 2.0 * kPi;
+  }
+  // REQ-443 / #803: model-space splines in world coordinates (document origin shift).
+  WriteSplineEntities(tw, hdr, st.cadSplines, st.cadSplineAttrs, world);
+  // REQ-170 / issue #608: filled regions → HATCH (solid or predefined pattern). Boundary loops are
+  // built from temporary invisible LWPOLYLINE scaffolds that LibreDWG's dwg_add_HATCH copies into
+  // the hatch path (non-associative).
+  size_t nHatchOut = 0;
+  for (size_t fi = 0; fi < st.cadFilledRegions.size(); ++fi) {
+    if (WriteFilledRegionHatch(dwg, hdr, tw, st, st.cadFilledRegions[fi],
+                               fi < st.cadFilledRegionAttrs.size() ? &st.cadFilledRegionAttrs[fi] : nullptr,
+                               st.worldDocumentOriginX, st.worldDocumentOriginY, r2018Write, annotCtx))
+      ++nHatchOut;
+  }
+  if (nHatchOut > 0)
+    log.push_back("CAD export — wrote " + std::to_string(nHatchOut) + " HATCH(es) (REQ-170, issue #608).");
+
+  size_t nMeshOut = 0;
+  unsigned pfaceExports = 0;  // LibreDWG: one POLYLINE_PFACE per block (issue #663)
+  for (size_t mi = 0; mi < st.cadMeshes.size(); ++mi) {
+    const std::shared_ptr<const CadMesh>& mp = st.cadMeshes[mi];
+    if (mp == nullptr)
+      continue;
+    const EntityAttributes* at = mi < st.cadMeshAttrs.size() ? &st.cadMeshAttrs[mi] : nullptr;
+    const bool asPface = pfaceExports == 0;
+    if (dwg_mesh_export::WriteCadMesh(st, *mp, hdr, &tw, at, dwg, &matCtx, asPface)) {
+      ++nMeshOut;
+      if (asPface)
+        ++pfaceExports;
+    }
+  }
+  size_t nTinOut = 0;
+  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+    const EntityAttributes* at = si < st.cadSurfaceAttrs.size() ? &st.cadSurfaceAttrs[si] : nullptr;
+    const bool asPface = pfaceExports == 0;
+    if (dwg_mesh_export::WriteCadSurfaceTin(st, st.cadSurfaces[si], hdr, &tw, at, dwg, &matCtx, asPface)) {
+      ++nTinOut;
+      if (asPface)
+        ++pfaceExports;
+    }
+  }
+  if (nMeshOut + nTinOut > 0)
+    log.push_back("CAD export — wrote " + std::to_string(nMeshOut + nTinOut) +
+                  " POLYLINE_PFACE mesh(es) (issue #611).");
+
+  size_t nSolidOut = 0;
+  for (size_t si = 0; si < st.cadSolids.size(); ++si) {
+    const CadSolidPtr& sp = st.cadSolids[si];
+    if (sp == nullptr)
+      continue;
+    const EntityAttributes* at =
+        si < st.cadSolidAttrs.size() ? &st.cadSolidAttrs[si] : nullptr;
+    if (dwg_solid_export::WriteSolidEntity(st, *sp, hdr, &tw, at, dwg, &matCtx))
+      ++nSolidOut;
+  }
+  size_t nPipeSolidOut = 0;
+  for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
+    const EntityAttributes* at =
+        ri < st.cadPipeRunAttrs.size() ? &st.cadPipeRunAttrs[ri] : nullptr;
+    if (dwg_solid_export::WritePipeRunEntity(st, st.cadPipeRuns[ri], hdr, &tw, at, dwg, &matCtx))
+      ++nPipeSolidOut;
+  }
+  if (nSolidOut + nPipeSolidOut > 0)
+    log.push_back("CAD export — wrote " + std::to_string(nSolidOut + nPipeSolidOut) +
+                  " 3DSOLID(s) (ACIS, issue #612).");
+
+  size_t nTableOut = 0;
+  for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
+    const EntityAttributes* at = ti < st.cadTableAttrs.size() ? &st.cadTableAttrs[ti] : nullptr;
+    if (dwg_table_export::WriteCadTable(st, st.cadTables[ti], hdr, tw, at, &fldCtx, blockOwnerHandle,
+                                       st.worldDocumentOriginX, st.worldDocumentOriginY,
+                                       st.modelUnitsPerPlottedInch))
+      ++nTableOut;
+  }
+  if (nTableOut > 0)
+    log.push_back("CAD export — wrote " + std::to_string(nTableOut) +
+                  " table(s) as grid geometry (issue #616).");
+
+  size_t nPcOut = 0;
+  for (size_t pi = 0; pi < st.cadPointClouds.size(); ++pi) {
+    const std::shared_ptr<const CadPointCloud>& pc = st.cadPointClouds[pi];
+    if (pc == nullptr)
+      continue;
+    const EntityAttributes* at = pi < st.cadPointCloudAttrs.size() ? &st.cadPointCloudAttrs[pi] : nullptr;
+    if (dwg_pointcloud_export::WritePointCloudMarker(st, *pc, hdr, tw, at))
+      ++nPcOut;
+  }
+  if (nPcOut > 0)
+    log.push_back("CAD export — wrote " + std::to_string(nPcOut) +
+                  " point-cloud extent box(es) with scan path in XDATA (issue #621).");
+
+  DwgExportImportedLightsAndSun(st, dwg, static_cast<void*>(hdr), log);
+
+  FillPaperLayoutsFromState(st, dwg, tw, log, &fldCtx, &vsCtx, outputVersion, asDxf);
+  DwgExportSetModelVisualStyle(dwg, &vsCtx, st.viewportVisualStyle);
+
+  DwgExportFinalizeFieldObjects(&fldCtx, dwg, log);
+  DwgExportMaterialAppendLog(matCtx, log);
+  DwgExportAnnotContextAppendLog(annotCtx, log);
+
+  // REQ-170 / REQ-201, issue #614: every drop and degradation, named and counted, from the ONE
+  // scan the pre-export warning dialog also reads — so the log and the dialog cannot disagree, and
+  // nothing is silently dropped.
+  for (const DwgExportLoss& loss : ComputeDwgExportLossesImpl(st))
+    log.push_back("CAD export — drops " + std::to_string(loss.count) + " " + loss.label + ".");
+  (void)dwg;
+}
+
+std::string TrimAscii(const std::string& s) {
+  size_t a = 0;
+  while (a < s.size() && (s[a] == ' ' || s[a] == '\t' || s[a] == '\r'))
+    ++a;
+  size_t b = s.size();
+  while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t' || s[b - 1] == '\r'))
+    --b;
+  return s.substr(a, b - a);
+}
+
+void BumpExportedDxfHandseed(const char* pathUtf8) {
+  std::ifstream in(pathUtf8, std::ios::binary);
+  if (!in)
+    return;
+  std::vector<std::string> lines;
+  std::string line;
+  while (std::getline(in, line))
+    lines.push_back(line);
+  in.close();
+  if (lines.size() < 2)
+    return;
+
+  unsigned long long maxH = 0;
+  size_t seedValueIdx = static_cast<size_t>(-1);
+  std::string lastVar;
+  for (size_t i = 0; i + 1 < lines.size(); i += 1) {
+    const std::string code = TrimAscii(lines[i]);
+    const std::string value = TrimAscii(lines[i + 1]);
+    if (code == "9")
+      lastVar = value;
+    if (code == "40" &&
+        (lastVar == "$TDCREATE" || lastVar == "$TDUPDATE" || lastVar == "$TDUCREATE" ||
+         lastVar == "$TDUUPDATE" || lastVar == "$TDINDWG" || lastVar == "$TDUSRTIMER")) {
+      const bool crlf = !lines[i + 1].empty() && lines[i + 1].back() == '\r';
+      lines[i + 1] = std::string("0.000000000");
+      if (crlf)
+        lines[i + 1] += '\r';
+    }
+    if (code == "5") {
+      if (lastVar == "$HANDSEED" && seedValueIdx == static_cast<size_t>(-1)) {
+        seedValueIdx = i + 1;
+        lastVar.clear();
+      } else {
+        const unsigned long long h = std::strtoull(value.c_str(), nullptr, 16);
+        if (h > maxH)
+          maxH = h;
+      }
+    }
+  }
+  if (seedValueIdx >= lines.size() || maxH == 0)
+    return;
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%llX", static_cast<unsigned long long>(maxH + 1));
+  std::string& seedLine = lines[seedValueIdx];
+  const bool crlf = !seedLine.empty() && seedLine.back() == '\r';
+  seedLine = std::string(buf);
+  if (crlf)
+    seedLine += '\r';
+
+  std::ofstream out(pathUtf8, std::ios::binary | std::ios::trunc);
+  if (!out)
+    return;
+  for (size_t i = 0; i < lines.size(); ++i) {
+    out << lines[i];
+    out.put('\n');
+  }
+}
+
+// LibreDWG does not write the HEADER's $CTAB (current layout tab). Insert it before $CLAYER, or replace
+// an existing value, so a DXF round trip restores the active layout (REQ-113 acceptance 15).
+void SetExportedDxfCurrentTab(const char* pathUtf8, const std::string& tabName) {
+  std::ifstream in(pathUtf8, std::ios::binary);
+  if (!in)
+    return;
+  std::vector<std::string> lines;
+  std::string line;
+  while (std::getline(in, line))
+    lines.push_back(line);
+  in.close();
+  const std::string eol = (!lines.empty() && !lines[0].empty() && lines[0].back() == '\r') ? "\r" : "";
+  size_t clayerAt = static_cast<size_t>(-1);
+  bool replaced = false;
+  for (size_t i = 0; i + 1 < lines.size(); ++i) {
+    if (TrimAscii(lines[i]) != "9")
+      continue;
+    const std::string var = TrimAscii(lines[i + 1]);
+    if (var == "$CTAB") {
+      for (size_t k = i + 2; k + 1 < lines.size() && TrimAscii(lines[k]) != "9"; k += 2)
+        if (TrimAscii(lines[k]) == "1") {
+          lines[k + 1] = tabName + eol;
+          replaced = true;
+          break;
+        }
+      break;
+    }
+    if (var == "$CLAYER" && clayerAt == static_cast<size_t>(-1))
+      clayerAt = i;
+  }
+  if (!replaced) {
+    if (clayerAt == static_cast<size_t>(-1))
+      return;
+    lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(clayerAt),
+                 {std::string("  9") + eol, std::string("$CTAB") + eol, std::string("  1") + eol, tabName + eol});
+  }
+  std::ofstream out(pathUtf8, std::ios::binary | std::ios::trunc);
+  if (!out)
+    return;
+  for (const std::string& l : lines)
+    out << l << '\n';
+}
+
+bool WriteDxfFile(const char* pathUtf8, Dwg_Data* dwg, const std::string& currentTab,
+                  std::vector<std::string>& log) {
+  // dwg_write_dxf walks BLOCK_HEADER.first_entity. A drawing built only with
+  // dwg_add_* often encodes to DWG correctly but has an empty DXF ENTITIES
+  // section until it is read back.
+  const std::filesystem::path tmp = std::string(pathUtf8) + ".gosurvey-tmp.dwg";
+  std::error_code ec;
+  std::filesystem::remove(tmp, ec);
+  if (dwg_write_file(tmp.string().c_str(), dwg) != DWG_NOERR) {
+    log.push_back("DXF export — LibreDWG could not encode an intermediate DWG.");
+    std::filesystem::remove(tmp, ec);
+    return false;
+  }
+  Dwg_Data loaded;
+  std::memset(&loaded, 0, sizeof(loaded));
+  const int rd = dwg_read_file(tmp.string().c_str(), &loaded);
+  std::filesystem::remove(tmp, ec);
+  if (rd >= DWG_ERR_CRITICAL) {
+    log.push_back("DXF export — LibreDWG could not re-read the intermediate DWG.");
+    dwg_free(&loaded);
+    return false;
+  }
+
+  Bit_Chain dat;
+  std::memset(&dat, 0, sizeof(dat));
+  dat.version = loaded.header.version;
+  dat.from_version = loaded.header.from_version;
+#if defined(_MSC_VER)
+  if (fopen_s(&dat.fh, pathUtf8, "wb") != 0 || dat.fh == nullptr) {
+#else
+  dat.fh = std::fopen(pathUtf8, "wb");
+  if (dat.fh == nullptr) {
+#endif
+    log.push_back("DXF export failed: could not create " + std::string(pathUtf8) + ".");
+    dwg_free(&loaded);
+    return false;
+  }
+  const int err = dwg_write_dxf(&dat, &loaded);
+  std::fclose(dat.fh);
+  if (dat.chain != nullptr)
+    std::free(dat.chain);
+  dwg_free(&loaded);
+  if (err >= DWG_ERR_CRITICAL) {
+    log.push_back("DXF export — LibreDWG encode failed.");
+    std::filesystem::remove(pathUtf8, ec);
+    return false;
+  }
+  BumpExportedDxfHandseed(pathUtf8);
+  SetExportedDxfCurrentTab(pathUtf8, currentTab);
+  return true;
+}
+
+bool WriteDwgFile(const char* pathUtf8, Dwg_Data* dwg, std::vector<std::string>& log) {
+  if (pathUtf8 == nullptr || pathUtf8[0] == '\0')
+    return false;
+  const std::filesystem::path dst = std::filesystem::u8path(pathUtf8);
+  const std::filesystem::path tmp =
+      std::filesystem::path(dst.u8string() + u8".gosurvey-tmp.dwg");
+  std::error_code ec;
+  std::filesystem::remove(tmp, ec);
+  const std::string tmpUtf8 = tmp.u8string();
+  const int err = dwg_write_file(tmpUtf8.c_str(), dwg);
+  if (err != DWG_NOERR) {
+    log.push_back("DWG export — LibreDWG encode failed.");
+    std::filesystem::remove(tmp, ec);
+    return false;
+  }
+  std::filesystem::rename(tmp, dst, ec);
+  if (ec) {
+    std::filesystem::copy_file(tmp, dst, std::filesystem::copy_options::overwrite_existing, ec);
+    std::filesystem::remove(tmp, ec);
+    if (ec) {
+      log.push_back(std::string("DWG export failed: could not write ") + pathUtf8 + ".");
+      return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+/// REQ-362: the drawing's GEODATA (the one hosted by model space, else the first), copied out for
+/// ApplyDwgGeoData. False when the file has none.
+static bool ReadDwgGeoData(Dwg_Data* dwg, DwgGeoData* out) {
+  const Dwg_Object* ms = dwg_model_space_object(dwg);
+  const BITCODE_RLL msHandle = ms != nullptr ? ms->handle.value : 0;
+  const Dwg_Object_GEODATA* found = nullptr;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_GEODATA || o->tio.object == nullptr || o->tio.object->tio.GEODATA == nullptr)
+      continue;
+    const Dwg_Object_GEODATA* g = o->tio.object->tio.GEODATA;
+    if (g == nullptr)
+      continue;
+    if (found == nullptr)
+      found = g;
+    if (g->host_block != nullptr && g->host_block->absolute_ref == msHandle) {
+      found = g;
+      break;
+    }
+  }
+  if (found == nullptr)
+    return false;
+  const Dwg_Object_GEODATA& g = *found;
+  out->designX = g.design_pt.x;
+  out->designY = g.design_pt.y;
+  out->reference = g.coord_type == 3   ? DwgGeoData::Reference::Geographic
+                   : g.coord_type == 2 ? DwgGeoData::Reference::ProjectedGrid
+                                       : DwgGeoData::Reference::None;
+  out->refX = g.ref_pt.x;
+  out->refY = g.ref_pt.y;
+  out->northX = g.north_dir.x;
+  out->northY = g.north_dir.y;
+  if (g.class_version <= 1) {
+    // The 2009 layout (R2000-R2007 files; REQ-362 item 3): the reference point is (latitude,
+    // longitude) and north is an angle in radians from +Y, with no north vector.
+    out->reference = DwgGeoData::Reference::Geographic;
+    out->refX = g.ref_pt.y;
+    out->refY = g.ref_pt.x;
+    out->northX = std::sin(g.north_dir_angle_deg);
+    out->northY = std::cos(g.north_dir_angle_deg);
+  }
+  out->scaleEstimation = static_cast<int>(g.scale_est);
+  out->userScaleFactor = g.user_scale_factor;
+  out->seaLevelCorrection = g.do_sea_level_corr != 0;
+  out->seaLevelElevation = g.sea_level_elev;
+  out->projectionRadius = g.coord_proj_radius;
+  out->coordinateSystemDefinition = FromT(dwg, g.coord_system_def);
+  return true;
+}
+
+// LibreDWG has no dwg_add_GEODATA (HAVE_NO_DWG_ADD_GEODATA). Its own NEW_OBJECT / API_ADD_OBJECT
+// macros (src/dwg_api.c) do what WriteDwgGeoData does, with these two library functions that dwg.h
+// does not declare (src/dwg.c, src/decode.c; both non-static).
+extern "C" void dwg_set_next_objhandle(Dwg_Object* obj);
+extern "C" void dwg_resolve_objectrefs_silent(Dwg_Data* dwg);
+
+/// REQ-362 item 2: \p g as a GEODATA on model space's extension dictionary (`ACAD_GEOGRAPHICDATA`),
+/// laid out as AutoCAD writes it in an R2000 file (REQ-362 item 3): the reference point stored as
+/// (latitude, longitude), north as an angle in radians from +Y in all three angle fields, and
+/// coordinate type 0. The encoder writes the class-version-1 layout at R2000 by itself.
+static bool WriteDwgGeoData(Dwg_Data* dwg, const DwgGeoData& g) {
+  // A new document's *Model_Space has no extension dictionary; never replace one that exists.
+  const Dwg_Object* msBefore = dwg_model_space_object(dwg);
+  if (msBefore == nullptr || (msBefore->tio.object->xdicobjhandle != nullptr &&
+                              msBefore->tio.object->xdicobjhandle->absolute_ref != 0))
+    return false;
+  // Returns the new class's number (500 and up), or -1.
+  const int classNumber = dwg_add_class(dwg, "GEODATA", "AcDbGeoData", "ObjectDBX Classes", false);
+  if (classNumber < 0)
+    return false;
+  const BITCODE_BL geoIndex = dwg->num_objects;
+  // 0, or -1 when dwg->object[] moved (then re-resolve, as NEW_OBJECT does), or DWG_ERR_OUTOFMEM.
+  const int added = dwg_add_object(dwg);
+  if (added > 0)
+    return false;
+  if (added < 0)
+    dwg_resolve_objectrefs_silent(dwg);
+  Dwg_Object* obj = &dwg->object[geoIndex];
+  obj->supertype = DWG_SUPERTYPE_OBJECT;
+  obj->type = static_cast<BITCODE_BS>(classNumber);
+  obj->fixedtype = DWG_TYPE_GEODATA;
+  // A new document has DWG_OPTS_IN set, so dwg_free frees both names (as for dwg_add_* objects).
+  obj->name = _strdup("GEODATA");
+  obj->dxfname = _strdup("GEODATA");
+  obj->tio.object = static_cast<Dwg_Object_Object*>(std::calloc(1, sizeof(Dwg_Object_Object)));
+  if (obj->tio.object == nullptr)
+    return false;
+  obj->tio.object->objid = obj->index;
+  obj->tio.object->dwg = dwg;
+  auto* geo = static_cast<Dwg_Object_GEODATA*>(std::calloc(1, sizeof(Dwg_Object_GEODATA)));
+  if (geo == nullptr)
+    return false;
+  obj->tio.object->tio.GEODATA = geo;
+  geo->parent = obj->tio.object;
+  dwg_set_next_objhandle(obj);
+  const BITCODE_HV geoHandle = obj->handle.value;
+
+  // The extension dictionary holding it: owned by *Model_Space, as AutoCAD does it.
+  Dwg_Object_DICTIONARY* dict = dwg_add_DICTIONARY(dwg, nullptr, "ACAD_GEOGRAPHICDATA", geoHandle);
+  int err = 0;
+  Dwg_Object* dictObj = dict != nullptr ? dwg_obj_generic_to_object(dict, &err) : nullptr;
+  Dwg_Object* ms = dwg_model_space_object(dwg);
+  if (dictObj == nullptr || err != 0 || ms == nullptr)
+    return false;
+  const BITCODE_HV dictHandle = dictObj->handle.value;
+  const BITCODE_HV msHandle = ms->handle.value;
+  // Owner plus one reactor pointing at it — the links AutoCAD writes on both objects.
+  auto ownBy = [dwg](Dwg_Object_Object* o, BITCODE_HV owner) {
+    o->ownerhandle = dwg_add_handleref(dwg, 4, owner, nullptr);
+    o->num_reactors = 1;
+    o->reactors = static_cast<BITCODE_H*>(std::calloc(1, sizeof(BITCODE_H)));
+    if (o->reactors != nullptr)
+      o->reactors[0] = dwg_add_handleref(dwg, 4, owner, nullptr);
+    else
+      o->num_reactors = 0;
+  };
+  ownBy(dictObj->tio.object, msHandle);
+  ms->tio.object->xdicobjhandle = dwg_add_handleref(dwg, 3, dictHandle, nullptr);
+
+  obj = &dwg->object[geoIndex];  // dwg->object[] may have moved while the dictionary was added
+  ownBy(obj->tio.object, dictHandle);
+  obj->tio.object->xdicobjhandle = dwg_add_handleref(dwg, 3, 0, nullptr);
+
+  geo = obj->tio.object->tio.GEODATA;
+  const double northRad = std::atan2(g.northX, g.northY);  // from +Y towards +X
+  geo->host_block = dwg_add_handleref(dwg, 4, msHandle, nullptr);
+  const bool geodataV2 = dwg->header.version >= R_2010;
+  geo->class_version = geodataV2 ? 2 : 1;
+  if (geodataV2) {
+    geo->coord_type = g.reference == DwgGeoData::Reference::Geographic
+                          ? static_cast<BITCODE_BS>(3)
+                          : g.reference == DwgGeoData::Reference::ProjectedGrid
+                                ? static_cast<BITCODE_BS>(2)
+                                : static_cast<BITCODE_BS>(1);
+    geo->ref_pt = {g.refX, g.refY, 0.0};
+  } else {
+    geo->coord_type = 0;
+    geo->ref_pt = {g.refY, g.refX, 0.0};  // (latitude, longitude), 2009 layout
+  }
+  geo->design_pt = {g.designX, g.designY, 0.0};
+  geo->obs_pt = {0.0, 0.0, 0.0};
+  geo->up_dir = {0.0, 0.0, 1.0};
+  geo->north_dir = {g.northX, g.northY};
+  geo->north_dir_angle_deg = northRad;
+  geo->north_dir_angle_rad = northRad;
+  geo->scale_vec = {1.0, 1.0, 1.0};
+  geo->units_value_horiz = static_cast<BITCODE_BL>(g.horizontalUnits);
+  geo->unit_scale_horiz = g.horizontalUnitScale;
+  geo->units_value_vert = static_cast<BITCODE_BL>(g.horizontalUnits);
+  geo->unit_scale_vert = g.horizontalUnitScale;
+  geo->scale_est = static_cast<BITCODE_BL>(g.scaleEstimation);
+  geo->user_scale_factor = g.userScaleFactor;
+  geo->do_sea_level_corr = g.seaLevelCorrection ? 1 : 0;
+  geo->sea_level_elev = g.seaLevelElevation;
+  geo->coord_proj_radius = g.projectionRadius;
+  geo->coord_system_def = dwg_add_u8_input(dwg, g.coordinateSystemDefinition.c_str());
+  geo->geo_rss_tag = dwg_add_u8_input(dwg, "");
+  geo->coord_system_datum = dwg_add_u8_input(dwg, "");
+  geo->coord_system_wkt = dwg_add_u8_input(dwg, "");
+  geo->observation_from_tag = dwg_add_u8_input(dwg, "");
+  geo->observation_to_tag = dwg_add_u8_input(dwg, "");
+  geo->observation_coverage_tag = dwg_add_u8_input(dwg, "");
+  geo->has_civil_data = 1;
+  return true;
+}
+
+void ImportAnnotationScales(AppCommandState& st, Dwg_Data* dwg) {
+  st.annotationScales.clear();
+  if (dwg == nullptr)
+    return;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_SCALE || o->tio.object == nullptr || o->tio.object->tio.SCALE == nullptr)
+      continue;
+    const Dwg_Object_SCALE* sc = o->tio.object->tio.SCALE;
+    if (sc->flag != 0)
+      continue;  // skip temporary scales
+    CadAnnotationScale entry;
+    entry.name = LayoutNameFromT(dwg, sc->name);
+    if (entry.name.rfind(kViewportZoomScaleDwgPrefix, 0) == 0)
+      continue;
+    entry.paperUnits = static_cast<float>(sc->paper_units);
+    entry.drawingUnits = static_cast<float>(sc->drawing_units);
+    if (entry.name.empty() || entry.paperUnits <= 0.f || entry.drawingUnits <= 0.f)
+      continue;
+    st.annotationScales.push_back(std::move(entry));
+  }
+}
+
+void ImportViewportZoomScales(AppCommandState& st, Dwg_Data* dwg) {
+  st.viewportZoomScales.clear();
+  st.currentViewportZoomScaleIndex = -1;
+  if (dwg == nullptr)
+    return;
+  const std::size_t prefixLen = std::strlen(kViewportZoomScaleDwgPrefix);
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_SCALE || o->tio.object == nullptr || o->tio.object->tio.SCALE == nullptr)
+      continue;
+    const Dwg_Object_SCALE* sc = o->tio.object->tio.SCALE;
+    if (sc->flag != 0)
+      continue;
+    CadAnnotationScale entry;
+    entry.name = LayoutNameFromT(dwg, sc->name);
+    if (entry.name.rfind(kViewportZoomScaleDwgPrefix, 0) != 0)
+      continue;
+    entry.name = entry.name.substr(prefixLen);
+    entry.paperUnits = static_cast<float>(sc->paper_units);
+    entry.drawingUnits = static_cast<float>(sc->drawing_units);
+    if (entry.name.empty() || entry.paperUnits <= 0.f || entry.drawingUnits <= 0.f)
+      continue;
+    st.viewportZoomScales.push_back(std::move(entry));
+  }
+}
+
+bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log, bool asDxf) {
+  if (pathUtf8 == nullptr || pathUtf8[0] == '\0') {
+    log.push_back(asDxf ? "DXF import — no path." : "DWG import — no path.");
+    return false;
+  }
+  if (!asDxf) {
+    const std::string ver = DwgVersionName(pathUtf8);
+    if (ver.empty()) {
+      log.push_back("DWG import — file is not a DWG (no AC#### format tag).");
+      return false;
+    }
+    log.push_back("DWG import — LibreDWG (" + ver + ").");
+  } else {
+    log.push_back("DXF import — LibreDWG.");
+  }
+
+  Dwg_Data dwg;
+  if (!LoadDwgData(pathUtf8, asDxf, &dwg, log))
+    return false;
+  dwg_resolve_objectrefs_silent(&dwg);
+  const LegacyLeaderScaleContext legacyLeaderScale = ReadLegacyLeaderScaleContext(&dwg);
+  SavedModelViewport savedModelViewport;
+  const bool hasSavedModelViewport = !asDxf && ReadSavedModelViewport(&dwg, &savedModelViewport);
+  DwgMaterialImportBegin();
+  DwgAnnotContextImportBegin();
+  DwgLightImportBegin();
+
+  const double oldOx = st.worldDocumentOriginX;
+  const double oldOy = st.worldDocumentOriginY;
+  ResetCadToolStateToIdle(st);
+  ClearCadGeometry(st);
+  st.selectedSurveyPointIndices.clear();
+  const bool hadPts = !st.surveyPoints.empty();
+  if (hadPts) {
+    if (oldOx != 0.0 || oldOy != 0.0)
+      CadCoord::ShiftAllStorageBy(st, oldOx, oldOy);
+    for (SurveyPoint& p : st.surveyPoints)
+      p.labelMtextAnnId = 0;
+  }
+
+  if (CadDrawingInsUnitsOffered(static_cast<int>(dwg.header_vars.INSUNITS)))
+    st.drawingInsUnits = static_cast<int>(dwg.header_vars.INSUNITS);
+  // REQ-456 / issue #1010: point display travels with the drawing (PDMODE, PDSIZE).
+  st.pdMode = static_cast<int>(dwg.header_vars.PDMODE);
+  st.pdSize = dwg.header_vars.PDSIZE;
+  // Civil's drawing scale governs paper-sized markers and label/style measurements. Read it
+  // before converting native text/style sizes; the application default is not the source scale.
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const auto& object = dwg.object[i];
+    if (object.type < 500 || object.type - 500 >= dwg.num_classes ||
+        std::strcmp(dwg.dwg_class[object.type - 500].dxfname, "AEC_VARS_DWG_SETUP") != 0) continue;
+    if (const auto scale = libredwgcivil::DecodeDrawingScale(object.unknown_bits, object.num_unknown_bits)) {
+      st.modelUnitsPerPlottedInch = static_cast<float>(*scale);
+      log.push_back("Civil drawing scale decoded: " + std::to_string(*scale) + " model units per plotted inch.");
+      break;
+    }
+  }
+
+  const double minX = dwg.header_vars.EXTMIN.x;
+  const double minY = dwg.header_vars.EXTMIN.y;
+  const double maxX = dwg.header_vars.EXTMAX.x;
+  const double maxY = dwg.header_vars.EXTMAX.y;
+  const double span = std::max(std::fabs(maxX - minX), std::fabs(maxY - minY));
+  const double mag = std::max({std::fabs(minX), std::fabs(maxX), std::fabs(minY), std::fabs(maxY)});
+  if (span < 1e6 && mag >= CadCoord::kLargeCoordinateRebaseThreshold)
+    CadCoord::ApplyDocumentOriginRebase(st, 0.5 * (minX + maxX), 0.5 * (minY + maxY), &log);
+
+  ImportLayers(st, &dwg, log);
+  ImportStyles(st, &dwg);
+  std::unordered_map<std::string, int> skipHist;
+  int degenerateExtrusions = 0;
+  const auto civilPointStyles = ImportCivilPointStyles(st, &dwg, log, &skipHist, &degenerateExtrusions,
+                                                       legacyLeaderScale);
+  std::unordered_set<int> explicitCivilPointStyles;
+  ImportCivilSurfaceStyles(st, &dwg, log);
+  // The Civil point node owns coordinates even when a point's display style hides its proxy.
+  // Decode it once, then let the COGO entities supply their layer references during traversal.
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object& object = dwg.object[i];
+    if (object.type < 500 || object.type - 500 >= dwg.num_classes) continue;
+    const char* name = dwg.dwg_class[object.type - 500].dxfname;
+    if (name == nullptr || std::strcmp(name, "AECC_POINT_NODE") != 0) continue;
+    const auto locations = libredwgcivil::DecodePointNodeLocations(
+        object.unknown_bits, static_cast<std::size_t>(object.num_unknown_bits));
+    if (!locations.has_value()) continue;
+    std::unordered_map<int, std::string> assignedStyles;
+    const std::size_t prefix = object.common_size + object.bitsize_pos;
+    if (object.tio.object != nullptr && object.bitsize >= prefix) {
+      const std::size_t commonHandles = 1 + object.tio.object->num_reactors +
+                                       (object.tio.object->is_xdic_missing ? 0 : 1);
+      const auto references = libredwgcivil::DecodePointNodeMarkerStyles(object.unknown_bits,
+          object.num_unknown_bits, object.bitsize - prefix, commonHandles, object.handle.value);
+      if (references.has_value()) {
+        for (const auto& reference : *references) {
+          const auto style = civilPointStyles.find(reference.second);
+          if (style != civilPointStyles.end()) {
+            assignedStyles.emplace(reference.first, style->second);
+            explicitCivilPointStyles.insert(reference.first);
+          }
+          else NoteSkip(&skipHist, "AECC_COGO_POINT(marker style reference not decoded)");
+        }
+      }
+    }
+    // Raw descriptions: literal strings in the node's string stream, one per described point.
+    std::unordered_map<int, std::string> descriptions;
+    if (object.has_strings) {
+      const std::size_t trailer = object.stringstream_size >= 32768 ? 33 : 17;
+      if (object.bitsize >= prefix + trailer + object.stringstream_size) {
+        const std::size_t strings = object.bitsize - prefix - trailer - object.stringstream_size;
+        if (const auto decoded = libredwgcivil::DecodePointNodeDescriptions(
+                object.unknown_bits, object.num_unknown_bits, strings, object.stringstream_size)) {
+          for (const auto& description : *decoded) {
+            if (description.literal || !description.text.empty())
+              descriptions.emplace(description.number,
+                                   libredwgcad_detail::DecodeDwgString(description.text.c_str(), true));
+            else
+              NoteSkip(&skipHist, "AECC_COGO_POINT(built-in description token has no stored text)");
+          }
+        } else {
+          NoteSkip(&skipHist, "AECC_COGO_POINT(descriptions not decoded)");
+        }
+      }
+    }
+    for (const auto& location : *locations) {
+      SurveyPoint point{};
+      point.id = location.number;
+      if (const auto text = descriptions.find(point.id); text != descriptions.end()) {
+        point.rawDescription = text->second;
+        point.description = text->second;
+      }
+      point.easting = location.location.x - st.worldDocumentOriginX;
+      point.northing = location.location.y - st.worldDocumentOriginY;
+      point.elevation = location.location.z;
+      point.labelStyle = SurveyPointLabelStyle::None;
+      if (const auto assigned = assignedStyles.find(point.id); assigned != assignedStyles.end())
+        point.styleName = assigned->second;
+      st.surveyPoints.push_back(std::move(point));
+    }
+    log.push_back("Civil point-node coordinates decoded: " + std::to_string(locations->size()));
+    if (!descriptions.empty())
+      log.push_back("Civil point descriptions decoded: " + std::to_string(descriptions.size()));
+  }
+  ImportCivilPointGroups(st, &dwg, log, civilPointStyles, explicitCivilPointStyles);
+  ImportCivilPointLabelStyles(st, &dwg, log, &skipHist);
+  ImportCivilPointTableStyles(st, &dwg, log);
+  if (!asDxf) {  // REQ-362: an AutoCAD / Civil 3D drawing's geolocation (read only, D-2026-09-29-g)
+    DwgGeoData geo;
+    if (ReadDwgGeoData(&dwg, &geo))
+      ApplyDwgGeoData(st, geo, log);
+  }
+
+  const Xf2 id{};
+  std::vector<TaggedAlignment> taggedAlignments;  // REQ-496.2: GoSurvey alignment entities, rebuilt below
+  const std::unordered_set<BITCODE_RLL> civilAlignments = ImportCivilAlignments(st, &dwg, log);  // REQ-496.3
+  Dwg_Object* mspace = dwg_model_space_object(&dwg);
+  if (mspace != nullptr) {
+    for (Dwg_Object* e = get_first_owned_entity(mspace); e != nullptr; e = get_next_owned_entity(mspace, e)) {
+      if (IsPaperLayoutEntity(&dwg, e) || civilAlignments.count(e->handle.value) != 0 ||
+          CollectTaggedAlignmentEntity(st, &dwg, e, &taggedAlignments))
+        continue;
+      ImportObject(st, &dwg, e, id, 0, &skipHist, &degenerateExtrusions, nullptr, legacyLeaderScale);
+    }
+    ImportPlantParts(st, &dwg, mspace, &skipHist);
+  }
+  ImportCivilContourLabels(st, &dwg, &skipHist);
+  const bool emptyGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userArcs.empty() &&
+                         st.userPolylineVerts.empty() && st.cadAnnotations.empty() && st.userEllipses.empty() &&
+                         st.cadMultileaders.empty() && st.cadBlockRefs.empty() && st.cadSolids.empty() &&
+                         st.cadSplines.empty() && st.cadPoints.empty() && taggedAlignments.empty() &&
+                         civilAlignments.empty();
+  // DXF decode often leaves BLOCK_HEADER.first_entity unset or pointing at BLOCK/ENDBLK only.
+  if (emptyGeom) {
+    for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+      Dwg_Object* o = &dwg.object[i];
+      if (o->supertype != DWG_SUPERTYPE_ENTITY || o->tio.entity == nullptr)
+        continue;
+      if (o->tio.entity->entmode == 1 || IsPaperLayoutEntity(&dwg, o))
+        continue;
+      const Dwg_Object_Type ty = o->fixedtype;
+      if (ty == DWG_TYPE_VERTEX_2D || ty == DWG_TYPE_VERTEX_3D || ty == DWG_TYPE_VERTEX_MESH ||
+          ty == DWG_TYPE_VERTEX_PFACE || ty == DWG_TYPE_VERTEX_PFACE_FACE || ty == DWG_TYPE_SEQEND ||
+          ty == DWG_TYPE_ENDBLK || ty == DWG_TYPE_BLOCK)
+        continue;
+      if (ty == DWG_TYPE_POLYLINE_PFACE || ty == DWG_TYPE_POLYLINE_MESH || ty == DWG_TYPE__3DFACE)
+        continue;
+      ImportObject(st, &dwg, o, id, 0, &skipHist, &degenerateExtrusions, nullptr, legacyLeaderScale);
+    }
+  }
+  if (st.cadMeshes.empty()) {
+    for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+      Dwg_Object* o = &dwg.object[i];
+      if (o->supertype != DWG_SUPERTYPE_ENTITY || o->tio.entity == nullptr)
+        continue;
+      if (o->tio.entity->entmode == 1)
+        continue;
+      const Dwg_Object_Type ty = o->fixedtype;
+      if (ty != DWG_TYPE_POLYLINE_PFACE && ty != DWG_TYPE_POLYLINE_MESH && ty != DWG_TYPE__3DFACE)
+        continue;
+      ImportObject(st, &dwg, o, id, 0, &skipHist, &degenerateExtrusions, nullptr, legacyLeaderScale);
+    }
+  }
+  ImportTaggedAlignments(st, &dwg, taggedAlignments, &skipHist, log, legacyLeaderScale);
+
+  ImportPaperLayoutsFromDwg(st, &dwg, &skipHist, &degenerateExtrusions, legacyLeaderScale);
+  if (dwg.header.version >= R_2007)
+    st.viewportVisualStyle = DwgImportModelVisualStyle(&dwg);
+  ImportAnnotationScales(st, &dwg);
+  // AutoCAD persists its active annotation context in AcDbVariableDictionary.CANNOSCALE.
+  // Keep it as the authority when present; GoSurvey EED is only the compatibility fallback.
+  bool hasNativeCannoscale = false;
+  if (!st.annotationScales.empty()) {
+    const char* nativeScale = dwg_variable_dict(&dwg, "CANNOSCALE");
+    const std::string savedScale = nativeScale != nullptr
+                                       ? FromT(&dwg, reinterpret_cast<BITCODE_T>(const_cast<char*>(nativeScale)))
+                                       : std::string{};
+    if (!savedScale.empty()) {
+      for (int i = 0; i < static_cast<int>(st.annotationScales.size()); ++i) {
+        if (st.annotationScales[static_cast<size_t>(i)].name == savedScale) {
+          st.currentAnnotationScaleIndex = i;
+          hasNativeCannoscale = true;
+          break;
+        }
+      }
+    }
+  }
+
+  ImportViewportZoomScales(st, &dwg);
+  const Dwg_Object* msForCannoscale = dwg_model_space_object(&dwg);
+  if (!hasNativeCannoscale &&
+      (msForCannoscale == nullptr || msForCannoscale->tio.object == nullptr ||
+       !ApplyGosurveyCannoscaleFromEed(reinterpret_cast<Dwg_Object_Entity*>(msForCannoscale->tio.object), st)))
+    SyncCurrentAnnotationScaleIndex(st);
+
+  if (!asDxf) {
+    DwgLightImportCapture(&dwg, st);
+    DwgAnnotContextImportScan(&dwg);
+  }
+
+  dwg_free(&dwg);
+
+  CadCoord::MaybeRebaseLargeCoordinates(st, &log);
+  const int fbW = std::max(st.viewportLastFbW, 1);
+  const int fbH = std::max(st.viewportLastFbH, 1);
+  const float aspect = static_cast<float>(fbW) / static_cast<float>(fbH);
+  const bool restoredSavedModelViewport = hasSavedModelViewport &&
+                                          ApplySavedModelViewport(st, savedModelViewport);
+  if (!restoredSavedModelViewport && !CadCoord::FitViewportToDrawing(st, aspect, fbW, fbH))
+    st.pendingZoomExtents = true;
+  else if (restoredSavedModelViewport)
+    st.pendingZoomExtents = false;
+  for (size_t i = 0; i < st.surveyPoints.size(); ++i)
+    EnsureSurveyPointLabelMtext(st, i, nullptr);
+
+  const size_t nLines = st.userLinesFlat.size() / 6;
+  const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
+  const size_t nPoly = st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1;
+  log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) + " import — " + std::to_string(nLines) +
+                " line(s), " + std::to_string(nCirc) + " circle(s), " + std::to_string(nPoly) + " polyline(s), " +
+                std::to_string(st.userArcs.size()) + " arc(s).");
+  if (degenerateExtrusions > 0) {
+    log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) +
+                  " import — refused " + std::to_string(degenerateExtrusions) +
+                  " ARC/CIRCLE record(s) whose extrusion is a zero-length vector.");
+  }
+  // REQ-366, issue #607: dimensions are now counted, not silently omitted, on import too.
+  size_t nDimsImported = 0;
+  for (const CadAnnotation& a : st.cadAnnotations)
+    if (CadAnnotationIsDimension(a))
+      ++nDimsImported;
+  if (nDimsImported > 0)
+    log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) + " import — " +
+                  std::to_string(nDimsImported) + " dimension(s) (REQ-366).");
+  if (!st.cadFilledRegions.empty())
+    log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) + " import — " +
+                  std::to_string(st.cadFilledRegions.size()) + " HATCH fill(s) (REQ-170, issue #608).");
+  if (!st.paperLayouts.empty()) {
+    size_t nVp = 0;
+    for (const PaperLayout& pl : st.paperLayouts)
+      nVp += pl.viewports.size();
+    log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) + " import — " +
+                  std::to_string(st.paperLayouts.size()) + " paper layout(s), " +
+                  std::to_string(nVp) + " viewport(s) (REQ-170, issue #610).");
+  }
+  int printed = 0;
+  for (const auto& kv : skipHist) {
+    if (printed >= 8)
+      break;
+    log.push_back("  skipped \"" + kv.first + "\" × " + std::to_string(kv.second));
+    ++printed;
+  }
+  DwgMaterialImportAppendLog(log);
+  DwgLightImportAppendLog(log);
+  DwgAnnotContextImportAppendLog(log);
+  CadTableSyncSurveyPointTables(st.cadTables, st.tableStyles, st.modelUnitsPerPlottedInch);
+  BumpCadGpuCache(st);
+  return true;
+}
+
+std::vector<DwgExportLoss> ComputeDwgExportLosses(const AppCommandState& st) {
+  return ComputeDwgExportLossesImpl(st);
+}
+
+bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log,
+                        bool asDxf) {
+  if (pathUtf8 == nullptr || pathUtf8[0] == '\0') {
+    log.push_back(asDxf ? "DXF export — no path." : "DWG export — no path.");
+    return false;
+  }
+
+  // DXF carries the drawing's native annotation scale list only in the R2018 format selected for
+  // issue #1013. This is independent of the user's DWG save-version preference.
+  const DwgSaveVersion outputVersion = asDxf ? DwgSaveVersion::R2018 : st.dwgExportVersion;
+  const Dwg_Version_Type libVer = LibreDwgVersionFromExport(outputVersion);
+  Dwg_Data* dwg = dwg_new_Document(libVer, /*imperial=*/0, /*loglevel=*/0);
+  if (dwg == nullptr) {
+    log.push_back("CAD export — LibreDWG could not create a drawing.");
+    return false;
+  }
+  Dwg_Object_BLOCK_HEADER* hdr = ModelHeader(dwg);
+  if (hdr == nullptr) {
+    dwg_free(dwg);
+    std::free(dwg);
+    log.push_back("CAD export — missing model space.");
+    return false;
+  }
+  // Drawing unit (REQ-022) and, with "Set drawing variables to match" (REQ-357), LUNITS / AUNITS.
+  dwg->header_vars.INSUNITS = static_cast<BITCODE_BS>(st.drawingInsUnits);
+  dwg->header_vars.PDMODE = static_cast<BITCODE_BS>(st.pdMode);  // REQ-456 / issue #1010
+  dwg->header_vars.PDSIZE = st.pdSize;
+  if (st.drawingSettings.setDrawingVariables) {
+    dwg->header_vars.LUNITS = 2;
+    dwg->header_vars.AUNITS = static_cast<BITCODE_BS>(DrawingAunitsCode(st.drawingSettings.angularUnits));
+  }
+  FillFromState(st, dwg, hdr, log, outputVersion, asDxf);
+  dwg_resolve_objectrefs_silent(dwg);
+  if (!asDxf) {  // REQ-362 item 2: the map pin other programs read (DWG only)
+    DwgGeoData geo;
+    std::string why;
+    if (!BuildDwgGeoData(st, &geo, &why))
+      log.push_back("DWG export — no GEODATA written: " + why + ".");
+    else if (!WriteDwgGeoData(dwg, geo))
+      log.push_back("DWG export — LibreDWG could not add the GEODATA; the location is kept in GoSurvey's data only.");
+    else {
+      char buf[160];
+      std::snprintf(buf, sizeof(buf), "DWG export — GEODATA written: zone %s, marker at %.3f, %.3f.",
+                    geo.coordinateSystemDefinition.c_str(), geo.designX, geo.designY);
+      log.push_back(buf);
+    }
+  }
+  LibreDwgLinkBlockEntities(dwg);  // issue #590: AutoCAD refuses LibreDWG's implicit last link
+  if (!asDxf && !WriteNativeCannoscale(st, dwg) && !st.annotationScales.empty())
+    log.push_back("DWG export — AutoCAD's CANNOSCALE could not be written; GoSurvey scale metadata was retained.");
+  WriteGosurveyCannoscaleOnModelSpace(st, dwg);
+  bool ok = false;
+  if (asDxf) {
+    const std::string currentTab =
+        st.activeSpaceIndex >= 0 && static_cast<size_t>(st.activeSpaceIndex) < st.paperLayouts.size()
+            ? st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)].name
+            : std::string("Model");
+    ok = WriteDxfFile(pathUtf8, dwg, currentTab, log);
+    if (ok) {
+      size_t nPaperTables = 0;
+      size_t nPaperMultileaders = 0;
+      for (const PaperLayout& layout : st.paperLayouts)
+        {
+          nPaperTables += layout.paperTables.size();
+          nPaperMultileaders += layout.paperMultileaders.size();
+        }
+      if (nPaperMultileaders > 0)
+        log.push_back("DXF export — " + std::to_string(nPaperMultileaders) +
+                      " paper-space multileader(s) written as LEADER plus MTEXT.");
+      if (nPaperTables > 0)
+        log.push_back("DXF export — " + std::to_string(nPaperTables) +
+                      " paper-space table(s) written as grid lines plus cell text (REQ-113). Table identity is not retained.");
+      log.push_back("DXF export complete: R2018 (LibreDWG ASCII; independent of the DWG save-version preference).");
+    }
+  } else {
+    ok = WriteDwgFile(pathUtf8, dwg, log);
+    if (ok) {
+      log.push_back(std::string("DWG export complete: ") + DwgSaveVersionDisplayName(outputVersion) +
+                    " (" + DwgSaveVersionAcTag(outputVersion) + ") via LibreDWG.");
+    }
+  }
+  dwg_free(dwg);
+  std::free(dwg);
+  return ok;
+}

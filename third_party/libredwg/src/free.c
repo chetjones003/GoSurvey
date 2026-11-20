@@ -662,7 +662,9 @@ free_TABLESTYLE_r2010 (Bit_Chain *restrict dat, Dwg_Object *restrict obj)
     }
   FIELD_CMTC (sty.cellstyle.bg_color, 62);
   FIELD_T (sty.cellstyle.content_format.value_format_string, 300);
-  if (_obj->numoverrides)
+  /* With the complete cell-style array, ovr is only a borrowed first-record view.
+     The generated schema free owns each array entry and releases it exactly once. */
+  if (_obj->numoverrides && !_obj->overrides)
     {
       for (unsigned j = 0; j < _obj->ovr.cellstyle.num_borders; j++)
         {
@@ -674,7 +676,8 @@ free_TABLESTYLE_r2010 (Bit_Chain *restrict dat, Dwg_Object *restrict obj)
     }
   FIELD_TV (name, 3);
   FIELD_TV (sty.name, 300);
-  FIELD_TV (ovr.name, 300);
+  if (!_obj->overrides)
+    { FIELD_TV (ovr.name, 300); }
 }
 
 static void

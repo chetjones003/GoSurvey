@@ -22,8 +22,8 @@
 /// real sub-object selection subsystem" over a UCS-command-local ray-triangle test, so #156 becomes
 /// a thin consumer of the face answer.
 
-#include "brep.hpp"
-#include "ray3d.hpp"
+#include <GoSurvey/Geometry/brep.hpp>
+#include <GoSurvey/Math/ray3d.hpp>
 
 #include <cstdint>
 #include <vector>

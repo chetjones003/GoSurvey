@@ -1,0 +1,98 @@
+#pragma once
+
+#include <cstddef>
+#include <string>
+#include <vector>
+
+#include <GoSurvey/Survey/SurveyPoints.hpp>
+
+struct AppCommandState;
+
+/// Resolve a survey point's label link to an index into \c st.cadAnnotations, or -1 if there is none.
+///
+/// The link is stored as a stable entity id (REQ-076), so this is the one place that turns it back
+/// into an index — and the index is a return value, never something a caller stores.
+[[nodiscard]] int FindSurveyLabelAnnIndex(const AppCommandState& st, const SurveyPoint& p);
+
+/// Resolve a label MTEXT's back-link to an index into \c st.surveyPoints, or -1 if there is none.
+///
+/// The argument is a \c SurveyPoint::id (the point number), not an array position — that is what
+/// \c CadAnnotation::surveyPointLabelForId now holds (REQ-076).
+[[nodiscard]] int SurveyPointIndexForId(const AppCommandState& st, int surveyPointId);
+
+/// Indices into \c st.surveyPoints of every point matching \p group (REQ-067).
+///
+/// Computed fresh on every call — a group stores a rule, never a member list (ASSUMPTION-3). Returns
+/// indices rather than ids because callers immediately want the points; ids are what get *stored*.
+///
+/// \param log optional; receives a line when the rule names ranges it could not parse, and when a
+///        configured rule resolves to nothing — both are things the user needs told (REQ-201).
+[[nodiscard]] std::vector<int> ResolvePointGroup(const AppCommandState& st, const PointGroup& group,
+                                                 std::vector<std::string>* log = nullptr);
+
+/// Index of the group named \p name (case-insensitive), or -1.
+[[nodiscard]] int FindPointGroupIndex(const AppCommandState& st, const std::string& name);
+
+void ResetCreatePointsNextIdFromSettings(AppCommandState& st);
+
+/// The layer Create Points places a point on: its typed layer, or the Object Layers Survey point
+/// layer when none is typed or the row is Locked (REQ-361 item 4). Adds the layer if missing.
+std::string CreatePointsLayer(AppCommandState& st);
+
+/// Places a survey point using create-points options & duplicate policy. Updates next ID when sequential.
+/// The point goes on the Object Layers Survey point layer (REQ-361). \p pushUndo: one undo step per
+/// point; false when the caller already pushed one for a batch (the Traverse commit).
+bool TryPlaceSurveyPoint(AppCommandState& st, double easting, double northing, double elevation,
+                         std::vector<std::string>& log, bool pushUndo = true);
+
+/// Copies viewport-selected survey rows by (\p dx, \p dy, \p dz), applying \p policy when IDs collide
+/// with other points. \p dz is the elevation delta (REQ-329 increment 1 — a COPY under a rotated or
+/// tilted UCS carries a Z component); it is zero for every plan-view / World-UCS copy.
+void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, double dx, double dy, double dz,
+                                             SurveyDuplicatePolicy policy, std::vector<std::string>& log);
+
+/// Same ID policy as translated copy; positions are rotated about (\p bx,\p by) by \p rad radians.
+void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, double bx, double by, float rad,
+                                          SurveyDuplicatePolicy policy, std::vector<std::string>& log);
+
+/// Same ID policy as translated copy; positions are reflected across the line through
+/// (\p x0,\p y0)-(\p x1,\p y1) (REQ-103 MIRROR). Elevation is untouched, matching the CAD-side
+/// reflection funnel (a mirror is a plan-view operation).
+void DuplicateSelectedSurveyPointsReflected(AppCommandState& st, double x0, double y0, double x1, double y1,
+                                            SurveyDuplicatePolicy policy, std::vector<std::string>& log);
+
+void RemoveSurveyPointAt(AppCommandState& st, size_t index);
+
+
+
+void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::vector<std::string>* log);
+
+void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex);
+
+/// Repositions every linked survey MTEXT (e.g. after plot scale / PSCALE changes).
+void RepositionAllSurveyPointLabels(AppCommandState& st);
+
+/// Rebuilds every linked survey MTEXT's text and position. Call after the document origin changes so
+/// {north}/{east} labels show world coordinates relative to the new origin.
+void RegenerateAllSurveyPointLabels(AppCommandState& st);
+
+/// Adds conflicting world-coordinate survey points to the document. \p overwrite replaces the existing same-ID point;
+/// otherwise each point's ID gets \p offset added (then bumped to the next free ID if still taken).
+void ResolveConflictingWorldSurveyPoints(AppCommandState& st, const std::vector<SurveyPoint>& conflictsWorld,
+                                         bool overwrite, int offset, std::vector<std::string>* log);
+
+/// UTF-8 path. Writes a staged replacement; serialization/write failures preserve the destination.
+/// Version 1 retains local coordinates with origin metadata and raw field descriptions.
+bool SaveSurveyPointsToJsonFile(const AppCommandState& st, const char* path, std::vector<std::string>& log);
+
+/// Validates the complete file before replacing points/labels as one undo step. Old unversioned
+/// files without origins keep their legacy local-coordinate interpretation. Rejects read-only projects.
+bool LoadSurveyPointsFromJsonFile(AppCommandState& st, const char* path, std::vector<std::string>& log);
+
+void StartCreatePointsCommand(AppCommandState& st, std::vector<std::string>& log);
+
+void StartViewPointsCommand(AppCommandState& st, std::vector<std::string>& log);
+
+void StartImportPointsCommand(AppCommandState& st, std::vector<std::string>& log);
+
+void StartExportPointsCommand(AppCommandState& st, std::vector<std::string>& log);

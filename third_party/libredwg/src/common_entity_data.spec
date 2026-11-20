@@ -499,8 +499,6 @@
     {
       // 00 BYLAYER, 01 BYBLOCK, 10 CONTINUOUS, 11 ltype handle
       FIELD_BB (ltype_flags, 0);
-      // 00 BYLAYER, 01 BYBLOCK, 10 CONTINUOUS, 11 plotstyle handle
-      FIELD_BB (plotstyle_flags, 0);
     }
   SINCE (R_2007a)
     {
@@ -519,6 +517,12 @@
           FIELD_HANDLE (material, 0, 347)
       }
       FIELD_RC0 (shadow_flags, 284); /* r2007+: 0 both, 1 receives, 2 casts, 3 no */
+    }
+  SINCE (R_2000b)
+    {
+      // R2007+ inserts material and shadow flags before the plot-style flags. Native controls
+      // with an explicit material and both shadow flags disabled establish this order.
+      FIELD_BB (plotstyle_flags, 0);
     }
   SINCE (R_2010b)
     {

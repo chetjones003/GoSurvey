@@ -4,19 +4,27 @@
 // `propedit` services (and CadApplyLayer/Color/Linetype/Lineweight/TransparencyToSelection), which
 // This file contains the Qt widgets around those shared services.
 #include "EditorWindow.hpp"
+#include "EditorChrome.hpp"
+#include "EditorViewport.hpp"
 #include "QtAccent.hpp"
 #include "TopographicArtwork.hpp"
 #include <QApplication>
 #include <QPainter>
 
+#include "GoSurvey/Survey/AlignmentDesign.hpp"
 #include "CadColor.hpp"
+#include "CadCoordinateFrame.hpp"
 #include "CadLinetype.hpp"
 #include "CadPropertyEdit.hpp"
-#include "CadUiStyleWidgets.hpp"
-#include "util/AngleFormat.hpp"
-#include "util/NumFormat.hpp"
+#include "GoSurvey/Document/CadUiStyleWidgets.hpp"
+#include <GoSurvey/Core/AngleFormat.hpp>
+#include <GoSurvey/Geometry/brep.hpp>
+#include <GoSurvey/Geometry/geom2d.hpp>
+#include <GoSurvey/Core/NumFormat.hpp>
 
 #include <QColorDialog>
+#include <QTimer>
+#include <cstdio>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDockWidget>
@@ -26,8 +34,12 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPixmap>
+#include <QMap>
 #include <QPlainTextEdit>
+#include <QPushButton>
 #include <QScrollArea>
+#include <QResizeEvent>
+#include <QStatusBar>
 #include <QSignalBlocker>
 #include <QStandardItemModel>
 #include <QVBoxLayout>
@@ -46,6 +58,24 @@ class TerrainPropertiesBody final : public QWidget {
     QPainter painter(this);
     const qreal artHeight = width() * 220.0 / 300.0;
     qtArtwork::DrawTerrainContours(painter, QRectF(0, height() - artHeight, width(), artHeight));
+  }
+};
+
+class AdaptivePropertiesScrollArea final : public QScrollArea {
+public:
+  using QScrollArea::QScrollArea;
+  void UpdateRowWidths() {
+    // Let Qt show the thumb only when this content actually overflows. Always-on created a
+    // full-track thumb in wide palettes with only a few rows, which looked like a broken control.
+    setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    const int labelWidth = std::clamp(viewport()->width() - 140, 70, 124);
+    for (auto* label : findChildren<QLabel*>("propertiesRowLabel"))
+      label->setFixedWidth(labelWidth);
+  }
+protected:
+  void resizeEvent(QResizeEvent* event) override {
+    QScrollArea::resizeEvent(event);
+    UpdateRowWidths();
   }
 };
 
@@ -82,7 +112,8 @@ QString Merge(const QStringList& values) {
 }  // namespace
 
 void EditorWindow::BuildPropertiesPanel() {
-  m_PropertiesScroll = new QScrollArea(this);
+  auto* propertiesScroll = new AdaptivePropertiesScrollArea(this);
+  m_PropertiesScroll = propertiesScroll;
   m_PropertiesScroll->setObjectName("propertiesPanel");
   m_PropertiesScroll->setWidgetResizable(true);
   m_PropertiesScroll->setFrameShape(QFrame::NoFrame);
@@ -99,33 +130,61 @@ void EditorWindow::RefreshProperties() {
   for (const auto& e : st.selection) { mix(static_cast<std::uint64_t>(e.type)); mix(static_cast<std::uint64_t>(e.index)); }
   for (int i : st.selectedSurveyPointIndices) mix(static_cast<std::uint64_t>(i) + 977);
   mix(st.cadGpuRevision); mix(static_cast<std::uint64_t>(st.displayLinearPrecision));
+  mix(qApp->property("cadLightTheme").toBool() ? 1u : 0u);
   mix(static_cast<std::uint64_t>(std::llround(st.worldDocumentOriginX * 1000))); mix(static_cast<std::uint64_t>(std::llround(st.worldDocumentOriginY * 1000)));
   mix(st.annotationScales.size());
   mix(st.drawingLayerTable.size()); mix(static_cast<std::uint64_t>(st.activeDrawingIdx));
   mix(qHash(m_PropertiesNote));
+  // A selected alignment's own fields change without a geometry revision (criteria, name, station) - REQ-501.1.
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Alignment || e.index < 0 || static_cast<size_t>(e.index) >= st.alignments.size())
+      continue;
+    const alignment::Alignment& al = st.alignments[static_cast<size_t>(e.index)];
+    mix(std::hash<std::string>{}(al.name + '\n' + al.description + '\n' + al.layer + '\n' + al.style + '\n' + al.checkSetName));
+    mix(static_cast<std::uint64_t>(std::llround(al.startingStation * 1e6)));
+    mix(al.equations.size());
+    mix(al.designSpeeds.size());
+    mix(st.alignmentCheckSets.size());
+  }
   if (fp == m_PropertiesFingerprint && m_PropertiesScroll->widget()) return;
   m_PropertiesFingerprint = fp;
 
   auto* body = new TerrainPropertiesBody;
   body->setAutoFillBackground(false);
   body->setObjectName("propertiesBody");
+  const bool darkTheme = !qApp->property("cadLightTheme").toBool();
+  body->setStyleSheet(QtApplyAccent(QString::fromLatin1(R"(
+    #propertiesBody QLineEdit, #propertiesBody QComboBox, #propertiesBody QAbstractSpinBox {
+      min-height:18px; padding:1px 4px; border-radius:2px;
+    }
+    #propertiesBody QLineEdit:focus, #propertiesBody QComboBox:focus, #propertiesBody QAbstractSpinBox:focus {
+      border:1px solid @strong@;
+    }
+  )"), darkTheme));
   auto* root = new QVBoxLayout(body);
-  root->setContentsMargins(6, 6, 6, 6);
-  root->setSpacing(4);
+  root->setContentsMargins(4, 4, 4, 4);
+  root->setSpacing(3);
   const int precision = st.displayLinearPrecision;
   auto fmt = [precision](double v) { return QString::fromStdString(FormatLinear(v, precision)); };
 
   // --- selection summary ------------------------------------------------------------------------
-  int nLine = 0, nCirc = 0, nText = 0, nOther = 0, nSurface = 0;
+  int nLine = 0, nCirc = 0, nText = 0, nOther = 0, nSurface = 0, nAlignment = 0;
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) ++nLine;
     else if (e.type == SelectedEntity::Type::Circle) ++nCirc;
     else if (e.type == SelectedEntity::Type::Annotation) ++nText;
-    else { ++nOther; if (e.type == SelectedEntity::Type::Surface) ++nSurface; }
+    else {
+      ++nOther;
+      if (e.type == SelectedEntity::Type::Surface) ++nSurface;
+      if (e.type == SelectedEntity::Type::Alignment) ++nAlignment;
+    }
   }
   const int total = static_cast<int>(st.selection.size());
+  body->setProperty("propertiesPopulated", total > 0 || !st.selectedSurveyPointIndices.empty());
   QString summary;
-  if (total == 0) summary = "No selection";
+  if (total == 0 && st.selectedSurveyPointIndices.empty()) summary = "No selection";
+  else if (total == 0) summary = QString("Selected: %1 survey point%2")
+      .arg(st.selectedSurveyPointIndices.size()).arg(st.selectedSurveyPointIndices.size() == 1 ? "" : "s");
   else {
     const int kinds = (nLine > 0) + (nCirc > 0) + (nText > 0) + (nOther > 0);
     QString what;
@@ -140,7 +199,9 @@ void EditorWindow::RefreshProperties() {
     else if (nLine) what = nLine == 1 ? "Line" : QString("%1 lines").arg(nLine);
     else if (nCirc) what = nCirc == 1 ? "Circle" : QString("%1 circles").arg(nCirc);
     else if (nText) what = nText == 1 ? "Text" : QString("%1 annotations").arg(nText);
-    else what = nSurface == nOther ? (nSurface == 1 ? QString("TIN Surface") : QString("%1 surfaces").arg(nSurface)) : QString("Other objects");
+    else if (nSurface == nOther) what = nSurface == 1 ? QString("TIN Surface") : QString("%1 surfaces").arg(nSurface);
+    else if (nAlignment == nOther) what = nAlignment == 1 ? QString("Alignment") : QString("%1 alignments").arg(nAlignment);
+    else what = "Other objects";
     summary = QString("Selected: %1 object%2 — %3").arg(total).arg(total == 1 ? "" : "s").arg(what);
   }
   auto* header = new QLabel(summary, body);
@@ -151,9 +212,34 @@ void EditorWindow::RefreshProperties() {
   auto* note = new QLabel(m_PropertiesNote, body);
   note->setObjectName("propertiesNote");
   note->setWordWrap(true);
-  note->setStyleSheet("color:#c54646;");
+  const bool darkAppearance = !qApp->property("cadLightTheme").toBool();
+  note->setStyleSheet(QString("color:%1;").arg(darkAppearance ? "#ff7b72" : "#b42318"));
   note->setVisible(!m_PropertiesNote.isEmpty());
   root->addWidget(note);
+
+  if (total == 0 && st.selectedSurveyPointIndices.empty()) {
+    auto* emptyState = new QLabel("Select an object in the drawing area to view its properties.", body);
+    emptyState->setObjectName("propertiesEmptyState");
+    emptyState->setWordWrap(true);
+    emptyState->setMargin(8);
+    emptyState->setStyleSheet("color:palette(text); background:palette(alternate-base); border:1px solid palette(mid); border-radius:4px;");
+    root->addWidget(emptyState);
+    auto* selectInDrawing = new QPushButton("Select in drawing area", body);
+    selectInDrawing->setObjectName("propertiesSelectInDrawingAction");
+    selectInDrawing->setToolTip("Move focus to the drawing area, then click an object to view its properties.");
+    connect(selectInDrawing, &QPushButton::clicked, this, [this] {
+      if (!m_Viewport) return;
+      m_Viewport->setFocus(Qt::OtherFocusReason);
+      if (m_CommandBar)
+        m_CommandBar->Append("Click an object in the drawing area to view its properties.");
+    });
+    root->addWidget(selectInDrawing);
+    root->addStretch(1);
+    if (auto* old = m_PropertiesScroll->takeWidget()) old->deleteLater();
+    m_PropertiesScroll->setWidget(body);
+    static_cast<AdaptivePropertiesScrollArea*>(m_PropertiesScroll)->UpdateRowWidths();
+    return;
+  }
 
   // --- section / row builders -------------------------------------------------------------------
   auto section = [&](const QString& title, const char* name) {
@@ -165,14 +251,12 @@ void EditorWindow::RefreshProperties() {
     auto* heading = new QLabel(title, box);
     heading->setObjectName("propertiesSectionHeading");
     QFont f = heading->font(); f.setBold(true); heading->setFont(f);
-    heading->setStyleSheet(qApp->property("cadLightTheme").toBool()
-        ? "background:#1f3a5f; color:#ffffff; padding:3px 8px;"
-        : QtApplyAccent("background:#30373c; color:#f4f7f8; border-left:3px solid @strong@; padding:3px 8px;", true));
+    heading->setStyleSheet(QtPropertiesSectionHeadingStyle(!qApp->property("cadLightTheme").toBool()));
     layout->addWidget(heading);
     auto* rows = new QWidget(box);
     auto* grid = new QVBoxLayout(rows);
     grid->setContentsMargins(0, 0, 0, 0);
-    grid->setSpacing(3);
+    grid->setSpacing(1);
     layout->addWidget(rows);
     root->addWidget(box);
     return grid;
@@ -180,19 +264,30 @@ void EditorWindow::RefreshProperties() {
   auto addRow = [&](QVBoxLayout* grid, const QString& label, QWidget* field, char axis = 0) {
     auto* row = new QWidget(grid->parentWidget());
     auto* outer = new QHBoxLayout(row);
-    outer->setContentsMargins(6, 0, 6, 0);
-    outer->setSpacing(6);
+    outer->setContentsMargins(4, 0, 4, 0);
+    outer->setSpacing(5);
     auto* caption = new QLabel(label, row);
     caption->setObjectName("propertiesRowLabel");
-    caption->setFixedWidth(124);
+    caption->setFixedWidth(std::clamp(m_PropertiesScroll->viewport()->width() - 140, 70, 124));
+    caption->setWordWrap(true);
     outer->addWidget(caption);
     auto* fieldRow = new QHBoxLayout();
     fieldRow->setContentsMargins(0, 0, 0, 0); fieldRow->setSpacing(4);
     if (axis) {  // X/Y/Z badge on coordinate fields, as in the 0.7.4 panel (REQ-081)
       auto* badge = new QLabel(QString(QChar(axis)), row);
-      badge->setAlignment(Qt::AlignCenter); badge->setFixedWidth(18);
-      const char* color = axis == 'X' ? "#c0392b" : axis == 'Y' ? "#2e8b57" : "#2f6fc0";
-      badge->setStyleSheet(QString("background:%1; color:white; border-radius:2px; font-weight:bold;").arg(color));
+      badge->setAlignment(Qt::AlignCenter); badge->setFixedWidth(16);
+      badge->setProperty("propertiesAxisBadge", QString(QChar(axis)));
+      const char* background = axis == 'X' ? (darkTheme ? "#492d2b" : "#f6ecea")
+          : axis == 'Y' ? (darkTheme ? "#294033" : "#edf5ef")
+                        : (darkTheme ? "#29384b" : "#edf2f8");
+      const char* color = axis == 'X' ? (darkTheme ? "#ff9c91" : "#8f3b35")
+          : axis == 'Y' ? (darkTheme ? "#92d9a6" : "#356648")
+                        : (darkTheme ? "#9bc2ff" : "#3b5c83");
+      const char* edge = axis == 'X' ? (darkTheme ? "#68413e" : "#e1c6c3")
+          : axis == 'Y' ? (darkTheme ? "#3b5b45" : "#c5d8ca")
+                        : (darkTheme ? "#3b506a" : "#c4d0df");
+      badge->setStyleSheet(QString("background:%1; color:%2; border:1px solid %3; border-radius:3px; font-weight:600;")
+                               .arg(background, color, edge));
       fieldRow->addWidget(badge);
     }
     fieldRow->addWidget(field, 1);
@@ -200,10 +295,31 @@ void EditorWindow::RefreshProperties() {
     grid->addWidget(row);
     return row;
   };
+  // REQ-501.1: an editable Properties field. Committing runs ALIGNMENTPROPS, so validation and undo match the command line.
+  // The panel is rebuilt on the next event-loop turn, not inside the edit's own signal.
+  auto editableAlignmentField = [&](QVBoxLayout* grid, const QString& label, const QString& value, const char* name,
+                                    const char* field, const std::string& alignmentName) {
+    auto* edit = new QLineEdit(value, body);
+    edit->setObjectName(name);
+    QObject::connect(edit, &QLineEdit::editingFinished, body, [this, edit, field, alignmentName]() {
+      const std::string command = "ALIGNMENTPROPS " + alignmentName + ", " + field + ", " + edit->text().toUtf8().toStdString();
+      char buf[1024];
+      std::snprintf(buf, sizeof buf, "%s", command.c_str());
+      std::vector<std::string> out;
+      ProcessCommandLineSubmit(buf, sizeof buf, m_State, out);
+      for (const std::string& line : out) m_Log.push_back(line);
+      QTimer::singleShot(0, this, [this]() { RefreshProperties(); });
+    });
+    addRow(grid, label, edit);
+  };
   auto readOnly = [&](QVBoxLayout* grid, const QString& label, const QString& value, const char* name) {
     auto* text = new QLabel(value, body);
     text->setObjectName(name);
+    text->setProperty("propertiesReadOnly", true);
     text->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    text->setToolTip("Calculated value · read-only");
+    text->setStyleSheet(QString("color:%1; font-weight:500;")
+        .arg(darkTheme ? "#b6c0c6" : "#46515a"));
     addRow(grid, label, text);
   };
 
@@ -259,9 +375,22 @@ void EditorWindow::RefreshProperties() {
     layer->addItems(layers);
     layer->setCurrentText(none ? QString::fromUtf8("\xE2\x80\x94") : general.layerMixed ? "(varies)" : Text(general.layer));
     layer->setEnabled(!none && general.count > 0);
-    connect(layer, &QComboBox::textActivated, layer, [this, finish](const QString& value) {
+    // An alignment keeps its layer on itself, not in the entity attributes: show it and set it with ALIGNMENTPROPS.
+    const bool oneAlignment = total == 1 && nAlignment == 1 && st.selection[0].index >= 0 &&
+                              static_cast<size_t>(st.selection[0].index) < st.alignments.size();
+    const std::string alignmentName = oneAlignment ? st.alignments[static_cast<size_t>(st.selection[0].index)].name : std::string();
+    if (oneAlignment) {
+      layer->setCurrentText(Text(st.alignments[static_cast<size_t>(st.selection[0].index)].layer));
+      layer->setEnabled(true);
+    }
+    connect(layer, &QComboBox::textActivated, layer, [this, finish, alignmentName](const QString& value) {
       const QString name = value.trimmed();
       if (name.isEmpty() || name == "(varies)") return;
+      if (!alignmentName.empty()) {  // the panel is rebuilt by the command, so not inside this combo's own signal
+        const QString command = Text(("ALIGNMENTPROPS " + alignmentName + ", LAYER, " + name.toUtf8().toStdString()).c_str());
+        QTimer::singleShot(0, this, [this, command] { Submit(command); });
+        return;
+      }
       const int n = CadApplyLayerToSelection(m_State, name.toUtf8().toStdString());
       if (n > 0) m_Log.push_back("LAYER — " + std::to_string(n) + " object(s) moved to layer \"" + name.toStdString() + "\".");
       finish({});
@@ -270,7 +399,7 @@ void EditorWindow::RefreshProperties() {
 
     QStringList colors; int colorIndex = -1;
     for (int i = 0; i < kNamedColorCount; ++i) {
-      colors.append(kNamedColors[i].storage);
+    colors.append(kNamedColors[i].storage);
       if (!general.colorMixed && CadColorStorageMatches(general.color, kNamedColors[i].storage)) colorIndex = i;
     }
     if (!general.colorMixed && colorIndex < 0 && !general.color.empty()) { colors.append(Text(general.color)); colorIndex = colors.size() - 1; }
@@ -285,6 +414,8 @@ void EditorWindow::RefreshProperties() {
       if (CadApplyColorToSelection(m_State, storage) > 0) m_Log.push_back("COLOR — set to " + storage + ".");
       finish({});
     });
+    for (int i = 0; i < kNamedColorCount; ++i)
+      color->setItemText(i + (general.colorMixed ? 1 : 0), kNamedColors[i].label);
     for (int i = 0; i < color->count(); ++i) {
       const int named = i - (general.colorMixed ? 1 : 0);
       if (named >= 0 && named < kNamedColorCount && !none) {
@@ -422,17 +553,30 @@ void EditorWindow::RefreshProperties() {
   }
   const bool pure = nOther == 0 && ((lines.size() == st.selection.size()) || (circles.size() == st.selection.size()) || (texts.size() == st.selection.size()));
   const size_t lineCount = st.userLinesFlat.size() / 6, circleCount = st.userCirclesCxCyZR.size() / 4;
-  if (none) {
+  if (none && st.selectedSurveyPointIndices.empty()) {
     for (const char* label : {"Start X", "Start Y", "End X", "End Y"}) {
       auto* dash = new QLabel(QString::fromUtf8("\xE2\x80\x94"), body);
       dash->setEnabled(false);
       addRow(geometryRows, label, dash);
     }
+  } else if (nAlignment > 0 && nAlignment == total) {  // REQ-487: an alignment's geometry is edited with grips and its table
+    auto* note = new QLabel("Alignment geometry: see the Alignment section below, drag its grips, or open the Alignment Layout table (EDITALIGNMENT).", body);
+    note->setObjectName("propertiesAlignmentGeometryNote");
+    note->setWordWrap(true);
+    geometryRows->addWidget(note);
   } else if (!pure) {
-    auto* mixed = new QLabel("Mixed object types — geometry is read-only here. Edit General above, or select only lines, circles, or text.", body);
-    mixed->setObjectName("propertiesMixedNote");
-    mixed->setWordWrap(true);
-    geometryRows->addWidget(mixed);
+    // Keep the shared geometry editor reserved for homogeneous line/circle/text selections;
+    // object-specific, read-only geometry is reported below for every other entity kind.
+    if (st.selection.size() > 1) {
+      auto* mixed = new QLabel("Mixed object types — geometry is read-only here. Edit General above, or select only lines, circles, or text.", body);
+      mixed->setObjectName("propertiesMixedNote");
+      mixed->setWordWrap(true);
+      geometryRows->addWidget(mixed);
+      if (lines.size()) readOnly(geometryRows, "Lines", QString::number(lines.size()), "propMixedLines");
+      if (circles.size()) readOnly(geometryRows, "Circles", QString::number(circles.size()), "propMixedCircles");
+      if (texts.size()) readOnly(geometryRows, "Annotations", QString::number(texts.size()), "propMixedAnnotations");
+      if (nOther) readOnly(geometryRows, "Other objects", QString::number(nOther), "propMixedOther");
+    }
   } else if (lines.size() == 1 && static_cast<size_t>(lines[0].index) < lineCount) {
     const int i = lines[0].index;
     const double* v = &st.userLinesFlat[static_cast<size_t>(i) * 6];
@@ -563,6 +707,253 @@ void EditorWindow::RefreshProperties() {
     hint->setWordWrap(true);
     geometryRows->addWidget(hint);
   }
+  if (nOther > 0) {
+    auto* details = section("Object details", "propertiesObjectDetails");
+    auto typeName = [](SelectedEntity::Type type) -> const char* {
+      switch (type) {
+        case SelectedEntity::Type::Polyline: return "Polyline";
+        case SelectedEntity::Type::Arc: return "Arc";
+        case SelectedEntity::Type::Ellipse: return "Ellipse";
+        case SelectedEntity::Type::PdfUnderlay: return "PDF underlay";
+        case SelectedEntity::Type::FilledRegion: return "Filled region";
+        case SelectedEntity::Type::Mesh: return "Mesh";
+        case SelectedEntity::Type::FeatureLine: return "Feature line";
+        case SelectedEntity::Type::Surface: return "TIN surface";
+        case SelectedEntity::Type::Table: return "Table";
+        case SelectedEntity::Type::BlockRef: return "Block reference";
+        case SelectedEntity::Type::Solid: return "3D solid";
+        case SelectedEntity::Type::PipeRun: return "Pipe run";
+        case SelectedEntity::Type::PointCloud: return "Point cloud";
+        case SelectedEntity::Type::Multileader: return "Multileader";
+        case SelectedEntity::Type::Spline: return "Spline";
+        case SelectedEntity::Type::Point: return "CAD point";
+        case SelectedEntity::Type::Alignment: return "Alignment";
+        default: return "Object";
+      }
+    };
+    QMap<QString, int> counts;
+    for (const auto& e : st.selection) if (e.type != SelectedEntity::Type::LineSeg &&
+        e.type != SelectedEntity::Type::Circle && e.type != SelectedEntity::Type::Annotation)
+      ++counts[QString::fromLatin1(typeName(e.type))];
+    for (auto it = counts.cbegin(); it != counts.cend(); ++it)
+      readOnly(details, it.key(), QString("%1 selected").arg(it.value()), "propObjectKind");
+    if (st.selection.size() == 1) {
+      const auto& e = st.selection.front();
+      const int i = e.index;
+      const auto valid = [i](size_t n) { return i >= 0 && static_cast<size_t>(i) < n; };
+      if (e.type == SelectedEntity::Type::Polyline && valid(st.userPolylineOffsets.size() - (st.userPolylineOffsets.empty() ? 0u : 1u))) {
+        const int first = st.userPolylineOffsets[static_cast<size_t>(i)], last = st.userPolylineOffsets[static_cast<size_t>(i + 1)];
+        readOnly(details, "Vertices", QString::number(std::max(0, last - first)), "propPolylineVertices");
+        const bool closed = valid(st.userPolylineClosed.size()) && st.userPolylineClosed[static_cast<size_t>(i)];
+        readOnly(details, "Closed", closed ? "Yes" : "No", "propPolylineClosed");
+        if (last > first && static_cast<size_t>(last) <= st.userPolylineVerts.size() / 3) {
+          double lo = st.userPolylineVerts[static_cast<size_t>(first) * 3 + 2], hi = lo;
+          for (int v = first; v < last; ++v) { const double z = st.userPolylineVerts[static_cast<size_t>(v) * 3 + 2]; lo = std::min(lo, z); hi = std::max(hi, z); }
+          readOnly(details, "Elevation range", fmt(lo) + " to " + fmt(hi), "propPolylineElevation");
+          const int vertexCount = last - first;
+          const int segmentCount = std::max(0, vertexCount - 1) + (closed && vertexCount > 1 ? 1 : 0);
+          double planLength = 0.0, spatialLength = 0.0, signedArea = 0.0;
+          for (int seg = 0; seg < segmentCount; ++seg) {
+            const int va = first + seg;
+            const int vb = seg == vertexCount - 1 ? first : va + 1;
+            const size_t a = static_cast<size_t>(va) * 3, b = static_cast<size_t>(vb) * 3;
+            const double x0 = st.userPolylineVerts[a], y0 = st.userPolylineVerts[a + 1], z0 = st.userPolylineVerts[a + 2];
+            const double x1 = st.userPolylineVerts[b], y1 = st.userPolylineVerts[b + 1], z1 = st.userPolylineVerts[b + 2];
+            const double bulge = static_cast<size_t>(va) < st.userPolylineVertsBulge.size()
+                ? st.userPolylineVertsBulge[static_cast<size_t>(va)] : 0.0;
+            const double segmentPlan = BulgeSegmentLength(x0, y0, x1, y1, bulge);
+            planLength += segmentPlan;
+            spatialLength += std::hypot(segmentPlan, z1 - z0);
+            if (closed) {
+              signedArea += 0.5 * (x0 * y1 - x1 * y0);
+              if (std::fabs(bulge) > 1e-12) {
+                const BulgeArcSpan arc = BulgeArc(x0, y0, x1, y1, bulge);
+                if (arc.valid) {
+                  signedArea += 0.5 * arc.radius * arc.radius * (arc.sweep - std::sin(arc.sweep));
+                }
+              }
+            }
+          }
+          readOnly(details, "Plan length", fmt(planLength), "propPolylinePlanLength");
+          readOnly(details, "Spatial length", fmt(spatialLength), "propPolylineSpatialLength");
+          if (closed) readOnly(details, "Area", fmt(std::fabs(signedArea)), "propPolylineArea");
+        }
+      } else if (e.type == SelectedEntity::Type::FeatureLine && valid(st.featureLineInfo.size())) {
+        const auto& fl = st.featureLineInfo[static_cast<size_t>(i)];
+        readOnly(details, "Name", Text(fl.name), "propFeatureLineName");
+        readOnly(details, "Description", Text(fl.description), "propFeatureLineDescription");
+        if (valid(st.featureLineOffsets.size() - (st.featureLineOffsets.empty() ? 0u : 1u))) {
+          const int first = st.featureLineOffsets[static_cast<size_t>(i)], last = st.featureLineOffsets[static_cast<size_t>(i + 1)];
+          const int vertexCount = std::max(0, last - first);
+          const bool closed = valid(st.featureLineClosed.size()) && st.featureLineClosed[static_cast<size_t>(i)];
+          readOnly(details, "Vertices", QString::number(vertexCount), "propFeatureLineVertices");
+          readOnly(details, "Closed", closed ? "Yes" : "No", "propFeatureLineClosed");
+          if (vertexCount > 0 && static_cast<size_t>(last) <= st.featureLineVerts.size() / 3) {
+            double lo = st.featureLineVerts[static_cast<size_t>(first) * 3 + 2], hi = lo;
+            double planLength = 0.0, spatialLength = 0.0;
+            const int segmentCount = std::max(0, vertexCount - 1) + (closed && vertexCount > 1 ? 1 : 0);
+            for (int seg = 0; seg < segmentCount; ++seg) {
+              const int va = first + seg, vb = seg == vertexCount - 1 ? first : va + 1;
+              const size_t a = static_cast<size_t>(va) * 3, b = static_cast<size_t>(vb) * 3;
+              const double dx = st.featureLineVerts[b] - st.featureLineVerts[a];
+              const double dy = st.featureLineVerts[b + 1] - st.featureLineVerts[a + 1];
+              const double dz = st.featureLineVerts[b + 2] - st.featureLineVerts[a + 2];
+              const double horizontal = std::hypot(dx, dy);
+              planLength += horizontal;
+              spatialLength += std::hypot(horizontal, dz);
+            }
+            for (int v = first; v < last; ++v) {
+              const double z = st.featureLineVerts[static_cast<size_t>(v) * 3 + 2];
+              lo = std::min(lo, z); hi = std::max(hi, z);
+            }
+            readOnly(details, "Elevation range", fmt(lo) + " to " + fmt(hi), "propFeatureLineElevation");
+            readOnly(details, "Plan length", fmt(planLength), "propFeatureLinePlanLength");
+            readOnly(details, "Spatial length", fmt(spatialLength), "propFeatureLineSpatialLength");
+          }
+        }
+      } else if (e.type == SelectedEntity::Type::Arc && valid(st.userArcs.size())) {
+        const auto& a = st.userArcs[static_cast<size_t>(i)];
+        readOnly(details, "Center", fmt(a.cx + ox) + ", " + fmt(a.cy + oy) + ", " + fmt(a.z), "propArcCenter");
+        readOnly(details, "Radius", fmt(a.r), "propArcRadius");
+        readOnly(details, "Sweep", fmt(std::fabs(a.sweepRad) * 180.0 / 3.14159265358979323846) + "°", "propArcSweep");
+        readOnly(details, "Length", fmt(a.r * std::fabs(static_cast<double>(a.sweepRad))), "propArcLength");
+      } else if (e.type == SelectedEntity::Type::Ellipse && valid(st.userEllipses.size())) {
+        const auto& a = st.userEllipses[static_cast<size_t>(i)];
+        readOnly(details, "Center", fmt(a.cx + ox) + ", " + fmt(a.cy + oy) + ", " + fmt(a.z), "propEllipseCenter");
+        const double major = std::hypot(a.majVx, a.majVy), minor = major * a.ratio;
+        readOnly(details, "Major radius", fmt(major), "propEllipseMajor");
+        readOnly(details, "Minor radius", fmt(minor), "propEllipseMinor");
+        readOnly(details, "Axis ratio", fmt(a.ratio), "propEllipseRatio");
+        constexpr double kPi = 3.14159265358979323846;
+        readOnly(details, "Major-axis rotation", fmt(std::atan2(a.majVy, a.majVx) * 180.0 / kPi) + "°", "propEllipseRotation");
+        readOnly(details, "Sweep", fmt(std::fabs(static_cast<double>(a.sweepRad)) * 180.0 / kPi) + "°", "propEllipseSweep");
+        int steps = std::max(32, static_cast<int>(std::ceil(std::fabs(static_cast<double>(a.sweepRad)) * 64.0)));
+        if (steps % 2 != 0) ++steps;
+        const double dt = static_cast<double>(a.sweepRad) / steps;
+        auto speed = [major, minor](double t) { return std::hypot(major * std::sin(t), minor * std::cos(t)); };
+        double integral = speed(a.startRad) + speed(static_cast<double>(a.startRad) + a.sweepRad);
+        for (int step = 1; step < steps; ++step)
+          integral += ((step % 2) ? 4.0 : 2.0) * speed(static_cast<double>(a.startRad) + step * dt);
+        readOnly(details, "Length", fmt(std::fabs(dt) * integral / 3.0), "propEllipseLength");
+        const double area = EllipseIsFullTurn(a) ? kPi * major * minor
+            : 0.5 * major * minor * (std::fabs(static_cast<double>(a.sweepRad)) - std::sin(std::fabs(static_cast<double>(a.sweepRad))));
+        readOnly(details, EllipseIsFullTurn(a) ? "Area" : "Arc segment area", fmt(area), "propEllipseArea");
+      } else if (e.type == SelectedEntity::Type::PipeRun && valid(st.cadPipeRuns.size())) {
+        const auto& p = st.cadPipeRuns[static_cast<size_t>(i)];
+        readOnly(details, "Name", Text(p.name), "propPipeRunName");
+        readOnly(details, "Nominal size", Text(p.nominalSize), "propPipeRunSize");
+        readOnly(details, "Route vertices", QString::number(p.vertsXyz.size() / 3), "propPipeRunVertices");
+        double routeLength = 0.0;
+        for (size_t v = 3; v + 2 < p.vertsXyz.size(); v += 3)
+          routeLength += std::hypot(std::hypot(p.vertsXyz[v] - p.vertsXyz[v - 3], p.vertsXyz[v + 1] - p.vertsXyz[v - 2]),
+                                    p.vertsXyz[v + 2] - p.vertsXyz[v - 1]);
+        readOnly(details, "Route length", fmt(routeLength), "propPipeRunLength");
+        readOnly(details, "Pressure class", p.pressureClassTag.empty() ? QString("Unspecified") : Text(p.pressureClassTag), "propPipeRunClass");
+        if (p.wallThicknessIn > 0.0) readOnly(details, "Wall thickness (in)", fmt(p.wallThicknessIn), "propPipeRunWall");
+      } else if (e.type == SelectedEntity::Type::Point && valid(st.cadPoints.size())) {
+        const auto& p = st.cadPoints[static_cast<size_t>(i)];
+        readOnly(details, "Position", fmt(p.x + ox) + ", " + fmt(p.y + oy) + ", " + fmt(p.z), "propCadPointPosition");
+      } else if (e.type == SelectedEntity::Type::Solid && valid(st.cadSolids.size()) && st.cadSolids[static_cast<size_t>(i)]) {
+        const auto& solid = *st.cadSolids[static_cast<size_t>(i)];
+        readOnly(details, "Vertices", QString::number(solid.vertices.size()), "propSolidVertices");
+        readOnly(details, "Edges", QString::number(solid.edges.size()), "propSolidEdges");
+        readOnly(details, "Faces", QString::number(solid.faces.size()), "propSolidFaces");
+        if (!solid.vertices.empty()) {
+          double lo[3]{solid.vertices.front().p.x, solid.vertices.front().p.y, solid.vertices.front().p.z};
+          double hi[3]{lo[0], lo[1], lo[2]};
+          for (const auto& v : solid.vertices) {
+            const double c[3]{v.p.x, v.p.y, v.p.z};
+            for (int axis = 0; axis < 3; ++axis) { lo[axis] = std::min(lo[axis], c[axis]); hi[axis] = std::max(hi[axis], c[axis]); }
+          }
+          readOnly(details, "Bounds X", fmt(lo[0] + ox) + " to " + fmt(hi[0] + ox), "propSolidBoundsX");
+          readOnly(details, "Bounds Y", fmt(lo[1] + oy) + " to " + fmt(hi[1] + oy), "propSolidBoundsY");
+          readOnly(details, "Bounds Z", fmt(lo[2]) + " to " + fmt(hi[2]), "propSolidBoundsZ");
+        }
+      } else if (e.type == SelectedEntity::Type::Mesh && valid(st.cadMeshes.size()) && st.cadMeshes[static_cast<size_t>(i)]) {
+        const auto& mesh = *st.cadMeshes[static_cast<size_t>(i)];
+        readOnly(details, "Source", Text(mesh.sourceName), "propMeshSource");
+        readOnly(details, "Vertices", QString::number(mesh.vertexCount()), "propMeshVertices");
+        readOnly(details, "Triangles", QString::number(mesh.triangleCount()), "propMeshTriangles");
+        if (mesh.vertsXyz.size() >= 3) {
+          float lo[3]{mesh.vertsXyz[0], mesh.vertsXyz[1], mesh.vertsXyz[2]}, hi[3]{lo[0], lo[1], lo[2]};
+          for (size_t v = 3; v + 2 < mesh.vertsXyz.size(); v += 3)
+            for (int axis = 0; axis < 3; ++axis) { lo[axis] = std::min(lo[axis], mesh.vertsXyz[v + static_cast<size_t>(axis)]); hi[axis] = std::max(hi[axis], mesh.vertsXyz[v + static_cast<size_t>(axis)]); }
+          readOnly(details, "Bounds X", fmt(lo[0] + ox) + " to " + fmt(hi[0] + ox), "propMeshBoundsX");
+          readOnly(details, "Bounds Y", fmt(lo[1] + oy) + " to " + fmt(hi[1] + oy), "propMeshBoundsY");
+          readOnly(details, "Bounds Z", fmt(lo[2]) + " to " + fmt(hi[2]), "propMeshBoundsZ");
+        }
+      } else if (e.type == SelectedEntity::Type::BlockRef && valid(st.cadBlockRefs.size())) {
+        const auto& block = st.cadBlockRefs[static_cast<size_t>(i)];
+        readOnly(details, "Definition", Text(block.defName), "propBlockDefinition");
+        readOnly(details, "Insertion", fmt(block.xf.x + ox) + ", " + fmt(block.xf.y + oy) + ", " + fmt(block.xf.z), "propBlockInsertion");
+        readOnly(details, "Scale X / Y / Z", fmt(block.xf.sx) + " / " + fmt(block.xf.sy) + " / " + fmt(block.xf.sz), "propBlockScale");
+        readOnly(details, "Rotation Z", fmt(block.xf.rotZ * 180.0 / 3.14159265358979323846) + "°", "propBlockRotation");
+        readOnly(details, "Attributes", QString::number(block.attributes.size()), "propBlockAttributes");
+      } else if (e.type == SelectedEntity::Type::Table && valid(st.cadTables.size())) {
+        const auto& table = st.cadTables[static_cast<size_t>(i)];
+        readOnly(details, "Rows × columns", QString("%1 × %2").arg(CadTableRowCount(table)).arg(table.cols), "propTableSize");
+        readOnly(details, "Insertion", fmt(table.insX + ox) + ", " + fmt(table.insY + oy) + ", " + fmt(table.insZ), "propTableInsertion");
+        readOnly(details, "Width × height", fmt(table.width) + " × " + fmt(table.height), "propTableDimensions");
+        readOnly(details, "Style", table.styleName.empty() ? QString("Standard") : Text(table.styleName), "propTableStyle");
+      } else if (e.type == SelectedEntity::Type::FilledRegion && valid(st.cadFilledRegions.size())) {
+        const auto& region = st.cadFilledRegions[static_cast<size_t>(i)];
+        readOnly(details, "Boundary loops", QString::number(region.loopStart.size()), "propRegionLoops");
+        readOnly(details, "Boundary vertices", QString::number(region.vertsXyz.size() / 3), "propRegionVertices");
+        readOnly(details, "Pattern", region.isSolid() ? QString("SOLID") : Text(region.patternName), "propRegionPattern");
+      } else if (e.type == SelectedEntity::Type::Multileader && valid(st.cadMultileaders.size())) {
+        const auto& leader = st.cadMultileaders[static_cast<size_t>(i)];
+        readOnly(details, "Branches", QString::number(CadMultileaderBranchCount(leader)), "propMleaderBranches");
+        readOnly(details, "Path vertices", QString::number(leader.pathXyz.size() / 3), "propMleaderVertices");
+        readOnly(details, "Text", Text(leader.label.text), "propMleaderText");
+        readOnly(details, "Style", Text(leader.styleName), "propMleaderStyle");
+      } else if (e.type == SelectedEntity::Type::PdfUnderlay && valid(st.pdfAttachments.size())) {
+        const auto& pdf = st.pdfAttachments[static_cast<size_t>(i)];
+        readOnly(details, "File", Text(pdf.filePath), "propPdfFile");
+        readOnly(details, "Page", QString::number(pdf.pageIndex + 1), "propPdfPage");
+        readOnly(details, "Insertion", fmt(pdf.insertX + ox) + ", " + fmt(pdf.insertY + oy), "propPdfInsertion");
+        readOnly(details, "Scale", fmt(pdf.scale), "propPdfScale");
+        readOnly(details, "Rotation", fmt(pdf.rotationDeg) + "°", "propPdfRotation");
+        readOnly(details, "Page size", fmt(pdf.pageWidthPts * pdf.scale) + " × " + fmt(pdf.pageHeightPts * pdf.scale), "propPdfDimensions");
+      } else if (e.type == SelectedEntity::Type::PointCloud && valid(st.cadPointClouds.size()) && st.cadPointClouds[static_cast<size_t>(i)]) {
+        const auto& cloud = *st.cadPointClouds[static_cast<size_t>(i)];
+        readOnly(details, "Source", Text(cloud.sourcePath), "propCloudSource");
+        readOnly(details, "Points", QString::number(cloud.totalPointCount), "propCloudPoints");
+        readOnly(details, "Preview points", QString::number(cloud.pointCount()), "propCloudPreviewPoints");
+      } else if (e.type == SelectedEntity::Type::PositionMarker && valid(st.cadPositionMarkers.size())) {
+        const auto& marker = st.cadPositionMarkers[static_cast<size_t>(i)];
+        readOnly(details, "Position", fmt(marker.x + ox) + ", " + fmt(marker.y + oy) + ", " + fmt(marker.z), "propPositionMarkerPosition");
+        readOnly(details, "Latitude / longitude", fmt(marker.latitudeDeg) + ", " + fmt(marker.longitudeDeg), "propPositionMarkerLatLong");
+        readOnly(details, "Label", Text(marker.label.text), "propPositionMarkerLabel");
+      }
+    }
+  }
+  if (st.selection.size() == 1 && st.selection.front().type == SelectedEntity::Type::FeatureLine) {
+    const int index = st.selection.front().index;
+    if (index >= 0 && static_cast<size_t>(index) < st.featureLineInfo.size() &&
+        st.featureLineInfo[static_cast<size_t>(index)].grading) {
+      const auto& grading = *st.featureLineInfo[static_cast<size_t>(index)].grading;
+      auto* rows = section("Grading criteria", "propertiesGrading");
+      const int baseline = FindEntityIndexById(st.featureLineAttrs, grading.baselineId);
+      const QString baselineName = baseline >= 0 && static_cast<size_t>(baseline) < st.featureLineInfo.size()
+          ? Text(st.featureLineInfo[static_cast<size_t>(baseline)].name) : QString("Missing baseline");
+      readOnly(rows, "Baseline", baselineName, "propGradingBaseline");
+      static const QStringList targets{"Surface", "Distance", "Absolute elevation", "Relative elevation"};
+      readOnly(rows, "Target kind", targets.value(static_cast<int>(grading.target)), "propGradingTargetKind");
+      QString targetValue = fmt(grading.targetValue);
+      if (grading.target == CadGradingDefinition::Target::Surface) {
+        const int si = FindSurfaceIndexById(st, grading.surfaceId);
+        targetValue = si >= 0 ? Text(st.cadSurfaces[static_cast<size_t>(si)].name) : QString("Missing surface");
+      }
+      readOnly(rows, "Target", targetValue, "propGradingTarget");
+      if (grading.target == CadGradingDefinition::Target::Distance)
+        readOnly(rows, "Distance grade (%)", fmt(grading.distanceGradePercent), "propGradingDistanceGrade");
+      readOnly(rows, "Cut slope (H:V)", fmt(grading.cutRun) + ":1", "propGradingCutSlope");
+      readOnly(rows, "Fill slope (H:V)", fmt(grading.fillRun) + ":1", "propGradingFillSlope");
+      if (static_cast<size_t>(index) < st.featureLineClosed.size() && !st.featureLineClosed[static_cast<size_t>(index)])
+        readOnly(rows, "Open side", grading.sideLeft ? "Left" : "Right", "propGradingOpenSide");
+    }
+  }
+
   // A single TIN surface: read-only, as in 0.7.4 -- every figure is derived from the triangulation or the
   // definition, so an editable copy here would be a second source of truth the next rebuild overwrites.
   int surfaceCount = 0;
@@ -573,6 +964,17 @@ void EditorWindow::RefreshProperties() {
     const CadSurface& surface = st.cadSurfaces[surfaceIndex];
     auto* rows = section("Surface", "propertiesSurface");
     readOnly(rows, "Name", Text(surface.name), "propSurfaceName");
+    if (surface.gradingGroup) {
+      QStringList members;
+      for (const auto& member : surface.gradingMembers) {
+        const int fi = FindEntityIndexById(st.featureLineAttrs, member.gradingId);
+        const QString name = fi >= 0 && static_cast<size_t>(fi) < st.featureLineInfo.size()
+            ? Text(st.featureLineInfo[static_cast<size_t>(fi)].name) : QString("Missing grading");
+        members << name + (member.infill ? " (infill)" : "");
+      }
+      readOnly(rows, "Grading group", "Yes", "propSurfaceGradingGroup");
+      readOnly(rows, "Members", members.join(", "), "propSurfaceGradingMembers");
+    }
     readOnly(rows, "Points", QString::number(surface.vertexCount()), "propSurfacePoints");
     readOnly(rows, "Triangles", QString::number(surface.triangleCount()), "propSurfaceTriangles");
     if (surface.tin && surface.tin->vertsXyz.size() >= 3) {
@@ -608,14 +1010,86 @@ void EditorWindow::RefreshProperties() {
       readOnly(rows, "Length", fmt(spline::Length(sp)), "propSplineLength");
     }
   }
+  if (st.selection.size() == 1 && st.selection.front().type == SelectedEntity::Type::Alignment) {  // REQ-501.1
+    const int index = st.selection.front().index;
+    if (index >= 0 && static_cast<size_t>(index) < st.alignments.size()) {
+      const alignment::Alignment& al = st.alignments[static_cast<size_t>(index)];
+      auto* rows = section("Alignment", "propertiesAlignment");
+      static const char* const kTypeNames[] = {"", "Centerline", "Offset", "Curb Return", "Miscellaneous", "Rail"};
+      editableAlignmentField(rows, "Name", Text(al.name), "propAlignmentName", "NAME", al.name);
+      editableAlignmentField(rows, "Description", Text(al.description), "propAlignmentDescription", "DESCRIPTION", al.name);
+      readOnly(rows, "Type", kTypeNames[static_cast<int>(al.type)], "propAlignmentType");
+      editableAlignmentField(rows, "Style", Text(al.style), "propAlignmentStyle", "STYLE", al.name);
+      editableAlignmentField(rows, "Layer", Text(al.layer), "propAlignmentLayer", "LAYER", al.name);
+      // Offsets name their parent by id (REQ-488).
+      QString parentName = QStringLiteral("(none)");
+      if (al.parentId != 0) {
+        for (const alignment::Alignment& other : st.alignments) {
+          if (other.id == al.parentId) parentName = Text(other.name);
+        }
+      }
+      readOnly(rows, "Parent alignment", parentName, "propAlignmentParent");
+      const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.alignmentStyles, al);
+      readOnly(rows, "Design criteria", criteriaName.empty() ? QStringLiteral("none") : Text(criteriaName),
+               "propAlignmentDesignCriteria");
+      // REQ-501.1 design criteria status: meets, or how many checks the alignment fails (REQ-502).
+      if (const alignment::AlignmentCheckSet* set = alignment::FindCheckSet(st.alignmentCheckSets, criteriaName)) {
+        const size_t findings = alignment::CheckDesign(al, *set, st.displayLinearPrecision).size();
+        readOnly(rows, "Design criteria status", findings == 0 ? QStringLiteral("Meets criteria")
+                                                               : QString("%1 violation(s)").arg(findings),
+                 "propAlignmentDesignStatus");
+      }
+      if (!al.Empty()) {
+        const double ox = CadCoord::WorldOriginX(st), oy = CadCoord::WorldOriginY(st);
+        const AngleDisplaySettings angles = CadAngleDisplaySettings(st);
+        constexpr double kRadToDeg = 180.0 / alignment::kPi;
+        editableAlignmentField(rows, "Start station", Text(alignment::FormatStation(al.StartStation(), st.alignmentStationFormat)), "propAlignmentStartStation",
+                               "START", al.name);
+        readOnly(rows, "End station", Text(alignment::FormatStation(al.EndStationWithEquations(), st.alignmentStationFormat)), "propAlignmentEndStation");
+        readOnly(rows, "Length", fmt(al.Length()), "propAlignmentLength");
+        readOnly(rows, "Start coordinate", fmt(al.StartPoint().x + ox) + ", " + fmt(al.StartPoint().y + oy),
+                 "propAlignmentStart");
+        readOnly(rows, "End coordinate", fmt(al.EndPoint().x + ox) + ", " + fmt(al.EndPoint().y + oy), "propAlignmentEnd");
+        readOnly(rows, "Start bearing", Text(FormatBearing(al.StartAzimuth() * kRadToDeg, angles)), "propAlignmentStartBearing");
+        readOnly(rows, "End bearing", Text(FormatBearing(al.EndAzimuth() * kRadToDeg, angles)), "propAlignmentEndBearing");
+      }
+      readOnly(rows, "Entity count", QString::number(al.Entities().size()), "propAlignmentEntities");
+      readOnly(rows, "Curve count", QString::number(al.CurveCount()), "propAlignmentCurves");
+      readOnly(rows, "Spiral count", QString::number(al.SpiralCount()), "propAlignmentSpirals");
+      readOnly(rows, "Continuity requirement", alignment::ContinuityRequirementLabel(al.continuityRequirement),
+                 "propAlignmentContinuityReq");
+      int continuityWarnings = 0;
+      for (const alignment::ContinuityIssue& c : al.CheckContinuity()) {
+        if (c.FailsRequirement(al.continuityRequirement)) ++continuityWarnings;
+      }
+      readOnly(rows, "Continuity status", continuityWarnings == 0 ? "OK" : QString("%1 warning(s)").arg(continuityWarnings),
+               "propAlignmentContinuityStatus");
+      readOnly(rows, "Station equations", QString::number(al.equations.size()), "propAlignmentEquations");
+    }
+  }
   if (!st.selectedSurveyPointIndices.empty()) {
-    auto* points = new QLabel(QString("%1 survey point%2 selected. Bulk editing: VIEWPOINTS.").arg(st.selectedSurveyPointIndices.size()).arg(st.selectedSurveyPointIndices.size() == 1 ? "" : "s"), body);
+    auto* rows = section("Survey point", "propertiesSurveyPoint");
+    readOnly(rows, "Selected points", QString::number(st.selectedSurveyPointIndices.size()), "propSurveyPointCount");
+    if (st.selectedSurveyPointIndices.size() == 1) {
+      const int index = st.selectedSurveyPointIndices.front();
+      if (index >= 0 && static_cast<size_t>(index) < st.surveyPoints.size()) {
+        const auto& point = st.surveyPoints[static_cast<size_t>(index)];
+        readOnly(rows, "Point ID", QString::number(point.id), "propSurveyPointId");
+        readOnly(rows, "Easting (X)", fmt(point.easting), "propSurveyPointEasting");
+        readOnly(rows, "Northing (Y)", fmt(point.northing), "propSurveyPointNorthing");
+        readOnly(rows, "Elevation (Z)", fmt(point.elevation), "propSurveyPointElevation");
+        readOnly(rows, "Description", Text(point.description), "propSurveyPointDescription");
+        readOnly(rows, "Raw code", Text(point.rawDescription), "propSurveyPointCode");
+      }
+    }
+    auto* points = new QLabel("Bulk editing: VIEWPOINTS.", body);
     points->setObjectName("propertiesSurveyNote");
     points->setWordWrap(true);
-    root->addWidget(points);
+    rows->addWidget(points);
   }
   root->addStretch(1);
 
   if (auto* old = m_PropertiesScroll->takeWidget()) old->deleteLater();
   m_PropertiesScroll->setWidget(body);
+  static_cast<AdaptivePropertiesScrollArea*>(m_PropertiesScroll)->UpdateRowWidths();
 }

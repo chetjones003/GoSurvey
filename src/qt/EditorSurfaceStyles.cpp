@@ -123,6 +123,7 @@ void EditorWindow::ShowSurfaceStyles(const QString& focusName, bool surfacesTitl
   const auto touch = [&] {
     dirty = true;
     BumpCadGpuCache(m_State);
+    RefreshSurfaceLegendTablesForStyle(m_State, current().name);
     m_Viewport->update();
     reloadAll();
   };
@@ -585,6 +586,7 @@ void EditorWindow::ShowSurfaceStyles(const QString& focusName, bool surfacesTitl
     m_State.surfaceStyles = baseline;
     for (size_t i = 0; i < baselineRefs.size() && i < m_State.cadSurfaces.size(); ++i) m_State.cadSurfaces[i].styleName = baselineRefs[i];
     BumpCadGpuCache(m_State);
+    for (const std::string& styleName : baselineRefs) RefreshSurfaceLegendTablesForStyle(m_State, styleName);
   };
   QObject::connect(ok, &QPushButton::clicked, &dialog, [&] {
     if (!intervalsOk) return;
@@ -600,6 +602,7 @@ void EditorWindow::ShowSurfaceStyles(const QString& focusName, bool surfacesTitl
       m_State.surfaceStyles = edited;
       for (size_t i = 0; i < editedRefs.size() && i < m_State.cadSurfaces.size(); ++i) m_State.cadSurfaces[i].styleName = editedRefs[i];
       BumpCadGpuCache(m_State);
+      for (const std::string& styleName : editedRefs) RefreshSurfaceLegendTablesForStyle(m_State, styleName);
     }
     dialog.accept();
   });

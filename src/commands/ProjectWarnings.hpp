@@ -56,8 +56,8 @@ struct PasteCheck {
   std::string text;  ///< plain-English reason; empty when Ok
   bool canConvert = false;  ///< Convert (D-2026-10-07-a) would make the paste match: within tolerance, nothing in the way
 };
-/// Compares the clipboard's origin with the ACTIVE drawing. Two standalone drawings are never checked, so
-/// nothing changes outside projects.
+/// Compares the clipboard's origin with the ACTIVE drawing. Defined coordinate-system mismatches are
+/// checked for every drawing pair; standalone unit mismatches retain their warning-and-convert behavior.
 PasteCheck CheckClipboardPaste(const AppCommandState& st);
 
 /// Convert the clipboard into the ACTIVE drawing's coordinate system and units (REQ-383 clause 7): the same

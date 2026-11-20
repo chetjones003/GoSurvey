@@ -7,8 +7,9 @@
 
 **Ribbon:** — **Command:** `OVERKILL`, `OK`
 
-Cleans the **entire drawing** in one pass. It takes no selection and asks nothing — run it and read
-the counts in the log.
+Cleans supported geometry in one pass. In model space it processes the drawing's model geometry. In
+paper space it processes only geometry on the active layout; model geometry and other layouts are
+unchanged. It takes no selection and asks nothing — run it and read the result in the log.
 
 | Object type | What is removed or merged |
 |---|---|

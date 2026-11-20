@@ -3,6 +3,7 @@ param(
   [string] $PdbPath,
   [string] $Version,
   [string] $Commit,
+  [ValidateSet('stable', 'beta', '')] [string] $Channel = '',
   [string] $Bucket = 'gosurvey-crash-dumps',
   [switch] $DryRun
 )
@@ -53,6 +54,7 @@ function ConvertFrom-PdbSummaryOutput {
 
 function Get-PdbObjectKey {
   param(
+    [Parameter(Mandatory)] [ValidateSet('stable', 'beta')] [string] $Channel,
     [Parameter(Mandatory)] [string] $Version,
     [Parameter(Mandatory)] [string] $Commit,
     [Parameter(Mandatory)] [string] $Identity
@@ -67,7 +69,7 @@ function Get-PdbObjectKey {
   if ($Identity -notmatch '^[0-9A-F]{32},\d+$') {
     throw "Invalid report PDB identity '$Identity'."
   }
-  "symbols/$Version/$($Commit.ToLowerInvariant())/$Identity.pdb"
+  "symbols/$Channel/$Version/$($Commit.ToLowerInvariant())/$Identity.pdb"
 }
 
 function Get-ReportPdbIdentity {
@@ -89,7 +91,7 @@ function Assert-PdbMatchesExecutable {
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
-  foreach ($argumentName in @('ExecutablePath', 'PdbPath', 'Version', 'Commit')) {
+  foreach ($argumentName in @('ExecutablePath', 'PdbPath', 'Version', 'Commit', 'Channel')) {
     if ([string]::IsNullOrWhiteSpace((Get-Variable -Name $argumentName -ValueOnly))) {
       throw "Missing required argument: -$argumentName"
     }
@@ -116,7 +118,7 @@ if ($MyInvocation.InvocationName -ne '.') {
   $pdbIdentity = ConvertFrom-PdbSummaryOutput -Lines $pdbLines
   $reportIdentity = Assert-PdbMatchesExecutable -ExecutableIdentity $executableIdentity -PdbIdentity $pdbIdentity
 
-  $key = Get-PdbObjectKey -Version $Version -Commit $Commit -Identity $reportIdentity
+  $key = Get-PdbObjectKey -Channel $Channel -Version $Version -Commit $Commit -Identity $reportIdentity
   $destination = "s3://$Bucket/$key"
   if ($DryRun) {
     Write-Output $destination
@@ -135,5 +137,7 @@ if ($MyInvocation.InvocationName -ne '.') {
   $aws = Get-Command aws.exe -ErrorAction Stop
   & $aws.Source s3 cp $PdbPath $destination --endpoint-url $endpoint --region auto --only-show-errors
   if ($LASTEXITCODE -ne 0) { throw "R2 PDB upload failed with exit code $LASTEXITCODE." }
+  # The prune step protects exactly this object, so hand its key to the workflow.
+  if ($env:GITHUB_OUTPUT) { "pdb-key=$key" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8 }
   Write-Output "Archived PDB as $destination"
 }

@@ -1,6 +1,6 @@
 // REQ-103 CHAMFER (step 6b, TASK-103) — the two genuinely new geometry functions this step adds:
 // ChamferPointAtDistance (Distance/Distance mode) and ChamferRayIntersect (Distance/Angle mode).
-// Header-only/inline (CadCommands.hpp), so this is testable without linking the whole command
+// Header-only/inline (GoSurvey/Geometry/FilletChamfer.hpp), so this is testable without linking the whole command
 // layer — the same reasoning tests/FilletGeomTests.cpp already follows for FILLET's own geometry
 // (whose radius-0 SolveFilletCenter path CHAMFER reuses directly for the intersection point, not
 // re-tested here).
@@ -11,7 +11,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include "CadCommands.hpp"
+#include <GoSurvey/Geometry/FilletChamfer.hpp>
 
 using Catch::Approx;
 

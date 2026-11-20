@@ -16,6 +16,17 @@ per notch. The same page reports the current zoom and pan values.
 
 ## Zoom commands
 
+### Annotation scale in model space
+
+The status bar's **annotation scale** list is the same control in model space and paper space, as in
+AutoCAD. Choosing a scale resizes annotative objects (survey points, markers and labels, and any text,
+dimension or multileader marked annotative) so they keep their plotted size at that scale. **The view
+does not move, pan or zoom.** Wheel zoom and the view commands are the only way to change the view.
+
+A new drawing starts with AutoCAD's standard list: the imperial list (`1" = 1"` to `1" = 5000'`) for
+inch or foot drawings, or the metric list (`1:1` to `100:1`) for other units. A list already in the drawing
+is kept as it is.
+
 ### ZOOMEXTENTS (`ZE`)
 
 **Ribbon:** View → Extents **Command:** `ZOOMEXTENTS`, `ZE`

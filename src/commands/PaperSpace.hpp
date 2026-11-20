@@ -1,10 +1,10 @@
 #pragma once
 
 #include "CadEntities.hpp"
-#include "util/cadblock.hpp"
-#include "util/cadtable.hpp"
-#include "util/geom2d.hpp"  // the shared segment/circle-vs-box tests the model-space fence uses
-#include "util/ucs.hpp"  // REQ-155: per-viewport active UCS frame (pure value type, ray3d only)
+#include "GoSurvey/Document/cadblock.hpp"
+#include "GoSurvey/Document/cadtable.hpp"
+#include <GoSurvey/Geometry/geom2d.hpp>  // the shared segment/circle-vs-box tests the model-space fence uses
+#include <GoSurvey/Math/ucs.hpp>  // REQ-155: per-viewport active UCS frame (pure value type, ray3d only)
 
 #include <algorithm>
 #include <cmath>
@@ -17,7 +17,10 @@
 // selection helpers can name it. \c index: Line = segment (flat offset/6); others = index into the matching
 // paper* vector.
 struct PaperEntityRef {
-  enum class Type : std::uint8_t { Line = 0, Text = 1, Circle = 2, Arc = 3, Ellipse = 4, Polyline = 5, Block = 6, Leader = 7, Table = 8 };
+  enum class Type : std::uint8_t {
+    Line = 0, Text = 1, Circle = 2, Arc = 3, Ellipse = 4, Polyline = 5, Block = 6, Leader = 7, Table = 8,
+    Spline = 9, Point = 10
+  };
   Type type = Type::Line;
   int  index = 0;
 };
@@ -57,6 +60,13 @@ struct Viewport {
   float paperYIn = 1.f;
   float paperWIn = 10.f;  // rect size, paper inches
   float paperHIn = 7.5f;
+  struct ClipVertex {
+    float xIn = 0.f;
+    float yIn = 0.f;
+    float bulge = 0.f;
+  };
+  // REQ-490: optional copied paper-space clipping boundary. Empty keeps the rectangular fast path.
+  std::vector<ClipVertex> clipBoundary;
   double modelCenterX = 0.0;  // model-space point shown at the viewport's center
   double modelCenterY = 0.0;
   float scaleModelPerPaperIn = 50.f;  // model units per paper inch (AutoCAD viewport scale)
@@ -66,8 +76,9 @@ struct Viewport {
   VisualStyle visualStyle = VisualStyle::Wireframe2D;  // REQ-371 / #624: per-viewport draw style (DWG VISUALSTYLE)
   std::string layer = "0";            // viewport's layer; if not plottable, its border is omitted from plots
   std::vector<std::string> frozenLayers;  // layer names hidden only in this viewport (REQ-028)
-  bool on = true;       // DWG VIEWPORT on/off (issue #768); carried through DWG, not yet enforced when drawing
-  bool locked = false;  // DWG 'display locked' flag (issue #768); carried through DWG, not yet enforced
+  bool on = true;       // DWG VIEWPORT on/off (issue #768, REQ-482); hides model content while off
+  bool locked = false;  // DWG display-lock flag (issue #768, REQ-482); prevents model-view navigation
+  bool hidePlot = false;  // REQ-482: visible in the editor, omitted from plotted output
   // Per-viewport layer COLOR override (REQ-046): parallel arrays (layer name -> override color, same
   // storage encoding as CadLayerRow::color). An entry recolors that layer's entities only within this
   // viewport (on screen and in the plot). No entry = the layer's normal color.
@@ -244,6 +255,16 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
   return drawingModelUnitsPerPlottedInch;
 }
 
+/// Plotted-inch scale for a drawing object (D-2026-11-06-a). In model space an annotative object takes the
+/// current annotation scale; everything else, and everything in paper space, keeps the drawing plot scale.
+[[nodiscard]] inline float ModelObjectUnitsPerPlottedInch(bool annotative, bool modelSpace, float drawingMup,
+                                                          const std::vector<CadAnnotationScale>& scales,
+                                                          int currentScaleIndex) {
+  if (!annotative || !modelSpace)
+    return drawingMup;
+  return ModelSpaceAnnotativeModelUnitsPerPlottedInch(drawingMup, &scales, currentScaleIndex);
+}
+
 /// Issue #622: annotative TEXT/MTEXT/dimensions use the viewport's scale on a layout sheet, or the
 /// current annotation scale in model space. Non-annotative objects keep the drawing plot scale.
 [[nodiscard]] inline float AnnotativeModelUnitsPerPlottedInch(
@@ -403,15 +424,33 @@ struct PageSetup {
   float portraitHeightIn = kPaperSizePresets[kDefaultPaperPresetIdx].heightIn;
   bool  landscape = true;
   bool  fitToPaper = false;
-  float scaleModelPerPaperIn = 1.f;  // plot scale: model units per paper inch (when not fit-to-paper)
+  float scaleModelPerPaperIn = 1.f;  // plot ratio N for "1 : N" (when not fit-to-paper); name kept for persistence (REQ-445)
   int   plotArea = 0;                // 0 = Layout (only option for now)
   float offsetXIn = 0.f;
   float offsetYIn = 0.f;
   bool  centerPlot = false;
+  /// Optional path to an existing CTB or STB file. Empty preserves current plot appearance.
+  std::string plotStyleTablePath;
+};
+
+/// Raster image attachment shared by model-space surface drapes (REQ-511) and paper-space underlays
+/// (REQ-457 / issue #1010). Stored by file path (REQ-173); the pixel size is recorded at attach time.
+/// PaperLayout::paperImages uses paper inches. AppCommandState::cadRasterImages uses drawing units.
+struct CadRasterImage {
+  std::uint64_t id = 0;                       ///< stable drawing id when used in model space
+  std::uint64_t surfaceId = 0;                 ///< nonzero when draped on a TIN
+  std::string layer = "0";                    ///< model-space layer (REQ-511)
+  std::string path;                          ///< file path as attached
+  float insX = 0.f, insY = 0.f;              ///< insertion point (lower-left corner), paper inches
+  float width = 0.f, height = 0.f;           ///< size on the sheet, paper inches
+  float rotationRad = 0.f;                   ///< CCW from +X
+  int pixelW = 0, pixelH = 0;                ///< pixel size of the image file
 };
 
 struct PaperLayout {
   std::string name = "Layout1";
+  /// Optional path to an existing CTB or STB file; empty means current plot appearance (REQ-485).
+  std::string plotStyleTablePath;
   // Portrait dimensions in inches (width <= height); orientation chooses how they map to the sheet.
   float portraitWidthIn = kPaperSizePresets[kDefaultPaperPresetIdx].widthIn;
   float portraitHeightIn = kPaperSizePresets[kDefaultPaperPresetIdx].heightIn;
@@ -435,8 +474,12 @@ struct PaperLayout {
   std::vector<EntityAttributes> paperArcAttrs;
   std::vector<CadEllipse>       paperEllipses;
   std::vector<EntityAttributes> paperEllAttrs;
+  /// REQ-457 / issue #1010: sheet raster IMAGE underlays; paperImageAttrs is parallel.
+  std::vector<CadRasterImage>   paperImages;
+  std::vector<EntityAttributes> paperImageAttrs;
   std::vector<int>              paperPolyOffsets;  ///< vertex-offset table (starts with 0); empty = no polylines
   std::vector<float>            paperPolyVerts;    ///< flat x,y,z triples
+  std::vector<float>            paperPolyVertsBulge;  ///< REQ-456 PEDIT Fit: one bulge per vertex, like model
   std::vector<uint8_t>          paperPolyClosed;
   std::vector<EntityAttributes> paperPolyAttrs;
   std::vector<CadFilledRegion>  paperFilledRegions;     ///< Solid fills on the sheet, paper inches (REQ-038 addendum)
@@ -449,6 +492,10 @@ struct PaperLayout {
   /// First-class tables on the sheet (REQ-148), in paper inches like model-space tables are in model units.
   std::vector<CadTable>         paperTables;
   std::vector<EntityAttributes> paperTableAttrs;
+  std::vector<CadSpline>        paperSplines;  ///< REQ-456 / issue #1019
+  std::vector<EntityAttributes> paperSplineAttrs;
+  std::vector<CadPoint>         paperPoints;   ///< REQ-456 / issue #1019
+  std::vector<EntityAttributes> paperPointAttrs;
   // Current page-setup plot fields (the layout's own setup). Paper size/orientation above are part of it.
   std::string pageSetupName;               // name of the applied named setup, or "" = <None>
   bool  fitToPaper = false;
@@ -523,6 +570,14 @@ inline bool SnapPaperInchPoint(const PaperLayout& L, float px, float py, float t
       CadTableWorldCorner(tb, c, &x, &y);
       consider(x, y);                                                              // table corners
     }
+  for (const CadSpline& sp : L.paperSplines) {
+    if (!sp.ctrl.empty())
+      consider(static_cast<float>(sp.ctrl.front().x), static_cast<float>(sp.ctrl.front().y));
+    if (sp.ctrl.size() > 1)
+      consider(static_cast<float>(sp.ctrl.back().x), static_cast<float>(sp.ctrl.back().y));
+  }
+  for (const CadPoint& p : L.paperPoints)
+    consider(static_cast<float>(p.x), static_cast<float>(p.y));
   return found;
 }
 
@@ -749,5 +804,27 @@ inline void SelectPaperEntitiesInBox(const PaperLayout& L, float bx0, float by0,
     CadTableWorldAabb(L.paperTables[static_cast<size_t>(ti)], &tx0, &ty0, &tx1, &ty1);
     if (boxSel(tx0, ty0, tx1, ty1))
       out.push_back({PaperEntityRef::Type::Table, ti});
+  }
+  for (int si = 0; si < static_cast<int>(L.paperSplines.size()); ++si) {
+    const CadSpline& sp = L.paperSplines[static_cast<size_t>(si)];
+    if (sp.ctrl.empty())
+      continue;
+    float mnX = static_cast<float>(sp.ctrl[0].x), mnY = static_cast<float>(sp.ctrl[0].y);
+    float mxX = mnX, mxY = mnY;
+    for (const auto& v : sp.ctrl) {
+      mnX = std::min(mnX, static_cast<float>(v.x));
+      mnY = std::min(mnY, static_cast<float>(v.y));
+      mxX = std::max(mxX, static_cast<float>(v.x));
+      mxY = std::max(mxY, static_cast<float>(v.y));
+    }
+    if (boxSel(mnX, mnY, mxX, mxY))
+      out.push_back({PaperEntityRef::Type::Spline, si});
+  }
+  for (int pi = 0; pi < static_cast<int>(L.paperPoints.size()); ++pi) {
+    const CadPoint& p = L.paperPoints[static_cast<size_t>(pi)];
+    const float x = static_cast<float>(p.x);
+    const float y = static_cast<float>(p.y);
+    if (boxSel(x, y, x, y))
+      out.push_back({PaperEntityRef::Type::Point, pi});
   }
 }

@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "ui/MtextToolbar.hpp"
+#include <GoSurvey/UI/MtextToolbar.hpp>
 
 // REQ-051: pure logic behind the MTEXT "Text Formatting" panel.
 

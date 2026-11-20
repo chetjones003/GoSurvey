@@ -13,7 +13,9 @@
 #include <QMessageBox>
 #include <QPainter>
 #include <QProgressBar>
+#include <QPushButton>
 #include <QRegion>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStackedWidget>
@@ -32,7 +34,7 @@
 // Shows the Compare tab of the side panel, wide enough for its list.
 void PdfWindow::ShowComparePanel() {
   m_ThumbDock->show();
-  const int index = m_SidePages->indexOf(m_ComparePanel);
+  const int index = m_SidePages->indexOf(m_CompareScroll);
   m_SidePages->setCurrentIndex(index);
   if (auto* group = findChild<QButtonGroup*>("pdfSideGroup")) if (auto* tab = group->button(index)) tab->setChecked(true);
   resizeDocks({m_ThumbDock}, {460}, Qt::Horizontal);
@@ -66,6 +68,7 @@ void PdfWindow::StartCompare(bool findChanges) {
   if (!m_Document || !m_Compare || m_Compare->busy || m_CompareWork.valid()) return;
   m_Compare->cancel = false;
   m_Compare->busy = true;
+  if (auto* cancel = findChild<QPushButton*>("pdfCompareCancel")) cancel->show();
   m_CompareProgress->show();
   if (!findChanges) m_Compare->haveChanges = false;
   m_CompareBasePage->setEnabled(false); m_CompareRevisionPage->setEnabled(false);
@@ -155,6 +158,7 @@ void PdfWindow::PollCompare() {
   catch (const std::exception& error) { qWarning() << "PDF comparison failed:" << error.what(); }
   if (!m_Compare) return;
   m_Compare->busy = false;
+  if (auto* cancel = findChild<QPushButton*>("pdfCompareCancel")) cancel->hide();
   m_CompareProgress->hide();
   m_CompareBasePage->setEnabled(true); m_CompareRevisionPage->setEnabled(true);
   if (m_Compare->cancel) {
@@ -188,10 +192,12 @@ void PdfWindow::PollCompare() {
     m_Compare->changes = std::move(out.changes.regions);
     m_Compare->haveChanges = true;
   }
-  m_CompareStatus->setText(QString("Revision: %1, page %2. Alignment confidence %3%4")
-      .arg(QFileInfo(m_Compare->source).fileName()).arg(m_Compare->revisionPage + 1)
-      .arg(out.alignment.confidence * 100.0, 0, 'f', 1)
-      .arg(m_Compare->lowConfidence ? ". Check alignment before trusting any change list." : ""));
+  m_CompareStatus->setToolTip("This percentage is the share of revision-page marks within about 2 pt of a base-page mark after alignment. Below 60%, check alignment before using the change list.");
+  const QString confidence = QString::number(out.alignment.confidence * 100.0, 'f', 1) + QLatin1Char('%');
+  QString status = QString("Revision: %1, page %2. %3 of marks on this page are within about 2 pt of a matching mark on the base page")
+      .arg(QFileInfo(m_Compare->source).fileName()).arg(m_Compare->revisionPage + 1).arg(confidence);
+  if (m_Compare->lowConfidence) status += ". Check alignment before trusting any change list.";
+  m_CompareStatus->setText(status);
   if (m_Compare->haveChanges) {
     m_CompareStatus->setText(m_CompareStatus->text() + (m_Compare->changes.empty() ? ". No changes found at this tolerance." :
         QString(". %1 change%2 found.").arg(m_Compare->changes.size()).arg(m_Compare->changes.size() == 1 ? "" : "s")));
@@ -200,7 +206,16 @@ void PdfWindow::PollCompare() {
       const auto& region = m_Compare->changes[static_cast<std::size_t>(row)];
       const QString values[] = {QString::fromLatin1(pdfdiff::KindName(region.kind)), QString::number(region.x0, 'f', 1),
           QString::number(region.y0, 'f', 1), QString("%1 × %2 pt").arg(region.Width(), 0, 'f', 1).arg(region.Height(), 0, 'f', 1)};
-      for (int column = 0; column < 4; ++column) m_CompareTable->setItem(row, column, new QTableWidgetItem(values[column]));
+      for (int column = 0; column < 4; ++column) {
+        auto* item = new QTableWidgetItem(values[column]);
+        if (column > 0) item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        m_CompareTable->setItem(row, column, item);
+      }
+    }
+    if (auto* count = findChild<QLabel*>("pdfCompareResultCount")) {
+      count->setText(m_Compare->changes.empty()
+          ? "No changes found at this tolerance."
+          : QString("%1 changes found · scroll the list to review all results").arg(m_Compare->changes.size()));
     }
   }
   ClearCompareDetail();

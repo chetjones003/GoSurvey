@@ -1,6 +1,6 @@
 // Web Mercator tile maths (REQ-363, ADR-064 (b)).
 
-#include "WebMercator.hpp"
+#include <GoSurvey/Network/WebMercator.hpp>
 
 #include <algorithm>
 #include <cmath>

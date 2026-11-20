@@ -44,6 +44,7 @@ function(gosurvey_assert_no_imgui_in_link_graph target)
 endfunction()
 
 add_library(gosurvey_qt_frontend STATIC
+  src/qt/DrawingDocumentTabBar.cpp
   src/qt/EditorWindow.cpp
   src/qt/EditorInput.cpp
   src/qt/EditorRibbon.cpp
@@ -60,8 +61,17 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorPointClouds.cpp
   src/qt/EditorUpdate.cpp
   src/qt/EditorDialogs.cpp
+  src/qt/StyleEditors.cpp
   src/qt/EditorPoints.cpp
   src/qt/EditorPointGroups.cpp
+  src/qt/EditorAlignmentLayout.cpp
+  src/qt/EditorAlignmentCreate.cpp
+  src/qt/EditorViewFrameDialog.cpp
+  src/qt/EditorSheetsDialog.cpp
+  src/qt/EditorSampleLinesDialog.cpp
+  src/qt/EditorSectionSheetsDialog.cpp
+  src/qt/EditorAlignmentStyle.cpp
+  src/qt/EditorPointTableDialog.cpp
   src/qt/EditorLayerManager.cpp
   src/qt/EditorProperties.cpp
   src/qt/EditorSurfaces.cpp
@@ -71,28 +81,17 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorPointTransfer.cpp
   src/qt/EditorBlockAuthoring.cpp
   src/qt/EditorPipePalette.cpp
+  src/qt/EditorGradingPalette.cpp
   src/qt/AdjustmentWindow.cpp
   src/qt/AdjustmentEditor.cpp
   src/qt/PdfWindow.cpp
   src/qt/PdfWindowCompare.cpp
   src/qt/PdfScaleUi.cpp
   src/qt/FailureReport.cpp
-  src/render/ViewportRenderer.cpp
-  src/pdf/PdfAttach.cpp
-  src/pdf/PdfDocument.cpp
-  src/pdf/PdfDimAudit.cpp
-  src/pdf/PdfAlign.cpp
-  src/pdf/PdfDiff.cpp
-  src/pdf/PdfViewerCore.cpp
-  src/pdf/PdfAnnotate.cpp
-  src/pdf/PdfMeasure.cpp
-  src/pdf/PdfScaleCheck.cpp
-  src/pdf/PdfSnap.cpp
-  src/pdf/PdfCoordExtract.cpp
-  src/pdf/PdfRaw.cpp
-  src/pdf/PdfSplit.cpp
-  src/io/PdfPlot.cpp
-  src/traverse/TraverseReport.cpp
+  src/renderer/src/ViewportRenderer.cpp
+  src/pdf/src/PdfAttach.cpp
+  src/io/src/PdfPlot.cpp
+  src/io/src/PlotStyleTable.cpp
   src/platform/WinFileDialogs.cpp
   src/platform/MapTilePlatform.cpp
   src/platform/HttpFetch.cpp
@@ -107,7 +106,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/platform/FailureReportUi.cpp
 )
 target_link_libraries(gosurvey_qt_frontend PUBLIC
-  gosurvey_domain Qt6::Widgets Qt6::OpenGLWidgets OpenGL::GL glew_static pdfium
+  gosurvey_domain GoSurvey::Pdf GoSurvey::UI Qt6::Widgets Qt6::OpenGLWidgets OpenGL::GL glew_static pdfium
   comdlg32 ole32 shell32 Windowscodecs winhttp bcrypt ws2_32 advapi32)
 target_include_directories(gosurvey_qt_frontend PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/qt")
 target_include_directories(gosurvey_qt_frontend PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry")
@@ -116,6 +115,7 @@ gosurvey_target_warnings(gosurvey_qt_frontend)
 add_executable(GoSurveyQt WIN32 src/qt/main.cpp resources/icons/app.rc)
 set_target_properties(GoSurveyQt PROPERTIES OUTPUT_NAME GoSurvey)
 target_link_libraries(GoSurveyQt PRIVATE gosurvey_qt_frontend)
+target_link_libraries(GoSurveyQt PRIVATE GoSurvey::Engine)
 gosurvey_assert_no_imgui_in_link_graph(GoSurveyQt)
 gosurvey_target_warnings(GoSurveyQt)
 if(MSVC)

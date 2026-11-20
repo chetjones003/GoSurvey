@@ -18,6 +18,11 @@ The top of the dialog reports the **Current profile** (`<<GoSurvey>>`) and the *
 
 Search paths, file locations, and the startup template.
 
+In the Qt application, **Options → Files → New drawings** sets the default template for standalone
+new drawings. Browse to a `.gst` file, or select **Use GoSurvey default** to clear the custom path
+and use the bundled `resources/default-template.gst`. This setting is separate from the startup
+workspace template. New drawings in an active project continue to use that project's defaults.
+
 | Control | What it does |
 |---|---|
 | **Startup template (.gst)** — Custom template path | The `.gst` new drawings start from |

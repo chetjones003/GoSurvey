@@ -96,3 +96,17 @@ TEST_CASE("Polylines still gate the draw on their own, unchanged", "[render][req
 
   REQUIRE(CadExtendedHasDrawableGeometry(e));
 }
+
+TEST_CASE("A drawing holding only a spline has drawable geometry", "[render][req087][req443]") {
+  std::vector<CadSpline> splines(1);
+  CadExtendedGeometryInput e;
+  e.splines = &splines;
+  REQUIRE(CadExtendedHasDrawableGeometry(e));
+}
+
+TEST_CASE("A drawing holding only a CAD point has drawable geometry", "[render][req087][req456]") {
+  std::vector<CadPoint> points = {{0.0, 0.0, 0.0}};
+  CadExtendedGeometryInput e;
+  e.points = &points;
+  REQUIRE(CadExtendedHasDrawableGeometry(e));
+}

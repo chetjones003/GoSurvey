@@ -41,6 +41,7 @@ Tabs can be hidden with **Settings → Display → Display File Tabs**.
 | **Open** | File → Open or `Ctrl+O` | Opens the selected DWG directly in a new, active tab, named after the file. Does not show the New Drawing chooser or replace what you are working on |
 | **Save** | `Ctrl+S`, File → Save | Writes to the current path. With no path yet, the Save-As dialog opens first |
 | **Save As** | File → Save As… | New name and location; the tab is renamed to the file stem and later saves go to the new path |
+| **Save as Template** | File → Save as Template… | Saves reusable styles/settings, point-group rules, supported model/paper linework, and layout border blocks as a `.gst`; omits survey-point instances and non-linework objects, and does not change the drawing's path or saved state |
 
 There is **no autosave, no backup file, and no drawing recovery**. Save deliberately, and save often.
 
@@ -75,6 +76,12 @@ the bundled and personal template folders. Selecting a template loads its conten
 drawing tab; it does not modify the source template. If a drawing in an open project is active,
 creating a new drawing starts empty with that project's defaults and skips the standalone chooser.
 
+Use **File → Save as Template…** to save reusable setup from the current drawing. Templates keep
+layers and their linetypes, text and annotation styles, layouts and page setups, plot scale,
+insertion units, and drawing settings. Model and paper geometry, survey points, and point groups
+are left out. The save dialog starts in the personal template folder; a saved template is available
+in the New Drawing chooser. A `.gst` is not opened with File → Open.
+
 The startup workspace template is a separate setting. It is used for the startup workspace and is
 not automatically listed in the New Drawing chooser.
 
@@ -94,7 +101,8 @@ not automatically listed in the New Drawing chooser.
 The dialog reports where the bundled template resolved to, or says it could not be found.
 
 **To make your own template:** set up a drawing with your standard layers, text styles, layouts,
-and page setups, save it as a `.gst` template, and point the startup template at it.
+and page setups. Choose **File → Save as Template…**, then point the Startup template setting at
+the saved `.gst` if you want it used for the startup workspace.
 
 ---
 

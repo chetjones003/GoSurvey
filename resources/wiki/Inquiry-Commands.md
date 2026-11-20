@@ -143,10 +143,11 @@ Press **Esc** after the first pick to stop with just the elevation.
 | Transformation parameters and point errors | [[Coordinate Alignment]] |
 | A CSV of every point | `EXPORTPOINTS` — see [[Survey Points]] |
 
-There is no `AREA`, `DIST`, `LIST`, or `MASSPROP` command. The only area GoSurvey reports is a
-**circle's**, shown under *Derived* in the Properties panel along with its diameter and
-circumference. A parcel area has to be computed outside the program — export the boundary or the
-points and compute there.
+`AREA` reports the area and perimeter of typed points or of a **closed** polyline or circle
+(`Object`). Open polylines are refused. `LIST` reports type, layer, space, and geometry (line
+endpoints, polyline vertex count and closed/open, spline fit/control counts, leader path points).
+`DIST` reports 3D distance between two points. There is no `MASSPROP` command. A circle's area is
+also shown under *Derived* in the Properties panel.
 
 ---
 

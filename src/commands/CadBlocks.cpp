@@ -1,16 +1,17 @@
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
 #include "CadRubberPreview.hpp"
-#include "StringUtil.hpp"
-#include "util/cadsolid.hpp"
-#include "util/cadpiperun.hpp"  // CadPipeRunEndPorts (issue #486, "pipe end" connection port)
+#include "ProjectWarnings.hpp"  // REQ-383: CheckClipboardPaste, the paste guard PASTEBLOCK shares with PASTE
+#include <GoSurvey/Core/StringUtil.hpp>
+#include <GoSurvey/Renderer/CadSolidDisplay.hpp>
+#include "GoSurvey/Document/cadpiperun.hpp"  // CadPipeRunEndPorts (issue #486, "pipe end" connection port)
 #include "util/solidpick.hpp"
 #include "GsIo.hpp"
 #include "DxfIo.hpp"
 #include "DwgIo.hpp"
 #include "AppPaths.hpp"
-#include "WinFileDialogs.hpp"
-#include "AcisSatParser.hpp"
+#include <GoSurvey/UI/FileDialogs.hpp>
+#include "io/src/AcisSatParser.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -275,6 +276,8 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   st.cadMultileaderAttrs.clear();
   st.cadSplines.clear();  // REQ-443: model-space objects, never block content
   st.cadSplineAttrs.clear();
+  st.cadPoints.clear();  // REQ-456: model-space objects, never block content
+  st.cadPointAttrs.clear();
   // Pipe runs (issue #486 / REQ-345) are model-space entities, never block content, so they hide
   // the same way cadTables/cadSurfaces above do — a run drawn in the main drawing is not the block
   // being edited. pipeRunWorldSolidsSig is left stale on purpose: it is a content hash, and this
@@ -282,6 +285,9 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   st.cadPipeRuns.clear();
   st.cadPipeRunAttrs.clear();
   st.cadPipingSystems.clear();  // issue #486 increment B3 / REQ-345 — same reason as cadPipeRuns above
+  st.alignments.clear();  // REQ-480: model-space objects, never block content
+  st.sampleLines.clear();  // REQ-519: sample lines belong to the alignments just removed
+  st.profiles.clear();  // REQ-521: profiles belong to the alignments just removed
   st.cadBlockRefs.clear();
   st.cadBlockRefAttrs.clear();
   st.surveyPoints.clear();
@@ -729,15 +735,15 @@ bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform x
     // A catalogue part off any run: the Pipe fitting row (REQ-361, D-2026-09-29-f).
     attr.layer = EnsureObjectLayer(st, ObjectLayerKind::PipeFitting, def.name);
   }
-  const bool paper = ActivePaperGeometryTarget(st) != nullptr;
+  PaperLayout* const paperTarget = ActivePaperGeometryTarget(st);
+  const bool paper = paperTarget != nullptr;
   if (paper && explode) {
     log.push_back("INSERT — explode is model space only; placing as a reference.");
     explode = false;
   }
   if (paper) {
-    PaperLayout* L = ActivePaperGeometryTarget(st);
-    L->paperBlockRefs.push_back(r);
-    L->paperBlockRefAttrs.push_back(attr);
+    paperTarget->paperBlockRefs.push_back(r);
+    paperTarget->paperBlockRefAttrs.push_back(attr);
   } else {
     st.cadBlockRefs.push_back(r);
     st.cadBlockRefAttrs.push_back(attr);
@@ -4236,22 +4242,45 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
         return true;
       }
     }
+    // Issue #805: Paste Special's menu runs this command from the ribbon, so it takes the same guards as
+    // PASTE and PASTEORIG. A stale layout index refuses (as Cut does), and a coordinate-system mismatch refuses
+    // before any change. A paper layout receives the references on its sheet, as PASTEORIG does.
+    PaperLayout* paperTarget = ActivePaperGeometryTarget(st);
+    if (paperTarget == nullptr && st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
+      log.push_back("PASTEBLOCK — the active layout is not available. Switch to model space first.");
+      return true;
+    }
     if (st.clipboard.blockRefs.empty()) {
       log.push_back("PASTEBLOCK — clipboard has no block references.");
+      return true;
+    }
+    const PasteCheck pc = CheckClipboardPaste(st);
+    if (pc.verdict != PasteCheck::Verdict::Ok) {
+      // This command has no warning dialog, so it cannot offer "Paste anyway" or Convert. The message says so.
+      log.push_back(std::string("PASTEBLOCK — not pasted (") + (pc.verdict == PasteCheck::Verdict::Block ? "blocked" : "needs a check") +
+                    "): " + pc.text +
+                    " Paste (Ctrl+V) shows the warning, but it pastes the whole clipboard, not only block references.");
       return true;
     }
     PushUndoSnapshot(st, "Pasteblock");
     for (size_t i = 0; i < st.clipboard.blockRefs.size(); ++i) {
       CadBlockRef r = st.clipboard.blockRefs[i];
       CadBlockTranslate(&r, dx, dy, 0.f);
-      st.cadBlockRefs.push_back(std::move(r));
-      EntityAttributes a = NewBlockAttr(st);
-      if (i < st.clipboard.blockRefAttrs.size())
-        a = st.clipboard.blockRefAttrs[i];
+      // REQ-076: a paste gets new entity ids, so the copied source's id is cleared on both sheet and model.
+      EntityAttributes a = i < st.clipboard.blockRefAttrs.size() ? st.clipboard.blockRefAttrs[i]
+                           : paperTarget != nullptr              ? EntityAttributes{}
+                                                                 : NewBlockAttr(st);
       a.id = 0;
+      if (paperTarget != nullptr) {
+        paperTarget->paperBlockRefs.push_back(std::move(r));
+        paperTarget->paperBlockRefAttrs.push_back(std::move(a));
+        continue;
+      }
+      st.cadBlockRefs.push_back(std::move(r));
       st.cadBlockRefAttrs.push_back(std::move(a));
     }
-    EnsureEntityIds(st);
+    if (paperTarget == nullptr)
+      EnsureEntityIds(st);
     BumpCadGpuCache(st);
     log.push_back("PASTEBLOCK — " + std::to_string(st.clipboard.blockRefs.size()) + " reference(s).");
     return true;

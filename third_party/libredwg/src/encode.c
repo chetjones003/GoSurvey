@@ -2239,19 +2239,19 @@ encode_header_vars (Dwg_Data *restrict dwg, Bit_Chain *restrict dat,
       size_t main_end = bit_position (dat);
       size_t str_bits = bit_position (&str_dat);
       size_t hdl_bits = bit_position (&hdl_dat);
-      BITCODE_RS data_size = (BITCODE_RS)str_bits;
+      BITCODE_RL data_size = (BITCODE_RL)str_bits;
 
       // Append string stream data
       if (str_bits)
         bit_copy_chain (dat, &str_dat);
       // String footer: data_size(RS) + endbit(B)
-      if (data_size & 0x8000)
+      if (data_size > 0x7fff)
         {
-          bit_write_RS (dat, (data_size >> 15) & 0x7FFF);
-          bit_write_RS (dat, (data_size & 0x7FFF) | 0x8000);
+          bit_write_RS (dat, (BITCODE_RS)((data_size >> 15) & 0x7FFF));
+          bit_write_RS (dat, (BITCODE_RS)((data_size & 0x7FFF) | 0x8000));
         }
       else
-        bit_write_RS (dat, data_size);
+        bit_write_RS (dat, (BITCODE_RS)data_size);
       bit_write_B (dat, str_bits ? 1 : 0); // endbit
       LOG_TRACE ("header string stream data_size: %u endbit: %d\n",
                  (unsigned)data_size, str_bits ? 1 : 0);
@@ -2430,7 +2430,7 @@ encode_classes (Dwg_Data *restrict dwg, Bit_Chain *restrict dat)
         || dat->version >= R_2018)
       {
         hsize_adr = dat->byte;
-        bit_write_RL (dat, 0); // hsize placeholder
+        bit_write_RL (dat, 0); // reserved class-section hsize
       }
     if (dat->version >= R_2007)
       {
@@ -2485,7 +2485,7 @@ encode_classes (Dwg_Data *restrict dwg, Bit_Chain *restrict dat)
     // Phase 2: write string data
     {
       size_t str_start = bit_position (dat);
-      BITCODE_RS data_size;
+      BITCODE_RL data_size;
       for (j = 0; j < dwg->num_classes; j++)
         {
           Dwg_Class *klass = &dwg->dwg_class[j];
@@ -2497,14 +2497,17 @@ encode_classes (Dwg_Data *restrict dwg, Bit_Chain *restrict dat)
             bit_write_T (dat, klass->dxfname);
         }
       // Phase 3: string stream footer
-      data_size = (BITCODE_RS)(bit_position (dat) - str_start);
-      if (data_size & 0x8000)
+      /* The R2007+ footer stores strings stream size in 15-bit low/high
+         chunks. Keep the intermediate full width: narrowing to RS here wraps
+         any stream larger than 65535 bits before the split is calculated. */
+      data_size = (BITCODE_RL)(bit_position (dat) - str_start);
+      if (data_size > 0x7fff)
         {
-          bit_write_RS (dat, (data_size >> 15) & 0x7FFF);
-          bit_write_RS (dat, (data_size & 0x7FFF) | 0x8000);
+          bit_write_RS (dat, (BITCODE_RS)((data_size >> 15) & 0x7FFF));
+          bit_write_RS (dat, (BITCODE_RS)((data_size & 0x7FFF) | 0x8000));
         }
       else
-        bit_write_RS (dat, data_size);
+        bit_write_RS (dat, (BITCODE_RS)data_size);
       bit_write_B (dat, 1); // endbit: has strings
       LOG_TRACE ("string stream data_size: %u endbit: 1\n",
                  (unsigned)data_size);
@@ -2553,20 +2556,12 @@ encode_classes (Dwg_Data *restrict dwg, Bit_Chain *restrict dat)
       // up to and including the string stream endbit
       bitsize = (BITCODE_RL)(32 + bit_position (dat) - data_start * 8);
       {
-        /* AutoCAD R2018 writes zero in the reserved class-section hsize
-           field. The DWG reader does not use this value; writing the computed
-           byte length here makes a self-consistent file that AutoCAD rejects
-           with eFilerError. */
-        BITCODE_RL hsize = dat->version >= R_2018
-                               ? 0
-                               : (BITCODE_RL)(bitsize / 8);
         size_t pos = bit_position (dat);
         if (hsize_adr)
           {
             bit_set_position (dat, hsize_adr * 8);
-            bit_write_RL (dat, hsize);
-            LOG_TRACE ("hsize: " FORMAT_RL " [RL] @%" PRIuSIZE "\n", hsize,
-                       hsize_adr);
+            bit_write_RL (dat, 0);
+            LOG_TRACE ("hsize: 0 [RL] @%" PRIuSIZE "\n", hsize_adr);
           }
         bit_set_position (dat, bitsize_adr * 8);
         bit_write_RL (dat, bitsize);
@@ -2595,9 +2590,10 @@ encode_classes (Dwg_Data *restrict dwg, Bit_Chain *restrict dat)
   dwg->header.section[sec_id].size
       = (dat->byte - dwg->header.section[sec_id].address) & 0xFFFFFFFF;
   LOG_TRACE ("       Classes (end): %4zu\n", dat->byte);
-  if (dat->version >= R_2018)
+  if (dat->version >= R_2010)
     {
-      /* AutoCAD R2018 terminates this section with eight reserved zero bytes. */
+      /* R2010+ terminates CLASSES with eight reserved zero bytes. The older
+         0x0DCA trailer makes AutoCAD reject R2010 files with a CRC error. */
       bit_write_RL (dat, 0);
       bit_write_RL (dat, 0);
     }
@@ -6628,7 +6624,7 @@ dwg_encode_unknown_bits (Bit_Chain *restrict dat, Dwg_Object *restrict obj)
         {
           const BITCODE_TF tail = obj->unknown_bits + len;
           for (int i = 0; i < mod; i++)
-            bit_write_B (dat, (tail[0] >> i) & 1);
+            bit_write_B (dat, (tail[0] >> (7 - i)) & 1);
           len++;
         }
       LOG_TRACE ("unknown_bits: %d/%u [TF]\n", len,

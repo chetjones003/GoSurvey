@@ -75,3 +75,50 @@ TEST_CASE("null catalog out is a no-op", "[req142][toolspace]") {
   AppendToolspaceSettingsLines(st, nullptr);
   REQUIRE(ToolspaceActiveDrawingName(st) == "Drawing 1");
 }
+
+TEST_CASE("project tab with no project open says so and lists no drawings", "[req142][toolspace][issue1040]") {
+  AppCommandState st;
+  std::vector<std::string> lines;
+  AppendToolspaceProjectLines(st, &lines);
+  REQUIRE(HasLine(lines, "No project is open"));
+  REQUIRE(HasLine(lines, "Drawings"));
+  REQUIRE_FALSE(HasLine(lines, "Projects"));
+  REQUIRE(lines.front() == "No project is open");
+}
+
+TEST_CASE("project tab lists open projects with their tracked files and the open drawings", "[req142][toolspace][issue1040]") {
+  AppCommandState st;
+  AppCommandState::ProjectSession session;
+  session.project.name = "Cloud Job";
+  session.uid = 7;
+  session.readOnly = true;
+  gsproj::TrackedItem item;
+  item.path = "PDFs/plan.pdf";
+  session.project.items.push_back(item);
+  st.openProjects.push_back(session);
+  st.drawingTabs.push_back({});
+  st.drawingTabs.back().name = "Site A";
+  st.drawingTabs.back().projectUid = session.uid;
+  st.drawingTabs.push_back({});
+  st.drawingTabs.back().name = "Loose";  // not in a project: not listed on the Project tab
+  std::vector<std::string> lines;
+  AppendToolspaceProjectLines(st, &lines);
+  REQUIRE(HasLine(lines, "Projects"));
+  REQUIRE(HasLine(lines, "Cloud Job (read-only)"));
+  REQUIRE(HasLine(lines, "PDFs/plan.pdf"));
+  REQUIRE(HasLine(lines, "Site A"));
+  REQUIRE_FALSE(HasLine(lines, "Loose"));
+  REQUIRE_FALSE(HasLine(lines, "No project is open"));
+  REQUIRE_FALSE(AnyForbidden(lines));
+}
+
+TEST_CASE("settings names the drawing's dimension style under Dimension Style", "[req142][toolspace][issue1040]") {
+  AppCommandState st;
+  st.activeDimensionStyle.name = "Survey Dims";
+  std::vector<std::string> lines;
+  AppendToolspaceSettingsLines(st, &lines);
+  const auto dimension = std::find(lines.begin(), lines.end(), "Dimension Style");
+  REQUIRE(dimension != lines.end());
+  REQUIRE((dimension + 1) != lines.end());
+  REQUIRE(*(dimension + 1) == "Survey Dims");
+}
