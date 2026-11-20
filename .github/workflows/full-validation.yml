@@ -35,7 +35,7 @@ jobs:
   # ---------------------------------------------------------------------------
   classify-docs-only:
     name: full / docs-only policy
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
       has_cpp_changes: ${{ steps.changed-cpp.outputs.has_cpp_changes }}
@@ -56,12 +56,13 @@ jobs:
 
       - name: Detect changed C/C++ files
         id: changed-cpp
-        shell: bash
+        shell: pwsh
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          python - <<'PY'
+          git fetch --no-tags --depth=1 origin "$env:BASE_SHA"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the PR base.' }
+          @'
           import os
           import subprocess
 
@@ -77,7 +78,8 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"has_cpp_changes={str(changed).lower()}\n")
           print(f"Changed C/C++ files present: {changed}")
-          PY
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'C/C++ change detection failed.' }
 
   # Keep the complete target build blocking while other checks are paused.
   build-all-targets:
@@ -90,9 +92,10 @@ jobs:
       always() &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
-    runs-on: ${{ vars.GOSURVEY_FULL_VALIDATION_RUNNER || 'windows-latest' }}
+    # Self-hosted Victus build runner; fork PRs wait for maintainer approval before running here.
+    runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
     env:
-      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_ENABLED: "false"
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -113,13 +116,11 @@ jobs:
         if: always()
         run: python .github/scripts/report_ci_performance.py --build-dir build/.cmake/release --output-dir build/artifacts/ci --sccache
 
-      - name: Upload build performance evidence
+      - name: Store build performance evidence on the runner
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-evidence-build-all-${{ github.run_attempt }}
-          retention-days: 7
-          include-hidden-files: true
-          path: |
-            build/artifacts/ci/
-            build/.cmake/release/.ninja_log
+        run: |
+          $evidence = Join-Path $env:RUNNER_TEMP 'ci-evidence-build-all'
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          if (Test-Path build/artifacts/ci) { Copy-Item -Recurse -Force build/artifacts/ci (Join-Path $evidence 'ci') }
+          if (Test-Path build/.cmake/release/.ninja_log) { Copy-Item -Force build/.cmake/release/.ninja_log $evidence }
+          ./tools/ci-local-artifacts.ps1 -Action store -Name "ci-evidence-build-all" -SourcePath $evidence

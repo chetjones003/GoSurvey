@@ -49,16 +49,12 @@ jobs:
   beta-notes-api-smoke:
     if: ${{ inputs.beta_notes_api_smoke == true }}
     name: Beta notes OpenAI API smoke test
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     permissions:
       contents: read
     steps:
       - name: Check out
         uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
       - name: Verify OpenAI Responses API with gpt-6-luna
         env:
           OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
@@ -66,13 +62,15 @@ jobs:
 
   build:
     if: ${{ inputs.beta_notes_api_smoke != true }}
-    runs-on: windows-latest
+    # All release jobs run on the self-hosted Victus runner. CI artifacts stay on its disk
+    # (tools/ci-local-artifacts.ps1); published installers still go to GitHub Releases and PDBs to R2.
+    runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
     permissions:
       contents: read
       actions: write
       pull-requests: read
     env:
-      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_ENABLED: "false"
     outputs:
       version: ${{ steps.ver.outputs.version }}
       full: ${{ steps.ver.outputs.full }}
@@ -102,12 +100,6 @@ jobs:
             throw 'Could not capture the master commit for the beta notes baseline.'
           }
           "commit=$baseline" | Out-File $env:GITHUB_OUTPUT -Append
-
-      - name: Set up Python for beta release notes
-        if: github.ref_name == 'beta' || inputs.beta_notes_validation == true
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
 
       # ---------------------------------------------------------------------
       # Version and channel
@@ -380,39 +372,37 @@ jobs:
             Write-Warning 'sccache was unavailable during cleanup; skipping stats.'
           }
 
-      - name: Upload test diagnostics
+      - name: Store test diagnostics on the runner
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-test-diagnostics
-          path: |
-            build/artifacts/ci/
-            build/artifacts/catch/
-            build/artifacts/qt-editor/
-          if-no-files-found: ignore
-          retention-days: 7
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'release-test-diagnostics'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          foreach ($dir in 'ci', 'catch', 'qt-editor') {
+            $source = Join-Path 'build/artifacts' $dir
+            if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $stage -Recurse -Force }
+          }
+          ./tools/ci-local-artifacts.ps1 -Action store -Name release-test-diagnostics -SourcePath $stage
 
-      - name: Upload binaries for packaging
-        uses: actions/upload-artifact@v4
-        with:
-          name: gosurvey-bin
-          path: |
-            build/GoSurvey.exe
-            build/*.dll
-            build/qt.conf
-            build/qt-plugins/
-            build/resources/
-          if-no-files-found: error
-          retention-days: 1
+      - name: Store binaries for packaging on the runner
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'gosurvey-bin'
+          if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -LiteralPath build/GoSurvey.exe, build/qt.conf -Destination $stage
+          Copy-Item -Path build/*.dll -Destination $stage
+          Copy-Item -LiteralPath build/qt-plugins, build/resources -Destination $stage -Recurse
+          ./tools/ci-local-artifacts.ps1 -Action store -Name gosurvey-bin -SourcePath $stage
 
-      - name: Upload generated beta release content
+      - name: Store generated beta release content on the runner
         if: github.ref_name == 'beta' || inputs.beta_notes_validation == true
-        uses: actions/upload-artifact@v4
-        with:
-          name: beta-release-content
-          path: build/artifacts/release-notes/beta-release-content.json
-          if-no-files-found: error
-          retention-days: 1
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'beta-release-content'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -LiteralPath build/artifacts/release-notes/beta-release-content.json -Destination $stage -Force
+          ./tools/ci-local-artifacts.ps1 -Action store -Name beta-release-content -SourcePath $stage
 
   package:
     needs: build
@@ -423,7 +413,7 @@ jobs:
     if: >-
       inputs.beta_notes_api_smoke != true &&
       (github.ref_name == 'beta' || github.ref_name == 'master' || github.event_name == 'workflow_dispatch')
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
     permissions:
       contents: write
       actions: read
@@ -434,21 +424,16 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Download binaries
-        # upload-artifact@v4 strips the shared `build/` prefix from the uploaded
-        # paths, so the archive contains the app/runtime files at its root. Unpack into
-        # build/ so installer/GoSurvey.iss finds the Qt deployment tree.
-        uses: actions/download-artifact@v4
-        with:
-          name: gosurvey-bin
-          path: build
+      - name: Restore binaries from the runner
+        # The stored artifact holds the app/runtime files at its root; restore into build/ so
+        # installer/GoSurvey.iss finds the Qt deployment tree.
+        shell: pwsh
+        run: ./tools/ci-local-artifacts.ps1 -Action restore -Name gosurvey-bin -Destination build
 
-      - name: Download generated beta release content
+      - name: Restore generated beta release content from the runner
         if: github.ref_name == 'beta' || inputs.beta_notes_validation == true
-        uses: actions/download-artifact@v4
-        with:
-          name: beta-release-content
-          path: installer/Output/beta-release-content
+        shell: pwsh
+        run: ./tools/ci-local-artifacts.ps1 -Action restore -Name beta-release-content -Destination installer/Output/beta-release-content
 
       - name: REQ-336 assert whats-new.md in packaging inputs
         shell: pwsh
@@ -488,13 +473,8 @@ jobs:
               throw "Expected $path in packaging inputs; offline installer would be incomplete."
             }
           }
-          $iscc = Get-ChildItem 'C:\Program Files (x86)\Inno Setup*\ISCC.exe','C:\Program Files\Inno Setup*\ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $iscc) {
-            Write-Host "Inno Setup not present on the runner image - installing."
-            choco install innosetup -y --no-progress
-            $iscc = Get-ChildItem 'C:\Program Files (x86)\Inno Setup*\ISCC.exe','C:\Program Files\Inno Setup*\ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-          }
-          if (-not $iscc) { throw "ISCC.exe not found after install attempt" }
+          # Pinned per-user Inno Setup 6 in the runner's local tool cache; no elevation needed.
+          $iscc = Get-Item -LiteralPath (./tools/ci-get-tool.ps1 -Name innosetup)
           Write-Host "Using $($iscc.FullName)"
           & $iscc.FullName `
             "/DAppVersion=${{ needs.build.outputs.full }}" `
@@ -693,17 +673,18 @@ jobs:
       # ---------------------------------------------------------------------
       # Publish
       # ---------------------------------------------------------------------
-      - name: Upload artifact (non-release branches)
+      - name: Store installer on the runner (non-release branches)
         if: >-
           (github.ref_name != 'master' && github.ref_name != 'beta') ||
           inputs.beta_notes_validation == true
-        uses: actions/upload-artifact@v4
-        with:
-          name: GoSurvey-${{ needs.build.outputs.full }}
-          path: |
-            installer/Output/*.exe
-            installer/Output/latest.json
-          retention-days: 14
+        shell: pwsh
+        env:
+          ARTIFACT_NAME: GoSurvey-${{ needs.build.outputs.full }}
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'installer-artifact'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -Path installer/Output/*.exe, installer/Output/latest.json -Destination $stage
+          ./tools/ci-local-artifacts.ps1 -Action store -Name $env:ARTIFACT_NAME -SourcePath $stage
 
       - name: Publish the rolling beta prerelease
         if: github.ref_name == 'beta' && inputs.beta_notes_validation != true
@@ -791,7 +772,7 @@ jobs:
       (needs.build.result == 'failure' || needs.package.result == 'failure') &&
       (github.ref_name == 'beta' || github.ref_name == 'master') &&
       inputs.beta_notes_validation != true
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     permissions:
       actions: read
       contents: read

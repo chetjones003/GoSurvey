@@ -52,10 +52,19 @@ inputs:
 runs:
   using: composite
   steps:
+    # Self-hosted runners use the toolchain, Qt kit and compiler cache installed on the machine
+    # (tools/setup-windows-build-runner.ps1); nothing is restored from or saved to GitHub's cache.
+    - name: Set up self-hosted toolchain and local compiler cache
+      if: runner.environment == 'self-hosted'
+      shell: pwsh
+      run: ./tools/initialize-self-hosted-pr-job.ps1 -Role build
+
     - name: Set up MSVC
+      if: runner.environment != 'self-hosted'
       uses: ilammy/msvc-dev-cmd@v1
 
     - name: Set up Qt
+      if: runner.environment != 'self-hosted'
       uses: ./.github/actions/setup-qt
 
     - name: Set up Mesa OpenGL for hosted tests
@@ -101,12 +110,14 @@ runs:
       run: ./.github/scripts/record_ci_runner.ps1
 
     - name: Set up sccache
+      if: runner.environment != 'self-hosted'
       uses: mozilla-actions/sccache-action@v0.0.11
 
     # GitHub's per-object sccache backend is rate-limited (429) when 17 jobs read and write thousands of
     # entries, so most hits became recompiles. Workers instead use one local directory that is restored
     # from a single cache archive and saved once by the full-target build.
     - name: Use local sccache directory
+      if: runner.environment != 'self-hosted'
       shell: pwsh
       run: |
         # No server may be running yet; cmd keeps its "couldn't connect" stderr from aborting this step.
@@ -118,6 +129,7 @@ runs:
         "SCCACHE_DIR=$dir" | Add-Content $env:GITHUB_ENV
 
     - name: Restore sccache archive
+      if: runner.environment != 'self-hosted'
       uses: actions/cache/restore@v4
       with:
         path: ${{ runner.temp }}/sccache
@@ -186,7 +198,7 @@ runs:
         if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
 
     - name: Save sccache archive
-      if: inputs.build-targets == 'all' && success()
+      if: runner.environment != 'self-hosted' && inputs.build-targets == 'all' && success()
       uses: actions/cache/save@v4
       with:
         path: ${{ runner.temp }}/sccache
@@ -212,8 +224,9 @@ runs:
           }
         }
 
+    # Self-hosted Qt tests run on the hidden desktop; never resize the runner owner's display.
     - name: Prepare hosted display for Qt tests
-      if: inputs.run-tests == 'true' && inputs.prepare-qt-tests == 'true'
+      if: runner.environment != 'self-hosted' && inputs.run-tests == 'true' && inputs.prepare-qt-tests == 'true'
       shell: pwsh
       run: ./tools/prepare-qt-test-display.ps1
 

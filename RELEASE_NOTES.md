@@ -19,6 +19,53 @@ time. Current GoSurvey drawings use DWG.
 
 ---
 
+## 0.8.0
+
+- The first click in Qt ZOOM WINDOW now starts the selection box, and the second completes the zoom area.
+- With OSNAP enabled, Qt ZOOM WINDOW keeps both corners at the cursor positions instead of snapping them to nearby geometry.
+- Crash reports with multibyte text are now truncated at a valid UTF-8 character boundary before upload.
+- Traverse files now retain side-shot and network-direction inputs when saved and loaded, and malformed observations return an error without changing the existing traverse or weights.
+- Valid paper-space viewports that span nearly an entire layout sheet are now preserved when saving and reopening DWG files.
+- The Qt drawing workspace now has rounded ribbon tabs and more distinct, beveled edges around the ribbon and dock panels in both Light and Dark appearances.
+- LEADER, MLEADER, SPLINE, POINT, PEDIT, MEASURE, DIVIDE, AREA, and LIST are available as typed commands in model space and on paper layouts.
+- DWG files written as R2010 or R2018 can now be opened in AutoCAD.
+- The Qt Toolspace now separates Project, Prospector, and Settings into tabs, with project actions and drawing-level style tables in their respective tabs.
+- The Home ribbon no longer shows the unimplemented Panorama, Reference Manager, Component Editor, Set Working Folder, and Project Explorer buttons.
+- PDF plots now use entity lineweights, including ByLayer values, and render dashed linetypes across connected entity segments.
+- Paper-space splines, dimensions, points, and raster images are now written to DWG as native objects on their layouts.
+- Drafting interactions now support additive click and box selection, live text and PDF transforms, and magnetic snaps; zoom ratios and presets are separate per drawing and persist in DWG and DXF, with improved PDF attachment controls and drawing tabs.
+- DIMALIGNED and DIMLINEAR now use the active dimension style, and DWG import brings in dimension, multileader, and Civil surface style tables for listing in Toolspace Settings.
+- Help pages now explain the Modify Text, Dimension, Multileader, and Table Style windows.
+- PDF plots now apply Page Setup offsets, centering, fit-to-paper scaling, and plot ratio settings.
+- Choose a default template for new standalone drawings in Options → Files, or use the bundled template; new drawings open without the former template chooser.
+- Qt interaction and precision improvements refine grip snapping, TRIM previews, selection highlights, and status-bar scale controls; model-space scale presets do not change the viewport zoom.
+- Copy and paste selected survey points, with options to resolve point-number conflicts and address coordinate-system mismatches between drawings.
+- Manage grading presets and groups, create and copy grading results, and edit feature-line elevations and grades in a table.
+- Windows can open a DWG in an existing GoSurvey editor, while DWG import and export better preserve saved views, annotation scales, multileader contexts, and legacy leader callouts.
+- Paper-space tools now include viewport controls and clipping, layout duplication, named viewport scales, and current-layout PDF preview and export with CTB/STB support.
+- The Qt editor and related panels have clearer visual states, input focus, command history, search feedback, and PDF workflow guidance in dark and light themes.
+- Create and edit alignments with transition spirals, stationing, grips, and continuity reporting, and save alignment data to GS and DWG drawings.
+- Removed the Parcel, Intersections, Assembly, Pond, Underground Storage, and Channel placeholders from the Create Design ribbon.
+- Import LandXML 1.2 survey points, TIN surfaces, and feature lines into a drawing, with unit conversion when units are known and reporting for unsupported items.
+- The model-space status bar now controls annotation scale; changing it resizes annotative objects without moving or zooming the view.
+- In model space, annotative objects now size to the annotation scale without moving the view; survey points, markers, and labels are annotative by default.
+- New text now inherits the Annotative setting of its text style and follows the model-space annotation scale when that setting is enabled.
+- The showcase now includes a triangulated mountainous surface and solid 3D primitive examples, and Properties shows geometry details for additional object types.
+- Surface ribbon controls now provide access to analysis, terrain display, editing, saved surface profiles and views, and data shortcuts.
+- DXF export preserves the active layout, and importing a DXF restores its active layout when available or activates Model space otherwise.
+- Create view frames along an alignment using a page setup, named scale, and centered, left, or right placement; frame groups update with alignment edits and are saved with the drawing.
+- Create ARCH D paper layouts from view frames, with a title block, filled-in frame details, a north arrow, and a locked viewport oriented to the alignment.
+- Create sample lines at chosen alignment stations and sample sections from a TIN surface, then generate paper-space section sheets from those sections.
+- The installer now includes an expanded third-party license notice and license files, and excludes the Qt test library from installed files.
+- Cut now works from the ribbon, context menu, Ctrl+X, or the CUT command; one Undo restores cut objects, and unsupported selections are refused without erasing them.
+- Create and manage vertical design profiles along alignments with commands for profile points, elevation and grade queries, listing, and deletion; profiles save with the drawing.
+- The Paste Special menu now offers Paste Block References and Paste at Original Coordinates; it provides access to existing paste commands rather than adding new paste behavior.
+- Alignment criteria now calculate superelevation and sight distance on circular curves and report findings in alignment criteria, lists, reports, and drawing markers.
+- Saving or using Save As is now refused during BEDIT, with a message directing you to run BCLOSE first; BSAVE and BSAVEAS remain available.
+- The startup screen now shows an update-checking phase, and the initial update offer appears after the main window has been open for one second and the check is complete.
+
+---
+
 ## 0.7.8
 
 **Updating GoSurvey**
