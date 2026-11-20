@@ -8,6 +8,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'pdb-identity.ps1')
 
 $script:CrashTriageBucket = 'gosurvey-crash-dumps'
 $script:CrashTriageConfig = Join-Path $PSScriptRoot 'crash-triage.wrangler.toml'
@@ -191,7 +192,9 @@ function Invoke-CrashReportTriage {
       ) | Out-Null
       if (-not (Test-Path -LiteralPath $partialPdbPath -PathType Leaf)) { throw 'Wrangler did not create the PDB file.' }
       $downloadedIdentity = Get-PdbIdentityFromFile -PdbPath $partialPdbPath
-      if ($downloadedIdentity -cne $identity.pdb.ToUpperInvariant()) { throw 'The downloaded PDB identity does not match the crash report.' }
+      if (-not (Test-PdbIdentityMatch -ExecutableIdentity $identity.pdb.ToUpperInvariant() -PdbIdentity $downloadedIdentity)) {
+        throw 'The downloaded PDB identity does not match the crash report.'
+      }
       Move-Item -LiteralPath $partialPdbPath -Destination $pdbPath -Force | Out-Null
       $metadata.pdb = 'GoSurvey.pdb'
       $metadata.pdbStatus = 'downloaded and verified against report GUID/age'

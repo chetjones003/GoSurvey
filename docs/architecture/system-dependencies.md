@@ -13,7 +13,7 @@ named box. Nothing has to be traced across the page.
 - **Dotted arrow**: a platform backend implements that interface.
 - **Red ✗ box**: a forbidden dependency. These are examples. Apart from Core, anything not drawn
   is forbidden too.
-- **Core** is open to every system except GoSurveyEditor, so the system view does not draw it.
+- **Core** is open to every system; its arrows are omitted from the system view.
 
 `python tools/system_dependency_diagrams.py` generates this file and a three-page US Letter print
 layout in `build/artifacts/diagrams/`. Edit the generator, not this file; `--check` fails when
@@ -148,6 +148,7 @@ flowchart LR
   commands__math["Math"]
   commands__events["Events"]
   commands__ui["UI"]
+  commands__debug["Debug"]
   commands__x_interaction["✗ Interaction"]
   commands__src --> commands__renderer
   commands__src --> commands__io
@@ -161,6 +162,7 @@ flowchart LR
   commands__src --> commands__math
   commands__src --> commands__events
   commands__src --> commands__ui
+  commands__src --> commands__debug
   commands__src -.-x commands__x_interaction
   style commands__src fill:#312e81,stroke:#60a5fa,stroke-width:3px,color:#f8fafc
   style commands__renderer fill:#164e63,stroke:#22d3ee,stroke-width:2px,color:#f8fafc
@@ -175,6 +177,7 @@ flowchart LR
   style commands__math fill:#4c1d95,stroke:#a78bfa,stroke-width:2px,color:#f8fafc
   style commands__events fill:#4c1d95,stroke:#c084fc,stroke-width:2px,color:#f8fafc
   style commands__ui fill:#4c1d95,stroke:#d8b4fe,stroke-width:2px,color:#f8fafc
+  style commands__debug fill:#4c1d95,stroke:#ddd6fe,stroke-width:2px,color:#f8fafc
   style commands__x_interaction fill:#3f1d1d,stroke:#ef4444,stroke-width:2px,color:#f8fafc
   linkStyle 0 stroke:#60a5fa,stroke-width:2.5px
   linkStyle 1 stroke:#60a5fa,stroke-width:2.5px
@@ -188,7 +191,8 @@ flowchart LR
   linkStyle 9 stroke:#60a5fa,stroke-width:2.5px
   linkStyle 10 stroke:#60a5fa,stroke-width:2.5px
   linkStyle 11 stroke:#60a5fa,stroke-width:2.5px
-  linkStyle 12 stroke:#ef4444,stroke-width:2.5px,stroke-dasharray:8 5
+  linkStyle 12 stroke:#60a5fa,stroke-width:2.5px
+  linkStyle 13 stroke:#ef4444,stroke-width:2.5px,stroke-dasharray:8 5
 ```
 
 ### Renderer
@@ -480,15 +484,23 @@ flowchart LR
 ```mermaid
 flowchart LR
   pqt__src["<b>Qt</b>"]
+  pqt__survey["Survey"]
+  pqt__terrain["Terrain"]
   pqt__events["Events"]
   pqt__ui["UI"]
+  pqt__src --> pqt__survey
+  pqt__src --> pqt__terrain
   pqt__src -.-> pqt__events
   pqt__src -.-> pqt__ui
   style pqt__src fill:#3f3f46,stroke:#f472b6,stroke-width:3px,color:#f8fafc
+  style pqt__survey fill:#14532d,stroke:#facc15,stroke-width:2px,color:#f8fafc
+  style pqt__terrain fill:#14532d,stroke:#4ade80,stroke-width:2px,color:#f8fafc
   style pqt__events fill:#4c1d95,stroke:#c084fc,stroke-width:2px,color:#f8fafc
   style pqt__ui fill:#4c1d95,stroke:#d8b4fe,stroke-width:2px,color:#f8fafc
   linkStyle 0 stroke:#f472b6,stroke-width:2.5px
   linkStyle 1 stroke:#f472b6,stroke-width:2.5px
+  linkStyle 2 stroke:#f472b6,stroke-width:2.5px
+  linkStyle 3 stroke:#f472b6,stroke-width:2.5px
 ```
 
 ### OpenGL
@@ -1361,10 +1373,8 @@ flowchart LR
 These follow from the system-map table and may be unintended. Resolve them in `system-map.md`;
 the generator drops a gap from this list once the table no longer has it.
 
-- **Debug has no consumers.** No system lists Debug as an allowed dependency, so nothing may
-  call the profiler, tracer or invariant checks.
 - **Commands and GoSurveyEditor may use Geometry's public kernel interface.** Geometry remains
   a lower-tier library with only Math and Core dependencies; Qt remains independent of Geometry.
 - **Interaction may not include Pdf**, though it may include every other Domain system.
-- **GoSurveyEditor may not include Headless, Events, UI or Core directly**; it reaches them
+- **GoSurveyEditor may not include Headless, Events or UI directly**; it reaches them
   only through the systems it lists.
