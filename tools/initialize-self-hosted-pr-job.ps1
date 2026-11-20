@@ -29,7 +29,8 @@ if ($Role -eq 'msvc-analyze') {
 }
 foreach ($key in @('GOSURVEY_QT_ROOT', 'QT_ROOT_DIR', 'QT_PLUGIN_PATH', 'QML2_IMPORT_PATH',
   'CMAKE_BUILD_PARALLEL_LEVEL', 'CTEST_PARALLEL_LEVEL', 'CMAKE_PREFIX_PATH', 'SCCACHE_GHA_ENABLED', 'SCCACHE_DIR',
-  'SCCACHE_CACHE_SIZE', 'INCLUDE', 'LIB', 'LIBPATH')) {
+  'SCCACHE_CACHE_SIZE', 'INCLUDE', 'LIB', 'LIBPATH', 'VCINSTALLDIR', 'VCToolsInstallDir', 'VCToolsRedistDir',
+  'VSINSTALLDIR', 'WindowsSdkDir', 'WindowsSDKVersion', 'UniversalCRTSdkDir', 'UCRTVersion')) {
   $value = [Environment]::GetEnvironmentVariable($key)
   if ($value -and $value -match '[\r\n]') { throw "Unexpected newline in environment value $key." }
   if ($value) { Add-Content -LiteralPath $env:GITHUB_ENV -Value "$key=$value" }
