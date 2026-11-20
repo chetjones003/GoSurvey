@@ -9,6 +9,7 @@ never gain entries or raise a value over the base branch's baseline.
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -171,6 +172,30 @@ def write_baseline(root, output):
     return grandfathered
 
 
+def release_baseline_ref(root, base_ref):
+    """Use beta's accepted debt baseline for release PRs to master.
+
+    The size baseline is maintained on beta. Comparing a beta-to-master promotion against
+    master's older baseline would reject every oversized file that was already accepted on
+    beta, even though the promotion does not grow that debt. All other PRs remain checked
+    against their actual target commit.
+    """
+    if (os.environ.get("GITHUB_BASE_REF") != "master" or
+            not os.environ.get("GITHUB_HEAD_REF", "").startswith("chore/release-")):
+        return base_ref
+
+    result = subprocess.run(
+        ["git", "-C", str(root), "fetch", "--no-tags", "--depth=1", "origin",
+         "+refs/heads/beta:refs/remotes/origin/beta"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise SystemExit("File-size gate: could not fetch beta's accepted size baseline: "
+                         f"{result.stderr.strip()}")
+    print("Note: release PR to master; comparing file-size limits against origin/beta.")
+    return "refs/remotes/origin/beta"
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2], help="repository root")
@@ -186,6 +211,8 @@ def main(argv=None):
 
     if not args.base_ref:
         parser.error("--base-ref is required when checking (omit it only with --write-baseline)")
+
+    args.base_ref = release_baseline_ref(args.root, args.base_ref)
 
     current = collect_line_counts(args.root)
     baseline = read_baseline(args.root)
