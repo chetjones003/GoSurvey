@@ -217,8 +217,8 @@ GAPS = [
     (lambda allowed: "pdf" not in allowed["interaction"]
      and all(d in allowed["interaction"] for d in DOMAIN if d != "pdf"),
      "**Interaction may not include Pdf**, though it may include every other Domain system."),
-    (lambda allowed: not {"phead", "events", "ui", "core"} & allowed["editor"],
-     "**GoSurveyEditor may not include Headless, Events, UI or Core directly**; it reaches them\n"
+    (lambda allowed: not {"phead", "events", "ui"} & allowed["editor"],
+     "**GoSurveyEditor may not include Headless, Events or UI directly**; it reaches them\n"
      "  only through the systems it lists."),
 ]
 
@@ -288,11 +288,11 @@ def validate(allowed, feature_edges=None, forbidden=None):
             if target not in allowed[source]:
                 raise DiagramError(f"forbidden example {example.source} -> {example.target} says "
                                    f"{example.why!r}, but the system map has no {source} -> {target}")
-    # The doc and the system view rely on Core being open to everyone but the editor.
+    # Core is a Foundation dependency of every system; it does not depend on itself.
     for system in SYSTEMS:
-        expected = system not in ("editor", "core")
+        expected = system != "core"
         if ("core" in allowed[system]) != expected:
-            raise DiagramError(f"the doc says every system except GoSurveyEditor may include Core, "
+            raise DiagramError(f"the doc says every system except Core may include Core, "
                                f"but the system map {'omits' if expected else 'allows'} {system} -> core")
     for source, target in SYSTEM_IMPLEMENTS | {(system_of(a), system_of(b)) for a, b in FEATURE_IMPLEMENTS}:
         if target not in allowed[source]:
@@ -381,7 +381,7 @@ LEGEND = """- **Arrow** `A --> B`: A may include B (system view) or uses B (feat
 - **Dotted arrow**: a platform backend implements that interface.
 - **Red ✗ box**: a forbidden dependency. These are examples. Apart from Core, anything not drawn
   is forbidden too.
-- **Core** is open to every system except GoSurveyEditor, so the system view does not draw it.
+- **Core** is open to every system; its arrows are omitted from the system view.
 """
 
 
@@ -442,7 +442,7 @@ def render_print_page(allowed):
 <h1>GoSurvey · system dependencies</h1>
 <div class="sub">Target architecture · one diagram per system · each arrow is one allowed entry in docs/architecture/system-map.md.
 Box colour = tier · arrow colour = source system · dotted = implements · <span class="red">✗</span> = forbidden example ·
-Core is open to every system except GoSurveyEditor.</div>
+Core is open to every system; its arrows are omitted from this view.</div>
 <div class="grid">{cards(system_card(s, allowed) for s in ORDER)}</div></section>"""
     feature_sheets = "".join(f"""<section class="sheet">
 <h1>GoSurvey · feature dependencies (proposed) · {title}</h1>
