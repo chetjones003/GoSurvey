@@ -449,9 +449,12 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   setDockNestingEnabled(true);
   // Tab zero is the Start page; a drawing becomes active only after the user opens one.
   m_State.activeDrawingIdx = 0;
-  m_State.prevDrawingIdx = 1;
-  const auto templatePath = ResolveDefaultWorkspaceTemplateGstPath();
-  if (!templatePath.empty()) LoadGoSurveyTemplateFile(m_State, templatePath.u8string().c_str(), m_Log);
+  // The state type keeps a drawing slot for engine-only callers, but the editor must not expose
+  // or initialize a drawing until the user chooses New Drawing (or opens an existing file).
+  if (m_State.drawingTabs.size() > 1) m_State.drawingTabs.pop_back();
+  if (m_State.documents.size() > 1) m_State.documents.pop_back();
+  m_State.nextDrawingNumber = 1;
+  m_State.prevDrawingIdx = 0;
   LoadBundledBlockLibrary(m_State, m_Log);
 
   auto* center = new QWidget(this);
@@ -1393,6 +1396,12 @@ void EditorWindow::BuildDocks() {
   });
   connect(m_CommandSuggestions, &QListView::clicked, this, [this](const QModelIndex& index) {
     if (!index.isValid() || (DynamicInputAcceptsInput())) return;
+    if (m_State.activeDrawingIdx == 0) {
+      m_CommandSuggestions->hide();
+      m_Command->clear();
+      m_CommandBar->Append("Open or create a drawing before entering commands.");
+      return;
+    }
     const QString command = index.data(Qt::DisplayRole).toString();
     m_CommandSuggestions->hide();
     m_Command->clear();

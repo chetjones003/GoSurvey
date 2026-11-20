@@ -7,7 +7,8 @@ feedback on the right, and the status bar along the bottom.*
 
 The window is laid out top to bottom: **menu bar**, **ribbon**, **drawing tabs**, **drawing
 viewport** (with the **Properties / Reports** panel docked left), **command line**, and the
-**status bar** across the bottom.
+**status bar** across the bottom. GoSurvey opens on Start without an active drawing; create or open
+one before entering drawing commands.
 
 ---
 

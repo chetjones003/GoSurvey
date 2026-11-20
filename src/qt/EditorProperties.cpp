@@ -134,6 +134,21 @@ void EditorWindow::RefreshProperties() {
   mix(static_cast<std::uint64_t>(std::llround(st.worldDocumentOriginX * 1000))); mix(static_cast<std::uint64_t>(std::llround(st.worldDocumentOriginY * 1000)));
   mix(st.annotationScales.size());
   mix(st.drawingLayerTable.size()); mix(static_cast<std::uint64_t>(st.activeDrawingIdx));
+  mix(st.sectionPlaneSelected ? 1u : 0u);
+  mix(st.viewportSectionClip ? 1u : 0u);
+  mix(st.viewportSectionClipFrameValid ? 1u : 0u);
+  mix(st.viewportSectionClipFlip ? 1u : 0u);
+  mix(static_cast<std::uint64_t>(std::llround(st.viewportSectionClipOffset * 1e6)));
+  const auto& sectionFrame = st.viewportSectionClipFrameValid ? st.viewportSectionClipFrame : st.activeUcs;
+  mix(static_cast<std::uint64_t>(std::llround(sectionFrame.origin.x * 1e6)));
+  mix(static_cast<std::uint64_t>(std::llround(sectionFrame.origin.y * 1e6)));
+  mix(static_cast<std::uint64_t>(std::llround(sectionFrame.origin.z * 1e6)));
+  mix(static_cast<std::uint64_t>(std::llround(sectionFrame.zAxis.x * 1e6)));
+  mix(static_cast<std::uint64_t>(std::llround(sectionFrame.zAxis.y * 1e6)));
+  mix(static_cast<std::uint64_t>(std::llround(sectionFrame.zAxis.z * 1e6)));
+  mix(st.viewportSectionClipExtent.valid ? 1u : 0u);
+  mix(static_cast<std::uint64_t>(std::llround(st.viewportSectionClipExtent.halfU * 1e6)));
+  mix(static_cast<std::uint64_t>(std::llround(st.viewportSectionClipExtent.halfV * 1e6)));
   mix(qHash(m_PropertiesNote));
   // A selected alignment's own fields change without a geometry revision (criteria, name, station) - REQ-501.1.
   for (const auto& e : st.selection) {
@@ -169,6 +184,7 @@ void EditorWindow::RefreshProperties() {
 
   // --- selection summary ------------------------------------------------------------------------
   int nLine = 0, nCirc = 0, nText = 0, nOther = 0, nSurface = 0, nAlignment = 0;
+  const int nSectionPlane = st.sectionPlaneSelected ? 1 : 0;
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) ++nLine;
     else if (e.type == SelectedEntity::Type::Circle) ++nCirc;
@@ -179,14 +195,14 @@ void EditorWindow::RefreshProperties() {
       if (e.type == SelectedEntity::Type::Alignment) ++nAlignment;
     }
   }
-  const int total = static_cast<int>(st.selection.size());
+  const int total = static_cast<int>(st.selection.size()) + nSectionPlane;
   body->setProperty("propertiesPopulated", total > 0 || !st.selectedSurveyPointIndices.empty());
   QString summary;
   if (total == 0 && st.selectedSurveyPointIndices.empty()) summary = "No selection";
   else if (total == 0) summary = QString("Selected: %1 survey point%2")
       .arg(st.selectedSurveyPointIndices.size()).arg(st.selectedSurveyPointIndices.size() == 1 ? "" : "s");
   else {
-    const int kinds = (nLine > 0) + (nCirc > 0) + (nText > 0) + (nOther > 0);
+    const int kinds = (nLine > 0) + (nCirc > 0) + (nText > 0) + (nOther > 0) + (nSectionPlane > 0);
     QString what;
     if (kinds > 1) {
       QStringList parts;
@@ -194,11 +210,13 @@ void EditorWindow::RefreshProperties() {
       if (nCirc) parts << QString("Circle %1").arg(nCirc);
       if (nText) parts << QString("Text %1").arg(nText);
       if (nOther) parts << QString("Other %1").arg(nOther);
+      if (nSectionPlane) parts << "Section plane";
       what = "Mixed: " + parts.join(", ");
     }
     else if (nLine) what = nLine == 1 ? "Line" : QString("%1 lines").arg(nLine);
     else if (nCirc) what = nCirc == 1 ? "Circle" : QString("%1 circles").arg(nCirc);
     else if (nText) what = nText == 1 ? "Text" : QString("%1 annotations").arg(nText);
+    else if (nSectionPlane && total == 1) what = "Section plane";
     else if (nSurface == nOther) what = nSurface == 1 ? QString("TIN Surface") : QString("%1 surfaces").arg(nSurface);
     else if (nAlignment == nOther) what = nAlignment == 1 ? QString("Alignment") : QString("%1 alignments").arg(nAlignment);
     else what = "Other objects";
@@ -376,7 +394,7 @@ void EditorWindow::RefreshProperties() {
     layer->setCurrentText(none ? QString::fromUtf8("\xE2\x80\x94") : general.layerMixed ? "(varies)" : Text(general.layer));
     layer->setEnabled(!none && general.count > 0);
     // An alignment keeps its layer on itself, not in the entity attributes: show it and set it with ALIGNMENTPROPS.
-    const bool oneAlignment = total == 1 && nAlignment == 1 && st.selection[0].index >= 0 &&
+    const bool oneAlignment = st.selection.size() == 1 && total == 1 && nAlignment == 1 && st.selection[0].index >= 0 &&
                               static_cast<size_t>(st.selection[0].index) < st.alignments.size();
     const std::string alignmentName = oneAlignment ? st.alignments[static_cast<size_t>(st.selection[0].index)].name : std::string();
     if (oneAlignment) {
@@ -711,6 +729,13 @@ void EditorWindow::RefreshProperties() {
     auto* details = section("Object details", "propertiesObjectDetails");
     auto typeName = [](SelectedEntity::Type type) -> const char* {
       switch (type) {
+        case SelectedEntity::Type::Solid: return "3D solid";
+        case SelectedEntity::Type::PipeRun: return "Pipe run";
+        case SelectedEntity::Type::PositionMarker: return "Position marker";
+        case SelectedEntity::Type::Multileader: return "Multileader";
+        case SelectedEntity::Type::Spline: return "Spline";
+        case SelectedEntity::Type::Point: return "CAD point";
+        case SelectedEntity::Type::Alignment: return "Alignment";
         case SelectedEntity::Type::Polyline: return "Polyline";
         case SelectedEntity::Type::Arc: return "Arc";
         case SelectedEntity::Type::Ellipse: return "Ellipse";
@@ -721,13 +746,7 @@ void EditorWindow::RefreshProperties() {
         case SelectedEntity::Type::Surface: return "TIN surface";
         case SelectedEntity::Type::Table: return "Table";
         case SelectedEntity::Type::BlockRef: return "Block reference";
-        case SelectedEntity::Type::Solid: return "3D solid";
-        case SelectedEntity::Type::PipeRun: return "Pipe run";
         case SelectedEntity::Type::PointCloud: return "Point cloud";
-        case SelectedEntity::Type::Multileader: return "Multileader";
-        case SelectedEntity::Type::Spline: return "Spline";
-        case SelectedEntity::Type::Point: return "CAD point";
-        case SelectedEntity::Type::Alignment: return "Alignment";
         default: return "Object";
       }
     };
@@ -740,6 +759,7 @@ void EditorWindow::RefreshProperties() {
     if (st.selection.size() == 1) {
       const auto& e = st.selection.front();
       const int i = e.index;
+      readOnly(details, "Object index", QString::number(i + 1), "propObjectIndex");
       const auto valid = [i](size_t n) { return i >= 0 && static_cast<size_t>(i) < n; };
       if (e.type == SelectedEntity::Type::Polyline && valid(st.userPolylineOffsets.size() - (st.userPolylineOffsets.empty() ? 0u : 1u))) {
         const int first = st.userPolylineOffsets[static_cast<size_t>(i)], last = st.userPolylineOffsets[static_cast<size_t>(i + 1)];
@@ -925,6 +945,25 @@ void EditorWindow::RefreshProperties() {
         readOnly(details, "Latitude / longitude", fmt(marker.latitudeDeg) + ", " + fmt(marker.longitudeDeg), "propPositionMarkerLatLong");
         readOnly(details, "Label", Text(marker.label.text), "propPositionMarkerLabel");
       }
+    }
+  }
+  if (st.sectionPlaneSelected) {
+    auto* planeRows = section("Section plane", "propertiesSectionPlane");
+    const auto& frame = st.viewportSectionClipFrameValid ? st.viewportSectionClipFrame : st.activeUcs;
+    readOnly(planeRows, "Status", st.viewportSectionClip ? "Active" : "Off", "propSectionPlaneStatus");
+    readOnly(planeRows, "Frame", st.viewportSectionClipFrameValid ? "Face-defined" : "Current UCS", "propSectionPlaneFrame");
+    readOnly(planeRows, "Origin", fmt(frame.origin.x + ox) + ", " +
+        fmt(frame.origin.y + oy) + ", " + fmt(frame.origin.z), "propSectionPlaneOrigin");
+    readOnly(planeRows, "Normal", fmt(frame.zAxis.x) + ", " +
+        fmt(frame.zAxis.y) + ", " + fmt(frame.zAxis.z), "propSectionPlaneNormal");
+    readOnly(planeRows, "Offset", fmt(st.viewportSectionClipOffset), "propSectionPlaneOffset");
+    readOnly(planeRows, "Flipped", st.viewportSectionClipFlip ? "Yes" : "No", "propSectionPlaneFlipped");
+    if (st.viewportSectionClipExtent.valid) {
+      readOnly(planeRows, "Extent", "Custom", "propSectionPlaneExtent");
+      readOnly(planeRows, "Width × height", fmt(2.0 * st.viewportSectionClipExtent.halfU) + " × " +
+          fmt(2.0 * st.viewportSectionClipExtent.halfV), "propSectionPlaneDimensions");
+    } else {
+      readOnly(planeRows, "Extent", "Model bounds", "propSectionPlaneExtent");
     }
   }
   if (st.selection.size() == 1 && st.selection.front().type == SelectedEntity::Type::FeatureLine) {

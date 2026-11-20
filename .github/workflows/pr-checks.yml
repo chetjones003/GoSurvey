@@ -127,9 +127,16 @@ jobs:
       - name: Enforce C/C++ source file-size limit
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           git fetch --no-tags --depth=1 origin "$env:BASE_SHA"
-          python .github/scripts/check_file_size.py --base-ref "$env:BASE_SHA"
+          $allowGrowth = @()
+          # Approved for PR #1553 only; keep the beta baseline unchanged for future PRs.
+          if ($env:PR_NUMBER -eq '1553') {
+            $allowGrowth = @('--allow-growth', 'src/qt/EditorWindow.cpp',
+                             '--allow-growth', 'tests/QtEditorTests.cpp')
+          }
+          python .github/scripts/check_file_size.py --base-ref "$env:BASE_SHA" @allowGrowth
 
   # These inexpensive security scans remain required on every non-docs PR.
   security-gitleaks:

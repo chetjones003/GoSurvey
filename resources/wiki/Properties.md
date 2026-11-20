@@ -42,8 +42,9 @@ Set a value to **ByLayer** to hand control back to the object's layer ([[Layers]
 
 ## Geometry by object type
 
-The **Object details** section also reports read-only geometry and model data for selected object
-types that do not use the editable line, circle, or annotation fields. Examples include polyline
+The panel identifies each selected object by type. For a single selection, **Object details** also
+shows its object index and reports read-only geometry and model data for object types that do not
+use the editable line, circle, or annotation fields. Examples include polyline
 vertex count, closure and elevation range; arc center, radius and sweep; ellipse center, major radius
 and axis ratio; feature-line name, description and vertex count; and pipe-run name, nominal size and
 route vertex count. TIN surfaces and alignments have their own detail sections. These values come
@@ -107,6 +108,12 @@ code. Values are read-only; use the relevant contextual tools or manager to edit
 
 `DIMALIGNED`, `DIMLINEAR`, and `DIMANGULAR` selections show their defining points and text
 placement.
+
+### Section plane
+
+Selecting the section plane shows whether clipping is active, whether the plane follows the current
+UCS or a picked face, its origin and normal, offset, flip state, and whether its extent follows the
+model bounds or has a custom width and height.
 
 ### Survey point
 

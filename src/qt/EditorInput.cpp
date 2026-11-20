@@ -340,6 +340,12 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
   }
   if ((widget == m_Command || suggestionPopupWidget) &&
       (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter)) {
+    if (m_State.activeDrawingIdx == 0) {
+      if (widget == m_Command) m_Command->clear();
+      if (m_CommandSuggestions) m_CommandSuggestions->hide();
+      if (m_CommandBar) m_CommandBar->Append("Open or create a drawing before entering commands.");
+      return true;
+    }
     if (widget == m_Command && DynamicInputAcceptsInput()) return SubmitDraftingInput();
     if (m_CommandSuggestions && m_CommandSuggestions->isVisible() &&
         m_CommandSuggestionModel && m_CommandSuggestionModel->rowCount() > 0) {
