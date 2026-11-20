@@ -342,24 +342,30 @@ TEST_CASE("Restores keep their side effects", "[issue1557][drawing-content]") {
     st.currentLayer = "Gone";
     st.alignmentStyleCurrent = "Gone";
     st.activeTextStyleName = "Gone";
+    st.defaultPlottedTextHeightInches = 0.2f;
     PushUndoSnapshot(st, "missing names");
     st.currentLayer = "0";
     st.alignmentStyleCurrent = "Standard";
     st.activeTextStyleName = "Standard";
     REQUIRE(DoUndo(st, log));
+    REQUIRE(TextStyles::Find(st.textStyles, "Standard") != nullptr);
     CHECK(st.currentLayer == "0");
     CHECK(st.alignmentStyleCurrent == "Standard");
     CHECK(st.activeTextStyleName == "Standard");
+    CHECK(st.defaultPlottedTextHeightInches == TextStyles::Find(st.textStyles, "Standard")->heightInches);
   }
 
   SECTION("a tab restore falls back to 0 and Standard for a current name that no longer exists") {
     st.documents[2].content.currentLayer = "Gone";
     st.documents[2].content.alignmentStyleCurrent = "Gone";
     st.documents[2].content.activeTextStyleName = "Gone";
+    st.documents[2].content.defaultPlottedTextHeightInches = 0.2f;
     RestoreDocumentFromSnapshot(st, 2);
+    REQUIRE(TextStyles::Find(st.textStyles, "Standard") != nullptr);
     CHECK(st.currentLayer == "0");
     CHECK(st.alignmentStyleCurrent == "Standard");
     CHECK(st.activeTextStyleName == "Standard");
+    CHECK(st.defaultPlottedTextHeightInches == TextStyles::Find(st.textStyles, "Standard")->heightInches);
   }
 
   SECTION("undo resets the multileader style draft and resizes labels for a restored plot scale") {
@@ -516,13 +522,13 @@ TEST_CASE("Undo restores each drawing field that undo used to miss", "[issue1557
   }
 
   SECTION("point numbering rewinds with the undo of point creation") {
-    st.createPointsOpts.startNumber = 40;
-    st.createPointsNextId = 42;
-    PushUndoSnapshot(st, "create points");
-    st.createPointsNextId = 43;
+    st.createPointsNextId = 40;
+    REQUIRE(TryPlaceSurveyPoint(st, 1.0, 2.0, 0.0, log));
+    REQUIRE(st.surveyPoints.size() == 1);
+    CHECK(st.createPointsNextId == 41);
     REQUIRE(DoUndo(st, log));
-    CHECK(st.createPointsNextId == 42);
-    CHECK(st.createPointsOpts.startNumber == 40);
+    CHECK(st.surveyPoints.empty());
+    CHECK(st.createPointsNextId == 40);
   }
 }
 
@@ -607,6 +613,7 @@ TEST_CASE("A tab switch does not carry phase 1b drawing fields into another draw
 TEST_CASE("Tab-only drawing state stays with its own drawing and is not undone",
           "[issue1557][drawing-content]") {
   AppCommandState st;
+  std::vector<std::string> log;
   st.documents.resize(3);
   st.activeDrawingIdx = 1;
 
@@ -641,4 +648,12 @@ TEST_CASE("Tab-only drawing state stays with its own drawing and is not undone",
   CHECK(st.dwgImportedLights[0].name == "Lamp");
   CHECK(st.blockFavorites == std::vector<std::string>{"Valve"});
   CHECK(st.blockRecent == std::vector<std::string>{"Pump"});
+
+  // Undo never reverts tab-only state: a frame pushed at scale 1 and undone after a change to 3 keeps 3.
+  st.currentAnnotationScaleIndex = 1;
+  PushUndoSnapshot(st, "scale");
+  st.currentAnnotationScaleIndex = 3;
+  REQUIRE(DoUndo(st, log));
+  CHECK(st.currentAnnotationScaleIndex == 3);
+  CHECK(st.blockFavorites == std::vector<std::string>{"Valve"});
 }

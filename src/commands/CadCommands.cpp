@@ -116,8 +116,12 @@ void FillEmptyDrawingContentTables(DrawingContent& c) {
     c.currentLayer = "0";
   if (AlignmentStyles::Find(c.alignmentStyles, c.alignmentStyleCurrent) == nullptr)
     c.alignmentStyleCurrent = AlignmentStyles::kStandardName;
-  if (TextStyles::Find(c.textStyles, c.activeTextStyleName) == nullptr)
+  if (TextStyles::Find(c.textStyles, c.activeTextStyleName) == nullptr) {
     c.activeTextStyleName = TextStyles::kStandardName;
+    // Same height sync as SetActiveTextStyle: the fallback style's height, not the missing one's.
+    if (const TextStyle* s = TextStyles::Find(c.textStyles, c.activeTextStyleName))
+      c.defaultPlottedTextHeightInches = std::max(s->heightInches, 1.e-6f);
+  }
 }
 } // namespace
 
