@@ -1836,6 +1836,8 @@ if(GOSURVEY_BUILD_TESTS)
     # TASK-0.7.8 — modify selection accumulate, annotation MOVE preview, REQ-121 prompt.
     tests/Task078InteractionTests.cpp
     tests/Document/ViewportZoomScaleTests.cpp
+    # Issue #1557 / ADR-0010 — undo and tab switching round-trip every kind of drawing content.
+    tests/DrawingContentTests.cpp
     # REQ-370 / D-2026-10-05-a — box-selection live preview.
     tests/BoxSelectionPreviewTests.cpp
     # REQ-357 / D-2026-09-29-b,c — the Drawing Settings window (issue #582 increment 1).

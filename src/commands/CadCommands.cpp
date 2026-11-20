@@ -85,6 +85,27 @@
 // REQ-044: stamp the active text style onto a new user TEXT/MTEXT (defined below, used at the commit sites).
 
 
+namespace {
+/// A stored tab or undo frame may hold an empty style table; a live drawing never does. Both
+/// restores refill the same tables (the tab restore also refills alignment styles).
+void FillEmptyDrawingContentTables(DrawingContent& c) {
+  if (c.tableStyles.empty())
+    c.tableStyles = CadTableBuiltinStyles();
+  if (c.surveyPointStyles.empty())
+    c.surveyPointStyles = DefaultSurveyPointStyles();
+  if (c.surveyPointLabelStyles.empty())
+    c.surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
+  if (c.alignmentLabelSets.empty())
+    c.alignmentLabelSets = AlignmentLabelSets::DefaultAlignmentLabelSets();
+  if (c.alignmentLabelStyles.empty())
+    c.alignmentLabelStyles = AlignmentLabelStyles::DefaultAlignmentLabelStyles();  // REQ-492.5
+  if (c.dimensionStyles.empty())
+    c.dimensionStyles = DimensionStyles::DefaultStyles();
+  if (c.multileaderStyles.empty())
+    c.multileaderStyles = MultileaderStyles::DefaultStyles();
+}
+} // namespace
+
 void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   if (idx < 0 || static_cast<size_t>(idx) >= cmd.documents.size()) return;
   DrawingDocument& doc       = cmd.documents[static_cast<size_t>(idx)];
@@ -107,106 +128,27 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   // belonging to a different drawing, with nothing on screen to say so.
   // REQ-155: while floating model space is entered, cmd.activeUcs is a VIEWPORT's frame; the
   // drawing's own UCS is parked in the stash. Snapshot the drawing-scoped one (and patch the
-  // floating viewport's frame into doc.paperLayouts below).
+  // floating viewport's frame into doc.content.paperLayouts below).
   doc.activeUcs              = CadDrawingScopedUcs(cmd);
   doc.ucsPrevious            = cmd.ucsPrevious;
   doc.ucsNamed               = cmd.ucsNamed;
   doc.namedViews             = cmd.namedViews;
   doc.activeViewName         = cmd.activeViewName;
   doc.ucsFollow              = cmd.ucsFollow;
-  doc.worldDocumentOriginX   = cmd.worldDocumentOriginX;
-  doc.worldDocumentOriginY   = cmd.worldDocumentOriginY;
+  // ADR-0010: everything the drawing saves and the user edits, in one assignment.
+  doc.content = static_cast<const DrawingContent&>(cmd);
   doc.nextEntityId           = cmd.nextEntityId;  // per-drawing id counter (REQ-076)
-  doc.userLinesFlat          = cmd.userLinesFlat;
-  doc.userLineAttrs          = cmd.userLineAttrs;
-  doc.userCirclesCxCyZR       = cmd.userCirclesCxCyZR;
-  doc.userCircleAttrs        = cmd.userCircleAttrs;
-  doc.userCircleNormals      = cmd.userCircleNormals;
-  doc.userArcs               = cmd.userArcs;
-  doc.userArcAttrs           = cmd.userArcAttrs;
-  doc.userEllipses           = cmd.userEllipses;
-  doc.userEllAttrs           = cmd.userEllAttrs;
-  doc.userPolylineOffsets    = cmd.userPolylineOffsets;
-  doc.userPolylineVerts      = cmd.userPolylineVerts;
-  doc.userPolylineVertsBulge = cmd.userPolylineVertsBulge;  // REQ-316 / ADR-047
-  doc.userPolylineVertsNormal = cmd.userPolylineVertsNormal;  // REQ-325 / ADR-053
-  doc.userPolylineClosed     = cmd.userPolylineClosed;
-  doc.userPolylineAttrs      = cmd.userPolylineAttrs;
-  doc.featureLineOffsets     = cmd.featureLineOffsets;   // REQ-087
-  doc.featureLineVerts       = cmd.featureLineVerts;
-  doc.featureLineClosed      = cmd.featureLineClosed;
-  doc.featureLineElevPt      = cmd.featureLineElevPt;
-  doc.featureLineInfo        = cmd.featureLineInfo;
-  doc.gradingPresets         = cmd.gradingPresets;
-  doc.featureLineAttrs       = cmd.featureLineAttrs;
-  doc.cadAnnotations         = cmd.cadAnnotations;
-  doc.cadAnnotationAttrs     = cmd.cadAnnotationAttrs;
-  doc.cadFilledRegions       = cmd.cadFilledRegions;
-  doc.cadFilledRegionAttrs   = cmd.cadFilledRegionAttrs;
-  doc.cadMeshes              = cmd.cadMeshes;      // pointers, not payloads (REQ-063)
-  doc.cadMeshAttrs           = cmd.cadMeshAttrs;
-  doc.cadPointClouds         = cmd.cadPointClouds; // pointers, not payloads (REQ-171)
-  doc.cadPointCloudAttrs     = cmd.cadPointCloudAttrs;
-  doc.cadSurfaces            = cmd.cadSurfaces;
-  doc.cadSurfaceAttrs        = cmd.cadSurfaceAttrs;
-  doc.cadSolids              = cmd.cadSolids;      // pointers, not payloads (REQ-313)
-  doc.cadSolidAttrs          = cmd.cadSolidAttrs;
-  doc.cadTables              = cmd.cadTables;
-  doc.cadTableAttrs          = cmd.cadTableAttrs;
-  doc.tableStyles            = cmd.tableStyles;
-  doc.cadPositionMarkers     = cmd.cadPositionMarkers;  // REQ-359: per drawing
-  doc.cadPositionMarkerAttrs = cmd.cadPositionMarkerAttrs;
-  doc.cadMultileaders        = cmd.cadMultileaders;  // REQ-367
-  doc.cadMultileaderAttrs    = cmd.cadMultileaderAttrs;
-  doc.cadSplines             = cmd.cadSplines;  // REQ-443
-  doc.cadSplineAttrs         = cmd.cadSplineAttrs;
-  doc.cadPoints              = cmd.cadPoints;  // REQ-456
-  doc.cadPointAttrs          = cmd.cadPointAttrs;
-  doc.pdMode                 = cmd.pdMode;
-  doc.pdSize                 = cmd.pdSize;
-  doc.cadPipeRuns            = cmd.cadPipeRuns;      // pipe runs are per-drawing (issue #486 / REQ-345)
-  doc.cadPipeRunAttrs        = cmd.cadPipeRunAttrs;
-  doc.alignments             = cmd.alignments;       // REQ-480: per-drawing
-  doc.viewFrameGroups        = cmd.viewFrameGroups;  // REQ-517: per-drawing
-  doc.sampleLines            = cmd.sampleLines;      // REQ-519: per-drawing
-  doc.profiles               = cmd.profiles;         // REQ-521: per-drawing
-  doc.surfaceProfiles        = cmd.surfaceProfiles;  // REQ-513
-  doc.cadPipingSystems       = cmd.cadPipingSystems;  // indices into cadPipeRuns — travels with it
-  doc.blockDefs              = cmd.blockDefs;
-  doc.cadBlockRefs           = cmd.cadBlockRefs;
-  doc.cadBlockRefAttrs       = cmd.cadBlockRefAttrs;
-  doc.surveyPoints           = cmd.surveyPoints;
-  doc.surveyPointStyles      = cmd.surveyPointStyles;
-  doc.surveyPointLabelStyles = cmd.surveyPointLabelStyles;
-  doc.pointGroups            = cmd.pointGroups;
   doc.selectedSurveyPointIndices = cmd.selectedSurveyPointIndices;
-  doc.drawingLayerTable      = cmd.drawingLayerTable;
   doc.currentColor           = cmd.currentColor;  // REQ-356
-  doc.drawingInsUnits        = cmd.drawingInsUnits;  // REQ-357: unit, scale and settings are per drawing
-  doc.modelUnitsPerPlottedInch = cmd.modelUnitsPerPlottedInch;
-  doc.drawingSettings        = cmd.drawingSettings;
   doc.pointVisibility        = cmd.pointVisibility;
-  doc.textStyles             = cmd.textStyles;
-  doc.surfaceStyles          = cmd.surfaceStyles;
-  doc.alignmentStyles        = cmd.alignmentStyles;
-  doc.alignmentCheckSets     = cmd.alignmentCheckSets;  // REQ-502
-  doc.alignmentLabelSets     = cmd.alignmentLabelSets;
-  doc.alignmentLabelStyles   = cmd.alignmentLabelStyles;  // REQ-492.5
-  doc.dimensionStyle         = cmd.activeDimensionStyle;
-  doc.dimensionStyles        = cmd.dimensionStyles;
-  doc.multileaderStyle       = cmd.activeMultileaderStyle;
-  doc.multileaderStyles      = cmd.multileaderStyles;
   doc.activeTextStyleName    = cmd.activeTextStyleName;
-  doc.pdfAttachments         = cmd.pdfAttachments;
   doc.selection              = cmd.selection;
   doc.hiddenEntityIds        = cmd.hiddenEntityIds;  // isolation is per-drawing (REQ-084 (d))
-  doc.paperLayouts           = cmd.paperLayouts;
-  doc.cadRasterImages        = cmd.cadRasterImages;
   // REQ-155: fold the live floating-viewport UCS into the snapshot's copy of that viewport, so a
   // tab switch while floating does not lose a UCS change made in the viewport.
   if (cmd.floatingUcsSwapActive && cmd.floatingViewportLayout >= 0 &&
-      static_cast<size_t>(cmd.floatingViewportLayout) < doc.paperLayouts.size()) {
-    PaperLayout& dl = doc.paperLayouts[static_cast<size_t>(cmd.floatingViewportLayout)];
+      static_cast<size_t>(cmd.floatingViewportLayout) < doc.content.paperLayouts.size()) {
+    PaperLayout& dl = doc.content.paperLayouts[static_cast<size_t>(cmd.floatingViewportLayout)];
     if (cmd.floatingViewportIndex >= 0 &&
         static_cast<size_t>(cmd.floatingViewportIndex) < dl.viewports.size())
       dl.viewports[static_cast<size_t>(cmd.floatingViewportIndex)].activeUcs = cmd.activeUcs;
@@ -242,68 +184,15 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.namedViews                 = doc.namedViews;
   cmd.activeViewName             = doc.activeViewName;
   cmd.ucsFollow                  = doc.ucsFollow;
-  cmd.worldDocumentOriginX       = doc.worldDocumentOriginX;
-  cmd.worldDocumentOriginY       = doc.worldDocumentOriginY;
+  static_cast<DrawingContent&>(cmd) = doc.content;  // ADR-0010
+  FillEmptyDrawingContentTables(cmd);
+  if (cmd.alignmentStyles.empty())
+    cmd.alignmentStyles = AlignmentStyles::DefaultAlignmentStyles();
   cmd.nextEntityId               = doc.nextEntityId;  // per-drawing id counter (REQ-076)
   // Force a re-sweep for the incoming drawing. The guard compares against cadGpuRevision, which is
   // per-document and restored just below — two tabs can legitimately sit at the same revision, and
   // a match there would wrongly certify this drawing's entities as already swept.
   cmd.entityIdSweepRevision      = kEntityIdSweepNever;
-  cmd.userLinesFlat              = doc.userLinesFlat;
-  cmd.userLineAttrs              = doc.userLineAttrs;
-  cmd.userCirclesCxCyZR           = doc.userCirclesCxCyZR;
-  cmd.userCircleAttrs            = doc.userCircleAttrs;
-  cmd.userCircleNormals          = doc.userCircleNormals;
-  cmd.userArcs                   = doc.userArcs;
-  cmd.userArcAttrs               = doc.userArcAttrs;
-  cmd.userEllipses               = doc.userEllipses;
-  cmd.userEllAttrs               = doc.userEllAttrs;
-  cmd.userPolylineOffsets        = doc.userPolylineOffsets;
-  cmd.userPolylineVerts          = doc.userPolylineVerts;
-  cmd.userPolylineVertsBulge     = doc.userPolylineVertsBulge;  // REQ-316 / ADR-047
-  cmd.userPolylineVertsNormal    = doc.userPolylineVertsNormal;  // REQ-325 / ADR-053
-  cmd.userPolylineClosed         = doc.userPolylineClosed;
-  cmd.userPolylineAttrs          = doc.userPolylineAttrs;
-  cmd.featureLineOffsets         = doc.featureLineOffsets;   // REQ-087
-  cmd.featureLineVerts           = doc.featureLineVerts;
-  cmd.featureLineClosed          = doc.featureLineClosed;
-  cmd.featureLineElevPt          = doc.featureLineElevPt;
-  cmd.featureLineInfo            = doc.featureLineInfo;
-  cmd.gradingPresets              = doc.gradingPresets;
-  cmd.featureLineAttrs           = doc.featureLineAttrs;
-  cmd.cadAnnotations             = doc.cadAnnotations;
-  cmd.cadAnnotationAttrs         = doc.cadAnnotationAttrs;
-  cmd.cadFilledRegions           = doc.cadFilledRegions;
-  cmd.cadFilledRegionAttrs       = doc.cadFilledRegionAttrs;
-  cmd.cadMeshes                  = doc.cadMeshes;
-  cmd.cadMeshAttrs               = doc.cadMeshAttrs;
-  cmd.cadPointClouds             = doc.cadPointClouds;
-  cmd.cadPointCloudAttrs         = doc.cadPointCloudAttrs;
-  cmd.cadSurfaces                = doc.cadSurfaces;
-  cmd.cadSurfaceAttrs            = doc.cadSurfaceAttrs;
-  cmd.cadSolids                  = doc.cadSolids;
-  cmd.cadSolidAttrs              = doc.cadSolidAttrs;
-  cmd.cadTables                  = doc.cadTables;
-  cmd.cadTableAttrs              = doc.cadTableAttrs;
-  cmd.tableStyles                = doc.tableStyles.empty() ? CadTableBuiltinStyles() : doc.tableStyles;
-  cmd.cadPositionMarkers         = doc.cadPositionMarkers;  // REQ-359
-  cmd.cadPositionMarkerAttrs     = doc.cadPositionMarkerAttrs;
-  cmd.cadMultileaders            = doc.cadMultileaders;  // REQ-367
-  cmd.cadMultileaderAttrs        = doc.cadMultileaderAttrs;
-  cmd.cadSplines                 = doc.cadSplines;  // REQ-443
-  cmd.cadSplineAttrs             = doc.cadSplineAttrs;
-  cmd.cadPoints                  = doc.cadPoints;  // REQ-456
-  cmd.cadPointAttrs              = doc.cadPointAttrs;
-  cmd.pdMode                     = doc.pdMode;
-  cmd.pdSize                     = doc.pdSize;
-  cmd.cadPipeRuns                = doc.cadPipeRuns;      // issue #486 / REQ-345
-  cmd.cadPipeRunAttrs            = doc.cadPipeRunAttrs;
-  cmd.alignments                 = doc.alignments;       // REQ-480
-  cmd.viewFrameGroups            = doc.viewFrameGroups;  // REQ-517
-  cmd.sampleLines                = doc.sampleLines;      // REQ-519
-  cmd.profiles                   = doc.profiles;         // REQ-521
-  cmd.surfaceProfiles            = doc.surfaceProfiles;  // REQ-513
-  cmd.cadPipingSystems           = doc.cadPipingSystems;
   // The derived swept solids belong to the drawing we are leaving. Their rebuild is gated on a
   // signature over the runs alone, and the incoming drawing can legitimately hash the same (two
   // empty drawings always do), so clear the arrays here rather than trusting the gate to notice.
@@ -311,40 +200,13 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.pipeRunWorldSolidAttrs.clear();
   cmd.pipeRunWorldSolidOwnerIndex.clear();
   cmd.pipeRunWorldSolidsSig = 0;  // 0 is never a real signature — forces the next refresh to derive
-  cmd.blockDefs                  = doc.blockDefs;
-  cmd.cadBlockRefs               = doc.cadBlockRefs;
-  cmd.cadBlockRefAttrs           = doc.cadBlockRefAttrs;
-  cmd.surveyPoints               = doc.surveyPoints;
-  cmd.surveyPointStyles          = doc.surveyPointStyles.empty() ? DefaultSurveyPointStyles() : doc.surveyPointStyles;
-  cmd.surveyPointLabelStyles     = doc.surveyPointLabelStyles.empty() ? DefaultSurveyPointLabelStyles() : doc.surveyPointLabelStyles;
-  cmd.pointGroups                = doc.pointGroups;
   cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
-  cmd.drawingLayerTable          = doc.drawingLayerTable;
   cmd.currentColor               = doc.currentColor;
-  cmd.drawingInsUnits            = doc.drawingInsUnits;  // REQ-357
-  cmd.modelUnitsPerPlottedInch   = doc.modelUnitsPerPlottedInch;
-  cmd.drawingSettings            = doc.drawingSettings;
   cmd.pointVisibility            = doc.pointVisibility;
-  cmd.textStyles                 = doc.textStyles;
-  cmd.surfaceStyles              = doc.surfaceStyles;
-  cmd.alignmentCheckSets         = doc.alignmentCheckSets;  // REQ-502
-  cmd.alignmentStyles            = doc.alignmentStyles.empty() ? AlignmentStyles::DefaultAlignmentStyles()
-                                                               : doc.alignmentStyles;
-  cmd.alignmentLabelSets         = doc.alignmentLabelSets.empty() ? AlignmentLabelSets::DefaultAlignmentLabelSets()
-                                                                  : doc.alignmentLabelSets;
-  cmd.alignmentLabelStyles       = doc.alignmentLabelStyles.empty() ? AlignmentLabelStyles::DefaultAlignmentLabelStyles()
-                                                                    : doc.alignmentLabelStyles;  // REQ-492.5
-  cmd.activeDimensionStyle       = doc.dimensionStyle;
-  cmd.dimensionStyles            = doc.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : doc.dimensionStyles;
-  cmd.activeMultileaderStyle     = doc.multileaderStyle;
-  cmd.multileaderStyles          = doc.multileaderStyles.empty() ? MultileaderStyles::DefaultStyles() : doc.multileaderStyles;
-  cmd.mleaderStyleDraft          = doc.multileaderStyle;
+  cmd.mleaderStyleDraft          = cmd.activeMultileaderStyle;
   cmd.activeTextStyleName        = doc.activeTextStyleName;
-  cmd.pdfAttachments             = doc.pdfAttachments;
   cmd.selection                  = doc.selection;
   cmd.hiddenEntityIds            = doc.hiddenEntityIds;  // isolation is per-drawing (REQ-084 (d))
-  cmd.paperLayouts               = doc.paperLayouts;
-  cmd.cadRasterImages            = doc.cadRasterImages;
   cmd.savedPageSetups            = doc.savedPageSetups;
   cmd.activeSpaceIndex           = doc.activeSpaceIndex;
   cmd.lastPaperLayoutIndex       = doc.activeSpaceIndex >= 0 ? doc.activeSpaceIndex : 0;
@@ -2137,93 +1999,13 @@ static void WriteUndoHistoryLogLine(const std::string& msg) {
 
 DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const std::string& description) {
   DrawingGeometrySnapshot snap;
-  // Meshes copy as pointers, not payloads (architecture §11.5 as amended 2026-08-12) — this line is
-  // O(number of meshes), not O(triangles), which is what makes undo affordable with a model loaded.
-  snap.cadMeshes            = st.cadMeshes;
-  snap.cadMeshAttrs         = st.cadMeshAttrs;
-  // Point clouds copy as pointers too (REQ-171 / ADR-042/ADR-060) — the octree/point payload is
-  // shared, never cloned.
-  snap.cadPointClouds       = st.cadPointClouds;
-  snap.cadPointCloudAttrs   = st.cadPointCloudAttrs;
-  // Surfaces copy as strings + a refcount bump, never as triangles (REQ-068, architecture §11.5).
-  snap.cadSurfaces          = st.cadSurfaces;
-  snap.cadSurfaceAttrs      = st.cadSurfaceAttrs;
-  // Solids copy as pointers too (REQ-313 / ADR-045) - the topology payload is shared, never cloned.
-  snap.cadSolids            = st.cadSolids;
-  snap.cadSolidAttrs        = st.cadSolidAttrs;
-  snap.cadTables            = st.cadTables;
-  snap.cadTableAttrs        = st.cadTableAttrs;
-  snap.tableStyles          = st.tableStyles;
-  snap.cadPositionMarkers   = st.cadPositionMarkers;  // REQ-359
-  snap.cadPositionMarkerAttrs = st.cadPositionMarkerAttrs;
-  snap.cadMultileaders      = st.cadMultileaders;  // REQ-367
-  snap.cadMultileaderAttrs  = st.cadMultileaderAttrs;
-  snap.cadSplines           = st.cadSplines;  // REQ-443
-  snap.cadSplineAttrs       = st.cadSplineAttrs;
-  snap.cadPoints            = st.cadPoints;  // REQ-456
-  snap.cadPointAttrs        = st.cadPointAttrs;
-  snap.pdMode               = st.pdMode;
-  snap.pdSize               = st.pdSize;
-  snap.cadPipeRuns          = st.cadPipeRuns;      // issue #486 / REQ-345
-  snap.cadPipeRunAttrs      = st.cadPipeRunAttrs;
-  snap.alignments           = st.alignments;       // REQ-480
-  snap.viewFrameGroups      = st.viewFrameGroups;  // REQ-517: undo restores frames with their alignment
-  snap.sampleLines          = st.sampleLines;      // REQ-519: undo restores sample lines and sections
-  snap.profiles             = st.profiles;         // REQ-521: undo restores design profiles
-  snap.surfaceProfiles      = st.surfaceProfiles;  // REQ-513
-  snap.cadPipingSystems     = st.cadPipingSystems; // issue #486 increment B3 / REQ-345
-  snap.blockDefs            = st.blockDefs;
-  snap.cadBlockRefs         = st.cadBlockRefs;
-  snap.cadBlockRefAttrs     = st.cadBlockRefAttrs;
-  snap.userLinesFlat        = st.userLinesFlat;
-  snap.userLineAttrs        = st.userLineAttrs;
-  snap.userCirclesCxCyZR     = st.userCirclesCxCyZR;
-  snap.userCircleAttrs      = st.userCircleAttrs;
-  snap.userCircleNormals    = st.userCircleNormals;
-  snap.userArcs             = st.userArcs;
-  snap.userArcAttrs         = st.userArcAttrs;
-  snap.userEllipses         = st.userEllipses;
-  snap.userEllAttrs         = st.userEllAttrs;
-  snap.userPolylineOffsets  = st.userPolylineOffsets;
-  snap.userPolylineVerts    = st.userPolylineVerts;
-  snap.userPolylineVertsBulge = st.userPolylineVertsBulge;  // REQ-316 / ADR-047
-  snap.userPolylineVertsNormal = st.userPolylineVertsNormal;  // REQ-325 / ADR-053
-  snap.userPolylineClosed   = st.userPolylineClosed;
-  snap.userPolylineAttrs    = st.userPolylineAttrs;
-  snap.featureLineOffsets   = st.featureLineOffsets;   // REQ-087
-  snap.featureLineVerts     = st.featureLineVerts;
-  snap.featureLineClosed    = st.featureLineClosed;
-  snap.featureLineElevPt    = st.featureLineElevPt;
-  snap.featureLineInfo      = st.featureLineInfo;
-  snap.gradingPresets       = st.gradingPresets;
-  snap.featureLineAttrs     = st.featureLineAttrs;
-  snap.cadAnnotations       = st.cadAnnotations;
-  snap.cadAnnotationAttrs   = st.cadAnnotationAttrs;
-  snap.cadFilledRegions     = st.cadFilledRegions;
-  snap.cadFilledRegionAttrs = st.cadFilledRegionAttrs;
-  snap.surveyPoints         = st.surveyPoints;
-  snap.surveyPointStyles    = st.surveyPointStyles;
-  snap.surveyPointLabelStyles = st.surveyPointLabelStyles;
-  snap.pointGroups          = st.pointGroups;   // group edits are undoable (REQ-067)
-  snap.drawingLayerTable    = st.drawingLayerTable;
-  snap.textStyles           = st.textStyles;  // style edits are undoable (REQ-044)
-  snap.surfaceStyles        = st.surfaceStyles;  // and surface-style edits (REQ-070)
-  snap.alignmentStyles      = st.alignmentStyles;  // REQ-491
-  snap.alignmentCheckSets   = st.alignmentCheckSets;  // REQ-502
-  snap.alignmentLabelSets   = st.alignmentLabelSets;
-  snap.alignmentLabelStyles = st.alignmentLabelStyles;  // REQ-492.5
-  snap.dimensionStyle       = st.activeDimensionStyle;  // dimension-style edits are undoable (issue #99)
-  snap.dimensionStyles      = st.dimensionStyles;
-  snap.multileaderStyle     = st.activeMultileaderStyle;
-  snap.multileaderStyles    = st.multileaderStyles;
-  snap.pdfAttachments       = st.pdfAttachments;
-  snap.paperLayouts         = st.paperLayouts;  // native paper geometry is undoable (REQ-037/038)
-  snap.cadRasterImages      = st.cadRasterImages;
+  // ADR-0010: one assignment. Meshes, point clouds, surfaces and solids copy as shared pointers,
+  // not payloads (architecture §11.5 as amended 2026-08-12), so this stays O(entities), not
+  // O(triangles) — which is what makes undo affordable with a model loaded.
+  snap.content = static_cast<const DrawingContent&>(st);
   // Zero GL texture IDs: restored snapshots must not reference freed GPU resources.
-  for (auto& att : snap.pdfAttachments)
+  for (auto& att : snap.content.pdfAttachments)
     att.glTexId = 0;
-  snap.worldDocumentOriginX = st.worldDocumentOriginX;
-  snap.worldDocumentOriginY = st.worldDocumentOriginY;
   // Section plane (REQ-343 amended, issue #479 acceptance 8) — undoable and internal document payload-persisted, but
   // ONLY the face-derived plane SECTIONPLANE creates (`viewportSectionClipFrameValid`). REQ-341's
   // `SECTIONCLIP`, aimed from the active UCS, stays the view state it always was: its own offset/
@@ -2240,101 +2022,25 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
     snap.sectionPlaneFlip   = st.viewportSectionClipFlip;
     snap.sectionPlaneExtent = st.viewportSectionClipExtent;
   }
-  snap.drawingInsUnits          = st.drawingInsUnits;  // REQ-357
-  snap.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;
-  snap.drawingSettings          = st.drawingSettings;
   snap.description          = description;
   return snap;
 }
 
 void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot& snap) {
-  st.userLinesFlat        = snap.userLinesFlat;
-  st.userLineAttrs        = snap.userLineAttrs;
-  st.userCirclesCxCyZR     = snap.userCirclesCxCyZR;
-  st.userCircleAttrs      = snap.userCircleAttrs;
-  st.userCircleNormals    = snap.userCircleNormals;
-  st.userArcs             = snap.userArcs;
-  st.userArcAttrs         = snap.userArcAttrs;
-  st.userEllipses         = snap.userEllipses;
-  st.userEllAttrs         = snap.userEllAttrs;
-  st.userPolylineOffsets  = snap.userPolylineOffsets;
-  st.userPolylineVerts    = snap.userPolylineVerts;
-  st.userPolylineVertsBulge = snap.userPolylineVertsBulge;  // REQ-316 / ADR-047
-  st.userPolylineVertsNormal = snap.userPolylineVertsNormal;  // REQ-325 / ADR-053
-  st.userPolylineClosed   = snap.userPolylineClosed;
-  st.userPolylineAttrs    = snap.userPolylineAttrs;
-  st.featureLineOffsets   = snap.featureLineOffsets;   // REQ-087
-  st.featureLineVerts     = snap.featureLineVerts;
-  st.featureLineClosed    = snap.featureLineClosed;
-  st.featureLineElevPt    = snap.featureLineElevPt;
-  st.featureLineInfo      = snap.featureLineInfo;
-  st.gradingPresets       = snap.gradingPresets;
-  st.featureLineAttrs     = snap.featureLineAttrs;
-  st.cadAnnotations       = snap.cadAnnotations;
-  st.cadAnnotationAttrs   = snap.cadAnnotationAttrs;
-  st.cadFilledRegions     = snap.cadFilledRegions;
-  st.cadFilledRegionAttrs = snap.cadFilledRegionAttrs;
-  st.cadMeshes            = snap.cadMeshes;
-  st.cadMeshAttrs         = snap.cadMeshAttrs;
-  st.cadPointClouds       = snap.cadPointClouds;
-  st.cadPointCloudAttrs   = snap.cadPointCloudAttrs;
-  st.cadSurfaces          = snap.cadSurfaces;
-  st.cadSurfaceAttrs      = snap.cadSurfaceAttrs;
-  st.cadSolids            = snap.cadSolids;
-  st.cadSolidAttrs        = snap.cadSolidAttrs;
-  st.cadTables            = snap.cadTables;
-  st.cadTableAttrs        = snap.cadTableAttrs;
-  st.tableStyles          = snap.tableStyles.empty() ? CadTableBuiltinStyles() : snap.tableStyles;
-  st.cadPositionMarkers   = snap.cadPositionMarkers;  // REQ-359
-  st.cadPositionMarkerAttrs = snap.cadPositionMarkerAttrs;
-  st.cadMultileaders      = snap.cadMultileaders;  // REQ-367
-  st.cadMultileaderAttrs  = snap.cadMultileaderAttrs;
-  st.cadSplines           = snap.cadSplines;  // REQ-443
-  st.cadSplineAttrs       = snap.cadSplineAttrs;
-  st.cadPoints            = snap.cadPoints;  // REQ-456
-  st.cadPointAttrs        = snap.cadPointAttrs;
-  st.pdMode               = snap.pdMode;
-  st.pdSize               = snap.pdSize;
-  st.cadPipeRuns          = snap.cadPipeRuns;      // issue #486 / REQ-345
-  st.cadPipeRunAttrs      = snap.cadPipeRunAttrs;
-  st.alignments           = snap.alignments;       // REQ-480
-  st.viewFrameGroups      = snap.viewFrameGroups;  // REQ-517
-  st.sampleLines          = snap.sampleLines;      // REQ-519
-  st.profiles             = snap.profiles;         // REQ-521
-  st.surfaceProfiles      = snap.surfaceProfiles;  // REQ-513
-  st.cadPipingSystems     = snap.cadPipingSystems; // issue #486 increment B3 / REQ-345
-  st.pipeRunWorldSolidsSig = 0;  // force RebuildPipeRunWorldSolids to re-derive from the swap
-  st.blockDefs            = snap.blockDefs;
-  st.cadBlockRefs         = snap.cadBlockRefs;
-  st.cadBlockRefAttrs     = snap.cadBlockRefAttrs;
-  st.surveyPoints         = snap.surveyPoints;
-  st.surveyPointStyles    = snap.surveyPointStyles.empty() ? DefaultSurveyPointStyles() : snap.surveyPointStyles;
-  st.surveyPointLabelStyles = snap.surveyPointLabelStyles.empty() ? DefaultSurveyPointLabelStyles() : snap.surveyPointLabelStyles;
-  st.pointGroups          = snap.pointGroups;
-  st.drawingLayerTable    = snap.drawingLayerTable;
-  st.textStyles           = snap.textStyles;
-  st.surfaceStyles        = snap.surfaceStyles;
-  st.alignmentStyles      = snap.alignmentStyles;
-  st.alignmentCheckSets   = snap.alignmentCheckSets;  // REQ-502
-  st.alignmentLabelSets   = snap.alignmentLabelSets.empty() ? AlignmentLabelSets::DefaultAlignmentLabelSets()
-                                                            : snap.alignmentLabelSets;
-  st.alignmentLabelStyles = snap.alignmentLabelStyles.empty() ? AlignmentLabelStyles::DefaultAlignmentLabelStyles()
-                                                              : snap.alignmentLabelStyles;  // REQ-492.5
-  st.activeDimensionStyle = snap.dimensionStyle;
-  st.dimensionStyles = snap.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : snap.dimensionStyles;
-  st.activeMultileaderStyle = snap.multileaderStyle;
-  st.multileaderStyles      = snap.multileaderStyles.empty() ? MultileaderStyles::DefaultStyles() : snap.multileaderStyles;
-  st.mleaderStyleDraft = snap.multileaderStyle;
-  st.pdfAttachments       = snap.pdfAttachments;
   // A restore that adds/removes a layout (undo/redo of layout delete or add) shifts every layout
   // index, so the floating/viewport/active-space state would point at the wrong layout (#763).
-  const bool layoutCountChanged = st.paperLayouts.size() != snap.paperLayouts.size();
+  const bool layoutCountChanged = st.paperLayouts.size() != snap.content.paperLayouts.size();
   if (layoutCountChanged && st.floatingViewportIndex >= 0) {
     std::vector<std::string> ignored;
     ExitFloatingModelSpace(st, ignored);  // before the swap, so the drawing's UCS is restored
   }
-  st.paperLayouts         = snap.paperLayouts;
-  st.cadRasterImages      = snap.cadRasterImages;
+  // A restored plot scale resizes the survey-point labels exactly as setting it does (REQ-357),
+  // so remember the live one before the content swap overwrites it.
+  const float previousPlotScale = st.modelUnitsPerPlottedInch;
+  static_cast<DrawingContent&>(st) = snap.content;  // ADR-0010
+  FillEmptyDrawingContentTables(st);
+  st.pipeRunWorldSolidsSig = 0;  // force RebuildPipeRunWorldSolids to re-derive from the swap
+  st.mleaderStyleDraft = st.activeMultileaderStyle;
   st.selectedPaperEntities.clear();  // restored layouts invalidate paper-entity indices
   if (layoutCountChanged) {
     ClearViewportSelection(st);
@@ -2343,8 +2049,6 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
     st.lastPaperLayoutIndex =
         std::clamp(st.lastPaperLayoutIndex, 0, std::max(0, static_cast<int>(st.paperLayouts.size()) - 1));
   }
-  st.worldDocumentOriginX = snap.worldDocumentOriginX;
-  st.worldDocumentOriginY = snap.worldDocumentOriginY;
   // Section plane (REQ-343 amended, issue #479 acceptance 8).
   //
   // `snap.sectionPlaneFrameValid` gates whether this step even has an opinion about the plane — see
@@ -2378,12 +2082,8 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.sectionPlaneSelected = false;
   st.sectionPlaneGripDrag = static_cast<int>(SectionPlaneGrip::None);
   st.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
-  // REQ-357: the drawing unit, plot scale and Drawing Settings are undoable. A restored plot scale
-  // resizes the survey-point labels exactly as setting it does.
-  st.drawingInsUnits = snap.drawingInsUnits;
-  st.drawingSettings = snap.drawingSettings;
-  if (snap.modelUnitsPerPlottedInch != st.modelUnitsPerPlottedInch)
-    SetDrawingPlotScale(st, snap.modelUnitsPerPlottedInch);
+  if (st.modelUnitsPerPlottedInch != previousPlotScale)
+    SetDrawingPlotScale(st, st.modelUnitsPerPlottedInch);
 }
 
 } // namespace
