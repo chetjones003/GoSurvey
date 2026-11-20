@@ -265,10 +265,10 @@ std::vector<std::string> UnconvertibleKinds(const CadClipboard& cb, bool rotates
   std::vector<std::string> k;
   if (rotates) {  // the same rule as for a drawing: a turn about the vertical axis cannot tilt an arc exactly
     size_t tilted = 0;
-    for (const CadArc& a : cb.arcs)
+    for (const CadArc& a : cb.content.userArcs)
       if (!NormalIsVertical(a.nx, a.ny))
         ++tilted;
-    for (const CadEllipse& e : cb.ellipses)
+    for (const CadEllipse& e : cb.content.userEllipses)
       if (!NormalIsPlusZ(e.nx, e.ny, e.nz))
         ++tilted;
     if (tilted > 0)
@@ -286,31 +286,31 @@ bool ClipboardWorldExtents(const CadClipboard& cb, double* minX, double* maxX, d
     y0 = std::min(y0, y - r);
     y1 = std::max(y1, y + r);
   };
-  for (size_t i = 0; i + 5 < cb.lines.size(); i += 6) {
-    add(cb.lines[i], cb.lines[i + 1]);
-    add(cb.lines[i + 3], cb.lines[i + 4]);
+  for (size_t i = 0; i + 5 < cb.content.userLinesFlat.size(); i += 6) {
+    add(cb.content.userLinesFlat[i], cb.content.userLinesFlat[i + 1]);
+    add(cb.content.userLinesFlat[i + 3], cb.content.userLinesFlat[i + 4]);
   }
-  for (size_t i = 0; i + 3 < cb.circlesCxCyZR.size(); i += 4)
-    add(cb.circlesCxCyZR[i], cb.circlesCxCyZR[i + 1], cb.circlesCxCyZR[i + 3]);
-  for (const CadArc& a : cb.arcs)
+  for (size_t i = 0; i + 3 < cb.content.userCirclesCxCyZR.size(); i += 4)
+    add(cb.content.userCirclesCxCyZR[i], cb.content.userCirclesCxCyZR[i + 1], cb.content.userCirclesCxCyZR[i + 3]);
+  for (const CadArc& a : cb.content.userArcs)
     add(a.cx, a.cy, a.r);
-  for (const CadEllipse& e : cb.ellipses)
+  for (const CadEllipse& e : cb.content.userEllipses)
     add(e.cx, e.cy, std::hypot(static_cast<double>(e.majVx), static_cast<double>(e.majVy)));
-  for (size_t i = 0; i + 2 < cb.polyVerts.size(); i += 3)
-    add(cb.polyVerts[i], cb.polyVerts[i + 1]);
-  for (const CadAnnotation& a : cb.annotations) {
+  for (size_t i = 0; i + 2 < cb.content.userPolylineVerts.size(); i += 3)
+    add(cb.content.userPolylineVerts[i], cb.content.userPolylineVerts[i + 1]);
+  for (const CadAnnotation& a : cb.content.cadAnnotations) {
     add(a.insX, a.insY);
     add(a.boxMinX, a.boxMinY);
     add(a.boxMaxX, a.boxMaxY);
   }
-  for (const CadTable& tb : cb.tables)
+  for (const CadTable& tb : cb.content.cadTables)
     add(tb.insX, tb.insY, std::max(tb.width, tb.height));
-  for (const CadBlockRef& b : cb.blockRefs)
+  for (const CadBlockRef& b : cb.content.cadBlockRefs)
     add(b.xf.x, b.xf.y);
-  for (const CadFilledRegion& r : cb.filledRegions)
+  for (const CadFilledRegion& r : cb.content.cadFilledRegions)
     for (size_t i = 0; i + 2 < r.vertsXyz.size(); i += 3)
       add(r.vertsXyz[i], r.vertsXyz[i + 1]);
-  for (const SurveyPoint& point : cb.surveyPoints)
+  for (const SurveyPoint& point : cb.content.surveyPoints)
     add(point.easting, point.northing);
   if (x0 > x1) {  // nothing to measure
     *minX = *maxX = cb.srcOriginX;
@@ -331,16 +331,16 @@ void ApplyClipboardConversion(CadClipboard& cb, const geo::Similarity& t, double
   t.Apply(cb.srcOriginX, cb.srcOriginY, &nx, &ny);
   Xf f{t.scale, std::cos(t.rotationRad), std::sin(t.rotationRad), t.scaleZ, t.rotationRad, nx - destOriginX, ny - destOriginY};
 
-  MoveLines(cb.lines, f);
-  MoveCircles(cb.circlesCxCyZR, cb.circleNormals, f);
-  MoveArcs(cb.arcs, f, t.rotationRad);
-  MoveEllipses(cb.ellipses, f);
-  MovePolylineVerts(cb.polyVerts, f);
-  MoveFilledRegions(cb.filledRegions, f, t.rotationRad);
-  MoveAnnotations(cb.annotations, f, t.rotationRad);
-  MoveTables(cb.tables, f, t.rotationRad);
-  MoveBlockRefs(cb.blockRefs, f, t.rotationRad);
-  for (SurveyPoint& point : cb.surveyPoints) {
+  MoveLines(cb.content.userLinesFlat, f);
+  MoveCircles(cb.content.userCirclesCxCyZR, cb.content.userCircleNormals, f);
+  MoveArcs(cb.content.userArcs, f, t.rotationRad);
+  MoveEllipses(cb.content.userEllipses, f);
+  MovePolylineVerts(cb.content.userPolylineVerts, f);
+  MoveFilledRegions(cb.content.cadFilledRegions, f, t.rotationRad);
+  MoveAnnotations(cb.content.cadAnnotations, f, t.rotationRad);
+  MoveTables(cb.content.cadTables, f, t.rotationRad);
+  MoveBlockRefs(cb.content.cadBlockRefs, f, t.rotationRad);
+  for (SurveyPoint& point : cb.content.surveyPoints) {
     f.Pt(&point.easting, &point.northing);
     f.Z(&point.elevation);
   }

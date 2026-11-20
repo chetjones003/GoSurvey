@@ -982,59 +982,59 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     const float dy = curY - cmd.modifyBaseY;
     const CadClipboard& cb = cmd.clipboard;
     // Lines
-    for (size_t i = 0; i + 5 < cb.lines.size() + 1; i += 6) {
-      prevLines->push_back(cb.lines[i + 0] + dx);
-      prevLines->push_back(cb.lines[i + 1] + dy);
-      prevLines->push_back(cb.lines[i + 2]);
-      prevLines->push_back(cb.lines[i + 3] + dx);
-      prevLines->push_back(cb.lines[i + 4] + dy);
-      prevLines->push_back(cb.lines[i + 5]);
+    for (size_t i = 0; i + 5 < cb.content.userLinesFlat.size() + 1; i += 6) {
+      prevLines->push_back(cb.content.userLinesFlat[i + 0] + dx);
+      prevLines->push_back(cb.content.userLinesFlat[i + 1] + dy);
+      prevLines->push_back(cb.content.userLinesFlat[i + 2]);
+      prevLines->push_back(cb.content.userLinesFlat[i + 3] + dx);
+      prevLines->push_back(cb.content.userLinesFlat[i + 4] + dy);
+      prevLines->push_back(cb.content.userLinesFlat[i + 5]);
     }
     // Circles
-    for (size_t i = 0; i + 3 < cb.circlesCxCyZR.size() + 1; i += 4) {  // cx,cy,z,r
+    for (size_t i = 0; i + 3 < cb.content.userCirclesCxCyZR.size() + 1; i += 4) {  // cx,cy,z,r
       float cnx = kFlatNormalX;
       float cny = kFlatNormalY;
       float cnz = kFlatNormalZ;
-      CircleNormalAt(cb.circleNormals, i / 4, &cnx, &cny, &cnz);
-      appendPreviewCircle(prevLines, prevCircles, cb.circlesCxCyZR[i + 0] + dx, cb.circlesCxCyZR[i + 1] + dy,
-                          cb.circlesCxCyZR[i + 2], cb.circlesCxCyZR[i + 3], cnx, cny, cnz);
+      CircleNormalAt(cb.content.userCircleNormals, i / 4, &cnx, &cny, &cnz);
+      appendPreviewCircle(prevLines, prevCircles, cb.content.userCirclesCxCyZR[i + 0] + dx, cb.content.userCirclesCxCyZR[i + 1] + dy,
+                          cb.content.userCirclesCxCyZR[i + 2], cb.content.userCirclesCxCyZR[i + 3], cnx, cny, cnz);
     }
     // Arcs
-    for (const auto& a : cb.arcs) {
+    for (const auto& a : cb.content.userArcs) {
       CadArc pa = a;
       pa.cx += dx;
       pa.cy += dy;
       appendArcPolylineStrip(prevLines, pa.z, pa, 48);
     }
     // Ellipses
-    for (const auto& el : cb.ellipses) {
+    for (const auto& el : cb.content.userEllipses) {
       CadEllipse pe = el;
       pe.cx += dx;
       pe.cy += dy;
       appendEllipsePolylineStrip(prevLines, pe.z, pe, 56);
     }
     // Polylines
-    const int nPoly = static_cast<int>(cb.polyOffsets.size()) - 1;
+    const int nPoly = static_cast<int>(cb.content.userPolylineOffsets.size()) - 1;
     for (int pi = 0; pi < nPoly; ++pi) {
-      const int v0 = cb.polyOffsets[static_cast<size_t>(pi)];
-      const int v1 = cb.polyOffsets[static_cast<size_t>(pi + 1)];
+      const int v0 = cb.content.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = cb.content.userPolylineOffsets[static_cast<size_t>(pi + 1)];
       const bool closed =
-          static_cast<size_t>(pi) < cb.polyClosed.size() && cb.polyClosed[static_cast<size_t>(pi)];
+          static_cast<size_t>(pi) < cb.content.userPolylineClosed.size() && cb.content.userPolylineClosed[static_cast<size_t>(pi)];
       for (int vi = v0; vi + 1 < v1; ++vi) {
-        prevLines->push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 0)] + dx);
-        prevLines->push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 1)] + dy);
-        prevLines->push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 2)]);
-        prevLines->push_back(cb.polyVerts[static_cast<size_t>((vi + 1) * 3 + 0)] + dx);
-        prevLines->push_back(cb.polyVerts[static_cast<size_t>((vi + 1) * 3 + 1)] + dy);
-        prevLines->push_back(cb.polyVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
+        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>(vi * 3 + 0)] + dx);
+        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)] + dy);
+        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
+        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 0)] + dx);
+        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)] + dy);
+        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
       }
       if (closed && v1 - v0 >= 2) {
-        prevLines->push_back(cb.polyVerts[static_cast<size_t>((v1 - 1) * 3 + 0)] + dx);
-        prevLines->push_back(cb.polyVerts[static_cast<size_t>((v1 - 1) * 3 + 1)] + dy);
-        prevLines->push_back(cb.polyVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
-        prevLines->push_back(cb.polyVerts[static_cast<size_t>(v0 * 3 + 0)] + dx);
-        prevLines->push_back(cb.polyVerts[static_cast<size_t>(v0 * 3 + 1)] + dy);
-        prevLines->push_back(cb.polyVerts[static_cast<size_t>(v0 * 3 + 2)]);
+        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 0)] + dx);
+        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)] + dy);
+        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
+        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>(v0 * 3 + 0)] + dx);
+        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)] + dy);
+        prevLines->push_back(cb.content.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]);
       }
     }
     return;

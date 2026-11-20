@@ -4250,7 +4250,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("PASTEBLOCK — the active layout is not available. Switch to model space first.");
       return true;
     }
-    if (st.clipboard.blockRefs.empty()) {
+    if (st.clipboard.content.cadBlockRefs.empty()) {
       log.push_back("PASTEBLOCK — clipboard has no block references.");
       return true;
     }
@@ -4263,11 +4263,11 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       return true;
     }
     PushUndoSnapshot(st, "Pasteblock");
-    for (size_t i = 0; i < st.clipboard.blockRefs.size(); ++i) {
-      CadBlockRef r = st.clipboard.blockRefs[i];
+    for (size_t i = 0; i < st.clipboard.content.cadBlockRefs.size(); ++i) {
+      CadBlockRef r = st.clipboard.content.cadBlockRefs[i];
       CadBlockTranslate(&r, dx, dy, 0.f);
       // REQ-076: a paste gets new entity ids, so the copied source's id is cleared on both sheet and model.
-      EntityAttributes a = i < st.clipboard.blockRefAttrs.size() ? st.clipboard.blockRefAttrs[i]
+      EntityAttributes a = i < st.clipboard.content.cadBlockRefAttrs.size() ? st.clipboard.content.cadBlockRefAttrs[i]
                            : paperTarget != nullptr              ? EntityAttributes{}
                                                                  : NewBlockAttr(st);
       a.id = 0;
@@ -4282,7 +4282,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     if (paperTarget == nullptr)
       EnsureEntityIds(st);
     BumpCadGpuCache(st);
-    log.push_back("PASTEBLOCK — " + std::to_string(st.clipboard.blockRefs.size()) + " reference(s).");
+    log.push_back("PASTEBLOCK — " + std::to_string(st.clipboard.content.cadBlockRefs.size()) + " reference(s).");
     return true;
   }
 
