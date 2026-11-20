@@ -637,6 +637,7 @@ flowchart LR
     interaction__grips["grips"]
     interaction__prev["previews"]
     interaction__pick["picking"]
+    interaction__sel["selection"]
   end
   interaction__t_document_ent["Document · entities"]
   interaction__t_survey_pts["Survey · points"]
@@ -646,7 +647,6 @@ flowchart LR
   interaction__t_renderer_lists["Renderer · draw lists"]
   interaction__t_renderer_cam["Renderer · camera"]
   interaction__t_math_rays["Math · rays"]
-  interaction__t_document_sel["Document · selection"]
   interaction__t_pointcloud_oct["PointCloud · octree"]
   interaction__t_events_input["Events · input"]
   interaction__t_terrain_tin["Terrain · TIN"]
@@ -660,15 +660,17 @@ flowchart LR
   interaction__prev --> interaction__t_commands_fam
   interaction__pick --> interaction__t_renderer_cam
   interaction__pick --> interaction__t_math_rays
-  interaction__pick --> interaction__t_document_sel
+  interaction__pick --> interaction__sel
   interaction__pick --> interaction__t_pointcloud_oct
   interaction__pick --> interaction__t_events_input
   interaction__pick --> interaction__t_terrain_tin
+  interaction__sel --> interaction__t_document_ent
   style interaction__SRC fill:#27272a,stroke:#e879f9,stroke-width:3px,color:#f8fafc
   style interaction__snap fill:#312e81,stroke:#e879f9,stroke-width:2px,color:#f8fafc
   style interaction__grips fill:#312e81,stroke:#e879f9,stroke-width:2px,color:#f8fafc
   style interaction__prev fill:#312e81,stroke:#e879f9,stroke-width:2px,color:#f8fafc
   style interaction__pick fill:#312e81,stroke:#e879f9,stroke-width:2px,color:#f8fafc
+  style interaction__sel fill:#312e81,stroke:#e879f9,stroke-width:2px,color:#f8fafc
   style interaction__t_document_ent fill:#14532d,stroke:#86efac,stroke-width:2px,color:#f8fafc
   style interaction__t_survey_pts fill:#14532d,stroke:#facc15,stroke-width:2px,color:#f8fafc
   style interaction__t_geometry_curves fill:#713f12,stroke:#fbbf24,stroke-width:2px,color:#f8fafc
@@ -677,7 +679,6 @@ flowchart LR
   style interaction__t_renderer_lists fill:#164e63,stroke:#22d3ee,stroke-width:2px,color:#f8fafc
   style interaction__t_renderer_cam fill:#164e63,stroke:#22d3ee,stroke-width:2px,color:#f8fafc
   style interaction__t_math_rays fill:#4c1d95,stroke:#a78bfa,stroke-width:2px,color:#f8fafc
-  style interaction__t_document_sel fill:#14532d,stroke:#86efac,stroke-width:2px,color:#f8fafc
   style interaction__t_pointcloud_oct fill:#14532d,stroke:#a3e635,stroke-width:2px,color:#f8fafc
   style interaction__t_events_input fill:#4c1d95,stroke:#c084fc,stroke-width:2px,color:#f8fafc
   style interaction__t_terrain_tin fill:#14532d,stroke:#4ade80,stroke-width:2px,color:#f8fafc
@@ -695,6 +696,7 @@ flowchart LR
   linkStyle 11 stroke:#e879f9,stroke-width:2.5px
   linkStyle 12 stroke:#e879f9,stroke-width:2.5px
   linkStyle 13 stroke:#e879f9,stroke-width:2.5px
+  linkStyle 14 stroke:#e879f9,stroke-width:2.5px
 ```
 
 ### Commands features
@@ -923,7 +925,6 @@ flowchart LR
     document__tbl["tables"]
     document__txt["text"]
     document__undo["undo"]
-    document__sel["selection"]
   end
   document__t_geometry["Geometry · all"]
   document__t_core_fmt["Core · formatting"]
@@ -934,7 +935,6 @@ flowchart LR
   document__txt --> document__t_core_fmt
   document__tbl --> document__txt
   document__undo --> document__t_events_docchg
-  document__sel --> document__ent
   style document__SRC fill:#27272a,stroke:#86efac,stroke-width:3px,color:#f8fafc
   style document__ent fill:#14532d,stroke:#86efac,stroke-width:2px,color:#f8fafc
   style document__lay fill:#14532d,stroke:#86efac,stroke-width:2px,color:#f8fafc
@@ -942,7 +942,6 @@ flowchart LR
   style document__tbl fill:#14532d,stroke:#86efac,stroke-width:2px,color:#f8fafc
   style document__txt fill:#14532d,stroke:#86efac,stroke-width:2px,color:#f8fafc
   style document__undo fill:#14532d,stroke:#86efac,stroke-width:2px,color:#f8fafc
-  style document__sel fill:#14532d,stroke:#86efac,stroke-width:2px,color:#f8fafc
   style document__t_geometry fill:#713f12,stroke:#fbbf24,stroke-width:2px,color:#f8fafc
   style document__t_core_fmt fill:#4c1d95,stroke:#c4b5fd,stroke-width:2px,color:#f8fafc
   style document__t_events_docchg fill:#4c1d95,stroke:#c084fc,stroke-width:2px,color:#f8fafc
@@ -952,7 +951,6 @@ flowchart LR
   linkStyle 3 stroke:#86efac,stroke-width:2.5px
   linkStyle 4 stroke:#86efac,stroke-width:2.5px
   linkStyle 5 stroke:#86efac,stroke-width:2.5px
-  linkStyle 6 stroke:#86efac,stroke-width:2.5px
 ```
 
 ### Survey features
