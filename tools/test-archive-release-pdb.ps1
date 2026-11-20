@@ -50,4 +50,13 @@ $wrongPdb = ConvertFrom-PdbSummaryOutput -Lines @('Age: 8', 'GUID: {B9EAF395-16D
 $threw = $false
 try { Assert-PdbMatchesExecutable -ExecutableIdentity $exeIdentity -PdbIdentity $wrongPdb | Out-Null } catch { $threw = $true }
 if (-not $threw) { throw 'A mismatched PDB identity was accepted.' }
+
+# Same GUID bytes rendered in raw byte order (as some llvm-pdbutil builds print it).
+$rawOrderPdb = ConvertFrom-PdbSummaryOutput -Lines @('Age: 9', 'GUID: {95F3EAB9-DC16-E448-AE8D-7BE49BB99584}')
+$rawOrderIdentity = Assert-PdbMatchesExecutable -ExecutableIdentity $exeIdentity -PdbIdentity $rawOrderPdb 3>$null
+if ($rawOrderIdentity -cne 'B9EAF39516DC48E4AE8D7BE49BB99584,9') { throw "Raw-order PDB GUID gave identity $rawOrderIdentity" }
+$threw = $false
+$rawOrderWrongAge = ConvertFrom-PdbSummaryOutput -Lines @('Age: 8', 'GUID: {95F3EAB9-DC16-E448-AE8D-7BE49BB99584}')
+try { Assert-PdbMatchesExecutable -ExecutableIdentity $exeIdentity -PdbIdentity $rawOrderWrongAge 3>$null | Out-Null } catch { $threw = $true }
+if (-not $threw) { throw 'A raw-order PDB GUID with the wrong age was accepted.' }
 Write-Output 'Archive-release-PDB tests passed.'
