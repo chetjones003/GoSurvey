@@ -140,6 +140,10 @@ struct DrawingContent {
   /// \ref cadPipeRuns whenever it changes and never persisted — the same "piping owns topology,
   /// blocks own geometry" split CadPipeRun's own doc comment explains, and the same shape
   /// `blockRefWorldSolids` already uses for a derived solid array.
+  ///
+  /// Part of drawing content so BEDIT's swap and a tab switch both carry it: before it was, the
+  /// MAIN drawing's pipe runs kept rendering inside the block editor and in every other tab,
+  /// because a swap leaves behind whatever it does not name (issue #486).
   std::vector<CadPipeRun> cadPipeRuns;
   std::vector<EntityAttributes> cadPipeRunAttrs;
   std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles

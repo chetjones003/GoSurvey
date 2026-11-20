@@ -841,10 +841,10 @@
       "note": "Unit predicates only. PlotScaleChoicesFor and PlotScaleLabel are plot-scale domain (Document) and stay."
     },
     {
-      "path": "src/commands/CadCommands.hpp",
+      "path": "src/commands/DrawingSettings.hpp",
       "lines": [
-        1182,
-        1183
+        74,
+        75
       ],
       "system": "Core",
       "concern": "units",
@@ -3729,10 +3729,10 @@
       "note": "Refers to solidpick::Kind, an Interaction policy type. Coupling recorded in auditFindings."
     },
     {
-      "path": "src/commands/CadCommands.hpp",
+      "path": "src/commands/CadLayerRow.hpp",
       "lines": [
-        256,
-        269
+        7,
+        20
       ],
       "system": "Document",
       "concern": "layer table row",
@@ -3741,10 +3741,10 @@
       ]
     },
     {
-      "path": "src/commands/CadCommands.hpp",
+      "path": "src/commands/DrawingSettings.hpp",
       "lines": [
-        1117,
-        1139
+        12,
+        34
       ],
       "system": "Document",
       "concern": "object layer rows",
@@ -3754,10 +3754,10 @@
       ]
     },
     {
-      "path": "src/commands/CadCommands.hpp",
+      "path": "src/commands/DrawingSettings.hpp",
       "lines": [
-        1172,
-        1291
+        64,
+        183
       ],
       "system": "Document",
       "concern": "drawing settings",
@@ -6363,40 +6363,19 @@
       ]
     },
     {
-      "path": "src/commands/CadCommands.hpp",
+      "path": "src/commands/DrawingContent.hpp",
       "lines": [
-        1383,
-        1411
+        115,
+        149
       ],
       "system": "Terrain",
-      "concern": "live surface profile and surface stores",
+      "concern": "Terrain stores in drawing content",
       "symbols": [
-        "AppCommandState::cadSurfaces",
-        "AppCommandState::surfaceProfiles"
+        "DrawingContent::cadSurfaces",
+        "DrawingContent::cadSurfaceAttrs",
+        "DrawingContent::surfaceProfiles"
       ],
-      "note": "Terrain state fields only; AppCommandState, command state transitions and adjacent stores remain Commands or their owning systems.",
-      "ownershipKind": "mixed",
-      "otherOwners": [
-        "Commands",
-        "Survey",
-        "Document",
-        "Renderer"
-      ]
-    },
-    {
-      "path": "src/commands/CadCommands.hpp",
-      "lines": [
-        1586,
-        1616
-      ],
-      "system": "Terrain",
-      "concern": "per-drawing Terrain stores in the mixed DrawingDocument",
-      "symbols": [
-        "DrawingDocument::cadSurfaces",
-        "DrawingDocument::cadSurfaceAttrs",
-        "DrawingDocument::surfaceProfiles"
-      ],
-      "note": "Terrain-owned data stored in a mixed composition struct. The struct itself is not Terrain and needs a final-map storage boundary.",
+      "note": "Terrain-owned data in the mixed DrawingContent composition (ADR-0010), shared by the live state, undo frames and per-tab documents. The struct itself is not Terrain.",
       "ownershipKind": "mixed",
       "otherOwners": [
         "Document",
@@ -6560,46 +6539,23 @@
       ]
     },
     {
-      "path": "src/commands/CadCommands.hpp",
+      "path": "src/commands/DrawingContent.hpp",
       "lines": [
-        1364,
-        1370
+        84,
+        90
       ],
       "system": "Terrain",
-      "concern": "live feature-line and grading stores",
+      "concern": "feature-line and grading stores in drawing content",
       "symbols": [
-        "AppCommandState::featureLineOffsets",
-        "AppCommandState::featureLineVerts",
-        "AppCommandState::featureLineClosed",
-        "AppCommandState::featureLineElevPt",
-        "AppCommandState::featureLineInfo",
-        "AppCommandState::gradingPresets",
-        "AppCommandState::featureLineAttrs"
+        "DrawingContent::featureLineOffsets",
+        "DrawingContent::featureLineVerts",
+        "DrawingContent::featureLineClosed",
+        "DrawingContent::featureLineElevPt",
+        "DrawingContent::featureLineInfo",
+        "DrawingContent::gradingPresets",
+        "DrawingContent::featureLineAttrs"
       ],
-      "note": "Terrain feature-line and grading fields in the mixed application state struct; other command state remains Commands.",
-      "ownershipKind": "mixed",
-      "otherOwners": [
-        "Commands"
-      ]
-    },
-    {
-      "path": "src/commands/CadCommands.hpp",
-      "lines": [
-        1575,
-        1577
-      ],
-      "system": "Terrain",
-      "concern": "per-drawing feature-line and grading stores",
-      "symbols": [
-        "DrawingDocument::featureLineOffsets",
-        "DrawingDocument::featureLineVerts",
-        "DrawingDocument::featureLineClosed",
-        "DrawingDocument::featureLineElevPt",
-        "DrawingDocument::featureLineInfo",
-        "DrawingDocument::gradingPresets",
-        "DrawingDocument::featureLineAttrs"
-      ],
-      "note": "Terrain fields in the mixed drawing composition struct; the container itself is not Terrain.",
+      "note": "Terrain-owned feature-line stores in the mixed DrawingContent composition (ADR-0010), shared by the live state, undo frames and per-tab documents.",
       "ownershipKind": "mixed",
       "otherOwners": [
         "Document",
@@ -6628,38 +6584,18 @@
       ]
     },
     {
-      "path": "src/commands/CadCommands.hpp",
+      "path": "src/commands/DrawingContent.hpp",
       "lines": [
-        1380,
-        1381
+        111,
+        112
       ],
       "system": "PointCloud",
-      "concern": "undo snapshot point-cloud references",
+      "concern": "point-cloud storage in drawing content",
       "symbols": [
-        "DrawingGeometrySnapshot::cadPointClouds"
+        "DrawingContent::cadPointClouds",
+        "DrawingContent::cadPointCloudAttrs"
       ],
-      "note": "Undo snapshots retain shared immutable cloud payloads; undo framework remains Document.",
-      "ownershipKind": "mixed",
-      "otherOwners": [
-        "Document",
-        "Survey",
-        "Terrain",
-        "Pdf",
-        "Renderer"
-      ]
-    },
-    {
-      "path": "src/commands/CadCommands.hpp",
-      "lines": [
-        1584,
-        1585
-      ],
-      "system": "PointCloud",
-      "concern": "drawing point-cloud storage",
-      "symbols": [
-        "DrawingDocument::cadPointClouds"
-      ],
-      "note": "Persistent drawing storage for immutable cloud payloads; the containing DrawingDocument is a cross-system composition.",
+      "note": "Shared immutable cloud payloads and their attributes in the mixed DrawingContent composition (ADR-0010); undo frames and tabs copy the pointers, never the payload.",
       "ownershipKind": "mixed",
       "otherOwners": [
         "Document"
@@ -6681,24 +6617,6 @@
       "ownershipKind": "mixed",
       "otherOwners": [
         "PointCloud"
-      ]
-    },
-    {
-      "path": "src/commands/CadCommands.hpp",
-      "lines": [
-        3607,
-        3608
-      ],
-      "system": "PointCloud",
-      "concern": "active point-cloud storage",
-      "symbols": [
-        "AppCommandState::cadPointClouds",
-        "AppCommandState::cadPointCloudAttrs"
-      ],
-      "note": "Live reference geometry and its per-cloud attributes. Payload ownership is PointCloud; the surrounding session state remains Commands.",
-      "ownershipKind": "mixed",
-      "otherOwners": [
-        "Commands"
       ]
     },
     {
@@ -6756,35 +6674,17 @@
       ]
     },
     {
-      "path": "src/commands/CadCommands.hpp",
+      "path": "src/commands/DrawingContent.hpp",
       "lines": [
-        1441,
-        1441
+        197,
+        197
       ],
       "system": "Pdf",
-      "concern": "undo snapshot PDF underlay payload",
+      "concern": "PDF underlay payload in drawing content",
       "symbols": [
-        "DrawingGeometrySnapshot::pdfAttachments"
+        "DrawingContent::pdfAttachments"
       ],
-      "note": "Attachment records copied into undo snapshots. The undo framework is Document; the snapshot copy zeroes GL texture ids (CadCommands.cpp:2223) so restored snapshots never reference freed textures.",
-      "ownershipKind": "mixed",
-      "otherOwners": [
-        "Document",
-        "Renderer"
-      ]
-    },
-    {
-      "path": "src/commands/CadCommands.hpp",
-      "lines": [
-        1644,
-        1644
-      ],
-      "system": "Pdf",
-      "concern": "drawing-owned PDF underlay storage",
-      "symbols": [
-        "DrawingDocument::pdfAttachments"
-      ],
-      "note": "Per-drawing list of PdfAttachment payloads inside the mixed DrawingDocument composition. The struct is a Document container; this list is Pdf payload.",
+      "note": "PdfAttachment records in the mixed DrawingContent composition (ADR-0010). CaptureGeometrySnapshot zeroes GL texture ids in the undo copy so restored snapshots never reference freed textures.",
       "ownershipKind": "mixed",
       "otherOwners": [
         "Document"

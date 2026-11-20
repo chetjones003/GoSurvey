@@ -296,6 +296,64 @@ TEST_CASE("Undo and redo round-trip every kind of drawing content", "[issue1557]
   RequireSame(UnserializedOf(st), secondExtra);
 }
 
+TEST_CASE("Restores keep their side effects", "[issue1557][drawing-content]") {
+  AppCommandState st;
+  st.documents.resize(3);
+  st.activeDrawingIdx = 1;
+  std::vector<std::string> log;
+
+  SECTION("undo refills empty style tables, except alignment styles") {
+    st.tableStyles.clear();
+    st.surveyPointStyles.clear();
+    st.surveyPointLabelStyles.clear();
+    st.alignmentStyles.clear();
+    st.alignmentLabelSets.clear();
+    st.alignmentLabelStyles.clear();
+    st.dimensionStyles.clear();
+    st.multileaderStyles.clear();
+    PushUndoSnapshot(st, "empty tables");
+    st.userLinesFlat = {0, 0, 0, 1, 1, 0};
+    st.userLineAttrs.resize(1);
+    REQUIRE(DoUndo(st, log));
+    CHECK_FALSE(st.tableStyles.empty());
+    CHECK_FALSE(st.surveyPointStyles.empty());
+    CHECK_FALSE(st.surveyPointLabelStyles.empty());
+    CHECK_FALSE(st.alignmentLabelSets.empty());
+    CHECK_FALSE(st.alignmentLabelStyles.empty());
+    CHECK_FALSE(st.dimensionStyles.empty());
+    CHECK_FALSE(st.multileaderStyles.empty());
+    CHECK(st.alignmentStyles.empty());  // today's behaviour; issue #1557 phase 1b adds this default
+  }
+
+  SECTION("a tab restore refills empty style tables, alignment styles included") {
+    SaveDocumentToSnapshot(st, 1);
+    RestoreDocumentFromSnapshot(st, 2);  // a stored document whose tables were never filled
+    CHECK_FALSE(st.tableStyles.empty());
+    CHECK_FALSE(st.surveyPointStyles.empty());
+    CHECK_FALSE(st.surveyPointLabelStyles.empty());
+    CHECK_FALSE(st.alignmentStyles.empty());
+    CHECK_FALSE(st.alignmentLabelSets.empty());
+    CHECK_FALSE(st.alignmentLabelStyles.empty());
+    CHECK_FALSE(st.dimensionStyles.empty());
+    CHECK_FALSE(st.multileaderStyles.empty());
+  }
+
+  SECTION("undo resets the multileader style draft and resizes labels for a restored plot scale") {
+    st.activeMultileaderStyle.name = "Before";
+    st.modelUnitsPerPlottedInch = 20.f;
+    PushUndoSnapshot(st, "style and scale");
+    st.activeMultileaderStyle.name = "After";
+    st.mleaderStyleDraft.name = "Draft";
+    SetDrawingPlotScale(st, 40.f);
+    REQUIRE(st.surveyLabelLayoutCacheMup == 40.f);
+    REQUIRE(DoUndo(st, log));
+    CHECK(st.activeMultileaderStyle.name == "Before");
+    CHECK(st.mleaderStyleDraft.name == "Before");
+    CHECK(st.modelUnitsPerPlottedInch == 20.f);
+    CHECK(st.surveyLabelLayoutCacheMup == 20.f);  // SetDrawingPlotScale ran on the restore
+  }
+}
+
 TEST_CASE("A tab switch away and back round-trips every kind of drawing content",
           "[issue1557][drawing-content]") {
   AppCommandState st;
