@@ -114,7 +114,8 @@ if ($Action -eq 'store') {
     throw "Artifact source directory does not exist: $SourcePath"
   }
   $sourceFullPath = Get-FullPath $SourcePath
-  if ($sourceFullPath.StartsWith(($fullStorageRoot + '\'), [StringComparison]::OrdinalIgnoreCase) -or
+  if ($sourceFullPath.Equals($fullStorageRoot, [StringComparison]::OrdinalIgnoreCase) -or
+      $sourceFullPath.StartsWith(($fullStorageRoot + '\'), [StringComparison]::OrdinalIgnoreCase) -or
       $fullStorageRoot.StartsWith(($sourceFullPath + '\'), [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Artifact source and storage root must not contain one another.'
   }
@@ -154,7 +155,9 @@ if (-not (Test-Path -LiteralPath $artifactPath -PathType Container)) {
 }
 Assert-PlainPath $artifactPath
 $destinationFullPath = Get-FullPath $Destination
-if ($destinationFullPath.StartsWith(($artifactPath + '\'), [StringComparison]::OrdinalIgnoreCase) -or
+$artifactPath = Get-FullPath $artifactPath
+if ($destinationFullPath.Equals($artifactPath, [StringComparison]::OrdinalIgnoreCase) -or
+    $destinationFullPath.StartsWith(($artifactPath + '\'), [StringComparison]::OrdinalIgnoreCase) -or
     $artifactPath.StartsWith(($destinationFullPath + '\'), [StringComparison]::OrdinalIgnoreCase)) {
   throw 'Restore destination and artifact source must not contain one another.'
 }
