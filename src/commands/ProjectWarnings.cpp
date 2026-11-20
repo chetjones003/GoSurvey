@@ -110,7 +110,7 @@ OtherDrawings CountOtherDrawings(const AppCommandState& st, std::uint32_t projec
     const bool active = static_cast<int>(i) == st.activeDrawingIdx;
     if (!active && i >= st.documents.size())
       continue;
-    const projpts::Rules& rules = active ? st.pointVisibility : st.documents[i].pointVisibility;
+    const projpts::Rules& rules = active ? st.pointVisibility : st.documents[i].content.pointVisibility;
     const auto& groups = active ? st.pointGroups : st.documents[i].content.pointGroups;
     const PointGroupRule* g = GroupRuleOf(groups, rules);
     if (std::any_of(doomed.begin(), doomed.end(),
