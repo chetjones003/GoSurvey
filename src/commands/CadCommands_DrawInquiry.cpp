@@ -206,11 +206,11 @@ bool ModelPathFromEntity(const AppCommandState& st, const SelectedEntity& e, dou
   out->closed = false;
   using T = SelectedEntity::Type;
   if (e.type == T::LineSeg) {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t li = static_cast<size_t>(e.index);
+    if (li >= st.lineCount())
       return false;
-    FillLinePath({st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 2]},
-                 {st.userLinesFlat[k + 3], st.userLinesFlat[k + 4], st.userLinesFlat[k + 5]}, pickX, pickY, out);
+    const CadLineRecord ln = st.line(li);
+    FillLinePath({ln.x0, ln.y0, ln.z0}, {ln.x1, ln.y1, ln.z1}, pickX, pickY, out);
     return true;
   }
   if (e.type == T::Polyline) {
@@ -380,15 +380,16 @@ void ListModelEntity(const AppCommandState& st, const SelectedEntity& e, std::ve
   const std::string layer = (at && !at->layer.empty()) ? at->layer : "0";
   using T = SelectedEntity::Type;
   if (e.type == T::LineSeg) {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t li = static_cast<size_t>(e.index);
+    if (li >= st.lineCount())
       return;
+    const CadLineRecord ln = st.line(li);
     char buf[256];
     std::snprintf(buf, sizeof(buf), "LINE  layer %s  model  (%s,%s) to (%s,%s)", layer.c_str(),
-                  FormatLinear(st.userLinesFlat[k], prec).c_str(),
-                  FormatLinear(st.userLinesFlat[k + 1], prec).c_str(),
-                  FormatLinear(st.userLinesFlat[k + 3], prec).c_str(),
-                  FormatLinear(st.userLinesFlat[k + 4], prec).c_str());
+                  FormatLinear(ln.x0, prec).c_str(),
+                  FormatLinear(ln.y0, prec).c_str(),
+                  FormatLinear(ln.x1, prec).c_str(),
+                  FormatLinear(ln.y1, prec).c_str());
     log.push_back(buf);
     return;
   }
@@ -590,17 +591,17 @@ int ConvertPickedToPolyline(AppCommandState& st, const SelectedEntity& hit, std:
   if (hit.type == T::Polyline)
     return hit.index;
   if (hit.type == T::LineSeg) {
-    const size_t k = static_cast<size_t>(hit.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t li = static_cast<size_t>(hit.index);
+    if (li >= st.lineCount())
       return -1;
     PushUndoSnapshot(st, "PEDIT convert");
+    const CadLineRecord ln = st.line(li);
     const int idx = AppendOpenPolyline2(st.userPolylineVerts, st.userPolylineOffsets, st.userPolylineClosed,
-                                        st.userPolylineAttrs, st.userPolylineVertsBulge, st.userLinesFlat[k],
-                                        st.userLinesFlat[k + 1], st.userLinesFlat[k + 2], st.userLinesFlat[k + 3],
-                                        st.userLinesFlat[k + 4], st.userLinesFlat[k + 5], 0.f, MakeNewEntityAttrs(st));
+                                        st.userPolylineAttrs, st.userPolylineVertsBulge, ln.x0,
+                                        ln.y0, ln.z0, ln.x1,
+                                        ln.y1, ln.z1, 0.f, MakeNewEntityAttrs(st));
     SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
-    st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(k),
-                           st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(k) + 6);
+    st.eraseLine(li);
     if (static_cast<size_t>(hit.index) < st.userLineAttrs.size())
       st.userLineAttrs.erase(st.userLineAttrs.begin() + hit.index);
     BumpCadGpuCache(st);
@@ -2109,12 +2110,13 @@ ExtractRecord DataExtractRecord(const AppCommandState& st, const SelectedEntity&
   const EntityAttributes* at = CadEntityAttrsForSelected(st, e);
   r.layer = (at && !at->layer.empty()) ? at->layer : "0";
   if (e.type == T::LineSeg) {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 2 < st.userLinesFlat.size()) {
+    const size_t li = static_cast<size_t>(e.index);
+    if (li < st.lineCount()) {
+      const CadLineRecord ln = st.line(li);
       r.hasPoint = true;
-      r.x = st.userLinesFlat[k];
-      r.y = st.userLinesFlat[k + 1];
-      r.z = st.userLinesFlat[k + 2];
+      r.x = ln.x0;
+      r.y = ln.y0;
+      r.z = ln.z0;
     }
   } else if (e.type == T::Circle) {
     const size_t ci = static_cast<size_t>(e.index);

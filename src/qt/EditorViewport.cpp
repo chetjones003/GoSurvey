@@ -251,10 +251,11 @@ EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>&
     const bool readOnly = projectUid && std::any_of(m_State.openProjects.begin(), m_State.openProjects.end(),
         [projectUid](const auto& project) { return project.uid == projectUid && project.readOnly; });
     if (readOnly) return;
-    const size_t k = static_cast<size_t>(entityIndex) * 6;
-    if (k + 5 >= m_State.userLinesFlat.size()) return;
-    const float gx = static_cast<float>(m_State.userLinesFlat[k + (which == 0 ? 0 : 3)]);
-    const float gy = static_cast<float>(m_State.userLinesFlat[k + (which == 0 ? 1 : 4)]);
+    const size_t li = static_cast<size_t>(entityIndex);
+    if (li >= m_State.lineCount()) return;
+    const CadLineRecord seg = m_State.line(li);
+    const float gx = static_cast<float>(which == 0 ? seg.x0 : seg.x1);
+    const float gy = static_cast<float>(which == 0 ? seg.y0 : seg.y1);
     m_State.gripMenuPendingEntityIndex = entityIndex;
     m_State.gripMenuPendingWhich = which;
     auto* menu = new QMenu(this);
@@ -269,12 +270,10 @@ EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>&
           m_State.entityGripEntityIndex != entityIndex) return;
       m_State.entityGripLengthenMode = alongLine;
       if (alongLine) {
-        const size_t line = static_cast<size_t>(entityIndex) * 6;
+        const CadLineRecord seg = m_State.line(static_cast<size_t>(entityIndex));
         const bool startGrip = m_State.entityGripWhich == 0;
-        const float dx = static_cast<float>(m_State.userLinesFlat[line + (startGrip ? 0 : 3)] -
-                                            m_State.userLinesFlat[line + (startGrip ? 3 : 0)]);
-        const float dy = static_cast<float>(m_State.userLinesFlat[line + (startGrip ? 1 : 4)] -
-                                            m_State.userLinesFlat[line + (startGrip ? 4 : 1)]);
+        const float dx = static_cast<float>(startGrip ? seg.x0 - seg.x1 : seg.x1 - seg.x0);
+        const float dy = static_cast<float>(startGrip ? seg.y0 - seg.y1 : seg.y1 - seg.y0);
         const float length = std::hypot(dx, dy);
         if (length > 1e-8f) {
           m_State.entityGripLengthenDirX = dx / length;
@@ -1342,10 +1341,10 @@ void EditorViewport::paintGL() {
       std::vector<int> gripShapes;
       switch (selected.type) {
         case SelectedEntity::Type::LineSeg: {
-          const std::size_t k = static_cast<std::size_t>(selected.index) * 6;
-          if (selected.index >= 0 && k + 5 < m_State.userLinesFlat.size()) {
-            grips.push_back({m_State.userLinesFlat[k], m_State.userLinesFlat[k + 1], m_State.userLinesFlat[k + 2]});
-            grips.push_back({m_State.userLinesFlat[k + 3], m_State.userLinesFlat[k + 4], m_State.userLinesFlat[k + 5]});
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.lineCount()) {
+            const CadLineRecord seg = m_State.line(static_cast<std::size_t>(selected.index));
+            grips.push_back({seg.x0, seg.y0, seg.z0});
+            grips.push_back({seg.x1, seg.y1, seg.z1});
           }
           break;
         }
@@ -2309,13 +2308,14 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
       double nearest = std::pow(static_cast<double>(m_State.gripSizePx + 4.f), 2.0);
       for (const SelectedEntity& selected : m_State.selection) {
         if (selected.type != SelectedEntity::Type::LineSeg || selected.index < 0) continue;
-        const size_t k = static_cast<size_t>(selected.index) * 6;
-        if (k + 5 >= m_State.userLinesFlat.size()) continue;
+        const size_t li = static_cast<size_t>(selected.index);
+        if (li >= m_State.lineCount()) continue;
+        const CadLineRecord seg = m_State.line(li);
         for (int which = 0; which < 2; ++which) {
-          const double gx = m_State.userLinesFlat[k + (which == 0 ? 0 : 3)];
-          const double gy = m_State.userLinesFlat[k + (which == 0 ? 1 : 4)];
+          const double gx = which == 0 ? seg.x0 : seg.x1;
+          const double gy = which == 0 ? seg.y0 : seg.y1;
           float sx = 0.f, sy = 0.f;
-          camera.WorldToScreen(gx, gy, m_State.userLinesFlat[k + (which == 0 ? 2 : 5)],
+          camera.WorldToScreen(gx, gy, which == 0 ? seg.z0 : seg.z1,
               static_cast<float>(width()), static_cast<float>(height()), &sx, &sy);
           const double dx = sx - m_Last.x(), dy = sy - m_Last.y();
           const double d2 = dx * dx + dy * dy;

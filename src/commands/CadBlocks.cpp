@@ -106,15 +106,17 @@ void CaptureSelectionInto(const AppCommandState& st, CadBlockContent* c, float b
   assert(c != nullptr);
   for (const SelectedEntity& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= st.userLinesFlat.size())
+      const size_t li = static_cast<size_t>(e.index);
+      if (li >= st.lineCount())
         continue;
-      c->userLinesFlat.push_back(st.userLinesFlat[k] - bx);
-      c->userLinesFlat.push_back(st.userLinesFlat[k + 1] - by);
-      c->userLinesFlat.push_back(st.userLinesFlat[k + 2] - bz);
-      c->userLinesFlat.push_back(st.userLinesFlat[k + 3] - bx);
-      c->userLinesFlat.push_back(st.userLinesFlat[k + 4] - by);
-      c->userLinesFlat.push_back(st.userLinesFlat[k + 5] - bz);
+      CadLineRecord ln = st.line(li);
+      ln.x0 -= bx;
+      ln.y0 -= by;
+      ln.z0 -= bz;
+      ln.x1 -= bx;
+      ln.y1 -= by;
+      ln.z1 -= bz;
+      c->pushLine(ln);
       EntityAttributes a{};
       if (static_cast<size_t>(e.index) < st.userLineAttrs.size())
         a = st.userLineAttrs[static_cast<size_t>(e.index)];
@@ -220,7 +222,7 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   // The block's entity store replaces the model's (ADR-0010, #1557 phase 3): a single slice copy,
   // then the attribute arrays are padded to their entity counts as before.
   static_cast<CadEntityStore&>(st) = static_cast<const CadEntityStore&>(c);
-  st.userLineAttrs.resize(st.userLinesFlat.size() / 6);
+  st.userLineAttrs.resize(st.lineCount());
   st.userCircleAttrs.resize(st.circleCount());
   EnsureCircleNormals(st.userCircleNormals, st.circleCount());
   st.userArcAttrs.resize(st.userArcs.size());
@@ -272,8 +274,8 @@ void HarvestDrawingPrimitivesIntoContent(const AppCommandState& st, CadBlockCont
   assert(c != nullptr);
   // Same entity store copy as CadBlockCaptureDrawing, then the attribute arrays are padded.
   static_cast<CadEntityStore&>(*c) = static_cast<const CadEntityStore&>(st);
-  c->userLineAttrs.resize(st.userLinesFlat.size() / 6);
-  c->lineVis.assign(st.userLinesFlat.size() / 6, "");
+  c->userLineAttrs.resize(st.lineCount());
+  c->lineVis.assign(st.lineCount(), "");
   c->userCircleAttrs.resize(st.circleCount());
   c->circleVis.assign(st.circleCount(), "");
   EnsureCircleNormals(c->userCircleNormals, st.circleCount());
@@ -554,10 +556,8 @@ void EraseSelectedSources(AppCommandState& st) {
       const int k = idx[static_cast<size_t>(i)];
       if (k < 0)
         continue;
-      const size_t o = static_cast<size_t>(k) * 6;
-      if (o + 5 < st.userLinesFlat.size())
-        st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(o),
-                               st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(o + 6));
+      if (static_cast<size_t>(k) < st.lineCount())
+        st.eraseLine(static_cast<size_t>(k));
       if (static_cast<size_t>(k) < st.userLineAttrs.size())
         st.userLineAttrs.erase(st.userLineAttrs.begin() + k);
     }
@@ -623,12 +623,7 @@ void ExplodeRef(AppCommandState& st, const CadBlockRef& ref, const EntityAttribu
   std::vector<CadBlockWorldSeg> segs;
   CadBlockCollectWorldLines(st.blockDefs, ref, insertAttr, &segs);
   for (const CadBlockWorldSeg& s : segs) {
-    st.userLinesFlat.push_back(s.x0);
-    st.userLinesFlat.push_back(s.y0);
-    st.userLinesFlat.push_back(s.z0);
-    st.userLinesFlat.push_back(s.x1);
-    st.userLinesFlat.push_back(s.y1);
-    st.userLinesFlat.push_back(s.z1);
+    st.pushLine(CadLineRecord{s.x0, s.y0, s.z0, s.x1, s.y1, s.z1});
     EntityAttributes a = s.attr;
     a.id = 0;
     st.userLineAttrs.push_back(a);
@@ -1707,13 +1702,14 @@ static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float p
     *outNy = diry / l;
     *outNz = dirz / l;
   };
-  for (size_t i = 0; i + 5 < st.userLinesFlat.size(); i += 6) {
-    const float x0 = static_cast<float>(st.userLinesFlat[i]);
-    const float y0 = static_cast<float>(st.userLinesFlat[i + 1]);
-    const float z0 = static_cast<float>(st.userLinesFlat[i + 2]);
-    const float x1 = static_cast<float>(st.userLinesFlat[i + 3]);
-    const float y1 = static_cast<float>(st.userLinesFlat[i + 4]);
-    const float z1 = static_cast<float>(st.userLinesFlat[i + 5]);
+  for (size_t i = 0; i < st.lineCount(); ++i) {
+    const CadLineRecord ln = st.line(i);
+    const float x0 = static_cast<float>(ln.x0);
+    const float y0 = static_cast<float>(ln.y0);
+    const float z0 = static_cast<float>(ln.z0);
+    const float x1 = static_cast<float>(ln.x1);
+    const float y1 = static_cast<float>(ln.y1);
+    const float z1 = static_cast<float>(ln.z1);
     consider(x0, y0, z0, x0 - x1, y0 - y1, z0 - z1);
     consider(x1, y1, z1, x1 - x0, y1 - y0, z1 - z0);
   }
@@ -3671,16 +3667,11 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       // ADR-043: an active session keeps the geometry in the model arrays; add there so it survives
       // the harvest on Save (and shows in the isolated view like any other draw).
       const float seg[6] = {x1, y1, 0.f, x2, y2, 0.f};
-      st.userLinesFlat.insert(st.userLinesFlat.end(), seg, seg + 6);
+      st.pushLine(CadLineRecord{x1, y1, 0.0, x2, y2, 0.0});
       st.userLineAttrs.push_back(EntityAttributes{});
     } else {
       CadBlockContent& c = st.blockDefs[static_cast<size_t>(di)].content;
-      c.userLinesFlat.push_back(x1);
-      c.userLinesFlat.push_back(y1);
-      c.userLinesFlat.push_back(0.f);
-      c.userLinesFlat.push_back(x2);
-      c.userLinesFlat.push_back(y2);
-      c.userLinesFlat.push_back(0.f);
+      c.pushLine(CadLineRecord{x1, y1, 0.0, x2, y2, 0.0});
       c.userLineAttrs.push_back(EntityAttributes{});
       c.lineVis.push_back(f.size() >= 6 ? f[5] : std::string());
     }
@@ -3975,12 +3966,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       const float x1 = std::stof(f[2]);
       const float y1 = std::stof(f[3]);
       PushUndoSnapshot(st, "Mkline");
-      st.userLinesFlat.push_back(x0);
-      st.userLinesFlat.push_back(y0);
-      st.userLinesFlat.push_back(0.f);
-      st.userLinesFlat.push_back(x1);
-      st.userLinesFlat.push_back(y1);
-      st.userLinesFlat.push_back(0.f);
+      st.pushLine(CadLineRecord{x0, y0, 0.0, x1, y1, 0.0});
       st.userLineAttrs.push_back(NewBlockAttr(st));
       EnsureEntityIds(st);
       BumpCadGpuCache(st);
@@ -3993,7 +3979,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
 
   if (tok == "selline") {
     st.selection.clear();
-    const int n = static_cast<int>(st.userLinesFlat.size() / 6);
+    const int n = static_cast<int>(st.lineCount());
     if (n <= 0) {
       log.push_back("SELLINE — no lines.");
       return true;

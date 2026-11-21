@@ -607,9 +607,10 @@ bool TitleBlockBounds(const AppCommandState& tb, Box* out) {
     out->minY = std::min(out->minY, y);
     out->maxY = std::max(out->maxY, y);
   };
-  for (size_t i = 0; i + 5 < tb.userLinesFlat.size(); i += 6) {
-    add(tb.userLinesFlat[i], tb.userLinesFlat[i + 1]);
-    add(tb.userLinesFlat[i + 3], tb.userLinesFlat[i + 4]);
+  for (size_t i = 0; i < tb.lineCount(); ++i) {
+    const CadLineRecord ln = tb.line(i);
+    add(ln.x0, ln.y0);
+    add(ln.x1, ln.y1);
   }
   for (size_t v = 0; v + 2 < tb.userPolylineVerts.size(); v += 3) add(tb.userPolylineVerts[v], tb.userPolylineVerts[v + 1]);
   return any;
@@ -650,14 +651,15 @@ bool TitleBlockBorder(const AppCommandState& tb, Box* out) {
 
 // REQ-518.8: copies the title block's lines and polylines onto `sheet`, moved by (dx, dy) paper inches.
 void CopyTitleBlockOntoSheet(PaperLayout& sheet, const AppCommandState& tb, double dx, double dy) {
-  for (size_t i = 0; i + 5 < tb.userLinesFlat.size(); i += 6) {
-    sheet.paperLines.push_back(static_cast<float>(tb.userLinesFlat[i] + dx));
-    sheet.paperLines.push_back(static_cast<float>(tb.userLinesFlat[i + 1] + dy));
+  for (size_t i = 0; i < tb.lineCount(); ++i) {
+    const CadLineRecord ln = tb.line(i);
+    sheet.paperLines.push_back(static_cast<float>(ln.x0 + dx));
+    sheet.paperLines.push_back(static_cast<float>(ln.y0 + dy));
     sheet.paperLines.push_back(0.f);
-    sheet.paperLines.push_back(static_cast<float>(tb.userLinesFlat[i + 3] + dx));
-    sheet.paperLines.push_back(static_cast<float>(tb.userLinesFlat[i + 4] + dy));
+    sheet.paperLines.push_back(static_cast<float>(ln.x1 + dx));
+    sheet.paperLines.push_back(static_cast<float>(ln.y1 + dy));
     sheet.paperLines.push_back(0.f);
-    EntityAttributes attr = i / 6 < tb.userLineAttrs.size() ? tb.userLineAttrs[i / 6] : EntityAttributes{};
+    EntityAttributes attr = i < tb.userLineAttrs.size() ? tb.userLineAttrs[i] : EntityAttributes{};
     attr.id = 0;  // the sheet's own copy takes a fresh identity when it is saved
     sheet.paperLineAttrs.push_back(attr);
   }
@@ -759,9 +761,10 @@ int ArchDPresetIndex() {
 double FieldColumnLeftOnSheet(const SheetTitleBlock& tb) {
   double left = tb.inner.maxX;
   bool found = false;
-  for (size_t i = 0; i + 5 < tb.state.userLinesFlat.size(); i += 6) {
-    const double x0 = tb.state.userLinesFlat[i], y0 = tb.state.userLinesFlat[i + 1];
-    const double y1 = tb.state.userLinesFlat[i + 4];
+  for (size_t i = 0; i < tb.state.lineCount(); ++i) {
+    const CadLineRecord ln = tb.state.line(i);
+    const double x0 = ln.x0, y0 = ln.y0;
+    const double y1 = ln.y1;
     if (std::fabs(y0 - y1) > 1e-6) continue;                                // horizontal lines only
     if (x0 < tb.border.maxX - 0.05) continue;                               // the column beside the main border
     if (y0 < (tb.border.minY + tb.border.maxY) * 0.5) continue;             // the field cells above the middle
@@ -965,9 +968,10 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
   // REQ-518.9: the right-hand column's horizontal box lines (in sheet coordinates) give the field rows: one per cell.
   double columnLeft = borderOnSheet.maxX;
   std::vector<double> lineYs;
-  for (size_t i = 0; i + 5 < titleBlock.userLinesFlat.size(); i += 6) {
-    const double x0 = titleBlock.userLinesFlat[i], y0 = titleBlock.userLinesFlat[i + 1];
-    const double y1 = titleBlock.userLinesFlat[i + 4];
+  for (size_t i = 0; i < titleBlock.lineCount(); ++i) {
+    const CadLineRecord ln = titleBlock.line(i);
+    const double x0 = ln.x0, y0 = ln.y0;
+    const double y1 = ln.y1;
     if (std::fabs(y0 - y1) > 1e-6) continue;                                      // horizontal lines only
     if (x0 < border.maxX - 0.05) continue;                                        // the column beside the main border
     if (y0 < (border.minY + border.maxY) * 0.5) continue;                         // the cells above the middle of the block
@@ -984,9 +988,10 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
   double fieldRight = columnRight;
   if (lineYs.size() >= 2) {
     const double fieldsLow = lineYs.back(), fieldsHigh = lineYs.front();
-    for (size_t i = 0; i + 5 < titleBlock.userLinesFlat.size(); i += 6) {
-      const double x0 = titleBlock.userLinesFlat[i] + dx, x1 = titleBlock.userLinesFlat[i + 3] + dx;
-      const double y0 = titleBlock.userLinesFlat[i + 1] + dy, y1 = titleBlock.userLinesFlat[i + 4] + dy;
+    for (size_t i = 0; i < titleBlock.lineCount(); ++i) {
+      const CadLineRecord ln = titleBlock.line(i);
+      const double x0 = ln.x0 + dx, x1 = ln.x1 + dx;
+      const double y0 = ln.y0 + dy, y1 = ln.y1 + dy;
       if (std::fabs(x0 - x1) > 1e-6) continue;                                  // vertical lines only
       if (std::max(y0, y1) < fieldsLow || std::min(y0, y1) > fieldsHigh) continue;  // beside the fields
       if (x0 > columnLeft + 0.05 && x0 < fieldRight - 0.01) fieldRight = x0;
@@ -5181,18 +5186,18 @@ bool AddSourceSegments(const AppCommandState& st, const SelectedEntity& se, int 
   using T = SelectedEntity::Type;
   const size_t ix = static_cast<size_t>(se.index);
   const std::string obj = "object " + std::to_string(srcNo);
-  if (se.type == T::LineSeg && se.index >= 0 && ix * 6 + 5 < st.userLinesFlat.size()) {
-    const double* v = &st.userLinesFlat[ix * 6];
-    if (std::hypot(v[3] - v[0], v[4] - v[1]) <= 1e-9 && std::fabs(v[5] - v[2]) > 1e-9) {
+  if (se.type == T::LineSeg && se.index >= 0 && ix < st.lineCount()) {
+    const CadLineRecord v = st.line(ix);
+    if (std::hypot(v.x1 - v.x0, v.y1 - v.y0) <= 1e-9 && std::fabs(v.z1 - v.z0) > 1e-9) {
       *why = obj + " is a vertical line; it has no length in plan";
       return false;
     }
     alignment::SourceSegment s;
-    s.a = {v[0], v[1]};
-    s.b = {v[3], v[4]};
+    s.a = {v.x0, v.y0};
+    s.b = {v.x1, v.y1};
     s.sourceIndex = srcNo;
     segs->push_back(s);
-    *zSeen = *zSeen || v[2] != 0.0 || v[5] != 0.0;
+    *zSeen = *zSeen || v.z0 != 0.0 || v.z1 != 0.0;
     return true;
   }
   if (se.type == T::Arc && se.index >= 0 && ix < st.userArcs.size()) {

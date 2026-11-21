@@ -640,8 +640,8 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       };
 
       // Lines (REQ-028: also skip layers frozen in THIS viewport, matching the on-screen viewport render).
-      for (size_t i = 0; i + 5 < st.userLinesFlat.size(); i += 6) {
-        const size_t idx = i / 6;
+      for (size_t idx = 0; idx < st.lineCount(); ++idx) {
+        const CadLineRecord ln = st.line(idx);
         if (idx < st.userLineAttrs.size() &&
             (!plottable(st.userLineAttrs[idx].layer) || IsLayerFrozenInViewport(vp, st.userLineAttrs[idx].layer)))
           continue;
@@ -650,8 +650,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
                        : 0x000000u;
         setLineStyle(idx < st.userLineAttrs.size() ? &st.userLineAttrs[idx] : nullptr,
                      idx < st.userLineAttrs.size() ? st.userLineAttrs[idx].layer : std::string("0"));
-        emitModelSeg(st.userLinesFlat[i] + oX, st.userLinesFlat[i + 1] + oY, st.userLinesFlat[i + 3] + oX,
-                     st.userLinesFlat[i + 4] + oY, st.userLinesFlat[i + 2], st.userLinesFlat[i + 5]);
+        emitModelSeg(ln.x0 + oX, ln.y0 + oY, ln.x1 + oX, ln.y1 + oY, ln.z0, ln.z1);
       }
       // Polylines.
       for (size_t pi = 0; pi < st.userPolylineOffsets.size(); ++pi) {

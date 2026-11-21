@@ -448,12 +448,12 @@ static bool UcsFromObjectPick(const AppCommandState& st, const ray3d::Vec3& pick
 
   switch (hit.type) {
     case SelectedEntity::Type::LineSeg: {
-      const size_t i = static_cast<size_t>(hit.index) * 6;
-      if (i + 5 >= st.userLinesFlat.size())
+      const size_t li = static_cast<size_t>(hit.index);
+      if (li >= st.lineCount())
         return false;
-      const ray3d::Vec3 a = storageToWorld(st.userLinesFlat[i], st.userLinesFlat[i + 1], st.userLinesFlat[i + 2]);
-      const ray3d::Vec3 b =
-          storageToWorld(st.userLinesFlat[i + 3], st.userLinesFlat[i + 4], st.userLinesFlat[i + 5]);
+      const CadLineRecord ln = st.line(li);
+      const ray3d::Vec3 a = storageToWorld(ln.x0, ln.y0, ln.z0);
+      const ray3d::Vec3 b = storageToWorld(ln.x1, ln.y1, ln.z1);
       // The endpoint nearest the pick becomes the origin and +X runs toward the other, so clicking
       // near either end gives a frame that reads along the line away from you.
       const bool nearA = ray3d::Length(ray3d::Sub(pickWorld, a)) <= ray3d::Length(ray3d::Sub(pickWorld, b));

@@ -6192,13 +6192,14 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
   const int idx = st.entityGripEntityIndex;
   switch (st.entityGripType) {
   case SelectedEntity::Type::LineSeg: {
-    if (idx < 0 || static_cast<size_t>(idx) * 6 + 5 >= st.userLinesFlat.size())
+    if (idx < 0 || static_cast<size_t>(idx) >= st.lineCount())
       return;
-    const size_t k = static_cast<size_t>(idx) * 6;
-    st.userLinesFlat[k] = st.entityGripOrigX0;
-    st.userLinesFlat[k + 1] = st.entityGripOrigY0;
-    st.userLinesFlat[k + 3] = st.entityGripOrigX1;
-    st.userLinesFlat[k + 4] = st.entityGripOrigY1;
+    CadLineRecord ln = st.line(static_cast<size_t>(idx));
+    ln.x0 = st.entityGripOrigX0;
+    ln.y0 = st.entityGripOrigY0;
+    ln.x1 = st.entityGripOrigX1;
+    ln.y1 = st.entityGripOrigY1;
+    st.setLine(static_cast<size_t>(idx), ln);
     break;
   }
   case SelectedEntity::Type::Circle: {

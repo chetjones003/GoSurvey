@@ -10,6 +10,12 @@
 
 namespace {
 
+// Component comp (0-2 = x, y, z) of endpoint (0 = start, 1 = end) of a line segment.
+double LineEndComp(const CadLineRecord& l, int endpoint, int comp) {
+  const double v[6] = {l.x0, l.y0, l.z0, l.x1, l.y1, l.z1};
+  return v[endpoint * 3 + comp];
+}
+
 template <class T>
 void rotatePreviewPt(double baseX, double baseY, double angleRad, T* inOutX, T* inOutY) {
   const double c = std::cos(angleRad);
@@ -340,12 +346,13 @@ void appendBreakRemovedSpan(std::vector<float>* out, const AppCommandState& cmd,
   constexpr float kTwoPi = 6.28318530717958647692f;
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= cmd.userLinesFlat.size())
+    const size_t li = static_cast<size_t>(e.index);
+    if (li >= cmd.lineCount())
       return;
+    const CadLineRecord seg = cmd.line(li);
     // Both points already lie on the segment, so the removed material is simply the span between
     // them — no ordering needed.
-    appendPreviewSegment(out, p1.x, p1.y, p2.x, p2.y, cmd.userLinesFlat[k + 2]);
+    appendPreviewSegment(out, p1.x, p1.y, p2.x, p2.y, seg.z0);
     return;
   }
   case SelectedEntity::Type::Circle: {
@@ -532,13 +539,14 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     const float dy = curY - cmd.modifyBaseY;
     for (const auto& e : cmd.selection) {
       if (e.type == SelectedEntity::Type::LineSeg) {
-        const size_t k = static_cast<size_t>(e.index) * 6;
-        if (k + 5 >= cmd.userLinesFlat.size())
+        const size_t li = static_cast<size_t>(e.index);
+        if (li >= cmd.lineCount())
           continue;
+        const CadLineRecord seg = cmd.line(li);
         for (int i = 0; i < 2; ++i) {
-          prevLines->push_back(cmd.userLinesFlat[k + i * 3] + dx);
-          prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 1] + dy);
-          prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);  // keep the endpoint's elevation
+          prevLines->push_back(LineEndComp(seg, i, 0) + dx);
+          prevLines->push_back(LineEndComp(seg, i, 1) + dy);
+          prevLines->push_back(LineEndComp(seg, i, 2));  // keep the endpoint's elevation
         }
       } else if (e.type == SelectedEntity::Type::Circle) {
         const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
@@ -620,13 +628,14 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     auto appendTranslatedInstance = [&](float dx, float dy, float dz) {
       for (const auto& e : cmd.selection) {
         if (e.type == SelectedEntity::Type::LineSeg) {
-          const size_t k = static_cast<size_t>(e.index) * 6;
-          if (k + 5 >= cmd.userLinesFlat.size())
+          const size_t li = static_cast<size_t>(e.index);
+          if (li >= cmd.lineCount())
             continue;
+          const CadLineRecord seg = cmd.line(li);
           for (int i = 0; i < 2; ++i) {
-            prevLines->push_back(cmd.userLinesFlat[k + i * 3] + dx);
-            prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 1] + dy);
-            prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2] + dz);
+            prevLines->push_back(LineEndComp(seg, i, 0) + dx);
+            prevLines->push_back(LineEndComp(seg, i, 1) + dy);
+            prevLines->push_back(LineEndComp(seg, i, 2) + dz);
           }
         } else if (e.type == SelectedEntity::Type::Circle) {
           const size_t ci = static_cast<size_t>(e.index);
@@ -715,12 +724,13 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       };
       for (const auto& e : cmd.selection) {
         if (e.type == SelectedEntity::Type::LineSeg) {
-          const size_t k = static_cast<size_t>(e.index) * 6;
-          if (k + 5 >= cmd.userLinesFlat.size())
+          const size_t li = static_cast<size_t>(e.index);
+          if (li >= cmd.lineCount())
             continue;
+          const CadLineRecord seg = cmd.line(li);
           for (int i = 0; i < 2; ++i) {
             const ray3d::Vec3 p =
-                rp(cmd.userLinesFlat[k + i * 3], cmd.userLinesFlat[k + i * 3 + 1], cmd.userLinesFlat[k + i * 3 + 2]);
+                rp(LineEndComp(seg, i, 0), LineEndComp(seg, i, 1), LineEndComp(seg, i, 2));
             prevLines->push_back(static_cast<float>(p.x));
             prevLines->push_back(static_cast<float>(p.y));
             prevLines->push_back(static_cast<float>(p.z));
@@ -901,15 +911,16 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     auto inBox = [&](float x, float y) { return PointInsideClosedRect(x, y, mnX, mxX, mnY, mxY); };
     for (const auto& e : cmd.selection) {
       if (e.type == SelectedEntity::Type::LineSeg) {
-        const size_t k = static_cast<size_t>(e.index) * 6;
-        if (k + 5 >= cmd.userLinesFlat.size())
+        const size_t li = static_cast<size_t>(e.index);
+        if (li >= cmd.lineCount())
           continue;
+        const CadLineRecord seg = cmd.line(li);
         for (int i = 0; i < 2; ++i) {
-          float x = cmd.userLinesFlat[k + i * 3], y = cmd.userLinesFlat[k + i * 3 + 1];
+          float x = LineEndComp(seg, i, 0), y = LineEndComp(seg, i, 1);
           if (inBox(x, y)) { x += dx; y += dy; }
           prevLines->push_back(x);
           prevLines->push_back(y);
-          prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
+          prevLines->push_back(LineEndComp(seg, i, 2));
         }
       } else if (e.type == SelectedEntity::Type::Circle) {
         const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
@@ -982,13 +993,14 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     const float dy = curY - cmd.modifyBaseY;
     const CadClipboard& cb = cmd.clipboard;
     // Lines
-    for (size_t i = 0; i + 5 < cb.content.userLinesFlat.size() + 1; i += 6) {
-      prevLines->push_back(cb.content.userLinesFlat[i + 0] + dx);
-      prevLines->push_back(cb.content.userLinesFlat[i + 1] + dy);
-      prevLines->push_back(cb.content.userLinesFlat[i + 2]);
-      prevLines->push_back(cb.content.userLinesFlat[i + 3] + dx);
-      prevLines->push_back(cb.content.userLinesFlat[i + 4] + dy);
-      prevLines->push_back(cb.content.userLinesFlat[i + 5]);
+    for (size_t i = 0; i < cb.content.lineCount(); ++i) {
+      const CadLineRecord ln = cb.content.line(i);
+      prevLines->push_back(ln.x0 + dx);
+      prevLines->push_back(ln.y0 + dy);
+      prevLines->push_back(ln.z0);
+      prevLines->push_back(ln.x1 + dx);
+      prevLines->push_back(ln.y1 + dy);
+      prevLines->push_back(ln.z1);
     }
     // Circles
     for (size_t i = 0; i < cb.content.circleCount(); ++i) {  // cx,cy,z,r
@@ -1068,16 +1080,17 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     const float by = cmd.modifyBaseY;
     for (const auto& e : cmd.selection) {
       if (e.type == SelectedEntity::Type::LineSeg) {
-        const size_t k = static_cast<size_t>(e.index) * 6;
-        if (k + 5 >= cmd.userLinesFlat.size())
+        const size_t li = static_cast<size_t>(e.index);
+        if (li >= cmd.lineCount())
           continue;
+        const CadLineRecord seg = cmd.line(li);
         for (int i = 0; i < 2; ++i) {
-          float x = cmd.userLinesFlat[k + i * 3];
-          float y = cmd.userLinesFlat[k + i * 3 + 1];
+          float x = LineEndComp(seg, i, 0);
+          float y = LineEndComp(seg, i, 1);
           scalePreviewPt(bx, by, sc, &x, &y);
           prevLines->push_back(x);
           prevLines->push_back(y);
-          prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
+          prevLines->push_back(LineEndComp(seg, i, 2));
         }
       } else if (e.type == SelectedEntity::Type::Circle) {
         const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
@@ -1177,16 +1190,17 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
 
     for (const auto& e : cmd.selection) {
       if (e.type == SelectedEntity::Type::LineSeg) {
-        const size_t k = static_cast<size_t>(e.index) * 6;
-        if (k + 5 >= cmd.userLinesFlat.size())
+        const size_t li = static_cast<size_t>(e.index);
+        if (li >= cmd.lineCount())
           continue;
+        const CadLineRecord seg = cmd.line(li);
         for (int i = 0; i < 2; ++i) {
-          float x = cmd.userLinesFlat[k + i * 3];
-          float y = cmd.userLinesFlat[k + i * 3 + 1];
+          float x = LineEndComp(seg, i, 0);
+          float y = LineEndComp(seg, i, 1);
           mirrorPreviewPt(x0, y0, x1, y1, &x, &y);
           prevLines->push_back(x);
           prevLines->push_back(y);
-          prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
+          prevLines->push_back(LineEndComp(seg, i, 2));
         }
       } else if (e.type == SelectedEntity::Type::Circle) {
         const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
@@ -1287,11 +1301,12 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     const SelectedEntity& e = cmd.lengthenPendingEntity;
     const bool nearFirst = cmd.lengthenPendingNearFirst;
     if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= cmd.userLinesFlat.size())
+      const size_t li = static_cast<size_t>(e.index);
+      if (li >= cmd.lineCount())
         return;
-      const float x0 = cmd.userLinesFlat[k], y0 = cmd.userLinesFlat[k + 1], z0 = cmd.userLinesFlat[k + 2];
-      const float x1 = cmd.userLinesFlat[k + 3], y1 = cmd.userLinesFlat[k + 4], z1 = cmd.userLinesFlat[k + 5];
+      const CadLineRecord seg = cmd.line(li);
+      const float x0 = static_cast<float>(seg.x0), y0 = static_cast<float>(seg.y0), z0 = static_cast<float>(seg.z0);
+      const float x1 = static_cast<float>(seg.x1), y1 = static_cast<float>(seg.y1), z1 = static_cast<float>(seg.z1);
       const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0, fixedZ = nearFirst ? z1 : z0;
       const float movingZ = nearFirst ? z0 : z1;
       const float dx = (nearFirst ? x0 : x1) - fixedX, dy = (nearFirst ? y0 : y1) - fixedY;
@@ -1374,16 +1389,17 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
   const float by = cmd.rotateBaseY;
   for (const auto& e : cmd.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= cmd.userLinesFlat.size())
+      const size_t li = static_cast<size_t>(e.index);
+      if (li >= cmd.lineCount())
         continue;
+      const CadLineRecord seg = cmd.line(li);
       for (int i = 0; i < 2; ++i) {
-        float x = cmd.userLinesFlat[k + i * 3];
-        float y = cmd.userLinesFlat[k + i * 3 + 1];
+        float x = LineEndComp(seg, i, 0);
+        float y = LineEndComp(seg, i, 1);
         rotatePreviewPt(bx, by, theta, &x, &y);
         prevLines->push_back(x);
         prevLines->push_back(y);
-        prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
+        prevLines->push_back(LineEndComp(seg, i, 2));
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
       const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
@@ -1477,16 +1493,17 @@ template<typename LineVert>
 static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEntity& e,
                                   std::vector<LineVert>* hlLines, std::vector<float>* hlCircles) {
   if (e.type == SelectedEntity::Type::LineSeg) {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= cmd.userLinesFlat.size())
+    const size_t li = static_cast<size_t>(e.index);
+    if (li >= cmd.lineCount())
       return;
+    const CadLineRecord seg = cmd.line(li);
     for (int i = 0; i < 2; ++i) {
-      hlLines->push_back(static_cast<LineVert>(cmd.userLinesFlat[k + i * 3]));
-      hlLines->push_back(static_cast<LineVert>(cmd.userLinesFlat[k + i * 3 + 1]));
+      hlLines->push_back(static_cast<LineVert>(LineEndComp(seg, i, 0)));
+      hlLines->push_back(static_cast<LineVert>(LineEndComp(seg, i, 1)));
       // The entity's OWN Z, not a flat overlay depth (REQ-057/058). Drawing the highlight at a
       // fixed Z put it on the datum while the line sat at its elevation, so an orbited view showed
       // the object twice — once real, once highlighted in the wrong place.
-      hlLines->push_back(static_cast<LineVert>(cmd.userLinesFlat[k + i * 3 + 2]));
+      hlLines->push_back(static_cast<LineVert>(LineEndComp(seg, i, 2)));
     }
   } else if (e.type == SelectedEntity::Type::Circle) {
     const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r

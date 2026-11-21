@@ -570,7 +570,7 @@ void EditorWindow::RefreshProperties() {
     else if (e.type == SelectedEntity::Type::Annotation) texts.push_back(e);
   }
   const bool pure = nOther == 0 && ((lines.size() == st.selection.size()) || (circles.size() == st.selection.size()) || (texts.size() == st.selection.size()));
-  const size_t lineCount = st.userLinesFlat.size() / 6, circleCount = st.circleCount();
+  const size_t lineCount = st.lineCount(), circleCount = st.circleCount();
   if (none && st.selectedSurveyPointIndices.empty()) {
     for (const char* label : {"Start X", "Start Y", "End X", "End Y"}) {
       auto* dash = new QLabel(QString::fromUtf8("\xE2\x80\x94"), body);
@@ -597,19 +597,19 @@ void EditorWindow::RefreshProperties() {
     }
   } else if (lines.size() == 1 && static_cast<size_t>(lines[0].index) < lineCount) {
     const int i = lines[0].index;
-    const double* v = &st.userLinesFlat[static_cast<size_t>(i) * 6];
+    const CadLineRecord v = st.line(static_cast<size_t>(i));
     using F = propedit::LineField;
     struct Item { const char* label; const char* name; F field; double shown; char axis; };
     const Item items[] = {
-        {"Start X", "propLineStartX", F::StartX, v[0] + ox, 'X'}, {"Start Y", "propLineStartY", F::StartY, v[1] + oy, 'Y'},
-        {"Start Z", "propLineStartZ", F::StartZ, v[2], 'Z'},     {"End X", "propLineEndX", F::EndX, v[3] + ox, 'X'},
-        {"End Y", "propLineEndY", F::EndY, v[4] + oy, 'Y'},       {"End Z", "propLineEndZ", F::EndZ, v[5], 'Z'}};
+        {"Start X", "propLineStartX", F::StartX, v.x0 + ox, 'X'}, {"Start Y", "propLineStartY", F::StartY, v.y0 + oy, 'Y'},
+        {"Start Z", "propLineStartZ", F::StartZ, v.z0, 'Z'},     {"End X", "propLineEndX", F::EndX, v.x1 + ox, 'X'},
+        {"End Y", "propLineEndY", F::EndY, v.y1 + oy, 'Y'},       {"End Z", "propLineEndZ", F::EndZ, v.z1, 'Z'}};
     for (const auto& item : items) {
       addRow(geometryRows, item.label, numberField(item.name, fmt(item.shown), [this, i, f = item.field](double value) {
         return propedit::SetLineField(m_State, i, f, value);
       }), item.axis);
     }
-    const double dx = v[3] - v[0], dy = v[4] - v[1], dz = v[5] - v[2];
+    const double dx = v.x1 - v.x0, dy = v.y1 - v.y0, dz = v.z1 - v.z0;
     const double horizontal = std::hypot(dx, dy);
     auto* derived = section("Derived", "propertiesDerived");
     readOnly(derived, "Length", fmt(horizontal), "propDerivedLength");
@@ -686,9 +686,9 @@ void EditorWindow::RefreshProperties() {
     QStringList start, end, length, bear;
     for (const auto& e : lines) {
       if (static_cast<size_t>(e.index) >= lineCount) continue;
-      const double* v = &st.userLinesFlat[static_cast<size_t>(e.index) * 6];
-      start.append(fmt(v[0] + ox) + ", " + fmt(v[1] + oy)); end.append(fmt(v[3] + ox) + ", " + fmt(v[4] + oy));
-      length.append(fmt(std::hypot(v[3] - v[0], v[4] - v[1]))); bear.append(bearing(v[3] - v[0], v[4] - v[1]));
+      const CadLineRecord v = st.line(static_cast<size_t>(e.index));
+      start.append(fmt(v.x0 + ox) + ", " + fmt(v.y0 + oy)); end.append(fmt(v.x1 + ox) + ", " + fmt(v.y1 + oy));
+      length.append(fmt(std::hypot(v.x1 - v.x0, v.y1 - v.y0))); bear.append(bearing(v.x1 - v.x0, v.y1 - v.y0));
     }
     readOnly(geometryRows, "Start point", Merge(start), "propMultiStart");
     readOnly(geometryRows, "End point", Merge(end), "propMultiEnd");

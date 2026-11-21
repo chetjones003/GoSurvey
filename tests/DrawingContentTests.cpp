@@ -711,3 +711,33 @@ TEST_CASE("Circle records are read and written through the entity store", "[issu
   CHECK(store.circle(0).cx == 5.0);
   CHECK(store.circle(0).r == 8.0);
 }
+
+TEST_CASE("Line records are read, written and erased through the entity store", "[issue1557][phase5][lines]") {
+  CadEntityStore store;
+  CHECK(store.lineCount() == 0);
+
+  store.pushLine(CadLineRecord{1.0, 2.0, 3.0, 4.0, 5.0, 6.0});
+  store.pushLine(CadLineRecord{7.0, 8.0, 9.0, 10.0, 11.0, 12.0});
+  CHECK(store.lineCount() == 2);
+  CHECK(store.userLinesFlat == std::vector<double>{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12});
+
+  const CadLineRecord second = store.line(1);
+  CHECK(second.x0 == 7.0);
+  CHECK(second.y0 == 8.0);
+  CHECK(second.z0 == 9.0);
+  CHECK(second.x1 == 10.0);
+  CHECK(second.y1 == 11.0);
+  CHECK(second.z1 == 12.0);
+
+  store.setLine(0, CadLineRecord{13.0, 14.0, 15.0, 16.0, 17.0, 18.0});
+  CHECK(store.line(0).x1 == 16.0);
+  CHECK(store.line(1).x0 == 7.0);  // neighbour untouched
+
+  store.lineComponent(1, CadLineComponent::Z1) = 99.0;
+  CHECK(store.line(1).z1 == 99.0);
+
+  store.eraseLine(0);
+  CHECK(store.lineCount() == 1);
+  CHECK(store.line(0).x0 == 7.0);
+  CHECK(store.lineStoreWellFormed());
+}

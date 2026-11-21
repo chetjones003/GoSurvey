@@ -450,12 +450,8 @@ static void PushImportedMesh(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Enti
 
 void LocalLine(AppCommandState& st, double x0, double y0, double z0, double x1, double y1, double z1,
                const EntityAttributes& at) {
-  st.userLinesFlat.push_back(x0 - st.worldDocumentOriginX);
-  st.userLinesFlat.push_back(y0 - st.worldDocumentOriginY);
-  st.userLinesFlat.push_back(z0);
-  st.userLinesFlat.push_back(x1 - st.worldDocumentOriginX);
-  st.userLinesFlat.push_back(y1 - st.worldDocumentOriginY);
-  st.userLinesFlat.push_back(z1);
+  st.pushLine(CadLineRecord{x0 - st.worldDocumentOriginX, y0 - st.worldDocumentOriginY, z0,
+                            x1 - st.worldDocumentOriginX, y1 - st.worldDocumentOriginY, z1});
   st.userLineAttrs.push_back(at);
 }
 
@@ -4805,10 +4801,11 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
     if (a != nullptr)
       tw.Apply(ent, *a);
   };
-  const size_t nSeg = content.userLinesFlat.size() / 6;
+  const size_t nSeg = content.lineCount();
   for (size_t i = 0; i < nSeg; ++i) {
-    dwg_point_3d a{content.userLinesFlat[i * 6 + 0], content.userLinesFlat[i * 6 + 1], content.userLinesFlat[i * 6 + 2]};
-    dwg_point_3d b{content.userLinesFlat[i * 6 + 3], content.userLinesFlat[i * 6 + 4], content.userLinesFlat[i * 6 + 5]};
+    const CadLineRecord ln = content.line(i);
+    dwg_point_3d a{ln.x0, ln.y0, ln.z0};
+    dwg_point_3d b{ln.x1, ln.y1, ln.z1};
     if (Dwg_Entity_LINE* e = dwg_add_LINE(blkhdr, &a, &b))
       apply(e->parent, AttrAt(content.userLineAttrs, i));
   }
@@ -7783,11 +7780,12 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       DwgExportRegisterEntityHandle(&fldCtx, a->id, ent);
   };
 
-  const size_t nSeg = st.userLinesFlat.size() / 6;
+  const size_t nSeg = st.lineCount();
   for (size_t i = 0; i < nSeg; ++i) {
     dwg_point_3d a{}, b{};
-    world(st.userLinesFlat[i * 6 + 0], st.userLinesFlat[i * 6 + 1], st.userLinesFlat[i * 6 + 2], &a);
-    world(st.userLinesFlat[i * 6 + 3], st.userLinesFlat[i * 6 + 4], st.userLinesFlat[i * 6 + 5], &b);
+    const CadLineRecord ln = st.line(i);
+    world(ln.x0, ln.y0, ln.z0, &a);
+    world(ln.x1, ln.y1, ln.z1, &b);
     Dwg_Entity_LINE* e = dwg_add_LINE(hdr, &a, &b);
     if (e != nullptr) {
       const EntityAttributes* la = AttrAt(st.userLineAttrs, i);
@@ -9195,7 +9193,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   for (size_t i = 0; i < st.surveyPoints.size(); ++i)
     EnsureSurveyPointLabelMtext(st, i, nullptr);
 
-  const size_t nLines = st.userLinesFlat.size() / 6;
+  const size_t nLines = st.lineCount();
   const size_t nCirc = st.circleCount();
   const size_t nPoly = st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1;
   log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) + " import — " + std::to_string(nLines) +

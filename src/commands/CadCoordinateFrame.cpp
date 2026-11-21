@@ -29,9 +29,11 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
     *y = static_cast<decltype(+*y)>(static_cast<double>(*y) + dy);
   };
 
-  for (size_t i = 0; i + 5 < st.userLinesFlat.size(); i += 6) {
-    add2(&st.userLinesFlat[i], &st.userLinesFlat[i + 1]);
-    add2(&st.userLinesFlat[i + 3], &st.userLinesFlat[i + 4]);
+  for (size_t i = 0; i < st.lineCount(); ++i) {
+    CadLineRecord ln = st.line(i);
+    add2(&ln.x0, &ln.y0);
+    add2(&ln.x1, &ln.y1);
+    st.setLine(i, ln);
   }
   // Only the centre's X and Y rebase. Z is absolute (ADR-025 D2) and the radius is a length, not
   // a position — neither may take a document-origin offset.

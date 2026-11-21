@@ -879,12 +879,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     xf.apply(x1, y1, &ox1, &oy1);
     UpdateCoordMag(coordMagMax, ox0, oy0);
     UpdateCoordMag(coordMagMax, ox1, oy1);
-    st.userLinesFlat.push_back(ox0 - st.worldDocumentOriginX);
-    st.userLinesFlat.push_back(oy0 - st.worldDocumentOriginY);
-    st.userLinesFlat.push_back(z0);
-    st.userLinesFlat.push_back(ox1 - st.worldDocumentOriginX);
-    st.userLinesFlat.push_back(oy1 - st.worldDocumentOriginY);
-    st.userLinesFlat.push_back(z1);
+    st.pushLine(CadLineRecord{ox0 - st.worldDocumentOriginX, oy0 - st.worldDocumentOriginY, z0,
+                              ox1 - st.worldDocumentOriginX, oy1 - st.worldDocumentOriginY, z1});
     st.userLineAttrs.push_back(at);
   };
 
@@ -2483,7 +2479,7 @@ uint32_t AttrResolvedRgbPacked(const EntityAttributes& e,
 void BuildExportLayerRgbHint(const AppCommandState& st, std::unordered_map<std::string, uint32_t>* hint) {
   hint->clear();
   std::unordered_set<std::string> layers;
-  const size_t nSeg = st.userLinesFlat.size() / 6;
+  const size_t nSeg = st.lineCount();
   for (size_t i = 0; i < nSeg && i < st.userLineAttrs.size(); ++i)
     layers.insert(st.userLineAttrs[i].layer.empty() ? std::string("0") : st.userLineAttrs[i].layer);
   const size_t nCirc = st.circleCount();
@@ -3141,7 +3137,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
                       &degenerateExtrusions, /*preserveInsertRefs=*/true);
   }
 
-  const size_t nLines = st.userLinesFlat.size() / 6;
+  const size_t nLines = st.lineCount();
   const size_t nCirc = st.circleCount();
   const size_t nPoly = st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1;
   std::ostringstream os;
@@ -4013,7 +4009,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       collectPlotStyles(*attrs);
   std::sort(plotStyleNames.begin() + 1, plotStyleNames.end());
 
-  const size_t nSeg = st.userLinesFlat.size() / 6;
+  const size_t nSeg = st.lineCount();
   const size_t nCirc = st.circleCount();
   const size_t nLayerRows = layerNames.size();
   // Symbol handles (hex, unique): fixed small IDs for tables/rows where handle < layer base (0x10),
@@ -4218,10 +4214,11 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     }
   };
   for (size_t i = 0; i < nSeg; ++i) {
-    accExt(q6lx(st.userLinesFlat[i * 6 + 0]), q6ly(st.userLinesFlat[i * 6 + 1]));
-    accExt(q6lx(st.userLinesFlat[i * 6 + 3]), q6ly(st.userLinesFlat[i * 6 + 4]));
-    accExtZ(static_cast<double>(st.userLinesFlat[i * 6 + 2]));
-    accExtZ(static_cast<double>(st.userLinesFlat[i * 6 + 5]));
+    const CadLineRecord ln = st.line(i);
+    accExt(q6lx(ln.x0), q6ly(ln.y0));
+    accExt(q6lx(ln.x1), q6ly(ln.y1));
+    accExtZ(ln.z0);
+    accExtZ(ln.z1);
   }
   for (size_t ci = 0; ci < nCirc; ++ci) {
     const CadCircleRecord circle = st.circle(ci);
@@ -5251,12 +5248,13 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   for (size_t i = 0; i < nSeg; ++i) {
     char hb[24];
     std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
-    const float x0 = st.userLinesFlat[i * 6 + 0];
-    const float y0 = st.userLinesFlat[i * 6 + 1];
-    const float z0 = st.userLinesFlat[i * 6 + 2];
-    const float x1 = st.userLinesFlat[i * 6 + 3];
-    const float y1 = st.userLinesFlat[i * 6 + 4];
-    const float z1 = st.userLinesFlat[i * 6 + 5];
+    const CadLineRecord ln = st.line(i);
+    const float x0 = static_cast<float>(ln.x0);
+    const float y0 = static_cast<float>(ln.y0);
+    const float z0 = static_cast<float>(ln.z0);
+    const float x1 = static_cast<float>(ln.x1);
+    const float y1 = static_cast<float>(ln.y1);
+    const float z1 = static_cast<float>(ln.z1);
     EntityAttributes at{};
     if (i < st.userLineAttrs.size())
       at = st.userLineAttrs[i];

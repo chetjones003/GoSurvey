@@ -47,12 +47,14 @@ std::string Plural(size_t n, const char* one, const char* many) {
 
 // The per-kind moves below serve both a whole drawing (ApplyDrawingConversion) and a clipboard
 // (ApplyClipboardConversion): the same objects, the same exact transform.
-template <class V> void MoveLines(V& lines, const Xf& f) {
-  for (size_t i = 0; i + 5 < lines.size(); i += 6) {
-    f.Pt(&lines[i], &lines[i + 1]);
-    f.Z(&lines[i + 2]);
-    f.Pt(&lines[i + 3], &lines[i + 4]);
-    f.Z(&lines[i + 5]);
+template <class S> void MoveLines(S& store, const Xf& f) {
+  for (size_t i = 0; i < store.lineCount(); ++i) {
+    CadLineRecord ln = store.line(i);
+    f.Pt(&ln.x0, &ln.y0);
+    f.Z(&ln.z0);
+    f.Pt(&ln.x1, &ln.y1);
+    f.Z(&ln.z1);
+    store.setLine(i, ln);
   }
 }
 
@@ -214,7 +216,7 @@ void ApplyDrawingConversion(AppCommandState& st, const geo::Similarity& t, std::
   st.worldDocumentOriginX = ox;
   st.worldDocumentOriginY = oy;
 
-  MoveLines(st.userLinesFlat, f);
+  MoveLines(st, f);
   MoveCircles(st, st.userCircleNormals, f);
   MoveArcs(st.userArcs, f, t.rotationRad);
   MoveEllipses(st.userEllipses, f);
@@ -288,9 +290,10 @@ bool ClipboardWorldExtents(const CadClipboard& cb, double* minX, double* maxX, d
     y0 = std::min(y0, y - r);
     y1 = std::max(y1, y + r);
   };
-  for (size_t i = 0; i + 5 < cb.content.userLinesFlat.size(); i += 6) {
-    add(cb.content.userLinesFlat[i], cb.content.userLinesFlat[i + 1]);
-    add(cb.content.userLinesFlat[i + 3], cb.content.userLinesFlat[i + 4]);
+  for (size_t i = 0; i < cb.content.lineCount(); ++i) {
+    const CadLineRecord ln = cb.content.line(i);
+    add(ln.x0, ln.y0);
+    add(ln.x1, ln.y1);
   }
   for (size_t i = 0; i < cb.content.circleCount(); ++i) {
     const CadCircleRecord cr = cb.content.circle(i);
@@ -335,7 +338,7 @@ void ApplyClipboardConversion(CadClipboard& cb, const geo::Similarity& t, double
   t.Apply(cb.srcOriginX, cb.srcOriginY, &nx, &ny);
   Xf f{t.scale, std::cos(t.rotationRad), std::sin(t.rotationRad), t.scaleZ, t.rotationRad, nx - destOriginX, ny - destOriginY};
 
-  MoveLines(cb.content.userLinesFlat, f);
+  MoveLines(cb.content, f);
   MoveCircles(cb.content, cb.content.userCircleNormals, f);
   MoveArcs(cb.content.userArcs, f, t.rotationRad);
   MoveEllipses(cb.content.userEllipses, f);

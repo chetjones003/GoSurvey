@@ -615,10 +615,10 @@ struct IsectConic {
 /// Collect the segments and conics close enough to the cursor to take part in an intersection.
 void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double tol, const ray3d::Ray* ray,
                       std::vector<IsectSeg>* segs, std::vector<IsectConic>* conics) {
-  const auto& L = cmd.userLinesFlat;
-  if (L.size() % 6 == 0) {
-    for (size_t i = 0; i + 5 < L.size(); i += 6) {
-      IsectSeg s{L[i], L[i + 1], L[i + 2], L[i + 3], L[i + 4], L[i + 5]};
+  if (cmd.lineStoreWellFormed()) {
+    for (size_t i = 0; i < cmd.lineCount(); ++i) {
+      const CadLineRecord ln = cmd.line(i);
+      IsectSeg s{ln.x0, ln.y0, ln.z0, ln.x1, ln.y1, ln.z1};
       const double mx = 0.5 * (s.x0 + s.x1);
       const double my = 0.5 * (s.y0 + s.y1);
       const double mz = 0.5 * (s.z0 + s.z1);
@@ -1127,18 +1127,18 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
              tolWorld, cmd.polylineDraftVerts[2]);
   }
 
-  const auto& L = cmd.userLinesFlat;
-  if (L.size() % 6 == 0) {
-    for (size_t i = 0; i + 5 < L.size(); i += 6) {
+  if (cmd.lineStoreWellFormed()) {
+    for (size_t i = 0; i < cmd.lineCount(); ++i) {
+      const CadLineRecord ln = cmd.line(i);
       if (isolatedOut(cmd.userLineAttrs, i / 6)) continue;
       if (exclude.valid && exclude.type == SelectedEntity::Type::LineSeg &&
           exclude.index == static_cast<int>(i / 6)) continue;
-      const float x0 = L[i];
-      const float y0 = L[i + 1];
-      const float x1 = L[i + 3];
-      const float y1 = L[i + 4];
-      const float z0 = L[i + 2];
-      const float z1 = L[i + 5];
+      const float x0 = ln.x0;
+      const float y0 = ln.y0;
+      const float x1 = ln.x1;
+      const float y1 = ln.y1;
+      const float z0 = ln.z0;
+      const float z1 = ln.z1;
       if (wantEndpoint) {
         Consider(&acc, wx, wy, x0, y0, Kind::Endpoint, tolWorld, z0);
         Consider(&acc, wx, wy, x1, y1, Kind::Endpoint, tolWorld, z1);
@@ -2227,11 +2227,11 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
 
   switch (kind) {
   case Kind::Endpoint: {
-    const auto& L = cmd.userLinesFlat;
-    if (L.size() % 6 == 0) {
-      for (size_t i = 0; i + 5 < L.size(); i += 6) {
-        PushSnapPickerEntry(L[i], L[i + 1], Kind::Endpoint, sortWorldX, sortWorldY, out, L[i + 2]);
-        PushSnapPickerEntry(L[i + 3], L[i + 4], Kind::Endpoint, sortWorldX, sortWorldY, out, L[i + 5]);
+    if (cmd.lineStoreWellFormed()) {
+      for (size_t i = 0; i < cmd.lineCount(); ++i) {
+        const CadLineRecord ln = cmd.line(i);
+        PushSnapPickerEntry(ln.x0, ln.y0, Kind::Endpoint, sortWorldX, sortWorldY, out, ln.z0);
+        PushSnapPickerEntry(ln.x1, ln.y1, Kind::Endpoint, sortWorldX, sortWorldY, out, ln.z1);
       }
     }
     for (const CadBlockRef& br : cmd.cadBlockRefs) {
@@ -2285,15 +2285,15 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     break;
   }
   case Kind::Midpoint: {
-    const auto& L = cmd.userLinesFlat;
-    if (L.size() % 6 == 0) {
-      for (size_t i = 0; i + 5 < L.size(); i += 6) {
-        const float x0 = L[i];
-        const float y0 = L[i + 1];
-        const float x1 = L[i + 3];
-        const float y1 = L[i + 4];
+    if (cmd.lineStoreWellFormed()) {
+      for (size_t i = 0; i < cmd.lineCount(); ++i) {
+        const CadLineRecord ln = cmd.line(i);
+        const float x0 = ln.x0;
+        const float y0 = ln.y0;
+        const float x1 = ln.x1;
+        const float y1 = ln.y1;
         PushSnapPickerEntry(0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out,
-                            0.5f * (L[i + 2] + L[i + 5]));
+                            0.5f * (ln.z0 + ln.z1));
       }
     }
     for (const CadBlockRef& br : cmd.cadBlockRefs) {
@@ -2474,11 +2474,12 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
   case Kind::Perpendicular: {
     if (!havePerpRef)
       break;
-    const auto& L = cmd.userLinesFlat;
-    if (L.size() % 6 == 0) {
-      for (size_t i = 0; i + 5 < L.size(); i += 6)
-        PushPerpFootEntry(refPx, refPy, L[i], L[i + 1], L[i + 3], L[i + 4], sortWorldX, sortWorldY, out, L[i + 2],
-                          L[i + 5]);
+    if (cmd.lineStoreWellFormed()) {
+      for (size_t i = 0; i < cmd.lineCount(); ++i) {
+        const CadLineRecord ln = cmd.line(i);
+        PushPerpFootEntry(refPx, refPy, ln.x0, ln.y0, ln.x1, ln.y1, sortWorldX, sortWorldY, out, ln.z0,
+                          ln.z1);
+      }
     }
     const int polyCount =
         static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
@@ -2647,10 +2648,11 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
          sel.index == (cmd.dimGripMoveActive ? cmd.dimGripAnnotationIndex : cmd.mtextGripAnnotationIndex)))
       continue;
     if (sel.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(sel.index) * 6;
-      if (k + 5 < cmd.userLinesFlat.size()) {
-        gripCandidate(cmd.userLinesFlat[k],     cmd.userLinesFlat[k + 1], cmd.userLinesFlat[k + 2]);
-        gripCandidate(cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4], cmd.userLinesFlat[k + 5]);
+      const size_t li = static_cast<size_t>(sel.index);
+      if (li < cmd.lineCount()) {
+        const CadLineRecord ln = cmd.line(li);
+        gripCandidate(ln.x0, ln.y0, ln.z0);
+        gripCandidate(ln.x1, ln.y1, ln.z1);
       }
     } else if (sel.type == SelectedEntity::Type::Circle) {
       const size_t ci = static_cast<size_t>(sel.index);

@@ -29,16 +29,18 @@ Outcome Store(AppCommandState& st, T& slot, T next, const char* undoLabel, std::
 Outcome SetLineField(AppCommandState& st, int lineIndex, LineField field, double value) {
   if (!std::isfinite(value))
     return NotFinite();
-  const size_t k = static_cast<size_t>(lineIndex) * 6;
-  if (lineIndex < 0 || k + 5 >= st.userLinesFlat.size())
+  if (lineIndex < 0 || static_cast<size_t>(lineIndex) >= st.lineCount())
     return Rejected("That line no longer exists.");
   using F = LineField;
-  const size_t slot = field == F::StartX ? 0 : field == F::StartY ? 1 : field == F::StartZ ? 2
-                    : field == F::EndX ? 3 : field == F::EndY ? 4 : 5;
+  using C = CadLineComponent;
+  const C slot = field == F::StartX ? C::X0 : field == F::StartY ? C::Y0 : field == F::StartZ ? C::Z0
+               : field == F::EndX ? C::X1 : field == F::EndY ? C::Y1 : C::Z1;
   // X/Y are typed in WORLD coordinates and stored LOCAL (REQ-101); Z is absolute (ADR-025 D2).
-  const double origin = (slot % 3 == 0) ? st.worldDocumentOriginX : (slot % 3 == 1) ? st.worldDocumentOriginY : 0.0;
-  const char* label = (slot % 3 == 0) ? "Edit line X" : (slot % 3 == 1) ? "Edit line Y" : "Edit line Z";
-  return Store(st, st.userLinesFlat[k + slot], value - origin, label);
+  const bool isX = slot == C::X0 || slot == C::X1;
+  const bool isY = slot == C::Y0 || slot == C::Y1;
+  const double origin = isX ? st.worldDocumentOriginX : isY ? st.worldDocumentOriginY : 0.0;
+  const char* label = isX ? "Edit line X" : isY ? "Edit line Y" : "Edit line Z";
+  return Store(st, st.lineComponent(static_cast<size_t>(lineIndex), slot), value - origin, label);
 }
 
 Outcome SetCircleField(AppCommandState& st, int circleIndex, CircleField field, double value) {

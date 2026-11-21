@@ -3652,15 +3652,15 @@ bool EditorWindow::RunSmokeChecks(QString& error) {
   if (!m_Viewport->IsRendererReady()) { error = "OpenGL renderer failed to initialize"; return false; }
   Submit("LINE"); Submit("0,0"); Submit("10,0");
   CancelActiveCommand(m_State, m_Log);
-  if (m_State.userLinesFlat.size() != 6) { error = "LINE did not create one segment"; return false; }
+  if (m_State.lineCount() != 1) { error = "LINE did not create one segment"; return false; }
   Submit("UNDO");
   if (!m_State.userLinesFlat.empty()) { error = "UNDO did not remove segment"; return false; }
   Submit("REDO");
-  if (m_State.userLinesFlat.size() != 6) { error = "REDO did not restore segment"; return false; }
+  if (m_State.lineCount() != 1) { error = "REDO did not restore segment"; return false; }
   CreateDrawingFromTemplate();  // Open Drawing starts with an empty tab before loading the file.
   if (!m_State.userLinesFlat.empty()) { error = "New document inherited geometry"; return false; }
   SwitchDrawing(1);
-  if (m_State.userLinesFlat.size() != 6) { error = "Document switch lost geometry"; return false; }
+  if (m_State.lineCount() != 1) { error = "Document switch lost geometry"; return false; }
   QTemporaryDir temporary;
   if (!temporary.isValid()) { error = "Cannot create smoke-test temporary directory"; return false; }
   const QString drawingPath = temporary.filePath("roundtrip.dwg");
@@ -3668,7 +3668,7 @@ bool EditorWindow::RunSmokeChecks(QString& error) {
     error = "DWG smoke save failed"; return false;
   }
   auto loaded = std::make_unique<AppCommandState>();
-  if (!OpenDrawingDocument(*loaded, drawingPath.toUtf8().constData(), m_Log) || loaded->userLinesFlat.size() != 6) {
+  if (!OpenDrawingDocument(*loaded, drawingPath.toUtf8().constData(), m_Log) || loaded->lineCount() != 1) {
     error = "DWG round trip lost line geometry"; return false;
   }
   const QString pdfPath = temporary.filePath("viewer.pdf");

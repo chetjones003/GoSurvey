@@ -323,6 +323,19 @@ struct CadCircleRecord {
   double r = 0.0;
 };
 
+/// One line segment of \ref CadEntityStore::userLinesFlat: start (x0, y0, z0) and end (x1, y1, z1).
+struct CadLineRecord {
+  double x0 = 0.0;
+  double y0 = 0.0;
+  double z0 = 0.0;
+  double x1 = 0.0;
+  double y1 = 0.0;
+  double z1 = 0.0;
+};
+
+/// Position of a component inside one line segment (the order of \ref CadLineRecord).
+enum class CadLineComponent : uint8_t { X0 = 0, Y0 = 1, Z0 = 2, X1 = 3, Y1 = 4, Z1 = 5 };
+
 /// Position of a component inside one circle record (the order of \ref CadCircleRecord).
 enum class CadCircleComponent : uint8_t { X = 0, Y = 1, Z = 2, Radius = 3 };
 
@@ -412,6 +425,46 @@ struct CadEntityStore {
   }
 
   static constexpr size_t kCircleStride = 4;
+
+  // --- Line records (ADR-0010 phase 5) -----------------------------------------------------------
+  // Same rule as the circle records: migrated callers go through these, layout readers index
+  // \ref userLinesFlat directly. \ref userLineAttrs stays the caller's to keep in step.
+
+  /// Number of line segments in \ref userLinesFlat.
+  [[nodiscard]] size_t lineCount() const { return userLinesFlat.size() / kLineStride; }
+  /// False when the flat store is not a whole number of segments.
+  [[nodiscard]] bool lineStoreWellFormed() const { return userLinesFlat.size() % kLineStride == 0; }
+  /// Segment \p i (requires `i < lineCount()`).
+  [[nodiscard]] CadLineRecord line(size_t i) const {
+    const size_t k = i * kLineStride;
+    return CadLineRecord{userLinesFlat[k], userLinesFlat[k + 1], userLinesFlat[k + 2],
+                         userLinesFlat[k + 3], userLinesFlat[k + 4], userLinesFlat[k + 5]};
+  }
+  /// Overwrites segment \p i in place (requires `i < lineCount()`).
+  void setLine(size_t i, const CadLineRecord& l) {
+    const size_t k = i * kLineStride;
+    userLinesFlat[k] = l.x0;
+    userLinesFlat[k + 1] = l.y0;
+    userLinesFlat[k + 2] = l.z0;
+    userLinesFlat[k + 3] = l.x1;
+    userLinesFlat[k + 4] = l.y1;
+    userLinesFlat[k + 5] = l.z1;
+  }
+  /// Appends one segment.
+  void pushLine(const CadLineRecord& l) {
+    userLinesFlat.insert(userLinesFlat.end(), {l.x0, l.y0, l.z0, l.x1, l.y1, l.z1});
+  }
+  /// One component of segment \p i by reference, for edit paths that store through an undo wrapper.
+  [[nodiscard]] double& lineComponent(size_t i, CadLineComponent which) {
+    return userLinesFlat[i * kLineStride + static_cast<size_t>(which)];
+  }
+  /// Removes segment \p i and shifts later segments down (requires `i < lineCount()`).
+  void eraseLine(size_t i) {
+    const auto first = userLinesFlat.begin() + static_cast<std::ptrdiff_t>(i * kLineStride);
+    userLinesFlat.erase(first, first + static_cast<std::ptrdiff_t>(kLineStride));
+  }
+
+  static constexpr size_t kLineStride = 6;
 };
 
 /// A block definition's own geometry (ADR-0010 / #1557 phase 3). The entity collections are the
@@ -1063,13 +1116,15 @@ inline void CadBlockApplyActionsToPoint(const CadBlockDefinition& def, const Cad
 
 inline void CadBlockShiftContent(CadBlockContent* c, float dx, float dy, float dz) {
   assert(c != nullptr);
-  for (size_t i = 0; i + 5 < c->userLinesFlat.size(); i += 6) {
-    c->userLinesFlat[i] += dx;
-    c->userLinesFlat[i + 1] += dy;
-    c->userLinesFlat[i + 2] += dz;
-    c->userLinesFlat[i + 3] += dx;
-    c->userLinesFlat[i + 4] += dy;
-    c->userLinesFlat[i + 5] += dz;
+  for (size_t i = 0; i < c->lineCount(); ++i) {
+    CadLineRecord l = c->line(i);
+    l.x0 += dx;
+    l.y0 += dy;
+    l.z0 += dz;
+    l.x1 += dx;
+    l.y1 += dy;
+    l.z1 += dz;
+    c->setLine(i, l);
   }
   for (size_t i = 0; i < c->circleCount(); ++i) {
     CadCircleRecord cr = c->circle(i);
@@ -1178,13 +1233,14 @@ inline void CadBlockCollectWorldLines(const std::vector<CadBlockDefinition>& def
       CadBlockApplyActionsToPoint(def, localRef, &ax, &ay, "geom", {});
       CadBlockXformPoint(fr.xf, ax, ay, lz, wx, wy, wz);
     };
-    const size_t nSeg = c.userLinesFlat.size() / 6;
+    const size_t nSeg = c.lineCount();
     for (size_t i = 0; i < nSeg; ++i) {
       if (i < c.lineVis.size() && CadBlockVisHidden(c.lineVis[i], fr.vis))
         continue;
       CadBlockWorldSeg s;
-      xformPt(c.userLinesFlat[i * 6 + 0], c.userLinesFlat[i * 6 + 1], c.userLinesFlat[i * 6 + 2], &s.x0, &s.y0, &s.z0);
-      xformPt(c.userLinesFlat[i * 6 + 3], c.userLinesFlat[i * 6 + 4], c.userLinesFlat[i * 6 + 5], &s.x1, &s.y1, &s.z1);
+      const CadLineRecord l = c.line(i);
+      xformPt(static_cast<float>(l.x0), static_cast<float>(l.y0), static_cast<float>(l.z0), &s.x0, &s.y0, &s.z0);
+      xformPt(static_cast<float>(l.x1), static_cast<float>(l.y1), static_cast<float>(l.z1), &s.x1, &s.y1, &s.z1);
       EntityAttributes pa{};
       if (i < c.userLineAttrs.size())
         pa = c.userLineAttrs[i];
@@ -1914,10 +1970,11 @@ inline void CadBlockLineYExtent(const CadBlockDefinition& def, float* yMin, floa
   *yMin = 0.f;
   *yMax = 0.f;
   bool any = false;
-  const std::vector<double>& L = def.content.userLinesFlat;
-  for (size_t i = 0; i + 4 < L.size(); i += 6) {
-    const float y0 = L[i + 1];
-    const float y1 = L[i + 4];
+  const CadEntityStore& L = def.content;
+  for (size_t i = 0; i < L.lineCount(); ++i) {
+    const CadLineRecord l = L.line(i);
+    const float y0 = static_cast<float>(l.y0);
+    const float y1 = static_cast<float>(l.y1);
     if (!any) {
       *yMin = std::min(y0, y1);
       *yMax = std::max(y0, y1);
