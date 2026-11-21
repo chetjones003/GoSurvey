@@ -37054,7 +37054,7 @@ static std::uint64_t BlockRefWorldSolidsSig(const AppCommandState& st) {
     }
   }
   for (const CadBlockDefinition& d : st.blockDefs)
-    mix(d.content.solids.size());
+    mix(d.content.cadSolids.size());
   return sig;
 }
 

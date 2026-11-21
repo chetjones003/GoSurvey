@@ -259,8 +259,8 @@ AppCommandState WithLayer0BlockRef() {
   REQUIRE(brep::MakeBox(ucs::Ucs{}, 2.0, 2.0, 2.0, &box, &why));
   CadBlockDefinition def;
   def.name = "FLANGE";
-  def.content.solids.push_back(std::make_shared<const brep::Solid>(box));
-  def.content.solidAttrs.push_back(EntityAttributes{});  // layer "0", ByLayer
+  def.content.cadSolids.push_back(std::make_shared<const brep::Solid>(box));
+  def.content.cadSolidAttrs.push_back(EntityAttributes{});  // layer "0", ByLayer
   st.blockDefs.push_back(def);
   CadBlockRef ref;
   ref.defName = "FLANGE";

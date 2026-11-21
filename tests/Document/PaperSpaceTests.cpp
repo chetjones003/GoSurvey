@@ -829,8 +829,8 @@ TEST_CASE("Paper box-select tests the object, not a box round it (REQ-039, TASK-
     CadBlockDefinition d;
     d.name = "B";
     // One segment from (2,2) to (6,6), well away from the insertion point at the origin.
-    d.content.lines = {2.f, 2.f, 0.f, 6.f, 6.f, 0.f};
-    d.content.lineAttrs.resize(1);
+    d.content.userLinesFlat = {2.f, 2.f, 0.f, 6.f, 6.f, 0.f};
+    d.content.userLineAttrs.resize(1);
     defs.push_back(d);
 
     PaperLayout L;

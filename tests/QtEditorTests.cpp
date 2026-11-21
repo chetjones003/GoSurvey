@@ -7723,8 +7723,8 @@ private Q_SLOTS:
     auto& st = window.State();
     CadBlockDefinition block;
     block.name = "Issue1024Block";
-    block.content.lines = {0.f, 0.f, 0.f, static_cast<float>(kLineW), static_cast<float>(kLineH), 0.f};
-    block.content.lineAttrs.resize(1);
+    block.content.userLinesFlat = {0.f, 0.f, 0.f, static_cast<float>(kLineW), static_cast<float>(kLineH), 0.f};
+    block.content.userLineAttrs.resize(1);
     block.content.lineVis.resize(1);
     st.blockDefs.push_back(block);
     ParkCamera(st);

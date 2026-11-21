@@ -1618,29 +1618,29 @@ static bool ScratchHasBlockGeometry(const AppCommandState& s) {
 
 static void CaptureScratchIntoBlockContent(const AppCommandState& st, CadBlockContent* c) {
   assert(c != nullptr);
-  c->lines = st.userLinesFlat;
-  c->lineAttrs = st.userLineAttrs;
+  c->userLinesFlat = st.userLinesFlat;
+  c->userLineAttrs = st.userLineAttrs;
   c->lineVis.assign(st.userLineAttrs.size(), "");
-  c->circles = st.userCirclesCxCyZR;
-  c->circleAttrs = st.userCircleAttrs;
+  c->userCirclesCxCyZR = st.userCirclesCxCyZR;
+  c->userCircleAttrs = st.userCircleAttrs;
   c->circleVis.assign(st.userCircleAttrs.size(), "");
-  c->circleNormals = st.userCircleNormals;
-  EnsureCircleNormals(c->circleNormals, st.userCirclesCxCyZR.size() / 4);
-  c->arcs = st.userArcs;
-  c->arcAttrs = st.userArcAttrs;
-  c->ellipses = st.userEllipses;
-  c->ellAttrs = st.userEllAttrs;
-  c->polyOffsets = st.userPolylineOffsets;
-  c->polyVerts = st.userPolylineVerts;
-  c->polyVertsBulge = st.userPolylineVertsBulge;
-  c->polyClosed = st.userPolylineClosed;
-  c->polyAttrs = st.userPolylineAttrs;
-  c->texts = st.cadAnnotations;
-  c->textAttrs = st.cadAnnotationAttrs;
-  c->meshes = st.cadMeshes;
-  c->meshAttrs = st.cadMeshAttrs;
-  c->solids = st.cadSolids;
-  c->solidAttrs = st.cadSolidAttrs;
+  c->userCircleNormals = st.userCircleNormals;
+  EnsureCircleNormals(c->userCircleNormals, st.userCirclesCxCyZR.size() / 4);
+  c->userArcs = st.userArcs;
+  c->userArcAttrs = st.userArcAttrs;
+  c->userEllipses = st.userEllipses;
+  c->userEllAttrs = st.userEllAttrs;
+  c->userPolylineOffsets = st.userPolylineOffsets;
+  c->userPolylineVerts = st.userPolylineVerts;
+  c->userPolylineVertsBulge = st.userPolylineVertsBulge;
+  c->userPolylineClosed = st.userPolylineClosed;
+  c->userPolylineAttrs = st.userPolylineAttrs;
+  c->cadAnnotations = st.cadAnnotations;
+  c->cadAnnotationAttrs = st.cadAnnotationAttrs;
+  c->cadMeshes = st.cadMeshes;
+  c->cadMeshAttrs = st.cadMeshAttrs;
+  c->cadSolids = st.cadSolids;
+  c->cadSolidAttrs = st.cadSolidAttrs;
   for (size_t refIndex = 0; refIndex < st.cadBlockRefs.size(); ++refIndex) {
     const CadBlockRef& r = st.cadBlockRefs[refIndex];
     CadBlockNested n;
@@ -4808,18 +4808,18 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
     if (a != nullptr)
       tw.Apply(ent, *a);
   };
-  const size_t nSeg = content.lines.size() / 6;
+  const size_t nSeg = content.userLinesFlat.size() / 6;
   for (size_t i = 0; i < nSeg; ++i) {
-    dwg_point_3d a{content.lines[i * 6 + 0], content.lines[i * 6 + 1], content.lines[i * 6 + 2]};
-    dwg_point_3d b{content.lines[i * 6 + 3], content.lines[i * 6 + 4], content.lines[i * 6 + 5]};
+    dwg_point_3d a{content.userLinesFlat[i * 6 + 0], content.userLinesFlat[i * 6 + 1], content.userLinesFlat[i * 6 + 2]};
+    dwg_point_3d b{content.userLinesFlat[i * 6 + 3], content.userLinesFlat[i * 6 + 4], content.userLinesFlat[i * 6 + 5]};
     if (Dwg_Entity_LINE* e = dwg_add_LINE(blkhdr, &a, &b))
-      apply(e->parent, AttrAt(content.lineAttrs, i));
+      apply(e->parent, AttrAt(content.userLineAttrs, i));
   }
-  const size_t nC = content.circles.size() / 4;
+  const size_t nC = content.userCirclesCxCyZR.size() / 4;
   for (size_t i = 0; i < nC; ++i) {
-    dwg_point_3d c{content.circles[i * 4 + 0], content.circles[i * 4 + 1], content.circles[i * 4 + 2]};
+    dwg_point_3d c{content.userCirclesCxCyZR[i * 4 + 0], content.userCirclesCxCyZR[i * 4 + 1], content.userCirclesCxCyZR[i * 4 + 2]};
     float nx = kFlatNormalX, ny = kFlatNormalY, nz = kFlatNormalZ;
-    CircleNormalAt(content.circleNormals, i, &nx, &ny, &nz);
+    CircleNormalAt(content.userCircleNormals, i, &nx, &ny, &nz);
     dwg_point_3d ext{0.0, 0.0, 1.0};
     if (!IsFlatNormal(nx, ny, nz)) {
       ucs::Ucs frame;
@@ -4830,15 +4830,15 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
         ext = {static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)};
       }
     }
-    if (Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(blkhdr, &c, content.circles[i * 4 + 3])) {
+    if (Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(blkhdr, &c, content.userCirclesCxCyZR[i * 4 + 3])) {
       e->extrusion.x = ext.x;
       e->extrusion.y = ext.y;
       e->extrusion.z = ext.z;
-      apply(e->parent, AttrAt(content.circleAttrs, i));
+      apply(e->parent, AttrAt(content.userCircleAttrs, i));
     }
   }
-  for (size_t i = 0; i < content.arcs.size(); ++i) {
-    const CadArc& arc = content.arcs[i];
+  for (size_t i = 0; i < content.userArcs.size(); ++i) {
+    const CadArc& arc = content.userArcs[i];
     dwg_point_3d c{arc.cx, arc.cy, arc.z};
     const double a0 = static_cast<double>(arc.startRad);
     const double a1 = a0 + static_cast<double>(arc.sweepRad);
@@ -4857,11 +4857,11 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
       e->extrusion.x = ext.x;
       e->extrusion.y = ext.y;
       e->extrusion.z = ext.z;
-      apply(e->parent, AttrAt(content.arcAttrs, i));
+      apply(e->parent, AttrAt(content.userArcAttrs, i));
     }
   }
-  for (size_t i = 0; i < content.ellipses.size(); ++i) {
-    const CadEllipse& el = content.ellipses[i];
+  for (size_t i = 0; i < content.userEllipses.size(); ++i) {
+    const CadEllipse& el = content.userEllipses[i];
     dwg_point_3d c{el.cx, el.cy, el.z};
     const double majLen = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
     if (majLen < 1e-12)
@@ -4870,7 +4870,7 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
     if (ratio <= 0.0 || ratio > 1.0)
       ratio = 1.0;
     if (Dwg_Entity_ELLIPSE* e = dwg_add_ELLIPSE(blkhdr, &c, majLen, ratio)) {
-      apply(e->parent, AttrAt(content.ellAttrs, i));
+      apply(e->parent, AttrAt(content.userEllAttrs, i));
       e->sm_axis.x = static_cast<double>(el.majVx);
       e->sm_axis.y = static_cast<double>(el.majVy);
       e->sm_axis.z = 0.0;
@@ -4879,33 +4879,33 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
       e->end_angle = 2.0 * kPi;
     }
   }
-  for (size_t i = 0; i + 1 < content.polyOffsets.size(); ++i) {
-    const int a = content.polyOffsets[i];
-    const int b = content.polyOffsets[i + 1];
+  for (size_t i = 0; i + 1 < content.userPolylineOffsets.size(); ++i) {
+    const int a = content.userPolylineOffsets[i];
+    const int b = content.userPolylineOffsets[i + 1];
     const int nv = b - a;
     if (nv < 2)
       continue;
     std::vector<dwg_point_2d> pts(static_cast<size_t>(nv));
     for (int v = 0; v < nv; ++v) {
       const size_t k = static_cast<size_t>(a + v) * 3;
-      pts[static_cast<size_t>(v)].x = content.polyVerts[k];
-      pts[static_cast<size_t>(v)].y = content.polyVerts[k + 1];
+      pts[static_cast<size_t>(v)].x = content.userPolylineVerts[k];
+      pts[static_cast<size_t>(v)].y = content.userPolylineVerts[k + 1];
     }
     Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(blkhdr, nv, pts.data());
     if (lw == nullptr)
       continue;
-    const double z0 = content.polyVerts[static_cast<size_t>(a) * 3 + 2];
+    const double z0 = content.userPolylineVerts[static_cast<size_t>(a) * 3 + 2];
     if (z0 != 0.0) {
       lw->elevation = z0;
       lw->flag = static_cast<BITCODE_BS>(lw->flag | 8);
     }
-    if (i < content.polyClosed.size() && content.polyClosed[i] != 0)
+    if (i < content.userPolylineClosed.size() && content.userPolylineClosed[i] != 0)
       lw->flag = static_cast<BITCODE_BS>(lw->flag | 512);
     bool anyBulge = false;
     std::vector<double> bulges(static_cast<size_t>(nv), 0.0);
     for (int v = 0; v < nv; ++v) {
       const size_t vi = static_cast<size_t>(a + v);
-      const float bg = vi < content.polyVertsBulge.size() ? content.polyVertsBulge[vi] : 0.f;
+      const float bg = vi < content.userPolylineVertsBulge.size() ? content.userPolylineVertsBulge[vi] : 0.f;
       if (bg == 0.f)
         continue;
       bulges[static_cast<size_t>(v)] = static_cast<double>(bg);
@@ -4922,12 +4922,12 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
         lw->num_bulges = 0;
       }
     }
-    apply(lw->parent, AttrAt(content.polyAttrs, i));
+    apply(lw->parent, AttrAt(content.userPolylineAttrs, i));
   }
-  for (size_t i = 0; i < content.texts.size(); ++i) {
-    const CadAnnotation& an = content.texts[i];
+  for (size_t i = 0; i < content.cadAnnotations.size(); ++i) {
+    const CadAnnotation& an = content.cadAnnotations[i];
     dwg_point_3d p{an.insX, an.insY, an.insZ};
-    const EntityAttributes* at = AttrAt(content.textAttrs, i);
+    const EntityAttributes* at = AttrAt(content.cadAnnotationAttrs, i);
     if (an.kind == CadAnnotation::Kind::Mtext) {
       std::string wire;
       for (char ch : MtextRichFlattenToPlain(SanitizeDwgTextSymbols(an.text))) {
@@ -7152,22 +7152,22 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
   // document-origin shift, exactly like block-local content. Lines are written above.
   CadBlockContent rest;
   for (size_t i = 0; i + 2 < L.paperCircles.size(); i += 3) {
-    rest.circles.insert(rest.circles.end(), {static_cast<double>(L.paperCircles[i]),
+    rest.userCirclesCxCyZR.insert(rest.userCirclesCxCyZR.end(), {static_cast<double>(L.paperCircles[i]),
                                              static_cast<double>(L.paperCircles[i + 1]), 0.0,
                                              static_cast<double>(L.paperCircles[i + 2])});
   }
-  rest.circleAttrs = L.paperCircleAttrs;
-  rest.arcs = L.paperArcs;
-  rest.arcAttrs = L.paperArcAttrs;
-  rest.ellipses = L.paperEllipses;
-  rest.ellAttrs = L.paperEllAttrs;
-  rest.polyOffsets = L.paperPolyOffsets;
-  rest.polyVerts.assign(L.paperPolyVerts.begin(), L.paperPolyVerts.end());
-  rest.polyVertsBulge = L.paperPolyVertsBulge;
-  rest.polyClosed = L.paperPolyClosed;
-  rest.polyAttrs = L.paperPolyAttrs;
-  rest.texts = L.paperTexts;
-  rest.textAttrs = L.paperTextAttrs;
+  rest.userCircleAttrs = L.paperCircleAttrs;
+  rest.userArcs = L.paperArcs;
+  rest.userArcAttrs = L.paperArcAttrs;
+  rest.userEllipses = L.paperEllipses;
+  rest.userEllAttrs = L.paperEllAttrs;
+  rest.userPolylineOffsets = L.paperPolyOffsets;
+  rest.userPolylineVerts.assign(L.paperPolyVerts.begin(), L.paperPolyVerts.end());
+  rest.userPolylineVertsBulge = L.paperPolyVertsBulge;
+  rest.userPolylineClosed = L.paperPolyClosed;
+  rest.userPolylineAttrs = L.paperPolyAttrs;
+  rest.cadAnnotations = L.paperTexts;
+  rest.cadAnnotationAttrs = L.paperTextAttrs;
   WriteBlockDefinitionGeometry(ps, rest, tw);
   for (size_t i = 0; i < L.paperPoints.size(); ++i) {
     const CadPoint& p = L.paperPoints[i];

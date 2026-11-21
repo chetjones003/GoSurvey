@@ -14,20 +14,20 @@ TEST_CASE("Block geometry is stored relative to a baked base point", "[issue124]
   def.name = "TREE";
   def.baseX = 100.f;
   def.baseY = 200.f;
-  def.content.lines = {98.f, 200.f, 0.f, 102.f, 200.f, 0.f};
+  def.content.userLinesFlat = {98.f, 200.f, 0.f, 102.f, 200.f, 0.f};
   CadBlockBakeBasePoint(&def);
   REQUIRE(def.baseX == 0.f);
   REQUIRE(def.baseY == 0.f);
-  REQUIRE(def.content.lines.size() >= 6);
-  CHECK(def.content.lines[0] == Catch::Approx(-2.f));
-  CHECK(def.content.lines[1] == Catch::Approx(0.f));
-  CHECK(def.content.lines[3] == Catch::Approx(2.f));
+  REQUIRE(def.content.userLinesFlat.size() >= 6);
+  CHECK(def.content.userLinesFlat[0] == Catch::Approx(-2.f));
+  CHECK(def.content.userLinesFlat[1] == Catch::Approx(0.f));
+  CHECK(def.content.userLinesFlat[3] == Catch::Approx(2.f));
 }
 
 TEST_CASE("Two references share one definition and keep independent transforms", "[issue124][block]") {
   std::vector<CadBlockDefinition> defs(1);
   defs[0].name = "TREE";
-  defs[0].content.lines = {-1.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  defs[0].content.userLinesFlat = {-1.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   CadBlockRef a;
   a.defName = "TREE";
   a.xf.x = 10.f;
@@ -108,7 +108,7 @@ TEST_CASE("Mirror of a reference flips insertion across the axis", "[issue124][b
 TEST_CASE("XYZ insertion and 3D scale apply to collected segments", "[issue124][block]") {
   std::vector<CadBlockDefinition> defs(1);
   defs[0].name = "POST";
-  defs[0].content.lines = {0.f, 0.f, 0.f, 0.f, 0.f, 2.f};
+  defs[0].content.userLinesFlat = {0.f, 0.f, 0.f, 0.f, 0.f, 2.f};
   CadBlockRef r;
   r.defName = "POST";
   r.xf.x = 1.f;
@@ -141,7 +141,7 @@ TEST_CASE("Attribute values differ per reference", "[issue124][block]") {
 TEST_CASE("Visibility state hides unmatched primitives", "[issue124][block]") {
   std::vector<CadBlockDefinition> defs(1);
   defs[0].name = "GATE";
-  defs[0].content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f};
+  defs[0].content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f};
   defs[0].content.lineVis = {"OPEN", "SHUT"};
   CadBlockRef r;
   r.defName = "GATE";
@@ -154,8 +154,8 @@ TEST_CASE("Visibility state hides unmatched primitives", "[issue124][block]") {
 TEST_CASE("Linear stretch dynamic grip updates block geometry (issue #618 inc4)", "[issue618][inc4][block]") {
   CadBlockDefinition def;
   def.name = "PANEL";
-  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
-  def.content.lineAttrs.push_back(EntityAttributes{});
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.userLineAttrs.push_back(EntityAttributes{});
   CadBlockParameter p;
   p.name = "Width";
   p.kind = CadBlockParamKind::Linear;
@@ -199,8 +199,8 @@ TEST_CASE("dynamicAnonymous instance geometry is not re-stretched by GoSurvey ac
   CadBlockDefinition def;
   def.name = "*U7";
   def.dynamicAnonymous = true;
-  def.content.lines = {0.f, 0.f, 0.f, 5.f, 0.f, 0.f};
-  def.content.lineAttrs.push_back(EntityAttributes{});
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 5.f, 0.f, 0.f};
+  def.content.userLineAttrs.push_back(EntityAttributes{});
   CadBlockAction stretch;
   stretch.kind = CadBlockActionKind::Stretch;
   stretch.paramName = "Width";
@@ -230,7 +230,7 @@ TEST_CASE("dynamicAnonymous instance geometry is not re-stretched by GoSurvey ac
 TEST_CASE("Matchline dynamics stretch the negative end and flip labels", "[issue124][block]") {
   CadBlockDefinition def;
   def.name = "_matchline_NORTHING";
-  def.content.lines = {0.f, -2.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 2.f, 0.f};
+  def.content.userLinesFlat = {0.f, -2.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 2.f, 0.f};
   CadBlockAttrDef sheet;
   sheet.tag = "N#";
   sheet.localX = 0.2f;
@@ -304,7 +304,7 @@ TEST_CASE("CadBlockCollectWorldSolids applies INSERT transform to block solids",
 
   std::vector<CadBlockDefinition> defs(1);
   defs[0].name = "FLANGE";
-  defs[0].content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  defs[0].content.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
 
   CadBlockRef r;
   r.defName = "FLANGE";
@@ -335,13 +335,13 @@ TEST_CASE("CadBlockBakeBasePoint shifts solid content by the base point", "[issu
   def.baseX = 1.f;
   def.baseY = 2.f;
   def.baseZ = 3.f;
-  def.content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  def.content.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
   CadBlockBakeBasePoint(&def);
   REQUIRE(def.baseX == 0.f);
   REQUIRE(def.baseY == 0.f);
   REQUIRE(def.baseZ == 0.f);
-  REQUIRE(def.content.solids.size() == 1);
-  const brep::Bounds b = brep::ComputeBounds(*def.content.solids[0]);
+  REQUIRE(def.content.cadSolids.size() == 1);
+  const brep::Bounds b = brep::ComputeBounds(*def.content.cadSolids[0]);
   REQUIRE(b.valid);
   CHECK(b.mn.z == Catch::Approx(-3.0).margin(0.05));
   CHECK(b.mx.z == Catch::Approx(-1.0).margin(0.05));
@@ -420,7 +420,7 @@ TEST_CASE("CadBlockCollectWorldSolids refuses non-uniform scale on solids", "[is
 
   std::vector<CadBlockDefinition> defs(1);
   defs[0].name = "SOL";
-  defs[0].content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  defs[0].content.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
 
   CadBlockRef r;
   r.defName = "SOL";

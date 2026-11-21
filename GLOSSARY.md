@@ -7,6 +7,8 @@ names it; keep each entry to what a reader needs to use the word correctly.
 
 **Entity store**: The Document-owned holder of a drawing's CAD entities (lines, arcs, polylines,
 solids, blocks and the rest), the layer table, and the text, dimension and multileader styles.
+The block-capable entity collections are `CadEntityStore` (`GoSurvey/Document/CadEntityStore.hpp`):
+a block definition's content and drawing content both hold them, so a block copy is one assignment.
 Owns how entities are held, compacted and copied; Commands decides what to change. See
 [ADR-0010](docs/adr/0010-drawing-content-and-entity-store.md).
 _Avoid_: geometry arrays, flat arrays.

@@ -1390,8 +1390,8 @@ TEST_CASE("AcadAnnotative EED imports when GOSURVEY marker stripped (issue #622)
   st.dwgExportVersion = DwgSaveVersion::R2018;
   CadBlockDefinition def;
   def.name = "SYM";
-  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  def.content.lineAttrs.push_back(EntityAttributes{});
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.userLineAttrs.push_back(EntityAttributes{});
   st.blockDefs.push_back(std::move(def));
   CadBlockRef ref;
   ref.defName = "SYM";
@@ -1914,8 +1914,8 @@ TEST_CASE("annotativeVisibleScaleNames persist through GsIo for block, hatch, an
   AppCommandState src;
   CadBlockDefinition def;
   def.name = "SYM";
-  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  def.content.lineAttrs.push_back(EntityAttributes{});
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.userLineAttrs.push_back(EntityAttributes{});
   src.blockDefs.push_back(std::move(def));
   CadBlockRef ref;
   ref.defName = "SYM";
@@ -1998,8 +1998,8 @@ TEST_CASE("Dynamic anonymous *U INSERT round-trips as cadBlockRef (issue #618)",
   CadBlockDefinition def;
   def.name = "*U42";
   def.dynamicAnonymous = true;
-  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
-  def.content.lineAttrs.push_back(EntityAttributes{});
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.userLineAttrs.push_back(EntityAttributes{});
   st.blockDefs.push_back(std::move(def));
   CadBlockRef ref;
   ref.defName = "*U42";
@@ -2068,8 +2068,8 @@ TEST_CASE("GoSurvey linear dynamic block exports evaluation graph at R2004 (issu
   st.dwgExportVersion = DwgSaveVersion::R2004;
   CadBlockDefinition def;
   def.name = "STRETCH_DOOR";
-  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
-  def.content.lineAttrs.push_back(EntityAttributes{});
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.userLineAttrs.push_back(EntityAttributes{});
   CadBlockParameter len;
   len.name = "Width";
   len.kind = CadBlockParamKind::Linear;
@@ -2123,8 +2123,8 @@ TEST_CASE("GoSurvey dynamic block DWG import restores parameters and actions (is
   st.dwgExportVersion = DwgSaveVersion::R2004;
   CadBlockDefinition def;
   def.name = "STRETCH_DOOR";
-  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
-  def.content.lineAttrs.push_back(EntityAttributes{});
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.userLineAttrs.push_back(EntityAttributes{});
   CadBlockParameter len;
   len.name = "Width";
   len.kind = CadBlockParamKind::Linear;
@@ -2173,8 +2173,8 @@ static int DwgLossCountForLabel(const AppCommandState& st, std::string_view need
 
 static void Issue618StretchDoorDef(CadBlockDefinition& def, float defaultWidth) {
   def.name = "STRETCH_DOOR";
-  def.content.lines = {0.f, 0.f, 0.f, defaultWidth, 0.f, 0.f};
-  def.content.lineAttrs.push_back(EntityAttributes{});
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, defaultWidth, 0.f, 0.f};
+  def.content.userLineAttrs.push_back(EntityAttributes{});
   CadBlockParameter len;
   len.name = "Width";
   len.kind = CadBlockParamKind::Linear;
@@ -2318,8 +2318,8 @@ TEST_CASE("Named block INSERT re-imports as cadBlockRef without trailer (issue #
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "ANNO_SYM";
-  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  def.content.lineAttrs.push_back(EntityAttributes{});
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.userLineAttrs.push_back(EntityAttributes{});
   st.blockDefs.push_back(std::move(def));
   CadBlockRef ref;
   ref.defName = "ANNO_SYM";
@@ -2348,8 +2348,8 @@ TEST_CASE("Paper-space named INSERT round-trips as paperBlockRef (issue #622)", 
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "TITLE_BLK";
-  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
-  def.content.lineAttrs.push_back(EntityAttributes{});
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.userLineAttrs.push_back(EntityAttributes{});
   st.blockDefs.push_back(std::move(def));
   PaperLayout sheet;
   sheet.name = "Sheet1";
@@ -2383,12 +2383,12 @@ TEST_CASE("Nested block INSERT in definition round-trips through DWG (issue #622
   st.dwgExportVersion = DwgSaveVersion::R2000;
   CadBlockDefinition leaf;
   leaf.name = "NEST_LEAF";
-  leaf.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  leaf.content.lineAttrs.push_back(EntityAttributes{});
+  leaf.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  leaf.content.userLineAttrs.push_back(EntityAttributes{});
   CadBlockDefinition parent;
   parent.name = "NEST_PARENT";
-  parent.content.lines = {0.f, 0.f, 0.f, 0.f, 1.f, 0.f};
-  parent.content.lineAttrs.push_back(EntityAttributes{});
+  parent.content.userLinesFlat = {0.f, 0.f, 0.f, 0.f, 1.f, 0.f};
+  parent.content.userLineAttrs.push_back(EntityAttributes{});
   CadBlockNested nested;
   nested.defName = "NEST_LEAF";
   nested.xf.x = 4.f;
@@ -3470,8 +3470,8 @@ TEST_CASE("DWG block symbols keep small details in a large-coordinate survey dra
   source.userLineAttrs = {EntityAttributes{}};
   CadBlockDefinition symbol;
   symbol.name = "Small survey marker";
-  symbol.content.lines = {0.0, 0.0, 0.0, 0.01, 0.025, 0.0};
-  symbol.content.lineAttrs = {EntityAttributes{}};
+  symbol.content.userLinesFlat = {0.0, 0.0, 0.0, 0.01, 0.025, 0.0};
+  symbol.content.userLineAttrs = {EntityAttributes{}};
   source.blockDefs.push_back(symbol);
   CadBlockRef insert;
   insert.defName = symbol.name;
@@ -3497,11 +3497,11 @@ TEST_CASE("DWG block symbols keep small details in a large-coordinate survey dra
   const auto definition = std::find_if(imported.blockDefs.begin(), imported.blockDefs.end(),
       [&](const CadBlockDefinition& value) { return value.name == symbol.name; });
   REQUIRE(definition != imported.blockDefs.end());
-  REQUIRE(definition->content.lines.size() == 6);
-  CHECK(definition->content.lines[0] == Catch::Approx(0.0).margin(1.e-7));
-  CHECK(definition->content.lines[1] == Catch::Approx(0.0).margin(1.e-7));
-  CHECK(definition->content.lines[3] - definition->content.lines[0] == Catch::Approx(0.01).margin(1.e-7));
-  CHECK(definition->content.lines[4] - definition->content.lines[1] == Catch::Approx(0.025).margin(1.e-7));
+  REQUIRE(definition->content.userLinesFlat.size() == 6);
+  CHECK(definition->content.userLinesFlat[0] == Catch::Approx(0.0).margin(1.e-7));
+  CHECK(definition->content.userLinesFlat[1] == Catch::Approx(0.0).margin(1.e-7));
+  CHECK(definition->content.userLinesFlat[3] - definition->content.userLinesFlat[0] == Catch::Approx(0.01).margin(1.e-7));
+  CHECK(definition->content.userLinesFlat[4] - definition->content.userLinesFlat[1] == Catch::Approx(0.025).margin(1.e-7));
 }
 
 TEST_CASE("Civil 3D COGO point preview imports as GoSurvey survey points",
@@ -6034,14 +6034,14 @@ TEST_CASE("DWG export writes real BLOCK definitions, INSERTs, and attributes (is
 
   CadBlockDefinition defA;
   defA.name = "MARKER";
-  defA.content.circles = {0.0, 0.0, 0.0, 1.0};
-  defA.content.circleAttrs = {EntityAttributes{}};
+  defA.content.userCirclesCxCyZR = {0.0, 0.0, 0.0, 1.0};
+  defA.content.userCircleAttrs = {EntityAttributes{}};
   st.blockDefs.push_back(defA);
 
   CadBlockDefinition defB;
   defB.name = "VALVE";
-  defB.content.lines = {-1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
-  defB.content.lineAttrs = {EntityAttributes{}};
+  defB.content.userLinesFlat = {-1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+  defB.content.userLineAttrs = {EntityAttributes{}};
   CadBlockAttrDef ad;
   ad.tag = "TAG";
   ad.height = 0.1f;
@@ -6445,8 +6445,8 @@ TEST_CASE("GOSURVEY annoVisScales EED round-trips on annotative block INSERT (is
   st.dwgExportVersion = DwgSaveVersion::R2018;
   CadBlockDefinition def;
   def.name = "SYM";
-  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  def.content.lineAttrs.push_back(EntityAttributes{});
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.userLineAttrs.push_back(EntityAttributes{});
   st.blockDefs.push_back(std::move(def));
   CadBlockRef ref;
   ref.defName = "SYM";
@@ -6598,8 +6598,8 @@ TEST_CASE("Block definition annotative MTEXT writes AcadAnnotative EED (issue #6
   m.boxMinY = -0.2f;
   m.boxMaxX = 2.f;
   m.boxMaxY = 0.f;
-  def.content.texts.push_back(std::move(m));
-  def.content.textAttrs.push_back(EntityAttributes{});
+  def.content.cadAnnotations.push_back(std::move(m));
+  def.content.cadAnnotationAttrs.push_back(EntityAttributes{});
   st.blockDefs.push_back(std::move(def));
   CadBlockRef ref;
   ref.defName = "LBL";
@@ -6648,8 +6648,8 @@ TEST_CASE("GOSURVEY annoVisScales EED round-trips on block-definition MTEXT (iss
   m.boxMinY = -0.2f;
   m.boxMaxX = 2.f;
   m.boxMaxY = 0.f;
-  def.content.texts.push_back(std::move(m));
-  def.content.textAttrs.push_back(EntityAttributes{});
+  def.content.cadAnnotations.push_back(std::move(m));
+  def.content.cadAnnotationAttrs.push_back(EntityAttributes{});
   st.blockDefs.push_back(std::move(def));
   CadBlockRef ref;
   ref.defName = "LBL";
@@ -6661,9 +6661,9 @@ TEST_CASE("GOSURVEY annoVisScales EED round-trips on block-definition MTEXT (iss
   AppCommandState in;
   REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
   REQUIRE(in.blockDefs.size() == 1);
-  REQUIRE(in.blockDefs[0].content.texts.size() == 1);
-  REQUIRE(in.blockDefs[0].content.texts[0].annotativeVisibleScaleNames.size() == 1);
-  CHECK(in.blockDefs[0].content.texts[0].annotativeVisibleScaleNames[0] == "1:20");
+  REQUIRE(in.blockDefs[0].content.cadAnnotations.size() == 1);
+  REQUIRE(in.blockDefs[0].content.cadAnnotations[0].annotativeVisibleScaleNames.size() == 1);
+  CHECK(in.blockDefs[0].content.cadAnnotations[0].annotativeVisibleScaleNames[0] == "1:20");
 }
 
 TEST_CASE("AcadAnnotative EED imports annotative HATCH without path flag (issue #622)",
@@ -7420,8 +7420,8 @@ TEST_CASE("Annotative TEXT, INSERT, and DIMENSION export annotation context (REQ
 
   CadBlockDefinition def;
   def.name = "PIN";
-  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  def.content.lineAttrs.push_back(EntityAttributes{});
+  def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.userLineAttrs.push_back(EntityAttributes{});
   st.blockDefs.push_back(std::move(def));
   CadBlockRef ref;
   ref.defName = "PIN";
@@ -8054,17 +8054,17 @@ TEST_CASE("DXF export writes block definitions and model/paper INSERT references
   def.name = "TitleBlock";
   def.baseX = 1.f;
   def.baseY = 2.f;
-  def.content.lines = {1.0, 2.0, 0.0, 11.0, 2.0, 0.0};
-  def.content.lineAttrs.resize(1);
-  def.content.texts.push_back(CadAnnotation{});
-  def.content.texts.back().kind = CadAnnotation::Kind::Text;
-  def.content.texts.back().text = "SHEET A";
-  def.content.texts.back().insX = 3.f;
-  def.content.texts.back().insY = 4.f;
-  def.content.texts.back().plottedHeightInches = 0.25f;
-  def.content.textAttrs.resize(1);
-  def.content.circles = {5.0, 6.0, 0.0, 2.0};
-  def.content.circleNormals = {0.f, 1.f, 0.f};
+  def.content.userLinesFlat = {1.0, 2.0, 0.0, 11.0, 2.0, 0.0};
+  def.content.userLineAttrs.resize(1);
+  def.content.cadAnnotations.push_back(CadAnnotation{});
+  def.content.cadAnnotations.back().kind = CadAnnotation::Kind::Text;
+  def.content.cadAnnotations.back().text = "SHEET A";
+  def.content.cadAnnotations.back().insX = 3.f;
+  def.content.cadAnnotations.back().insY = 4.f;
+  def.content.cadAnnotations.back().plottedHeightInches = 0.25f;
+  def.content.cadAnnotationAttrs.resize(1);
+  def.content.userCirclesCxCyZR = {5.0, 6.0, 0.0, 2.0};
+  def.content.userCircleNormals = {0.f, 1.f, 0.f};
   st.blockDefs.push_back(def);
   CadBlockRef modelRef;
   modelRef.defName = "TitleBlock";
@@ -8210,8 +8210,8 @@ TEST_CASE("DXF export preserves nested block references and skips missing or cyc
   CadBlockDefinition inner;
   inner.id = 2;
   inner.name = "Inner";
-  inner.content.lines = {0., 0., 0., 1., 0., 0.};
-  inner.content.lineAttrs.resize(1);
+  inner.content.userLinesFlat = {0., 0., 0., 1., 0., 0.};
+  inner.content.userLineAttrs.resize(1);
   CadBlockNested cycleRef;
   cycleRef.defName = "Outer";
   inner.content.nested.push_back(cycleRef);
