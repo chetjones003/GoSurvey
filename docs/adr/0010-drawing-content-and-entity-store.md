@@ -34,6 +34,17 @@ Document, so a single Document-owned type cannot hold their data without creatin
   `DrawingContent` value that `AppCommandState` temporarily inherits, so call sites keep compiling.
   Coverage fixes follow in their own change. Partitioning the entity store into Document comes
   later.
+- **Document's drawing entity store has a block-capable core and a drawing-only extension.**
+  `CadEntityStore` remains the exact store shared by `CadBlockContent` and drawing content.
+  `CadDrawingEntityStore` adds drawing-level CAD entities that block definitions do not support.
+  `DrawingContent` derives from the extension, while block capture and BEDIT continue copying only
+  the shared core. This keeps the move source-compatible and prevents drawing-only objects from
+  entering block definitions.
+- **The mixed `CadEntities.hpp` declarations follow their owning systems.** Document entity records
+  belong in Document; feature-line and TIN/surface records stay Terrain-owned; point-cloud payloads
+  stay PointCloud-owned; frame display batches stay Renderer-owned; imported DWG light records are
+  IO data. Those non-Document values remain outside `CadDrawingEntityStore` and travel in the
+  Commands composition only where a drawing needs them.
 
 ## Alternatives rejected
 

@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "CadEntities.hpp"
-#include "CadLayerRow.hpp"
+#include <GoSurvey/Document/CadLayerRow.hpp>
 #include "DimensionStyle.hpp"
 #include "DrawingSettings.hpp"
 #include "MultileaderStyle.hpp"
@@ -70,19 +70,16 @@ struct NamedView {
 /// \ref DrawingDocument, and \ref AppCommandState inherits it for the live drawing, so copying
 /// drawing content is one assignment instead of a hand-written field list.
 ///
-/// Phase 1a of issue #1557 moved the fields the two structs shared. Phase 1b adds the "current"
+/// Its Document-owned CAD collections come through CadDrawingEntityStore; the block-capable subset
+/// lives in CadEntityStore, while Survey, Terrain, PointCloud, Pdf and paper-layout values remain
+/// in this Commands-owned composition. Phase 1a of issue #1557 moved the fields the two structs shared.
+/// Phase 1b adds the "current"
 /// settings, the named views and UCSs, the page setups, the annotation and viewport scale lists,
 /// the point visibility rules and the point-numbering state, so each one is undone and carried
 /// per tab. The defaults are the snapshot's and the document's; `AppCommandState`'s constructor
 /// seeds the tables a live drawing always has (layer "0", "Standard" styles).
-struct DrawingContent : CadEntityStore {
+struct DrawingContent : CadDrawingEntityStore {
   // --- Model-space entities ---------------------------------------------------------------------
-
-  /// REQ-325 / ADR-053: the plane of the (bulge-curved) segment leaving this vertex, 3 floats each
-  /// (stride 3, parallel to userPolylineVerts). Consulted only when the paired bulge is non-zero;
-  /// omitted from persistence when every entry is world +Z, the same additive/byte-identical-legacy
-  /// rule REQ-312 used for userCircleNormals.
-  std::vector<float> userPolylineVertsNormal;
 
   /// Feature lines (REQ-087, ADR-035) — named 3D design linework, in their own store rather than
   /// the polyline arrays, so a feature line is never mistaken for a polyline at the type level.
@@ -104,10 +101,6 @@ struct DrawingContent : CadEntityStore {
   std::vector<CadGradingPreset> gradingPresets;
   std::vector<EntityAttributes> featureLineAttrs;
 
-  /// Solid-filled regions (ADR-011), imported from SOLID-fill HATCH; rendered filled in the overlay.
-  std::vector<CadFilledRegion> cadFilledRegions;
-  std::vector<EntityAttributes> cadFilledRegionAttrs;
-
   /// Point clouds (REQ-171 / ADR-042). Reference geometry: nothing in the command layer creates or
   /// edits one — REQ-172's E57/PTS/PTX/LAS/LAZ importers produce them and ERASE removes them.
   ///
@@ -119,52 +112,15 @@ struct DrawingContent : CadEntityStore {
   /// so copying this vector — which every undo snapshot does — is strings and refcount bumps.
   std::vector<CadSurface> cadSurfaces;
   std::vector<EntityAttributes> cadSurfaceAttrs;
-  /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
-  std::vector<CadTable> cadTables;
-  std::vector<EntityAttributes> cadTableAttrs;
-  /// Table styles of this drawing (REQ-475). The built-in set; style editing is a follow-up.
-  std::vector<CadTableStyle> tableStyles = CadTableBuiltinStyles();
-  std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
-  std::vector<EntityAttributes> cadPositionMarkerAttrs;
-  std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
-  std::vector<EntityAttributes> cadMultileaderAttrs;
-  std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
-  std::vector<EntityAttributes> cadSplineAttrs;
-  std::vector<CadPoint> cadPoints;  ///< REQ-456 / issue #1019
-  std::vector<EntityAttributes> cadPointAttrs;
-  int pdMode = 0;       ///< AutoCAD PDMODE for CAD POINT display
-  double pdSize = 0.0;  ///< AutoCAD PDSIZE; 0 = 5% of view
-
-  /// Pipe runs (issue #486 increment B1 / REQ-345). The entity IS the path (topology); the swept
-  /// solids (`AppCommandState::pipeRunWorldSolids`) are derived display data, rebuilt from
-  /// \ref cadPipeRuns whenever it changes and never persisted — the same "piping owns topology,
-  /// blocks own geometry" split CadPipeRun's own doc comment explains, and the same shape
-  /// `blockRefWorldSolids` already uses for a derived solid array.
-  ///
-  /// Part of drawing content so BEDIT's swap and a tab switch both carry it: before it was, the
-  /// MAIN drawing's pipe runs kept rendering inside the block editor and in every other tab,
-  /// because a swap leaves behind whatever it does not name (issue #486).
-  std::vector<CadPipeRun> cadPipeRuns;
-  std::vector<EntityAttributes> cadPipeRunAttrs;
-  /// Annotation scales (issue #622): the DWG SCALE object list. Per-scale display is not wired yet.
+  /// Annotation scales (issue #622) and viewport scale presets are drawing settings, not entity
+  /// collections, so they remain part of the Commands-owned drawing content.
   std::vector<CadAnnotationScale> annotationScales;
-  /// REQ-458: model editor viewport zoom ratio presets (separate from annotationScales).
   std::vector<CadAnnotationScale> viewportZoomScales;
   std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
   std::vector<alignment::ViewFrameGroup> viewFrameGroups;  ///< REQ-517: view frame groups that follow an alignment
   std::vector<alignment::SampleLine> sampleLines;  ///< REQ-519: sample lines and their sections (persist with the drawing)
   std::vector<alignment::VerticalProfile> profiles;  ///< REQ-521: design vertical profiles (persist with the drawing)
   std::vector<CadSurfaceProfile> surfaceProfiles; ///< REQ-513 saved existing-ground profiles
-  /// Named piping networks (issue #486 increment B3 / REQ-345) — see `CadPipingSystem`'s own doc
-  /// comment (CadEntities.hpp) for the ownership model. Metadata only, like `cadPipeRuns` itself;
-  /// a network's indices are only meaningful against the drawing's OWN `cadPipeRuns`, so it travels
-  /// with it. Persisted in `internal document payload` (additive array, ADR-020 (d)).
-  std::vector<CadPipingSystem> cadPipingSystems;
-
-  std::vector<CadBlockDefinition> blockDefs;
-  std::vector<CadBlockRef> cadBlockRefs;
-  std::vector<EntityAttributes> cadBlockRefAttrs;
-
   // --- Survey / COGO points ----------------------------------------------------------------------
 
   std::vector<SurveyPoint> surveyPoints;
@@ -183,8 +139,6 @@ struct DrawingContent : CadEntityStore {
 
   // --- Layers and styles -------------------------------------------------------------------------
 
-  /// Layer table. Empty here; `AppCommandState` seeds layer "0" (issue #57).
-  std::vector<CadLayerRow> drawingLayerTable;
   /// Current layer for new geometry (ribbon combo + command defaults). Undoable; a restore that
   /// names a layer no longer in \ref drawingLayerTable falls back to "0".
   std::string currentLayer = "0";
@@ -196,8 +150,6 @@ struct DrawingContent : CadEntityStore {
   std::string alignmentStyleCurrent = "Standard";
   /// Active text style for new TEXT/MTEXT (the STYLE dropdown). Empty resolves to "Standard".
   std::string activeTextStyleName = "Standard";
-  /// Named text styles (REQ-044 / ADR-020) — undoable so style edits undo.
-  std::vector<TextStyle> textStyles;
   /// Text height for new TEXT, synced to the active text style (REQ-044), in plotted inches.
   float defaultPlottedTextHeightInches = 0.125f;
   /// Named surface styles (REQ-070 / ADR-036 (d)) — undoable for the same reason textStyles is.
@@ -216,9 +168,7 @@ struct DrawingContent : CadEntityStore {
   /// Pure value type, undoable via snapshot (like textStyles/surfaceStyles).  New dimensions bake this
   /// style's effective values; existing dimensions read the active style at draw/measure time (phase 1).
   DimensionStyle activeDimensionStyle = DimensionStyles::Default();
-  std::vector<DimensionStyle> dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle activeMultileaderStyle = MultileaderStyles::Default();
-  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
 
   // --- Underlays and paper space -----------------------------------------------------------------
 

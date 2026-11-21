@@ -318,13 +318,6 @@
     },
     {
       "file": "src/io/src/GsIo.cpp",
-      "include": "DimensionStyle.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/io/src/GsIo.cpp includes \"DimensionStyle.hpp\": IO may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/io/src/GsIo.cpp",
       "include": "CadCoordinateFrame.hpp",
       "target": "Commands",
       "rule": "forbidden dependency",
@@ -1200,20 +1193,6 @@
     },
     {
       "file": "src/qt/EditorRibbon.cpp",
-      "include": "DimensionStyle.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorRibbon.cpp includes \"DimensionStyle.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorRibbon.cpp",
-      "include": "MultileaderStyle.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/EditorRibbon.cpp includes \"MultileaderStyle.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/EditorRibbon.cpp",
       "include": "GoSurvey/Document/cadtablestyle.hpp",
       "target": "Document",
       "rule": "forbidden dependency",
@@ -1869,20 +1848,6 @@
       "target": "Commands",
       "rule": "forbidden dependency",
       "message": "src/qt/StyleEditors.hpp includes \"CadEntities.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/StyleEditors.hpp",
-      "include": "DimensionStyle.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/StyleEditors.hpp includes \"DimensionStyle.hpp\": Qt may not depend on Commands (forbidden dependency)"
-    },
-    {
-      "file": "src/qt/StyleEditors.hpp",
-      "include": "MultileaderStyle.hpp",
-      "target": "Commands",
-      "rule": "forbidden dependency",
-      "message": "src/qt/StyleEditors.hpp includes \"MultileaderStyle.hpp\": Qt may not depend on Commands (forbidden dependency)"
     },
     {
       "file": "src/qt/StyleEditors.hpp",

@@ -8,6 +8,8 @@
 
 #include <memory>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "CadCommands.hpp"
@@ -15,6 +17,10 @@
 #include <GoSurvey/Geometry/brep.hpp>
 
 namespace {
+
+template <typename T, typename = void> struct HasCadPoints : std::false_type {};
+template <typename T>
+struct HasCadPoints<T, std::void_t<decltype(std::declval<T&>().cadPoints)>> : std::true_type {};
 
 /// Assigns (never appends) every drawing-content field from a value that depends on \p v, so two
 /// variants differ in every field and a field one copy forgets shows up as a JSON difference.
@@ -268,6 +274,29 @@ void RequireSame(const Unserialized& a, const Unserialized& b) {
 }
 
 } // namespace
+
+TEST_CASE("Document drawing entity store stays separate from block content", "[issue1557][drawing-content]") {
+  STATIC_REQUIRE(std::is_base_of_v<CadDrawingEntityStore, DrawingContent>);
+  STATIC_REQUIRE(std::is_base_of_v<CadEntityStore, CadBlockContent>);
+  STATIC_REQUIRE_FALSE(std::is_base_of_v<CadDrawingEntityStore, CadBlockContent>);
+
+  AppCommandState state;
+  state.userLinesFlat = {0, 0, 0, 1, 0, 0};
+  state.cadPoints = {CadPoint{2, 3, 4}};
+  CadTable table;
+  table.insX = 5.f;
+  state.cadTables = {table};
+  DrawingContent content = static_cast<const DrawingContent&>(state);
+  CHECK(content.cadPoints.size() == 1);
+  CHECK(content.cadPoints.front().x == 2.0);
+  CHECK(content.cadTables.size() == 1);
+
+  CadBlockContent block;
+  static_cast<CadEntityStore&>(block) = static_cast<const CadEntityStore&>(state);
+
+  CHECK(block.userLinesFlat == state.userLinesFlat);
+  STATIC_REQUIRE_FALSE(HasCadPoints<CadBlockContent>::value);
+}
 
 TEST_CASE("Undo and redo round-trip every kind of drawing content", "[issue1557][drawing-content]") {
   AppCommandState st;
