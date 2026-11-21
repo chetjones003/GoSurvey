@@ -82,13 +82,13 @@ TEST_CASE("A Civil 3D DWG's GEODATA sets the marker, north and scale method, no 
   REQUIRE(std::filesystem::exists(p));
 
   AppCommandState st;
-  st.drawingSettings.zoneCode = "HARN/TX.TX-CF";  // the file replaces the location with its own
+  st.drawing.drawingSettings.zoneCode = "HARN/TX.TX-CF";  // the file replaces the location with its own
   std::vector<std::string> log;
   REQUIRE(ImportDwgFile(st, p.c_str(), log));
   for (const std::string& l : log)
     UNSCOPED_INFO(l);
 
-  const DrawingSettings& ds = st.drawingSettings;
+  const DrawingSettings& ds = st.drawing.drawingSettings;
   CHECK(std::abs(ds.markerX - 1846238.730) <= 0.001);
   CHECK(std::abs(ds.markerY - 13629548.130) <= 0.001);
   CHECK(ds.markerNorthDeg == Catch::Approx(89.812).margin(0.001));
@@ -116,7 +116,7 @@ TEST_CASE("An AutoCAD-saved R2000 GEODATA reads with AutoCAD's values (REQ-362)"
   for (const std::string& l : log)
     UNSCOPED_INFO(l);
 
-  const DrawingSettings& ds = st.drawingSettings;
+  const DrawingSettings& ds = st.drawing.drawingSettings;
   CHECK(std::abs(ds.markerX - 1846238.73) <= 0.001);
   CHECK(std::abs(ds.markerY - 13629548.13) <= 0.001);
   CHECK(ds.markerNorthDeg == Catch::Approx(89.8122).margin(0.0001));
@@ -150,7 +150,7 @@ TEST_CASE("A GEODATA naming a zone sets it and the reference grid point (REQ-362
     AppCommandState st;
     std::vector<std::string> log;
     ApplyDwgGeoData(st, g, log);
-    const DrawingSettings& ds = st.drawingSettings;
+    const DrawingSettings& ds = st.drawing.drawingSettings;
     CHECK(ds.zoneCode == "HARN/TX.TX-CF");
     CHECK(ds.markerX == 1000.0);
     CHECK(ds.markerY == 2000.0);
@@ -174,7 +174,7 @@ TEST_CASE("A GEODATA naming a zone sets it and the reference grid point (REQ-362
     AppCommandState st;
     std::vector<std::string> log;
     ApplyDwgGeoData(st, g, log);
-    CHECK(st.drawingSettings.zoneCode == "HARN/TX.TX-CF");
+    CHECK(st.drawing.drawingSettings.zoneCode == "HARN/TX.TX-CF");
   }
   SECTION("a projected-grid reference point is already the grid coordinate") {
     g.coordinateSystemDefinition = "HARN/TX.TX-CF";
@@ -184,8 +184,8 @@ TEST_CASE("A GEODATA naming a zone sets it and the reference grid point (REQ-362
     AppCommandState st;
     std::vector<std::string> log;
     ApplyDwgGeoData(st, g, log);
-    CHECK(st.drawingSettings.transform.refGridE == kEFt);
-    CHECK(st.drawingSettings.transform.refGridN == kNFt);
+    CHECK(st.drawing.drawingSettings.transform.refGridE == kEFt);
+    CHECK(st.drawing.drawingSettings.transform.refGridN == kNFt);
   }
   SECTION("a local-grid reference point gives no grid reference") {
     g.coordinateSystemDefinition = "HARN/TX.TX-CF";
@@ -193,17 +193,17 @@ TEST_CASE("A GEODATA naming a zone sets it and the reference grid point (REQ-362
     AppCommandState st;
     std::vector<std::string> log;
     ApplyDwgGeoData(st, g, log);
-    CHECK(st.drawingSettings.transform.refGridE == 0.0);
-    CHECK(st.drawingSettings.transform.refGridN == 0.0);
+    CHECK(st.drawing.drawingSettings.transform.refGridE == 0.0);
+    CHECK(st.drawing.drawingSettings.transform.refGridN == 0.0);
   }
   SECTION("an unknown code is kept verbatim, with no grid reference") {
     g.coordinateSystemDefinition = "NOT-A-ZONE-362";
     AppCommandState st;
     std::vector<std::string> log;
     ApplyDwgGeoData(st, g, log);
-    CHECK(st.drawingSettings.zoneCode == "NOT-A-ZONE-362");
-    CHECK(st.drawingSettings.transform.refGridE == 0.0);
-    CHECK(st.drawingSettings.transform.refGridN == 0.0);
+    CHECK(st.drawing.drawingSettings.zoneCode == "NOT-A-ZONE-362");
+    CHECK(st.drawing.drawingSettings.transform.refGridE == 0.0);
+    CHECK(st.drawing.drawingSettings.transform.refGridN == 0.0);
     CHECK(LogHas(log, "NOT-A-ZONE-362 is unknown"));
   }
   SECTION("north direction below the X axis wraps to 0..360") {
@@ -212,7 +212,7 @@ TEST_CASE("A GEODATA naming a zone sets it and the reference grid point (REQ-362
     AppCommandState st;
     std::vector<std::string> log;
     ApplyDwgGeoData(st, g, log);
-    CHECK(st.drawingSettings.markerNorthDeg == Catch::Approx(315.0));
+    CHECK(st.drawing.drawingSettings.markerNorthDeg == Catch::Approx(315.0));
   }
   SECTION("no north direction means grid north; a bad user factor keeps Reference Point") {
     g.northX = 0.0;
@@ -221,24 +221,24 @@ TEST_CASE("A GEODATA naming a zone sets it and the reference grid point (REQ-362
     AppCommandState st;
     std::vector<std::string> log;
     ApplyDwgGeoData(st, g, log);
-    CHECK(st.drawingSettings.markerNorthDeg == 90.0);
-    CHECK(st.drawingSettings.transform.computation == DrawingSettings::Transform::Computation::ReferencePoint);
+    CHECK(st.drawing.drawingSettings.markerNorthDeg == 90.0);
+    CHECK(st.drawing.drawingSettings.transform.computation == DrawingSettings::Transform::Computation::ReferencePoint);
   }
 }
 
 TEST_CASE("A GoSurvey DWG with a trailer opens from the trailer (REQ-362)", "[req362][dwg]") {
   LoadShippedDictionary();
   AppCommandState st;
-  st.drawingInsUnits = 2;
-  st.drawingSettings.zoneCode = "HARN/TX.TX-CF";
-  st.drawingSettings.markerX = kEFt;
-  st.drawingSettings.markerY = kNFt;
-  st.drawingSettings.markerNorthDeg = 33.0;
-  st.drawingSettings.transform.apply = true;
-  st.drawingSettings.transform.userScaleFactor = 1.0001;
-  st.drawingSettings.transform.computation = DrawingSettings::Transform::Computation::UserDefined;
-  st.userLinesFlat = {0, 0, 0, 10, 0, 0};
-  st.userLineAttrs.resize(1);
+  st.drawing.drawingInsUnits = 2;
+  st.drawing.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+  st.drawing.drawingSettings.markerX = kEFt;
+  st.drawing.drawingSettings.markerY = kNFt;
+  st.drawing.drawingSettings.markerNorthDeg = 33.0;
+  st.drawing.drawingSettings.transform.apply = true;
+  st.drawing.drawingSettings.transform.userScaleFactor = 1.0001;
+  st.drawing.drawingSettings.transform.computation = DrawingSettings::Transform::Computation::UserDefined;
+  st.drawing.userLinesFlat = {0, 0, 0, 10, 0, 0};
+  st.drawing.userLineAttrs.resize(1);
   std::vector<std::string> log;
 
   // The file carries a GEODATA too (item 2), but GoSurvey reads its own trailer: every setting comes
@@ -249,7 +249,7 @@ TEST_CASE("A GoSurvey DWG with a trailer opens from the trailer (REQ-362)", "[re
   AppCommandState back;
   std::vector<std::string> openLog;
   REQUIRE(ImportDwgFile(back, withTrailer.c_str(), openLog));
-  CHECK(back.drawingSettings == st.drawingSettings);
+  CHECK(back.drawing.drawingSettings == st.drawing.drawingSettings);
   CHECK_FALSE(LogHas(openLog, "GEODATA"));
 
   std::error_code ec;
@@ -261,12 +261,12 @@ TEST_CASE("BLOCKIMPORT from a GEODATA drawing leaves this drawing's location alo
   LoadShippedDictionary();
   const std::string p = std::string(GOSURVEY_SAMPLES_DIR) + "/duke-main-clean-r2018.dwg";
   AppCommandState st;
-  st.drawingSettings.zoneCode = "HARN/TX.TX-CF";
-  st.drawingSettings.markerX = 5.0;
-  const DrawingSettings before = st.drawingSettings;
+  st.drawing.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+  st.drawing.drawingSettings.markerX = 5.0;
+  const DrawingSettings before = st.drawing.drawingSettings;
   std::vector<std::string> log;
   ImportCadBlocksFromPath(st, p.c_str(), log);
-  CHECK(st.drawingSettings == before);
+  CHECK(st.drawing.drawingSettings == before);
   CHECK_FALSE(LogHas(log, "GEODATA"));  // the source file's location is not reported as ours
 }
 
@@ -278,19 +278,19 @@ namespace {
 // is WORLD.
 AppCommandState GeolocatedAtAg9976() {
   AppCommandState st;
-  st.drawingInsUnits = 2;  // feet (US survey, the default foot)
-  st.worldDocumentOriginX = 3115000.0;
-  st.worldDocumentOriginY = 10077000.0;
-  st.drawingSettings.zoneCode = "HARN/TX.TX-CF";
-  st.drawingSettings.markerX = kEFt;
-  st.drawingSettings.markerY = kNFt;
-  st.drawingSettings.markerNorthDeg = 33.0;
-  DrawingSettings::Transform& t = st.drawingSettings.transform;
+  st.drawing.drawingInsUnits = 2;  // feet (US survey, the default foot)
+  st.drawing.worldDocumentOriginX = 3115000.0;
+  st.drawing.worldDocumentOriginY = 10077000.0;
+  st.drawing.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+  st.drawing.drawingSettings.markerX = kEFt;
+  st.drawing.drawingSettings.markerY = kNFt;
+  st.drawing.drawingSettings.markerNorthDeg = 33.0;
+  DrawingSettings::Transform& t = st.drawing.drawingSettings.transform;
   t.applySeaLevel = true;
   t.elevation = 500.0;
   t.spheroidRadiusM = 6378137.0;
-  st.userLinesFlat = {0, 0, 0, 10, 0, 0};
-  st.userLineAttrs.resize(1);
+  st.drawing.userLinesFlat = {0, 0, 0, 10, 0, 0};
+  st.drawing.userLineAttrs.resize(1);
   return st;
 }
 }  // namespace
@@ -318,8 +318,8 @@ TEST_CASE("The GEODATA a save writes: marker, lat/long, north, unit, zone, scale
   CHECK(g.projectionRadius == 6378137.0);
 
   SECTION("User Defined scale") {
-    st.drawingSettings.transform.computation = DrawingSettings::Transform::Computation::UserDefined;
-    st.drawingSettings.transform.userScaleFactor = 0.99995;
+    st.drawing.drawingSettings.transform.computation = DrawingSettings::Transform::Computation::UserDefined;
+    st.drawing.drawingSettings.transform.userScaleFactor = 0.99995;
     REQUIRE(BuildDwgGeoData(st, &g, &why));
     CHECK(g.scaleEstimation == 2);
     CHECK(g.userScaleFactor == 0.99995);
@@ -332,17 +332,17 @@ TEST_CASE("No GEODATA without a usable zone, and the reason says why (REQ-362)",
   DwgGeoData g;
   std::string why;
   SECTION("no zone") {
-    st.drawingSettings.zoneCode.clear();
+    st.drawing.drawingSettings.zoneCode.clear();
     CHECK_FALSE(BuildDwgGeoData(st, &g, &why));
     CHECK(why.find("no zone") != std::string::npos);
   }
   SECTION("a zone the dictionary does not know") {
-    st.drawingSettings.zoneCode = "NOT-A-ZONE-362";
+    st.drawing.drawingSettings.zoneCode = "NOT-A-ZONE-362";
     CHECK_FALSE(BuildDwgGeoData(st, &g, &why));
     CHECK(why.find("cannot be computed") != std::string::npos);
   }
   SECTION("a Unitless drawing") {
-    st.drawingInsUnits = 0;
+    st.drawing.drawingInsUnits = 0;
     CHECK_FALSE(BuildDwgGeoData(st, &g, &why));
     CHECK(why.find("Unitless") != std::string::npos);
   }
@@ -379,8 +379,8 @@ TEST_CASE("R2018 DWG GEODATA uses class version 2 (issue #623)", "[req362][dwg][
 TEST_CASE("A saved DWG's GEODATA alone reopens the location (REQ-362)", "[req362][dwg]") {
   LoadShippedDictionary();
   AppCommandState st = GeolocatedAtAg9976();
-  st.drawingSettings.transform.computation = DrawingSettings::Transform::Computation::UserDefined;
-  st.drawingSettings.transform.userScaleFactor = 1.0001;
+  st.drawing.drawingSettings.transform.computation = DrawingSettings::Transform::Computation::UserDefined;
+  st.drawing.drawingSettings.transform.userScaleFactor = 1.0001;
 
   // The DWG body alone, without GoSurvey's trailer — what AutoCAD leaves after it re-saves the file.
   const std::string body = TempDwg("gosurvey-req362-write-body.dwg");
@@ -395,7 +395,7 @@ TEST_CASE("A saved DWG's GEODATA alone reopens the location (REQ-362)", "[req362
   REQUIRE(ImportDwgFile(back, body.c_str(), openLog));
   for (const std::string& l : openLog)
     UNSCOPED_INFO(l);
-  const DrawingSettings& ds = back.drawingSettings;
+  const DrawingSettings& ds = back.drawing.drawingSettings;
   CHECK(ds.zoneCode == "HARN/TX.TX-CF");
   CHECK(std::abs(ds.markerX - kEFt) <= 0.001);
   CHECK(std::abs(ds.markerY - kNFt) <= 0.001);
@@ -421,7 +421,7 @@ TEST_CASE("A DWG save without a zone, and any DXF export, write no GEODATA (REQ-
   std::error_code ec;
   SECTION("DWG without a zone: nothing written, and the log says why") {
     AppCommandState st = GeolocatedAtAg9976();
-    st.drawingSettings.zoneCode.clear();
+    st.drawing.drawingSettings.zoneCode.clear();
     const std::string body = TempDwg("gosurvey-req362-nozone.dwg");
     std::vector<std::string> log;
     REQUIRE(ExportLibreCadFile(st, body.c_str(), log, /*asDxf=*/false));
@@ -429,7 +429,7 @@ TEST_CASE("A DWG save without a zone, and any DXF export, write no GEODATA (REQ-
     AppCommandState back;
     std::vector<std::string> openLog;
     REQUIRE(ImportDwgFile(back, body.c_str(), openLog));
-    CHECK(back.drawingSettings.zoneCode.empty());
+    CHECK(back.drawing.drawingSettings.zoneCode.empty());
     CHECK_FALSE(LogHas(openLog, "GEODATA"));
     std::filesystem::remove(body, ec);
   }

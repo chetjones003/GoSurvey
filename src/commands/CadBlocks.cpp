@@ -65,8 +65,8 @@ float InsertLiveRotDeg(const AppCommandState& st, float wx, float wy) {
 
 EntityAttributes NewBlockAttr(const AppCommandState& st) {
   EntityAttributes a;
-  a.layer = st.currentLayer.empty() ? std::string("0") : st.currentLayer;
-  a.color = st.currentColor.empty() ? std::string("ByLayer") : st.currentColor;  // REQ-356
+  a.layer = st.drawing.currentLayer.empty() ? std::string("0") : st.drawing.currentLayer;
+  a.color = st.drawing.currentColor.empty() ? std::string("ByLayer") : st.drawing.currentColor;  // REQ-356
   a.linetype = "ByLayer";
   a.lineweightMm = -1.f;
   a.transparency = -1.f;
@@ -106,81 +106,84 @@ void CaptureSelectionInto(const AppCommandState& st, CadBlockContent* c, float b
   assert(c != nullptr);
   for (const SelectedEntity& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= st.userLinesFlat.size())
+      const size_t li = static_cast<size_t>(e.index);
+      if (li >= st.drawing.lineCount())
         continue;
-      c->userLinesFlat.push_back(st.userLinesFlat[k] - bx);
-      c->userLinesFlat.push_back(st.userLinesFlat[k + 1] - by);
-      c->userLinesFlat.push_back(st.userLinesFlat[k + 2] - bz);
-      c->userLinesFlat.push_back(st.userLinesFlat[k + 3] - bx);
-      c->userLinesFlat.push_back(st.userLinesFlat[k + 4] - by);
-      c->userLinesFlat.push_back(st.userLinesFlat[k + 5] - bz);
+      CadLineRecord ln = st.drawing.line(li);
+      ln.x0 -= bx;
+      ln.y0 -= by;
+      ln.z0 -= bz;
+      ln.x1 -= bx;
+      ln.y1 -= by;
+      ln.z1 -= bz;
+      c->pushLine(ln);
       EntityAttributes a{};
-      if (static_cast<size_t>(e.index) < st.userLineAttrs.size())
-        a = st.userLineAttrs[static_cast<size_t>(e.index)];
+      if (static_cast<size_t>(e.index) < st.drawing.userLineAttrs.size())
+        a = st.drawing.userLineAttrs[static_cast<size_t>(e.index)];
       c->userLineAttrs.push_back(a);
       c->lineVis.push_back("");
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 >= st.userCirclesCxCyZR.size())
+      const size_t ci = static_cast<size_t>(e.index);
+      if (ci >= st.drawing.circleCount())
         continue;
-      c->userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k] - bx);
-      c->userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k + 1] - by);
-      c->userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k + 2] - bz);
-      c->userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k + 3]);
+      CadCircleRecord cr = st.drawing.circle(ci);
+      cr.cx -= bx;
+      cr.cy -= by;
+      cr.cz -= bz;
+      c->pushCircle(cr);
       EntityAttributes a{};
-      if (static_cast<size_t>(e.index) < st.userCircleAttrs.size())
-        a = st.userCircleAttrs[static_cast<size_t>(e.index)];
+      if (static_cast<size_t>(e.index) < st.drawing.userCircleAttrs.size())
+        a = st.drawing.userCircleAttrs[static_cast<size_t>(e.index)];
       c->userCircleAttrs.push_back(a);
       float bnx = 0.f, bny = 0.f, bnz = 1.f;
-      CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &bnx, &bny, &bnz);
+      CircleNormalAt(st.drawing.userCircleNormals, static_cast<size_t>(e.index), &bnx, &bny, &bnz);
       PushCircleNormal(c->userCircleNormals, bnx, bny, bnz);
       c->circleVis.push_back("");
     } else if (e.type == SelectedEntity::Type::Annotation) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadAnnotations.size())
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadAnnotations.size())
         continue;
-      CadAnnotation t = st.cadAnnotations[static_cast<size_t>(e.index)];
+      CadAnnotation t = st.drawing.cadAnnotations[static_cast<size_t>(e.index)];
       t.insX -= bx;
       t.insY -= by;
       t.insZ -= bz;
       c->cadAnnotations.push_back(std::move(t));
       EntityAttributes a{};
-      if (static_cast<size_t>(e.index) < st.cadAnnotationAttrs.size())
-        a = st.cadAnnotationAttrs[static_cast<size_t>(e.index)];
+      if (static_cast<size_t>(e.index) < st.drawing.cadAnnotationAttrs.size())
+        a = st.drawing.cadAnnotationAttrs[static_cast<size_t>(e.index)];
       c->cadAnnotationAttrs.push_back(a);
     } else if (e.type == SelectedEntity::Type::Arc) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.userArcs.size())
         continue;
-      CadArc a = st.userArcs[static_cast<size_t>(e.index)];
+      CadArc a = st.drawing.userArcs[static_cast<size_t>(e.index)];
       a.cx -= bx;
       a.cy -= by;
       c->userArcs.push_back(a);
       EntityAttributes at{};
-      if (static_cast<size_t>(e.index) < st.userArcAttrs.size())
-        at = st.userArcAttrs[static_cast<size_t>(e.index)];
+      if (static_cast<size_t>(e.index) < st.drawing.userArcAttrs.size())
+        at = st.drawing.userArcAttrs[static_cast<size_t>(e.index)];
       c->userArcAttrs.push_back(at);
     } else if (e.type == SelectedEntity::Type::BlockRef) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
         continue;
       CadBlockNested n;
-      n.defName = st.cadBlockRefs[static_cast<size_t>(e.index)].defName;
-      n.xf = st.cadBlockRefs[static_cast<size_t>(e.index)].xf;
+      n.defName = st.drawing.cadBlockRefs[static_cast<size_t>(e.index)].defName;
+      n.xf = st.drawing.cadBlockRefs[static_cast<size_t>(e.index)].xf;
       n.xf.x -= bx;
       n.xf.y -= by;
       n.xf.z -= bz;
       c->nested.push_back(std::move(n));
     } else if (e.type == SelectedEntity::Type::Mesh) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadMeshes.size())
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadMeshes.size())
         continue;
-      c->cadMeshes.push_back(st.cadMeshes[static_cast<size_t>(e.index)]);
+      c->cadMeshes.push_back(st.drawing.cadMeshes[static_cast<size_t>(e.index)]);
       EntityAttributes a{};
-      if (static_cast<size_t>(e.index) < st.cadMeshAttrs.size())
-        a = st.cadMeshAttrs[static_cast<size_t>(e.index)];
+      if (static_cast<size_t>(e.index) < st.drawing.cadMeshAttrs.size())
+        a = st.drawing.cadMeshAttrs[static_cast<size_t>(e.index)];
       c->cadMeshAttrs.push_back(a);
     } else if (e.type == SelectedEntity::Type::Solid) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadSolids.size())
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadSolids.size())
         continue;
-      const CadSolidPtr& sp = st.cadSolids[static_cast<size_t>(e.index)];
+      const CadSolidPtr& sp = st.drawing.cadSolids[static_cast<size_t>(e.index)];
       if (!sp)
         continue;
       brep::Solid local =
@@ -188,8 +191,8 @@ void CaptureSelectionInto(const AppCommandState& st, CadBlockContent* c, float b
                                            -static_cast<double>(bz)});
       c->cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(local)));
       EntityAttributes a{};
-      if (static_cast<size_t>(e.index) < st.cadSolidAttrs.size())
-        a = st.cadSolidAttrs[static_cast<size_t>(e.index)];
+      if (static_cast<size_t>(e.index) < st.drawing.cadSolidAttrs.size())
+        a = st.drawing.cadSolidAttrs[static_cast<size_t>(e.index)];
       c->cadSolidAttrs.push_back(a);
     }
   }
@@ -198,11 +201,11 @@ void CaptureSelectionInto(const AppCommandState& st, CadBlockContent* c, float b
 void CadBlockCaptureDrawing(const AppCommandState& st, CadBlockContent* c) {
   assert(c != nullptr);
   // The entity collections are one shared store (ADR-0010, #1557 phase 3): a single slice copy.
-  static_cast<CadEntityStore&>(*c) = static_cast<const CadEntityStore&>(st);
-  c->lineVis.assign(st.userLineAttrs.size(), "");
-  c->circleVis.assign(st.userCircleAttrs.size(), "");
-  EnsureCircleNormals(c->userCircleNormals, st.userCirclesCxCyZR.size() / 4);
-  for (const CadBlockRef& r : st.cadBlockRefs) {
+  static_cast<CadEntityStore&>(*c) = static_cast<const CadEntityStore&>(st.drawing);
+  c->lineVis.assign(st.drawing.userLineAttrs.size(), "");
+  c->circleVis.assign(st.drawing.userCircleAttrs.size(), "");
+  EnsureCircleNormals(c->userCircleNormals, st.drawing.circleCount());
+  for (const CadBlockRef& r : st.drawing.cadBlockRefs) {
     CadBlockNested n;
     n.defName = r.defName;
     n.xf = r.xf;
@@ -218,50 +221,50 @@ void CadBlockCaptureDrawing(const AppCommandState& st, CadBlockContent* c) {
 void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& c) {
   // The block's entity store replaces the model's (ADR-0010, #1557 phase 3): a single slice copy,
   // then the attribute arrays are padded to their entity counts as before.
-  static_cast<CadEntityStore&>(st) = static_cast<const CadEntityStore&>(c);
-  st.userLineAttrs.resize(st.userLinesFlat.size() / 6);
-  st.userCircleAttrs.resize(st.userCirclesCxCyZR.size() / 4);
-  EnsureCircleNormals(st.userCircleNormals, st.userCirclesCxCyZR.size() / 4);
-  st.userArcAttrs.resize(st.userArcs.size());
-  st.userEllAttrs.resize(st.userEllipses.size());
-  SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // legacy block defs have none
-  st.cadAnnotationAttrs.resize(st.cadAnnotations.size());
-  st.cadMeshAttrs.resize(st.cadMeshes.size());
-  st.cadSolidAttrs.resize(st.cadSolids.size());
+  static_cast<CadEntityStore&>(st.drawing) = static_cast<const CadEntityStore&>(c);
+  st.drawing.userLineAttrs.resize(st.drawing.lineCount());
+  st.drawing.userCircleAttrs.resize(st.drawing.circleCount());
+  EnsureCircleNormals(st.drawing.userCircleNormals, st.drawing.circleCount());
+  st.drawing.userArcAttrs.resize(st.drawing.userArcs.size());
+  st.drawing.userEllAttrs.resize(st.drawing.userEllipses.size());
+  SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());  // legacy block defs have none
+  st.drawing.cadAnnotationAttrs.resize(st.drawing.cadAnnotations.size());
+  st.drawing.cadMeshAttrs.resize(st.drawing.cadMeshes.size());
+  st.drawing.cadSolidAttrs.resize(st.drawing.cadSolids.size());
   // Hide everything that is not the block being edited.
-  st.cadFilledRegions.clear();
-  st.cadFilledRegionAttrs.clear();
-  st.cadSurfaces.clear();
-  st.cadSurfaceAttrs.clear();
-  st.cadTables.clear();
-  st.cadTableAttrs.clear();
-  st.cadPositionMarkers.clear();  // REQ-359: model-space objects, never block content
-  st.cadPositionMarkerAttrs.clear();
-  st.cadMultileaders.clear();  // REQ-367: model-space objects, never block content
-  st.cadMultileaderAttrs.clear();
-  st.cadSplines.clear();  // REQ-443: model-space objects, never block content
-  st.cadSplineAttrs.clear();
-  st.cadPoints.clear();  // REQ-456: model-space objects, never block content
-  st.cadPointAttrs.clear();
+  st.drawing.cadFilledRegions.clear();
+  st.drawing.cadFilledRegionAttrs.clear();
+  st.drawing.cadSurfaces.clear();
+  st.drawing.cadSurfaceAttrs.clear();
+  st.drawing.cadTables.clear();
+  st.drawing.cadTableAttrs.clear();
+  st.drawing.cadPositionMarkers.clear();  // REQ-359: model-space objects, never block content
+  st.drawing.cadPositionMarkerAttrs.clear();
+  st.drawing.cadMultileaders.clear();  // REQ-367: model-space objects, never block content
+  st.drawing.cadMultileaderAttrs.clear();
+  st.drawing.cadSplines.clear();  // REQ-443: model-space objects, never block content
+  st.drawing.cadSplineAttrs.clear();
+  st.drawing.cadPoints.clear();  // REQ-456: model-space objects, never block content
+  st.drawing.cadPointAttrs.clear();
   // Pipe runs (issue #486 / REQ-345) are model-space entities, never block content, so they hide
   // the same way cadTables/cadSurfaces above do — a run drawn in the main drawing is not the block
   // being edited. pipeRunWorldSolidsSig is left stale on purpose: it is a content hash, and this
   // clear changes the content, so RefreshSolidDisplayGeometry's next pass re-derives it naturally.
-  st.cadPipeRuns.clear();
-  st.cadPipeRunAttrs.clear();
-  st.cadPipingSystems.clear();  // issue #486 increment B3 / REQ-345 — same reason as cadPipeRuns above
-  st.alignments.clear();  // REQ-480: model-space objects, never block content
-  st.sampleLines.clear();  // REQ-519: sample lines belong to the alignments just removed
-  st.profiles.clear();  // REQ-521: profiles belong to the alignments just removed
-  st.cadBlockRefs.clear();
-  st.cadBlockRefAttrs.clear();
-  st.surveyPoints.clear();
-  st.featureLineOffsets.clear();
-  st.featureLineVerts.clear();
-  st.featureLineClosed.clear();
-  st.featureLineElevPt.clear();
-  st.featureLineInfo.clear();
-  st.featureLineAttrs.clear();
+  st.drawing.cadPipeRuns.clear();
+  st.drawing.cadPipeRunAttrs.clear();
+  st.drawing.cadPipingSystems.clear();  // issue #486 increment B3 / REQ-345 — same reason as cadPipeRuns above
+  st.drawing.alignments.clear();  // REQ-480: model-space objects, never block content
+  st.drawing.sampleLines.clear();  // REQ-519: sample lines belong to the alignments just removed
+  st.drawing.profiles.clear();  // REQ-521: profiles belong to the alignments just removed
+  st.drawing.cadBlockRefs.clear();
+  st.drawing.cadBlockRefAttrs.clear();
+  st.drawing.surveyPoints.clear();
+  st.drawing.featureLineOffsets.clear();
+  st.drawing.featureLineVerts.clear();
+  st.drawing.featureLineClosed.clear();
+  st.drawing.featureLineElevPt.clear();
+  st.drawing.featureLineInfo.clear();
+  st.drawing.featureLineAttrs.clear();
 }
 
 /// ADR-043: harvest the model arrays back into a definition's primitive geometry on Save. Leaves
@@ -270,23 +273,23 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
 void HarvestDrawingPrimitivesIntoContent(const AppCommandState& st, CadBlockContent* c) {
   assert(c != nullptr);
   // Same entity store copy as CadBlockCaptureDrawing, then the attribute arrays are padded.
-  static_cast<CadEntityStore&>(*c) = static_cast<const CadEntityStore&>(st);
-  c->userLineAttrs.resize(st.userLinesFlat.size() / 6);
-  c->lineVis.assign(st.userLinesFlat.size() / 6, "");
-  c->userCircleAttrs.resize(st.userCirclesCxCyZR.size() / 4);
-  c->circleVis.assign(st.userCirclesCxCyZR.size() / 4, "");
-  EnsureCircleNormals(c->userCircleNormals, st.userCirclesCxCyZR.size() / 4);
-  c->userArcAttrs.resize(st.userArcs.size());
-  c->userEllAttrs.resize(st.userEllipses.size());
-  c->cadAnnotationAttrs.resize(st.cadAnnotations.size());
-  c->cadMeshAttrs.resize(st.cadMeshes.size());
-  c->cadSolidAttrs.resize(st.cadSolids.size());
+  static_cast<CadEntityStore&>(*c) = static_cast<const CadEntityStore&>(st.drawing);
+  c->userLineAttrs.resize(st.drawing.lineCount());
+  c->lineVis.assign(st.drawing.lineCount(), "");
+  c->userCircleAttrs.resize(st.drawing.circleCount());
+  c->circleVis.assign(st.drawing.circleCount(), "");
+  EnsureCircleNormals(c->userCircleNormals, st.drawing.circleCount());
+  c->userArcAttrs.resize(st.drawing.userArcs.size());
+  c->userEllAttrs.resize(st.drawing.userEllipses.size());
+  c->cadAnnotationAttrs.resize(st.drawing.cadAnnotations.size());
+  c->cadMeshAttrs.resize(st.drawing.cadMeshes.size());
+  c->cadSolidAttrs.resize(st.drawing.cadSolids.size());
 }
 
 bool DrawingHasCaptureableGeometry(const AppCommandState& st) {
-  return !st.userLinesFlat.empty() || !st.userCirclesCxCyZR.empty() || !st.userArcs.empty() ||
-         !st.userEllipses.empty() || st.userPolylineOffsets.size() >= 2 || !st.cadAnnotations.empty() ||
-         !st.cadMeshes.empty() || !st.cadSolids.empty() || !st.importedDxfAttrDefs.empty();
+  return !st.drawing.userLinesFlat.empty() || !st.drawing.userCirclesCxCyZR.empty() || !st.drawing.userArcs.empty() ||
+         !st.drawing.userEllipses.empty() || st.drawing.userPolylineOffsets.size() >= 2 || !st.drawing.cadAnnotations.empty() ||
+         !st.drawing.cadMeshes.empty() || !st.drawing.cadSolids.empty() || !st.importedDxfAttrDefs.empty();
 }
 
 std::string FileStemUtf8(const char* pathUtf8) {
@@ -306,9 +309,9 @@ std::string LowerExt(const char* pathUtf8) {
 int MergeBlockDef(AppCommandState& dest, CadBlockDefinition def, std::vector<std::string>& log) {
   if (def.name.empty())
     return 0;
-  const int i = CadBlockFindDef(dest.blockDefs, def.name);
+  const int i = CadBlockFindDef(dest.drawing.blockDefs, def.name);
   if (i >= 0) {
-    CadBlockDefinition& have = dest.blockDefs[static_cast<size_t>(i)];
+    CadBlockDefinition& have = dest.drawing.blockDefs[static_cast<size_t>(i)];
     const bool upgradeMatchline =
         CadBlockNameIsMatchline(def.name) &&
         (have.attrDefs.size() < def.attrDefs.size() || have.content.cadAnnotations.size() < def.content.cadAnnotations.size());
@@ -321,7 +324,7 @@ int MergeBlockDef(AppCommandState& dest, CadBlockDefinition def, std::vector<std
     have = std::move(def);
     return 1;
   }
-  dest.blockDefs.push_back(std::move(def));
+  dest.drawing.blockDefs.push_back(std::move(def));
   return 1;
 }
 
@@ -349,12 +352,12 @@ bool ImportSatFileToScratch(AppCommandState& scratch, const char* pathUtf8, std:
   if (bb.valid)
     based = brep::Translate(
         based, brep::Vec3{-(bb.mn.x + bb.mx.x) * 0.5, -(bb.mn.y + bb.mx.y) * 0.5, -bb.mn.z});
-  scratch.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(based)));
-  scratch.cadSolidAttrs.push_back(EntityAttributes{});
+  scratch.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(based)));
+  scratch.drawing.cadSolidAttrs.push_back(EntityAttributes{});
   // Keep the block definition units-neutral: a `.sat` header's millimetres-per-model-unit is
   // unreliable in practice (Civil 3D wrote 25.4 for a foot-scaled model), and INSERT scaling a
   // solid it cannot place has no benefit. The solid imports at the file's own coordinates.
-  scratch.drawingInsUnits = 0;
+  scratch.drawing.drawingInsUnits = 0;
   log.push_back("BLOCKIMPORT — imported an ACIS solid from \"" + std::string(pathUtf8) + "\".");
   return true;
 }
@@ -420,7 +423,7 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
   // spawning a redundant second, unrelated block definition with the same content every time.
   const bool skipWrapDuringBedit = ext == ".sat" && dest.blockEditActive && dropLooseSatGeometry;
   int n = 0;
-  for (CadBlockDefinition& d : scratch.blockDefs)
+  for (CadBlockDefinition& d : scratch.drawing.blockDefs)
     n += MergeBlockDef(dest, std::move(d), log);
   if (DrawingHasCaptureableGeometry(scratch) && !skipWrapDuringBedit) {
     CadBlockDefinition wrap;
@@ -428,8 +431,8 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
     // A standalone `.sat` is re-based into the current drawing's model units (feet for a feet
     // drawing). Tag the block the same way so INSERT does not apply an inch→foot rescale (issue
     // #475). DXF/DWG keep the imported file's $INSUNITS when present.
-    wrap.units = (ext == ".sat") ? CadDrawingInsUnitsName(dest.drawingInsUnits)
-                                 : CadDrawingInsUnitsName(scratch.drawingInsUnits);
+    wrap.units = (ext == ".sat") ? CadDrawingInsUnitsName(dest.drawing.drawingInsUnits)
+                                 : CadDrawingInsUnitsName(scratch.drawing.drawingInsUnits);
     wrap.attrDefs = scratch.importedDxfAttrDefs;
     CadBlockCaptureDrawing(scratch, &wrap.content);
     CadBlockBakeBasePoint(&wrap);
@@ -440,13 +443,13 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
   // it and MOVE it into position; the block definition above is kept for a future 3D INSERT.
   // During BEDIT this instead lands the solid directly in the block being authored (see above).
   if (ext == ".sat" && dropLooseSatGeometry) {
-    for (std::size_t i = 0; i < scratch.cadSolids.size(); ++i) {
-      dest.cadSolids.push_back(scratch.cadSolids[i]);
-      dest.cadSolidAttrs.push_back(i < scratch.cadSolidAttrs.size() ? scratch.cadSolidAttrs[i]
+    for (std::size_t i = 0; i < scratch.drawing.cadSolids.size(); ++i) {
+      dest.drawing.cadSolids.push_back(scratch.drawing.cadSolids[i]);
+      dest.drawing.cadSolidAttrs.push_back(i < scratch.drawing.cadSolidAttrs.size() ? scratch.drawing.cadSolidAttrs[i]
                                                                     : EntityAttributes{});
     }
   }
-  for (CadBlockDefinition& d : dest.blockDefs)
+  for (CadBlockDefinition& d : dest.drawing.blockDefs)
     CadBlockAuthorMatchlineDynamics(&d);
   // A part that came in without piping metadata of its own takes its sidecar's. Without this the
   // bundled startup sweep (which imports `fittings/*.sat`) turns a tagged 4in flange into an untyped
@@ -456,11 +459,11 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
     CadPipePartType sidecarType = CadPipePartType::None;
     std::string sidecarSize;
     CadPipePressureClass sidecarClass = CadPipePressureClass::None;
-    const int di = CadBlockFindDef(dest.blockDefs, FileStemUtf8(pathUtf8));
-    if (di >= 0 && dest.blockDefs[static_cast<size_t>(di)].partType == CadPipePartType::None &&
+    const int di = CadBlockFindDef(dest.drawing.blockDefs, FileStemUtf8(pathUtf8));
+    if (di >= 0 && dest.drawing.blockDefs[static_cast<size_t>(di)].partType == CadPipePartType::None &&
         ReadFittingSidecar(std::filesystem::u8path(pathUtf8), &sidecarType, &sidecarSize, &sidecarClass) &&
         sidecarType != CadPipePartType::None) {
-      CadBlockDefinition& d = dest.blockDefs[static_cast<size_t>(di)];
+      CadBlockDefinition& d = dest.drawing.blockDefs[static_cast<size_t>(di)];
       d.partType = sidecarType;
       d.nominalSize = sidecarSize;
       d.pressureClass = sidecarClass;
@@ -553,12 +556,10 @@ void EraseSelectedSources(AppCommandState& st) {
       const int k = idx[static_cast<size_t>(i)];
       if (k < 0)
         continue;
-      const size_t o = static_cast<size_t>(k) * 6;
-      if (o + 5 < st.userLinesFlat.size())
-        st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(o),
-                               st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(o + 6));
-      if (static_cast<size_t>(k) < st.userLineAttrs.size())
-        st.userLineAttrs.erase(st.userLineAttrs.begin() + k);
+      if (static_cast<size_t>(k) < st.drawing.lineCount())
+        st.drawing.eraseLine(static_cast<size_t>(k));
+      if (static_cast<size_t>(k) < st.drawing.userLineAttrs.size())
+        st.drawing.userLineAttrs.erase(st.drawing.userLineAttrs.begin() + k);
     }
   };
   dropLines(lines);
@@ -569,109 +570,102 @@ void EraseSelectedSources(AppCommandState& st) {
   dedup(circles);
   for (int i = static_cast<int>(circles.size()) - 1; i >= 0; --i) {
     const int k = circles[static_cast<size_t>(i)];
-    const size_t o = static_cast<size_t>(k) * 4;
-    if (o + 3 < st.userCirclesCxCyZR.size())
-      st.userCirclesCxCyZR.erase(st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(o),
-                                 st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(o + 4));
-    if (static_cast<size_t>(k) < st.userCircleAttrs.size())
-      st.userCircleAttrs.erase(st.userCircleAttrs.begin() + k);
-    EraseCircleNormal(st.userCircleNormals, static_cast<size_t>(k));
+    if (static_cast<size_t>(k) < st.drawing.circleCount())
+      st.drawing.eraseCircle(static_cast<size_t>(k));
+    if (static_cast<size_t>(k) < st.drawing.userCircleAttrs.size())
+      st.drawing.userCircleAttrs.erase(st.drawing.userCircleAttrs.begin() + k);
+    EraseCircleNormal(st.drawing.userCircleNormals, static_cast<size_t>(k));
   }
   dedup(anns);
   for (int i = static_cast<int>(anns.size()) - 1; i >= 0; --i) {
     const int k = anns[static_cast<size_t>(i)];
-    if (k >= 0 && static_cast<size_t>(k) < st.cadAnnotations.size())
-      st.cadAnnotations.erase(st.cadAnnotations.begin() + k);
-    if (k >= 0 && static_cast<size_t>(k) < st.cadAnnotationAttrs.size())
-      st.cadAnnotationAttrs.erase(st.cadAnnotationAttrs.begin() + k);
+    if (k >= 0 && static_cast<size_t>(k) < st.drawing.cadAnnotations.size())
+      st.drawing.cadAnnotations.erase(st.drawing.cadAnnotations.begin() + k);
+    if (k >= 0 && static_cast<size_t>(k) < st.drawing.cadAnnotationAttrs.size())
+      st.drawing.cadAnnotationAttrs.erase(st.drawing.cadAnnotationAttrs.begin() + k);
   }
   dedup(arcs);
   for (int i = static_cast<int>(arcs.size()) - 1; i >= 0; --i) {
     const int k = arcs[static_cast<size_t>(i)];
-    if (k >= 0 && static_cast<size_t>(k) < st.userArcs.size())
-      st.userArcs.erase(st.userArcs.begin() + k);
-    if (k >= 0 && static_cast<size_t>(k) < st.userArcAttrs.size())
-      st.userArcAttrs.erase(st.userArcAttrs.begin() + k);
+    if (k >= 0 && static_cast<size_t>(k) < st.drawing.userArcs.size())
+      st.drawing.userArcs.erase(st.drawing.userArcs.begin() + k);
+    if (k >= 0 && static_cast<size_t>(k) < st.drawing.userArcAttrs.size())
+      st.drawing.userArcAttrs.erase(st.drawing.userArcAttrs.begin() + k);
   }
   std::sort(meshes.begin(), meshes.end());
   for (int i = static_cast<int>(meshes.size()) - 1; i >= 0; --i) {
     const int k = meshes[static_cast<size_t>(i)];
-    if (k >= 0 && static_cast<size_t>(k) < st.cadMeshes.size())
-      st.cadMeshes.erase(st.cadMeshes.begin() + k);
-    if (k >= 0 && static_cast<size_t>(k) < st.cadMeshAttrs.size())
-      st.cadMeshAttrs.erase(st.cadMeshAttrs.begin() + k);
+    if (k >= 0 && static_cast<size_t>(k) < st.drawing.cadMeshes.size())
+      st.drawing.cadMeshes.erase(st.drawing.cadMeshes.begin() + k);
+    if (k >= 0 && static_cast<size_t>(k) < st.drawing.cadMeshAttrs.size())
+      st.drawing.cadMeshAttrs.erase(st.drawing.cadMeshAttrs.begin() + k);
   }
   std::sort(refs.begin(), refs.end());
   for (int i = static_cast<int>(refs.size()) - 1; i >= 0; --i) {
     const int k = refs[static_cast<size_t>(i)];
-    if (k >= 0 && static_cast<size_t>(k) < st.cadBlockRefs.size())
-      st.cadBlockRefs.erase(st.cadBlockRefs.begin() + k);
-    if (k >= 0 && static_cast<size_t>(k) < st.cadBlockRefAttrs.size())
-      st.cadBlockRefAttrs.erase(st.cadBlockRefAttrs.begin() + k);
+    if (k >= 0 && static_cast<size_t>(k) < st.drawing.cadBlockRefs.size())
+      st.drawing.cadBlockRefs.erase(st.drawing.cadBlockRefs.begin() + k);
+    if (k >= 0 && static_cast<size_t>(k) < st.drawing.cadBlockRefAttrs.size())
+      st.drawing.cadBlockRefAttrs.erase(st.drawing.cadBlockRefAttrs.begin() + k);
   }
   std::sort(solids.begin(), solids.end());
   for (int i = static_cast<int>(solids.size()) - 1; i >= 0; --i) {
     const int k = solids[static_cast<size_t>(i)];
-    if (k >= 0 && static_cast<size_t>(k) < st.cadSolids.size())
-      st.cadSolids.erase(st.cadSolids.begin() + k);
-    if (k >= 0 && static_cast<size_t>(k) < st.cadSolidAttrs.size())
-      st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + k);
+    if (k >= 0 && static_cast<size_t>(k) < st.drawing.cadSolids.size())
+      st.drawing.cadSolids.erase(st.drawing.cadSolids.begin() + k);
+    if (k >= 0 && static_cast<size_t>(k) < st.drawing.cadSolidAttrs.size())
+      st.drawing.cadSolidAttrs.erase(st.drawing.cadSolidAttrs.begin() + k);
   }
   st.selection.clear();
 }
 
 void ExplodeRef(AppCommandState& st, const CadBlockRef& ref, const EntityAttributes& insertAttr) {
   std::vector<CadBlockWorldSeg> segs;
-  CadBlockCollectWorldLines(st.blockDefs, ref, insertAttr, &segs);
+  CadBlockCollectWorldLines(st.drawing.blockDefs, ref, insertAttr, &segs);
   for (const CadBlockWorldSeg& s : segs) {
-    st.userLinesFlat.push_back(s.x0);
-    st.userLinesFlat.push_back(s.y0);
-    st.userLinesFlat.push_back(s.z0);
-    st.userLinesFlat.push_back(s.x1);
-    st.userLinesFlat.push_back(s.y1);
-    st.userLinesFlat.push_back(s.z1);
+    st.drawing.pushLine(CadLineRecord{s.x0, s.y0, s.z0, s.x1, s.y1, s.z1});
     EntityAttributes a = s.attr;
     a.id = 0;
-    st.userLineAttrs.push_back(a);
+    st.drawing.userLineAttrs.push_back(a);
   }
   std::vector<CadAnnotation> anns;
-  CadBlockCollectWorldAnnotations(st.blockDefs, ref, &anns);
+  CadBlockCollectWorldAnnotations(st.drawing.blockDefs, ref, &anns);
   for (CadAnnotation& t : anns) {
-    st.cadAnnotations.push_back(std::move(t));
+    st.drawing.cadAnnotations.push_back(std::move(t));
     EntityAttributes a = insertAttr;
     a.id = 0;
-    st.cadAnnotationAttrs.push_back(std::move(a));
+    st.drawing.cadAnnotationAttrs.push_back(std::move(a));
   }
   std::vector<CadBlockWorldSolid> solids;
-  CadBlockCollectWorldSolids(st.blockDefs, ref, insertAttr, &solids);
+  CadBlockCollectWorldSolids(st.drawing.blockDefs, ref, insertAttr, &solids);
   for (const CadBlockWorldSolid& ws : solids) {
     if (!ws.solid)
       continue;
-    st.cadSolids.push_back(ws.solid);
+    st.drawing.cadSolids.push_back(ws.solid);
     EntityAttributes a = ws.attr;
     a.id = 0;
-    st.cadSolidAttrs.push_back(std::move(a));
+    st.drawing.cadSolidAttrs.push_back(std::move(a));
   }
 }
 
 bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform xf, bool explode,
                      std::vector<std::string>& log, bool pushUndo = true,
                      const EntityAttributes* lineAttrs = nullptr) {
-  const int di = CadBlockFindDef(st.blockDefs, name);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, name);
   if (di < 0) {
     log.push_back("INSERT — no block named \"" + std::string(name) + "\".");
     return false;
   }
   CadBlockRef r;
-  r.defName = st.blockDefs[static_cast<size_t>(di)].name;
+  r.defName = st.drawing.blockDefs[static_cast<size_t>(di)].name;
   r.xf = xf;
   if (pushUndo)
     PushUndoSnapshot(st, "Insert");
-  const float us = CadBlockInsertUnitsScale(st, st.blockDefs[static_cast<size_t>(di)]);
+  const float us = CadBlockInsertUnitsScale(st, st.drawing.blockDefs[static_cast<size_t>(di)]);
   r.xf.sx *= us;
   r.xf.sy *= us;
   r.xf.sz *= us;
-  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
   for (const CadBlockAttrDef& ad : def.attrDefs)
     CadBlockAttrSet(&r, ad.tag, ad.defaultValue);
   EntityAttributes attr = NewBlockAttr(st);
@@ -692,12 +686,12 @@ bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform x
     paperTarget->paperBlockRefs.push_back(r);
     paperTarget->paperBlockRefAttrs.push_back(attr);
   } else {
-    st.cadBlockRefs.push_back(r);
-    st.cadBlockRefAttrs.push_back(attr);
+    st.drawing.cadBlockRefs.push_back(r);
+    st.drawing.cadBlockRefAttrs.push_back(attr);
     if (explode) {
-      ExplodeRef(st, st.cadBlockRefs.back(), st.cadBlockRefAttrs.back());
-      st.cadBlockRefs.pop_back();
-      st.cadBlockRefAttrs.pop_back();
+      ExplodeRef(st, st.drawing.cadBlockRefs.back(), st.drawing.cadBlockRefAttrs.back());
+      st.drawing.cadBlockRefs.pop_back();
+      st.drawing.cadBlockRefAttrs.pop_back();
     }
   }
   if (!def.content.cadSolids.empty() && !CadBlockXformScaleIsUniform(r.xf))
@@ -760,10 +754,10 @@ std::filesystem::path CadFittingLibraryExportDir() {
 
 float CadBlockInsertUnitsScale(const AppCommandState& st, const CadBlockDefinition& def) {
   // REQ-357: "Scale objects inserted from other drawings" off → inserted as drawn.
-  if (!st.drawingSettings.scaleInsertedObjects)
+  if (!st.drawing.drawingSettings.scaleInsertedObjects)
     return 1.f;
-  const double inchesPerMeter = DrawingInchesPerMeter(st.drawingSettings.footDefinition);
-  const std::string drawUnits = CadDrawingInsUnitsName(st.drawingInsUnits);
+  const double inchesPerMeter = DrawingInchesPerMeter(st.drawing.drawingSettings.footDefinition);
+  const std::string drawUnits = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
   if (st.insertBlockUnitsBuf[0] != '\0')
     return CadBlockUnitsScale(st.insertBlockUnitsBuf, drawUnits, inchesPerMeter);
   return CadBlockUnitsScale(def.units, drawUnits, inchesPerMeter);
@@ -772,7 +766,7 @@ float CadBlockInsertUnitsScale(const AppCommandState& st, const CadBlockDefiniti
 void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBlockLibraryEntry>* out) {
   assert(out != nullptr);
   out->clear();
-  for (const CadBlockDefinition& d : st.blockDefs) {
+  for (const CadBlockDefinition& d : st.drawing.blockDefs) {
     if (d.name.empty() || d.dynamicAnonymous)
       continue;
     CadBlockLibraryEntry e;
@@ -801,7 +795,7 @@ void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBl
     if (ext != ".dxf" && ext != ".dwg" && ext != ".sat")
       return;
     const std::string stem = p.stem().u8string();
-    if (stem.empty() || CadBlockFindDef(st.blockDefs, stem) >= 0)
+    if (stem.empty() || CadBlockFindDef(st.drawing.blockDefs, stem) >= 0)
       return;
     CadBlockLibraryEntry e;
     e.name = stem;
@@ -851,12 +845,12 @@ void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBl
 bool CadBlocksImportLibraryEntry(AppCommandState& st, const CadBlockLibraryEntry& entry,
                                  std::vector<std::string>& log) {
   if (entry.imported || entry.path.empty())
-    return CadBlockFindDef(st.blockDefs, entry.name) >= 0;
-  const int nBefore = static_cast<int>(st.blockDefs.size());
+    return CadBlockFindDef(st.drawing.blockDefs, entry.name) >= 0;
+  const int nBefore = static_cast<int>(st.drawing.blockDefs.size());
   const bool dropLoose = !entry.isFitting;
   if (ImportCadBlocksFromPathImpl(st, entry.path.c_str(), log, dropLoose) < 0)
     return false;
-  return CadBlockFindDef(st.blockDefs, entry.name) >= 0 || static_cast<int>(st.blockDefs.size()) > nBefore;
+  return CadBlockFindDef(st.drawing.blockDefs, entry.name) >= 0 || static_cast<int>(st.drawing.blockDefs.size()) > nBefore;
 }
 
 std::string_view CadPipePaletteCategoryLabel(CadPipePaletteCategory c) {
@@ -982,7 +976,7 @@ bool CadPipePaletteArmPart(AppCommandState& st, const CadBlockLibraryEntry& entr
   // A library row may not be in this drawing's block table yet. Import it now, exactly as picking it
   // in the INSERT dialog does — and refuse by name if that fails, rather than arming a command that
   // would have nothing to place (REQ-201).
-  if (CadBlockFindDef(st.blockDefs, entry.name) < 0 && !CadBlocksImportLibraryEntry(st, entry, log)) {
+  if (CadBlockFindDef(st.drawing.blockDefs, entry.name) < 0 && !CadBlocksImportLibraryEntry(st, entry, log)) {
     log.push_back("Pipe Fittings — could not import \"" + entry.name + "\" from the library.");
     return false;
   }
@@ -1123,8 +1117,8 @@ bool CadBlockPlaceInsert(AppCommandState& st, std::string_view name, CadBlockXfo
   const int runIdx = st.insertBlockSnappedPipeRun;
   st.insertBlockSnappedPipeRun = -1;
   const EntityAttributes* lineAttrs =
-      runIdx >= 0 && static_cast<size_t>(runIdx) < st.cadPipeRunAttrs.size()
-          ? &st.cadPipeRunAttrs[static_cast<size_t>(runIdx)]
+      runIdx >= 0 && static_cast<size_t>(runIdx) < st.drawing.cadPipeRunAttrs.size()
+          ? &st.drawing.cadPipeRunAttrs[static_cast<size_t>(runIdx)]
           : nullptr;
   return PlaceInsertImpl(st, name, xf, explode, log, /*pushUndo=*/true, lineAttrs);
 }
@@ -1167,8 +1161,8 @@ void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log)
   st.insertBlockName[0] = '\0';
   if (!st.blockRecent.empty())
     std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "%s", st.blockRecent.front().c_str());
-  else if (!st.blockDefs.empty())
-    std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "%s", st.blockDefs.front().name.c_str());
+  else if (!st.drawing.blockDefs.empty())
+    std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "%s", st.drawing.blockDefs.front().name.c_str());
   std::snprintf(st.insertBlockAngleBuf, sizeof(st.insertBlockAngleBuf), "0");
   CadBlocksApplyInsertNameDefaults(st);
   log.push_back("INSERT — select a block in the Insert dialog.");
@@ -1186,7 +1180,7 @@ void StartBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log) 
   st.blockCreateSpecifyBase = true;
   st.blockCreateConvertMode = 1;
   st.blockCreateDescription[0] = '\0';
-  std::string du = CadDrawingInsUnitsName(st.drawingInsUnits);
+  std::string du = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
   std::snprintf(st.blockCreateUnits, sizeof(st.blockCreateUnits), "%s", du.c_str());
   log.push_back("BLOCK \u2014 define a new block in the Create dialog.");
 }
@@ -1197,7 +1191,7 @@ static bool CommitBlockCreateFromState(AppCommandState& st, std::vector<std::str
     log.push_back("BLOCK \u2014 block name is required.");
     return false;
   }
-  if (CadBlockFindDef(st.blockDefs, name) >= 0) {
+  if (CadBlockFindDef(st.drawing.blockDefs, name) >= 0) {
     log.push_back("BLOCK \u2014 name \"" + name + "\" is already used.");
     return false;
   }
@@ -1219,17 +1213,17 @@ static bool CommitBlockCreateFromState(AppCommandState& st, std::vector<std::str
   def.baseY = by;
   def.baseZ = bz;
   std::string unitStr = StringUtil::trimCopy(std::string(st.blockCreateUnits));
-  if (unitStr.empty()) unitStr = CadDrawingInsUnitsName(st.drawingInsUnits);
+  if (unitStr.empty()) unitStr = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
   def.units = unitStr;
   CaptureSelectionInto(st, &def.content, bx, by, bz);
   CadBlockBakeBasePoint(&def);
   for (const CadBlockNested& n : def.content.nested) {
-    if (CadBlockWouldCycle(st.blockDefs, def.name, n.defName)) {
+    if (CadBlockWouldCycle(st.drawing.blockDefs, def.name, n.defName)) {
       log.push_back("BLOCK \u2014 refused: nested block would create a circular reference.");
       return false;
     }
   }
-  st.blockDefs.push_back(std::move(def));
+  st.drawing.blockDefs.push_back(std::move(def));
   if (mode == "delete" || mode == "convert")
     EraseSelectedSources(st);
   st.selection.clear();
@@ -1239,9 +1233,9 @@ static bool CommitBlockCreateFromState(AppCommandState& st, std::vector<std::str
     r.xf.x = bx;
     r.xf.y = by;
     r.xf.z = bz;
-    st.cadBlockRefs.push_back(std::move(r));
-    st.cadBlockRefAttrs.push_back(NewBlockAttr(st));
-    st.selection.push_back({SelectedEntity::Type::BlockRef, static_cast<int>(st.cadBlockRefs.size()) - 1});
+    st.drawing.cadBlockRefs.push_back(std::move(r));
+    st.drawing.cadBlockRefAttrs.push_back(NewBlockAttr(st));
+    st.selection.push_back({SelectedEntity::Type::BlockRef, static_cast<int>(st.drawing.cadBlockRefs.size()) - 1});
   }
   NoteRecent(st, name);
   BumpCadGpuCache(st);
@@ -1264,7 +1258,7 @@ void SubmitBlockCreateBasePointPick(AppCommandState& st, float wx, float wy, flo
   st.blockCreateSpecifyBase = false;
   // If name and selection are already valid, create immediately; otherwise re-open dialog for user to complete.
   std::string name = StringUtil::trimCopy(std::string(st.blockCreateName));
-  bool canCreate = !name.empty() && CadBlockFindDef(st.blockDefs, name) < 0 && !st.selection.empty();
+  bool canCreate = !name.empty() && CadBlockFindDef(st.drawing.blockDefs, name) < 0 && !st.selection.empty();
   if (canCreate) {
     st.blockCreateDialogOpen = false;
     st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
@@ -1283,7 +1277,7 @@ void CommitBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log)
     log.push_back("BLOCK \u2014 block name is required.");
     return;
   }
-  if (CadBlockFindDef(st.blockDefs, name) >= 0) {
+  if (CadBlockFindDef(st.drawing.blockDefs, name) >= 0) {
     log.push_back("BLOCK \u2014 name \"" + name + "\" is already used.");
     return;
   }
@@ -1319,13 +1313,13 @@ bool CadBlocksWriteBlockToFile(AppCommandState& st, std::string_view name, const
     log.push_back("WBLOCK — no destination file given.");
     return false;
   }
-  const int di = CadBlockFindDef(st.blockDefs, name);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, name);
   if (di < 0) {
     log.push_back("WBLOCK — no block named \"" + std::string(name) + "\".");
     return false;
   }
   AppCommandState tmp;
-  tmp.blockDefs.push_back(st.blockDefs[static_cast<size_t>(di)]);
+  tmp.drawing.blockDefs.push_back(st.drawing.blockDefs[static_cast<size_t>(di)]);
   if (!ExportDwgFile(tmp, pathUtf8, log)) {
     log.push_back("WBLOCK — could not write " + std::string(pathUtf8) + ".");
     return false;
@@ -1335,7 +1329,7 @@ bool CadBlocksWriteBlockToFile(AppCommandState& st, std::string_view name, const
 }
 
 void StartWblockDialog(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.blockDefs.empty()) {
+  if (st.drawing.blockDefs.empty()) {
     // Refused with a reason rather than opening an empty picker (REQ-201's shape): there is nothing
     // to write, and a dialog listing nothing cannot say why.
     log.push_back("WBLOCK — this drawing has no block definitions to write.");
@@ -1344,8 +1338,8 @@ void StartWblockDialog(AppCommandState& st, std::vector<std::string>& log) {
   st.wblockDialogOpen = true;
   // Default to the most recently used definition when there is one, else the first — the same
   // "start where the user last was" rule CadBlocksApplyInsertNameDefaults uses for INSERT.
-  std::string pick = st.blockDefs.front().name;
-  if (!st.blockRecent.empty() && CadBlockFindDef(st.blockDefs, st.blockRecent.front()) >= 0)
+  std::string pick = st.drawing.blockDefs.front().name;
+  if (!st.blockRecent.empty() && CadBlockFindDef(st.drawing.blockDefs, st.blockRecent.front()) >= 0)
     pick = st.blockRecent.front();
   std::snprintf(st.wblockName, sizeof(st.wblockName), "%s", pick.c_str());
   st.wblockPath[0] = '\0';
@@ -1369,13 +1363,13 @@ void CancelWblockDialog(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void CadBlocksApplyInsertNameDefaults(AppCommandState& st) {
-  const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.insertBlockName);
   if (di < 0) {
     st.insertBlockUnitsBuf[0] = '\0';
     return;
   }
-  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
-  std::string units = def.units.empty() ? CadDrawingInsUnitsName(st.drawingInsUnits) : def.units;
+  const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
+  std::string units = def.units.empty() ? CadDrawingInsUnitsName(st.drawing.drawingInsUnits) : def.units;
   std::snprintf(st.insertBlockUnitsBuf, sizeof(st.insertBlockUnitsBuf), "%s", units.c_str());
 }
 
@@ -1500,9 +1494,9 @@ CadBlockRef* InsertAttrTarget(AppCommandState& st) {
       return nullptr;
     return &L->paperBlockRefs[static_cast<size_t>(st.insertBlockAttrRefIndex)];
   }
-  if (static_cast<size_t>(st.insertBlockAttrRefIndex) >= st.cadBlockRefs.size())
+  if (static_cast<size_t>(st.insertBlockAttrRefIndex) >= st.drawing.cadBlockRefs.size())
     return nullptr;
-  return &st.cadBlockRefs[static_cast<size_t>(st.insertBlockAttrRefIndex)];
+  return &st.drawing.cadBlockRefs[static_cast<size_t>(st.insertBlockAttrRefIndex)];
 }
 
 void CadBlocksAfterPlace(AppCommandState& st, std::vector<std::string>& log) {
@@ -1510,12 +1504,12 @@ void CadBlocksAfterPlace(AppCommandState& st, std::vector<std::string>& log) {
     FinishInsertCommand(st);
     return;
   }
-  const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
-  if (di < 0 || st.blockDefs[static_cast<size_t>(di)].attrDefs.empty()) {
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.insertBlockName);
+  if (di < 0 || st.drawing.blockDefs[static_cast<size_t>(di)].attrDefs.empty()) {
     FinishInsertCommand(st);
     return;
   }
-  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
   const bool paper = ActivePaperGeometryTarget(st) != nullptr;
   if (paper) {
     PaperLayout* L = ActivePaperGeometryTarget(st);
@@ -1525,9 +1519,9 @@ void CadBlocksAfterPlace(AppCommandState& st, std::vector<std::string>& log) {
     }
     st.insertBlockAttrPaper = true;
     st.insertBlockAttrRefIndex = static_cast<int>(L->paperBlockRefs.size()) - 1;
-  } else if (!st.cadBlockRefs.empty()) {
+  } else if (!st.drawing.cadBlockRefs.empty()) {
     st.insertBlockAttrPaper = false;
-    st.insertBlockAttrRefIndex = static_cast<int>(st.cadBlockRefs.size()) - 1;
+    st.insertBlockAttrRefIndex = static_cast<int>(st.drawing.cadBlockRefs.size()) - 1;
   } else {
     FinishInsertCommand(st);
     return;
@@ -1584,8 +1578,8 @@ bool PickSolidFaceAcrossDrawing(const AppCommandState& st, const ray3d::Ray& ray
     best.index = p.index;
     best.owner = sp;
   };
-  for (size_t i = 0; i < st.cadSolids.size(); ++i)
-    trySolid(st.cadSolids[i], static_cast<int>(i));
+  for (size_t i = 0; i < st.drawing.cadSolids.size(); ++i)
+    trySolid(st.drawing.cadSolids[i], static_cast<int>(i));
   for (size_t i = 0; i < st.blockRefWorldSolids.size(); ++i)
     trySolid(st.blockRefWorldSolids[i], static_cast<int>(i));
   if (!any)
@@ -1633,7 +1627,7 @@ bool RayHitAnySolidFace(const AppCommandState& st, const ray3d::Ray& ray, CadSol
       *outHit = hit;
     }
   };
-  for (const CadSolidPtr& sp : st.cadSolids)
+  for (const CadSolidPtr& sp : st.drawing.cadSolids)
     trySolid(sp);
   for (const CadSolidPtr& sp : st.blockRefWorldSolids)
     trySolid(sp);
@@ -1650,9 +1644,9 @@ bool FindNearestDrawingConnector(const AppCommandState& st, float px, float py, 
   float bestD = maxDist * maxDist;
   CadBlockWorldConnection best{};
   std::vector<CadBlockWorldConnection> world;
-  for (int i = 0; i < static_cast<int>(st.cadBlockRefs.size()); ++i) {
+  for (int i = 0; i < static_cast<int>(st.drawing.cadBlockRefs.size()); ++i) {
     world.clear();
-    CadBlockCollectWorldConnections(st.blockDefs, st.cadBlockRefs[static_cast<size_t>(i)], i, &world);
+    CadBlockCollectWorldConnections(st.drawing.blockDefs, st.drawing.cadBlockRefs[static_cast<size_t>(i)], i, &world);
     for (const CadBlockWorldConnection& wc : world) {
       const float dx = wc.x - px;
       const float dy = wc.y - py;
@@ -1708,18 +1702,19 @@ static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float p
     *outNy = diry / l;
     *outNz = dirz / l;
   };
-  for (size_t i = 0; i + 5 < st.userLinesFlat.size(); i += 6) {
-    const float x0 = static_cast<float>(st.userLinesFlat[i]);
-    const float y0 = static_cast<float>(st.userLinesFlat[i + 1]);
-    const float z0 = static_cast<float>(st.userLinesFlat[i + 2]);
-    const float x1 = static_cast<float>(st.userLinesFlat[i + 3]);
-    const float y1 = static_cast<float>(st.userLinesFlat[i + 4]);
-    const float z1 = static_cast<float>(st.userLinesFlat[i + 5]);
+  for (size_t i = 0; i < st.drawing.lineCount(); ++i) {
+    const CadLineRecord ln = st.drawing.line(i);
+    const float x0 = static_cast<float>(ln.x0);
+    const float y0 = static_cast<float>(ln.y0);
+    const float z0 = static_cast<float>(ln.z0);
+    const float x1 = static_cast<float>(ln.x1);
+    const float y1 = static_cast<float>(ln.y1);
+    const float z1 = static_cast<float>(ln.z1);
     consider(x0, y0, z0, x0 - x1, y0 - y1, z0 - z1);
     consider(x1, y1, z1, x1 - x0, y1 - y0, z1 - z0);
   }
-  for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
-    const CadPipeRun& run = st.cadPipeRuns[ri];
+  for (size_t ri = 0; ri < st.drawing.cadPipeRuns.size(); ++ri) {
+    const CadPipeRun& run = st.drawing.cadPipeRuns[ri];
     CadPipeRunEndPort start, end;
     if (!CadPipeRunEndPorts(run, &start, &end))
       continue;  // an unfillable/unresolvable run offers no connection point (REQ-201)
@@ -1740,12 +1735,12 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
   if (st.active != AppCommandState::Kind::InsertBlock || st.insertBlockPhase != Ph::WaitConnectorTarget)
     return false;
 
-  const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
-  if (di < 0 || st.blockDefs[static_cast<size_t>(di)].connections.empty()) {
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.insertBlockName);
+  if (di < 0 || st.drawing.blockDefs[static_cast<size_t>(di)].connections.empty()) {
     log.push_back("INSERT — the block being inserted has no connection ports.");
     return false;
   }
-  const CadBlockDefinition& insertedDef = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& insertedDef = st.drawing.blockDefs[static_cast<size_t>(di)];
 
   constexpr float kSnap = 2.f;
   CadBlockWorldConnection tgt;
@@ -1918,13 +1913,13 @@ void BConnectModeStart(AppCommandState& st, const std::string& connNameArg, std:
 void BConnectModeSubmitLine(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
   using Ph = AppCommandState::BConnectModePhase;
   const std::string line = StringUtil::trimCopy(lineIn);
-  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
   if (di < 0) {
     log.push_back("BCONNECTMODE — the block being edited no longer exists.");
     st.active = AppCommandState::Kind::None;
     return;
   }
-  CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
 
   if (st.bconnectModePhase == Ph::WaitConnName) {
     if (line.empty()) {
@@ -2172,7 +2167,7 @@ void BConnectSubmitLine(AppCommandState& st, const std::string& lineIn, std::vec
       return;
     }
     st.bconnectAwaitingFace = false;
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+    const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
     if (di < 0) {
       log.push_back("BCONNECT — the block being edited no longer exists.");
       st.active = AppCommandState::Kind::None;
@@ -2191,7 +2186,7 @@ void BConnectSubmitLine(AppCommandState& st, const std::string& lineIn, std::vec
     conn.engagementLength = st.bconnectEngagementPending;
     conn.compatibilityTag = st.bconnectCompatTagPending;
     const std::string addedName = conn.name;
-    st.blockDefs[static_cast<size_t>(di)].connections.push_back(std::move(conn));
+    st.drawing.blockDefs[static_cast<size_t>(di)].connections.push_back(std::move(conn));
     st.blockEditorDirty = true;
     log.push_back("BCONNECT — added connection \"" + addedName + "\".");
     st.active = AppCommandState::Kind::None;
@@ -2205,10 +2200,10 @@ void BConnectEditStart(AppCommandState& st, const std::string& connNameArg, std:
     log.push_back("BCONNECTEDIT — open a block with BEDIT first.");
     return;
   }
-  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
   if (di < 0)
     return;
-  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
   if (def.connections.empty()) {
     log.push_back("BCONNECTEDIT — \"" + st.blockEditorName + "\" has no connection points yet (use BCONNECT).");
     return;
@@ -2237,13 +2232,13 @@ void BConnectEditStart(AppCommandState& st, const std::string& connNameArg, std:
 void BConnectEditSubmitLine(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
   using Ph = AppCommandState::BConnectEditPhase;
   const std::string line = StringUtil::trimCopy(lineIn);
-  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
   if (di < 0) {
     log.push_back("BCONNECTEDIT — the block being edited no longer exists.");
     st.active = AppCommandState::Kind::None;
     return;
   }
-  CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
 
   if (st.bconnectEditPhase == Ph::WaitConnName) {
     if (line.empty()) {
@@ -2345,10 +2340,10 @@ void BlockFittingStart(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("BLOCKFITTING — open a block with BEDIT first.");
     return;
   }
-  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
   if (di < 0)
     return;
-  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
   st.active = AppCommandState::Kind::BlockFitting;
   st.blockFittingPhase = Ph::WaitPartType;
   st.blockFittingPartTypePending = def.partType;
@@ -2365,13 +2360,13 @@ void BlockFittingStart(AppCommandState& st, std::vector<std::string>& log) {
 void BlockFittingSubmitLine(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
   using Ph = AppCommandState::BlockFittingPhase;
   const std::string line = StringUtil::trimCopy(lineIn);
-  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
   if (di < 0) {
     log.push_back("BLOCKFITTING — the block being edited no longer exists.");
     st.active = AppCommandState::Kind::None;
     return;
   }
-  CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
 
   if (st.blockFittingPhase == Ph::WaitPartType) {
     if (!line.empty())
@@ -2474,7 +2469,7 @@ bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const so
     return false;
   }
 
-  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
   if (di < 0)
     return false;
   CadBlockConnection conn;
@@ -2490,7 +2485,7 @@ bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const so
   conn.engagementLength = st.bconnectEngagementPending;
   conn.compatibilityTag = st.bconnectCompatTagPending;
   const std::string addedName = conn.name;
-  st.blockDefs[static_cast<size_t>(di)].connections.push_back(std::move(conn));
+  st.drawing.blockDefs[static_cast<size_t>(di)].connections.push_back(std::move(conn));
   st.blockEditorDirty = true;
   st.bconnectAwaitingFace = false;
   st.bconnectNameBuf[0] = '\0';
@@ -2512,12 +2507,12 @@ void AppendInsertBlockGhostRubber(const AppCommandState& st, const CadBlockXform
   ghost.defName = st.insertBlockName;
   ghost.xf = xf;
   std::vector<CadBlockWorldSeg> segs;
-  CadBlockCollectWorldLines(st.blockDefs, ghost, EntityAttributes{}, &segs);
+  CadBlockCollectWorldLines(st.drawing.blockDefs, ghost, EntityAttributes{}, &segs);
   for (const CadBlockWorldSeg& s : segs)
     PushRubberSegViewRel(rubberLines, s.x0, s.y0, s.x1, s.y1, 0., 0., s.z0, s.z1);
 
   std::vector<CadBlockWorldSolid> ws;
-  CadBlockCollectWorldSolids(st.blockDefs, ghost, EntityAttributes{}, &ws);
+  CadBlockCollectWorldSolids(st.drawing.blockDefs, ghost, EntityAttributes{}, &ws);
   brep::Problem why = brep::Problem::Ok;
   for (const CadBlockWorldSolid& w : ws) {
     if (!w.solid)
@@ -2583,7 +2578,7 @@ void CadBlocksCommitInsertDialog(AppCommandState& st, std::vector<std::string>& 
     log.push_back("INSERT — choose a block name.");
     return;
   }
-  if (CadBlockFindDef(st.blockDefs, st.insertBlockName) < 0) {
+  if (CadBlockFindDef(st.drawing.blockDefs, st.insertBlockName) < 0) {
     log.push_back("INSERT — no block named \"" + std::string(st.insertBlockName) + "\".");
     return;
   }
@@ -2611,8 +2606,8 @@ void CadBlocksCommitInsertDialog(AppCommandState& st, std::vector<std::string>& 
     st.insertBlockRotYDeg = ry;
   }
   if (st.insertBlockSpecifyConnectorSnap) {
-    const int cdi = CadBlockFindDef(st.blockDefs, st.insertBlockName);
-    if (cdi < 0 || st.blockDefs[static_cast<size_t>(cdi)].connections.empty()) {
+    const int cdi = CadBlockFindDef(st.drawing.blockDefs, st.insertBlockName);
+    if (cdi < 0 || st.drawing.blockDefs[static_cast<size_t>(cdi)].connections.empty()) {
       log.push_back("INSERT — the block has no connection ports to snap from.");
       return;
     }
@@ -2651,9 +2646,9 @@ void CadBlocksCommitInsertDialog(AppCommandState& st, std::vector<std::string>& 
 
 void CadBlocksCommitInsertAttrDialog(AppCommandState& st, std::vector<std::string>& log) {
   CadBlockRef* r = InsertAttrTarget(st);
-  const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.insertBlockName);
   if (r && di >= 0) {
-    const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+    const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
     const int n = std::min(8, static_cast<int>(def.attrDefs.size()));
     for (int i = 0; i < n; ++i)
       CadBlockAttrSet(r, def.attrDefs[static_cast<size_t>(i)].tag, st.insertBlockAttrBuf[i]);
@@ -2669,13 +2664,13 @@ void CadBlocksPlacePendingInsert(AppCommandState& st, std::vector<std::string>& 
 }
 
 bool CadBlockArmDynGrip(AppCommandState& st, int refIndex, int which) {
-  if (refIndex < 0 || static_cast<size_t>(refIndex) >= st.cadBlockRefs.size())
+  if (refIndex < 0 || static_cast<size_t>(refIndex) >= st.drawing.cadBlockRefs.size())
     return false;
-  CadBlockRef& r = st.cadBlockRefs[static_cast<size_t>(refIndex)];
-  const int di = CadBlockFindDef(st.blockDefs, r.defName);
+  CadBlockRef& r = st.drawing.cadBlockRefs[static_cast<size_t>(refIndex)];
+  const int di = CadBlockFindDef(st.drawing.blockDefs, r.defName);
   if (di < 0)
     return false;
-  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
   if (which == 3 && CadBlockHasMatchlineDyn(def)) {
     CadBlockToggleMatchlineFlip(&r, def);
     return false;
@@ -2700,9 +2695,9 @@ bool CadBlockArmDynGrip(AppCommandState& st, int refIndex, int which) {
 void CadBlockRestoreDynGripOrig(AppCommandState& st, CadBlockRef* r) {
   if (!r)
     return;
-  const int di = CadBlockFindDef(st.blockDefs, r->defName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, r->defName);
   if (di >= 0) {
-    const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+    const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
     if (CadBlockHasLinearStretchDyn(def)) {
       const std::string pname = CadBlockFirstLinearStretchParamName(def);
       if (!pname.empty())
@@ -2732,7 +2727,7 @@ bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float cur
       st.insertBlockPhase != Ph::WaitRotation && st.insertBlockPhase != Ph::WaitAlignFace &&
       st.insertBlockPhase != Ph::WaitConnectorTarget)
     return false;
-  const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
+  const int di = CadBlockFindDef(st.drawing.blockDefs, st.insertBlockName);
   if (di < 0)
     return false;
 
@@ -2767,7 +2762,7 @@ bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float cur
 
   // CadBlockPlaceInsert multiplies the transform by the block-unit scale after building it from
   // the dialog; fold the same factor in here so the ghost matches the commit within REQ-101.
-  const float us = CadBlockInsertUnitsScale(st, st.blockDefs[static_cast<size_t>(di)]);
+  const float us = CadBlockInsertUnitsScale(st, st.drawing.blockDefs[static_cast<size_t>(di)]);
   xf.sx = sx * us;
   xf.sy = sy * us;
   xf.sz = sz * us;
@@ -2877,7 +2872,7 @@ void CadBlocksCollectEditPickerNames(const AppCommandState& st, std::vector<std:
   names->clear();
   names->emplace_back("<Current Drawing>");
   std::vector<std::string> rest;
-  for (const CadBlockDefinition& d : st.blockDefs) {
+  for (const CadBlockDefinition& d : st.drawing.blockDefs) {
     if (!d.name.empty())
       rest.push_back(d.name);
   }
@@ -2897,7 +2892,7 @@ void CadBlocksCollectEditPickerNames(const AppCommandState& st, std::vector<std:
         if (extLo != ".dxf")
           continue;
         const std::string stem = e.path().stem().u8string();
-        if (stem.empty() || CadBlockFindDef(st.blockDefs, stem) >= 0)
+        if (stem.empty() || CadBlockFindDef(st.drawing.blockDefs, stem) >= 0)
           continue;
         rest.push_back(stem);
       }
@@ -2920,9 +2915,9 @@ void CadBlocksOpenEditPicker(AppCommandState& st, std::vector<std::string>& log)
   for (const SelectedEntity& e : st.selection) {
     if (e.type != SelectedEntity::Type::BlockRef)
       continue;
-    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
       continue;
-    const std::string& nm = st.cadBlockRefs[static_cast<size_t>(e.index)].defName;
+    const std::string& nm = st.drawing.cadBlockRefs[static_cast<size_t>(e.index)].defName;
     std::snprintf(st.blockEditPickerName, sizeof(st.blockEditPickerName), "%s", nm.c_str());
     break;
   }
@@ -2947,7 +2942,7 @@ void CadBlocksEnterNamedEditor(AppCommandState& st, std::string_view nameRaw, st
     return;
   }
   LoadBundledBlockLibrary(st, log);
-  int di = CadBlockFindDef(st.blockDefs, name);
+  int di = CadBlockFindDef(st.drawing.blockDefs, name);
   if (di < 0) {
     namespace fs = std::filesystem;
     fs::path dir = ResolveBundledAssetPath(fs::path("resources") / "blocks");
@@ -2972,14 +2967,14 @@ void CadBlocksEnterNamedEditor(AppCommandState& st, std::string_view nameRaw, st
         }
       }
     }
-    di = CadBlockFindDef(st.blockDefs, name);
+    di = CadBlockFindDef(st.drawing.blockDefs, name);
   }
   if (di < 0) {
     CadBlockDefinition def;
     def.name = name;
-    def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
-    st.blockDefs.push_back(std::move(def));
-    di = CadBlockFindDef(st.blockDefs, name);
+    def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
+    st.drawing.blockDefs.push_back(std::move(def));
+    di = CadBlockFindDef(st.drawing.blockDefs, name);
     log.push_back("BEDIT — created empty definition \"" + name + "\".");
   }
   if (di < 0)
@@ -2997,9 +2992,9 @@ void CadBlocksEnterNamedEditor(AppCommandState& st, std::string_view nameRaw, st
   st.blockEditCamEl = st.viewportElevationDeg;
   st.blockEditCamRoll = st.viewportRollDeg;  // #153
   ClearCadSelection(st);
-  st.blockEditorName = st.blockDefs[static_cast<size_t>(di)].name;
-  st.blockEditorSnapshot = st.blockDefs[static_cast<size_t>(di)];
-  LoadBlockPrimitivesIntoDrawing(st, st.blockDefs[static_cast<size_t>(di)].content);
+  st.blockEditorName = st.drawing.blockDefs[static_cast<size_t>(di)].name;
+  st.blockEditorSnapshot = st.drawing.blockDefs[static_cast<size_t>(di)];
+  LoadBlockPrimitivesIntoDrawing(st, st.drawing.blockDefs[static_cast<size_t>(di)].content);
   st.blockEditActive = true;
   st.blockEditorDirty = false;
   st.blockAuthoringPaletteOpen = true;
@@ -3018,10 +3013,10 @@ int PickCadBlockRefAt(float wx, float wy, const AppCommandState& st, float ortho
   const float tol = std::max(orthoHalfHeightWorld * 0.02f, 1.e-4f);
   int best = -1;
   float bestD = 1.e30f;
-  for (int i = 0; i < static_cast<int>(st.cadBlockRefs.size()); ++i) {
-    if (CadBlockHitWorld(st.blockDefs, st.cadBlockRefs[static_cast<size_t>(i)], wx, wy, tol)) {
-      const float dx = wx - st.cadBlockRefs[static_cast<size_t>(i)].xf.x;
-      const float dy = wy - st.cadBlockRefs[static_cast<size_t>(i)].xf.y;
+  for (int i = 0; i < static_cast<int>(st.drawing.cadBlockRefs.size()); ++i) {
+    if (CadBlockHitWorld(st.drawing.blockDefs, st.drawing.cadBlockRefs[static_cast<size_t>(i)], wx, wy, tol)) {
+      const float dx = wx - st.drawing.cadBlockRefs[static_cast<size_t>(i)].xf.x;
+      const float dy = wy - st.drawing.cadBlockRefs[static_cast<size_t>(i)].xf.y;
       const float d = dx * dx + dy * dy;
       if (d < bestD) {
         bestD = d;
@@ -3046,7 +3041,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BLOCK — select geometry first, then run BLOCK.");
       return true;
     }
-    if (CadBlockFindDef(st.blockDefs, f[0]) >= 0) {
+    if (CadBlockFindDef(st.drawing.blockDefs, f[0]) >= 0) {
       log.push_back("BLOCK — name \"" + f[0] + "\" is already used.");
       return true;
     }
@@ -3069,16 +3064,16 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     def.baseX = bx;
     def.baseY = by;
     def.baseZ = bz;
-    def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+    def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
     CaptureSelectionInto(st, &def.content, bx, by, bz);
     CadBlockBakeBasePoint(&def);
     for (const CadBlockNested& n : def.content.nested) {
-      if (CadBlockWouldCycle(st.blockDefs, def.name, n.defName)) {
+      if (CadBlockWouldCycle(st.drawing.blockDefs, def.name, n.defName)) {
         log.push_back("BLOCK — refused: nested block would create a circular reference.");
         return true;
       }
     }
-    st.blockDefs.push_back(std::move(def));
+    st.drawing.blockDefs.push_back(std::move(def));
     if (mode == "delete" || mode == "convert")
       EraseSelectedSources(st);
     st.selection.clear();
@@ -3088,10 +3083,10 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       r.xf.x = bx;
       r.xf.y = by;
       r.xf.z = bz;
-      st.cadBlockRefs.push_back(std::move(r));
-      st.cadBlockRefAttrs.push_back(NewBlockAttr(st));
+      st.drawing.cadBlockRefs.push_back(std::move(r));
+      st.drawing.cadBlockRefAttrs.push_back(NewBlockAttr(st));
       st.selection.push_back(
-          {SelectedEntity::Type::BlockRef, static_cast<int>(st.cadBlockRefs.size()) - 1});
+          {SelectedEntity::Type::BlockRef, static_cast<int>(st.drawing.cadBlockRefs.size()) - 1});
     }
     NoteRecent(st, f[0]);
     BumpCadGpuCache(st);
@@ -3142,15 +3137,15 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     idx.erase(std::unique(idx.begin(), idx.end()), idx.end());
     for (int i = static_cast<int>(idx.size()) - 1; i >= 0; --i) {
       const int k = idx[static_cast<size_t>(i)];
-      if (k < 0 || static_cast<size_t>(k) >= st.cadBlockRefs.size())
+      if (k < 0 || static_cast<size_t>(k) >= st.drawing.cadBlockRefs.size())
         continue;
       EntityAttributes a = NewBlockAttr(st);
-      if (static_cast<size_t>(k) < st.cadBlockRefAttrs.size())
-        a = st.cadBlockRefAttrs[static_cast<size_t>(k)];
-      ExplodeRef(st, st.cadBlockRefs[static_cast<size_t>(k)], a);
-      st.cadBlockRefs.erase(st.cadBlockRefs.begin() + k);
-      if (static_cast<size_t>(k) < st.cadBlockRefAttrs.size())
-        st.cadBlockRefAttrs.erase(st.cadBlockRefAttrs.begin() + k);
+      if (static_cast<size_t>(k) < st.drawing.cadBlockRefAttrs.size())
+        a = st.drawing.cadBlockRefAttrs[static_cast<size_t>(k)];
+      ExplodeRef(st, st.drawing.cadBlockRefs[static_cast<size_t>(k)], a);
+      st.drawing.cadBlockRefs.erase(st.drawing.cadBlockRefs.begin() + k);
+      if (static_cast<size_t>(k) < st.drawing.cadBlockRefAttrs.size())
+        st.drawing.cadBlockRefAttrs.erase(st.drawing.cadBlockRefAttrs.begin() + k);
       ++n;
     }
     // REQ-103 step 8 / issue #390: a Polyline (2D, 3DPOLY, or a rectangle — a 4-vertex polyline per
@@ -3190,11 +3185,11 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BSAVE — no block editor is open.");
       return true;
     }
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+    const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
     if (di >= 0) {
       if (st.blockEditActive)  // ADR-043: fold the model arrays back into the definition
-        HarvestDrawingPrimitivesIntoContent(st, &st.blockDefs[static_cast<size_t>(di)].content);
-      st.blockEditorSnapshot = st.blockDefs[static_cast<size_t>(di)];
+        HarvestDrawingPrimitivesIntoContent(st, &st.drawing.blockDefs[static_cast<size_t>(di)].content);
+      st.blockEditorSnapshot = st.drawing.blockDefs[static_cast<size_t>(di)];
     }
     st.blockEditorDirty = false;
     BumpCadGpuCache(st);
@@ -3226,22 +3221,22 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       return true;
     }
     st.blockEditCloseAsked = false;
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+    const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
     if (discard) {
       if (di >= 0)
-        st.blockDefs[static_cast<size_t>(di)] = st.blockEditorSnapshot;
+        st.drawing.blockDefs[static_cast<size_t>(di)] = st.blockEditorSnapshot;
       log.push_back("BCLOSE — discarded edits to \"" + st.blockEditorName + "\".");
     } else {
       if (di >= 0 && st.blockEditActive)
-        HarvestDrawingPrimitivesIntoContent(st, &st.blockDefs[static_cast<size_t>(di)].content);
+        HarvestDrawingPrimitivesIntoContent(st, &st.drawing.blockDefs[static_cast<size_t>(di)].content);
       log.push_back("BCLOSE — closed \"" + st.blockEditorName + "\".");
     }
     if (st.blockEditActive) {
       // The stash captured blockDefs at enter time; keep the definitions as this session left them
       // and take model geometry, INSERT references and everything else back from the stash.
-      std::vector<CadBlockDefinition> editedDefs = std::move(st.blockDefs);
+      std::vector<CadBlockDefinition> editedDefs = std::move(st.drawing.blockDefs);
       CadRestoreGeometrySnapshot(st, st.blockEditModelStash);
-      st.blockDefs = std::move(editedDefs);
+      st.drawing.blockDefs = std::move(editedDefs);
       st.blockEditModelStash = DrawingGeometrySnapshot{};
       st.viewportPanX = st.blockEditCamPanX;
       st.viewportPanY = st.blockEditCamPanY;
@@ -3267,20 +3262,20 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BSAVEAS — usage: BSAVEAS <newname> (while BEDIT is open).");
       return true;
     }
-    if (CadBlockFindDef(st.blockDefs, f[0]) >= 0) {
+    if (CadBlockFindDef(st.drawing.blockDefs, f[0]) >= 0) {
       log.push_back("BSAVEAS — name \"" + f[0] + "\" is already used.");
       return true;
     }
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+    const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
     if (di < 0) {
       log.push_back("BSAVEAS — editor block missing.");
       return true;
     }
     PushUndoSnapshot(st, "Bsaveas");
-    CadBlockDefinition copy = st.blockDefs[static_cast<size_t>(di)];
+    CadBlockDefinition copy = st.drawing.blockDefs[static_cast<size_t>(di)];
     copy.name = f[0];
     copy.id = 0;
-    st.blockDefs.push_back(std::move(copy));
+    st.drawing.blockDefs.push_back(std::move(copy));
     st.blockEditorName = f[0];
     log.push_back("BSAVEAS — copied to \"" + f[0] + "\".");
     return true;
@@ -3292,7 +3287,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BLOCKREDEF — usage: BLOCKREDEF <name>, <baseX>, <baseY>[, <baseZ>].");
       return true;
     }
-    const int di = CadBlockFindDef(st.blockDefs, f[0]);
+    const int di = CadBlockFindDef(st.drawing.blockDefs, f[0]);
     if (di < 0) {
       log.push_back("BLOCKREDEF — no block named \"" + f[0] + "\".");
       return true;
@@ -3309,10 +3304,10 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     PushUndoSnapshot(st, "Blockredef");
     CadBlockContent c;
     CaptureSelectionInto(st, &c, bx, by, bz);
-    st.blockDefs[static_cast<size_t>(di)].content = std::move(c);
-    st.blockDefs[static_cast<size_t>(di)].baseX = 0.f;
-    st.blockDefs[static_cast<size_t>(di)].baseY = 0.f;
-    st.blockDefs[static_cast<size_t>(di)].baseZ = 0.f;
+    st.drawing.blockDefs[static_cast<size_t>(di)].content = std::move(c);
+    st.drawing.blockDefs[static_cast<size_t>(di)].baseX = 0.f;
+    st.drawing.blockDefs[static_cast<size_t>(di)].baseY = 0.f;
+    st.drawing.blockDefs[static_cast<size_t>(di)].baseZ = 0.f;
     BumpCadGpuCache(st);
     log.push_back("BLOCKREDEF — updated \"" + f[0] + "\". References keep their transforms.");
     return true;
@@ -3328,7 +3323,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("ATTDEF — usage: ATTDEF <tag>, <prompt>, <default>[, <x>, <y>].");
       return true;
     }
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+    const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
     if (di < 0)
       return true;
     CadBlockAttrDef d;
@@ -3341,7 +3336,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
         return true;
       }
     }
-    st.blockDefs[static_cast<size_t>(di)].attrDefs.push_back(std::move(d));
+    st.drawing.blockDefs[static_cast<size_t>(di)].attrDefs.push_back(std::move(d));
     st.blockEditorDirty = true;
     log.push_back("ATTDEF — tag " + f[0] + ".");
     return true;
@@ -3385,9 +3380,9 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     for (const SelectedEntity& e : st.selection) {
       if (e.type != SelectedEntity::Type::BlockRef)
         continue;
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
         continue;
-      CadBlockAttrSet(&st.cadBlockRefs[static_cast<size_t>(e.index)], f[0], f[1]);
+      CadBlockAttrSet(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], f[0], f[1]);
       ++n;
     }
     log.push_back("ATTEDIT — " + std::to_string(n) + " reference(s).");
@@ -3397,11 +3392,11 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
   if (tok == "attsync") {
     PushUndoSnapshot(st, "Attsync");
     int n = 0;
-    for (CadBlockRef& r : st.cadBlockRefs) {
-      const int di = CadBlockFindDef(st.blockDefs, r.defName);
+    for (CadBlockRef& r : st.drawing.cadBlockRefs) {
+      const int di = CadBlockFindDef(st.drawing.blockDefs, r.defName);
       if (di < 0)
         continue;
-      const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+      const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
       for (const CadBlockAttrDef& ad : def.attrDefs) {
         bool have = false;
         for (const CadBlockAttrValue& v : r.attributes) {
@@ -3422,11 +3417,11 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     const std::vector<std::string> f = SplitCommaRest(args);
     std::ostringstream oss;
     oss << "ATTEXT";
-    for (const CadBlockRef& r : st.cadBlockRefs) {
-      const int di = CadBlockFindDef(st.blockDefs, r.defName);
+    for (const CadBlockRef& r : st.drawing.cadBlockRefs) {
+      const int di = CadBlockFindDef(st.drawing.blockDefs, r.defName);
       if (di < 0)
         continue;
-      const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+      const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
       oss << "\n" << r.defName;
       for (const CadBlockAttrDef& ad : def.attrDefs)
         oss << "," << ad.tag << "=" << CadBlockAttrGet(r, def, ad.tag);
@@ -3441,12 +3436,12 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
   }
 
   if (tok == "blocklist") {
-    if (st.blockDefs.empty()) {
+    if (st.drawing.blockDefs.empty()) {
       log.push_back("BLOCKLIST — (none).");
       return true;
     }
-    for (const CadBlockDefinition& d : st.blockDefs) {
-      const int refs = CadBlockCountRefs(st.cadBlockRefs, d.name);
+    for (const CadBlockDefinition& d : st.drawing.blockDefs) {
+      const int refs = CadBlockCountRefs(st.drawing.cadBlockRefs, d.name);
       log.push_back("BLOCKLIST — " + d.name + " refs=" + std::to_string(refs) +
                     " nested=" + std::to_string(d.content.nested.size()) +
                     " attrs=" + std::to_string(d.attrDefs.size()) +
@@ -3461,17 +3456,17 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     std::string name = f.empty() ? std::string() : f[0];
     if (name.empty() && !st.selection.empty() && st.selection[0].type == SelectedEntity::Type::BlockRef) {
       const int k = st.selection[0].index;
-      if (k >= 0 && static_cast<size_t>(k) < st.cadBlockRefs.size())
-        name = st.cadBlockRefs[static_cast<size_t>(k)].defName;
+      if (k >= 0 && static_cast<size_t>(k) < st.drawing.cadBlockRefs.size())
+        name = st.drawing.cadBlockRefs[static_cast<size_t>(k)].defName;
     }
-    const int di = CadBlockFindDef(st.blockDefs, name);
+    const int di = CadBlockFindDef(st.drawing.blockDefs, name);
     if (di < 0) {
       log.push_back("BLOCKSTATS — name a definition or select a reference.");
       return true;
     }
-    const CadBlockDefinition& d = st.blockDefs[static_cast<size_t>(di)];
+    const CadBlockDefinition& d = st.drawing.blockDefs[static_cast<size_t>(di)];
     log.push_back("Definition: " + d.name);
-    log.push_back("References: " + std::to_string(CadBlockCountRefs(st.cadBlockRefs, d.name)));
+    log.push_back("References: " + std::to_string(CadBlockCountRefs(st.drawing.cadBlockRefs, d.name)));
     log.push_back("Attributes: " + std::to_string(d.attrDefs.size()));
     log.push_back("Nested Blocks: " + std::to_string(d.content.nested.size()));
     log.push_back(std::string("Dynamic: ") + (d.parameters.empty() ? "No" : "Yes"));
@@ -3483,14 +3478,14 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     const std::vector<std::string> f = SplitCommaRest(args);
     PushUndoSnapshot(st, "Purge");
     int n = 0;
-    for (int i = static_cast<int>(st.blockDefs.size()) - 1; i >= 0; --i) {
-      const std::string& nm = st.blockDefs[static_cast<size_t>(i)].name;
-      if (CadBlockCountRefs(st.cadBlockRefs, nm) > 0 || CadBlockDefUsedBy(st.blockDefs, nm))
+    for (int i = static_cast<int>(st.drawing.blockDefs.size()) - 1; i >= 0; --i) {
+      const std::string& nm = st.drawing.blockDefs[static_cast<size_t>(i)].name;
+      if (CadBlockCountRefs(st.drawing.cadBlockRefs, nm) > 0 || CadBlockDefUsedBy(st.drawing.blockDefs, nm))
         continue;
       if (!f.empty() && !CadBlockEqCi(f[0], "blocks") && !CadBlockEqCi(f[0], nm) &&
           !CadBlockEqCi(f[0], "*"))
         continue;
-      st.blockDefs.erase(st.blockDefs.begin() + i);
+      st.drawing.blockDefs.erase(st.drawing.blockDefs.begin() + i);
       ++n;
     }
     log.push_back("PURGE — removed " + std::to_string(n) + " unused block definition(s).");
@@ -3503,23 +3498,23 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BLOCKRENAME — usage: BLOCKRENAME <old>, <new>.");
       return true;
     }
-    const int di = CadBlockFindDef(st.blockDefs, f[0]);
+    const int di = CadBlockFindDef(st.drawing.blockDefs, f[0]);
     if (di < 0) {
       log.push_back("BLOCKRENAME — no block named \"" + f[0] + "\".");
       return true;
     }
-    if (CadBlockFindDef(st.blockDefs, f[1]) >= 0) {
+    if (CadBlockFindDef(st.drawing.blockDefs, f[1]) >= 0) {
       log.push_back("BLOCKRENAME — \"" + f[1] + "\" is already used.");
       return true;
     }
     PushUndoSnapshot(st, "Blockrename");
-    const std::string old = st.blockDefs[static_cast<size_t>(di)].name;
-    st.blockDefs[static_cast<size_t>(di)].name = f[1];
-    for (CadBlockRef& r : st.cadBlockRefs) {
+    const std::string old = st.drawing.blockDefs[static_cast<size_t>(di)].name;
+    st.drawing.blockDefs[static_cast<size_t>(di)].name = f[1];
+    for (CadBlockRef& r : st.drawing.cadBlockRefs) {
       if (CadBlockEqCi(r.defName, old))
         r.defName = f[1];
     }
-    for (CadBlockDefinition& d : st.blockDefs) {
+    for (CadBlockDefinition& d : st.drawing.blockDefs) {
       for (CadBlockNested& n : d.content.nested) {
         if (CadBlockEqCi(n.defName, old))
           n.defName = f[1];
@@ -3539,7 +3534,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BPARAM — usage: BPARAM <name>, <kind>[, <value>].");
       return true;
     }
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+    const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
     if (di < 0)
       return true;
     CadBlockParameter p;
@@ -3550,7 +3545,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       return true;
     }
     PushUndoSnapshot(st, "Block parameter");
-    st.blockDefs[static_cast<size_t>(di)].parameters.push_back(std::move(p));
+    st.drawing.blockDefs[static_cast<size_t>(di)].parameters.push_back(std::move(p));
     st.blockEditorDirty = true;
     BumpCadGpuCache(st);
     log.push_back("BPARAM — added " + f[0] + ".");
@@ -3567,7 +3562,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BACTION — usage: BACTION <kind>, <param>[, ox, oy, dx, dy, thresh].");
       return true;
     }
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+    const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
     if (di < 0)
       return true;
     CadBlockAction a;
@@ -3582,7 +3577,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       }
     }
     PushUndoSnapshot(st, "Block action");
-    st.blockDefs[static_cast<size_t>(di)].actions.push_back(std::move(a));
+    st.drawing.blockDefs[static_cast<size_t>(di)].actions.push_back(std::move(a));
     st.blockEditorDirty = true;
     BumpCadGpuCache(st);
     log.push_back("BACTION — bound to " + f[1] + ".");
@@ -3599,11 +3594,11 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BVISIBILITY — usage: BVISIBILITY <state>.");
       return true;
     }
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+    const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
     if (di < 0)
       return true;
     PushUndoSnapshot(st, "Block visibility state");
-    st.blockDefs[static_cast<size_t>(di)].visibilityStates.push_back(f[0]);
+    st.drawing.blockDefs[static_cast<size_t>(di)].visibilityStates.push_back(f[0]);
     st.blockEditorDirty = true;
     BumpCadGpuCache(st);
     log.push_back("BVISIBILITY — state " + f[0] + ".");
@@ -3619,8 +3614,8 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     for (const SelectedEntity& e : st.selection) {
       if (e.type != SelectedEntity::Type::BlockRef)
         continue;
-      if (e.index >= 0 && static_cast<size_t>(e.index) < st.cadBlockRefs.size())
-        st.cadBlockRefs[static_cast<size_t>(e.index)].visState = f[0];
+      if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.cadBlockRefs.size())
+        st.drawing.cadBlockRefs[static_cast<size_t>(e.index)].visState = f[0];
     }
     BumpCadGpuCache(st);
     log.push_back("BSETVIS — " + f[0] + ".");
@@ -3641,8 +3636,8 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     for (const SelectedEntity& e : st.selection) {
       if (e.type != SelectedEntity::Type::BlockRef)
         continue;
-      if (e.index >= 0 && static_cast<size_t>(e.index) < st.cadBlockRefs.size())
-        CadBlockParamSet(&st.cadBlockRefs[static_cast<size_t>(e.index)], f[0], v);
+      if (e.index >= 0 && static_cast<size_t>(e.index) < st.drawing.cadBlockRefs.size())
+        CadBlockParamSet(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], f[0], v);
     }
     BumpCadGpuCache(st);
     log.push_back("BSETPARAM — " + f[0] + "=" + f[1] + ".");
@@ -3659,7 +3654,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BEDITADD — usage: BEDITADD LINE, x1, y1, x2, y2[, visState].");
       return true;
     }
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+    const int di = CadBlockFindDef(st.drawing.blockDefs, st.blockEditorName);
     if (di < 0)
       return true;
     float x1 = 0.f, y1 = 0.f, x2 = 0.f, y2 = 0.f;
@@ -3672,16 +3667,11 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       // ADR-043: an active session keeps the geometry in the model arrays; add there so it survives
       // the harvest on Save (and shows in the isolated view like any other draw).
       const float seg[6] = {x1, y1, 0.f, x2, y2, 0.f};
-      st.userLinesFlat.insert(st.userLinesFlat.end(), seg, seg + 6);
-      st.userLineAttrs.push_back(EntityAttributes{});
+      st.drawing.pushLine(CadLineRecord{x1, y1, 0.0, x2, y2, 0.0});
+      st.drawing.userLineAttrs.push_back(EntityAttributes{});
     } else {
-      CadBlockContent& c = st.blockDefs[static_cast<size_t>(di)].content;
-      c.userLinesFlat.push_back(x1);
-      c.userLinesFlat.push_back(y1);
-      c.userLinesFlat.push_back(0.f);
-      c.userLinesFlat.push_back(x2);
-      c.userLinesFlat.push_back(y2);
-      c.userLinesFlat.push_back(0.f);
+      CadBlockContent& c = st.drawing.blockDefs[static_cast<size_t>(di)].content;
+      c.pushLine(CadLineRecord{x1, y1, 0.0, x2, y2, 0.0});
       c.userLineAttrs.push_back(EntityAttributes{});
       c.lineVis.push_back(f.size() >= 6 ? f[5] : std::string());
     }
@@ -3697,19 +3687,19 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BLOCKNEST — usage: BLOCKNEST <host>, <child>.");
       return true;
     }
-    const int hi = CadBlockFindDef(st.blockDefs, f[0]);
-    const int ci = CadBlockFindDef(st.blockDefs, f[1]);
+    const int hi = CadBlockFindDef(st.drawing.blockDefs, f[0]);
+    const int ci = CadBlockFindDef(st.drawing.blockDefs, f[1]);
     if (hi < 0 || ci < 0) {
       log.push_back("BLOCKNEST — both names must exist.");
       return true;
     }
-    if (CadBlockWouldCycle(st.blockDefs, f[0], f[1])) {
+    if (CadBlockWouldCycle(st.drawing.blockDefs, f[0], f[1])) {
       log.push_back("BLOCKNEST — refused circular reference.");
       return true;
     }
     CadBlockNested n;
-    n.defName = st.blockDefs[static_cast<size_t>(ci)].name;
-    st.blockDefs[static_cast<size_t>(hi)].content.nested.push_back(std::move(n));
+    n.defName = st.drawing.blockDefs[static_cast<size_t>(ci)].name;
+    st.drawing.blockDefs[static_cast<size_t>(hi)].content.nested.push_back(std::move(n));
     BumpCadGpuCache(st);
     log.push_back("BLOCKNEST — " + f[1] + " inside " + f[0] + ".");
     return true;
@@ -3718,16 +3708,16 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
   if (tok == "insunits") {
     const std::vector<std::string> f = SplitCommaRest(args);
     if (f.empty()) {
-      log.push_back("INSUNITS — " + CadDrawingInsUnitsName(st.drawingInsUnits) + ".");
+      log.push_back("INSUNITS — " + CadDrawingInsUnitsName(st.drawing.drawingInsUnits) + ".");
       return true;
     }
     const int code = CadDrawingInsUnitsCode(f[0]);
-    if (code != st.drawingInsUnits) {
+    if (code != st.drawing.drawingInsUnits) {
       PushUndoSnapshot(st, "INSUNITS");  // the drawing unit is undoable (REQ-357)
-      st.drawingInsUnits = code;
+      st.drawing.drawingInsUnits = code;
       BumpCadGpuCache(st);
     }
-    log.push_back("INSUNITS — drawing units " + CadDrawingInsUnitsName(st.drawingInsUnits) + ".");
+    log.push_back("INSUNITS — drawing units " + CadDrawingInsUnitsName(st.drawing.drawingInsUnits) + ".");
     return true;
   }
 
@@ -3737,12 +3727,12 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BLOCKUNITS — usage: BLOCKUNITS <name>, <units>.");
       return true;
     }
-    const int di = CadBlockFindDef(st.blockDefs, f[0]);
+    const int di = CadBlockFindDef(st.drawing.blockDefs, f[0]);
     if (di < 0) {
       log.push_back("BLOCKUNITS — no block named \"" + f[0] + "\".");
       return true;
     }
-    st.blockDefs[static_cast<size_t>(di)].units = f[1];
+    st.drawing.blockDefs[static_cast<size_t>(di)].units = f[1];
     log.push_back("BLOCKUNITS — " + f[0] + " is " + f[1] + ".");
     return true;
   }
@@ -3752,7 +3742,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     const std::string q = f.empty() ? st.blockLibraryFilter : f[0];
     st.blockLibraryFilter = q;
     int n = 0;
-    for (const CadBlockDefinition& d : st.blockDefs) {
+    for (const CadBlockDefinition& d : st.drawing.blockDefs) {
       if (q.empty() || StringUtil::toLowerAsciiCopy(d.name).find(StringUtil::toLowerAsciiCopy(q)) !=
                            std::string::npos) {
         log.push_back("BLOCKSEARCH — " + d.name);
@@ -3791,11 +3781,11 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
 
   if (tok == "blocklib" || tok == "blockbrowser") {
     log.push_back("BLOCKLIB — drawing library:");
-    for (const CadBlockDefinition& d : st.blockDefs) {
+    for (const CadBlockDefinition& d : st.drawing.blockDefs) {
       float mnX = 0, mnY = 0, mxX = 0, mxY = 0;
       CadBlockRef preview;
       preview.defName = d.name;
-      CadBlockWorldAabb(st.blockDefs, preview, &mnX, &mnY, &mxX, &mxY);
+      CadBlockWorldAabb(st.drawing.blockDefs, preview, &mnX, &mnY, &mxX, &mxY);
       log.push_back("  " + d.name + " preview " + std::to_string(mxX - mnX) + " x " +
                     std::to_string(mxY - mnY));
     }
@@ -3869,12 +3859,12 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("LIBEXPORT — usage: LIBEXPORT <name>[, <path.dwg>].");
       return true;
     }
-    const int di = CadBlockFindDef(st.blockDefs, f[0]);
+    const int di = CadBlockFindDef(st.drawing.blockDefs, f[0]);
     if (di < 0) {
       log.push_back("LIBEXPORT — no block named \"" + f[0] + "\".");
       return true;
     }
-    const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+    const CadBlockDefinition& def = st.drawing.blockDefs[static_cast<size_t>(di)];
     if (def.partType == CadPipePartType::None) {
       log.push_back("LIBEXPORT — \"" + f[0] + "\" has no fitting metadata; tag it with BLOCKFITTING first.");
       return true;
@@ -3894,7 +3884,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       dwgPath = dir / (def.name + ".dwg");
     }
     AppCommandState tmp;
-    tmp.blockDefs.push_back(def);
+    tmp.drawing.blockDefs.push_back(def);
     if (!ExportDwgFile(tmp, dwgPath.u8string().c_str(), log)) {
       log.push_back("LIBEXPORT — could not write " + dwgPath.u8string() + ".");
       return true;
@@ -3951,15 +3941,15 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("MAKEBLOCK — usage: MAKEBLOCK <name>.");
       return true;
     }
-    if (CadBlockFindDef(st.blockDefs, f[0]) >= 0) {
+    if (CadBlockFindDef(st.drawing.blockDefs, f[0]) >= 0) {
       log.push_back("MAKEBLOCK — name \"" + f[0] + "\" is already used.");
       return true;
     }
     PushUndoSnapshot(st, "Makeblock");
     CadBlockDefinition def;
     def.name = f[0];
-    def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
-    st.blockDefs.push_back(std::move(def));
+    def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
+    st.drawing.blockDefs.push_back(std::move(def));
     log.push_back("MAKEBLOCK — created \"" + f[0] + "\".");
     return true;
   }
@@ -3976,13 +3966,8 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       const float x1 = std::stof(f[2]);
       const float y1 = std::stof(f[3]);
       PushUndoSnapshot(st, "Mkline");
-      st.userLinesFlat.push_back(x0);
-      st.userLinesFlat.push_back(y0);
-      st.userLinesFlat.push_back(0.f);
-      st.userLinesFlat.push_back(x1);
-      st.userLinesFlat.push_back(y1);
-      st.userLinesFlat.push_back(0.f);
-      st.userLineAttrs.push_back(NewBlockAttr(st));
+      st.drawing.pushLine(CadLineRecord{x0, y0, 0.0, x1, y1, 0.0});
+      st.drawing.userLineAttrs.push_back(NewBlockAttr(st));
       EnsureEntityIds(st);
       BumpCadGpuCache(st);
       log.push_back("MKLINE — added.");
@@ -3994,7 +3979,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
 
   if (tok == "selline") {
     st.selection.clear();
-    const int n = static_cast<int>(st.userLinesFlat.size() / 6);
+    const int n = static_cast<int>(st.drawing.lineCount());
     if (n <= 0) {
       log.push_back("SELLINE — no lines.");
       return true;
@@ -4006,13 +3991,13 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
 
   if (tok == "selblock") {
     st.selection.clear();
-    if (st.cadBlockRefs.empty()) {
+    if (st.drawing.cadBlockRefs.empty()) {
       log.push_back("SELBLOCK — no block references.");
       return true;
     }
     st.selection.push_back(
-        {SelectedEntity::Type::BlockRef, static_cast<int>(st.cadBlockRefs.size()) - 1});
-    log.push_back("SELBLOCK — insert " + std::to_string(st.cadBlockRefs.size() - 1) + ".");
+        {SelectedEntity::Type::BlockRef, static_cast<int>(st.drawing.cadBlockRefs.size()) - 1});
+    log.push_back("SELBLOCK — insert " + std::to_string(st.drawing.cadBlockRefs.size() - 1) + ".");
     return true;
   }
 
@@ -4029,9 +4014,9 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       for (const SelectedEntity& e : st.selection) {
         if (e.type != SelectedEntity::Type::BlockRef)
           continue;
-        if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+        if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
           continue;
-        CadBlockTranslate(&st.cadBlockRefs[static_cast<size_t>(e.index)], dx, dy, 0.f);
+        CadBlockTranslate(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], dx, dy, 0.f);
       }
       BumpCadGpuCache(st);
       log.push_back("MOVESEL — done.");
@@ -4063,20 +4048,20 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     for (const SelectedEntity& e : st.selection) {
       if (e.type != SelectedEntity::Type::BlockRef)
         continue;
-      if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
         continue;
-      CadBlockRef c = st.cadBlockRefs[static_cast<size_t>(e.index)];
+      CadBlockRef c = st.drawing.cadBlockRefs[static_cast<size_t>(e.index)];
       CadBlockTranslate(&c, dx, dy, 0.f);
       extra.push_back(std::move(c));
       EntityAttributes a = NewBlockAttr(st);
-      if (static_cast<size_t>(e.index) < st.cadBlockRefAttrs.size())
-        a = st.cadBlockRefAttrs[static_cast<size_t>(e.index)];
+      if (static_cast<size_t>(e.index) < st.drawing.cadBlockRefAttrs.size())
+        a = st.drawing.cadBlockRefAttrs[static_cast<size_t>(e.index)];
       a.id = 0;
       extraA.push_back(std::move(a));
       ++n;
     }
-    st.cadBlockRefs.insert(st.cadBlockRefs.end(), extra.begin(), extra.end());
-    st.cadBlockRefAttrs.insert(st.cadBlockRefAttrs.end(), extraA.begin(), extraA.end());
+    st.drawing.cadBlockRefs.insert(st.drawing.cadBlockRefs.end(), extra.begin(), extra.end());
+    st.drawing.cadBlockRefAttrs.insert(st.drawing.cadBlockRefAttrs.end(), extraA.begin(), extraA.end());
     EnsureEntityIds(st);
     BumpCadGpuCache(st);
     log.push_back("COPYSEL — " + std::to_string(n) + " reference(s).");
@@ -4097,9 +4082,9 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       for (const SelectedEntity& e : st.selection) {
         if (e.type != SelectedEntity::Type::BlockRef)
           continue;
-        if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+        if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
           continue;
-        CadBlockRotateZ(&st.cadBlockRefs[static_cast<size_t>(e.index)], bx, by, rad);
+        CadBlockRotateZ(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], bx, by, rad);
       }
       BumpCadGpuCache(st);
       log.push_back("ROTATESEL — done.");
@@ -4123,9 +4108,9 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       for (const SelectedEntity& e : st.selection) {
         if (e.type != SelectedEntity::Type::BlockRef)
           continue;
-        if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+        if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
           continue;
-        CadBlockScaleAbout(&st.cadBlockRefs[static_cast<size_t>(e.index)], bx, by, sc);
+        CadBlockScaleAbout(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], bx, by, sc);
       }
       BumpCadGpuCache(st);
       log.push_back("SCALESEL — done.");
@@ -4150,9 +4135,9 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       for (const SelectedEntity& e : st.selection) {
         if (e.type != SelectedEntity::Type::BlockRef)
           continue;
-        if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+        if (e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.cadBlockRefs.size())
           continue;
-        CadBlockMirror(&st.cadBlockRefs[static_cast<size_t>(e.index)], x0, y0, x1, y1);
+        CadBlockMirror(&st.drawing.cadBlockRefs[static_cast<size_t>(e.index)], x0, y0, x1, y1);
       }
       BumpCadGpuCache(st);
       log.push_back("MIRRORSEL — done.");
@@ -4223,8 +4208,8 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
         paperTarget->paperBlockRefAttrs.push_back(std::move(a));
         continue;
       }
-      st.cadBlockRefs.push_back(std::move(r));
-      st.cadBlockRefAttrs.push_back(std::move(a));
+      st.drawing.cadBlockRefs.push_back(std::move(r));
+      st.drawing.cadBlockRefAttrs.push_back(std::move(a));
     }
     if (paperTarget == nullptr)
       EnsureEntityIds(st);
@@ -4239,14 +4224,14 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     return true;
   }
   if (tok == "blockpaper") {
-    if (st.paperLayouts.empty())
+    if (st.drawing.paperLayouts.empty())
       AddPaperLayout(st);
-    if (st.paperLayouts.empty()) {
+    if (st.drawing.paperLayouts.empty()) {
       log.push_back("BLOCKPAPER — no layouts.");
       return true;
     }
     st.activeSpaceIndex = 0;
-    log.push_back("BLOCKPAPER — " + st.paperLayouts[0].name);
+    log.push_back("BLOCKPAPER — " + st.drawing.paperLayouts[0].name);
     return true;
   }
 

@@ -23,9 +23,9 @@ namespace {
 // The sample lines of one alignment, found by its name.
 std::vector<const alignment::SampleLine*> LinesOf(const AppCommandState& state, const QString& alignmentName) {
   std::vector<const alignment::SampleLine*> lines;
-  for (const alignment::Alignment& a : state.alignments) {
+  for (const alignment::Alignment& a : state.drawing.alignments) {
     if (QString::fromStdString(a.name) != alignmentName) continue;
-    for (const alignment::SampleLine& line : state.sampleLines)
+    for (const alignment::SampleLine& line : state.drawing.sampleLines)
       if (line.alignmentId == a.id) lines.push_back(&line);
   }
   return lines;
@@ -46,7 +46,7 @@ QString DefaultAxisElevation(const std::vector<const alignment::SampleLine*>& li
 QString RunCreateSectionSheetsDialog(QWidget* parent, const AppCommandState& state) {
   // REQ-519.4: sheets are made from sample lines, so only alignments with at least one can be chosen.
   std::vector<QString> alignments;
-  for (const alignment::Alignment& a : state.alignments) {
+  for (const alignment::Alignment& a : state.drawing.alignments) {
     const QString name = QString::fromStdString(a.name);
     if (!LinesOf(state, name).empty()) alignments.push_back(name);
   }

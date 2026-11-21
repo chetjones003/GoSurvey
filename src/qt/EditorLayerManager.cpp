@@ -230,7 +230,7 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
   dialog.setObjectName("layerManager");
   dialog.setWindowTitle("Layer Properties Manager");
   dialog.setSizeGripEnabled(true);
-  dialog.resize(1040, std::clamp(240 + static_cast<int>(state.drawingLayerTable.size()) * kRowHeight, 360, 580));
+  dialog.resize(1040, std::clamp(240 + static_cast<int>(state.drawing.drawingLayerTable.size()) * kRowHeight, 360, 580));
   dialog.setMinimumSize(560, 320);
   bool dark = dialog.palette().color(QPalette::Window).lightness() < 128;
   dialog.setStyleSheet(LayerManagerStyle(dark));
@@ -330,7 +330,7 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
   layout->addWidget(buttons);
 
-  // Display order is a permutation of the stored table: sorting never touches state.drawingLayerTable (REQ-082).
+  // Display order is a permutation of the stored table: sorting never touches state.drawing.drawingLayerTable (REQ-082).
   int sortColumn = -1;
   Qt::SortOrder sortOrder = Qt::AscendingOrder;
   const qreal ratio = dialog.devicePixelRatioF();
@@ -345,19 +345,19 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
     Viewport* viewport = CurrentViewport(state);
     table->setColumnHidden(VpFreeze, viewport == nullptr);
     table->setColumnHidden(VpColor, viewport == nullptr);
-    std::vector<size_t> order(state.drawingLayerTable.size());
+    std::vector<size_t> order(state.drawing.drawingLayerTable.size());
     std::iota(order.begin(), order.end(), size_t{0});
     if (sortColumn >= 0)
       std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-        const int c = CompareLayers(state.drawingLayerTable[a], state.drawingLayerTable[b], sortColumn, viewport);
+        const int c = CompareLayers(state.drawing.drawingLayerTable[a], state.drawing.drawingLayerTable[b], sortColumn, viewport);
         return sortOrder == Qt::AscendingOrder ? c < 0 : c > 0;
       });
     table->clearContents();
     table->setRowCount(static_cast<int>(order.size()));
     int selectedRow = -1;
     for (int row = 0; row < table->rowCount(); ++row) {
-      const auto& layer = state.drawingLayerTable[order[static_cast<size_t>(row)]];
-      const bool isCurrent = layer.name == state.currentLayer;
+      const auto& layer = state.drawing.drawingLayerTable[order[static_cast<size_t>(row)]];
+      const bool isCurrent = layer.name == state.drawing.currentLayer;
       if (layer.name == selected) selectedRow = row;
       auto put = [&](int column, QTableWidgetItem* item) {
         table->setItem(row, column, item);
@@ -397,12 +397,12 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
     if (selectedRow >= 0) table->setCurrentCell(selectedRow, Name);
     int visibleCount = 0;
     for (int row = 0; row < table->rowCount(); ++row) visibleCount += table->isRowHidden(row) ? 0 : 1;
-    const int totalCount = static_cast<int>(state.drawingLayerTable.size());
+    const int totalCount = static_cast<int>(state.drawing.drawingLayerTable.size());
     const QString countText = filterText.isEmpty()
         ? QString("%1 layer%2").arg(totalCount).arg(totalCount == 1 ? "" : "s")
         : QString("%1 of %2 layers").arg(visibleCount).arg(totalCount);
     subtitle->setText(countText + (viewport ? "  ·  editing the VP columns for the current viewport" : QString()));
-    currentLabel->setText("Current layer: " + FromUtf8(state.currentLayer));
+    currentLabel->setText("Current layer: " + FromUtf8(state.drawing.currentLayer));
   };
   populate();
   auto* appearanceFilter = new PaletteRefreshFilter(&dialog, [&] {
@@ -422,7 +422,7 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
     const bool hasSelection = table->selectionModel()->hasSelection() && table->currentRow() >= 0 &&
                               !table->isRowHidden(table->currentRow());
     erase->setEnabled(hasSelection);
-    current->setEnabled(hasSelection && selectedLayerName() != state.currentLayer);
+    current->setEnabled(hasSelection && selectedLayerName() != state.drawing.currentLayer);
   };
   QObject::connect(table->selectionModel(), &QItemSelectionModel::currentRowChanged, &dialog,
                    [&](const QModelIndex&, const QModelIndex&) { updateSelectionActions(); });
@@ -474,9 +474,9 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
     const int row = item->row(), column = item->column();
     // The record is the one named in the row shown, whatever the sort order (REQ-082).
     const auto name = ToUtf8(table->item(row, Name)->data(Qt::UserRole).toString());
-    const auto found = std::find_if(state.drawingLayerTable.begin(), state.drawingLayerTable.end(),
+    const auto found = std::find_if(state.drawing.drawingLayerTable.begin(), state.drawing.drawingLayerTable.end(),
         [&](const auto& layer) { return layer.name == name; });
-    if (found == state.drawingLayerTable.end()) return;
+    if (found == state.drawing.drawingLayerTable.end()) return;
     std::string error;
     if (column == Name) {
       if (!CadRenameDrawingLayer(state, name, ToUtf8(item->text()), &error)) QMessageBox::warning(&dialog, "Rename layer", FromUtf8(error));
@@ -555,7 +555,7 @@ void ShowLayerManager(QWidget* parent, AppCommandState& state, const std::functi
   QObject::connect(current, &QPushButton::clicked, &dialog, [&] {
     const auto name = selectedLayerName();
     if (name.empty()) return;
-    state.currentLayer = name;
+    state.drawing.currentLayer = name;
     populate(); refresh();
   });
   QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);

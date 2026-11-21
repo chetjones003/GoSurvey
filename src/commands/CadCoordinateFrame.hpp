@@ -34,8 +34,8 @@ constexpr double kMaxEstablishableOriginMagnitude = 1.0e9;
 /// is refused; what is caught is reported (REQ-201) rather than propagating as inf/NaN.
 constexpr double kMaxStorableCoordinateMagnitude = 1.0e18;
 
-inline double WorldOriginX(const AppCommandState& st) { return st.worldDocumentOriginX; }
-inline double WorldOriginY(const AppCommandState& st) { return st.worldDocumentOriginY; }
+inline double WorldOriginX(const AppCommandState& st) { return st.drawing.worldDocumentOriginX; }
+inline double WorldOriginY(const AppCommandState& st) { return st.drawing.worldDocumentOriginY; }
 
 void LocalFromWorld(const AppCommandState& st, double wx, double wy, float* lx, float* ly);
 /// `double`-output overload for a full-precision store (survey points, Phase F) — see the
@@ -44,26 +44,26 @@ void LocalFromWorld(const AppCommandState& st, double wx, double wy, float* lx, 
 inline void LocalFromWorld(const AppCommandState& st, double wx, double wy, double* lx, double* ly) {
   if (!lx || !ly)
     return;
-  *lx = wx - st.worldDocumentOriginX;
-  *ly = wy - st.worldDocumentOriginY;
+  *lx = wx - st.drawing.worldDocumentOriginX;
+  *ly = wy - st.drawing.worldDocumentOriginY;
 }
 void WorldFromLocal(const AppCommandState& st, float lx, float ly, double* wx, double* wy);
 
 inline float WorldXFromLocal(const AppCommandState& st, float lx) {
-  return static_cast<float>(static_cast<double>(lx) + st.worldDocumentOriginX);
+  return static_cast<float>(static_cast<double>(lx) + st.drawing.worldDocumentOriginX);
 }
 
 inline float WorldYFromLocal(const AppCommandState& st, float ly) {
-  return static_cast<float>(static_cast<double>(ly) + st.worldDocumentOriginY);
+  return static_cast<float>(static_cast<double>(ly) + st.drawing.worldDocumentOriginY);
 }
 
 /// `double` overloads for callers carrying a full-precision coordinate (survey points, Phase F) —
 /// the `float` overloads above stay for callers still on `float` storage (viewport cursor, other
 /// still-`float` entity fields); narrowing through them would throw away the very precision REQ-101
 /// widened `SurveyPoint::easting/northing` to keep.
-inline double WorldXFromLocal(const AppCommandState& st, double lx) { return lx + st.worldDocumentOriginX; }
+inline double WorldXFromLocal(const AppCommandState& st, double lx) { return lx + st.drawing.worldDocumentOriginX; }
 
-inline double WorldYFromLocal(const AppCommandState& st, double ly) { return ly + st.worldDocumentOriginY; }
+inline double WorldYFromLocal(const AppCommandState& st, double ly) { return ly + st.drawing.worldDocumentOriginY; }
 
 void ShiftAllStorageBy(AppCommandState& st, double dx, double dy);
 

@@ -22,7 +22,7 @@ AppCommandState MviewState() {
   layout.portraitWidthIn = 11.f;
   layout.portraitHeightIn = 17.f;
   layout.landscape = true;
-  state.paperLayouts.push_back(layout);
+  state.drawing.paperLayouts.push_back(layout);
   state.activeSpaceIndex = 0;
   return state;
 }
@@ -43,9 +43,9 @@ TEST_CASE("MVIEW Fit and fixed options create the specified sheet rectangles (RE
     SubmitText(state, "MVIEW", log);
     REQUIRE(state.active == AppCommandState::Kind::PaperRectViewport);
     SubmitText(state, expected.option, log);
-    REQUIRE(state.paperLayouts[0].viewports.size() == expected.rects.size());
+    REQUIRE(state.drawing.paperLayouts[0].viewports.size() == expected.rects.size());
     for (size_t i = 0; i < expected.rects.size(); ++i) {
-      const Viewport& vp = state.paperLayouts[0].viewports[i];
+      const Viewport& vp = state.drawing.paperLayouts[0].viewports[i];
       CHECK(vp.paperXIn == Catch::Approx(expected.rects[i][0]));
       CHECK(vp.paperYIn == Catch::Approx(expected.rects[i][1]));
       CHECK(vp.paperXIn + vp.paperWIn == Catch::Approx(expected.rects[i][2]));
@@ -64,7 +64,7 @@ TEST_CASE("MVIEW cancellation leaves the active layout unchanged (REQ-490)", "[r
   REQUIRE(state.active == AppCommandState::Kind::PaperRectViewport);
   CancelActiveCommand(state, log);
   CHECK(state.active == AppCommandState::Kind::None);
-  CHECK(state.paperLayouts[0].viewports.empty());
+  CHECK(state.drawing.paperLayouts[0].viewports.empty());
   CHECK(state.paperVpMode == 0);
 }
 
@@ -73,11 +73,11 @@ TEST_CASE("MVIEW retains its original two-corner rectangle workflow (REQ-490)", 
   std::vector<std::string> log;
   SubmitText(state, "MVIEW", log);
   SubmitViewportPick(state, 2.0, 3.0, log);
-  CHECK(state.paperLayouts[0].viewports.empty());
+  CHECK(state.drawing.paperLayouts[0].viewports.empty());
   CHECK(state.paperVpPhase == 1);
   SubmitViewportPick(state, 8.0, 9.0, log);
-  REQUIRE(state.paperLayouts[0].viewports.size() == 1);
-  const Viewport& viewport = state.paperLayouts[0].viewports[0];
+  REQUIRE(state.drawing.paperLayouts[0].viewports.size() == 1);
+  const Viewport& viewport = state.drawing.paperLayouts[0].viewports[0];
   CHECK(viewport.paperXIn == Catch::Approx(2.f));
   CHECK(viewport.paperYIn == Catch::Approx(3.f));
   CHECK(viewport.paperWIn == Catch::Approx(6.f));
@@ -88,7 +88,7 @@ TEST_CASE("MVIEW retains its original two-corner rectangle workflow (REQ-490)", 
 TEST_CASE("MVIEW Object copies the closed boundary and undo/redo restores the viewport (REQ-490)",
           "[req490][mview]") {
   AppCommandState state = MviewState();
-  PaperLayout& layout = state.paperLayouts[0];
+  PaperLayout& layout = state.drawing.paperLayouts[0];
   layout.paperPolyOffsets = {0, 3};
   layout.paperPolyClosed = {1};
   layout.paperPolyVerts = {0.f, 0.f, 0.f, 4.f, 0.f, 0.f, 2.f, 3.f, 0.f};
@@ -98,24 +98,24 @@ TEST_CASE("MVIEW Object copies the closed boundary and undo/redo restores the vi
   SubmitText(state, "MVIEW", log);
   SubmitText(state, "Object", log);
   SubmitViewportPick(state, 2.0, 1.0, log);
-  REQUIRE(state.paperLayouts[0].viewports.size() == 1);
-  CHECK(state.paperLayouts[0].viewports[0].clipBoundary.size() == 3);
-  CHECK(state.paperLayouts[0].viewports[0].clipBoundary[0].bulge == Catch::Approx(0.5f));
-  CHECK(state.paperLayouts[0].paperPolyVerts == source);
+  REQUIRE(state.drawing.paperLayouts[0].viewports.size() == 1);
+  CHECK(state.drawing.paperLayouts[0].viewports[0].clipBoundary.size() == 3);
+  CHECK(state.drawing.paperLayouts[0].viewports[0].clipBoundary[0].bulge == Catch::Approx(0.5f));
+  CHECK(state.drawing.paperLayouts[0].paperPolyVerts == source);
   CHECK(state.active == AppCommandState::Kind::None);
 
   SubmitText(state, "UNDO", log);
-  CHECK(state.paperLayouts[0].viewports.empty());
+  CHECK(state.drawing.paperLayouts[0].viewports.empty());
   SubmitText(state, "REDO", log);
-  REQUIRE(state.paperLayouts[0].viewports.size() == 1);
-  CHECK(state.paperLayouts[0].viewports[0].clipBoundary.size() == 3);
-  CHECK(state.paperLayouts[0].paperPolyVerts == source);
+  REQUIRE(state.drawing.paperLayouts[0].viewports.size() == 1);
+  CHECK(state.drawing.paperLayouts[0].viewports[0].clipBoundary.size() == 3);
+  CHECK(state.drawing.paperLayouts[0].paperPolyVerts == source);
 }
 
 TEST_CASE("MVIEW Object refuses open polylines without changing geometry or undo state (REQ-490)",
           "[req490][mview]") {
   AppCommandState state = MviewState();
-  PaperLayout& layout = state.paperLayouts[0];
+  PaperLayout& layout = state.drawing.paperLayouts[0];
   layout.paperPolyOffsets = {0, 3};
   layout.paperPolyClosed = {0};
   layout.paperPolyVerts = {0.f, 0.f, 0.f, 4.f, 0.f, 0.f, 2.f, 3.f, 0.f};
@@ -124,8 +124,8 @@ TEST_CASE("MVIEW Object refuses open polylines without changing geometry or undo
   SubmitText(state, "MVIEW", log);
   SubmitText(state, "Object", log);
   SubmitViewportPick(state, 2.0, 0.0, log);
-  CHECK(state.paperLayouts[0].viewports.empty());
-  CHECK(state.paperLayouts[0].paperPolyVerts == source);
+  CHECK(state.drawing.paperLayouts[0].viewports.empty());
+  CHECK(state.drawing.paperLayouts[0].paperPolyVerts == source);
   CHECK(state.documents[static_cast<size_t>(state.activeDrawingIdx)].undoStack.empty());
   CHECK(state.active == AppCommandState::Kind::PaperRectViewport);
 }
@@ -133,15 +133,15 @@ TEST_CASE("MVIEW Object refuses open polylines without changing geometry or undo
 TEST_CASE("MVIEW Object refuses other paper entities without changing layout state (REQ-490)",
           "[req490][mview]") {
   AppCommandState state = MviewState();
-  PaperLayout& layout = state.paperLayouts[0];
+  PaperLayout& layout = state.drawing.paperLayouts[0];
   layout.paperLines = {0.f, 0.f, 0.f, 4.f, 0.f, 0.f};
   const auto source = layout.paperLines;
   std::vector<std::string> log;
   SubmitText(state, "MVIEW", log);
   SubmitText(state, "Object", log);
   SubmitViewportPick(state, 2.0, 0.0, log);
-  CHECK(state.paperLayouts[0].viewports.empty());
-  CHECK(state.paperLayouts[0].paperLines == source);
+  CHECK(state.drawing.paperLayouts[0].viewports.empty());
+  CHECK(state.drawing.paperLayouts[0].paperLines == source);
   CHECK(state.documents[static_cast<size_t>(state.activeDrawingIdx)].undoStack.empty());
   CHECK(state.active == AppCommandState::Kind::PaperRectViewport);
   CHECK_FALSE(log.empty());
@@ -149,7 +149,7 @@ TEST_CASE("MVIEW Object refuses other paper entities without changing layout sta
 
 TEST_CASE("MVIEW Object accepts a closed two-vertex bulge outline (REQ-490)", "[req490][mview]") {
   AppCommandState state = MviewState();
-  PaperLayout& layout = state.paperLayouts[0];
+  PaperLayout& layout = state.drawing.paperLayouts[0];
   layout.paperPolyOffsets = {0, 2};
   layout.paperPolyClosed = {1};
   layout.paperPolyVerts = {2.f, 2.f, 0.f, 6.f, 2.f, 0.f};
@@ -158,11 +158,11 @@ TEST_CASE("MVIEW Object accepts a closed two-vertex bulge outline (REQ-490)", "[
   SubmitText(state, "MVIEW", log);
   SubmitText(state, "Object", log);
   SubmitViewportPick(state, 2.0, 2.0, log);
-  REQUIRE(state.paperLayouts[0].viewports.size() == 1);
-  REQUIRE(state.paperLayouts[0].viewports[0].clipBoundary.size() == 2);
-  CHECK(state.paperLayouts[0].viewports[0].clipBoundary[0].bulge == Catch::Approx(1.f));
-  CHECK(state.paperLayouts[0].viewports[0].paperWIn > 0.f);
-  CHECK(state.paperLayouts[0].viewports[0].paperHIn > 0.f);
+  REQUIRE(state.drawing.paperLayouts[0].viewports.size() == 1);
+  REQUIRE(state.drawing.paperLayouts[0].viewports[0].clipBoundary.size() == 2);
+  CHECK(state.drawing.paperLayouts[0].viewports[0].clipBoundary[0].bulge == Catch::Approx(1.f));
+  CHECK(state.drawing.paperLayouts[0].viewports[0].paperWIn > 0.f);
+  CHECK(state.drawing.paperLayouts[0].viewports[0].paperHIn > 0.f);
 }
 
 TEST_CASE("MVIEW refuses model space before starting its prompt (REQ-490)", "[req490][mview]") {
@@ -170,7 +170,7 @@ TEST_CASE("MVIEW refuses model space before starting its prompt (REQ-490)", "[re
   std::vector<std::string> log;
   SubmitText(state, "MVIEW", log);
   CHECK(state.active == AppCommandState::Kind::None);
-  CHECK(state.paperLayouts.empty());
+  CHECK(state.drawing.paperLayouts.empty());
   REQUIRE_FALSE(log.empty());
 }
 
@@ -199,13 +199,13 @@ TEST_CASE("CopyPaperLayout duplicates complete value and preserves active layout
   viewport.frozenLayers = {"Survey"};
   viewport.clipBoundary = {{1.f, 1.f, 0.f}, {6.f, 1.f, 0.f}, {3.f, 5.f, 0.f}};
   source.viewports.push_back(viewport);
-  state.paperLayouts.push_back(source);
+  state.drawing.paperLayouts.push_back(source);
   PaperLayout collision;
   collision.name = "Site Plan (2)";
-  state.paperLayouts.push_back(collision);
+  state.drawing.paperLayouts.push_back(collision);
   PaperLayout active;
   active.name = "Current Sheet";
-  state.paperLayouts.push_back(active);
+  state.drawing.paperLayouts.push_back(active);
   SetActiveSpace(state, 2);
   state.lastPaperLayoutIndex = 2;
   state.selectedViewportLayout = 2;
@@ -216,9 +216,9 @@ TEST_CASE("CopyPaperLayout duplicates complete value and preserves active layout
   std::vector<std::string> log;
   const int copyIndex = CopyPaperLayout(state, 0, {}, log);
   REQUIRE(copyIndex == 3);
-  REQUIRE(state.paperLayouts.size() == 4);
-  CHECK(state.paperLayouts[3].name == "Site Plan (3)");
-  const PaperLayout& copy = state.paperLayouts[3];
+  REQUIRE(state.drawing.paperLayouts.size() == 4);
+  CHECK(state.drawing.paperLayouts[3].name == "Site Plan (3)");
+  const PaperLayout& copy = state.drawing.paperLayouts[3];
   CHECK(copy.sheetWidthIn() == Catch::Approx(source.sheetWidthIn()));
   CHECK(copy.sheetHeightIn() == Catch::Approx(source.sheetHeightIn()));
   CHECK(copy.presetIdx == -1);
@@ -235,13 +235,13 @@ TEST_CASE("CopyPaperLayout duplicates complete value and preserves active layout
   CHECK(copy.viewports[0].locked);
   CHECK(copy.viewports[0].frozenLayers == std::vector<std::string>{"Survey"});
   CHECK(copy.viewports[0].clipBoundary.size() == 3);
-  CHECK(state.paperLayouts[0].name == source.name);
-  CHECK(state.paperLayouts[0].paperLines == source.paperLines);
-  CHECK(state.paperLayouts[0].paperTexts[0].text == "SHEET A");
-  CHECK(state.paperLayouts[1].name == "Site Plan (2)");
-  CHECK(state.paperLayouts[2].name == "Current Sheet");
+  CHECK(state.drawing.paperLayouts[0].name == source.name);
+  CHECK(state.drawing.paperLayouts[0].paperLines == source.paperLines);
+  CHECK(state.drawing.paperLayouts[0].paperTexts[0].text == "SHEET A");
+  CHECK(state.drawing.paperLayouts[1].name == "Site Plan (2)");
+  CHECK(state.drawing.paperLayouts[2].name == "Current Sheet");
   CHECK(state.activeSpaceIndex == 2);
-  CHECK(state.paperLayouts[static_cast<size_t>(state.activeSpaceIndex)].name == "Current Sheet");
+  CHECK(state.drawing.paperLayouts[static_cast<size_t>(state.activeSpaceIndex)].name == "Current Sheet");
   CHECK(state.lastPaperLayoutIndex == 2);
   CHECK(state.selectedViewportLayout == 2);
   CHECK(state.pageSetupLayoutIdx == 2);
@@ -249,12 +249,12 @@ TEST_CASE("CopyPaperLayout duplicates complete value and preserves active layout
   CHECK(state.surveyExportCsvLayoutIdx == 2);
 
   REQUIRE(DoUndo(state, log));
-  CHECK(state.paperLayouts.size() == 3);
+  CHECK(state.drawing.paperLayouts.size() == 3);
   CHECK(state.activeSpaceIndex == 2);
   REQUIRE(DoRedo(state, log));
-  CHECK(state.paperLayouts.size() == 4);
+  CHECK(state.drawing.paperLayouts.size() == 4);
   CHECK(state.activeSpaceIndex == 2);
-  CHECK(state.paperLayouts[3].name == "Site Plan (3)");
+  CHECK(state.drawing.paperLayouts[3].name == "Site Plan (3)");
 }
 
 TEST_CASE("LAYOUT COPY supports active and named sources and rejects collisions without undo mutation (REQ-489)",
@@ -262,30 +262,30 @@ TEST_CASE("LAYOUT COPY supports active and named sources and rejects collisions 
   AppCommandState state;
   PaperLayout first;
   first.name = "Main Plan";
-  state.paperLayouts.push_back(first);
+  state.drawing.paperLayouts.push_back(first);
   PaperLayout current;
   current.name = "Current Sheet";
-  state.paperLayouts.push_back(current);
+  state.drawing.paperLayouts.push_back(current);
   SetActiveSpace(state, 1);
   std::vector<std::string> log;
 
   HandleLayoutCommand("COPY", state, log);
-  REQUIRE(state.paperLayouts.size() == 3);
-  CHECK(state.paperLayouts[2].name == "Current Sheet (2)");
+  REQUIRE(state.drawing.paperLayouts.size() == 3);
+  CHECK(state.drawing.paperLayouts[2].name == "Current Sheet (2)");
   CHECK(state.activeSpaceIndex == 1);
 
   HandleLayoutCommand("COPY Main Plan Alternate Plan", state, log);
-  REQUIRE(state.paperLayouts.size() == 4);
-  CHECK(state.paperLayouts[3].name == "Alternate Plan");
-  CHECK(state.paperLayouts[3].paperLines == state.paperLayouts[0].paperLines);
+  REQUIRE(state.drawing.paperLayouts.size() == 4);
+  CHECK(state.drawing.paperLayouts[3].name == "Alternate Plan");
+  CHECK(state.drawing.paperLayouts[3].paperLines == state.drawing.paperLayouts[0].paperLines);
   CHECK(state.activeSpaceIndex == 1);
 
-  const auto before = state.paperLayouts;
+  const auto before = state.drawing.paperLayouts;
   const size_t undoDepth = state.documents[static_cast<size_t>(state.activeDrawingIdx)].undoStack.size();
   HandleLayoutCommand("COPY Main Plan alternate plan", state, log);
-  CHECK(state.paperLayouts.size() == before.size());
-  CHECK(state.paperLayouts[0].name == before[0].name);
-  CHECK(state.paperLayouts[1].name == before[1].name);
+  CHECK(state.drawing.paperLayouts.size() == before.size());
+  CHECK(state.drawing.paperLayouts[0].name == before[0].name);
+  CHECK(state.drawing.paperLayouts[1].name == before[1].name);
   CHECK(state.activeSpaceIndex == 1);
   CHECK(state.documents[static_cast<size_t>(state.activeDrawingIdx)].undoStack.size() == undoDepth);
   REQUIRE(!log.empty());
@@ -299,7 +299,7 @@ TEST_CASE("REQ-482 locks viewport scale edits and refuses floating edits in an o
   viewport.locked = true;
   viewport.on = false;
   layout.viewports.push_back(viewport);
-  state.paperLayouts.push_back(layout);
+  state.drawing.paperLayouts.push_back(layout);
   SetActiveSpace(state, 0);
   state.selectedViewportIndex = 0;
   state.selectedViewports = {0};
@@ -307,7 +307,7 @@ TEST_CASE("REQ-482 locks viewport scale edits and refuses floating edits in an o
 
   const size_t undoDepth = state.documents[static_cast<size_t>(state.activeDrawingIdx)].undoStack.size();
   HandleVpscaleCommand("25", state, log);
-  CHECK(state.paperLayouts[0].viewports[0].scaleModelPerPaperIn == Catch::Approx(50.f));
+  CHECK(state.drawing.paperLayouts[0].viewports[0].scaleModelPerPaperIn == Catch::Approx(50.f));
   CHECK(state.documents[static_cast<size_t>(state.activeDrawingIdx)].undoStack.size() == undoDepth);
   REQUIRE_FALSE(log.empty());
   CHECK(log.back().find("locked") != std::string::npos);
@@ -315,50 +315,50 @@ TEST_CASE("REQ-482 locks viewport scale edits and refuses floating edits in an o
   EnterFloatingModelSpace(state, 0, 0, log);
   CHECK_FALSE(InFloatingModelSpace(state));
   CHECK(log.back().find("off") != std::string::npos);
-  CHECK(state.paperLayouts[0].viewports[0].on == false);
+  CHECK(state.drawing.paperLayouts[0].viewports[0].on == false);
 }
 
 TEST_CASE("REQ-484 applies one named drawing scale to selected paper viewports atomically", "[req484][viewport]") {
   AppCommandState state;
-  state.annotationScales = {{"1:50", 1.f, 50.f}, {"1:100", 1.f, 100.f}};
+  state.drawing.annotationScales = {{"1:50", 1.f, 50.f}, {"1:100", 1.f, 100.f}};
   PaperLayout layout;
   Viewport first; first.modelCenterX = 11.; first.modelCenterY = -8.; first.paperXIn = 1.; first.paperYIn = 2.;
   first.paperWIn = 4.; first.paperHIn = 3.; first.scaleModelPerPaperIn = 50.f;
   Viewport second; second.modelCenterX = -21.; second.modelCenterY = 31.; second.paperXIn = 7.; second.paperYIn = 5.;
   second.paperWIn = 6.; second.paperHIn = 2.; second.scaleModelPerPaperIn = 25.f;
   layout.viewports = {first, second};
-  state.paperLayouts.push_back(layout);
+  state.drawing.paperLayouts.push_back(layout);
   SetActiveSpace(state, 0);
   state.selectedViewports = {0, 1};
   state.selectedViewportIndex = 1;
   std::vector<std::string> log;
 
   HandleVpMatchScaleCommand("1:100", state, log);
-  CHECK(state.paperLayouts[0].viewports[0].scaleModelPerPaperIn == Catch::Approx(100.f));
-  CHECK(state.paperLayouts[0].viewports[1].scaleModelPerPaperIn == Catch::Approx(100.f));
-  CHECK(state.paperLayouts[0].viewports[0].modelCenterX == Catch::Approx(11.));
-  CHECK(state.paperLayouts[0].viewports[0].modelCenterY == Catch::Approx(-8.));
-  CHECK(state.paperLayouts[0].viewports[0].paperXIn == Catch::Approx(1.));
-  CHECK(state.paperLayouts[0].viewports[0].paperYIn == Catch::Approx(2.));
-  CHECK(state.paperLayouts[0].viewports[0].paperWIn == Catch::Approx(4.));
-  CHECK(state.paperLayouts[0].viewports[0].paperHIn == Catch::Approx(3.));
-  CHECK(state.paperLayouts[0].viewports[1].modelCenterX == Catch::Approx(-21.));
-  CHECK(state.paperLayouts[0].viewports[1].modelCenterY == Catch::Approx(31.));
-  CHECK(state.paperLayouts[0].viewports[1].paperXIn == Catch::Approx(7.));
-  CHECK(state.paperLayouts[0].viewports[1].paperYIn == Catch::Approx(5.));
-  CHECK(state.paperLayouts[0].viewports[1].paperWIn == Catch::Approx(6.));
-  CHECK(state.paperLayouts[0].viewports[1].paperHIn == Catch::Approx(2.));
+  CHECK(state.drawing.paperLayouts[0].viewports[0].scaleModelPerPaperIn == Catch::Approx(100.f));
+  CHECK(state.drawing.paperLayouts[0].viewports[1].scaleModelPerPaperIn == Catch::Approx(100.f));
+  CHECK(state.drawing.paperLayouts[0].viewports[0].modelCenterX == Catch::Approx(11.));
+  CHECK(state.drawing.paperLayouts[0].viewports[0].modelCenterY == Catch::Approx(-8.));
+  CHECK(state.drawing.paperLayouts[0].viewports[0].paperXIn == Catch::Approx(1.));
+  CHECK(state.drawing.paperLayouts[0].viewports[0].paperYIn == Catch::Approx(2.));
+  CHECK(state.drawing.paperLayouts[0].viewports[0].paperWIn == Catch::Approx(4.));
+  CHECK(state.drawing.paperLayouts[0].viewports[0].paperHIn == Catch::Approx(3.));
+  CHECK(state.drawing.paperLayouts[0].viewports[1].modelCenterX == Catch::Approx(-21.));
+  CHECK(state.drawing.paperLayouts[0].viewports[1].modelCenterY == Catch::Approx(31.));
+  CHECK(state.drawing.paperLayouts[0].viewports[1].paperXIn == Catch::Approx(7.));
+  CHECK(state.drawing.paperLayouts[0].viewports[1].paperYIn == Catch::Approx(5.));
+  CHECK(state.drawing.paperLayouts[0].viewports[1].paperWIn == Catch::Approx(6.));
+  CHECK(state.drawing.paperLayouts[0].viewports[1].paperHIn == Catch::Approx(2.));
   REQUIRE(DoUndo(state, log));
-  CHECK(state.paperLayouts[0].viewports[0].scaleModelPerPaperIn == Catch::Approx(50.f));
-  CHECK(state.paperLayouts[0].viewports[1].scaleModelPerPaperIn == Catch::Approx(25.f));
+  CHECK(state.drawing.paperLayouts[0].viewports[0].scaleModelPerPaperIn == Catch::Approx(50.f));
+  CHECK(state.drawing.paperLayouts[0].viewports[1].scaleModelPerPaperIn == Catch::Approx(25.f));
   REQUIRE(DoRedo(state, log));
-  CHECK(state.paperLayouts[0].viewports[0].scaleModelPerPaperIn == Catch::Approx(100.f));
-  CHECK(state.paperLayouts[0].viewports[1].scaleModelPerPaperIn == Catch::Approx(100.f));
+  CHECK(state.drawing.paperLayouts[0].viewports[0].scaleModelPerPaperIn == Catch::Approx(100.f));
+  CHECK(state.drawing.paperLayouts[0].viewports[1].scaleModelPerPaperIn == Catch::Approx(100.f));
 
   const auto depth = state.documents[static_cast<size_t>(state.activeDrawingIdx)].undoStack.size();
   HandleVpMatchScaleCommand("missing scale", state, log);
   CHECK(state.documents[static_cast<size_t>(state.activeDrawingIdx)].undoStack.size() == depth);
-  CHECK(state.paperLayouts[0].viewports[0].scaleModelPerPaperIn == Catch::Approx(100.f));
+  CHECK(state.drawing.paperLayouts[0].viewports[0].scaleModelPerPaperIn == Catch::Approx(100.f));
 }
 
 // REQ-026: a layout's orientation maps its portrait dimensions onto the sheet.
@@ -1083,19 +1083,19 @@ TEST_CASE("Annotative per-scale visibility gate (issue #622)", "[paperspace][iss
 TEST_CASE("Paper ARRAY rectangular copies are isolated and undo as one operation (REQ-483)",
           "[req483][paperspace][array]") {
   AppCommandState state = MviewState();
-  state.paperLayouts[0].paperLines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  state.paperLayouts[0].paperLineAttrs.resize(1);
-  state.userLinesFlat = {10.0, 0.0, 0.0, 11.0, 0.0, 0.0};
+  state.drawing.paperLayouts[0].paperLines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  state.drawing.paperLayouts[0].paperLineAttrs.resize(1);
+  state.drawing.userLinesFlat = {10.0, 0.0, 0.0, 11.0, 0.0, 0.0};
   PaperLayout sibling;
   sibling.paperLines = {20.f, 0.f, 0.f, 21.f, 0.f, 0.f};
-  state.paperLayouts.push_back(sibling);
+  state.drawing.paperLayouts.push_back(sibling);
 
   std::vector<std::string> log;
   SubmitText(state, "ARRAY", log);
   REQUIRE(state.arrayOnPaper);
   REQUIRE(state.active == AppCommandState::Kind::Array);
   PaperEntityRef paperHit{};
-  REQUIRE(PickPaperEntityAt(state.paperLayouts[0], 0.5f, 0.f, 0.12f, &paperHit));
+  REQUIRE(PickPaperEntityAt(state.drawing.paperLayouts[0], 0.5f, 0.f, 0.12f, &paperHit));
   SubmitViewportPick(state, 0.5, 0.0, log);
   CAPTURE(log.back());
   REQUIRE(state.selectedPaperEntities.size() == 1);
@@ -1108,22 +1108,22 @@ TEST_CASE("Paper ARRAY rectangular copies are isolated and undo as one operation
 
   CHECK(state.active == AppCommandState::Kind::None);
   CHECK(log.back() == "ARRAY — 2 total instance(s) (2 x 1).");
-  REQUIRE(state.paperLayouts[0].paperLines.size() == 12);
-  CHECK(state.paperLayouts[0].paperLines[0] == Catch::Approx(0.f));
-  CHECK(state.paperLayouts[0].paperLines[6] == Catch::Approx(3.f));
-  CHECK(state.paperLayouts[1].paperLines == sibling.paperLines);
-  CHECK(state.userLinesFlat == std::vector<double>{10.0, 0.0, 0.0, 11.0, 0.0, 0.0});
+  REQUIRE(state.drawing.paperLayouts[0].paperLines.size() == 12);
+  CHECK(state.drawing.paperLayouts[0].paperLines[0] == Catch::Approx(0.f));
+  CHECK(state.drawing.paperLayouts[0].paperLines[6] == Catch::Approx(3.f));
+  CHECK(state.drawing.paperLayouts[1].paperLines == sibling.paperLines);
+  CHECK(state.drawing.userLinesFlat == std::vector<double>{10.0, 0.0, 0.0, 11.0, 0.0, 0.0});
   REQUIRE(DoUndo(state, log));
-  CHECK(state.paperLayouts[0].paperLines == std::vector<float>{0.f, 0.f, 0.f, 1.f, 0.f, 0.f});
-  CHECK(state.paperLayouts[1].paperLines == sibling.paperLines);
-  CHECK(state.userLinesFlat == std::vector<double>{10.0, 0.0, 0.0, 11.0, 0.0, 0.0});
+  CHECK(state.drawing.paperLayouts[0].paperLines == std::vector<float>{0.f, 0.f, 0.f, 1.f, 0.f, 0.f});
+  CHECK(state.drawing.paperLayouts[1].paperLines == sibling.paperLines);
+  CHECK(state.drawing.userLinesFlat == std::vector<double>{10.0, 0.0, 0.0, 11.0, 0.0, 0.0});
 }
 
 TEST_CASE("Paper ARRAY polar copies selected geometry without changing the source (REQ-483)",
           "[req483][paperspace][array]") {
   AppCommandState state = MviewState();
-  state.paperLayouts[0].paperLines = {1.f, 0.f, 0.f, 2.f, 0.f, 0.f};
-  state.paperLayouts[0].paperLineAttrs.resize(1);
+  state.drawing.paperLayouts[0].paperLines = {1.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  state.drawing.paperLayouts[0].paperLineAttrs.resize(1);
   state.selectedPaperEntities.push_back({PaperEntityRef::Type::Line, 0});
   std::vector<std::string> log;
   SubmitText(state, "ARRAY", log);
@@ -1133,45 +1133,45 @@ TEST_CASE("Paper ARRAY polar copies selected geometry without changing the sourc
   SubmitText(state, "360", log);
   SubmitText(state, "Y", log);
 
-  REQUIRE(state.paperLayouts[0].paperLines.size() == 24);
-  CHECK(state.paperLayouts[0].paperLines[0] == Catch::Approx(1.f));
-  CHECK(state.paperLayouts[0].paperLines[6] == Catch::Approx(0.f).margin(1.e-5f));
-  CHECK(state.paperLayouts[0].paperLines[7] == Catch::Approx(1.f));
-  CHECK(state.paperLayouts[0].paperLines[9] == Catch::Approx(0.f).margin(1.e-5f));
-  CHECK(state.paperLayouts[0].paperLines[10] == Catch::Approx(2.f));
-  CHECK(state.paperLayouts[0].paperLines[12] == Catch::Approx(-1.f));
-  CHECK(state.paperLayouts[0].paperLines[18] == Catch::Approx(0.f).margin(1.e-5f));
-  CHECK(state.paperLayouts[0].paperLines[19] == Catch::Approx(-1.f));
+  REQUIRE(state.drawing.paperLayouts[0].paperLines.size() == 24);
+  CHECK(state.drawing.paperLayouts[0].paperLines[0] == Catch::Approx(1.f));
+  CHECK(state.drawing.paperLayouts[0].paperLines[6] == Catch::Approx(0.f).margin(1.e-5f));
+  CHECK(state.drawing.paperLayouts[0].paperLines[7] == Catch::Approx(1.f));
+  CHECK(state.drawing.paperLayouts[0].paperLines[9] == Catch::Approx(0.f).margin(1.e-5f));
+  CHECK(state.drawing.paperLayouts[0].paperLines[10] == Catch::Approx(2.f));
+  CHECK(state.drawing.paperLayouts[0].paperLines[12] == Catch::Approx(-1.f));
+  CHECK(state.drawing.paperLayouts[0].paperLines[18] == Catch::Approx(0.f).margin(1.e-5f));
+  CHECK(state.drawing.paperLayouts[0].paperLines[19] == Catch::Approx(-1.f));
   REQUIRE(DoUndo(state, log));
-  CHECK(state.paperLayouts[0].paperLines == std::vector<float>{1.f, 0.f, 0.f, 2.f, 0.f, 0.f});
+  CHECK(state.drawing.paperLayouts[0].paperLines == std::vector<float>{1.f, 0.f, 0.f, 2.f, 0.f, 0.f});
 }
 
 TEST_CASE("Paper OVERKILL cleans only the active layout and undo restores it (REQ-483)",
           "[req483][paperspace][overkill]") {
   AppCommandState state = MviewState();
-  state.paperLayouts[0].paperLines = {
+  state.drawing.paperLayouts[0].paperLines = {
       0.f, 0.f, 0.f, 1.f, 0.f, 0.f,
       1.f, 0.f, 0.f, 0.f, 0.f, 0.f,
       3.f, 3.f, 0.f, 3.f, 3.f, 0.f,
   };
-  const std::vector<float> original = state.paperLayouts[0].paperLines;
+  const std::vector<float> original = state.drawing.paperLayouts[0].paperLines;
   PaperLayout sibling;
   sibling.paperLines = original;
-  state.paperLayouts.push_back(sibling);
-  state.userLinesFlat = {10.0, 0.0, 0.0, 11.0, 0.0, 0.0};
-  const auto modelGeometry = state.userLinesFlat;
+  state.drawing.paperLayouts.push_back(sibling);
+  state.drawing.userLinesFlat = {10.0, 0.0, 0.0, 11.0, 0.0, 0.0};
+  const auto modelGeometry = state.drawing.userLinesFlat;
 
   std::vector<std::string> log;
   ExecuteOverkill(state, log);
-  REQUIRE(state.paperLayouts[0].paperLines.size() == 6);
-  CHECK(state.paperLayouts[0].paperLines[0] == Catch::Approx(0.f));
-  CHECK(state.paperLayouts[0].paperLines[3] == Catch::Approx(1.f));
-  CHECK(state.paperLayouts[1].paperLines == original);
-  CHECK(state.userLinesFlat == modelGeometry);
+  REQUIRE(state.drawing.paperLayouts[0].paperLines.size() == 6);
+  CHECK(state.drawing.paperLayouts[0].paperLines[0] == Catch::Approx(0.f));
+  CHECK(state.drawing.paperLayouts[0].paperLines[3] == Catch::Approx(1.f));
+  CHECK(state.drawing.paperLayouts[1].paperLines == original);
+  CHECK(state.drawing.userLinesFlat == modelGeometry);
   REQUIRE_FALSE(log.empty());
   CHECK(log.back().find("cleaned up") != std::string::npos);
   REQUIRE(DoUndo(state, log));
-  CHECK(state.paperLayouts[0].paperLines == original);
-  CHECK(state.paperLayouts[1].paperLines == original);
-  CHECK(state.userLinesFlat == modelGeometry);
+  CHECK(state.drawing.paperLayouts[0].paperLines == original);
+  CHECK(state.drawing.paperLayouts[1].paperLines == original);
+  CHECK(state.drawing.userLinesFlat == modelGeometry);
 }

@@ -3,7 +3,7 @@
 // REQ-376 / ADR-065 (issue #696 P3) — keeps each project drawing's survey points and the project's
 // one point database in step.
 //
-// A project drawing still works on `st.surveyPoints` (every command already does), so nothing that
+// A project drawing still works on `st.drawing.surveyPoints` (every command already does), so nothing that
 // edits points changes. Once a frame this module compares that list with what the tab last agreed
 // with the database: a difference is the user's edit and is folded into the database; a database
 // that has moved on (another tab edited it) is pulled into the tab. The database is the single copy
@@ -37,7 +37,7 @@ inline bool ProjectOwnsActiveTabPoints(const AppCommandState& st) {
 }
 
 // ---- REQ-377 (issue #696 P4): per-drawing visibility rules -------------------------------------
-// The rules themselves are `st.pointVisibility` (projpts::Rules); SyncProjectPoints rebuilds the
+// The rules themselves are `st.drawing.pointVisibility` (projpts::Rules); SyncProjectPoints rebuilds the
 // tab's points whenever they change. The helpers below are what the Survey Database toolspace
 // section needs; all of them are no-ops / empty for a standalone drawing.
 

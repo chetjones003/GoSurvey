@@ -197,9 +197,9 @@ double LegacyLeaderScaleFactor(double dimScale, double paperUnits, double drawin
 std::string CivilLabelFontFamily(const AppCommandState& st, const SurveyPointLabelStyleDefinition* style) {
   if (style != nullptr && !style->fontFamily.empty())
     return TextStyles::EffectiveFontFamily(style->fontFamily);
-  if (const auto* textStyle = TextStyles::Find(st.textStyles, "pnts"))
+  if (const auto* textStyle = TextStyles::Find(st.drawing.textStyles, "pnts"))
     return TextStyles::EffectiveFontFamily(textStyle->fontFamily);
-  if (const auto* textStyle = TextStyles::Find(st.textStyles, "Standard"))
+  if (const auto* textStyle = TextStyles::Find(st.drawing.textStyles, "Standard"))
     return TextStyles::EffectiveFontFamily(textStyle->fontFamily);
   return TextStyles::kDefaultFontFamily;
 }
@@ -444,29 +444,22 @@ static void PushImportedMesh(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Enti
                              std::shared_ptr<CadMesh> mesh, EntityAttributes at) {
   if (dwg != nullptr && owner != nullptr)
     DwgImportApplyEntityMaterial(dwg, owner, &at);
-  st.cadMeshes.push_back(std::move(mesh));
-  st.cadMeshAttrs.push_back(at);
+  st.drawing.cadMeshes.push_back(std::move(mesh));
+  st.drawing.cadMeshAttrs.push_back(at);
 }
 
 void LocalLine(AppCommandState& st, double x0, double y0, double z0, double x1, double y1, double z1,
                const EntityAttributes& at) {
-  st.userLinesFlat.push_back(x0 - st.worldDocumentOriginX);
-  st.userLinesFlat.push_back(y0 - st.worldDocumentOriginY);
-  st.userLinesFlat.push_back(z0);
-  st.userLinesFlat.push_back(x1 - st.worldDocumentOriginX);
-  st.userLinesFlat.push_back(y1 - st.worldDocumentOriginY);
-  st.userLinesFlat.push_back(z1);
-  st.userLineAttrs.push_back(at);
+  st.drawing.pushLine(CadLineRecord{x0 - st.drawing.worldDocumentOriginX, y0 - st.drawing.worldDocumentOriginY, z0,
+                            x1 - st.drawing.worldDocumentOriginX, y1 - st.drawing.worldDocumentOriginY, z1});
+  st.drawing.userLineAttrs.push_back(at);
 }
 
 void LocalCircle(AppCommandState& st, double cx, double cy, double r, double z, const EntityAttributes& at,
                  double nx = 0.0, double ny = 0.0, double nz = 1.0) {
-  st.userCirclesCxCyZR.push_back(cx - st.worldDocumentOriginX);
-  st.userCirclesCxCyZR.push_back(cy - st.worldDocumentOriginY);
-  st.userCirclesCxCyZR.push_back(z);
-  st.userCirclesCxCyZR.push_back(r);
-  st.userCircleAttrs.push_back(at);
-  PushCircleNormal(st.userCircleNormals, static_cast<float>(nx), static_cast<float>(ny),
+  st.drawing.pushCircle(CadCircleRecord{cx - st.drawing.worldDocumentOriginX, cy - st.drawing.worldDocumentOriginY, z, r});
+  st.drawing.userCircleAttrs.push_back(at);
+  PushCircleNormal(st.drawing.userCircleNormals, static_cast<float>(nx), static_cast<float>(ny),
                    static_cast<float>(nz));
 }
 
@@ -490,16 +483,16 @@ void LocalArc(AppCommandState& st, double cx, double cy, double r, double a0, do
   if (r <= 1e-12)
     return;
   CadArc arc{};
-  arc.cx = cx - st.worldDocumentOriginX;
-  arc.cy = cy - st.worldDocumentOriginY;
+  arc.cx = cx - st.drawing.worldDocumentOriginX;
+  arc.cy = cy - st.drawing.worldDocumentOriginY;
   arc.r = r;
   ArcFromAngles(a0, a1, &arc.startRad, &arc.sweepRad);
   arc.z = z;
   arc.nx = static_cast<float>(nx);
   arc.ny = static_cast<float>(ny);
   arc.nz = static_cast<float>(nz);
-  st.userArcs.push_back(arc);
-  st.userArcAttrs.push_back(at);
+  st.drawing.userArcs.push_back(arc);
+  st.drawing.userArcAttrs.push_back(at);
 }
 
 // REQ-316 / ADR-047: `bulge`, when given, is one entry per vertex (DXF group 42's own convention) —
@@ -510,29 +503,27 @@ void LocalPolyline(AppCommandState& st, const std::vector<double>& xyz, bool clo
   const size_t nv = xyz.size() / 3;
   if (nv < 2)
     return;
-  const int base = st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.back();
-  if (st.userPolylineOffsets.empty())
-    st.userPolylineOffsets.push_back(base);
+  const int base = st.drawing.userPolylineOffsets.empty() ? 0 : st.drawing.userPolylineOffsets.back();
+  if (st.drawing.userPolylineOffsets.empty())
+    st.drawing.userPolylineOffsets.push_back(base);
   for (size_t i = 0; i < nv; ++i) {
-    st.userPolylineVerts.push_back(xyz[i * 3 + 0] - st.worldDocumentOriginX);
-    st.userPolylineVerts.push_back(xyz[i * 3 + 1] - st.worldDocumentOriginY);
-    st.userPolylineVerts.push_back(xyz[i * 3 + 2]);
+    st.drawing.pushVertex(CadPolyVertex{xyz[i * 3 + 0] - st.drawing.worldDocumentOriginX, xyz[i * 3 + 1] - st.drawing.worldDocumentOriginY, xyz[i * 3 + 2]});
   }
-  st.userPolylineOffsets.push_back(base + static_cast<int>(nv));
-  st.userPolylineClosed.push_back(closed ? uint8_t{1} : uint8_t{0});
-  st.userPolylineAttrs.push_back(at);
+  st.drawing.userPolylineOffsets.push_back(base + static_cast<int>(nv));
+  st.drawing.userPolylineClosed.push_back(closed ? uint8_t{1} : uint8_t{0});
+  st.drawing.userPolylineAttrs.push_back(at);
   bool anyBulge = bulge != nullptr;
   if (anyBulge) {
     anyBulge = false;
     for (size_t i = 0; i < nv && i < bulge->size(); ++i)
       if ((*bulge)[i] != 0.0) { anyBulge = true; break; }
   }
-  if (anyBulge || !st.userPolylineVertsBulge.empty()) {
-    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
-    const size_t tail = st.userPolylineVertsBulge.size() >= nv ? st.userPolylineVertsBulge.size() - nv : 0;
+  if (anyBulge || !st.drawing.userPolylineVertsBulge.empty()) {
+    SyncPolylineBulge(st.drawing.userPolylineVertsBulge, st.drawing.userPolylineVerts.size());
+    const size_t tail = st.drawing.userPolylineVertsBulge.size() >= nv ? st.drawing.userPolylineVertsBulge.size() - nv : 0;
     if (bulge)
       for (size_t i = 0; i < nv && i < bulge->size(); ++i)
-        st.userPolylineVertsBulge[tail + i] = static_cast<float>((*bulge)[i]);
+        st.drawing.userPolylineVertsBulge[tail + i] = static_cast<float>((*bulge)[i]);
   }
 }
 
@@ -554,11 +545,11 @@ static void MergeDefaultMtextContextIntoAnnotation(const Dwg_Data* dwg, const Dw
   double wx = 0.0;
   double wy = 0.0;
   xf.apply(ctx->ins_pt.x, ctx->ins_pt.y, &wx, &wy);
-  a->insX = static_cast<float>(wx - st.worldDocumentOriginX);
-  a->insY = static_cast<float>(wy - st.worldDocumentOriginY);
+  a->insX = static_cast<float>(wx - st.drawing.worldDocumentOriginX);
+  a->insY = static_cast<float>(wy - st.drawing.worldDocumentOriginY);
   a->insZ = static_cast<float>(ctx->ins_pt.z);
   const double th = ctx->rect_height > 1e-9 ? ctx->rect_height : ctx->extents_height;
-  const double mup = std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6);
+  const double mup = std::max(static_cast<double>(st.drawing.modelUnitsPerPlottedInch), 1e-6);
   if (th > 1e-9)
     a->plottedHeightInches = static_cast<float>(th / mup);
   const double rot = std::atan2(ctx->x_axis_dir.y, ctx->x_axis_dir.x);
@@ -588,8 +579,8 @@ static void MergeDefaultTextContextIntoAnnotation(const Dwg_Data* dwg, const Dwg
   double wx = 0.0;
   double wy = 0.0;
   xf.apply(ctx->ins_pt.x, ctx->ins_pt.y, &wx, &wy);
-  a->insX = static_cast<float>(wx - st.worldDocumentOriginX);
-  a->insY = static_cast<float>(wy - st.worldDocumentOriginY);
+  a->insX = static_cast<float>(wx - st.drawing.worldDocumentOriginX);
+  a->insY = static_cast<float>(wy - st.drawing.worldDocumentOriginY);
   a->rotationRad = static_cast<float>(ctx->rotation + xf.ang);
   DwgImportNoteDefaultContextMerged();
 }
@@ -600,10 +591,10 @@ void LocalText(AppCommandState& st, double x, double y, double z, double height,
                const Dwg_Data* dwg = nullptr, const Xf2* xf = nullptr) {
   CadAnnotation a{};
   a.kind = kind;
-  a.insX = x - st.worldDocumentOriginX;
-  a.insY = y - st.worldDocumentOriginY;
+  a.insX = x - st.drawing.worldDocumentOriginX;
+  a.insY = y - st.drawing.worldDocumentOriginY;
   a.insZ = z;
-  const double mup = std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6);
+  const double mup = std::max(static_cast<double>(st.drawing.modelUnitsPerPlottedInch), 1e-6);
   a.plottedHeightInches = static_cast<float>(height / mup);
   a.rotationRad = static_cast<float>(rotRad);
   a.text = text;
@@ -619,10 +610,10 @@ void LocalText(AppCommandState& st, double x, double y, double z, double height,
   }
   if (ownerEnt != nullptr)
     ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &a.annotativeVisibleScaleNames);
-  st.cadAnnotations.push_back(std::move(a));
-  st.cadAnnotationAttrs.push_back(at);
+  st.drawing.cadAnnotations.push_back(std::move(a));
+  st.drawing.cadAnnotationAttrs.push_back(at);
   if (ownerEnt != nullptr && dwg != nullptr && xf != nullptr) {
-    CadAnnotation* back = &st.cadAnnotations.back();
+    CadAnnotation* back = &st.drawing.cadAnnotations.back();
     if (kind == CadAnnotation::Kind::Mtext)
       MergeDefaultMtextContextIntoAnnotation(dwg, ownerEnt, *xf, st, back);
     else if (kind == CadAnnotation::Kind::Text)
@@ -645,7 +636,7 @@ static bool ImportSpline(AppCommandState& st, const Dwg_Entity_SPLINE* sp, const
       const auto& p = sp->ctrl_pts[i];
       double x = 0.0, y = 0.0;
       xf.apply(p.x, p.y, &x, &y);
-      s.ctrl.push_back({x - st.worldDocumentOriginX, y - st.worldDocumentOriginY, p.z});
+      s.ctrl.push_back({x - st.drawing.worldDocumentOriginX, y - st.drawing.worldDocumentOriginY, p.z});
       if (sp->weighted || sp->rational) s.weights.push_back(p.w > 0.0 ? p.w : 1.0);
     }
   }
@@ -654,12 +645,12 @@ static bool ImportSpline(AppCommandState& st, const Dwg_Entity_SPLINE* sp, const
       const auto& p = sp->fit_pts[i];
       double x = 0.0, y = 0.0;
       xf.apply(p.x, p.y, &x, &y);
-      s.fit.push_back({x - st.worldDocumentOriginX, y - st.worldDocumentOriginY, p.z});
+      s.fit.push_back({x - st.drawing.worldDocumentOriginX, y - st.drawing.worldDocumentOriginY, p.z});
     }
   }
   if (!spline::Validate(s).empty()) return false;
-  st.cadSplines.push_back(std::move(s));
-  st.cadSplineAttrs.push_back(at);
+  st.drawing.cadSplines.push_back(std::move(s));
+  st.drawing.cadSplineAttrs.push_back(at);
   return true;
 }
 
@@ -727,8 +718,8 @@ static bool Import2DSolidOrTrace(AppCommandState& st, const BITCODE_2RD& c1, con
   auto pushCorner = [&](const BITCODE_2RD& c) {
     double wx = 0.0, wy = 0.0;
     xf.apply(c.x, c.y, &wx, &wy);
-    region.vertsXyz.push_back(wx - st.worldDocumentOriginX);
-    region.vertsXyz.push_back(wy - st.worldDocumentOriginY);
+    region.vertsXyz.push_back(wx - st.drawing.worldDocumentOriginX);
+    region.vertsXyz.push_back(wy - st.drawing.worldDocumentOriginY);
     region.vertsXyz.push_back(elev);
   };
   pushCorner(c1);
@@ -739,8 +730,8 @@ static bool Import2DSolidOrTrace(AppCommandState& st, const BITCODE_2RD& c1, con
   if (region.vertsXyz.size() < 9)
     return false;
   region.patternName.clear();
-  st.cadFilledRegions.push_back(std::move(region));
-  st.cadFilledRegionAttrs.push_back(at);
+  st.drawing.cadFilledRegions.push_back(std::move(region));
+  st.drawing.cadFilledRegionAttrs.push_back(at);
   return true;
 }
 
@@ -757,8 +748,8 @@ static bool Import3DFaceAsMesh(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_En
   auto addVert = [&](const BITCODE_3BD& p) {
     double wx = 0.0, wy = 0.0;
     xf.apply(p.x, p.y, &wx, &wy);
-    mesh->vertsXyz.push_back(static_cast<float>(wx - st.worldDocumentOriginX));
-    mesh->vertsXyz.push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+    mesh->vertsXyz.push_back(static_cast<float>(wx - st.drawing.worldDocumentOriginX));
+    mesh->vertsXyz.push_back(static_cast<float>(wy - st.drawing.worldDocumentOriginY));
     mesh->vertsXyz.push_back(static_cast<float>(p.z));
     mesh->normalsXyz.push_back(0.f);
     mesh->normalsXyz.push_back(0.f);
@@ -836,8 +827,8 @@ static bool ImportPolylineMesh(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* o
   for (const dwg_point_3d& p : grid) {
     double wx = 0.0, wy = 0.0;
     xf.apply(p.x, p.y, &wx, &wy);
-    mesh->vertsXyz.push_back(static_cast<float>(wx - st.worldDocumentOriginX));
-    mesh->vertsXyz.push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+    mesh->vertsXyz.push_back(static_cast<float>(wx - st.drawing.worldDocumentOriginX));
+    mesh->vertsXyz.push_back(static_cast<float>(wy - st.drawing.worldDocumentOriginY));
     mesh->vertsXyz.push_back(static_cast<float>(p.z));
     mesh->normalsXyz.push_back(0.f);
     mesh->normalsXyz.push_back(0.f);
@@ -957,8 +948,8 @@ static bool ImportPolylinePFace(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* 
   for (const dwg_point_3d& p : positions) {
     double wx = 0.0, wy = 0.0;
     xf.apply(p.x, p.y, &wx, &wy);
-    mesh->vertsXyz.push_back(static_cast<float>(wx - st.worldDocumentOriginX));
-    mesh->vertsXyz.push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+    mesh->vertsXyz.push_back(static_cast<float>(wx - st.drawing.worldDocumentOriginX));
+    mesh->vertsXyz.push_back(static_cast<float>(wy - st.drawing.worldDocumentOriginY));
     mesh->vertsXyz.push_back(static_cast<float>(p.z));
     mesh->normalsXyz.push_back(0.f);
     mesh->normalsXyz.push_back(0.f);
@@ -999,8 +990,8 @@ static bool ImportPolylinePFace(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* 
 
 static void AppendLocalPathPoint(CadMultileader& m, const AppCommandState& st, double wx, double wy,
                                  double z) {
-  m.pathXyz.push_back(static_cast<float>(wx - st.worldDocumentOriginX));
-  m.pathXyz.push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+  m.pathXyz.push_back(static_cast<float>(wx - st.drawing.worldDocumentOriginX));
+  m.pathXyz.push_back(static_cast<float>(wy - st.drawing.worldDocumentOriginY));
   m.pathXyz.push_back(static_cast<float>(z));
 }
 
@@ -1145,9 +1136,9 @@ static bool ApplySavedModelViewport(AppCommandState& st, const SavedModelViewpor
   const ray3d::Vec3 right = camera.RightWorld();
   const ray3d::Vec3 up = camera.UpWorld();
   st.viewportPanX = saved.targetX + right.x * saved.centerX + up.x * saved.centerY -
-                    st.worldDocumentOriginX;
+                    st.drawing.worldDocumentOriginX;
   st.viewportPanY = saved.targetY + right.y * saved.centerX + up.y * saved.centerY -
-                    st.worldDocumentOriginY;
+                    st.drawing.worldDocumentOriginY;
   st.viewportPanZ = saved.targetZ + right.z * saved.centerX + up.z * saved.centerY;
   st.viewportZoom = static_cast<float>(100.0 / saved.height);
   st.viewportAzimuthDeg = camera.azimuthDeg;
@@ -1183,12 +1174,12 @@ static bool ImportLeaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Ent
     CadAnnotation& an = m.label;
     an.kind = CadAnnotation::Kind::Mtext;
     an.mtextAttach = mt->attachment >= 1 && mt->attachment <= 9 ? mt->attachment : 1;
-    an.insX = static_cast<float>(x - st.worldDocumentOriginX);
-    an.insY = static_cast<float>(y - st.worldDocumentOriginY);
+    an.insX = static_cast<float>(x - st.drawing.worldDocumentOriginX);
+    an.insY = static_cast<float>(y - st.drawing.worldDocumentOriginY);
     an.insZ = static_cast<float>(mt->ins_pt.z);
     an.plottedHeightInches =
         static_cast<float>(static_cast<double>(mt->text_height) /
-                           std::max(1e-9, static_cast<double>(st.modelUnitsPerPlottedInch)));
+                           std::max(1e-9, static_cast<double>(st.drawing.modelUnitsPerPlottedInch)));
     an.text = FromT(dwg, mt->text);
     an.fontFamily = ImportTextStyleFontFamily(dwg, mt->style);
     const double leaderDx = ld->points[1].x - ld->points[0].x;
@@ -1241,8 +1232,8 @@ static bool ImportLeaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Ent
     DwgImportAnnotativeScaleNames(dwg, ld->parent, &m.annotativeVisibleScaleNames);
     DwgImportAnnotativeScaleNames(dwg, ann->tio.entity, &m.annotativeVisibleScaleNames);
     SetMultileaderLabelBounds(m);
-    st.cadMultileaders.push_back(std::move(m));
-    st.cadMultileaderAttrs.push_back(at);
+    st.drawing.cadMultileaders.push_back(std::move(m));
+    st.drawing.cadMultileaderAttrs.push_back(at);
     return true;
   }
   std::vector<double> xyz;
@@ -1340,15 +1331,15 @@ static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dw
     for (BITCODE_BL pi = 0; pi < seg.num_points; ++pi) {
       double wx = 0.0, wy = 0.0;
       xf.apply(seg.points[pi].x, seg.points[pi].y, &wx, &wy);
-      out->push_back(static_cast<float>(wx - st.worldDocumentOriginX));
-      out->push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+      out->push_back(static_cast<float>(wx - st.drawing.worldDocumentOriginX));
+      out->push_back(static_cast<float>(wy - st.drawing.worldDocumentOriginY));
       out->push_back(static_cast<float>(seg.points[pi].z));
     }
     if (lnode.has_lastleaderlinepoint != 0) {
       double wx = 0.0, wy = 0.0;
       xf.apply(lnode.lastleaderlinepoint.x, lnode.lastleaderlinepoint.y, &wx, &wy);
-      out->push_back(static_cast<float>(wx - st.worldDocumentOriginX));
-      out->push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+      out->push_back(static_cast<float>(wx - st.drawing.worldDocumentOriginX));
+      out->push_back(static_cast<float>(wy - st.drawing.worldDocumentOriginY));
       out->push_back(static_cast<float>(lnode.lastleaderlinepoint.z));
     }
   };
@@ -1375,12 +1366,12 @@ static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dw
   CadAnnotation& an = m.label;
   an.kind = CadAnnotation::Kind::Mtext;
   an.mtextAttach = txt.alignment >= 1 && txt.alignment <= 9 ? txt.alignment : 1;
-  an.insX = static_cast<float>(lx - st.worldDocumentOriginX);
-  an.insY = static_cast<float>(ly - st.worldDocumentOriginY);
+  an.insX = static_cast<float>(lx - st.drawing.worldDocumentOriginX);
+  an.insY = static_cast<float>(ly - st.drawing.worldDocumentOriginY);
   an.insZ = static_cast<float>(txt.location.z);
   const double th = ml->ctx.text_height > 1e-9 ? ml->ctx.text_height : 0.18;
   an.plottedHeightInches =
-      static_cast<float>(th / std::max(1e-9, static_cast<double>(st.modelUnitsPerPlottedInch)));
+      static_cast<float>(th / std::max(1e-9, static_cast<double>(st.drawing.modelUnitsPerPlottedInch)));
   an.text = FromT(dwg, txt.default_text);
   BITCODE_H textStyle = txt.style;
   if ((textStyle == nullptr || textStyle->absolute_ref == 0) && ml->mleaderstyle != nullptr &&
@@ -1419,8 +1410,8 @@ static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dw
     ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &m.annotativeVisibleScaleNames);
     DwgImportAnnotativeScaleNames(dwg, ownerEnt, &m.annotativeVisibleScaleNames);
   }
-  st.cadMultileaders.push_back(std::move(m));
-  st.cadMultileaderAttrs.push_back(at);
+  st.drawing.cadMultileaders.push_back(std::move(m));
+  st.drawing.cadMultileaderAttrs.push_back(at);
   return true;
 }
 
@@ -1499,12 +1490,12 @@ void ImportAcisSolid(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object_Entity
   // exports offset from every other entity in a state-plane drawing (REQ-101's Local storage
   // invariant).
   const brep::Solid localized =
-      brep::Translate(solid, ray3d::Vec3{-st.worldDocumentOriginX, -st.worldDocumentOriginY, 0.0});
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(localized));
+      brep::Translate(solid, ray3d::Vec3{-st.drawing.worldDocumentOriginX, -st.drawing.worldDocumentOriginY, 0.0});
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(localized));
   EntityAttributes solidAt = at;
   if (ownerEnt != nullptr && dwg != nullptr)
     DwgImportApplyEntityMaterial(dwg, ownerEnt, &solidAt);
-  st.cadSolidAttrs.push_back(solidAt);
+  st.drawing.cadSolidAttrs.push_back(solidAt);
 }
 
 /// Plant 3D parts in model space (REQ-320 increment 2, D-2026-10-08-b, GitHub issue #786). A
@@ -1544,7 +1535,7 @@ void ImportPlantParts(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* mspace,
     return catalog.emplace(blockHandle, std::move(c)).first->second;
   };
 
-  const ray3d::Vec3 docOrigin{st.worldDocumentOriginX, st.worldDocumentOriginY, 0.0};
+  const ray3d::Vec3 docOrigin{st.drawing.worldDocumentOriginX, st.drawing.worldDocumentOriginY, 0.0};
   for (Dwg_Object* e = get_first_owned_entity(mspace); e != nullptr; e = get_next_owned_entity(mspace, e)) {
     const std::string cls = libredwgplant::PlantClassName(dwg, e);
     if (cls.empty() || e->supertype != DWG_SUPERTYPE_ENTITY || e->tio.entity == nullptr)
@@ -1557,8 +1548,8 @@ void ImportPlantParts(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* mspace,
     }
     const EntityAttributes at = AttrFromEnt(dwg, e->tio.entity);
     const auto keep = [&](brep::Solid&& s) {
-      st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
-      st.cadSolidAttrs.push_back(at);
+      st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+      st.drawing.cadSolidAttrs.push_back(at);
     };
     if (part.kind == libredwgplant::Part::Kind::Pipe) {
       brep::Solid pipe;
@@ -1611,43 +1602,43 @@ void ImportPlantParts(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* mspace,
 }
 
 static bool ScratchHasBlockGeometry(const AppCommandState& s) {
-  return !s.userLinesFlat.empty() || !s.userCirclesCxCyZR.empty() || !s.userArcs.empty() ||
-         !s.userEllipses.empty() || s.userPolylineOffsets.size() >= 2 || !s.cadAnnotations.empty() ||
-         !s.cadMeshes.empty() || !s.cadSolids.empty() || !s.cadBlockRefs.empty();
+  return !s.drawing.userLinesFlat.empty() || !s.drawing.userCirclesCxCyZR.empty() || !s.drawing.userArcs.empty() ||
+         !s.drawing.userEllipses.empty() || s.drawing.userPolylineOffsets.size() >= 2 || !s.drawing.cadAnnotations.empty() ||
+         !s.drawing.cadMeshes.empty() || !s.drawing.cadSolids.empty() || !s.drawing.cadBlockRefs.empty();
 }
 
 static void CaptureScratchIntoBlockContent(const AppCommandState& st, CadBlockContent* c) {
   assert(c != nullptr);
-  c->userLinesFlat = st.userLinesFlat;
-  c->userLineAttrs = st.userLineAttrs;
-  c->lineVis.assign(st.userLineAttrs.size(), "");
-  c->userCirclesCxCyZR = st.userCirclesCxCyZR;
-  c->userCircleAttrs = st.userCircleAttrs;
-  c->circleVis.assign(st.userCircleAttrs.size(), "");
-  c->userCircleNormals = st.userCircleNormals;
-  EnsureCircleNormals(c->userCircleNormals, st.userCirclesCxCyZR.size() / 4);
-  c->userArcs = st.userArcs;
-  c->userArcAttrs = st.userArcAttrs;
-  c->userEllipses = st.userEllipses;
-  c->userEllAttrs = st.userEllAttrs;
-  c->userPolylineOffsets = st.userPolylineOffsets;
-  c->userPolylineVerts = st.userPolylineVerts;
-  c->userPolylineVertsBulge = st.userPolylineVertsBulge;
-  c->userPolylineClosed = st.userPolylineClosed;
-  c->userPolylineAttrs = st.userPolylineAttrs;
-  c->cadAnnotations = st.cadAnnotations;
-  c->cadAnnotationAttrs = st.cadAnnotationAttrs;
-  c->cadMeshes = st.cadMeshes;
-  c->cadMeshAttrs = st.cadMeshAttrs;
-  c->cadSolids = st.cadSolids;
-  c->cadSolidAttrs = st.cadSolidAttrs;
-  for (size_t refIndex = 0; refIndex < st.cadBlockRefs.size(); ++refIndex) {
-    const CadBlockRef& r = st.cadBlockRefs[refIndex];
+  c->userLinesFlat = st.drawing.userLinesFlat;
+  c->userLineAttrs = st.drawing.userLineAttrs;
+  c->lineVis.assign(st.drawing.userLineAttrs.size(), "");
+  c->userCirclesCxCyZR = st.drawing.userCirclesCxCyZR;
+  c->userCircleAttrs = st.drawing.userCircleAttrs;
+  c->circleVis.assign(st.drawing.userCircleAttrs.size(), "");
+  c->userCircleNormals = st.drawing.userCircleNormals;
+  EnsureCircleNormals(c->userCircleNormals, st.drawing.circleCount());
+  c->userArcs = st.drawing.userArcs;
+  c->userArcAttrs = st.drawing.userArcAttrs;
+  c->userEllipses = st.drawing.userEllipses;
+  c->userEllAttrs = st.drawing.userEllAttrs;
+  c->userPolylineOffsets = st.drawing.userPolylineOffsets;
+  c->userPolylineVerts = st.drawing.userPolylineVerts;
+  c->userPolylineVertsBulge = st.drawing.userPolylineVertsBulge;
+  c->userPolylineClosed = st.drawing.userPolylineClosed;
+  c->userPolylineAttrs = st.drawing.userPolylineAttrs;
+  c->cadAnnotations = st.drawing.cadAnnotations;
+  c->cadAnnotationAttrs = st.drawing.cadAnnotationAttrs;
+  c->cadMeshes = st.drawing.cadMeshes;
+  c->cadMeshAttrs = st.drawing.cadMeshAttrs;
+  c->cadSolids = st.drawing.cadSolids;
+  c->cadSolidAttrs = st.drawing.cadSolidAttrs;
+  for (size_t refIndex = 0; refIndex < st.drawing.cadBlockRefs.size(); ++refIndex) {
+    const CadBlockRef& r = st.drawing.cadBlockRefs[refIndex];
     CadBlockNested n;
     n.defName = r.defName;
     n.xf = r.xf;
-    if (refIndex < st.cadBlockRefAttrs.size())
-      n.attrs = st.cadBlockRefAttrs[refIndex];
+    if (refIndex < st.drawing.cadBlockRefAttrs.size())
+      n.attrs = st.drawing.cadBlockRefAttrs[refIndex];
     c->nested.push_back(std::move(n));
   }
 }
@@ -1677,7 +1668,7 @@ bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Ob
   const std::string name = BlockHeaderDwgName(dwg, blkHeaderObj);
   if (!DwgBlockDefNameIsImportable(name))
     return false;
-  if (CadBlockFindDef(st.blockDefs, name) >= 0)
+  if (CadBlockFindDef(st.drawing.blockDefs, name) >= 0)
     return true;
   if (blkHeaderObj->tio.object == nullptr || blkHeaderObj->tio.object->tio.BLOCK_HEADER == nullptr)
     return false;
@@ -1686,9 +1677,9 @@ bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Ob
   AppCommandState scratch;
   // A definition's coordinates are local to its base, independent of the survey origin.
   // Subtract that base in double before storing any float geometry or attribute positions.
-  scratch.worldDocumentOriginX = hdr->base_pt.x;
-  scratch.worldDocumentOriginY = hdr->base_pt.y;
-  scratch.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;
+  scratch.drawing.worldDocumentOriginX = hdr->base_pt.x;
+  scratch.drawing.worldDocumentOriginY = hdr->base_pt.y;
+  scratch.drawing.modelUnitsPerPlottedInch = st.drawing.modelUnitsPerPlottedInch;
   const Xf2 id{};
   for (Dwg_Object* e = get_first_owned_entity(blkHeaderObj); e != nullptr;
        e = get_next_owned_entity(blkHeaderObj, e)) {
@@ -1713,7 +1704,7 @@ bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Ob
   CaptureScratchIntoBlockContent(scratch, &def.content);
   CadBlockBakeBasePoint(&def);
   ImportDynamicBlockDefinitionFromDwg(dwg, blkHeaderObj, def);
-  st.blockDefs.push_back(std::move(def));
+  st.drawing.blockDefs.push_back(std::move(def));
   return true;
 }
 
@@ -1962,7 +1953,7 @@ static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_
   AppCommandState& catalog = blockDefCatalog != nullptr ? *blockDefCatalog : st;
   if (!EnsureDwgBlockDefinitionImported(catalog, dwg, blk, skipHist, degenerateExtrusions, scaleContext))
     return false;
-  if (CadBlockFindDef(catalog.blockDefs, name) < 0)
+  if (CadBlockFindDef(catalog.drawing.blockDefs, name) < 0)
     return false;
 
   CadBlockRef ref;
@@ -1980,9 +1971,9 @@ static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_
   ImportAnnotativeVisibilityFromEntityEed(ent, &ref.annotativeVisibleScaleNames);
   CollectInsertAttributes(dwg, ins, ref.attributes);
   if (!CadBlockNameIsDynamicAnonymous(name)) {
-    const int di = CadBlockFindDef(catalog.blockDefs, name);
+    const int di = CadBlockFindDef(catalog.drawing.blockDefs, name);
     if (di >= 0) {
-      const CadBlockDefinition& bdef = catalog.blockDefs[static_cast<size_t>(di)];
+      const CadBlockDefinition& bdef = catalog.drawing.blockDefs[static_cast<size_t>(di)];
       if (!bdef.parameters.empty() && ref.paramState.empty())
         ref.paramState = bdef.parameters;
     }
@@ -2010,7 +2001,7 @@ static bool ImportNestedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg
   AppCommandState& catalog = blockDefCatalog != nullptr ? *blockDefCatalog : st;
   if (!EnsureDwgBlockDefinitionImported(catalog, dwg, blk, skipHist, degenerateExtrusions, scaleContext))
     return false;
-  if (CadBlockFindDef(catalog.blockDefs, name) < 0)
+  if (CadBlockFindDef(catalog.drawing.blockDefs, name) < 0)
     return false;
 
   double wx = 0.0;
@@ -2021,8 +2012,8 @@ static bool ImportNestedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg
   const double insSz = ins->scale.z != 0.0 ? ins->scale.z : 1.0;
   CadBlockRef ref;
   ref.defName = name;
-  ref.xf.x = static_cast<float>(wx - st.worldDocumentOriginX);
-  ref.xf.y = static_cast<float>(wy - st.worldDocumentOriginY);
+  ref.xf.x = static_cast<float>(wx - st.drawing.worldDocumentOriginX);
+  ref.xf.y = static_cast<float>(wy - st.drawing.worldDocumentOriginY);
   ref.xf.z = static_cast<float>(ins->ins_pt.z);
   ref.xf.sx = static_cast<float>(insSx * xf.sx);
   ref.xf.sy = static_cast<float>(insSy * xf.sy);
@@ -2032,15 +2023,15 @@ static bool ImportNestedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg
   ImportAnnotativeVisibilityFromEntityEed(ent, &ref.annotativeVisibleScaleNames);
   CollectInsertAttributes(dwg, ins, ref.attributes);
   if (!CadBlockNameIsDynamicAnonymous(name)) {
-    const int di = CadBlockFindDef(catalog.blockDefs, name);
+    const int di = CadBlockFindDef(catalog.drawing.blockDefs, name);
     if (di >= 0) {
-      const CadBlockDefinition& bdef = catalog.blockDefs[static_cast<size_t>(di)];
+      const CadBlockDefinition& bdef = catalog.drawing.blockDefs[static_cast<size_t>(di)];
       if (!bdef.parameters.empty() && ref.paramState.empty())
         ref.paramState = bdef.parameters;
     }
   }
-  st.cadBlockRefs.push_back(std::move(ref));
-  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  st.drawing.cadBlockRefs.push_back(std::move(ref));
+  st.drawing.cadBlockRefAttrs.push_back(EntityAttributes{});
   return true;
 }
 
@@ -2050,8 +2041,8 @@ bool TryImportInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_En
                                const LegacyLeaderScaleContext& scaleContext) {
   if (depth != 0)
     return false;
-  return ImportNamedInsertAsBlockRef(st, dwg, ent, at, skipHist, degenerateExtrusions, st.worldDocumentOriginX,
-                                     st.worldDocumentOriginY, st.cadBlockRefs, st.cadBlockRefAttrs, nullptr,
+  return ImportNamedInsertAsBlockRef(st, dwg, ent, at, skipHist, degenerateExtrusions, st.drawing.worldDocumentOriginX,
+                                     st.drawing.worldDocumentOriginY, st.drawing.cadBlockRefs, st.drawing.cadBlockRefAttrs, nullptr,
                                      scaleContext);
 }
 
@@ -2119,18 +2110,18 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
   }
   double tmx = 0.0, tmy = 0.0;
   xf.apply(common->text_midpt.x, common->text_midpt.y, &tmx, &tmy);
-  a.insX = static_cast<float>(tmx - st.worldDocumentOriginX);
-  a.insY = static_cast<float>(tmy - st.worldDocumentOriginY);
+  a.insX = static_cast<float>(tmx - st.drawing.worldDocumentOriginX);
+  a.insY = static_cast<float>(tmy - st.drawing.worldDocumentOriginY);
   if (ty == DWG_TYPE_DIMENSION_ALIGNED || ty == DWG_TYPE_DIMENSION_LINEAR) {
     if (xline1 == nullptr || xline2 == nullptr)
       return false;
     double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
     xf.apply(xline1->x, xline1->y, &x1, &y1);
     xf.apply(xline2->x, xline2->y, &x2, &y2);
-    a.dimExt1X = static_cast<float>(x1 - st.worldDocumentOriginX);
-    a.dimExt1Y = static_cast<float>(y1 - st.worldDocumentOriginY);
-    a.dimExt2X = static_cast<float>(x2 - st.worldDocumentOriginX);
-    a.dimExt2Y = static_cast<float>(y2 - st.worldDocumentOriginY);
+    a.dimExt1X = static_cast<float>(x1 - st.drawing.worldDocumentOriginX);
+    a.dimExt1Y = static_cast<float>(y1 - st.drawing.worldDocumentOriginY);
+    a.dimExt2X = static_cast<float>(x2 - st.drawing.worldDocumentOriginX);
+    a.dimExt2Y = static_cast<float>(y2 - st.drawing.worldDocumentOriginY);
     if (ty == DWG_TYPE_DIMENSION_ALIGNED) {
       a.kind = CadAnnotation::Kind::DimAligned;
       const double vx = a.dimExt2X - a.dimExt1X, vy = a.dimExt2Y - a.dimExt1Y;
@@ -2141,8 +2132,8 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
       double dpx = 0, dpy = 0;
       if (centerOrDefPt != nullptr)
         xf.apply(centerOrDefPt->x, centerOrDefPt->y, &dpx, &dpy);
-      dpx -= st.worldDocumentOriginX;
-      dpy -= st.worldDocumentOriginY;
+      dpx -= st.drawing.worldDocumentOriginX;
+      dpy -= st.drawing.worldDocumentOriginY;
       const double cmx = 0.5 * (a.dimExt1X + a.dimExt2X), cmy = 0.5 * (a.dimExt1Y + a.dimExt2Y);
       a.dimSignedOffset = static_cast<float>((dpx - cmx) * n0x + (dpy - cmy) * n0y);
     } else {
@@ -2154,8 +2145,8 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
       double dpx = 0, dpy = 0;
       if (centerOrDefPt != nullptr)
         xf.apply(centerOrDefPt->x, centerOrDefPt->y, &dpx, &dpy);
-      dpx -= st.worldDocumentOriginX;
-      dpy -= st.worldDocumentOriginY;
+      dpx -= st.drawing.worldDocumentOriginX;
+      dpy -= st.drawing.worldDocumentOriginY;
       const double cmx = 0.5 * (a.dimExt1X + a.dimExt2X), cmy = 0.5 * (a.dimExt1Y + a.dimExt2Y);
       a.dimSignedOffset = static_cast<float>(a.dimLinearVertical ? (dpx - cmx) : (dpy - cmy));
     }
@@ -2165,19 +2156,19 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
     a.kind = CadAnnotation::Kind::DimAngular;
     double vx = 0, vy = 0;
     xf.apply(centerOrDefPt->x, centerOrDefPt->y, &vx, &vy);
-    a.dimAngVertexX = static_cast<float>(vx - st.worldDocumentOriginX);
-    a.dimAngVertexY = static_cast<float>(vy - st.worldDocumentOriginY);
+    a.dimAngVertexX = static_cast<float>(vx - st.drawing.worldDocumentOriginX);
+    a.dimAngVertexY = static_cast<float>(vy - st.drawing.worldDocumentOriginY);
     double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
     xf.apply(xline1->x, xline1->y, &x1, &y1);
     xf.apply(xline2->x, xline2->y, &x2, &y2);
-    a.dimExt1X = static_cast<float>(x1 - st.worldDocumentOriginX);
-    a.dimExt1Y = static_cast<float>(y1 - st.worldDocumentOriginY);
-    a.dimExt2X = static_cast<float>(x2 - st.worldDocumentOriginX);
-    a.dimExt2Y = static_cast<float>(y2 - st.worldDocumentOriginY);
+    a.dimExt1X = static_cast<float>(x1 - st.drawing.worldDocumentOriginX);
+    a.dimExt1Y = static_cast<float>(y1 - st.drawing.worldDocumentOriginY);
+    a.dimExt2X = static_cast<float>(x2 - st.drawing.worldDocumentOriginX);
+    a.dimExt2Y = static_cast<float>(y2 - st.drawing.worldDocumentOriginY);
     double dpx = 0, dpy = 0;
     xf.apply(common->def_pt.x, common->def_pt.y, &dpx, &dpy);
-    dpx -= st.worldDocumentOriginX;
-    dpy -= st.worldDocumentOriginY;
+    dpx -= st.drawing.worldDocumentOriginX;
+    dpy -= st.drawing.worldDocumentOriginY;
     a.dimSignedOffset = static_cast<float>(std::hypot(dpx - a.dimAngVertexX, dpy - a.dimAngVertexY));
     if (a.dimSignedOffset < 1e-6f)
       return false;
@@ -2185,7 +2176,7 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
     return false;
   }
   const AngleDisplaySettings angle = CadAngleDisplaySettings(st);
-  CadDimRefreshMeasurementText(&a, st.activeDimensionStyle, angle);
+  CadDimRefreshMeasurementText(&a, st.drawing.activeDimensionStyle, angle);
   // A user-overridden DIMENSION text (DXF 1) takes priority over the geometry-derived label
   // above, matching what AutoCAD itself shows for the entity.
   if (common->user_text != nullptr) {
@@ -2198,8 +2189,8 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
     a.annotative = ImportEedMarksAnnotative(dwg, ownerEnt);
     ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &a.annotativeVisibleScaleNames);
   }
-  st.cadAnnotations.push_back(a);
-  st.cadAnnotationAttrs.push_back(at);
+  st.drawing.cadAnnotations.push_back(a);
+  st.drawing.cadAnnotationAttrs.push_back(at);
   return true;
 }
 
@@ -2216,8 +2207,8 @@ bool ImportHatchEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_HATC
   auto pushWorld = [&](double wx, double wy) {
     double ox = 0, oy = 0;
     xf.apply(wx, wy, &ox, &oy);
-    region.vertsXyz.push_back(ox - st.worldDocumentOriginX);
-    region.vertsXyz.push_back(oy - st.worldDocumentOriginY);
+    region.vertsXyz.push_back(ox - st.drawing.worldDocumentOriginX);
+    region.vertsXyz.push_back(oy - st.drawing.worldDocumentOriginY);
     region.vertsXyz.push_back(elev);
   };
   auto beginLoop = [&]() { region.loopStart.push_back(static_cast<int>(region.vertsXyz.size() / 3)); };
@@ -2294,8 +2285,8 @@ bool ImportHatchEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_HATC
   if (ownerEnt != nullptr)
     ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &region.annotativeVisibleScaleNames);
 
-  st.cadFilledRegions.push_back(std::move(region));
-  st.cadFilledRegionAttrs.push_back(at);
+  st.drawing.cadFilledRegions.push_back(std::move(region));
+  st.drawing.cadFilledRegionAttrs.push_back(at);
   return true;
 }
 
@@ -2322,7 +2313,7 @@ void AnchorMtextBox(CadAnnotation& annotation, double textHeight, double rotatio
 
 const SurveyPointLabelStyleDefinition* FindSurveyLabelStyle(
     const AppCommandState& st, std::string_view name) {
-  for (const auto& style : st.surveyPointLabelStyles) {
+  for (const auto& style : st.drawing.surveyPointLabelStyles) {
     if (style.name == name) return &style;
   }
   return nullptr;
@@ -2332,7 +2323,7 @@ float CivilLabelTextHeightWorld(const AppCommandState& st, const SurveyPointLabe
                                 float fallbackPaperInches) {
   const float paperInches = style != nullptr && style->textHeightPlottedInches > 0.f ?
       style->textHeightPlottedInches : fallbackPaperInches;
-  return paperInches * std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+  return paperInches * std::max(st.drawing.modelUnitsPerPlottedInch, 1.e-6f);
 }
 
 // REQ-479: a Civil 3D surface elevation label becomes a marker and the elevation text, as plain
@@ -2356,8 +2347,8 @@ void ImportSurfaceElevationLabel(AppCommandState& st, const CadPoint& point, con
   if (style != nullptr && !style->color.empty()) textAttributes.color = style->color;
   LocalText(st, point.x + kTextOffset, point.y, point.z, textHeight, 0.0, text,
             CadAnnotation::Kind::Mtext, textAttributes);
-  st.cadAnnotations.back().fontFamily = libredwgcad_detail::CivilLabelFontFamily(st, style);
-  AnchorMtextBox(st.cadAnnotations.back(), textHeight, 0.0, kMtextAttachMiddleLeft);
+  st.drawing.cadAnnotations.back().fontFamily = libredwgcad_detail::CivilLabelFontFamily(st, style);
+  AnchorMtextBox(st.drawing.cadAnnotations.back(), textHeight, 0.0, kMtextAttachMiddleLeft);
 }
 
 // REQ-479: one AECC_SURFACE_STYLE object, or nothing when its layout is not one that was verified.
@@ -2385,8 +2376,8 @@ bool IsCivilSurfaceStyleObject(const Dwg_Data* dwg, const Dwg_Object* object) {
 // the facet direction is within 1 degree for half the labels, 5 for 90% and 12 at worst. Zero when
 // no imported surface covers the point.
 double ContourDirectionAt(const AppCommandState& st, double worldX, double worldY) {
-  const double x = worldX - st.worldDocumentOriginX, y = worldY - st.worldDocumentOriginY;
-  for (const CadSurface& surface : st.cadSurfaces) {
+  const double x = worldX - st.drawing.worldDocumentOriginX, y = worldY - st.drawing.worldDocumentOriginY;
+  for (const CadSurface& surface : st.drawing.cadSurfaces) {
     if (!surface.tin) continue;
     const auto& v = surface.tin->vertsXyz;
     for (std::size_t t = 0; t + 2 < surface.tin->indices.size(); t += 3) {
@@ -2443,8 +2434,8 @@ void ImportCivilContourLabels(AppCommandState& st, Dwg_Data* dwg,
     std::snprintf(text, sizeof(text), "%.1f", point->z);
     LocalText(st, point->x, point->y, point->z, textHeight, ContourDirectionAt(st, point->x, point->y), text,
               CadAnnotation::Kind::Mtext, attributes);
-    st.cadAnnotations.back().fontFamily = libredwgcad_detail::CivilLabelFontFamily(st, style);
-    AnchorMtextBox(st.cadAnnotations.back(), textHeight, st.cadAnnotations.back().rotationRad,
+    st.drawing.cadAnnotations.back().fontFamily = libredwgcad_detail::CivilLabelFontFamily(st, style);
+    AnchorMtextBox(st.drawing.cadAnnotations.back(), textHeight, st.drawing.cadAnnotations.back().rotationRad,
                    kMtextAttachMiddleCenter);
     NoteSkip(skipHist, "AECC_SURFACE_CONTOUR_LABEL_GROUP(imported as elevation text; rotation approximated from the surface)");
   }
@@ -2458,7 +2449,7 @@ void ImportCivilPointGroups(AppCommandState& st, Dwg_Data* dwg, std::vector<std:
                            const std::unordered_map<uint64_t, std::string>& markerStyles,
                            const std::unordered_set<int>& explicitMarkerStyles) {
   std::unordered_set<int> known;
-  for (const SurveyPoint& point : st.surveyPoints) known.insert(point.id);
+  for (const SurveyPoint& point : st.drawing.surveyPoints) known.insert(point.id);
   if (known.empty()) return;
   std::size_t imported = 0, unverified = 0;
   for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
@@ -2500,7 +2491,7 @@ void ImportCivilPointGroups(AppCommandState& st, Dwg_Data* dwg, std::vector<std:
         }
       }
     }
-    if (target.name.empty() || std::any_of(st.pointGroups.begin(), st.pointGroups.end(),
+    if (target.name.empty() || std::any_of(st.drawing.pointGroups.begin(), st.drawing.pointGroups.end(),
                                            [&](const PointGroup& value) { return value.name == target.name; }))
       continue;
     target.rule.explicitIds = group->members;
@@ -2508,7 +2499,7 @@ void ImportCivilPointGroups(AppCommandState& st, Dwg_Data* dwg, std::vector<std:
       ++unverified;
       log.push_back("Civil point group \"" + target.name + "\": member list could not be verified; imported empty.");
     }
-    st.pointGroups.push_back(std::move(target));
+    st.drawing.pointGroups.push_back(std::move(target));
     ++imported;
   }
   if (imported != 0)
@@ -2517,11 +2508,11 @@ void ImportCivilPointGroups(AppCommandState& st, Dwg_Data* dwg, std::vector<std:
   // Civil stores display order as descending priorities. The first group containing a point
   // supplies its defaults; an explicit per-point style wins unless that group's override is set.
   // The drawing's list (and so the Prospector) is in that same order.
-  std::stable_sort(st.pointGroups.begin(), st.pointGroups.end(),
+  std::stable_sort(st.drawing.pointGroups.begin(), st.drawing.pointGroups.end(),
                    [](const PointGroup& a, const PointGroup& b) { return a.displayPriority > b.displayPriority; });
   std::vector<const PointGroup*> ordered;
-  for (const auto& group : st.pointGroups) ordered.push_back(&group);
-  for (auto& point : st.surveyPoints) {
+  for (const auto& group : st.drawing.pointGroups) ordered.push_back(&group);
+  for (auto& point : st.drawing.surveyPoints) {
     for (const auto* group : ordered) {
       if (std::find(group->rule.explicitIds.begin(), group->rule.explicitIds.end(), point.id) ==
           group->rule.explicitIds.end()) continue;
@@ -2537,7 +2528,7 @@ void ImportCivilPointGroups(AppCommandState& st, Dwg_Data* dwg, std::vector<std:
 void ImportCivilPointLabelStyles(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& log,
                                 std::unordered_map<std::string, int>* /*skipHist*/) {
   // Drawing-owned AECC label styles: decode from DWG bits and ordinary STYLE table records only.
-  st.surveyPointLabelStyles.clear();
+  st.drawing.surveyPointLabelStyles.clear();
   auto isClass = [&](const Dwg_Object& object, const char* name) {
     return object.type >= 500 && object.type - 500 < dwg->num_classes &&
            std::strcmp(dwg->dwg_class[object.type - 500].dxfname, name) == 0;
@@ -2613,14 +2604,14 @@ void ImportCivilPointLabelStyles(AppCommandState& st, Dwg_Data* dwg, std::vector
     };
     if (!isPointLabelStyle(style)) continue;
     if (style.name == "Coordinates") continue;
-    const auto existing = std::find_if(st.surveyPointLabelStyles.begin(), st.surveyPointLabelStyles.end(),
+    const auto existing = std::find_if(st.drawing.surveyPointLabelStyles.begin(), st.drawing.surveyPointLabelStyles.end(),
         [&](const SurveyPointLabelStyleDefinition& value) { return value.name == style.name; });
-    if (existing == st.surveyPointLabelStyles.end()) st.surveyPointLabelStyles.push_back(std::move(style));
+    if (existing == st.drawing.surveyPointLabelStyles.end()) st.drawing.surveyPointLabelStyles.push_back(std::move(style));
     else *existing = std::move(style);
     ++imported;
   }
-  if (st.surveyPointLabelStyles.empty())
-    st.surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
+  if (st.drawing.surveyPointLabelStyles.empty())
+    st.drawing.surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
   if (imported != 0) log.push_back("Civil point label styles decoded: " + std::to_string(imported));
 }
 
@@ -2736,7 +2727,7 @@ void ImportCivilPointTableStyles(AppCommandState& st, Dwg_Data* dwg, std::vector
     style.name = style.civilStyleName;
     // Civil point-table and AutoCAD data-table collections can both own a Standard style.
     // Keep both definitions; preserve the exact Civil name separately from the UI's unique key.
-    if (CadTableFindStyle(st.tableStyles, style.name)) style.name += " (Civil Point)";
+    if (CadTableFindStyle(st.drawing.tableStyles, style.name)) style.name += " (Civil Point)";
     style.point = true;
     style.title = libredwgcad_detail::DecodeDwgString(record->title.c_str(), true);
     style.textHeightInches = static_cast<float>(record->dataTextHeight * 12.0);
@@ -2774,7 +2765,7 @@ void ImportCivilPointTableStyles(AppCommandState& st, Dwg_Data* dwg, std::vector
           *names[j] = FromT(dwg, text->tio.object->tio.STYLE->name);
       }
     }
-    st.tableStyles.push_back(std::move(style));
+    st.drawing.tableStyles.push_back(std::move(style));
     ++count;
   }
   if (count) log.push_back("Civil point table styles decoded: " + std::to_string(count));
@@ -2805,7 +2796,7 @@ bool ImportCivilPointTable(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object&
                                                     *styleStrings, sourceStyle->stringstream_size);
   std::unordered_set<int> known;
   std::unordered_map<int, const SurveyPoint*> points;
-  for (const auto& point : st.surveyPoints) { known.insert(point.id); points.emplace(point.id, &point); }
+  for (const auto& point : st.drawing.surveyPoints) { known.insert(point.id); points.emplace(point.id, &point); }
   const auto group = libredwgcivil::DecodePointGroup(groupObject->unknown_bits, groupObject->num_unknown_bits,
       *groupStrings, groupObject->stringstream_size, known);
   if (!style || !group || !group->membersDecoded || segment->firstRow >= group->members.size()) return false;
@@ -2815,14 +2806,14 @@ bool ImportCivilPointTable(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object&
   CadTable table;
   table.cols = static_cast<int>(style->columns.size());
   const auto sourceName = libredwgcad_detail::DecodeDwgString(style->name.c_str(), true);
-  const auto target = std::find_if(st.tableStyles.begin(), st.tableStyles.end(),
+  const auto target = std::find_if(st.drawing.tableStyles.begin(), st.drawing.tableStyles.end(),
       [&](const CadTableStyle& s) { return s.civilStyleName == sourceName; });
-  if (target == st.tableStyles.end()) return false;
+  if (target == st.drawing.tableStyles.end()) return false;
   table.styleName = target->name;
   table.plottedHeightInches = target->textHeightInches;
-  if (const auto* text = TextStyles::Find(st.textStyles, target->textStyleName)) table.fontFamily = text->fontFamily;
-  table.insX = static_cast<float>(segment->transform[3] - st.worldDocumentOriginX);
-  table.insY = static_cast<float>(segment->transform[7] - st.worldDocumentOriginY);
+  if (const auto* text = TextStyles::Find(st.drawing.textStyles, target->textStyleName)) table.fontFamily = text->fontFamily;
+  table.insX = static_cast<float>(segment->transform[3] - st.drawing.worldDocumentOriginX);
+  table.insY = static_cast<float>(segment->transform[7] - st.drawing.worldDocumentOriginY);
   table.insZ = static_cast<float>(segment->transform[11]);
   table.rotationRad = static_cast<float>(std::atan2(segment->transform[4], segment->transform[0]));
   const auto& frame = preview->front();
@@ -2847,8 +2838,8 @@ bool ImportCivilPointTable(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object&
       if (expression == "<[167792643(2449)]>") { table.cells.push_back(point.rawDescription); continue; }
       double number = 0;
       if (expression.find("<[33574914(") == 0) number = point.elevation;
-      else if (expression.find("<[33574917(") == 0) number = point.northing + st.worldDocumentOriginY;
-      else if (expression.find("<[33574918(") == 0) number = point.easting + st.worldDocumentOriginX;
+      else if (expression.find("<[33574917(") == 0) number = point.northing + st.drawing.worldDocumentOriginY;
+      else if (expression.find("<[33574918(") == 0) number = point.easting + st.drawing.worldDocumentOriginX;
       else return false;
       int precision = -1;
       for (int p = 0; p <= 8; ++p)
@@ -2861,8 +2852,8 @@ bool ImportCivilPointTable(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object&
   }
   // Preserve the source's frame and the title/data cap heights. Civil's table rows have
   // three text heights of leading; the header absorbs its source frame's remaining height.
-  const float dataHeight = target->textHeightInches * st.modelUnitsPerPlottedInch;
-  const float titleHeight = target->titleTextHeightInches * st.modelUnitsPerPlottedInch;
+  const float dataHeight = target->textHeightInches * st.drawing.modelUnitsPerPlottedInch;
+  const float titleHeight = target->titleTextHeightInches * st.drawing.modelUnitsPerPlottedInch;
   const float dataRows = static_cast<float>(end - segment->firstRow);
   const float headerBand = table.height - titleHeight * 3.f - dataRows * dataHeight * 3.f;
   if (headerBand <= 0) return false;
@@ -2885,7 +2876,7 @@ bool ImportCivilPointTable(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object&
     table.columnWeights.assign(static_cast<std::size_t>(table.cols), 0.f);
     const int rows = CadTableRowCount(table);
     for (int row = 0; row < rows; ++row) {
-      const float cap = table.rowTextHeightsInches[static_cast<std::size_t>(row)] * st.modelUnitsPerPlottedInch;
+      const float cap = table.rowTextHeightsInches[static_cast<std::size_t>(row)] * st.drawing.modelUnitsPerPlottedInch;
       float rowHeight = cap * 3.f;
       for (int column = 0; column < table.cols; ++column) {
         const auto& text = table.cells[static_cast<std::size_t>(row * table.cols + column)];
@@ -2901,10 +2892,10 @@ bool ImportCivilPointTable(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object&
     // Retain the original bounds and make the metric substitution visible in the loss report.
     const std::string reason = "AECC_POINT_TABLE(font unavailable: " + table.fontFamily + "; column proportions estimated, source frame retained)";
     NoteSkip(skipHist, reason.c_str());
-    CadTableFitColumnWeightsFromContent(&table, st.modelUnitsPerPlottedInch);
+    CadTableFitColumnWeightsFromContent(&table, st.drawing.modelUnitsPerPlottedInch);
   }
-  st.cadTables.push_back(std::move(table));
-  st.cadTableAttrs.push_back(AttrFromEnt(dwg, object.tio.entity));
+  st.drawing.cadTables.push_back(std::move(table));
+  st.drawing.cadTableAttrs.push_back(AttrFromEnt(dwg, object.tio.entity));
   return true;
 }
 
@@ -3014,14 +3005,14 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     double cx = 0, cy = 0;
     xf.apply(e->center.x, e->center.y, &cx, &cy);
     CadEllipse el{};
-    el.cx = cx - st.worldDocumentOriginX;
-    el.cy = cy - st.worldDocumentOriginY;
+    el.cx = cx - st.drawing.worldDocumentOriginX;
+    el.cy = cy - st.drawing.worldDocumentOriginY;
     el.majVx = e->sm_axis.x * xf.sx;
     el.majVy = e->sm_axis.y * xf.sy;
     el.ratio = e->axis_ratio;
     el.z = e->center.z;
-    st.userEllipses.push_back(el);
-    st.userEllAttrs.push_back(at);
+    st.drawing.userEllipses.push_back(el);
+    st.drawing.userEllAttrs.push_back(at);
     return;
   }
   if (ty == DWG_TYPE_LWPOLYLINE && ent->tio.LWPOLYLINE != nullptr) {
@@ -3161,11 +3152,11 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     double px = 0.0, py = 0.0;
     xf.apply(e->x, e->y, &px, &py);
     CadPoint cp;
-    cp.x = px - st.worldDocumentOriginX;
-    cp.y = py - st.worldDocumentOriginY;
+    cp.x = px - st.drawing.worldDocumentOriginX;
+    cp.y = py - st.drawing.worldDocumentOriginY;
     cp.z = e->z;
-    st.cadPoints.push_back(cp);
-    st.cadPointAttrs.push_back(at);
+    st.drawing.cadPoints.push_back(cp);
+    st.drawing.cadPointAttrs.push_back(at);
     return;
   }
   if (ty == DWG_TYPE_HATCH && ent->tio.HATCH != nullptr) {
@@ -3194,8 +3185,8 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
       }
       double ix = tab->ins_pt.x, iy = tab->ins_pt.y;
       xf.apply(ix, iy, &ix, &iy);
-      table.insX = static_cast<float>(ix - st.worldDocumentOriginX);
-      table.insY = static_cast<float>(iy - st.worldDocumentOriginY);
+      table.insX = static_cast<float>(ix - st.drawing.worldDocumentOriginX);
+      table.insY = static_cast<float>(iy - st.drawing.worldDocumentOriginY);
       table.insZ = static_cast<float>(tab->ins_pt.z);
       table.rotationRad = static_cast<float>(tab->rotation);
       if (tab->col_widths != nullptr && tab->num_cols > 0) {
@@ -3214,8 +3205,8 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
       table.cells.reserve(static_cast<size_t>(nCells));
       for (unsigned long ci = 0; ci < nCells; ++ci)
         table.cells.push_back(FromT(dwg, tab->cells[ci].text_value));
-      st.cadTables.push_back(std::move(table));
-      st.cadTableAttrs.push_back(at);
+      st.drawing.cadTables.push_back(std::move(table));
+      st.drawing.cadTableAttrs.push_back(at);
       return;
     }
     NoteSkip(skipHist, "TABLE(degenerate)");
@@ -3231,8 +3222,8 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
             EnsureDwgBlockDefinitionImported(catalog, dwg, insBlk, skipHist, degenerateExtrusions,
                                              scaleContext)) {
           const std::string bname = BlockHeaderDwgName(dwg, insBlk);
-          const int di = CadBlockFindDef(catalog.blockDefs, bname);
-          canEval = di >= 0 && !catalog.blockDefs[static_cast<size_t>(di)].parameters.empty();
+          const int di = CadBlockFindDef(catalog.drawing.blockDefs, bname);
+          canEval = di >= 0 && !catalog.drawing.blockDefs[static_cast<size_t>(di)].parameters.empty();
         }
         if (!canEval) {
           NoteSkip(skipHist, "INSERT(dynamic block definition; expected *U instance)");
@@ -3320,9 +3311,9 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
         const auto nodeNumber = libredwgcivil::DecodeCogoPointNumber(
             obj->unknown_bits, static_cast<std::size_t>(obj->num_unknown_bits));
         if (depth == 0 && nodeNumber.has_value()) {
-          const auto point = std::find_if(st.surveyPoints.begin(), st.surveyPoints.end(),
+          const auto point = std::find_if(st.drawing.surveyPoints.begin(), st.drawing.surveyPoints.end(),
               [&](const SurveyPoint& value) { return value.id == *nodeNumber; });
-          if (point != st.surveyPoints.end()) {
+          if (point != st.drawing.surveyPoints.end()) {
             point->layer = LayerName(dwg, ent);
             NoteSkip(skipHist, "AECC_COGO_POINT(description/point-group/label-style fields not decoded)");
             return;
@@ -3338,12 +3329,12 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
           if (number.has_value()) {
             SurveyPoint point{};
             point.id = *number;
-            point.easting = x - st.worldDocumentOriginX;
-            point.northing = y - st.worldDocumentOriginY;
+            point.easting = x - st.drawing.worldDocumentOriginX;
+            point.northing = y - st.drawing.worldDocumentOriginY;
             point.elevation = center->z;
             point.layer = LayerName(dwg, ent);
             point.labelStyle = SurveyPointLabelStyle::None;
-            st.surveyPoints.push_back(std::move(point));
+            st.drawing.surveyPoints.push_back(std::move(point));
             NoteSkip(skipHist, "AECC_COGO_POINT(description/point-group/label-style fields not decoded)");
           }
           return;
@@ -3379,15 +3370,15 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
           surface.name = libredwgcad_detail::DecodeDwgString(record->name.c_str(), true);
           if (surface.name.empty()) surface.name = "Surface";
           const std::string baseName = surface.name;
-          for (int suffix = 2; std::any_of(st.cadSurfaces.begin(), st.cadSurfaces.end(),
+          for (int suffix = 2; std::any_of(st.drawing.cadSurfaces.begin(), st.drawing.cadSurfaces.end(),
                                            [&](const CadSurface& value) { return value.name == surface.name; });
                ++suffix)
             surface.name = baseName + " (" + std::to_string(suffix) + ")";
           auto tin = std::make_shared<CadTin>();
           tin->vertsXyz = std::move(record->vertsXyz);
           for (std::size_t i = 0; i + 2 < tin->vertsXyz.size(); i += 3) {
-            tin->vertsXyz[i] -= st.worldDocumentOriginX;
-            tin->vertsXyz[i + 1] -= st.worldDocumentOriginY;
+            tin->vertsXyz[i] -= st.drawing.worldDocumentOriginX;
+            tin->vertsXyz[i + 1] -= st.drawing.worldDocumentOriginY;
           }
           tin->indices = std::move(record->indices);
           surface.tin = std::move(tin);
@@ -3395,8 +3386,8 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
           if (const Dwg_Object* styleObject = ResolveTinSurfaceStyle(dwg, *obj))
             if (const auto style = DecodeCivilSurfaceStyleObject(*styleObject))
               surface.styleName = libredwgcad_detail::DecodeDwgString(style->name.c_str(), true);
-          st.cadSurfaces.push_back(std::move(surface));
-          st.cadSurfaceAttrs.push_back(AttrFromEnt(dwg, ent));
+          st.drawing.cadSurfaces.push_back(std::move(surface));
+          st.drawing.cadSurfaceAttrs.push_back(AttrFromEnt(dwg, ent));
           NoteSkip(skipHist, "AECC_TIN_SURFACE(triangulation and style imported; contour smoothing, boundaries and edit definition not decoded)");
           return;
         }
@@ -3456,7 +3447,7 @@ std::string LayerLinetypeName(Dwg_Data* dwg, const Dwg_Object_LAYER* ly) {
 }
 
 void ImportLayers(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& log) {
-  st.drawingLayerTable = DefaultDrawingLayerTable();
+  st.drawing.drawingLayerTable = DefaultDrawingLayerTable();
   int imported = 0;
   int undecoded = 0;
   for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
@@ -3481,12 +3472,12 @@ void ImportLayers(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& 
     const float layerTr = Transparency01FromEntityColor(ly->color);
     if (layerTr >= 0.f)
       row.transparency = layerTr;
-    auto existing = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+    auto existing = std::find_if(st.drawing.drawingLayerTable.begin(), st.drawing.drawingLayerTable.end(),
                                 [&name](const CadLayerRow& layer) { return layer.name == name; });
-    if (existing != st.drawingLayerTable.end())
+    if (existing != st.drawing.drawingLayerTable.end())
       *existing = row;
     else
-      st.drawingLayerTable.push_back(row);
+      st.drawing.drawingLayerTable.push_back(row);
     ++imported;
   }
   log.push_back("DWG import — " + std::to_string(imported) + " layer(s).");
@@ -3534,14 +3525,14 @@ std::string StyleWeightName(int weight) {
 }
 
 void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
-  st.textStyles.clear();
-  TextStyles::EnsureStandard(st.textStyles);
-  st.activeTextStyleName = TextStyles::kStandardName;
-  st.tableStyles = CadTableBuiltinStyles();
-  st.surveyPointStyles = DefaultSurveyPointStyles();
-  st.surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
-  st.pointGroups.clear();
-  st.surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
+  st.drawing.textStyles.clear();
+  TextStyles::EnsureStandard(st.drawing.textStyles);
+  st.drawing.activeTextStyleName = TextStyles::kStandardName;
+  st.drawing.tableStyles = CadTableBuiltinStyles();
+  st.drawing.surveyPointStyles = DefaultSurveyPointStyles();
+  st.drawing.surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
+  st.drawing.pointGroups.clear();
+  st.drawing.surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
   for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
     Dwg_Object* o = &dwg->object[i];
     if (o->fixedtype != DWG_TYPE_STYLE || o->tio.object == nullptr || o->tio.object->tio.STYLE == nullptr)
@@ -3550,15 +3541,15 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
     const std::string name = FromT(dwg, s->name);
     if (name.empty())
       continue;
-    TextStyle* existing = TextStyles::Find(st.textStyles, name);
+    TextStyle* existing = TextStyles::Find(st.drawing.textStyles, name);
     if (existing == nullptr) {
-      st.textStyles.push_back(TextStyle{});
-      existing = &st.textStyles.back();
+      st.drawing.textStyles.push_back(TextStyle{});
+      existing = &st.drawing.textStyles.back();
     }
     TextStyle& ts = *existing;
     const bool annotative = ObjectStyleIsAnnotative(dwg, o->tio.object);
     ts.props["annotative"] = annotative ? "1" : "0";
-    const double sizeScale = annotative ? 1.0 : std::max<double>(st.modelUnitsPerPlottedInch, 1.e-6);
+    const double sizeScale = annotative ? 1.0 : std::max<double>(st.drawing.modelUnitsPerPlottedInch, 1.e-6);
     ts.name = name;
     ts.fontFamily = FromT(dwg, s->font_file);
     ts.heightInches = static_cast<float>(std::max(0.0, s->text_size / sizeScale));
@@ -3577,12 +3568,12 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
     if (activeObject != nullptr && activeObject->fixedtype == DWG_TYPE_STYLE &&
         activeObject->tio.object != nullptr && activeObject->tio.object->tio.STYLE != nullptr) {
       const std::string activeName = FromT(dwg, activeObject->tio.object->tio.STYLE->name);
-      if (TextStyles::Find(st.textStyles, activeName) != nullptr)
-        st.activeTextStyleName = activeName;
+      if (TextStyles::Find(st.drawing.textStyles, activeName) != nullptr)
+        st.drawing.activeTextStyleName = activeName;
     }
   }
-  st.dimensionStyles.clear();
-  const double mup = std::max<double>(st.modelUnitsPerPlottedInch, 1.e-6);
+  st.drawing.dimensionStyles.clear();
+  const double mup = std::max<double>(st.drawing.modelUnitsPerPlottedInch, 1.e-6);
   auto linetypeName = [dwg](BITCODE_H ref) {
     if (ref == nullptr) return std::string("Continuous");
     Dwg_Object* object = dwg_resolve_handle_silent(dwg, ref->absolute_ref);
@@ -3709,12 +3700,12 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
     else if (arrow.find("DOT") != std::string::npos) style.arrowType = DimArrowType::Dot;
     else if (arrow.find("OPEN") != std::string::npos) style.arrowType = DimArrowType::Open;
     else if (arrow.find("NONE") != std::string::npos) style.arrowType = DimArrowType::None;
-    if (DimensionStyle* existing = const_cast<DimensionStyle*>(DimensionStyles::Find(st.dimensionStyles, style.name)))
+    if (DimensionStyle* existing = const_cast<DimensionStyle*>(DimensionStyles::Find(st.drawing.dimensionStyles, style.name)))
       *existing = std::move(style);
     else
-      st.dimensionStyles.push_back(std::move(style));
+      st.drawing.dimensionStyles.push_back(std::move(style));
   }
-  if (st.dimensionStyles.empty()) st.dimensionStyles = DimensionStyles::DefaultStyles();
+  if (st.drawing.dimensionStyles.empty()) st.drawing.dimensionStyles = DimensionStyles::DefaultStyles();
   std::string activeName;
   if (dwg->header_vars.DIMSTYLE != nullptr) {
     Dwg_Object* activeObject = dwg_resolve_handle_silent(dwg, dwg->header_vars.DIMSTYLE->absolute_ref);
@@ -3722,13 +3713,13 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
         activeObject->tio.object->tio.DIMSTYLE)
       activeName = FromT(dwg, activeObject->tio.object->tio.DIMSTYLE->name);
   }
-  if (const DimensionStyle* current = DimensionStyles::Find(st.dimensionStyles, activeName))
-    st.activeDimensionStyle = *current;
-  else if (const DimensionStyle* standard = DimensionStyles::Find(st.dimensionStyles, "Standard"))
-    st.activeDimensionStyle = *standard;
-  else st.activeDimensionStyle = st.dimensionStyles.front();
+  if (const DimensionStyle* current = DimensionStyles::Find(st.drawing.dimensionStyles, activeName))
+    st.drawing.activeDimensionStyle = *current;
+  else if (const DimensionStyle* standard = DimensionStyles::Find(st.drawing.dimensionStyles, "Standard"))
+    st.drawing.activeDimensionStyle = *standard;
+  else st.drawing.activeDimensionStyle = st.drawing.dimensionStyles.front();
 
-  st.multileaderStyles.clear();
+  st.drawing.multileaderStyles.clear();
   std::map<std::uint64_t, std::string> mleaderStyleNamesByHandle;
   for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
     Dwg_Object* o = &dwg->object[i];
@@ -3741,7 +3732,7 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
     style.name = MleaderStyleNameFromRecord(dwg, o, record);
     if (style.name.empty()) continue;
     mleaderStyleNamesByHandle[o->handle.value] = style.name;
-    if (MultileaderStyles::Find(st.multileaderStyles, style.name) != nullptr) continue;
+    if (MultileaderStyles::Find(st.drawing.multileaderStyles, style.name) != nullptr) continue;
     style.textSizeInches = static_cast<float>(std::max(0.001, record->text_height / sizeScale));
     style.arrowSizeInches = static_cast<float>(std::max(0.001, record->arrow_head_size / sizeScale));
     style.landingGapInches = static_cast<float>(std::max(0.0, record->landing_gap / sizeScale));
@@ -3780,16 +3771,16 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
           textStyleObject->tio.object != nullptr && textStyleObject->tio.object->tio.STYLE != nullptr)
         style.textFont = FromT(dwg, textStyleObject->tio.object->tio.STYLE->name);
     }
-    st.multileaderStyles.push_back(std::move(style));
+    st.drawing.multileaderStyles.push_back(std::move(style));
   }
-  if (st.multileaderStyles.empty()) st.multileaderStyles = MultileaderStyles::DefaultStyles();
+  if (st.drawing.multileaderStyles.empty()) st.drawing.multileaderStyles = MultileaderStyles::DefaultStyles();
   const std::string activeMleaderName = ActiveMleaderStyleName(dwg, mleaderStyleNamesByHandle);
-  if (const MultileaderStyle* current = MultileaderStyles::Find(st.multileaderStyles, activeMleaderName))
-    st.activeMultileaderStyle = *current;
-  else if (const MultileaderStyle* standard = MultileaderStyles::Find(st.multileaderStyles, "Standard"))
-    st.activeMultileaderStyle = *standard;
+  if (const MultileaderStyle* current = MultileaderStyles::Find(st.drawing.multileaderStyles, activeMleaderName))
+    st.drawing.activeMultileaderStyle = *current;
+  else if (const MultileaderStyle* standard = MultileaderStyles::Find(st.drawing.multileaderStyles, "Standard"))
+    st.drawing.activeMultileaderStyle = *standard;
   else
-    st.activeMultileaderStyle = st.multileaderStyles.front();
+    st.drawing.activeMultileaderStyle = st.drawing.multileaderStyles.front();
 
   // Native TABLESTYLE owns separate title/header/data records. The owner dictionary's
   // key is authoritative: imported records can carry an empty or stale internal name.
@@ -3865,8 +3856,8 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
       style.rowHeightInches = std::max(style.textHeightInches * 1.6f,
           static_cast<float>((source->vert_cell_margin * 2.0 + data.text_height) / mup));
     }
-    auto existing = std::find_if(st.tableStyles.begin(), st.tableStyles.end(), [&](const auto& old) { return CadTableNameEquals(old.name, style.name); });
-    if (existing == st.tableStyles.end()) st.tableStyles.push_back(std::move(style));
+    auto existing = std::find_if(st.drawing.tableStyles.begin(), st.drawing.tableStyles.end(), [&](const auto& old) { return CadTableNameEquals(old.name, style.name); });
+    if (existing == st.drawing.tableStyles.end()) st.drawing.tableStyles.push_back(std::move(style));
     else *existing = std::move(style);
   }
 }
@@ -3920,8 +3911,8 @@ void ImportCivilSurfaceStyles(AppCommandState& st, Dwg_Data* dwg, std::vector<st
     if (decoded->smoothContours.value_or(false) && decoded->smoothingFactor.has_value())
       style.contourSmoothPasses = std::clamp(
           static_cast<int>(std::lround(std::log2(static_cast<double>(*decoded->smoothingFactor) + 1.0))), 1, 5);
-    if (SurfaceStyle* existing = SurfaceStyles::Find(st.surfaceStyles, style.name)) *existing = std::move(style);
-    else st.surfaceStyles.push_back(std::move(style));
+    if (SurfaceStyle* existing = SurfaceStyles::Find(st.drawing.surfaceStyles, style.name)) *existing = std::move(style);
+    else st.drawing.surfaceStyles.push_back(std::move(style));
     ++imported;
   }
   if (imported != 0) log.push_back("Civil surface styles decoded: " + std::to_string(imported));
@@ -3973,7 +3964,7 @@ std::unordered_map<uint64_t, std::string> ImportCivilPointStyles(
     style.markerElevation = decoded->elevation;
     style.markerScaleFactor = decoded->scaleFactor;
     style.crossSpanPlottedInches = static_cast<float>(decoded->size *
-        CadBlockUnitsScale(CadDrawingInsUnitsName(st.drawingInsUnits), "inches"));
+        CadBlockUnitsScale(CadDrawingInsUnitsName(st.drawing.drawingInsUnits), "inches"));
     for (std::size_t component = 0; component < style.displayComponents.size(); ++component) {
       auto& target = style.displayComponents[component];
       target.visible = decoded->components[component].visible;
@@ -3998,9 +3989,9 @@ std::unordered_map<uint64_t, std::string> ImportCivilPointStyles(
         NoteSkip(skipHist, "AECC_POINT_STYLE(marker block geometry unsupported)");
     }
     names.emplace(object.handle.value, style.name);
-    const auto existing = std::find_if(st.surveyPointStyles.begin(), st.surveyPointStyles.end(),
+    const auto existing = std::find_if(st.drawing.surveyPointStyles.begin(), st.drawing.surveyPointStyles.end(),
         [&](const SurveyPointStyleDefinition& value) { return value.name == style.name; });
-    if (existing == st.surveyPointStyles.end()) st.surveyPointStyles.push_back(std::move(style));
+    if (existing == st.drawing.surveyPointStyles.end()) st.drawing.surveyPointStyles.push_back(std::move(style));
     else *existing = std::move(style);
   }
   if (!names.empty()) log.push_back("Civil point styles decoded: " + std::to_string(names.size()));
@@ -4249,7 +4240,7 @@ struct TableWriter {
         layers["0"] = layer0Obj->index;
       }
     }
-    for (const CadLayerRow& row : st.drawingLayerTable) {
+    for (const CadLayerRow& row : st.drawing.drawingLayerTable) {
       if (row.name.empty())
         continue;
       Dwg_Object_LAYER* ly = nullptr;
@@ -4284,7 +4275,7 @@ struct TableWriter {
   // it (TEXTSTYLE header var points at it, and dwg_add_TEXT/MTEXT/ATTDEF/ATTRIB default `style`
   // to it), so adding it again would be a second, conflicting STYLE named "Standard".
   void BuildStyleTable(const AppCommandState& st, float modelUnitsPerPlottedInch) {
-    for (const TextStyle& ts : st.textStyles) {
+    for (const TextStyle& ts : st.drawing.textStyles) {
       if (ts.name.empty()) continue;
       Dwg_Object_STYLE* sy = nullptr;
       if (BITCODE_H existing = dwg_find_tablehandle(dwg, ts.name.c_str(), "STYLE")) {
@@ -4305,13 +4296,13 @@ struct TableWriter {
       // fontFamily empty = app default (romans.shx), same convention TextStyle.hpp documents.
       sy->font_file = dwg_add_u8_input(dwg, ts.fontFamily.empty() ? "romans.shx" : ts.fontFamily.c_str());
       styles[LowerAscii(ts.name)] = sy->parent->objid;
-      if (ts.name == st.activeTextStyleName)
+      if (ts.name == st.drawing.activeTextStyleName)
         dwg->header_vars.TEXTSTYLE = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(sy), nullptr);
     }
   }
 
   void BuildDimensionStyleTable(const AppCommandState& st, float modelUnitsPerPlottedInch) {
-    const auto& named = st.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : st.dimensionStyles;
+    const auto& named = st.drawing.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : st.drawing.dimensionStyles;
     for (const DimensionStyle& style : named) {
       if (style.name.empty()) continue;
       Dwg_Object_DIMSTYLE* ds = EnsureDimStyleNamed(dwg, style.name);
@@ -4439,13 +4430,13 @@ struct TableWriter {
       };
       exportFeetZeros("zero", ds->DIMZIN); exportFeetZeros("altZero", ds->DIMALTZ);
       exportFeetZeros("tolZero", ds->DIMTZIN); exportFeetZeros("altTolZero", ds->DIMALTTZ);
-      if (style.name == st.activeDimensionStyle.name && ds->parent != nullptr)
+      if (style.name == st.drawing.activeDimensionStyle.name && ds->parent != nullptr)
         dwg->header_vars.DIMSTYLE = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(ds), nullptr);
     }
   }
 
   void BuildMleaderStyleTable(const AppCommandState& st, float modelUnitsPerPlottedInch) {
-    const auto& named = st.multileaderStyles.empty() ? MultileaderStyles::DefaultStyles() : st.multileaderStyles;
+    const auto& named = st.drawing.multileaderStyles.empty() ? MultileaderStyles::DefaultStyles() : st.drawing.multileaderStyles;
     for (const MultileaderStyle& style : named) {
       if (style.name.empty()) continue;
       const double mup = style.annotativeDefault ? 1.0 : std::max<double>(modelUnitsPerPlottedInch, 1.e-6);
@@ -4508,7 +4499,7 @@ struct TableWriter {
     if (dwg->header.version < R_2004) return;
     const double mup = std::max<double>(unitsPerInch, 1.e-6);
     const std::initializer_list<const char*> alignments = {"Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"};
-    for (const auto& style : state.tableStyles) {
+    for (const auto& style : state.drawing.tableStyles) {
       if (style.name.empty()) continue;
       auto* record = dwg_add_TABLESTYLE(dwg, style.name.c_str());
       if (!record) continue;
@@ -4808,16 +4799,18 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
     if (a != nullptr)
       tw.Apply(ent, *a);
   };
-  const size_t nSeg = content.userLinesFlat.size() / 6;
+  const size_t nSeg = content.lineCount();
   for (size_t i = 0; i < nSeg; ++i) {
-    dwg_point_3d a{content.userLinesFlat[i * 6 + 0], content.userLinesFlat[i * 6 + 1], content.userLinesFlat[i * 6 + 2]};
-    dwg_point_3d b{content.userLinesFlat[i * 6 + 3], content.userLinesFlat[i * 6 + 4], content.userLinesFlat[i * 6 + 5]};
+    const CadLineRecord ln = content.line(i);
+    dwg_point_3d a{ln.x0, ln.y0, ln.z0};
+    dwg_point_3d b{ln.x1, ln.y1, ln.z1};
     if (Dwg_Entity_LINE* e = dwg_add_LINE(blkhdr, &a, &b))
       apply(e->parent, AttrAt(content.userLineAttrs, i));
   }
-  const size_t nC = content.userCirclesCxCyZR.size() / 4;
+  const size_t nC = content.circleCount();
   for (size_t i = 0; i < nC; ++i) {
-    dwg_point_3d c{content.userCirclesCxCyZR[i * 4 + 0], content.userCirclesCxCyZR[i * 4 + 1], content.userCirclesCxCyZR[i * 4 + 2]};
+    const CadCircleRecord rec = content.circle(i);
+    dwg_point_3d c{rec.cx, rec.cy, rec.cz};
     float nx = kFlatNormalX, ny = kFlatNormalY, nz = kFlatNormalZ;
     CircleNormalAt(content.userCircleNormals, i, &nx, &ny, &nz);
     dwg_point_3d ext{0.0, 0.0, 1.0};
@@ -4830,7 +4823,7 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
         ext = {static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)};
       }
     }
-    if (Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(blkhdr, &c, content.userCirclesCxCyZR[i * 4 + 3])) {
+    if (Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(blkhdr, &c, rec.r)) {
       e->extrusion.x = ext.x;
       e->extrusion.y = ext.y;
       e->extrusion.z = ext.z;
@@ -4887,14 +4880,14 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
       continue;
     std::vector<dwg_point_2d> pts(static_cast<size_t>(nv));
     for (int v = 0; v < nv; ++v) {
-      const size_t k = static_cast<size_t>(a + v) * 3;
-      pts[static_cast<size_t>(v)].x = content.userPolylineVerts[k];
-      pts[static_cast<size_t>(v)].y = content.userPolylineVerts[k + 1];
+      const size_t k = static_cast<size_t>(a + v);
+      pts[static_cast<size_t>(v)].x = content.vertex(k).x;
+      pts[static_cast<size_t>(v)].y = content.vertex(k).y;
     }
     Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(blkhdr, nv, pts.data());
     if (lw == nullptr)
       continue;
-    const double z0 = content.userPolylineVerts[static_cast<size_t>(a) * 3 + 2];
+    const double z0 = content.vertex(a).z;
     if (z0 != 0.0) {
       lw->elevation = z0;
       lw->flag = static_cast<BITCODE_BS>(lw->flag | 8);
@@ -5021,7 +5014,7 @@ Dwg_Object_BLOCK_HEADER* EnsureStyledSurveyPointBlockDef(
       CadBlockRef reference;
       reference.defName = style.markerBlockName;
       float minX = 0, minY = 0, maxX = 0, maxY = 0;
-      CadBlockWorldAabb(state.blockDefs, reference, &minX, &minY, &maxX, &maxY);
+      CadBlockWorldAabb(state.drawing.blockDefs, reference, &minX, &minY, &maxX, &maxY);
       const double span = std::max(maxX - minX, maxY - minY);
       const double scale = style.markerSizeType == 3 ? 1.0 : span > 1.e-12 ? 2 * radius / span : 1.0;
       const auto& fixed = style.markerFixedScale;
@@ -5284,7 +5277,7 @@ struct TaggedAlignment {
 [[nodiscard]] bool AppendTaggedSegments(const AppCommandState& st, const Dwg_Object& obj, TaggedAlignment* g) {
   assert(g != nullptr && obj.tio.entity != nullptr);
   assert(g->segments.size() < g->segments.max_size());
-  const double ox = st.worldDocumentOriginX, oy = st.worldDocumentOriginY;
+  const double ox = st.drawing.worldDocumentOriginX, oy = st.drawing.worldDocumentOriginY;
   const Dwg_Object_Entity* ent = obj.tio.entity;
   const int index = static_cast<int>(g->segments.size()) + 1;
   if (obj.fixedtype == DWG_TYPE_LINE && ent->tio.LINE != nullptr) {
@@ -5343,7 +5336,7 @@ struct TaggedAlignment {
   double x = 0.0, y = 0.0, station = 0.0;
   if (!it->hasStart && tag.size() >= 4 && tag[2] == "START" && ParseAlignmentStartTag(tag[3], &x, &y, &station)) {
     it->hasStart = true;
-    it->start = {x - st.worldDocumentOriginX, y - st.worldDocumentOriginY};
+    it->start = {x - st.drawing.worldDocumentOriginX, y - st.drawing.worldDocumentOriginY};
     it->startingStation = station;
   }
   return true;
@@ -5355,7 +5348,7 @@ void ImportTaggedAlignments(AppCommandState& st, Dwg_Data* dwg, const std::vecto
                             std::unordered_map<std::string, int>* skipHist, std::vector<std::string>& log,
                             const LegacyLeaderScaleContext& scaleContext) {
   assert(dwg != nullptr);
-  assert(st.alignments.size() < st.alignments.max_size());
+  assert(st.drawing.alignments.size() < st.drawing.alignments.max_size());
   for (const TaggedAlignment& g : groups) {
     if (g.segments.empty()) continue;
     alignment::FromObjectsOptions opt;
@@ -5379,7 +5372,7 @@ void ImportTaggedAlignments(AppCommandState& st, Dwg_Data* dwg, const std::vecto
     log.push_back("DWG import — alignment \"" + g.name + "\" rebuilt from its " + std::to_string(g.objects.size()) +
                   " drawing entities (the file has no GoSurvey data)" +
                   (g.polylines > 0 ? "; its spirals were read as tangents." : "."));
-    st.alignments.push_back(std::move(rebuilt));
+    st.drawing.alignments.push_back(std::move(rebuilt));
   }
 }
 
@@ -5456,7 +5449,7 @@ void ImportTaggedAlignments(AppCommandState& st, Dwg_Data* dwg, const std::vecto
 std::unordered_set<BITCODE_RLL> ImportCivilAlignments(AppCommandState& st, Dwg_Data* dwg,
                                                       std::vector<std::string>& log) {
   assert(dwg != nullptr);
-  assert(st.alignments.size() < st.alignments.max_size());
+  assert(st.drawing.alignments.size() < st.drawing.alignments.max_size());
   std::unordered_set<BITCODE_RLL> imported;
   for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
     const Dwg_Object& object = dwg->object[i];
@@ -5481,7 +5474,7 @@ std::unordered_set<BITCODE_RLL> ImportCivilAlignments(AppCommandState& st, Dwg_D
     std::vector<std::string> warnings;
     alignment::Alignment made;
     bool ok = rec.has_value() && CivilAlignmentPis(*rec, &pis, &settings, &why);
-    for (alignment::Point2& p : pis) p = {p.x - st.worldDocumentOriginX, p.y - st.worldDocumentOriginY};
+    for (alignment::Point2& p : pis) p = {p.x - st.drawing.worldDocumentOriginX, p.y - st.drawing.worldDocumentOriginY};
     ok = ok && alignment::BuildFromPis(pis, settings, &made, &why, &warnings);
     if (ok && !warnings.empty()) {
       why = warnings.front();  // a curve that does not fit as decoded would not be Civil 3D's geometry
@@ -5517,7 +5510,7 @@ std::unordered_set<BITCODE_RLL> ImportCivilAlignments(AppCommandState& st, Dwg_D
     log.push_back("  not decoded for \"" + name + "\": type, description, alignment style, label set, labels, design "
                   "criteria and design speeds (Standard and defaults used)" +
                   (hasSpiral ? "; the spiral type is not decoded and its spirals are read as clothoids" : "") + ".");
-    st.alignments.push_back(std::move(made));
+    st.drawing.alignments.push_back(std::move(made));
     imported.insert(object.handle.value);
   }
   return imported;
@@ -5624,7 +5617,7 @@ void WriteAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent,
 // Issue #622: persist the status-bar CANNOSCALE choice on *Model_Space (object EED shares entity
 // layout per LibreDWG encode.c). AutoCAD ignores this; GoSurvey native reopen uses it before plot sync.
 [[nodiscard]] bool ApplyGosurveyCannoscaleFromEed(const Dwg_Object_Entity* ent, AppCommandState& st) {
-  if (ent == nullptr || ent->eed == nullptr || ent->num_eed == 0 || st.annotationScales.empty())
+  if (ent == nullptr || ent->eed == nullptr || ent->num_eed == 0 || st.drawing.annotationScales.empty())
     return false;
   std::vector<std::string> strings;
   strings.reserve(static_cast<size_t>(ent->num_eed));
@@ -5637,8 +5630,8 @@ void WriteAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent,
     if (strings[i] != kGosurveyCannoscaleEedTag)
       continue;
     const std::string& scaleName = strings[i + 1];
-    for (int j = 0; j < static_cast<int>(st.annotationScales.size()); ++j) {
-      if (st.annotationScales[static_cast<size_t>(j)].name == scaleName) {
+    for (int j = 0; j < static_cast<int>(st.drawing.annotationScales.size()); ++j) {
+      if (st.drawing.annotationScales[static_cast<size_t>(j)].name == scaleName) {
         st.currentAnnotationScaleIndex = j;
         return true;
       }
@@ -5649,12 +5642,12 @@ void WriteAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent,
 }
 
 static void WriteGosurveyCannoscaleOnModelSpace(const AppCommandState& st, Dwg_Data* dwg) {
-  if (dwg == nullptr || st.annotationScales.empty())
+  if (dwg == nullptr || st.drawing.annotationScales.empty())
     return;
   const int ix = st.currentAnnotationScaleIndex;
-  if (ix < 0 || ix >= static_cast<int>(st.annotationScales.size()))
+  if (ix < 0 || ix >= static_cast<int>(st.drawing.annotationScales.size()))
     return;
-  const std::string& scaleName = st.annotationScales[static_cast<size_t>(ix)].name;
+  const std::string& scaleName = st.drawing.annotationScales[static_cast<size_t>(ix)].name;
   if (scaleName.empty())
     return;
   Dwg_Object* ms = dwg_model_space_object(dwg);
@@ -5667,12 +5660,12 @@ static void WriteGosurveyCannoscaleOnModelSpace(const AppCommandState& st, Dwg_D
 // AutoCAD reads its active annotation scale from AcDbVariableDictionary.CANNOSCALE. Keep the
 // GoSurvey EED copy for older GoSurvey versions, but write the native variable for other CAD apps.
 static bool WriteNativeCannoscale(const AppCommandState& st, Dwg_Data* dwg) {
-  if (dwg == nullptr || st.annotationScales.empty())
+  if (dwg == nullptr || st.drawing.annotationScales.empty())
     return false;
   const int ix = st.currentAnnotationScaleIndex;
-  if (ix < 0 || ix >= static_cast<int>(st.annotationScales.size()))
+  if (ix < 0 || ix >= static_cast<int>(st.drawing.annotationScales.size()))
     return false;
-  const std::string& scaleName = st.annotationScales[static_cast<size_t>(ix)].name;
+  const std::string& scaleName = st.drawing.annotationScales[static_cast<size_t>(ix)].name;
   if (scaleName.empty())
     return false;
 
@@ -5885,7 +5878,7 @@ bool WriteCadSurfaceTin(const AppCommandState& st, const CadSurface& surface, Dw
 
 size_t CountSkippedMeshes(const AppCommandState& st) {
   size_t n = 0;
-  for (const std::shared_ptr<const CadMesh>& mp : st.cadMeshes) {
+  for (const std::shared_ptr<const CadMesh>& mp : st.drawing.cadMeshes) {
     if (mp == nullptr || mp->triangleCount() < 1)
       ++n;
   }
@@ -5894,7 +5887,7 @@ size_t CountSkippedMeshes(const AppCommandState& st) {
 
 size_t CountSkippedSurfaces(const AppCommandState& st) {
   size_t n = 0;
-  for (const CadSurface& s : st.cadSurfaces) {
+  for (const CadSurface& s : st.drawing.cadSurfaces) {
     if (s.tin == nullptr || s.triangleCount() < 1)
       ++n;
   }
@@ -5915,7 +5908,7 @@ bool WriteCadTable(const AppCommandState& st, const CadTable& table, Dwg_Object_
   const float w = std::max(table.width, 1.e-3f);
   const float h = std::max(table.height, 1.e-3f);
   const double z = static_cast<double>(table.insZ);
-  const auto* tableStyle = CadTableFindStyle(st.tableStyles, table.styleName);
+  const auto* tableStyle = CadTableFindStyle(st.drawing.tableStyles, table.styleName);
   const std::map<std::string, std::string> emptyProperties;
   const auto& properties = tableStyle ? tableStyle->props : emptyProperties;
   const auto rowKind = [&](std::size_t row) -> std::string {
@@ -5978,7 +5971,7 @@ bool WriteCadTable(const AppCommandState& st, const CadTable& table, Dwg_Object_
     if (Dwg_Entity_MTEXT* mt = dwg_add_MTEXT(hdr, &p, std::max<double>(local.x1 - local.x0, 1.e-3), flat.c_str())) {
       mt->text_height = textH;
       mt->attachment = static_cast<BITCODE_BS>(vertical * 3 + horizontal + 1);
-      if (const auto* style = CadTableFindStyle(st.tableStyles, table.styleName)) {
+      if (const auto* style = CadTableFindStyle(st.drawing.tableStyles, table.styleName)) {
         const auto& name = row == 0 && table.mergeTitleRow ? style->titleTextStyleName :
             row == static_cast<std::size_t>(table.mergeTitleRow ? 1 : 0) ? style->headerTextStyleName : style->textStyleName;
         if (const auto reference = dwg_find_tablehandle(tw.dwg, name.c_str(), "STYLE"))
@@ -6014,7 +6007,7 @@ bool WriteCadTable(const AppCommandState& st, const CadTable& table, Dwg_Object_
 
 size_t CountSkippedTables(const AppCommandState& st) {
   size_t n = 0;
-  for (const CadTable& t : st.cadTables) {
+  for (const CadTable& t : st.drawing.cadTables) {
     if (t.cols <= 0)
       ++n;
   }
@@ -6051,8 +6044,8 @@ bool WritePointCloudMarker(const AppCommandState& st, const CadPointCloud& pc, D
   double mnX = 0, mnY = 0, mnZ = 0, mxX = 0, mxY = 0, mxZ = 0;
   if (!CloudBounds(pc, &mnX, &mnY, &mnZ, &mxX, &mxY, &mxZ))
     return false;
-  const double ox = st.worldDocumentOriginX;
-  const double oy = st.worldDocumentOriginY;
+  const double ox = st.drawing.worldDocumentOriginX;
+  const double oy = st.drawing.worldDocumentOriginY;
   const dwg_point_3d corners[8] = {
       {mnX + ox, mnY + oy, mnZ}, {mxX + ox, mnY + oy, mnZ}, {mxX + ox, mxY + oy, mnZ},
       {mnX + ox, mxY + oy, mnZ}, {mnX + ox, mnY + oy, mxZ}, {mxX + ox, mnY + oy, mxZ},
@@ -6076,7 +6069,7 @@ bool WritePointCloudMarker(const AppCommandState& st, const CadPointCloud& pc, D
 
 size_t CountSkippedPointClouds(const AppCommandState& st) {
   size_t n = 0;
-  for (const std::shared_ptr<const CadPointCloud>& pc : st.cadPointClouds) {
+  for (const std::shared_ptr<const CadPointCloud>& pc : st.drawing.cadPointClouds) {
     if (pc == nullptr || pc->sourcePath.empty() || pc->pointsXyz.size() < 6)
       ++n;
   }
@@ -6089,8 +6082,8 @@ size_t CountSkippedPointClouds(const AppCommandState& st) {
 namespace dwg_solid_export {
 
 void WorldPoint(const AppCommandState& st, const ray3d::Vec3& local, dwg_point_3d* out) {
-  out->x = local.x + st.worldDocumentOriginX;
-  out->y = local.y + st.worldDocumentOriginY;
+  out->x = local.x + st.drawing.worldDocumentOriginX;
+  out->y = local.y + st.drawing.worldDocumentOriginY;
   out->z = local.z;
 }
 
@@ -6172,7 +6165,7 @@ bool WriteSolidEntity(const AppCommandState& st, const brep::Solid& solid, Dwg_O
   Dwg_Entity__3DSOLID* ent = WriteRecipeSolid(hdr, st, solid.recipe);
   if (ent == nullptr) {
     double mmPerUnit = 304.8;
-    switch (st.drawingInsUnits) {
+    switch (st.drawing.drawingInsUnits) {
     case 1: mmPerUnit = 25.4; break;
     case 4: mmPerUnit = 1.0; break;
     case 5: mmPerUnit = 10.0; break;
@@ -6198,7 +6191,7 @@ bool WriteSolidEntity(const AppCommandState& st, const brep::Solid& solid, Dwg_O
 
 size_t CountSkippedSolids(const AppCommandState& st) {
   size_t n = 0;
-  for (const CadSolidPtr& sp : st.cadSolids) {
+  for (const CadSolidPtr& sp : st.drawing.cadSolids) {
     if (sp != nullptr && !CanWriteSolid(*sp))
       ++n;
   }
@@ -6253,8 +6246,8 @@ bool WritePipeRunEntity(const AppCommandState& st, const CadPipeRun& run, Dwg_Ob
 
 size_t CountSkippedPipeRuns(const AppCommandState& st) {
   size_t n = 0;
-  for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
-    const CadPipeRun& run = st.cadPipeRuns[ri];
+  for (size_t ri = 0; ri < st.drawing.cadPipeRuns.size(); ++ri) {
+    const CadPipeRun& run = st.drawing.cadPipeRuns[ri];
     bool canExport = false;
     std::vector<CadSolidPtr> built;
     if (CadBuildPipeRunSolids(run, &built)) {
@@ -6306,10 +6299,10 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
   add("solid(s)", dwg_solid_export::CountSkippedSolids(st));
 
   // Degradations: the entity IS written, but a property on it is not.
-  const std::vector<EntityAttributes>* attrSets[] = {&st.userLineAttrs, &st.userCircleAttrs,
-                                                      &st.userArcAttrs,  &st.userPolylineAttrs,
-                                                      &st.cadAnnotationAttrs, &st.userEllAttrs,
-                                                      &st.cadFilledRegionAttrs};
+  const std::vector<EntityAttributes>* attrSets[] = {&st.drawing.userLineAttrs, &st.drawing.userCircleAttrs,
+                                                      &st.drawing.userArcAttrs,  &st.drawing.userPolylineAttrs,
+                                                      &st.drawing.cadAnnotationAttrs, &st.drawing.userEllAttrs,
+                                                      &st.drawing.cadFilledRegionAttrs};
   const bool r2004Write = DwgSaveVersionUsesR2004Features(st.dwgExportVersion);
   size_t nColorRounded = 0, nTransparency = 0;
   auto countRoundedRgb = [&](const std::string& colorStr) {
@@ -6334,13 +6327,13 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
       countTransparencyLoss(a, FindDrawingLayerRowCi(st, a.layer.empty() ? std::string("0") : a.layer));
     }
   }
-  for (const CadLayerRow& row : st.drawingLayerTable)
+  for (const CadLayerRow& row : st.drawing.drawingLayerTable)
     countRoundedRgb(row.color);
   add("colour(s) (rounded to the nearest AutoCAD index colour)", nColorRounded);
   add("object(s) with transparency (not written)", nTransparency);
 
   size_t nRotatedText = 0;
-  for (const CadAnnotation& a : st.cadAnnotations)
+  for (const CadAnnotation& a : st.drawing.cadAnnotations)
     if ((a.kind == CadAnnotation::Kind::Text || a.kind == CadAnnotation::Kind::Mtext) &&
         std::fabs(a.rotationRad) > 1e-6f)
       ++nRotatedText;
@@ -6349,14 +6342,14 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
   const bool nativeMl = LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2010;
   if (!nativeMl) {
     size_t nMlExtraBranches = 0;
-    for (const CadMultileader& ml : st.cadMultileaders)
+    for (const CadMultileader& ml : st.drawing.cadMultileaders)
       nMlExtraBranches += ml.extraLeaderPaths.size();
     add("multileader extra branch(es) (R2000/R2004 export keeps primary branch only)", nMlExtraBranches);
   }
 
   if (!r2004Write) {
     size_t nDynBlock = 0;
-    for (const CadBlockDefinition& d : st.blockDefs) {
+    for (const CadBlockDefinition& d : st.drawing.blockDefs) {
       if (CadBlockDefinitionNeedsDynamicDwgExport(d))
         ++nDynBlock;
     }
@@ -6376,18 +6369,18 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
   // POLYLINE_3D has no bulge — a run that is BOTH 3D and curved still degrades to straight
   // segments between its vertices.
   size_t nFlattenedCurves = 0;
-  for (size_t i = 0; i + 1 < st.userPolylineOffsets.size(); ++i) {
-    const int a = st.userPolylineOffsets[i];
-    const int b = st.userPolylineOffsets[i + 1];
+  for (size_t i = 0; i + 1 < st.drawing.userPolylineOffsets.size(); ++i) {
+    const int a = st.drawing.userPolylineOffsets[i];
+    const int b = st.drawing.userPolylineOffsets[i + 1];
     if (b - a < 2)
       continue;
-    const float z0 = st.userPolylineVerts[static_cast<size_t>(a) * 3 + 2];
+    const float z0 = st.drawing.vertex(a).z;
     bool is3d = false, anyBulge = false;
     for (int vi = a; vi < b; ++vi) {
-      if (vi > a && std::fabs(st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 2] - z0) > 1e-4f)
+      if (vi > a && std::fabs(st.drawing.vertex(vi).z - z0) > 1e-4f)
         is3d = true;
-      if (static_cast<size_t>(vi) < st.userPolylineVertsBulge.size() &&
-          st.userPolylineVertsBulge[static_cast<size_t>(vi)] != 0.f)
+      if (static_cast<size_t>(vi) < st.drawing.userPolylineVertsBulge.size() &&
+          st.drawing.userPolylineVertsBulge[static_cast<size_t>(vi)] != 0.f)
         anyBulge = true;
     }
     if (is3d && anyBulge)
@@ -6509,9 +6502,9 @@ static void WriteBlockRefInsertToHeader(Dwg_Object_BLOCK_HEADER* hdr, TableWrite
   const std::uint64_t blockOwnerHandle = BlockHeaderObjectHandle(hdr);
   if (dwg_find_tablehandle(tw.dwg, ref.defName.c_str(), "BLOCK") == nullptr)
     return;
-  const int defIdx = CadBlockFindDef(st.blockDefs, ref.defName);
+  const int defIdx = CadBlockFindDef(st.drawing.blockDefs, ref.defName);
   const CadBlockDefinition* def =
-      defIdx >= 0 ? &st.blockDefs[static_cast<size_t>(defIdx)] : nullptr;
+      defIdx >= 0 ? &st.drawing.blockDefs[static_cast<size_t>(defIdx)] : nullptr;
 
   dwg_point_3d ins{};
   ins.x = static_cast<double>(ref.xf.x) + insOriginAddX;
@@ -6863,19 +6856,19 @@ static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr
   };
   const DimensionStyle& style = CadDimensionStyleForAnnotation(st, an);
   CadDimStrokeParams sp;
-  sp.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;
+  sp.modelUnitsPerPlottedInch = st.drawing.modelUnitsPerPlottedInch;
   sp.arrowSizeInches = style.arrowSizeInches;
   sp.arrowType = style.arrowType;
   sp.style = &style;
   CadDimWorldStrokes strokes;
   CadDimBuildWorldStrokes(an, sp, &strokes);
   const double labelH = std::max(static_cast<double>(an.ovHeight ? an.plottedHeightInches : style.textSizeInches) *
-                                     std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6) *
+                                     std::max(static_cast<double>(st.drawing.modelUnitsPerPlottedInch), 1e-6) *
                                      (StyleFlag(style.props, "annotative") ? 1.0 : StyleNumber(style.props, "overallScale", 1)),
                                  1e-3);
   Dwg_Object_BLOCK_HEADER* anonBlk = WriteDimAnonymousBlock(
-      dwg, &ds.anonCounter, strokes, static_cast<double>(an.insZ), st.worldDocumentOriginX,
-      st.worldDocumentOriginY, CadAnnotationResolvedText(st, an), labelH);
+      dwg, &ds.anonCounter, strokes, static_cast<double>(an.insZ), st.drawing.worldDocumentOriginX,
+      st.drawing.worldDocumentOriginY, CadAnnotationResolvedText(st, an), labelH);
   dwg_point_3d textMid{};
   world(an.insX, an.insY, an.insZ, &textMid);
   Dwg_Entity_DIMENSION_ALIGNED* dimA = nullptr;
@@ -6937,7 +6930,7 @@ static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr
     }
   }
   if (common != nullptr) {
-    const std::string dimStyleName = an.dimensionStyleName.empty() ? st.activeDimensionStyle.name : an.dimensionStyleName;
+    const std::string dimStyleName = an.dimensionStyleName.empty() ? st.drawing.activeDimensionStyle.name : an.dimensionStyleName;
     if (BITCODE_H styleRef = dwg_find_tablehandle(dwg, dimStyleName.c_str(), "DIMSTYLE"))
       common->dimstyle = dwg_add_handleref(dwg, 5, styleRef->absolute_ref, nullptr);
     common->user_text = dwg_add_u8_input(dwg, SanitizeDwgTextSymbols(an.dimensionTextOverride).c_str());
@@ -7036,8 +7029,8 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
     vp->ambient_color.index = 250;
     vp->ambient_color.method = DWG_COLOR_METHOD_ACI;
     vp->ambient_color.rgb = 0x00333333u;
-    const double ox = st.worldDocumentOriginX;
-    const double oy = st.worldDocumentOriginY;
+    const double ox = st.drawing.worldDocumentOriginX;
+    const double oy = st.drawing.worldDocumentOriginY;
     vp->view_target.x = gv.modelCenterX + ox;
     vp->view_target.y = gv.modelCenterY + oy;
     vp->view_target.z = 0.0;
@@ -7286,9 +7279,9 @@ static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, 
                                       std::vector<std::string>& log, DwgExportFieldContext* fldCtx,
                                       DwgExportVisualStyleContext* vsCtx, DwgSaveVersion outputVersion,
                                       bool flattenPaperMultileaders) {
-  if (st.paperLayouts.empty())
+  if (st.drawing.paperLayouts.empty())
     return;
-  for (const PaperLayout& L : st.paperLayouts) {
+  for (const PaperLayout& L : st.drawing.paperLayouts) {
     for (const EntityAttributes& a : L.paperLineAttrs)
       tw.EnsureLtype(a.linetype);
     for (const std::vector<EntityAttributes>* v :
@@ -7304,8 +7297,8 @@ static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, 
     (void)L;
   }
   size_t nWritten = 0;
-  for (size_t li = 0; li < st.paperLayouts.size(); ++li) {
-    const PaperLayout& L = st.paperLayouts[li];
+  for (size_t li = 0; li < st.drawing.paperLayouts.size(); ++li) {
+    const PaperLayout& L = st.drawing.paperLayouts[li];
     Dwg_Object_BLOCK_HEADER* ps =
         EnsurePaperSpaceBlockHeader(dwg, li, L.name.empty() ? "Layout" : L.name.c_str());
     if (ps == nullptr)
@@ -7386,8 +7379,8 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     }
     if (e->height > 1.e-6)
       vp.scaleModelPerPaperIn = static_cast<float>(e->VIEWSIZE / e->height);
-    vp.modelCenterX = e->view_target.x - st.worldDocumentOriginX;
-    vp.modelCenterY = e->view_target.y - st.worldDocumentOriginY;
+    vp.modelCenterX = e->view_target.x - st.drawing.worldDocumentOriginX;
+    vp.modelCenterY = e->view_target.y - st.drawing.worldDocumentOriginY;
     if (!at.layer.empty() && at.layer != "0")
       vp.layer = at.layer;
     vp.visualStyle = DwgImportVisualStyleFromViewport(dwg, e);
@@ -7399,7 +7392,7 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     if (vp.camPerspective && e->LENSLENGTH > 1.e-6)
       vp.camFovDeg = static_cast<float>(2.0 * std::atan(35.0 / (2.0 * e->LENSLENGTH)) * (180.0 / kPi));
     if (e->UCSVP) {
-      vp.activeUcs.origin = {e->ucsorg.x - st.worldDocumentOriginX, e->ucsorg.y - st.worldDocumentOriginY,
+      vp.activeUcs.origin = {e->ucsorg.x - st.drawing.worldDocumentOriginX, e->ucsorg.y - st.drawing.worldDocumentOriginY,
                              e->ucsorg.z};
       vp.activeUcs.xAxis = {e->ucsxdir.x, e->ucsxdir.y, e->ucsxdir.z};
       vp.activeUcs.yAxis = {e->ucsydir.x, e->ucsydir.y, e->ucsydir.z};
@@ -7545,9 +7538,9 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
       ty == DWG_TYPE_HATCH || ty == DWG_TYPE_MULTILEADER || ty == DWG_TYPE_LEADER ||
       ty == DWG_TYPE_TABLE || ty == DWG_TYPE_POINT || ty == DWG_TYPE_SPLINE) {
     AppCommandState scratch;
-    scratch.worldDocumentOriginX = 0.0;
-    scratch.worldDocumentOriginY = 0.0;
-    scratch.modelUnitsPerPlottedInch = 1.f;
+    scratch.drawing.worldDocumentOriginX = 0.0;
+    scratch.drawing.worldDocumentOriginY = 0.0;
+    scratch.drawing.modelUnitsPerPlottedInch = 1.f;
     // The model-space reader drops paper-space entities (entmode 1); this IS the sheet, so read it as model.
     const auto savedEntMode = ent->entmode;
     ent->entmode = 2;
@@ -7564,7 +7557,7 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
 static void ImportPaperLayoutsFromDwg(AppCommandState& st, Dwg_Data* dwg,
                                       std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
                                       const LegacyLeaderScaleContext& scaleContext) {
-  st.paperLayouts.clear();
+  st.drawing.paperLayouts.clear();
   struct LayoutRow {
     int tab = 0;
     Dwg_Object* layObj = nullptr;
@@ -7627,7 +7620,7 @@ static void ImportPaperLayoutsFromDwg(AppCommandState& st, Dwg_Data* dwg,
         ImportPaperEntity(pl, st, dwg, e, skipHist, degenerateExtrusions, scaleContext);
       }
     }
-    st.paperLayouts.push_back(std::move(pl));
+    st.drawing.paperLayouts.push_back(std::move(pl));
   }
 }
 
@@ -7690,12 +7683,12 @@ static bool AppendDwgAnnotationScaleObject(Dwg_Data* dwg, const CadAnnotationSca
 static void WriteAnnotationScalesFromState(const AppCommandState& st, Dwg_Data* dwg,
                                            std::vector<std::string>& log,
                                            DwgExportAnnotContext* annotCtx, DwgSaveVersion outputVersion) {
-  if (dwg == nullptr || st.annotationScales.empty())
+  if (dwg == nullptr || st.drawing.annotationScales.empty())
     return;
   if (LibreDwgVersionFromExport(outputVersion) < R_2007)
     return;
   size_t nWritten = 0;
-  for (const CadAnnotationScale& s : st.annotationScales) {
+  for (const CadAnnotationScale& s : st.drawing.annotationScales) {
     BITCODE_HV scaleHandle = 0;
     if (AppendDwgAnnotationScaleObject(dwg, s, &scaleHandle)) {
       ++nWritten;
@@ -7711,12 +7704,12 @@ static void WriteAnnotationScalesFromState(const AppCommandState& st, Dwg_Data* 
 
 static void WriteViewportZoomScalesFromState(const AppCommandState& st, Dwg_Data* dwg,
                                              std::vector<std::string>& log, DwgSaveVersion outputVersion) {
-  if (dwg == nullptr || st.viewportZoomScales.empty())
+  if (dwg == nullptr || st.drawing.viewportZoomScales.empty())
     return;
   if (LibreDwgVersionFromExport(outputVersion) < R_2007)
     return;
   size_t nWritten = 0;
-  for (const CadAnnotationScale& s : st.viewportZoomScales) {
+  for (const CadAnnotationScale& s : st.drawing.viewportZoomScales) {
     CadAnnotationScale tagged = s;
     tagged.name = std::string(kViewportZoomScaleDwgPrefix) + s.name;
     BITCODE_HV scaleHandle = 0;
@@ -7732,8 +7725,8 @@ static void WriteViewportZoomScalesFromState(const AppCommandState& st, Dwg_Data
 void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr,
                    std::vector<std::string>& log, DwgSaveVersion outputVersion, bool asDxf) {
   auto world = [&](float lx, float ly, double z, dwg_point_3d* p) {
-    p->x = static_cast<double>(lx) + st.worldDocumentOriginX;
-    p->y = static_cast<double>(ly) + st.worldDocumentOriginY;
+    p->x = static_cast<double>(lx) + st.drawing.worldDocumentOriginX;
+    p->y = static_cast<double>(ly) + st.drawing.worldDocumentOriginY;
     p->z = z;
   };
 
@@ -7748,17 +7741,17 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   tw.layerState = &st;
   tw.annotContext = &annotCtx;
   tw.BuildLayerTable(st);
-  tw.BuildStyleTable(st, st.modelUnitsPerPlottedInch);
-  tw.BuildDimensionStyleTable(st, st.modelUnitsPerPlottedInch);
-  tw.BuildMleaderStyleTable(st, st.modelUnitsPerPlottedInch);
-  tw.BuildTableStyleTable(st, st.modelUnitsPerPlottedInch);
+  tw.BuildStyleTable(st, st.drawing.modelUnitsPerPlottedInch);
+  tw.BuildDimensionStyleTable(st, st.drawing.modelUnitsPerPlottedInch);
+  tw.BuildMleaderStyleTable(st, st.drawing.modelUnitsPerPlottedInch);
+  tw.BuildTableStyleTable(st, st.drawing.modelUnitsPerPlottedInch);
   WriteAnnotationScalesFromState(st, dwg, log, &annotCtx, outputVersion);
   WriteViewportZoomScalesFromState(st, dwg, log, outputVersion);
   // Register every linetype the entities reference up front, so no LTYPE table object is created
   // after the entity records have started going into the object array.
   for (const std::vector<EntityAttributes>* v :
-       {&st.userLineAttrs, &st.userCircleAttrs, &st.userArcAttrs, &st.userPolylineAttrs,
-        &st.cadAnnotationAttrs, &st.userEllAttrs, &st.cadFilledRegionAttrs}) {
+       {&st.drawing.userLineAttrs, &st.drawing.userCircleAttrs, &st.drawing.userArcAttrs, &st.drawing.userPolylineAttrs,
+        &st.drawing.cadAnnotationAttrs, &st.drawing.userEllAttrs, &st.drawing.cadFilledRegionAttrs}) {
     for (const EntityAttributes& a : *v)
       tw.EnsureLtype(a.linetype);
   }
@@ -7785,24 +7778,26 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       DwgExportRegisterEntityHandle(&fldCtx, a->id, ent);
   };
 
-  const size_t nSeg = st.userLinesFlat.size() / 6;
+  const size_t nSeg = st.drawing.lineCount();
   for (size_t i = 0; i < nSeg; ++i) {
     dwg_point_3d a{}, b{};
-    world(st.userLinesFlat[i * 6 + 0], st.userLinesFlat[i * 6 + 1], st.userLinesFlat[i * 6 + 2], &a);
-    world(st.userLinesFlat[i * 6 + 3], st.userLinesFlat[i * 6 + 4], st.userLinesFlat[i * 6 + 5], &b);
+    const CadLineRecord ln = st.drawing.line(i);
+    world(ln.x0, ln.y0, ln.z0, &a);
+    world(ln.x1, ln.y1, ln.z1, &b);
     Dwg_Entity_LINE* e = dwg_add_LINE(hdr, &a, &b);
     if (e != nullptr) {
-      const EntityAttributes* la = AttrAt(st.userLineAttrs, i);
+      const EntityAttributes* la = AttrAt(st.drawing.userLineAttrs, i);
       apply(e->parent, la);
       regEnt(e, la);
     }
   }
-  const size_t nC = st.userCirclesCxCyZR.size() / 4;
+  const size_t nC = st.drawing.circleCount();
   for (size_t i = 0; i < nC; ++i) {
     dwg_point_3d c{};
-    world(st.userCirclesCxCyZR[i * 4 + 0], st.userCirclesCxCyZR[i * 4 + 1], st.userCirclesCxCyZR[i * 4 + 2], &c);
+    const CadCircleRecord rec = st.drawing.circle(i);
+    world(rec.cx, rec.cy, rec.cz, &c);
     float nx = kFlatNormalX, ny = kFlatNormalY, nz = kFlatNormalZ;
-    CircleNormalAt(st.userCircleNormals, i, &nx, &ny, &nz);
+    CircleNormalAt(st.drawing.userCircleNormals, i, &nx, &ny, &nz);
     const bool circFlat = IsFlatNormal(nx, ny, nz);
     dwg_point_3d ext{0.0, 0.0, 1.0};
     if (!circFlat) {
@@ -7818,18 +7813,18 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         ext.z = static_cast<double>(nz);
       }
     }
-    Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(hdr, &c, static_cast<double>(st.userCirclesCxCyZR[i * 4 + 3]));
+    Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(hdr, &c, static_cast<double>(rec.r));
     if (e != nullptr) {
       e->extrusion.x = ext.x;
       e->extrusion.y = ext.y;
       e->extrusion.z = ext.z;
-      const EntityAttributes* ca = AttrAt(st.userCircleAttrs, i);
+      const EntityAttributes* ca = AttrAt(st.drawing.userCircleAttrs, i);
       apply(e->parent, ca);
       regEnt(e, ca);
     }
   }
-  for (size_t i = 0; i < st.userArcs.size(); ++i) {
-    const CadArc& arc = st.userArcs[i];
+  for (size_t i = 0; i < st.drawing.userArcs.size(); ++i) {
+    const CadArc& arc = st.drawing.userArcs[i];
     dwg_point_3d c{};
     world(arc.cx, arc.cy, arc.z, &c);
     const double a0 = static_cast<double>(arc.startRad);
@@ -7862,7 +7857,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       e->extrusion.x = ext.x;
       e->extrusion.y = ext.y;
       e->extrusion.z = ext.z;
-      const EntityAttributes* aa = AttrAt(st.userArcAttrs, i);
+      const EntityAttributes* aa = AttrAt(st.drawing.userArcAttrs, i);
       apply(e->parent, aa);
       regEnt(e, aa);
     }
@@ -7872,14 +7867,14 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   // LWPOLYLINE, each tilted curved edge becomes its own ARC carrying the
   // segment's own plane (IsFlatNormal guard, BulgeArc + BuildTilted...).
   // Closure is not preserved through a split (ADR-053 (e)), same as DXF.
-  for (size_t i = 0; i + 1 < st.userPolylineOffsets.size(); ++i) {
-    const int a = st.userPolylineOffsets[i];
-    const int b = st.userPolylineOffsets[i + 1];
+  for (size_t i = 0; i + 1 < st.drawing.userPolylineOffsets.size(); ++i) {
+    const int a = st.drawing.userPolylineOffsets[i];
+    const int b = st.drawing.userPolylineOffsets[i + 1];
     const int nv = b - a;
     if (nv < 2)
       continue;
-    const EntityAttributes* atPtr = AttrAt(st.userPolylineAttrs, i);
-    const bool closed = i < st.userPolylineClosed.size() && st.userPolylineClosed[i] != 0;
+    const EntityAttributes* atPtr = AttrAt(st.drawing.userPolylineAttrs, i);
+    const bool closed = i < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[i] != 0;
 
     auto emitPolylineRun = [&](int vStart, int vEndIncl, bool runClosed) {
       if (vEndIncl - vStart < 1)
@@ -7891,11 +7886,11 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       // POLYLINE_3D + VERTEX_3D carries a real Z per vertex instead; it does not carry a bulge, so
       // a curved 3D run's curve degrades to straight segments — same precedent as DxfIo's own
       // genuinely-3D-polyline path.
-      const double z0 = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(vStart) * 3 + 2]);
+      const double z0 = static_cast<double>(st.drawing.vertex(vStart).z);
       bool is3d = false;
       for (int v = 1; v < runNv; ++v) {
-        const int k = (vStart + v) * 3;
-        if (std::fabs(static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k) + 2]) - z0) > 1e-4) {
+        const size_t k = static_cast<size_t>(vStart + v);
+        if (std::fabs(static_cast<double>(st.drawing.vertex(k).z) - z0) > 1e-4) {
           is3d = true;
           break;
         }
@@ -7903,12 +7898,12 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       if (is3d) {
         std::vector<dwg_point_3d> pts3(static_cast<size_t>(runNv));
         for (int v = 0; v < runNv; ++v) {
-          const int k = (vStart + v) * 3;
+          const size_t k = static_cast<size_t>(vStart + v);
           pts3[static_cast<size_t>(v)].x =
-              static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k)]) + st.worldDocumentOriginX;
+              static_cast<double>(st.drawing.vertex(k).x) + st.drawing.worldDocumentOriginX;
           pts3[static_cast<size_t>(v)].y =
-              static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k + 1)]) + st.worldDocumentOriginY;
-          pts3[static_cast<size_t>(v)].z = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k + 2)]);
+              static_cast<double>(st.drawing.vertex(k).y) + st.drawing.worldDocumentOriginY;
+          pts3[static_cast<size_t>(v)].z = static_cast<double>(st.drawing.vertex(k).z);
         }
         Dwg_Entity_POLYLINE_3D* pl = dwg_add_POLYLINE_3D(hdr, runNv, pts3.data());
         if (pl != nullptr) {
@@ -7920,11 +7915,11 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       }
       std::vector<dwg_point_2d> pts(static_cast<size_t>(runNv));
       for (int v = 0; v < runNv; ++v) {
-        const int k = (vStart + v) * 3;
+        const size_t k = static_cast<size_t>(vStart + v);
         pts[static_cast<size_t>(v)].x =
-            static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k)]) + st.worldDocumentOriginX;
+            static_cast<double>(st.drawing.vertex(k).x) + st.drawing.worldDocumentOriginX;
         pts[static_cast<size_t>(v)].y =
-            static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k + 1)]) + st.worldDocumentOriginY;
+            static_cast<double>(st.drawing.vertex(k).y) + st.drawing.worldDocumentOriginY;
       }
       Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(hdr, runNv, pts.data());
       if (lw == nullptr)
@@ -7939,8 +7934,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       std::vector<double> bulges(static_cast<size_t>(runNv), 0.0);
       for (int v = 0; v < runNv; ++v) {
         const int vi = vStart + v;
-        const float b2 = static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
-                             ? st.userPolylineVertsBulge[static_cast<size_t>(vi)]
+        const float b2 = static_cast<size_t>(vi) < st.drawing.userPolylineVertsBulge.size()
+                             ? st.drawing.userPolylineVertsBulge[static_cast<size_t>(vi)]
                              : 0.f;
         if (b2 == 0.f)
           continue;
@@ -7950,10 +7945,10 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         // Writing it would tell a reader this run curves onward to a point that does not exist.
         float nx = 0.f, ny = 0.f, nz = 1.f;
         const size_t nk = static_cast<size_t>(vi) * 3;
-        if (nk + 2 < st.userPolylineVertsNormal.size()) {
-          nx = st.userPolylineVertsNormal[nk];
-          ny = st.userPolylineVertsNormal[nk + 1];
-          nz = st.userPolylineVertsNormal[nk + 2];
+        if (nk + 2 < st.drawing.userPolylineVertsNormal.size()) {
+          nx = st.drawing.userPolylineVertsNormal[nk];
+          ny = st.drawing.userPolylineVertsNormal[nk + 1];
+          nz = st.drawing.userPolylineVertsNormal[nk + 2];
         }
         if (v == runNv - 1 && !IsFlatNormal(nx, ny, nz))
           continue;
@@ -8009,10 +8004,10 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
 
     auto normalAt = [&](int vi, float* nx, float* ny, float* nz) {
       const size_t k = static_cast<size_t>(vi) * 3;
-      if (k + 2 < st.userPolylineVertsNormal.size()) {
-        *nx = st.userPolylineVertsNormal[k];
-        *ny = st.userPolylineVertsNormal[k + 1];
-        *nz = st.userPolylineVertsNormal[k + 2];
+      if (k + 2 < st.drawing.userPolylineVertsNormal.size()) {
+        *nx = st.drawing.userPolylineVertsNormal[k];
+        *ny = st.drawing.userPolylineVertsNormal[k + 1];
+        *nz = st.drawing.userPolylineVertsNormal[k + 2];
       } else {
         *nx = 0.f;
         *ny = 0.f;
@@ -8020,8 +8015,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       }
     };
     auto bulgeAt = [&](int vi) -> float {
-      return static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
-                 ? st.userPolylineVertsBulge[static_cast<size_t>(vi)]
+      return static_cast<size_t>(vi) < st.drawing.userPolylineVertsBulge.size()
+                 ? st.drawing.userPolylineVertsBulge[static_cast<size_t>(vi)]
                  : 0.f;
     };
     auto isTiltedEdge = [&](int vi) {
@@ -8051,12 +8046,12 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       emitPolylineRun(runStart, vi, false);
       float nx = 0.f, ny = 0.f, nz = 1.f;
       normalAt(vi, &nx, &ny, &nz);
-      const ray3d::Vec3 pA{st.userPolylineVerts[static_cast<size_t>(vi) * 3],
-                           st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 1],
-                           st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 2]};
-      const ray3d::Vec3 pB{st.userPolylineVerts[static_cast<size_t>((vi + 1)) * 3],
-                           st.userPolylineVerts[static_cast<size_t>((vi + 1)) * 3 + 1],
-                           st.userPolylineVerts[static_cast<size_t>((vi + 1)) * 3 + 2]};
+      const ray3d::Vec3 pA{st.drawing.vertex(vi).x,
+                           st.drawing.vertex(vi).y,
+                           st.drawing.vertex(vi).z};
+      const ray3d::Vec3 pB{st.drawing.vertex(static_cast<size_t>((vi + 1))).x,
+                           st.drawing.vertex(static_cast<size_t>((vi + 1))).y,
+                           st.drawing.vertex(static_cast<size_t>((vi + 1))).z};
       CadArc arc{};
       if (BuildTiltedPolylineSegmentArc(
               pA, pB, static_cast<double>(bulgeAt(vi)),
@@ -8068,12 +8063,12 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       emitPolylineRun(runStart, b - 1, false);
       float nx = 0.f, ny = 0.f, nz = 1.f;
       normalAt(b - 1, &nx, &ny, &nz);
-      const ray3d::Vec3 pA{st.userPolylineVerts[static_cast<size_t>((b - 1)) * 3],
-                           st.userPolylineVerts[static_cast<size_t>((b - 1)) * 3 + 1],
-                           st.userPolylineVerts[static_cast<size_t>((b - 1)) * 3 + 2]};
-      const ray3d::Vec3 pB{st.userPolylineVerts[static_cast<size_t>(a) * 3],
-                           st.userPolylineVerts[static_cast<size_t>(a) * 3 + 1],
-                           st.userPolylineVerts[static_cast<size_t>(a) * 3 + 2]};
+      const ray3d::Vec3 pA{st.drawing.vertex(static_cast<size_t>((b - 1))).x,
+                           st.drawing.vertex(static_cast<size_t>((b - 1))).y,
+                           st.drawing.vertex(static_cast<size_t>((b - 1))).z};
+      const ray3d::Vec3 pB{st.drawing.vertex(a).x,
+                           st.drawing.vertex(a).y,
+                           st.drawing.vertex(a).z};
       CadArc arc{};
       if (BuildTiltedPolylineSegmentArc(
               pA, pB, static_cast<double>(bulgeAt(b - 1)),
@@ -8088,15 +8083,15 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   // per-dimension table — see EnsureDimStyleNamed's comment).
   DimWriteState dimState;
   int dimsWritten = 0;
-  for (size_t i = 0; i < st.cadAnnotations.size(); ++i) {
-    const CadAnnotation& an = st.cadAnnotations[i];
+  for (size_t i = 0; i < st.drawing.cadAnnotations.size(); ++i) {
+    const CadAnnotation& an = st.drawing.cadAnnotations[i];
     if (an.surveyPointLabelForId >= 0)
       continue;
-    const double h = static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
-    const EntityAttributes* at = AttrAt(st.cadAnnotationAttrs, i);
+    const double h = static_cast<double>(CadAnnotationHeightWorld(an, st.drawing.modelUnitsPerPlottedInch));
+    const EntityAttributes* at = AttrAt(st.drawing.cadAnnotationAttrs, i);
     const BITCODE_BL styleId = tw.StyleObjId(an.styleName);
     if (CadAnnotationIsDimension(an)) {
-      WriteDimensionAnnotation(dwg, hdr, tw, st, an, at, st.worldDocumentOriginX, st.worldDocumentOriginY,
+      WriteDimensionAnnotation(dwg, hdr, tw, st, an, at, st.drawing.worldDocumentOriginX, st.drawing.worldDocumentOriginY,
                                r2018Write, annotCtx, dimState);
       ++dimsWritten;
       continue;
@@ -8190,13 +8185,13 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   // Position Markers (REQ-359 item 3, D-2026-09-29-e): other programs see a CIRCLE, a cross of two
   // LINEs and the label MTEXT. GoSurvey reopens its own DWG from the trailer, so these never come
   // back as duplicates.
-  for (size_t i = 0; i < st.cadPositionMarkers.size(); ++i) {
-    const CadPositionMarker& m = st.cadPositionMarkers[i];
-    const EntityAttributes* at = AttrAt(st.cadPositionMarkerAttrs, i);
+  for (size_t i = 0; i < st.drawing.cadPositionMarkers.size(); ++i) {
+    const CadPositionMarker& m = st.drawing.cadPositionMarkers[i];
+    const EntityAttributes* at = AttrAt(st.drawing.cadPositionMarkerAttrs, i);
     const double r = static_cast<double>(PositionMarkerRadiusWorld(st));
     dwg_point_3d c{};
-    c.x = m.x + st.worldDocumentOriginX;  // double all the way (REQ-101)
-    c.y = m.y + st.worldDocumentOriginY;
+    c.x = m.x + st.drawing.worldDocumentOriginX;  // double all the way (REQ-101)
+    c.y = m.y + st.drawing.worldDocumentOriginY;
     c.z = static_cast<double>(m.z);
     if (Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(hdr, &c, r))
       apply(e->parent, at);
@@ -8219,24 +8214,24 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     }
     const double width = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
     if (Dwg_Entity_MTEXT* e = dwg_add_MTEXT(hdr, &p, width, wire.c_str())) {
-      e->text_height = static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
+      e->text_height = static_cast<double>(CadAnnotationHeightWorld(an, st.drawing.modelUnitsPerPlottedInch));
       e->attachment = 1;
       apply(e->parent, at);
     }
   }
   // REQ-367 / issue #619: R2010+ native MULTILEADER; older saves use LEADER + MTEXT fallback.
   const bool nativeMultileaderExport = LibreDwgVersionFromExport(outputVersion) >= R_2010;
-  for (size_t i = 0; i < st.cadMultileaders.size(); ++i)
-    WriteMultileaderEntity(dwg, hdr, tw, st, st.cadMultileaders[i], AttrAt(st.cadMultileaderAttrs, i),
-                           st.worldDocumentOriginX, st.worldDocumentOriginY, r2018Write, nativeMultileaderExport,
-                           st.modelUnitsPerPlottedInch, annotCtx);
+  for (size_t i = 0; i < st.drawing.cadMultileaders.size(); ++i)
+    WriteMultileaderEntity(dwg, hdr, tw, st, st.drawing.cadMultileaders[i], AttrAt(st.drawing.cadMultileaderAttrs, i),
+                           st.drawing.worldDocumentOriginX, st.drawing.worldDocumentOriginY, r2018Write, nativeMultileaderExport,
+                           st.drawing.modelUnitsPerPlottedInch, annotCtx);
   // REQ-107, issue #606: real BLOCK/INSERT/ATTRIB records, so a GoSurvey DWG shows blocks (incl.
   // pipe-fitting parts) as real, re-insertable blocks in AutoCAD/Civil 3D instead of nothing at
   // all. Definitions are written FIRST and in full before any INSERT, since dwg_add_INSERT looks
   // its target block up by name (must already be in the BLOCK table).
   std::unordered_map<std::string, const CadBlockDefinition*> blockDefByName;
   std::unordered_map<std::string, Dwg_Object_BLOCK_HEADER*> blockHdrByName;
-  for (const CadBlockDefinition& def : st.blockDefs) {
+  for (const CadBlockDefinition& def : st.drawing.blockDefs) {
     if (def.name.empty())
       continue;
     Dwg_Object_BLOCK_HEADER* bh = dwg_add_BLOCK_HEADER(dwg, def.name.c_str());
@@ -8261,7 +8256,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   // Nested INSERTs need every BLOCK table entry to exist first (LibreDWG dwg_add_INSERT resolves
   // by name via dwg_find_tablehandle), and must be created before ENDBLK so import walks owned
   // entities correctly.
-  for (const CadBlockDefinition& def : st.blockDefs) {
+  for (const CadBlockDefinition& def : st.drawing.blockDefs) {
     const auto hdrIt = blockHdrByName.find(def.name);
     if (hdrIt == blockHdrByName.end())
       continue;
@@ -8270,31 +8265,31 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   for (const auto& kv : blockHdrByName)
     dwg_add_ENDBLK(kv.second);
   if (DwgSaveVersionUsesR2004Features(outputVersion)) {
-    for (const CadBlockDefinition& def : st.blockDefs) {
+    for (const CadBlockDefinition& def : st.drawing.blockDefs) {
       const auto hdrIt = blockHdrByName.find(def.name);
       if (hdrIt != blockHdrByName.end())
-        WriteGoSurveyDynamicBlockObjects(dwg, hdrIt->second, def, &st.cadBlockRefs, log);
+        WriteGoSurveyDynamicBlockObjects(dwg, hdrIt->second, def, &st.drawing.cadBlockRefs, log);
     }
   }
-  for (size_t i = 0; i < st.cadBlockRefs.size(); ++i) {
-    const CadBlockRef& ref = st.cadBlockRefs[i];
+  for (size_t i = 0; i < st.drawing.cadBlockRefs.size(); ++i) {
+    const CadBlockRef& ref = st.drawing.cadBlockRefs[i];
     if (blockDefByName.find(ref.defName) == blockDefByName.end())
       continue;  // definition missing or failed to write; REQ-201 covered by the #614 loss summary
-    WriteBlockRefInsertToHeader(hdr, tw, st, ref, AttrAt(st.cadBlockRefAttrs, i), st.worldDocumentOriginX,
-                                st.worldDocumentOriginY, &fldCtx);
+    WriteBlockRefInsertToHeader(hdr, tw, st, ref, AttrAt(st.drawing.cadBlockRefAttrs, i), st.drawing.worldDocumentOriginX,
+                                st.drawing.worldDocumentOriginY, &fldCtx);
   }
   // Ordinary DWG blocks carry point identity while their marker geometry follows the drawing's
   // style. Write them after symbol definitions, which styled markers can reference as nested INSERTs.
-  if (!st.surveyPoints.empty() && !ProjectOwnsActiveTabPoints(st)) {
+  if (!st.drawing.surveyPoints.empty() && !ProjectOwnsActiveTabPoints(st)) {
     std::unordered_map<std::string, uint64_t> pointBlocks;
-    for (const SurveyPoint& point : st.surveyPoints) {
-      const auto* style = FindSurveyPointStyle(st.surveyPointStyles, point.styleName);
+    for (const SurveyPoint& point : st.drawing.surveyPoints) {
+      const auto* style = FindSurveyPointStyle(st.drawing.surveyPointStyles, point.styleName);
       const bool styled = style != nullptr && style->hasExplicitMarkerGeometry;
-      const std::size_t index = styled ? static_cast<std::size_t>(style - st.surveyPointStyles.data()) : 0;
+      const std::size_t index = styled ? static_cast<std::size_t>(style - st.drawing.surveyPointStyles.data()) : 0;
       const std::string blockName = styled ? std::string(kSurveyPointBlockName) + "$" + std::to_string(index)
                                            : kSurveyPointBlockName;
       const double radius = styled ? (style->markerSizeType == 2 ? style->markerSize * .5 :
-          style->crossSpanPlottedInches * st.modelUnitsPerPlottedInch * .5) : PositionMarkerRadiusWorld(st);
+          style->crossSpanPlottedInches * st.drawing.modelUnitsPerPlottedInch * .5) : PositionMarkerRadiusWorld(st);
       auto block = pointBlocks.find(blockName);
       if (block == pointBlocks.end()) {
         auto* header = styled ? EnsureStyledSurveyPointBlockDef(dwg, st, blockName, *style, radius)
@@ -8304,8 +8299,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         if (reference == nullptr) continue;
         block = pointBlocks.emplace(blockName, reference->absolute_ref).first;
       }
-      dwg_point_3d position{point.easting + st.worldDocumentOriginX,
-                            point.northing + st.worldDocumentOriginY, point.elevation};
+      dwg_point_3d position{point.easting + st.drawing.worldDocumentOriginX,
+                            point.northing + st.drawing.worldDocumentOriginY, point.elevation};
       if (styled && style->markerDisplay3dType == 1) position.z = style->markerElevation;
       if (styled && style->markerDisplay3dType == 2) position.z *= style->markerScaleFactor;
       auto* insert = dwg_add_INSERT(hdr, &position, blockName.c_str(), 1, 1, 1,
@@ -8314,8 +8309,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       const BITCODE_BL id = insert->parent->objid;
       // Entity additions can relocate dwg->object. Re-resolve by stable object index every time.
       auto resolve = [&]() { return dwg->object[id].tio.entity->tio.INSERT; };
-      const bool labelsVisible = SurveyPointLabelVisible(point, st.surveyPointStyles) &&
-                                SurveyPointNamedLabelVisible(point, st.surveyPointLabelStyles);
+      const bool labelsVisible = SurveyPointLabelVisible(point, st.drawing.surveyPointStyles) &&
+                                SurveyPointNamedLabelVisible(point, st.drawing.surveyPointLabelStyles);
       const double textHeight = std::max(radius * .8, 1.e-6);
       if (auto* attr = dwg_add_ATTRIB(resolve(), textHeight, labelsVisible ? 0 : 1,
                                      &position, "NUMBER", std::to_string(point.id).c_str()))
@@ -8341,28 +8336,28 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   // per vertex — these almost always have varying elevation, which is the whole point of a
   // feature line) with their name/description preserved for a future GoSurvey-aware reader via
   // GOSURVEY-appid XDATA (the user's choice; plain-polyline-only was the alternative). No bulge
-  // support — a feature line has none today (st.featureLineVerts carries no bulge array).
-  for (size_t i = 0; i + 1 < st.featureLineOffsets.size(); ++i) {
-    const int a = st.featureLineOffsets[i];
-    const int b = st.featureLineOffsets[i + 1];
+  // support — a feature line has none today (st.drawing.featureLineVerts carries no bulge array).
+  for (size_t i = 0; i + 1 < st.drawing.featureLineOffsets.size(); ++i) {
+    const int a = st.drawing.featureLineOffsets[i];
+    const int b = st.drawing.featureLineOffsets[i + 1];
     const int nv = b - a;
     if (nv < 2)
       continue;
     std::vector<dwg_point_3d> pts3(static_cast<size_t>(nv));
     for (int v = 0; v < nv; ++v) {
       const size_t k = static_cast<size_t>(a + v) * 3;
-      pts3[static_cast<size_t>(v)].x = st.featureLineVerts[k] + st.worldDocumentOriginX;
-      pts3[static_cast<size_t>(v)].y = st.featureLineVerts[k + 1] + st.worldDocumentOriginY;
-      pts3[static_cast<size_t>(v)].z = st.featureLineVerts[k + 2];
+      pts3[static_cast<size_t>(v)].x = st.drawing.featureLineVerts[k] + st.drawing.worldDocumentOriginX;
+      pts3[static_cast<size_t>(v)].y = st.drawing.featureLineVerts[k + 1] + st.drawing.worldDocumentOriginY;
+      pts3[static_cast<size_t>(v)].z = st.drawing.featureLineVerts[k + 2];
     }
     Dwg_Entity_POLYLINE_3D* pl = dwg_add_POLYLINE_3D(hdr, nv, pts3.data());
     if (pl == nullptr)
       continue;
-    if (i < st.featureLineClosed.size() && st.featureLineClosed[i] != 0)
+    if (i < st.drawing.featureLineClosed.size() && st.drawing.featureLineClosed[i] != 0)
       pl->flag = static_cast<BITCODE_RC>(pl->flag | 1);  // FLAG_POLYLINE_CLOSED
-    apply(pl->parent, AttrAt(st.featureLineAttrs, i));
-    if (i < st.featureLineInfo.size()) {
-      const CadFeatureLineInfo& info = st.featureLineInfo[i];
+    apply(pl->parent, AttrAt(st.drawing.featureLineAttrs, i));
+    if (i < st.drawing.featureLineInfo.size()) {
+      const CadFeatureLineInfo& info = st.drawing.featureLineInfo[i];
       if (!info.name.empty() || !info.description.empty())
         AppendGosurveyStringEed(dwg, pl->parent, {info.name, info.description});
     }
@@ -8371,14 +8366,14 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   // per spiral) on its layer, tagged with its name in GOSURVEY XDATA, so any DWG reader draws it without Recover.
   // GoSurvey's own reopen prefers the lossless ADR-044 trailer; without it (a drawing AutoCAD saved) the tagged
   // entities are re-read as a REQ-485 conversion (ImportTaggedAlignments), starting where the first one says.
-  for (const alignment::Alignment& al : st.alignments) {
+  for (const alignment::Alignment& al : st.drawing.alignments) {
     EntityAttributes alAttrs{};
     alAttrs.layer = al.layer;
     if (!al.layer.empty() && !EnsureExportLayer(tw, al.layer)) alAttrs.layer.clear();  // then on "0"
     for (size_t ei = 0; ei < al.Entities().size(); ++ei) {
       const alignment::Entity& ae = al.Entities()[ei];
       Dwg_Object_Entity* parent = nullptr;
-      const double ox = st.worldDocumentOriginX, oy = st.worldDocumentOriginY;
+      const double ox = st.drawing.worldDocumentOriginX, oy = st.drawing.worldDocumentOriginY;
       std::vector<std::string> tag{"ALIGNMENT", al.name};
       if (ei == 0) {
         tag.push_back("START");
@@ -8408,8 +8403,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       (void)AppendGosurveyStringEed(dwg, parent, tag);  // the entity stands without its tag; only a re-read loses it
     }
   }
-  for (size_t i = 0; i < st.userEllipses.size(); ++i) {
-    const CadEllipse& el = st.userEllipses[i];
+  for (size_t i = 0; i < st.drawing.userEllipses.size(); ++i) {
+    const CadEllipse& el = st.drawing.userEllipses[i];
     dwg_point_3d c{};
     world(el.cx, el.cy, el.z, &c);
     const double majLen =
@@ -8422,7 +8417,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     Dwg_Entity_ELLIPSE* e = dwg_add_ELLIPSE(hdr, &c, majLen, ratio);
     if (e == nullptr)
       continue;
-    apply(e->parent, AttrAt(st.userEllAttrs, i));
+    apply(e->parent, AttrAt(st.drawing.userEllAttrs, i));
     e->sm_axis.x = static_cast<double>(el.majVx);
     e->sm_axis.y = static_cast<double>(el.majVy);
     e->sm_axis.z = 0.0;
@@ -8431,15 +8426,15 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     e->end_angle = 2.0 * kPi;
   }
   // REQ-443 / #803: model-space splines in world coordinates (document origin shift).
-  WriteSplineEntities(tw, hdr, st.cadSplines, st.cadSplineAttrs, world);
+  WriteSplineEntities(tw, hdr, st.drawing.cadSplines, st.drawing.cadSplineAttrs, world);
   // REQ-170 / issue #608: filled regions → HATCH (solid or predefined pattern). Boundary loops are
   // built from temporary invisible LWPOLYLINE scaffolds that LibreDWG's dwg_add_HATCH copies into
   // the hatch path (non-associative).
   size_t nHatchOut = 0;
-  for (size_t fi = 0; fi < st.cadFilledRegions.size(); ++fi) {
-    if (WriteFilledRegionHatch(dwg, hdr, tw, st, st.cadFilledRegions[fi],
-                               fi < st.cadFilledRegionAttrs.size() ? &st.cadFilledRegionAttrs[fi] : nullptr,
-                               st.worldDocumentOriginX, st.worldDocumentOriginY, r2018Write, annotCtx))
+  for (size_t fi = 0; fi < st.drawing.cadFilledRegions.size(); ++fi) {
+    if (WriteFilledRegionHatch(dwg, hdr, tw, st, st.drawing.cadFilledRegions[fi],
+                               fi < st.drawing.cadFilledRegionAttrs.size() ? &st.drawing.cadFilledRegionAttrs[fi] : nullptr,
+                               st.drawing.worldDocumentOriginX, st.drawing.worldDocumentOriginY, r2018Write, annotCtx))
       ++nHatchOut;
   }
   if (nHatchOut > 0)
@@ -8447,11 +8442,11 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
 
   size_t nMeshOut = 0;
   unsigned pfaceExports = 0;  // LibreDWG: one POLYLINE_PFACE per block (issue #663)
-  for (size_t mi = 0; mi < st.cadMeshes.size(); ++mi) {
-    const std::shared_ptr<const CadMesh>& mp = st.cadMeshes[mi];
+  for (size_t mi = 0; mi < st.drawing.cadMeshes.size(); ++mi) {
+    const std::shared_ptr<const CadMesh>& mp = st.drawing.cadMeshes[mi];
     if (mp == nullptr)
       continue;
-    const EntityAttributes* at = mi < st.cadMeshAttrs.size() ? &st.cadMeshAttrs[mi] : nullptr;
+    const EntityAttributes* at = mi < st.drawing.cadMeshAttrs.size() ? &st.drawing.cadMeshAttrs[mi] : nullptr;
     const bool asPface = pfaceExports == 0;
     if (dwg_mesh_export::WriteCadMesh(st, *mp, hdr, &tw, at, dwg, &matCtx, asPface)) {
       ++nMeshOut;
@@ -8460,10 +8455,10 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     }
   }
   size_t nTinOut = 0;
-  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
-    const EntityAttributes* at = si < st.cadSurfaceAttrs.size() ? &st.cadSurfaceAttrs[si] : nullptr;
+  for (size_t si = 0; si < st.drawing.cadSurfaces.size(); ++si) {
+    const EntityAttributes* at = si < st.drawing.cadSurfaceAttrs.size() ? &st.drawing.cadSurfaceAttrs[si] : nullptr;
     const bool asPface = pfaceExports == 0;
-    if (dwg_mesh_export::WriteCadSurfaceTin(st, st.cadSurfaces[si], hdr, &tw, at, dwg, &matCtx, asPface)) {
+    if (dwg_mesh_export::WriteCadSurfaceTin(st, st.drawing.cadSurfaces[si], hdr, &tw, at, dwg, &matCtx, asPface)) {
       ++nTinOut;
       if (asPface)
         ++pfaceExports;
@@ -8474,20 +8469,20 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
                   " POLYLINE_PFACE mesh(es) (issue #611).");
 
   size_t nSolidOut = 0;
-  for (size_t si = 0; si < st.cadSolids.size(); ++si) {
-    const CadSolidPtr& sp = st.cadSolids[si];
+  for (size_t si = 0; si < st.drawing.cadSolids.size(); ++si) {
+    const CadSolidPtr& sp = st.drawing.cadSolids[si];
     if (sp == nullptr)
       continue;
     const EntityAttributes* at =
-        si < st.cadSolidAttrs.size() ? &st.cadSolidAttrs[si] : nullptr;
+        si < st.drawing.cadSolidAttrs.size() ? &st.drawing.cadSolidAttrs[si] : nullptr;
     if (dwg_solid_export::WriteSolidEntity(st, *sp, hdr, &tw, at, dwg, &matCtx))
       ++nSolidOut;
   }
   size_t nPipeSolidOut = 0;
-  for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
+  for (size_t ri = 0; ri < st.drawing.cadPipeRuns.size(); ++ri) {
     const EntityAttributes* at =
-        ri < st.cadPipeRunAttrs.size() ? &st.cadPipeRunAttrs[ri] : nullptr;
-    if (dwg_solid_export::WritePipeRunEntity(st, st.cadPipeRuns[ri], hdr, &tw, at, dwg, &matCtx))
+        ri < st.drawing.cadPipeRunAttrs.size() ? &st.drawing.cadPipeRunAttrs[ri] : nullptr;
+    if (dwg_solid_export::WritePipeRunEntity(st, st.drawing.cadPipeRuns[ri], hdr, &tw, at, dwg, &matCtx))
       ++nPipeSolidOut;
   }
   if (nSolidOut + nPipeSolidOut > 0)
@@ -8495,11 +8490,11 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
                   " 3DSOLID(s) (ACIS, issue #612).");
 
   size_t nTableOut = 0;
-  for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
-    const EntityAttributes* at = ti < st.cadTableAttrs.size() ? &st.cadTableAttrs[ti] : nullptr;
-    if (dwg_table_export::WriteCadTable(st, st.cadTables[ti], hdr, tw, at, &fldCtx, blockOwnerHandle,
-                                       st.worldDocumentOriginX, st.worldDocumentOriginY,
-                                       st.modelUnitsPerPlottedInch))
+  for (size_t ti = 0; ti < st.drawing.cadTables.size(); ++ti) {
+    const EntityAttributes* at = ti < st.drawing.cadTableAttrs.size() ? &st.drawing.cadTableAttrs[ti] : nullptr;
+    if (dwg_table_export::WriteCadTable(st, st.drawing.cadTables[ti], hdr, tw, at, &fldCtx, blockOwnerHandle,
+                                       st.drawing.worldDocumentOriginX, st.drawing.worldDocumentOriginY,
+                                       st.drawing.modelUnitsPerPlottedInch))
       ++nTableOut;
   }
   if (nTableOut > 0)
@@ -8507,11 +8502,11 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
                   " table(s) as grid geometry (issue #616).");
 
   size_t nPcOut = 0;
-  for (size_t pi = 0; pi < st.cadPointClouds.size(); ++pi) {
-    const std::shared_ptr<const CadPointCloud>& pc = st.cadPointClouds[pi];
+  for (size_t pi = 0; pi < st.drawing.cadPointClouds.size(); ++pi) {
+    const std::shared_ptr<const CadPointCloud>& pc = st.drawing.cadPointClouds[pi];
     if (pc == nullptr)
       continue;
-    const EntityAttributes* at = pi < st.cadPointCloudAttrs.size() ? &st.cadPointCloudAttrs[pi] : nullptr;
+    const EntityAttributes* at = pi < st.drawing.cadPointCloudAttrs.size() ? &st.drawing.cadPointCloudAttrs[pi] : nullptr;
     if (dwg_pointcloud_export::WritePointCloudMarker(st, *pc, hdr, tw, at))
       ++nPcOut;
   }
@@ -8895,7 +8890,7 @@ static bool WriteDwgGeoData(Dwg_Data* dwg, const DwgGeoData& g) {
 }
 
 void ImportAnnotationScales(AppCommandState& st, Dwg_Data* dwg) {
-  st.annotationScales.clear();
+  st.drawing.annotationScales.clear();
   if (dwg == nullptr)
     return;
   for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
@@ -8913,12 +8908,12 @@ void ImportAnnotationScales(AppCommandState& st, Dwg_Data* dwg) {
     entry.drawingUnits = static_cast<float>(sc->drawing_units);
     if (entry.name.empty() || entry.paperUnits <= 0.f || entry.drawingUnits <= 0.f)
       continue;
-    st.annotationScales.push_back(std::move(entry));
+    st.drawing.annotationScales.push_back(std::move(entry));
   }
 }
 
 void ImportViewportZoomScales(AppCommandState& st, Dwg_Data* dwg) {
-  st.viewportZoomScales.clear();
+  st.drawing.viewportZoomScales.clear();
   st.currentViewportZoomScaleIndex = -1;
   if (dwg == nullptr)
     return;
@@ -8939,7 +8934,7 @@ void ImportViewportZoomScales(AppCommandState& st, Dwg_Data* dwg) {
     entry.drawingUnits = static_cast<float>(sc->drawing_units);
     if (entry.name.empty() || entry.paperUnits <= 0.f || entry.drawingUnits <= 0.f)
       continue;
-    st.viewportZoomScales.push_back(std::move(entry));
+    st.drawing.viewportZoomScales.push_back(std::move(entry));
   }
 }
 
@@ -8970,24 +8965,24 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   DwgAnnotContextImportBegin();
   DwgLightImportBegin();
 
-  const double oldOx = st.worldDocumentOriginX;
-  const double oldOy = st.worldDocumentOriginY;
+  const double oldOx = st.drawing.worldDocumentOriginX;
+  const double oldOy = st.drawing.worldDocumentOriginY;
   ResetCadToolStateToIdle(st);
   ClearCadGeometry(st);
   st.selectedSurveyPointIndices.clear();
-  const bool hadPts = !st.surveyPoints.empty();
+  const bool hadPts = !st.drawing.surveyPoints.empty();
   if (hadPts) {
     if (oldOx != 0.0 || oldOy != 0.0)
       CadCoord::ShiftAllStorageBy(st, oldOx, oldOy);
-    for (SurveyPoint& p : st.surveyPoints)
+    for (SurveyPoint& p : st.drawing.surveyPoints)
       p.labelMtextAnnId = 0;
   }
 
   if (CadDrawingInsUnitsOffered(static_cast<int>(dwg.header_vars.INSUNITS)))
-    st.drawingInsUnits = static_cast<int>(dwg.header_vars.INSUNITS);
+    st.drawing.drawingInsUnits = static_cast<int>(dwg.header_vars.INSUNITS);
   // REQ-456 / issue #1010: point display travels with the drawing (PDMODE, PDSIZE).
-  st.pdMode = static_cast<int>(dwg.header_vars.PDMODE);
-  st.pdSize = dwg.header_vars.PDSIZE;
+  st.drawing.pdMode = static_cast<int>(dwg.header_vars.PDMODE);
+  st.drawing.pdSize = dwg.header_vars.PDSIZE;
   // Civil's drawing scale governs paper-sized markers and label/style measurements. Read it
   // before converting native text/style sizes; the application default is not the source scale.
   for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
@@ -8995,7 +8990,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
     if (object.type < 500 || object.type - 500 >= dwg.num_classes ||
         std::strcmp(dwg.dwg_class[object.type - 500].dxfname, "AEC_VARS_DWG_SETUP") != 0) continue;
     if (const auto scale = libredwgcivil::DecodeDrawingScale(object.unknown_bits, object.num_unknown_bits)) {
-      st.modelUnitsPerPlottedInch = static_cast<float>(*scale);
+      st.drawing.modelUnitsPerPlottedInch = static_cast<float>(*scale);
       log.push_back("Civil drawing scale decoded: " + std::to_string(*scale) + " model units per plotted inch.");
       break;
     }
@@ -9073,13 +9068,13 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
         point.rawDescription = text->second;
         point.description = text->second;
       }
-      point.easting = location.location.x - st.worldDocumentOriginX;
-      point.northing = location.location.y - st.worldDocumentOriginY;
+      point.easting = location.location.x - st.drawing.worldDocumentOriginX;
+      point.northing = location.location.y - st.drawing.worldDocumentOriginY;
       point.elevation = location.location.z;
       point.labelStyle = SurveyPointLabelStyle::None;
       if (const auto assigned = assignedStyles.find(point.id); assigned != assignedStyles.end())
         point.styleName = assigned->second;
-      st.surveyPoints.push_back(std::move(point));
+      st.drawing.surveyPoints.push_back(std::move(point));
     }
     log.push_back("Civil point-node coordinates decoded: " + std::to_string(locations->size()));
     if (!descriptions.empty())
@@ -9108,10 +9103,10 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
     ImportPlantParts(st, &dwg, mspace, &skipHist);
   }
   ImportCivilContourLabels(st, &dwg, &skipHist);
-  const bool emptyGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userArcs.empty() &&
-                         st.userPolylineVerts.empty() && st.cadAnnotations.empty() && st.userEllipses.empty() &&
-                         st.cadMultileaders.empty() && st.cadBlockRefs.empty() && st.cadSolids.empty() &&
-                         st.cadSplines.empty() && st.cadPoints.empty() && taggedAlignments.empty() &&
+  const bool emptyGeom = st.drawing.userLinesFlat.empty() && st.drawing.userCirclesCxCyZR.empty() && st.drawing.userArcs.empty() &&
+                         st.drawing.userPolylineVerts.empty() && st.drawing.cadAnnotations.empty() && st.drawing.userEllipses.empty() &&
+                         st.drawing.cadMultileaders.empty() && st.drawing.cadBlockRefs.empty() && st.drawing.cadSolids.empty() &&
+                         st.drawing.cadSplines.empty() && st.drawing.cadPoints.empty() && taggedAlignments.empty() &&
                          civilAlignments.empty();
   // DXF decode often leaves BLOCK_HEADER.first_entity unset or pointing at BLOCK/ENDBLK only.
   if (emptyGeom) {
@@ -9131,7 +9126,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
       ImportObject(st, &dwg, o, id, 0, &skipHist, &degenerateExtrusions, nullptr, legacyLeaderScale);
     }
   }
-  if (st.cadMeshes.empty()) {
+  if (st.drawing.cadMeshes.empty()) {
     for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
       Dwg_Object* o = &dwg.object[i];
       if (o->supertype != DWG_SUPERTYPE_ENTITY || o->tio.entity == nullptr)
@@ -9153,14 +9148,14 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   // AutoCAD persists its active annotation context in AcDbVariableDictionary.CANNOSCALE.
   // Keep it as the authority when present; GoSurvey EED is only the compatibility fallback.
   bool hasNativeCannoscale = false;
-  if (!st.annotationScales.empty()) {
+  if (!st.drawing.annotationScales.empty()) {
     const char* nativeScale = dwg_variable_dict(&dwg, "CANNOSCALE");
     const std::string savedScale = nativeScale != nullptr
                                        ? FromT(&dwg, reinterpret_cast<BITCODE_T>(const_cast<char*>(nativeScale)))
                                        : std::string{};
     if (!savedScale.empty()) {
-      for (int i = 0; i < static_cast<int>(st.annotationScales.size()); ++i) {
-        if (st.annotationScales[static_cast<size_t>(i)].name == savedScale) {
+      for (int i = 0; i < static_cast<int>(st.drawing.annotationScales.size()); ++i) {
+        if (st.drawing.annotationScales[static_cast<size_t>(i)].name == savedScale) {
           st.currentAnnotationScaleIndex = i;
           hasNativeCannoscale = true;
           break;
@@ -9193,15 +9188,15 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
     st.pendingZoomExtents = true;
   else if (restoredSavedModelViewport)
     st.pendingZoomExtents = false;
-  for (size_t i = 0; i < st.surveyPoints.size(); ++i)
+  for (size_t i = 0; i < st.drawing.surveyPoints.size(); ++i)
     EnsureSurveyPointLabelMtext(st, i, nullptr);
 
-  const size_t nLines = st.userLinesFlat.size() / 6;
-  const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
-  const size_t nPoly = st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1;
+  const size_t nLines = st.drawing.lineCount();
+  const size_t nCirc = st.drawing.circleCount();
+  const size_t nPoly = st.drawing.userPolylineOffsets.empty() ? 0 : st.drawing.userPolylineOffsets.size() - 1;
   log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) + " import — " + std::to_string(nLines) +
                 " line(s), " + std::to_string(nCirc) + " circle(s), " + std::to_string(nPoly) + " polyline(s), " +
-                std::to_string(st.userArcs.size()) + " arc(s).");
+                std::to_string(st.drawing.userArcs.size()) + " arc(s).");
   if (degenerateExtrusions > 0) {
     log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) +
                   " import — refused " + std::to_string(degenerateExtrusions) +
@@ -9209,21 +9204,21 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   }
   // REQ-366, issue #607: dimensions are now counted, not silently omitted, on import too.
   size_t nDimsImported = 0;
-  for (const CadAnnotation& a : st.cadAnnotations)
+  for (const CadAnnotation& a : st.drawing.cadAnnotations)
     if (CadAnnotationIsDimension(a))
       ++nDimsImported;
   if (nDimsImported > 0)
     log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) + " import — " +
                   std::to_string(nDimsImported) + " dimension(s) (REQ-366).");
-  if (!st.cadFilledRegions.empty())
+  if (!st.drawing.cadFilledRegions.empty())
     log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) + " import — " +
-                  std::to_string(st.cadFilledRegions.size()) + " HATCH fill(s) (REQ-170, issue #608).");
-  if (!st.paperLayouts.empty()) {
+                  std::to_string(st.drawing.cadFilledRegions.size()) + " HATCH fill(s) (REQ-170, issue #608).");
+  if (!st.drawing.paperLayouts.empty()) {
     size_t nVp = 0;
-    for (const PaperLayout& pl : st.paperLayouts)
+    for (const PaperLayout& pl : st.drawing.paperLayouts)
       nVp += pl.viewports.size();
     log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) + " import — " +
-                  std::to_string(st.paperLayouts.size()) + " paper layout(s), " +
+                  std::to_string(st.drawing.paperLayouts.size()) + " paper layout(s), " +
                   std::to_string(nVp) + " viewport(s) (REQ-170, issue #610).");
   }
   int printed = 0;
@@ -9236,7 +9231,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   DwgMaterialImportAppendLog(log);
   DwgLightImportAppendLog(log);
   DwgAnnotContextImportAppendLog(log);
-  CadTableSyncSurveyPointTables(st.cadTables, st.tableStyles, st.modelUnitsPerPlottedInch);
+  CadTableSyncSurveyPointTables(st.drawing.cadTables, st.drawing.tableStyles, st.drawing.modelUnitsPerPlottedInch);
   BumpCadGpuCache(st);
   return true;
 }
@@ -9269,12 +9264,12 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
     return false;
   }
   // Drawing unit (REQ-022) and, with "Set drawing variables to match" (REQ-357), LUNITS / AUNITS.
-  dwg->header_vars.INSUNITS = static_cast<BITCODE_BS>(st.drawingInsUnits);
-  dwg->header_vars.PDMODE = static_cast<BITCODE_BS>(st.pdMode);  // REQ-456 / issue #1010
-  dwg->header_vars.PDSIZE = st.pdSize;
-  if (st.drawingSettings.setDrawingVariables) {
+  dwg->header_vars.INSUNITS = static_cast<BITCODE_BS>(st.drawing.drawingInsUnits);
+  dwg->header_vars.PDMODE = static_cast<BITCODE_BS>(st.drawing.pdMode);  // REQ-456 / issue #1010
+  dwg->header_vars.PDSIZE = st.drawing.pdSize;
+  if (st.drawing.drawingSettings.setDrawingVariables) {
     dwg->header_vars.LUNITS = 2;
-    dwg->header_vars.AUNITS = static_cast<BITCODE_BS>(DrawingAunitsCode(st.drawingSettings.angularUnits));
+    dwg->header_vars.AUNITS = static_cast<BITCODE_BS>(DrawingAunitsCode(st.drawing.drawingSettings.angularUnits));
   }
   FillFromState(st, dwg, hdr, log, outputVersion, asDxf);
   dwg_resolve_objectrefs_silent(dwg);
@@ -9293,20 +9288,20 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
     }
   }
   LibreDwgLinkBlockEntities(dwg);  // issue #590: AutoCAD refuses LibreDWG's implicit last link
-  if (!asDxf && !WriteNativeCannoscale(st, dwg) && !st.annotationScales.empty())
+  if (!asDxf && !WriteNativeCannoscale(st, dwg) && !st.drawing.annotationScales.empty())
     log.push_back("DWG export — AutoCAD's CANNOSCALE could not be written; GoSurvey scale metadata was retained.");
   WriteGosurveyCannoscaleOnModelSpace(st, dwg);
   bool ok = false;
   if (asDxf) {
     const std::string currentTab =
-        st.activeSpaceIndex >= 0 && static_cast<size_t>(st.activeSpaceIndex) < st.paperLayouts.size()
-            ? st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)].name
+        st.activeSpaceIndex >= 0 && static_cast<size_t>(st.activeSpaceIndex) < st.drawing.paperLayouts.size()
+            ? st.drawing.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)].name
             : std::string("Model");
     ok = WriteDxfFile(pathUtf8, dwg, currentTab, log);
     if (ok) {
       size_t nPaperTables = 0;
       size_t nPaperMultileaders = 0;
-      for (const PaperLayout& layout : st.paperLayouts)
+      for (const PaperLayout& layout : st.drawing.paperLayouts)
         {
           nPaperTables += layout.paperTables.size();
           nPaperMultileaders += layout.paperMultileaders.size();

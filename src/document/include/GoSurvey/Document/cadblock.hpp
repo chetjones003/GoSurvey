@@ -315,6 +315,40 @@ struct CadBlockWorldConnection {
   CadPipePartType ownerPartType = CadPipePartType::None;
 };
 
+/// One circle of \ref CadEntityStore::userCirclesCxCyZR: centre X, Y and Z, and radius (world units).
+struct CadCircleRecord {
+  double cx = 0.0;
+  double cy = 0.0;
+  double cz = 0.0;
+  double r = 0.0;
+};
+
+/// One line segment of \ref CadEntityStore::userLinesFlat: start (x0, y0, z0) and end (x1, y1, z1).
+struct CadLineRecord {
+  double x0 = 0.0;
+  double y0 = 0.0;
+  double z0 = 0.0;
+  double x1 = 0.0;
+  double y1 = 0.0;
+  double z1 = 0.0;
+};
+
+/// Position of a component inside one line segment (the order of \ref CadLineRecord).
+enum class CadLineComponent : uint8_t { X0 = 0, Y0 = 1, Z0 = 2, X1 = 3, Y1 = 4, Z1 = 5 };
+
+/// Position of a component inside one circle record (the order of \ref CadCircleRecord).
+enum class CadCircleComponent : uint8_t { X = 0, Y = 1, Z = 2, Radius = 3 };
+
+/// One vertex of \ref CadEntityStore::userPolylineVerts: X, Y and Z (world units, storage coordinates).
+struct CadPolyVertex {
+  double x = 0.0;
+  double y = 0.0;
+  double z = 0.0;
+};
+
+/// Position of a component inside one polyline vertex (the order of \ref CadPolyVertex).
+enum class CadVertexComponent : uint8_t { X = 0, Y = 1, Z = 2 };
+
 struct CadEntityStore {
   /// Line vertices for GL: pairs (x,y,z) per endpoint; each segment is two endpoints.
   std::vector<double> userLinesFlat;
@@ -358,6 +392,122 @@ struct CadEntityStore {
   /// never written through.
   std::vector<CadSolidPtr> cadSolids;
   std::vector<EntityAttributes> cadSolidAttrs;
+
+  // --- Circle records (ADR-0010 phase 5) ---------------------------------------------------------
+  // Migrated callers use these instead of computing `i * 4` into \ref userCirclesCxCyZR. Layout
+  // readers (the GsIo file format, DocumentInvariants, the headless driver) still index it directly. The side-cars
+  // (\ref userCircleAttrs, \ref userCircleNormals) stay the caller's to keep in step.
+
+  /// Number of circle records in \ref userCirclesCxCyZR.
+  [[nodiscard]] size_t circleCount() const { return userCirclesCxCyZR.size() / kCircleStride; }
+  /// False when the flat store is not a whole number of records; readers that must skip a corrupt
+  /// store check this first, as they did with `size() % 4`.
+  [[nodiscard]] bool circleStoreWellFormed() const { return userCirclesCxCyZR.size() % kCircleStride == 0; }
+  /// Circle \p i (requires `i < circleCount()`).
+  [[nodiscard]] CadCircleRecord circle(size_t i) const {
+    const size_t k = i * kCircleStride;
+    return CadCircleRecord{userCirclesCxCyZR[k], userCirclesCxCyZR[k + 1], userCirclesCxCyZR[k + 2],
+                           userCirclesCxCyZR[k + 3]};
+  }
+  /// Overwrites circle \p i in place (requires `i < circleCount()`).
+  void setCircle(size_t i, const CadCircleRecord& c) {
+    const size_t k = i * kCircleStride;
+    userCirclesCxCyZR[k] = c.cx;
+    userCirclesCxCyZR[k + 1] = c.cy;
+    userCirclesCxCyZR[k + 2] = c.cz;
+    userCirclesCxCyZR[k + 3] = c.r;
+  }
+  /// Appends one circle record.
+  void pushCircle(const CadCircleRecord& c) {
+    userCirclesCxCyZR.push_back(c.cx);
+    userCirclesCxCyZR.push_back(c.cy);
+    userCirclesCxCyZR.push_back(c.cz);
+    userCirclesCxCyZR.push_back(c.r);
+  }
+  /// Removes circle \p i and shifts later records down (requires `i < circleCount()`).
+  void eraseCircle(size_t i) {
+    const auto first = userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(i * kCircleStride);
+    userCirclesCxCyZR.erase(first, first + static_cast<std::ptrdiff_t>(kCircleStride));
+  }
+  /// One component of circle \p i by reference, for edit paths that store through an undo wrapper.
+  [[nodiscard]] double& circleComponent(size_t i, CadCircleComponent which) {
+    return userCirclesCxCyZR[i * kCircleStride + static_cast<size_t>(which)];
+  }
+
+  static constexpr size_t kCircleStride = 4;
+
+  // --- Line records (ADR-0010 phase 5) -----------------------------------------------------------
+  // Same rule as the circle records: migrated callers go through these, layout readers index
+  // \ref userLinesFlat directly. \ref userLineAttrs stays the caller's to keep in step.
+
+  /// Number of line segments in \ref userLinesFlat.
+  [[nodiscard]] size_t lineCount() const { return userLinesFlat.size() / kLineStride; }
+  /// False when the flat store is not a whole number of segments.
+  [[nodiscard]] bool lineStoreWellFormed() const { return userLinesFlat.size() % kLineStride == 0; }
+  /// Segment \p i (requires `i < lineCount()`).
+  [[nodiscard]] CadLineRecord line(size_t i) const {
+    const size_t k = i * kLineStride;
+    return CadLineRecord{userLinesFlat[k], userLinesFlat[k + 1], userLinesFlat[k + 2],
+                         userLinesFlat[k + 3], userLinesFlat[k + 4], userLinesFlat[k + 5]};
+  }
+  /// Overwrites segment \p i in place (requires `i < lineCount()`).
+  void setLine(size_t i, const CadLineRecord& l) {
+    const size_t k = i * kLineStride;
+    userLinesFlat[k] = l.x0;
+    userLinesFlat[k + 1] = l.y0;
+    userLinesFlat[k + 2] = l.z0;
+    userLinesFlat[k + 3] = l.x1;
+    userLinesFlat[k + 4] = l.y1;
+    userLinesFlat[k + 5] = l.z1;
+  }
+  /// Appends one segment.
+  void pushLine(const CadLineRecord& l) {
+    userLinesFlat.insert(userLinesFlat.end(), {l.x0, l.y0, l.z0, l.x1, l.y1, l.z1});
+  }
+  /// One component of segment \p i by reference, for edit paths that store through an undo wrapper.
+  [[nodiscard]] double& lineComponent(size_t i, CadLineComponent which) {
+    return userLinesFlat[i * kLineStride + static_cast<size_t>(which)];
+  }
+  /// Removes segment \p i and shifts later segments down (requires `i < lineCount()`).
+  void eraseLine(size_t i) {
+    const auto first = userLinesFlat.begin() + static_cast<std::ptrdiff_t>(i * kLineStride);
+    userLinesFlat.erase(first, first + static_cast<std::ptrdiff_t>(kLineStride));
+  }
+
+  static constexpr size_t kLineStride = 6;
+
+  // --- Polyline vertices (ADR-0010 phase 5) ------------------------------------------------------
+  // Polyline offsets index vertices, not floats. Same rule as the line and circle records: migrated
+  // callers go through these; the per-vertex side-cars (bulge, normal) stay the caller's to keep in step.
+
+  /// Number of vertices in \ref userPolylineVerts.
+  [[nodiscard]] size_t vertexCount() const { return userPolylineVerts.size() / kVertexStride; }
+  /// False when the flat store is not a whole number of vertices.
+  /// Vertex \p i (requires `i < vertexCount()`).
+  [[nodiscard]] CadPolyVertex vertex(size_t i) const {
+    const size_t k = i * kVertexStride;
+    return CadPolyVertex{userPolylineVerts[k], userPolylineVerts[k + 1], userPolylineVerts[k + 2]};
+  }
+  /// Overwrites vertex \p i in place (requires `i < vertexCount()`).
+  void setVertex(size_t i, const CadPolyVertex& v) {
+    const size_t k = i * kVertexStride;
+    userPolylineVerts[k] = v.x;
+    userPolylineVerts[k + 1] = v.y;
+    userPolylineVerts[k + 2] = v.z;
+  }
+  /// Appends one vertex.
+  void pushVertex(const CadPolyVertex& v) { userPolylineVerts.insert(userPolylineVerts.end(), {v.x, v.y, v.z}); }
+  /// Removes vertices [\p first, \p last) and shifts later vertices down.
+  void eraseVertexRange(size_t first, size_t last) {
+    userPolylineVerts.erase(userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(first * kVertexStride),
+                            userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(last * kVertexStride));
+  }
+  /// One component of vertex \p i by reference, for edit paths that store through an undo wrapper.
+  [[nodiscard]] double& vertexComponent(size_t i, CadVertexComponent which) {
+    return userPolylineVerts[i * kVertexStride + static_cast<size_t>(which)];
+  }
+
+  static constexpr size_t kVertexStride = 3;
 };
 
 /// A block definition's own geometry (ADR-0010 / #1557 phase 3). The entity collections are the
@@ -1009,18 +1159,22 @@ inline void CadBlockApplyActionsToPoint(const CadBlockDefinition& def, const Cad
 
 inline void CadBlockShiftContent(CadBlockContent* c, float dx, float dy, float dz) {
   assert(c != nullptr);
-  for (size_t i = 0; i + 5 < c->userLinesFlat.size(); i += 6) {
-    c->userLinesFlat[i] += dx;
-    c->userLinesFlat[i + 1] += dy;
-    c->userLinesFlat[i + 2] += dz;
-    c->userLinesFlat[i + 3] += dx;
-    c->userLinesFlat[i + 4] += dy;
-    c->userLinesFlat[i + 5] += dz;
+  for (size_t i = 0; i < c->lineCount(); ++i) {
+    CadLineRecord l = c->line(i);
+    l.x0 += dx;
+    l.y0 += dy;
+    l.z0 += dz;
+    l.x1 += dx;
+    l.y1 += dy;
+    l.z1 += dz;
+    c->setLine(i, l);
   }
-  for (size_t i = 0; i + 3 < c->userCirclesCxCyZR.size(); i += 4) {
-    c->userCirclesCxCyZR[i] += dx;
-    c->userCirclesCxCyZR[i + 1] += dy;
-    c->userCirclesCxCyZR[i + 2] += dz;
+  for (size_t i = 0; i < c->circleCount(); ++i) {
+    CadCircleRecord cr = c->circle(i);
+    cr.cx += dx;
+    cr.cy += dy;
+    cr.cz += dz;
+    c->setCircle(i, cr);
   }
   for (CadArc& a : c->userArcs) {
     a.cx += dx;
@@ -1032,10 +1186,12 @@ inline void CadBlockShiftContent(CadBlockContent* c, float dx, float dy, float d
     e.cy += dy;
     e.z += dz;
   }
-  for (size_t i = 0; i + 2 < c->userPolylineVerts.size(); i += 3) {
-    c->userPolylineVerts[i] += dx;
-    c->userPolylineVerts[i + 1] += dy;
-    c->userPolylineVerts[i + 2] += dz;
+  for (size_t vi = 0; vi < c->vertexCount(); ++vi) {
+    CadPolyVertex v = c->vertex(vi);
+    v.x += dx;
+    v.y += dy;
+    v.z += dz;
+    c->setVertex(vi, v);
   }
   for (CadAnnotation& t : c->cadAnnotations) {
     t.insX += dx;
@@ -1122,27 +1278,29 @@ inline void CadBlockCollectWorldLines(const std::vector<CadBlockDefinition>& def
       CadBlockApplyActionsToPoint(def, localRef, &ax, &ay, "geom", {});
       CadBlockXformPoint(fr.xf, ax, ay, lz, wx, wy, wz);
     };
-    const size_t nSeg = c.userLinesFlat.size() / 6;
+    const size_t nSeg = c.lineCount();
     for (size_t i = 0; i < nSeg; ++i) {
       if (i < c.lineVis.size() && CadBlockVisHidden(c.lineVis[i], fr.vis))
         continue;
       CadBlockWorldSeg s;
-      xformPt(c.userLinesFlat[i * 6 + 0], c.userLinesFlat[i * 6 + 1], c.userLinesFlat[i * 6 + 2], &s.x0, &s.y0, &s.z0);
-      xformPt(c.userLinesFlat[i * 6 + 3], c.userLinesFlat[i * 6 + 4], c.userLinesFlat[i * 6 + 5], &s.x1, &s.y1, &s.z1);
+      const CadLineRecord l = c.line(i);
+      xformPt(static_cast<float>(l.x0), static_cast<float>(l.y0), static_cast<float>(l.z0), &s.x0, &s.y0, &s.z0);
+      xformPt(static_cast<float>(l.x1), static_cast<float>(l.y1), static_cast<float>(l.z1), &s.x1, &s.y1, &s.z1);
       EntityAttributes pa{};
       if (i < c.userLineAttrs.size())
         pa = c.userLineAttrs[i];
       s.attr = CadBlockResolveAttr(pa, insertAttr);
       out->push_back(s);
     }
-    const size_t nC = c.userCirclesCxCyZR.size() / 4;
+    const size_t nC = c.circleCount();
     for (size_t i = 0; i < nC; ++i) {
       if (i < c.circleVis.size() && CadBlockVisHidden(c.circleVis[i], fr.vis))
         continue;
-      const float cx = c.userCirclesCxCyZR[i * 4 + 0];
-      const float cy = c.userCirclesCxCyZR[i * 4 + 1];
-      const float cz = c.userCirclesCxCyZR[i * 4 + 2];
-      const float r = c.userCirclesCxCyZR[i * 4 + 3];
+      const CadCircleRecord cr = c.circle(i);
+      const float cx = static_cast<float>(cr.cx);
+      const float cy = static_cast<float>(cr.cy);
+      const float cz = static_cast<float>(cr.cz);
+      const float r = static_cast<float>(cr.r);
       EntityAttributes pa{};
       if (i < c.userCircleAttrs.size())
         pa = c.userCircleAttrs[i];
@@ -1198,23 +1356,23 @@ inline void CadBlockCollectWorldLines(const std::vector<CadBlockDefinition>& def
           pa = c.userPolylineAttrs[static_cast<size_t>(p)];
         const EntityAttributes ra = CadBlockResolveAttr(pa, insertAttr);
         for (int v = a; v + 1 < b; ++v) {
-          const size_t i0 = static_cast<size_t>(v) * 3;
-          const size_t i1 = static_cast<size_t>(v + 1) * 3;
-          if (i1 + 2 >= c.userPolylineVerts.size())
+          const size_t i0 = static_cast<size_t>(v);
+          const size_t i1 = static_cast<size_t>(v + 1);
+          if (i1 >= c.vertexCount())
             break;
           CadBlockWorldSeg s;
-          xformPt(c.userPolylineVerts[i0], c.userPolylineVerts[i0 + 1], c.userPolylineVerts[i0 + 2], &s.x0, &s.y0, &s.z0);
-          xformPt(c.userPolylineVerts[i1], c.userPolylineVerts[i1 + 1], c.userPolylineVerts[i1 + 2], &s.x1, &s.y1, &s.z1);
+          xformPt(c.vertex(i0).x, c.vertex(i0).y, c.vertex(i0).z, &s.x0, &s.y0, &s.z0);
+          xformPt(c.vertex(i1).x, c.vertex(i1).y, c.vertex(i1).z, &s.x1, &s.y1, &s.z1);
           s.attr = ra;
           out->push_back(s);
         }
         const bool closed = static_cast<size_t>(p) < c.userPolylineClosed.size() && c.userPolylineClosed[static_cast<size_t>(p)] != 0;
         if (closed && b - a >= 2) {
-          const size_t i0 = static_cast<size_t>(b - 1) * 3;
-          const size_t i1 = static_cast<size_t>(a) * 3;
+          const size_t i0 = static_cast<size_t>(b - 1);
+          const size_t i1 = static_cast<size_t>(a);
           CadBlockWorldSeg s;
-          xformPt(c.userPolylineVerts[i0], c.userPolylineVerts[i0 + 1], c.userPolylineVerts[i0 + 2], &s.x0, &s.y0, &s.z0);
-          xformPt(c.userPolylineVerts[i1], c.userPolylineVerts[i1 + 1], c.userPolylineVerts[i1 + 2], &s.x1, &s.y1, &s.z1);
+          xformPt(c.vertex(i0).x, c.vertex(i0).y, c.vertex(i0).z, &s.x0, &s.y0, &s.z0);
+          xformPt(c.vertex(i1).x, c.vertex(i1).y, c.vertex(i1).z, &s.x1, &s.y1, &s.z1);
           s.attr = ra;
           out->push_back(s);
         }
@@ -1264,8 +1422,10 @@ inline void CadBlockCollectWorldCenters(const std::vector<CadBlockDefinition>& d
       CadBlockXformPoint(fr.xf, ax, ay, lz, &p.x, &p.y, &p.z);
       out->push_back(p);
     };
-    for (size_t i = 0; i + 3 < c.userCirclesCxCyZR.size(); i += 4)
-      emit(c.userCirclesCxCyZR[i], c.userCirclesCxCyZR[i + 1], c.userCirclesCxCyZR[i + 2]);
+    for (size_t i = 0; i < c.circleCount(); ++i) {
+      const CadCircleRecord cr = c.circle(i);
+      emit(cr.cx, cr.cy, cr.cz);
+    }
     for (const CadArc& a : c.userArcs)
       emit(a.cx, a.cy, a.z);
     for (const CadEllipse& e : c.userEllipses)
@@ -1855,10 +2015,11 @@ inline void CadBlockLineYExtent(const CadBlockDefinition& def, float* yMin, floa
   *yMin = 0.f;
   *yMax = 0.f;
   bool any = false;
-  const std::vector<double>& L = def.content.userLinesFlat;
-  for (size_t i = 0; i + 4 < L.size(); i += 6) {
-    const float y0 = L[i + 1];
-    const float y1 = L[i + 4];
+  const CadEntityStore& L = def.content;
+  for (size_t i = 0; i < L.lineCount(); ++i) {
+    const CadLineRecord l = L.line(i);
+    const float y0 = static_cast<float>(l.y0);
+    const float y1 = static_cast<float>(l.y1);
     if (!any) {
       *yMin = std::min(y0, y1);
       *yMax = std::max(y0, y1);

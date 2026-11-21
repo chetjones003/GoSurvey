@@ -16,7 +16,7 @@
 #include <string>
 
 QString RunCreateSampleLinesDialog(QWidget* parent, const AppCommandState& state) {
-  if (state.alignments.empty()) {  // REQ-519.1: sample lines run along an alignment, so one must exist
+  if (state.drawing.alignments.empty()) {  // REQ-519.1: sample lines run along an alignment, so one must exist
     QMessageBox::information(parent, "Sample Lines", "Create an alignment first. Sample lines are placed along one.");
     return {};
   }
@@ -25,21 +25,21 @@ QString RunCreateSampleLinesDialog(QWidget* parent, const AppCommandState& state
   auto* form = new QFormLayout;
 
   auto* alignmentBox = new QComboBox(&dialog);
-  for (const alignment::Alignment& a : state.alignments) alignmentBox->addItem(QString::fromStdString(a.name));
+  for (const alignment::Alignment& a : state.drawing.alignments) alignmentBox->addItem(QString::fromStdString(a.name));
   form->addRow("Alignment:", alignmentBox);
 
   // The default range is the whole alignment, from its start station to its end station (as the view frames use).
   // A whole station is shown without decimals; a fractional one keeps the drawing's, so the end never rounds past itself.
   // The start rounds up and the end rounds down to the drawing's decimals, so the prefilled range never leaves the alignment.
   auto stationText = [&state](double displayed, bool roundUp) {
-    alignment::StationFormat fmt = state.alignmentStationFormat;
+    alignment::StationFormat fmt = state.drawing.alignmentStationFormat;
     if (std::fabs(displayed - std::round(displayed)) < 1e-6) fmt.decimals = 0;  // a whole station shows no decimals
     const double scale = std::pow(10.0, fmt.decimals);
     const double scaled = displayed * scale;
     displayed = (roundUp ? std::ceil(scaled - 1e-9) : std::floor(scaled + 1e-9)) / scale;
     return QString::fromStdString(alignment::FormatStation(displayed, fmt));
   };
-  const alignment::Alignment& first = state.alignments.front();
+  const alignment::Alignment& first = state.drawing.alignments.front();
   auto* startEdit = new QLineEdit(stationText(first.DisplayedStation(first.StartStation(), true), true), &dialog);
   auto* endEdit = new QLineEdit(stationText(first.DisplayedStation(first.EndStation(), true), false), &dialog);
   form->addRow("Start station:", startEdit);
@@ -47,8 +47,8 @@ QString RunCreateSampleLinesDialog(QWidget* parent, const AppCommandState& state
   // Choosing another alignment moves the range to that alignment's own start and end.
   QObject::connect(alignmentBox, &QComboBox::currentIndexChanged, &dialog,
                    [&state, stationText, startEdit, endEdit](int index) {
-                     if (index < 0 || index >= static_cast<int>(state.alignments.size())) return;
-                     const alignment::Alignment& chosen = state.alignments[static_cast<size_t>(index)];
+                     if (index < 0 || index >= static_cast<int>(state.drawing.alignments.size())) return;
+                     const alignment::Alignment& chosen = state.drawing.alignments[static_cast<size_t>(index)];
                      startEdit->setText(stationText(chosen.DisplayedStation(chosen.StartStation(), true), true));
                      endEdit->setText(stationText(chosen.DisplayedStation(chosen.EndStation(), true), false));
                    });
@@ -67,7 +67,7 @@ QString RunCreateSampleLinesDialog(QWidget* parent, const AppCommandState& state
   // REQ-519.9: the surface each line is sampled against. None makes lines with no sections.
   auto* surfaceBox = new QComboBox(&dialog);
   surfaceBox->addItem("None");
-  for (const CadSurface& surface : state.cadSurfaces)
+  for (const CadSurface& surface : state.drawing.cadSurfaces)
     if (surface.kind == SurfaceKind::Tin && surface.tin) surfaceBox->addItem(QString::fromStdString(surface.name));
   surfaceBox->setToolTip("The TIN surface to take each line's section from. None gives lines with no sections.");
   form->addRow("Surface:", surfaceBox);

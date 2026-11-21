@@ -177,21 +177,21 @@ void ShowPointGroupManager(QWidget* parent, AppCommandState& state, std::vector<
   footer->addWidget(close);
   root->addLayout(footer);
 
-  int selected = state.pointGroups.empty() ? -1 : 0;
+  int selected = state.drawing.pointGroups.empty() ? -1 : 0;
   bool syncQueued = false;
   bool rangeUndoSaved = false;
   bool descriptionUndoSaved = false;
   bool rawUndoSaved = false;
   std::vector<std::string> groupNames;
   auto update = [&] {
-    const bool hasGroup = selected >= 0 && selected < static_cast<int>(state.pointGroups.size());
+    const bool hasGroup = selected >= 0 && selected < static_cast<int>(state.drawing.pointGroups.size());
     std::vector<std::string> currentNames;
-    currentNames.reserve(state.pointGroups.size());
-    for (const auto& group : state.pointGroups) currentNames.push_back(group.name);
+    currentNames.reserve(state.drawing.pointGroups.size());
+    for (const auto& group : state.drawing.pointGroups) currentNames.push_back(group.name);
     if (currentNames != groupNames) {
       const QSignalBlocker pickerBlock(groupPicker);
       groupPicker->clear();
-      for (const auto& group : state.pointGroups) groupPicker->addItem(FromUtf8(group.name));
+      for (const auto& group : state.drawing.pointGroups) groupPicker->addItem(FromUtf8(group.name));
       groupNames = std::move(currentNames);
     }
     {
@@ -206,19 +206,19 @@ void ShowPointGroupManager(QWidget* parent, AppCommandState& state, std::vector<
     descriptions->setEnabled(hasGroup);
     rawDescriptions->setEnabled(hasGroup);
     addSelection->setEnabled(hasGroup && !state.selectedSurveyPointIndices.empty());
-    clearPicks->setEnabled(hasGroup && !state.pointGroups[static_cast<size_t>(selected)].rule.explicitIds.empty());
+    clearPicks->setEnabled(hasGroup && !state.drawing.pointGroups[static_cast<size_t>(selected)].rule.explicitIds.empty());
 
     const QSignalBlocker nameBlock(name), rangeBlock(ranges), descriptionBlock(descriptions), rawBlock(rawDescriptions);
     if (!hasGroup) {
       name->clear(); ranges->clear(); descriptions->clear(); rawDescriptions->clear();
-      validation->setText(state.pointGroups.empty() ? "No groups yet. Create one to define a set of survey points." : "");
+      validation->setText(state.drawing.pointGroups.empty() ? "No groups yet. Create one to define a set of survey points." : "");
       pickedIds->setText("A point group is a rule, not a fixed list. Matching points imported later join automatically.");
       matchCount->setText("No point group selected");
       matchCount->setStyleSheet("QLabel { background:#e8edf2; color:#35485a; border-radius:6px; font-weight:600; }");
       ruleHint->clear();
       memberPreview->clear();
     } else {
-      auto& group = state.pointGroups[static_cast<size_t>(selected)];
+      auto& group = state.drawing.pointGroups[static_cast<size_t>(selected)];
       if (!name->hasFocus()) name->setText(FromUtf8(group.name));
       if (!ranges->hasFocus()) ranges->setText(FromUtf8(group.rule.idRangesText));
       if (!descriptions->hasFocus()) descriptions->setText(FromUtf8(group.rule.descriptionMatch));
@@ -235,14 +235,14 @@ void ShowPointGroupManager(QWidget* parent, AppCommandState& state, std::vector<
         matchCount->setText("No criteria set — this group contains 0 points.");
         matchCount->setStyleSheet("QLabel { background:#fff0d4; color:#76500c; border-radius:6px; font-weight:600; }");
       } else if (members.empty()) {
-        matchCount->setText(QString("Matches 0 of %1 survey points").arg(state.surveyPoints.size()));
+        matchCount->setText(QString("Matches 0 of %1 survey points").arg(state.drawing.surveyPoints.size()));
         matchCount->setStyleSheet("QLabel { background:#fff0d4; color:#76500c; border-radius:6px; font-weight:600; }");
       } else {
-        matchCount->setText(QString("%1 matched\nof %2 survey points").arg(members.size()).arg(state.surveyPoints.size()));
+        matchCount->setText(QString("%1 matched\nof %2 survey points").arg(members.size()).arg(state.drawing.surveyPoints.size()));
         matchCount->setStyleSheet("QLabel { background:#e6f3ee; color:#18553e; border-radius:6px; font-weight:600; }");
       }
       for (size_t i = 0; i < members.size() && i < 12; ++i) {
-        const auto& point = state.surveyPoints[static_cast<size_t>(members[i])];
+        const auto& point = state.drawing.surveyPoints[static_cast<size_t>(members[i])];
         memberPreview->addItem(QString("%1  ·  %2").arg(point.id).arg(QString::fromUtf8(point.description.c_str())));
       }
       if (members.size() > 12)
@@ -267,31 +267,31 @@ void ShowPointGroupManager(QWidget* parent, AppCommandState& state, std::vector<
     PushUndoSnapshot(state, "New point group");
     PointGroup group;
     group.name = NextGroupName(state);
-    state.pointGroups.push_back(std::move(group));
-    selected = static_cast<int>(state.pointGroups.size()) - 1;
-    log.push_back("Created point group \"" + state.pointGroups.back().name + "\".");
+    state.drawing.pointGroups.push_back(std::move(group));
+    selected = static_cast<int>(state.drawing.pointGroups.size()) - 1;
+    log.push_back("Created point group \"" + state.drawing.pointGroups.back().name + "\".");
     update();
   });
   QObject::connect(groupPicker, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&](int index) {
-    if (index < 0 || index >= static_cast<int>(state.pointGroups.size())) return;
+    if (index < 0 || index >= static_cast<int>(state.drawing.pointGroups.size())) return;
     selected = index;
     validation->clear();
     update();
   });
   QObject::connect(deleteGroup, &QPushButton::clicked, &dialog, [&] {
-    if (selected < 0 || selected >= static_cast<int>(state.pointGroups.size())) return;
-    const auto groupName = state.pointGroups[static_cast<size_t>(selected)].name;
+    if (selected < 0 || selected >= static_cast<int>(state.drawing.pointGroups.size())) return;
+    const auto groupName = state.drawing.pointGroups[static_cast<size_t>(selected)].name;
     PushUndoSnapshot(state, "Delete point group");
-    state.pointGroups.erase(state.pointGroups.begin() + selected);
+    state.drawing.pointGroups.erase(state.drawing.pointGroups.begin() + selected);
     log.push_back("Deleted point group \"" + groupName + "\".");
-    if (selected >= static_cast<int>(state.pointGroups.size())) selected = static_cast<int>(state.pointGroups.size()) - 1;
+    if (selected >= static_cast<int>(state.drawing.pointGroups.size())) selected = static_cast<int>(state.drawing.pointGroups.size()) - 1;
     update();
   });
   QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
   QObject::connect(name, &QLineEdit::editingFinished, &dialog, [&] {
-    if (selected < 0 || selected >= static_cast<int>(state.pointGroups.size())) return;
+    if (selected < 0 || selected >= static_cast<int>(state.drawing.pointGroups.size())) return;
     const auto replacement = name->text().trimmed().toUtf8().toStdString();
-    const auto current = state.pointGroups[static_cast<size_t>(selected)].name;
+    const auto current = state.drawing.pointGroups[static_cast<size_t>(selected)].name;
     const int clash = FindPointGroupIndex(state, replacement);
     if (replacement.empty()) {
       validation->setText("Point group name cannot be empty.");
@@ -301,7 +301,7 @@ void ShowPointGroupManager(QWidget* parent, AppCommandState& state, std::vector<
       log.push_back("A point group named \"" + replacement + "\" already exists — rename refused.");
     } else if (replacement != current) {
       PushUndoSnapshot(state, "Rename point group");
-      state.pointGroups[static_cast<size_t>(selected)].name = replacement;
+      state.drawing.pointGroups[static_cast<size_t>(selected)].name = replacement;
       validation->clear();
       log.push_back("Renamed point group \"" + current + "\" to \"" + replacement + "\".");
     }
@@ -311,9 +311,9 @@ void ShowPointGroupManager(QWidget* parent, AppCommandState& state, std::vector<
   auto bindRuleEdit = [&](QLineEdit* edit, bool& undoSaved, const char* description,
                           std::string PointGroupRule::*field) {
     QObject::connect(edit, &QLineEdit::textEdited, &dialog, [&, edit, field, description](const QString& text) {
-      if (selected < 0 || selected >= static_cast<int>(state.pointGroups.size())) return;
+      if (selected < 0 || selected >= static_cast<int>(state.drawing.pointGroups.size())) return;
       validation->clear();
-      auto& group = state.pointGroups[static_cast<size_t>(selected)];
+      auto& group = state.drawing.pointGroups[static_cast<size_t>(selected)];
       auto& value = group.rule.*field;
       const auto newValue = text.toUtf8().toStdString();
       if (value == newValue) return;
@@ -329,8 +329,8 @@ void ShowPointGroupManager(QWidget* parent, AppCommandState& state, std::vector<
     });
     QObject::connect(edit, &QLineEdit::editingFinished, &dialog, [&] {
       undoSaved = false;
-      if (selected >= 0 && selected < static_cast<int>(state.pointGroups.size()))
-        (void)ResolvePointGroup(state, state.pointGroups[static_cast<size_t>(selected)], &log);
+      if (selected >= 0 && selected < static_cast<int>(state.drawing.pointGroups.size()))
+        (void)ResolvePointGroup(state, state.drawing.pointGroups[static_cast<size_t>(selected)], &log);
       update();
     });
   };
@@ -339,12 +339,12 @@ void ShowPointGroupManager(QWidget* parent, AppCommandState& state, std::vector<
   bindRuleEdit(rawDescriptions, rawUndoSaved, "Edit point group raw-description rule", &PointGroupRule::rawDescriptionMatch);
 
   QObject::connect(addSelection, &QPushButton::clicked, &dialog, [&] {
-    if (selected < 0 || selected >= static_cast<int>(state.pointGroups.size())) return;
-    auto& group = state.pointGroups[static_cast<size_t>(selected)];
+    if (selected < 0 || selected >= static_cast<int>(state.drawing.pointGroups.size())) return;
+    auto& group = state.drawing.pointGroups[static_cast<size_t>(selected)];
     std::vector<int> additions;
     for (const int pointIndex : state.selectedSurveyPointIndices) {
-      if (pointIndex < 0 || static_cast<size_t>(pointIndex) >= state.surveyPoints.size()) continue;
-      const int id = state.surveyPoints[static_cast<size_t>(pointIndex)].id;
+      if (pointIndex < 0 || static_cast<size_t>(pointIndex) >= state.drawing.surveyPoints.size()) continue;
+      const int id = state.drawing.surveyPoints[static_cast<size_t>(pointIndex)].id;
       if (std::find(group.rule.explicitIds.begin(), group.rule.explicitIds.end(), id) == group.rule.explicitIds.end())
         additions.push_back(id);
     }
@@ -355,8 +355,8 @@ void ShowPointGroupManager(QWidget* parent, AppCommandState& state, std::vector<
     update();
   });
   QObject::connect(clearPicks, &QPushButton::clicked, &dialog, [&] {
-    if (selected < 0 || selected >= static_cast<int>(state.pointGroups.size())) return;
-    auto& ids = state.pointGroups[static_cast<size_t>(selected)].rule.explicitIds;
+    if (selected < 0 || selected >= static_cast<int>(state.drawing.pointGroups.size())) return;
+    auto& ids = state.drawing.pointGroups[static_cast<size_t>(selected)].rule.explicitIds;
     if (ids.empty()) return;
     PushUndoSnapshot(state, "Clear group picks");
     ids.clear();

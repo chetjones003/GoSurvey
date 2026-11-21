@@ -12,15 +12,15 @@ namespace CadCoord {
 void LocalFromWorld(const AppCommandState& st, double wx, double wy, float* lx, float* ly) {
   if (!lx || !ly)
     return;
-  *lx = static_cast<float>(wx - st.worldDocumentOriginX);
-  *ly = static_cast<float>(wy - st.worldDocumentOriginY);
+  *lx = static_cast<float>(wx - st.drawing.worldDocumentOriginX);
+  *ly = static_cast<float>(wy - st.drawing.worldDocumentOriginY);
 }
 
 void WorldFromLocal(const AppCommandState& st, float lx, float ly, double* wx, double* wy) {
   if (!wx || !wy)
     return;
-  *wx = static_cast<double>(lx) + st.worldDocumentOriginX;
-  *wy = static_cast<double>(ly) + st.worldDocumentOriginY;
+  *wx = static_cast<double>(lx) + st.drawing.worldDocumentOriginX;
+  *wy = static_cast<double>(ly) + st.drawing.worldDocumentOriginY;
 }
 
 void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
@@ -29,21 +29,29 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
     *y = static_cast<decltype(+*y)>(static_cast<double>(*y) + dy);
   };
 
-  for (size_t i = 0; i + 5 < st.userLinesFlat.size(); i += 6) {
-    add2(&st.userLinesFlat[i], &st.userLinesFlat[i + 1]);
-    add2(&st.userLinesFlat[i + 3], &st.userLinesFlat[i + 4]);
+  for (size_t i = 0; i < st.drawing.lineCount(); ++i) {
+    CadLineRecord ln = st.drawing.line(i);
+    add2(&ln.x0, &ln.y0);
+    add2(&ln.x1, &ln.y1);
+    st.drawing.setLine(i, ln);
   }
-  // Stride 4 (cx,cy,z,r): only the centre's X and Y rebase. Z is absolute (ADR-025 D2) and the
-  // radius is a length, not a position — neither may take a document-origin offset.
-  for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4)
-    add2(&st.userCirclesCxCyZR[i], &st.userCirclesCxCyZR[i + 1]);
-  for (CadArc& a : st.userArcs)
+  // Only the centre's X and Y rebase. Z is absolute (ADR-025 D2) and the radius is a length, not
+  // a position — neither may take a document-origin offset.
+  for (size_t i = 0; i < st.drawing.circleCount(); ++i) {
+    CadCircleRecord cr = st.drawing.circle(i);
+    add2(&cr.cx, &cr.cy);
+    st.drawing.setCircle(i, cr);
+  }
+  for (CadArc& a : st.drawing.userArcs)
     add2(&a.cx, &a.cy);
-  for (CadEllipse& el : st.userEllipses)
+  for (CadEllipse& el : st.drawing.userEllipses)
     add2(&el.cx, &el.cy);
-  for (size_t i = 0; i + 2 < st.userPolylineVerts.size(); i += 3)
-    add2(&st.userPolylineVerts[i], &st.userPolylineVerts[i + 1]);
-  for (CadAnnotation& an : st.cadAnnotations) {
+  for (size_t vi = 0; vi < st.drawing.vertexCount(); ++vi) {
+    CadPolyVertex pv = st.drawing.vertex(vi);
+    add2(&pv.x, &pv.y);
+    st.drawing.setVertex(vi, pv);
+  }
+  for (CadAnnotation& an : st.drawing.cadAnnotations) {
     add2(&an.insX, &an.insY);
     add2(&an.boxMinX, &an.boxMinY);
     add2(&an.boxMaxX, &an.boxMaxY);
@@ -52,14 +60,14 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
       add2(&an.dimExt2X, &an.dimExt2Y);
     }
   }
-  for (CadTable& t : st.cadTables)
+  for (CadTable& t : st.drawing.cadTables)
     add2(&t.insX, &t.insY);
   // Stride 3, but only X and Y are rebased — Z is absolute and never carries a document origin
   // (ADR-025 D2). The +2 slot is deliberately skipped.
-  for (CadFilledRegion& fr : st.cadFilledRegions)
+  for (CadFilledRegion& fr : st.drawing.cadFilledRegions)
     for (size_t i = 0; i + 2 < fr.vertsXyz.size(); i += 3)
       add2(&fr.vertsXyz[i], &fr.vertsXyz[i + 1]);
-  for (SurveyPoint& p : st.surveyPoints)
+  for (SurveyPoint& p : st.drawing.surveyPoints)
     add2(&p.easting, &p.northing);
   // B-rep solids (REQ-313). A solid is an immutable shared payload, so it is REPLACED with a moved
   // copy rather than written through — the same rule that makes an undo snapshot a refcount bump.
@@ -69,13 +77,13 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
   // arc edge, an origin on every face's surface, and a placement frame on its recipe. Shifting only
   // the vertices would leave a box correct and a cylinder inside out, which is exactly the sort of
   // half-move that looks fine until someone orbits. Z is absolute and never rebases (ADR-025 D2).
-  for (CadSolidPtr& sp : st.cadSolids) {
+  for (CadSolidPtr& sp : st.drawing.cadSolids) {
     if (sp)
       sp = std::make_shared<const brep::Solid>(brep::Translate(*sp, ray3d::Vec3{dx, dy, 0.0}));
   }
   // A built TIN is likewise shared and immutable, so it is replaced by a shifted copy. A surface
   // imported as a fixed triangulation (DWG Civil 3D TIN) has no sources to rebuild it from.
-  for (CadSurface& surface : st.cadSurfaces) {
+  for (CadSurface& surface : st.drawing.cadSurfaces) {
     if (!surface.tin) continue;
     auto moved = std::make_shared<CadTin>(*surface.tin);
     for (size_t i = 0; i + 2 < moved->vertsXyz.size(); i += 3)
@@ -83,17 +91,17 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
     surface.tin = std::move(moved);
   }
   // Alignments and the plan points of their fixed station labels are drawing-local too (REQ-496.1).
-  for (alignment::Alignment& al : st.alignments) {
+  for (alignment::Alignment& al : st.drawing.alignments) {
     al.Translate(dx, dy);
     for (alignment::StationOffsetLabel& label : al.stationLabels)
       if (label.fixed) add2(&label.fixedPoint.x, &label.fixedPoint.y);
   }
   // Feature-line vertices are stored local as XYZ triples: X and Y rebase, Z is absolute.
-  for (size_t i = 0; i + 2 < st.featureLineVerts.size(); i += 3)
-    add2(&st.featureLineVerts[i], &st.featureLineVerts[i + 1]);
+  for (size_t i = 0; i + 2 < st.drawing.featureLineVerts.size(); i += 3)
+    add2(&st.drawing.featureLineVerts[i], &st.drawing.featureLineVerts[i + 1]);
   // Point and edge edits are stored in the same local frame; a later rebuild would otherwise apply them
   // at their old positions. Z values are absolute and stay as they are.
-  for (CadSurface& surface : st.cadSurfaces) {
+  for (CadSurface& surface : st.drawing.cadSurfaces) {
     for (size_t i = 0; i + 2 < surface.addedPointXyz.size(); i += 3)
       add2(&surface.addedPointXyz[i], &surface.addedPointXyz[i + 1]);
     for (auto& pick : surface.deletedPointPicks) add2(&pick.first, &pick.second);
@@ -108,15 +116,15 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
 
 void ApplyDocumentOriginRebase(AppCommandState& st, double newOriginX, double newOriginY,
                                std::vector<std::string>* log) {
-  const double dx = st.worldDocumentOriginX - newOriginX;
-  const double dy = st.worldDocumentOriginY - newOriginY;
+  const double dx = st.drawing.worldDocumentOriginX - newOriginX;
+  const double dy = st.drawing.worldDocumentOriginY - newOriginY;
   if (std::fabs(dx) < 1e-9 && std::fabs(dy) < 1e-9)
     return;
   ShiftAllStorageBy(st, dx, dy);
   st.viewportPanX += dx;
   st.viewportPanY += dy;
-  st.worldDocumentOriginX = newOriginX;
-  st.worldDocumentOriginY = newOriginY;
+  st.drawing.worldDocumentOriginX = newOriginX;
+  st.drawing.worldDocumentOriginY = newOriginY;
   // The origin moved, so {north}/{east} label text is now stale — rebuild it against the new origin.
   RegenerateAllSurveyPointLabels(st);
   if (log) {
@@ -138,10 +146,10 @@ bool ComputeWorldSpaceExtents(const AppCommandState& st, double* outMnX, double*
   double smxY = 0.;
   if (!ComputeWorldExtents(st, &smnX, &smxX, &smnY, &smxY))
     return false;
-  *outMnX = smnX + st.worldDocumentOriginX;
-  *outMxX = smxX + st.worldDocumentOriginX;
-  *outMnY = smnY + st.worldDocumentOriginY;
-  *outMxY = smxY + st.worldDocumentOriginY;
+  *outMnX = smnX + st.drawing.worldDocumentOriginX;
+  *outMxX = smxX + st.drawing.worldDocumentOriginX;
+  *outMnY = smnY + st.drawing.worldDocumentOriginY;
+  *outMxY = smxY + st.drawing.worldDocumentOriginY;
   return true;
 }
 
@@ -154,8 +162,8 @@ bool RebaseDrawingToLocalOrigin(AppCommandState& st, std::vector<std::string>* l
   if (!ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped))
     return false;
   // Add current world origin to convert local-extent output to world for the rebase pivot.
-  const double cx = 0.5 * (mnX + mxX) + st.worldDocumentOriginX;
-  const double cy = 0.5 * (mnY + mxY) + st.worldDocumentOriginY;
+  const double cx = 0.5 * (mnX + mxX) + st.drawing.worldDocumentOriginX;
+  const double cy = 0.5 * (mnY + mxY) + st.drawing.worldDocumentOriginY;
   ApplyDocumentOriginRebase(st, cx, cy, log);
   return true;
 }
@@ -180,7 +188,7 @@ bool FitViewportToDrawing(AppCommandState& st, float viewportAspect, int fbW, in
 }
 
 bool MaybeRebaseLargeCoordinates(AppCommandState& st, std::vector<std::string>* log) {
-  if (st.worldDocumentOriginX != 0.0 || st.worldDocumentOriginY != 0.0)
+  if (st.drawing.worldDocumentOriginX != 0.0 || st.drawing.worldDocumentOriginY != 0.0)
     return false;
   double mnX = 0.;
   double mxX = 0.;

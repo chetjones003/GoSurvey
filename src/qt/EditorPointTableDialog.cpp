@@ -38,7 +38,7 @@ QString FromUtf8(const std::string& value) { return QString::fromUtf8(value.c_st
 
 void ShowAddPointTableDialog(QWidget* parent, AppCommandState& state, std::vector<std::string>& log) {
   std::vector<const CadTableStyle*> pointStyles;
-  for (const CadTableStyle& s : state.tableStyles) {
+  for (const CadTableStyle& s : state.drawing.tableStyles) {
     if (s.point)
       pointStyles.push_back(&s);
   }
@@ -46,11 +46,11 @@ void ShowAddPointTableDialog(QWidget* parent, AppCommandState& state, std::vecto
     log.push_back("ADDPOINTTABLE — this drawing has no point table style.");
     return;
   }
-  if (state.surveyPoints.empty()) {
+  if (state.drawing.surveyPoints.empty()) {
     log.push_back("ADDPOINTTABLE — this drawing has no survey points.");
     return;
   }
-  std::vector<SurveyPoint> points = state.surveyPoints;
+  std::vector<SurveyPoint> points = state.drawing.surveyPoints;
   std::sort(points.begin(), points.end(), [](const SurveyPoint& a, const SurveyPoint& b) { return a.id < b.id; });
 
   QDialog dialog(parent);
@@ -86,14 +86,14 @@ void ShowAddPointTableDialog(QWidget* parent, AppCommandState& state, std::vecto
   auto* groupCombo = new QComboBox(&dialog);
   groupCombo->setObjectName("pointTableGroup");
   groupCombo->addItem("(none)");
-  for (const PointGroup& g : state.pointGroups)
+  for (const PointGroup& g : state.drawing.pointGroups)
     groupCombo->addItem(FromUtf8(g.name));
   controls->addWidget(groupCombo, 1);
   root->addLayout(controls);
 
   auto* layerRow = new QHBoxLayout;
   layerRow->addWidget(new QLabel("Table layer:", &dialog));
-  auto* tableLayer = new QLineEdit(QString::fromUtf8(state.currentLayer.c_str()), &dialog);
+  auto* tableLayer = new QLineEdit(QString::fromUtf8(state.drawing.currentLayer.c_str()), &dialog);
   tableLayer->setObjectName("pointTableLayer");
   layerRow->addWidget(tableLayer, 1);
   root->addLayout(layerRow);
@@ -177,25 +177,25 @@ void ShowAddPointTableDialog(QWidget* parent, AppCommandState& state, std::vecto
   root->addWidget(behavior);
 
   QObject::connect(styleEdit, &QPushButton::clicked, &dialog, [&state, styleCombo, &dialog] {
-    auto it = std::find_if(state.tableStyles.begin(), state.tableStyles.end(), [&](const CadTableStyle& style) {
+    auto it = std::find_if(state.drawing.tableStyles.begin(), state.drawing.tableStyles.end(), [&](const CadTableStyle& style) {
       return style.name == styleCombo->currentText().toUtf8().toStdString();
     });
-    if (it == state.tableStyles.end()) return;
+    if (it == state.drawing.tableStyles.end()) return;
     const std::string name = it->name;
     CadTableStyle edited = *it;
     QStringList names;
-    for (const auto& text : state.textStyles) names << FromUtf8(text.name);
+    for (const auto& text : state.drawing.textStyles) names << FromUtf8(text.name);
     if (!EditTableStyleDialog(&dialog, &edited, false, names)) return;
     PushUndoSnapshot(state, "ADDPOINTTABLE table style");
-    it = std::find_if(state.tableStyles.begin(), state.tableStyles.end(), [&](const CadTableStyle& style) { return style.name == name; });
-    if (it != state.tableStyles.end()) *it = std::move(edited);
+    it = std::find_if(state.drawing.tableStyles.begin(), state.drawing.tableStyles.end(), [&](const CadTableStyle& style) { return style.name == name; });
+    if (it != state.drawing.tableStyles.end()) *it = std::move(edited);
   });
 
   // A point group checks exactly its members (REQ-474 clause 2). "(none)" leaves the check boxes as they are.
   QObject::connect(groupCombo, &QComboBox::currentIndexChanged, &dialog, [&state, list](int index) {
-    if (index <= 0 || index - 1 >= static_cast<int>(state.pointGroups.size()))
+    if (index <= 0 || index - 1 >= static_cast<int>(state.drawing.pointGroups.size()))
       return;
-    const std::vector<int> members = ResolvePointGroup(state, state.pointGroups[static_cast<size_t>(index - 1)]);
+    const std::vector<int> members = ResolvePointGroup(state, state.drawing.pointGroups[static_cast<size_t>(index - 1)]);
     const std::set<int> wanted(members.begin(), members.end());
     for (int r = 0; r < list->rowCount(); ++r) {
       QTableWidgetItem* use = list->item(r, 0);

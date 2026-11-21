@@ -14,7 +14,7 @@ const char* kBandPalette[] = {"#3148F5", "#31A2F5", "#31F5C8", "#7CF531", "#F5E6
                               "#C831F5"};
 
 bool ValidIndex(const AppCommandState& cmd, int si) {
-  return si >= 0 && si < static_cast<int>(cmd.cadSurfaces.size());
+  return si >= 0 && si < static_cast<int>(cmd.drawing.cadSurfaces.size());
 }
 
 void SubmitLine(AppCommandState& cmd, std::vector<std::string>& log, const std::string& line) {
@@ -25,7 +25,7 @@ void SubmitLine(AppCommandState& cmd, std::vector<std::string>& log, const std::
 
 /// Why \p name cannot be surface \p si's name, or empty when it can. Logged by the callers.
 std::string NameRefusal(const AppCommandState& cmd, int si, const std::string& name) {
-  const CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(si)];
+  const CadSurface& s = cmd.drawing.cadSurfaces[static_cast<size_t>(si)];
   if (name.empty())
     return "Surface name cannot be empty \xe2\x80\x94 keeping \"" + s.name + "\".";
   const int clash = FindSurfaceIndex(cmd, name);
@@ -65,14 +65,14 @@ void ApplyCreatedFields(AppCommandState& cmd, const CreateRequest& req) {
   assert(ni >= 0);
   if (ni < 0)
     return;
-  CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(ni)];
+  CadSurface& s = cmd.drawing.cadSurfaces[static_cast<size_t>(ni)];
   s.description = req.description;
   s.styleName = req.styleName;
   const std::string chosen = StringUtil::trimCopy(req.layer);
-  if (static_cast<size_t>(ni) < cmd.cadSurfaceAttrs.size() && !chosen.empty() &&
-      chosen != ResolveObjectLayer(cmd.drawingSettings, ObjectLayerKind::Surface, req.name) &&
-      !cmd.drawingSettings.ObjectLayer(ObjectLayerKind::Surface).locked)
-    cmd.cadSurfaceAttrs[static_cast<size_t>(ni)].layer = EnsureDrawingLayer(cmd, chosen);
+  if (static_cast<size_t>(ni) < cmd.drawing.cadSurfaceAttrs.size() && !chosen.empty() &&
+      chosen != ResolveObjectLayer(cmd.drawing.drawingSettings, ObjectLayerKind::Surface, req.name) &&
+      !cmd.drawing.drawingSettings.ObjectLayer(ObjectLayerKind::Surface).locked)
+    cmd.drawing.cadSurfaceAttrs[static_cast<size_t>(ni)].layer = EnsureDrawingLayer(cmd, chosen);
 }
 
 }  // namespace
@@ -165,7 +165,7 @@ bool ApplySurfaceInfo(AppCommandState& cmd, int si, const std::string& name, con
     log.push_back(why);
     return false;
   }
-  CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& s = cmd.drawing.cadSurfaces[static_cast<size_t>(si)];
   PushUndoSnapshot(cmd, "Surface properties");
   s.name = name;
   s.description = description;
@@ -182,7 +182,7 @@ bool RenameSurface(AppCommandState& cmd, int si, const std::string& newName, std
     log.push_back(why);
     return false;
   }
-  CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& s = cmd.drawing.cadSurfaces[static_cast<size_t>(si)];
   PushUndoSnapshot(cmd, "Rename surface");
   log.push_back("Renamed surface \"" + s.name + "\" to \"" + newName + "\".");
   s.name = newName;
@@ -193,7 +193,7 @@ bool RenameSurface(AppCommandState& cmd, int si, const std::string& newName, std
 void AssignSurfaceStyle(AppCommandState& cmd, int si, const std::string& styleName, std::vector<std::string>& log) {
   if (!ValidIndex(cmd, si))
     return;
-  CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& s = cmd.drawing.cadSurfaces[static_cast<size_t>(si)];
   PushUndoSnapshot(cmd, "Surface style");
   s.styleName = styleName;
   BumpCadGpuCache(cmd);
@@ -204,7 +204,7 @@ void RebuildSurface(AppCommandState& cmd, int si, std::vector<std::string>& log)
   if (!ValidIndex(cmd, si))
     return;
   PushUndoSnapshot(cmd, "Rebuild surface");
-  BuildSurfaceFromSources(cmd, cmd.cadSurfaces[static_cast<size_t>(si)], log);
+  BuildSurfaceFromSources(cmd, cmd.drawing.cadSurfaces[static_cast<size_t>(si)], log);
   BumpCadGpuCache(cmd);
 }
 
@@ -212,7 +212,7 @@ void DeleteSurface(AppCommandState& cmd, int si, std::vector<std::string>& log) 
   if (!ValidIndex(cmd, si))
     return;
   PushUndoSnapshot(cmd, "Delete surface");  // undoable in one step (REQ-068)
-  log.push_back("Deleted surface \"" + cmd.cadSurfaces[static_cast<size_t>(si)].name + "\".");
+  log.push_back("Deleted surface \"" + cmd.drawing.cadSurfaces[static_cast<size_t>(si)].name + "\".");
   EraseSurfaceAtIndex(cmd, static_cast<size_t>(si));
 }
 
@@ -232,7 +232,7 @@ bool RemoveDefinitionItem(AppCommandState& cmd, int si, DefinitionKind kind, siz
                           std::vector<std::string>& log) {
   if (!ValidIndex(cmd, si))
     return false;
-  CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& s = cmd.drawing.cadSurfaces[static_cast<size_t>(si)];
   const char* what = "point group";
   switch (kind) {
   case DefinitionKind::PointGroup:
@@ -273,7 +273,7 @@ bool MoveDefinitionItem(AppCommandState& cmd, int si, DefinitionKind kind, size_
                         std::vector<std::string>& log) {
   if (!ValidIndex(cmd, si) || delta == 0)
     return false;
-  CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& s = cmd.drawing.cadSurfaces[static_cast<size_t>(si)];
   const long long j = static_cast<long long>(index) + delta;
   if (kind == DefinitionKind::Breakline) {
     if (index >= s.breaklines.size() || j < 0 || j >= static_cast<long long>(s.breaklines.size()))
@@ -296,7 +296,7 @@ bool MoveDefinitionItem(AppCommandState& cmd, int si, DefinitionKind kind, size_
 bool AddPointGroup(AppCommandState& cmd, int si, const std::string& groupName, std::vector<std::string>& log) {
   if (!ValidIndex(cmd, si))
     return false;
-  CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& s = cmd.drawing.cadSurfaces[static_cast<size_t>(si)];
   if (std::find(s.sourcePointGroups.begin(), s.sourcePointGroups.end(), groupName) != s.sourcePointGroups.end())
     return false;
   PushUndoSnapshot(cmd, "Add point group to surface");
@@ -312,7 +312,7 @@ void AddPointFile(AppCommandState& cmd, int si, const std::string& path, const s
     return;
   // Straight through the command line, so the window and SURFACEADDFILE cannot disagree about what
   // linking means — including refusing a path that cannot be read, and the undo snapshot.
-  std::string line = "SURFACEADDFILE " + cmd.cadSurfaces[static_cast<size_t>(si)].name + ", " + path + ", " + layoutName;
+  std::string line = "SURFACEADDFILE " + cmd.drawing.cadSurfaces[static_cast<size_t>(si)].name + ", " + path + ", " + layoutName;
   if (firstRowIsHeader)
     line += ", HEADER";
   SubmitLine(cmd, log, line);
@@ -324,7 +324,7 @@ void ImportPointFile(AppCommandState& cmd, int si, size_t fileIndex, std::vector
   // REQ-086's break-the-link, routed through the command so the window and SURFACEIMPORTFILE share
   // one definition of what it does — including refusing to drop the link when nothing imported.
   SubmitLine(cmd, log,
-             "SURFACEIMPORTFILE " + cmd.cadSurfaces[static_cast<size_t>(si)].name + ", " + std::to_string(fileIndex + 1));
+             "SURFACEIMPORTFILE " + cmd.drawing.cadSurfaces[static_cast<size_t>(si)].name + ", " + std::to_string(fileIndex + 1));
 }
 
 std::vector<DefinitionRow> DefinitionRows(const CadSurface& s) {
@@ -364,7 +364,7 @@ bool CanMoveDefinitionRow(const std::vector<DefinitionRow>& rows, int sel, int d
 bool MoveDefinitionRow(AppCommandState& cmd, int si, const std::vector<DefinitionRow>& rows, int sel, int delta) {
   if (!ValidIndex(cmd, si) || !CanMoveDefinitionRow(rows, sel, delta))
     return false;
-  CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(si)];
+  CadSurface& s = cmd.drawing.cadSurfaces[static_cast<size_t>(si)];
   const DefinitionRow& r = rows[static_cast<size_t>(sel)];
   PushUndoSnapshot(cmd, "Reorder surface definition");
   switch (r.kind) {
@@ -385,7 +385,7 @@ void SetAnalysisMode(AppCommandState& cmd, int si, SurfaceAnalysisMode mode, std
   if (!ValidIndex(cmd, si))
     return;
   DetachSurfaceStyleIfShared(cmd, static_cast<size_t>(si), &log);
-  SurfaceStyle* st = SurfaceStyles::Find(cmd.surfaceStyles, cmd.cadSurfaces[static_cast<size_t>(si)].styleName);
+  SurfaceStyle* st = SurfaceStyles::Find(cmd.drawing.surfaceStyles, cmd.drawing.cadSurfaces[static_cast<size_t>(si)].styleName);
   if (st == nullptr)
     return;
   PushUndoSnapshot(cmd, "Surface analysis");
@@ -398,11 +398,11 @@ void RunElevationBands(AppCommandState& cmd, int si, int count, std::vector<std:
     return;
   double lo = 0.0, hi = 0.0;
   DetachSurfaceStyleIfShared(cmd, static_cast<size_t>(si), &log);
-  SurfaceStyle* st = SurfaceStyles::Find(cmd.surfaceStyles, cmd.cadSurfaces[static_cast<size_t>(si)].styleName);
+  SurfaceStyle* st = SurfaceStyles::Find(cmd.drawing.surfaceStyles, cmd.drawing.cadSurfaces[static_cast<size_t>(si)].styleName);
   if (st == nullptr)
     return;
   PushUndoSnapshot(cmd, "Surface analysis ranges");
-  if (ElevationRange(cmd.cadSurfaces[static_cast<size_t>(si)], &lo, &hi) && count >= 1) {
+  if (ElevationRange(cmd.drawing.cadSurfaces[static_cast<size_t>(si)], &lo, &hi) && count >= 1) {
     if (hi <= lo)
       hi = lo + 1.0;
     st->analysisMode = SurfaceAnalysisMode::Elevation;
@@ -427,9 +427,9 @@ std::string TrimStyleName(const std::string& s) {
 
 bool RenameStyle(AppCommandState& cmd, size_t idx, const std::string& newName, std::vector<std::string>& log,
                  bool recordUndo) {
-  if (idx >= cmd.surfaceStyles.size())
+  if (idx >= cmd.drawing.surfaceStyles.size())
     return false;
-  SurfaceStyle& s = cmd.surfaceStyles[idx];
+  SurfaceStyle& s = cmd.drawing.surfaceStyles[idx];
   const std::string nm = TrimStyleName(newName);
   if (s.name == SurfaceStyles::kStandardName)
     return false;
@@ -437,7 +437,7 @@ bool RenameStyle(AppCommandState& cmd, size_t idx, const std::string& newName, s
     log.push_back("A surface style name cannot be empty \xe2\x80\x94 keeping \"" + s.name + "\".");
     return false;
   }
-  if (SurfaceStyles::Find(cmd.surfaceStyles, nm) && nm != s.name) {
+  if (SurfaceStyles::Find(cmd.drawing.surfaceStyles, nm) && nm != s.name) {
     log.push_back("A surface style named \"" + nm + "\" already exists \xe2\x80\x94 rename refused.");
     return false;
   }
@@ -445,7 +445,7 @@ bool RenameStyle(AppCommandState& cmd, size_t idx, const std::string& newName, s
     PushUndoSnapshot(cmd, "Rename surface style");
   // Every surface referencing the old name is re-pointed, so a rename does not silently orphan them
   // into the Standard fallback.
-  for (CadSurface& surf : cmd.cadSurfaces)
+  for (CadSurface& surf : cmd.drawing.cadSurfaces)
     if (surf.styleName == s.name)
       surf.styleName = nm;
   log.push_back("Renamed surface style \"" + s.name + "\" to \"" + nm + "\".");
@@ -457,26 +457,26 @@ bool RenameStyle(AppCommandState& cmd, size_t idx, const std::string& newName, s
 bool AddStyle(AppCommandState& cmd, size_t copyFrom, const std::string& name, std::vector<std::string>& log,
               bool recordUndo) {
   const std::string nm = TrimStyleName(name);
-  if (copyFrom >= cmd.surfaceStyles.size() || nm.empty() || SurfaceStyles::Find(cmd.surfaceStyles, nm) != nullptr)
+  if (copyFrom >= cmd.drawing.surfaceStyles.size() || nm.empty() || SurfaceStyles::Find(cmd.drawing.surfaceStyles, nm) != nullptr)
     return false;
   if (recordUndo)
     PushUndoSnapshot(cmd, "Add surface style");
-  SurfaceStyle ns = cmd.surfaceStyles[copyFrom];
+  SurfaceStyle ns = cmd.drawing.surfaceStyles[copyFrom];
   ns.name = nm;
-  cmd.surfaceStyles.push_back(ns);
+  cmd.drawing.surfaceStyles.push_back(ns);
   log.push_back("Surface style added: " + nm);
   BumpCadGpuCache(cmd);
   return true;
 }
 
 bool DeleteStyle(AppCommandState& cmd, size_t idx, std::vector<std::string>& log, bool recordUndo) {
-  if (idx >= cmd.surfaceStyles.size() || cmd.surfaceStyles[idx].name == SurfaceStyles::kStandardName)
+  if (idx >= cmd.drawing.surfaceStyles.size() || cmd.drawing.surfaceStyles[idx].name == SurfaceStyles::kStandardName)
     return false;
   if (recordUndo)
     PushUndoSnapshot(cmd, "Delete surface style");
-  const std::string nm = cmd.surfaceStyles[idx].name;
-  const int used = SurfaceStyles::CountSurfacesResolvingTo(cmd.cadSurfaces, cmd.surfaceStyles, nm);
-  cmd.surfaceStyles.erase(cmd.surfaceStyles.begin() + static_cast<std::ptrdiff_t>(idx));
+  const std::string nm = cmd.drawing.surfaceStyles[idx].name;
+  const int used = SurfaceStyles::CountSurfacesResolvingTo(cmd.drawing.cadSurfaces, cmd.drawing.surfaceStyles, nm);
+  cmd.drawing.surfaceStyles.erase(cmd.drawing.surfaceStyles.begin() + static_cast<std::ptrdiff_t>(idx));
   // Surfaces keep their styleName on purpose (REQ-070): they fall back to Standard for now, and
   // re-creating a style with that name adopts them back rather than leaving the reference rewritten.
   log.push_back("Surface style deleted: " + nm +
@@ -487,12 +487,12 @@ bool DeleteStyle(AppCommandState& cmd, size_t idx, std::vector<std::string>& log
 }
 
 void SetStyleIntervals(AppCommandState& cmd, size_t idx, double minorFt, double majorFt, bool recordUndo) {
-  if (idx >= cmd.surfaceStyles.size())
+  if (idx >= cmd.drawing.surfaceStyles.size())
     return;
   if (recordUndo)
     PushUndoSnapshot(cmd, "Surface style interval");
-  cmd.surfaceStyles[idx].minorIntervalFt = minorFt;
-  cmd.surfaceStyles[idx].majorIntervalFt = majorFt;
+  cmd.drawing.surfaceStyles[idx].minorIntervalFt = minorFt;
+  cmd.drawing.surfaceStyles[idx].majorIntervalFt = majorFt;
   BumpCadGpuCache(cmd);
 }
 

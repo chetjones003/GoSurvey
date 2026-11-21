@@ -10,13 +10,13 @@ TEST_CASE("Cut refuses unsupported model entity types without erasing", "[issue8
                           SelectedEntity::Type::PointCloud, SelectedEntity::Type::PdfUnderlay,
                           SelectedEntity::Type::Alignment}) {
     AppCommandState state;
-    state.userLinesFlat = {100, 100, 0, 110, 100, 0};
+    state.drawing.userLinesFlat = {100, 100, 0, 110, 100, 0};
     state.selection = {{SelectedEntity::Type::LineSeg, 0}, {type, 0}};
     std::vector<std::string> log;
 
     CutSelectionToClipboard(state, log);
 
-    CHECK(state.userLinesFlat.size() == 6);
+    CHECK(state.drawing.userLinesFlat.size() == 6);
     CHECK(state.clipboard.empty());
     REQUIRE_FALSE(log.empty());
     CHECK(log.back().find("CUT — not done") != std::string::npos);
@@ -29,8 +29,8 @@ TEST_CASE("Cut refuses unsupported model entity types without erasing", "[issue8
 
 TEST_CASE("A copied line is held as drawing content and pastes at the cursor", "[issue1557][clipboard]") {
   AppCommandState state;
-  state.userLinesFlat = {100, 100, 0, 110, 100, 0};
-  state.userLineAttrs = {EntityAttributes{}};
+  state.drawing.userLinesFlat = {100, 100, 0, 110, 100, 0};
+  state.drawing.userLineAttrs = {EntityAttributes{}};
   state.selection = {{SelectedEntity::Type::LineSeg, 0}};
   std::vector<std::string> log;
 
@@ -42,10 +42,10 @@ TEST_CASE("A copied line is held as drawing content and pastes at the cursor", "
 
   CommitClipboardPasteAt(state, state.clipboard.basePtX + 50.0, state.clipboard.basePtY, log);
 
-  REQUIRE(state.userLinesFlat.size() == 12);
-  CHECK(state.userLinesFlat[6] == Catch::Approx(150.0));
-  CHECK(state.userLinesFlat[7] == Catch::Approx(100.0));
-  CHECK(state.userLinesFlat[9] == Catch::Approx(160.0));
+  REQUIRE(state.drawing.userLinesFlat.size() == 12);
+  CHECK(state.drawing.userLinesFlat[6] == Catch::Approx(150.0));
+  CHECK(state.drawing.userLinesFlat[7] == Catch::Approx(100.0));
+  CHECK(state.drawing.userLinesFlat[9] == Catch::Approx(160.0));
 }
 
 TEST_CASE("Clipboard emptiness ignores drawing fields that a copy never fills", "[issue1557][clipboard]") {

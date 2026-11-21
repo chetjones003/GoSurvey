@@ -316,10 +316,10 @@ std::string BuildExportCsvBody(const AppCommandState& st, SurveyCsvLayout layout
   std::ostringstream oss;
   if (writeHeader)
     oss << HeaderLine(layout) << '\n';
-  for (const auto& p : st.surveyPoints) {
+  for (const auto& p : st.drawing.surveyPoints) {
     const std::string d = CsvEscapeField(p.description);
-    const double e = static_cast<double>(p.easting) + st.worldDocumentOriginX;
-    const double n = static_cast<double>(p.northing) + st.worldDocumentOriginY;
+    const double e = static_cast<double>(p.easting) + st.drawing.worldDocumentOriginX;
+    const double n = static_cast<double>(p.northing) + st.drawing.worldDocumentOriginY;
     const double z = static_cast<double>(p.elevation);
     switch (layout) {
     case SurveyCsvLayout::PENZD_PN:
@@ -433,8 +433,8 @@ void SurveyCsvRefreshImportPreview(AppCommandState& st) {
   if (st.surveyImportCsvSkipFirstRow && !lines.empty())
     startRow = 1;
 
-  int previewAuto = (MaxSurveyPointId(st.surveyPoints) == std::numeric_limits<int>::max() ? std::numeric_limits<int>::max() : MaxSurveyPointId(st.surveyPoints) + 1);
-  previewAuto = std::max(previewAuto, st.createPointsNextId);
+  int previewAuto = (MaxSurveyPointId(st.drawing.surveyPoints) == std::numeric_limits<int>::max() ? std::numeric_limits<int>::max() : MaxSurveyPointId(st.drawing.surveyPoints) + 1);
+  previewAuto = std::max(previewAuto, st.drawing.createPointsNextId);
 
   int parsedOk = 0;
   int parseFail = 0;
@@ -465,8 +465,8 @@ void SurveyCsvRefreshImportPreview(AppCommandState& st) {
   // mirroring the importer's skip rules so the valid/skip counts are accurate.
   std::unordered_set<int> sessionIds;
   if (hasId) {
-    sessionIds.reserve(st.surveyPoints.size());
-    for (const auto& p : st.surveyPoints)
+    sessionIds.reserve(st.drawing.surveyPoints.size());
+    for (const auto& p : st.drawing.surveyPoints)
       sessionIds.insert(p.id);
   }
   const survey_csv::DuplicateScan dup = survey_csv::ScanDuplicateIds(rowsWithId, sessionIds);
@@ -591,8 +591,8 @@ bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
 
   const SurveyCsvLayout layout = SurveyCsvLayoutFromUiIndex(st.surveyImportCsvLayoutIdx);
   const bool hasId = LayoutHasPointId(layout);
-  int autoId = (MaxSurveyPointId(st.surveyPoints) == std::numeric_limits<int>::max() ? std::numeric_limits<int>::max() : MaxSurveyPointId(st.surveyPoints) + 1);
-  autoId = std::max(autoId, st.createPointsNextId);
+  int autoId = (MaxSurveyPointId(st.drawing.surveyPoints) == std::numeric_limits<int>::max() ? std::numeric_limits<int>::max() : MaxSurveyPointId(st.drawing.surveyPoints) + 1);
+  autoId = std::max(autoId, st.drawing.createPointsNextId);
 
   std::string line;
   size_t lineNo = 0;
@@ -600,7 +600,7 @@ bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
   int skipped = 0;
   std::vector<SurveyPoint> pending;
   std::unordered_set<int> used;
-  for (const auto& point : st.surveyPoints) used.insert(point.id);
+  for (const auto& point : st.drawing.surveyPoints) used.insert(point.id);
 
   while (std::getline(f, line)) {
     ++lineNo;
@@ -627,8 +627,8 @@ bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
 
     // CSV coordinates are world-space; survey points are stored local (world − document origin). Convert
     // in double precision so points land exactly on existing geometry (e.g. an imported DXF's endpoints).
-    pr.pt.easting = pr.worldE - st.worldDocumentOriginX;
-    pr.pt.northing = pr.worldN - st.worldDocumentOriginY;
+    pr.pt.easting = pr.worldE - st.drawing.worldDocumentOriginX;
+    pr.pt.northing = pr.worldN - st.drawing.worldDocumentOriginY;
     if (!std::isfinite(pr.pt.easting) || !std::isfinite(pr.pt.northing)) { ++skipped; continue; }
     pending.push_back(std::move(pr.pt));
     ++imported;
@@ -641,11 +641,11 @@ bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
     PushUndoSnapshot(st, "Import survey points");
     for (auto& point : pending) {
       point.layer = EnsureObjectLayer(st, ObjectLayerKind::SurveyPoint, {});
-      st.surveyPoints.push_back(std::move(point));
-      EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, &log);
+      st.drawing.surveyPoints.push_back(std::move(point));
+      EnsureSurveyPointLabelMtext(st, st.drawing.surveyPoints.size() - 1, &log);
     }
   }
-  st.createPointsNextId = std::max(st.createPointsNextId, autoId);
+  st.drawing.createPointsNextId = std::max(st.drawing.createPointsNextId, autoId);
   st.selectedSurveyPointIndices.clear();
   if (imported > 0)
     CadCoord::MaybeRebaseLargeCoordinates(st, &log);
@@ -677,9 +677,9 @@ bool SurveyCsvExportFile(AppCommandState& st, std::vector<std::string>& log) {
 
   fs::path temporary;
   try {
-    for (const auto& point : st.surveyPoints) {
-      if (!std::isfinite(point.easting + st.worldDocumentOriginX) ||
-          !std::isfinite(point.northing + st.worldDocumentOriginY) || !std::isfinite(point.elevation))
+    for (const auto& point : st.drawing.surveyPoints) {
+      if (!std::isfinite(point.easting + st.drawing.worldDocumentOriginX) ||
+          !std::isfinite(point.northing + st.drawing.worldDocumentOriginY) || !std::isfinite(point.elevation))
         throw std::runtime_error("Non-finite point coordinate.");
     }
     const auto destination = fs::u8path(st.surveyExportCsvPath);
@@ -700,7 +700,7 @@ bool SurveyCsvExportFile(AppCommandState& st, std::vector<std::string>& log) {
     return false;
   }
 
-  log.push_back(std::string("EXPORTPOINTS — wrote ") + std::to_string(st.surveyPoints.size()) + " point(s) to " +
+  log.push_back(std::string("EXPORTPOINTS — wrote ") + std::to_string(st.drawing.surveyPoints.size()) + " point(s) to " +
                 st.surveyExportCsvPath);
 
   std::string tabTitle = st.surveyExportCsvPath;

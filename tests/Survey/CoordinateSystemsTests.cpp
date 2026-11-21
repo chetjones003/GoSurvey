@@ -189,14 +189,14 @@ TEST_CASE("A zone's lat/long converts to WGS 84 along CS-MAP's datum path (REQ-3
 TEST_CASE("A drawing point converts to grid and lat/long through the zone (REQ-358)", "[req358]") {
   LoadShippedDictionary();
   AppCommandState st;
-  CHECK_FALSE(st.drawingSettings.Geolocated());
+  CHECK_FALSE(st.drawing.drawingSettings.Geolocated());
   CHECK_FALSE(DrawingPointToLatLong(st, 0.0, 0.0).ok);
 
   // A feet drawing (US survey foot) holding AG9976 in LOCAL coordinates about a world origin.
-  st.drawingInsUnits = 2;
-  st.drawingSettings.zoneCode = "HARN/TX.TX-CF";
-  st.worldDocumentOriginX = 3115000.0;
-  st.worldDocumentOriginY = 10077000.0;
+  st.drawing.drawingInsUnits = 2;
+  st.drawing.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+  st.drawing.worldDocumentOriginX = 3115000.0;
+  st.drawing.worldDocumentOriginY = 10077000.0;
   const geo::GeoResult grid = DrawingPointToGrid(st, kAg9976EFt - 3115000.0, kAg9976NFt - 10077000.0);
   REQUIRE(grid.ok);
   CHECK(grid.x == Catch::Approx(kAg9976EFt).margin(1e-6));
@@ -206,19 +206,19 @@ TEST_CASE("A drawing point converts to grid and lat/long through the zone (REQ-3
   CHECK(std::abs(ll.y - kAg9976Lat) * kMetersPerDegreeLat <= 0.003);  // sFT datasheet: 0.01 ft
 
   // The same drawing in a METER zone: feet → meters with the drawing's foot.
-  st.drawingSettings.zoneCode = "HARN/TX.TX-C";
+  st.drawing.drawingSettings.zoneCode = "HARN/TX.TX-C";
   const geo::GeoResult m = DrawingPointToGrid(st, kAg9976EFt - 3115000.0, kAg9976NFt - 10077000.0);
   REQUIRE(m.ok);
   CHECK(m.x == Catch::Approx(kAg9976EFt * kUsFootMeters).margin(1e-6));
   // International foot: 2 ppm different, about 6 ft at 3,115,000 ft.
-  st.drawingSettings.footDefinition = DrawingSettings::FootDefinition::International;
+  st.drawing.drawingSettings.footDefinition = DrawingSettings::FootDefinition::International;
   const geo::GeoResult mi = DrawingPointToGrid(st, kAg9976EFt - 3115000.0, kAg9976NFt - 10077000.0);
   REQUIRE(mi.ok);
   CHECK(mi.x == Catch::Approx(kAg9976EFt * 0.3048).margin(1e-6));
 
   // A zone the dictionary does not know: kept, still geolocated, conversion refused with a reason.
-  st.drawingSettings.zoneCode = "NOSUCH";
-  CHECK(st.drawingSettings.Geolocated());
+  st.drawing.drawingSettings.zoneCode = "NOSUCH";
+  CHECK(st.drawing.drawingSettings.Geolocated());
   const geo::GeoResult unknown = DrawingPointToGrid(st, 0.0, 0.0);
   CHECK_FALSE(unknown.ok);
   CHECK(unknown.error.find("NOSUCH") != std::string::npos);
@@ -227,40 +227,40 @@ TEST_CASE("A drawing point converts to grid and lat/long through the zone (REQ-3
 TEST_CASE("The zone is one undo step, moves no coordinate and survives the trailer (REQ-358)", "[req358]") {
   std::vector<std::string> log;
   AppCommandState st;
-  st.userLinesFlat = {1.25, 2.5, 0.0, 10.75, 20.5, 3.0};
-  st.userLineAttrs = {EntityAttributes{}};
-  const std::vector<double> before = st.userLinesFlat;
+  st.drawing.userLinesFlat = {1.25, 2.5, 0.0, 10.75, 20.5, 3.0};
+  st.drawing.userLineAttrs = {EntityAttributes{}};
+  const std::vector<double> before = st.drawing.userLinesFlat;
 
-  DrawingSettings s = st.drawingSettings;
+  DrawingSettings s = st.drawing.drawingSettings;
   s.zoneCode = "HARN/TX.TX-CF";
-  REQUIRE(ApplyDrawingSettings(st, st.drawingInsUnits, st.modelUnitsPerPlottedInch, s, log));
-  CHECK(st.drawingSettings.zoneCode == "HARN/TX.TX-CF");
-  CHECK(st.userLinesFlat == before);  // a relabel (REQ-358 item 3)
+  REQUIRE(ApplyDrawingSettings(st, st.drawing.drawingInsUnits, st.drawing.modelUnitsPerPlottedInch, s, log));
+  CHECK(st.drawing.drawingSettings.zoneCode == "HARN/TX.TX-CF");
+  CHECK(st.drawing.userLinesFlat == before);  // a relabel (REQ-358 item 3)
 
   // Trailer round trip, including a code this dictionary does not know (kept verbatim).
   for (const char* code : {"HARN/TX.TX-CF", "SOME.FUTURE-ZONE"}) {
     AppCommandState src;
-    src.drawingSettings.zoneCode = code;
+    src.drawing.drawingSettings.zoneCode = code;
     AppCommandState back;
     REQUIRE(LoadGoSurveyFromJsonUtf8(back, SerializeGoSurveyJson(src), log));
-    CHECK(back.drawingSettings.zoneCode == code);
-    CHECK(back.drawingSettings.Geolocated());
+    CHECK(back.drawing.drawingSettings.zoneCode == code);
+    CHECK(back.drawing.drawingSettings.Geolocated());
   }
 
   REQUIRE(DoUndo(st, log));
-  CHECK(st.drawingSettings.zoneCode.empty());
+  CHECK(st.drawing.drawingSettings.zoneCode.empty());
 }
 
 TEST_CASE("Two drawing tabs keep different zones (REQ-358)", "[req358]") {
   AppCommandState st;
   st.documents.resize(3);
-  st.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+  st.drawing.drawingSettings.zoneCode = "HARN/TX.TX-CF";
   SaveDocumentToSnapshot(st, 1);
-  st.drawingSettings.zoneCode = "TX83-NF";
+  st.drawing.drawingSettings.zoneCode = "TX83-NF";
   SaveDocumentToSnapshot(st, 2);
 
   RestoreDocumentFromSnapshot(st, 1);
-  CHECK(st.drawingSettings.zoneCode == "HARN/TX.TX-CF");
+  CHECK(st.drawing.drawingSettings.zoneCode == "HARN/TX.TX-CF");
   RestoreDocumentFromSnapshot(st, 2);
-  CHECK(st.drawingSettings.zoneCode == "TX83-NF");
+  CHECK(st.drawing.drawingSettings.zoneCode == "TX83-NF");
 }

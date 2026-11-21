@@ -29,7 +29,7 @@
 
 const NamedUcs* FindNamedUcs(const AppCommandState& st, const std::string& name) {
   const std::string want = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(name));
-  for (const NamedUcs& n : st.ucsNamed) {
+  for (const NamedUcs& n : st.drawing.ucsNamed) {
     if (StringUtil::toLowerAsciiCopy(n.name) == want)
       return &n;
   }
@@ -47,7 +47,7 @@ const NamedUcs* FindNamedUcs(const AppCommandState& st, const std::string& name)
 
 const NamedView* FindNamedView(const AppCommandState& st, const std::string& name) {
   const std::string want = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(name));
-  for (const NamedView& v : st.namedViews) {
+  for (const NamedView& v : st.drawing.namedViews) {
     if (StringUtil::toLowerAsciiCopy(v.name) == want)
       return &v;
   }
@@ -66,7 +66,7 @@ const NamedView* FindNamedView(const AppCommandState& st, const std::string& nam
 const NamedView* CurrentNamedView(const AppCommandState& st) {
   constexpr double kPanTol = 1e-6;
   constexpr float kAngTol = 1e-3f;
-  for (const NamedView& v : st.namedViews) {
+  for (const NamedView& v : st.drawing.namedViews) {
     if (std::fabs(v.panX - st.viewportPanX) > kPanTol || std::fabs(v.panY - st.viewportPanY) > kPanTol ||
         std::fabs(v.panZ - st.viewportPanZ) > kPanTol)
       continue;
@@ -136,12 +136,12 @@ void RestoreNamedView(AppCommandState& st, const NamedView& v, std::vector<std::
 }
 
 void ListNamedViews(const AppCommandState& st, std::vector<std::string>& log) {
-  if (st.namedViews.empty()) {
+  if (st.drawing.namedViews.empty()) {
     log.push_back("VIEW - no saved views in this drawing.");
     return;
   }
   std::string s = "VIEW - saved views:";
-  for (const NamedView& v : st.namedViews)
+  for (const NamedView& v : st.drawing.namedViews)
     s += " " + v.name + ";";
   log.push_back(s);
 }
@@ -175,7 +175,7 @@ bool ProcessViewCommandLine(AppCommandState& st, const std::string& rest, std::v
     }
     // Overwriting by name is deliberate and matches `UCS N S`: a view is a bookmark, and re-saving
     // one you are standing in is the ordinary way to move it.
-    for (NamedView& v : st.namedViews) {
+    for (NamedView& v : st.drawing.namedViews) {
       if (StringUtil::toLowerAsciiCopy(v.name) == StringUtil::toLowerAsciiCopy(name)) {
         const std::string keep = v.name;
         v = CaptureCurrentView(st, keep);
@@ -184,7 +184,7 @@ bool ProcessViewCommandLine(AppCommandState& st, const std::string& rest, std::v
         return true;
       }
     }
-    st.namedViews.push_back(CaptureCurrentView(st, name));
+    st.drawing.namedViews.push_back(CaptureCurrentView(st, name));
     st.activeViewName = name;
     log.push_back("VIEW - saved as " + name + ".");
     return true;
@@ -199,14 +199,14 @@ bool ProcessViewCommandLine(AppCommandState& st, const std::string& rest, std::v
     return true;
   }
   if (low == "d" || low == "delete") {
-    for (size_t i = 0; i < st.namedViews.size(); ++i) {
-      if (StringUtil::toLowerAsciiCopy(st.namedViews[i].name) == StringUtil::toLowerAsciiCopy(name)) {
+    for (size_t i = 0; i < st.drawing.namedViews.size(); ++i) {
+      if (StringUtil::toLowerAsciiCopy(st.drawing.namedViews[i].name) == StringUtil::toLowerAsciiCopy(name)) {
         // Deleting the view you are standing in leaves the camera exactly where it is and drops the
         // name — the view becomes "Unsaved View", which is true, rather than moving the drawing.
         if (StringUtil::toLowerAsciiCopy(st.activeViewName) == StringUtil::toLowerAsciiCopy(name))
           st.activeViewName.clear();
-        log.push_back("VIEW - " + st.namedViews[i].name + " deleted.");
-        st.namedViews.erase(st.namedViews.begin() + static_cast<std::ptrdiff_t>(i));
+        log.push_back("VIEW - " + st.drawing.namedViews[i].name + " deleted.");
+        st.drawing.namedViews.erase(st.drawing.namedViews.begin() + static_cast<std::ptrdiff_t>(i));
         return true;
       }
     }
@@ -448,12 +448,12 @@ static bool UcsFromObjectPick(const AppCommandState& st, const ray3d::Vec3& pick
 
   switch (hit.type) {
     case SelectedEntity::Type::LineSeg: {
-      const size_t i = static_cast<size_t>(hit.index) * 6;
-      if (i + 5 >= st.userLinesFlat.size())
+      const size_t li = static_cast<size_t>(hit.index);
+      if (li >= st.drawing.lineCount())
         return false;
-      const ray3d::Vec3 a = storageToWorld(st.userLinesFlat[i], st.userLinesFlat[i + 1], st.userLinesFlat[i + 2]);
-      const ray3d::Vec3 b =
-          storageToWorld(st.userLinesFlat[i + 3], st.userLinesFlat[i + 4], st.userLinesFlat[i + 5]);
+      const CadLineRecord ln = st.drawing.line(li);
+      const ray3d::Vec3 a = storageToWorld(ln.x0, ln.y0, ln.z0);
+      const ray3d::Vec3 b = storageToWorld(ln.x1, ln.y1, ln.z1);
       // The endpoint nearest the pick becomes the origin and +X runs toward the other, so clicking
       // near either end gives a frame that reads along the line away from you.
       const bool nearA = ray3d::Length(ray3d::Sub(pickWorld, a)) <= ray3d::Length(ray3d::Sub(pickWorld, b));
@@ -466,11 +466,11 @@ static bool UcsFromObjectPick(const AppCommandState& st, const ray3d::Vec3& pick
       return true;
     }
     case SelectedEntity::Type::Circle: {
-      const size_t i = static_cast<size_t>(hit.index) * 4;
-      if (i + 3 >= st.userCirclesCxCyZR.size())
+      const size_t ci = static_cast<size_t>(hit.index);
+      if (ci >= st.drawing.circleCount())
         return false;
-      const ray3d::Vec3 c =
-          storageToWorld(st.userCirclesCxCyZR[i], st.userCirclesCxCyZR[i + 1], st.userCirclesCxCyZR[i + 2]);
+      const CadCircleRecord cr = st.drawing.circle(ci);
+      const ray3d::Vec3 c = storageToWorld(cr.cx, cr.cy, cr.cz);
       // AutoCAD's rule: origin at the centre, +X from the centre out through the pick point.
       if (!UcsAlignedToDirection(c, ray3d::Sub(pickWorld, c), out)) {
         log.push_back("UCS Object - click away from the centre so the X axis has a direction.");
@@ -479,9 +479,9 @@ static bool UcsFromObjectPick(const AppCommandState& st, const ray3d::Vec3& pick
       return true;
     }
     case SelectedEntity::Type::Arc: {
-      if (hit.index < 0 || static_cast<size_t>(hit.index) >= st.userArcs.size())
+      if (hit.index < 0 || static_cast<size_t>(hit.index) >= st.drawing.userArcs.size())
         return false;
-      const CadArc& a = st.userArcs[static_cast<size_t>(hit.index)];
+      const CadArc& a = st.drawing.userArcs[static_cast<size_t>(hit.index)];
       const ray3d::Vec3 c = storageToWorld(a.cx, a.cy, a.z);
       if (!UcsAlignedToDirection(c, ray3d::Sub(pickWorld, c), out)) {
         log.push_back("UCS Object - click away from the centre so the X axis has a direction.");
@@ -490,9 +490,9 @@ static bool UcsFromObjectPick(const AppCommandState& st, const ray3d::Vec3& pick
       return true;
     }
     case SelectedEntity::Type::Ellipse: {
-      if (hit.index < 0 || static_cast<size_t>(hit.index) >= st.userEllipses.size())
+      if (hit.index < 0 || static_cast<size_t>(hit.index) >= st.drawing.userEllipses.size())
         return false;
-      const CadEllipse& e = st.userEllipses[static_cast<size_t>(hit.index)];
+      const CadEllipse& e = st.drawing.userEllipses[static_cast<size_t>(hit.index)];
       const ray3d::Vec3 c = storageToWorld(e.cx, e.cy, e.z);
       // The ellipse's own major axis beats the pick direction here: it is an intrinsic property of
       // the entity, so the resulting frame does not depend on where the user happened to click.
@@ -504,9 +504,9 @@ static bool UcsFromObjectPick(const AppCommandState& st, const ray3d::Vec3& pick
       return true;
     }
     case SelectedEntity::Type::Annotation: {
-      if (hit.index < 0 || static_cast<size_t>(hit.index) >= st.cadAnnotations.size())
+      if (hit.index < 0 || static_cast<size_t>(hit.index) >= st.drawing.cadAnnotations.size())
         return false;
-      const CadAnnotation& an = st.cadAnnotations[static_cast<size_t>(hit.index)];
+      const CadAnnotation& an = st.drawing.cadAnnotations[static_cast<size_t>(hit.index)];
       const ray3d::Vec3 o = storageToWorld(an.insX, an.insY, an.insZ);
       const double rad = static_cast<double>(an.rotationRad);
       if (!UcsAlignedToDirection(o, ray3d::Vec3{std::cos(rad), std::sin(rad), 0.0}, out)) {
@@ -698,7 +698,7 @@ void SaveNamedUcs(AppCommandState& st, const std::string& rawName, std::vector<s
   std::string name;
   if (!ValidUcsName(rawName, "Named", &name, log))
     return;
-  for (NamedUcs& n : st.ucsNamed) {
+  for (NamedUcs& n : st.drawing.ucsNamed) {
     if (StringUtil::toLowerAsciiCopy(n.name) == StringUtil::toLowerAsciiCopy(name)) {
       n.frame = st.activeUcs;  // redefining an existing name, which AutoCAD allows
       log.push_back("UCS " + n.name + " redefined.");
@@ -708,7 +708,7 @@ void SaveNamedUcs(AppCommandState& st, const std::string& rawName, std::vector<s
   NamedUcs n;
   n.name = name;
   n.frame = st.activeUcs;
-  st.ucsNamed.push_back(std::move(n));
+  st.drawing.ucsNamed.push_back(std::move(n));
   log.push_back("UCS saved as " + name + ".");
 }
 
@@ -729,10 +729,10 @@ bool DeleteNamedUcs(AppCommandState& st, const std::string& rawName, std::vector
   std::string name;
   if (!ValidUcsName(rawName, "Delete", &name, log))
     return false;
-  for (size_t i = 0; i < st.ucsNamed.size(); ++i) {
-    if (StringUtil::toLowerAsciiCopy(st.ucsNamed[i].name) == StringUtil::toLowerAsciiCopy(name)) {
-      log.push_back("UCS " + st.ucsNamed[i].name + " deleted.");
-      st.ucsNamed.erase(st.ucsNamed.begin() + static_cast<std::ptrdiff_t>(i));
+  for (size_t i = 0; i < st.drawing.ucsNamed.size(); ++i) {
+    if (StringUtil::toLowerAsciiCopy(st.drawing.ucsNamed[i].name) == StringUtil::toLowerAsciiCopy(name)) {
+      log.push_back("UCS " + st.drawing.ucsNamed[i].name + " deleted.");
+      st.drawing.ucsNamed.erase(st.drawing.ucsNamed.begin() + static_cast<std::ptrdiff_t>(i));
       return true;
     }
   }
@@ -743,11 +743,11 @@ bool DeleteNamedUcs(AppCommandState& st, const std::string& rawName, std::vector
 void ListNamedUcs(const AppCommandState& st, std::vector<std::string>& log) {
   log.push_back("Named coordinate systems:");
   log.push_back("  World (current)" + std::string(ucs::IsWorld(st.activeUcs) ? "" : ""));
-  if (st.ucsNamed.empty()) {
+  if (st.drawing.ucsNamed.empty()) {
     log.push_back("  (no saved UCS definitions)");
     return;
   }
-  for (const NamedUcs& n : st.ucsNamed)
+  for (const NamedUcs& n : st.drawing.ucsNamed)
     log.push_back("  " + n.name + " - " + DescribeUcs(n.frame));
 }
 
@@ -1084,7 +1084,7 @@ bool ProcessPlanCommandLine(AppCommandState& st, const std::string& line, std::v
     ApplyPlanViewOf(st, ucs::Ucs{}, log);
     log.push_back("PLAN - view set to the world XY plane. The current UCS is unchanged.");
   } else if (low == "u" || low == "ucs" || low == "named") {
-    if (st.ucsNamed.empty()) {
+    if (st.drawing.ucsNamed.empty()) {
       log.push_back("PLAN - there are no saved UCS definitions. Save one with UCS Named Save first.");
     } else {
       st.planPhase = AppCommandState::PlanPhase::WaitNamedName;

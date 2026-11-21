@@ -334,7 +334,7 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   SetAdjustmentMessage(m_Output, "Import observations or enter GoSurvey traverse commands, then run adjustment.");
   m_ResultPlan = new AdjustmentPlanView(results);
   m_ResultPlan->setObjectName("adjustmentResultPlan");
-  m_ResultPlan->SetUnitLabel(QString::fromUtf8(CadDrawingInsUnitsAbbrev(state.drawingInsUnits)));
+  m_ResultPlan->SetUnitLabel(QString::fromUtf8(CadDrawingInsUnitsAbbrev(state.drawing.drawingInsUnits)));
   reportLayout->addWidget(m_Output, 1);
   results->addTab(reportPage, "Report");
   results->addTab(m_ResultPlan, "Plan plot");
@@ -595,7 +595,7 @@ void AdjustmentWindow::InvalidateResult() {
 }
 
 QString AdjustmentWindow::UnitSuffix() const {
-  const QString unit = QString::fromUtf8(CadDrawingInsUnitsAbbrev(m_State.drawingInsUnits));
+  const QString unit = QString::fromUtf8(CadDrawingInsUnitsAbbrev(m_State.drawing.drawingInsUnits));
   return unit.isEmpty() ? QString("drawing units") : unit;
 }
 
@@ -720,7 +720,7 @@ void AdjustmentWindow::ApplyOptionsToData() {
 void AdjustmentWindow::RefreshOptionsBar() {
   int unitIndex = 2;  // Feet, the fallback default (REQ-357).
   for (int i = 0; i < kDrawingUnitCount; ++i)
-    if (kDrawingUnitCodes[i] == m_State.drawingInsUnits) unitIndex = i;
+    if (kDrawingUnitCodes[i] == m_State.drawing.drawingInsUnits) unitIndex = i;
   m_UnitsLabel->setText(QString("Units: ") + kDrawingUnitNames[unitIndex]);
   const QString unit = UnitSuffix();
   m_Coordinates->setHorizontalHeaderLabels({"Station", "Easting (" + unit + ")", "Northing (" + unit + ")", "Elevation (" + unit + ")"});
@@ -973,7 +973,7 @@ void AdjustmentWindow::PresentResult() {
   m_State.traverseLsaAccepted = false;
   m_Log.push_back(result.message);
   QString report = QString::fromUtf8(traverserpt::BuildReportText(m_Data, m_Weights, result, "",
-      CadDrawingInsUnitsAbbrev(m_State.drawingInsUnits)).c_str());
+      CadDrawingInsUnitsAbbrev(m_State.drawing.drawingInsUnits)).c_str());
   if (!m_ScaleNote.isEmpty()) report = "Scale factor not applied (computed unscaled): " + m_ScaleNote + "\n\n" + report;
   m_Output->setLineWrapMode(QPlainTextEdit::NoWrap);
   m_Output->setPlainText(report);
@@ -1167,7 +1167,7 @@ bool AdjustmentWindow::ExportReportFile(const QString& path, QString& error) {
     return false;
   }
   const auto report = traverserpt::BuildReportText(m_Data, m_Weights, m_State.traverseLsaResult, "",
-      CadDrawingInsUnitsAbbrev(m_State.drawingInsUnits));
+      CadDrawingInsUnitsAbbrev(m_State.drawing.drawingInsUnits));
   const auto utf8 = path.toUtf8().toStdString();
   const auto suffix = QFileInfo(path).suffix().toLower();
   std::string reason;

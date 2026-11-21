@@ -44,10 +44,10 @@ TEST_CASE("DIMANGULAR survives document-payload serialization and loading (issue
   a.dimAngVertexX = 10.f;
   a.dimAngVertexY = 20.f;
   a.dimSignedOffset = 15.f;
-  st.cadAnnotations.push_back(a);
+  st.drawing.cadAnnotations.push_back(a);
   EntityAttributes attr;
   attr.id = 1;
-  st.cadAnnotationAttrs.push_back(attr);
+  st.drawing.cadAnnotationAttrs.push_back(attr);
   st.nextEntityId = 2;
 
   const std::filesystem::path path = UniqueGsPath("dimangular");
@@ -64,8 +64,8 @@ TEST_CASE("DIMANGULAR survives document-payload serialization and loading (issue
 
   AppCommandState loaded;
   REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
-  REQUIRE(loaded.cadAnnotations.size() == 1);
-  const CadAnnotation& b = loaded.cadAnnotations[0];
+  REQUIRE(loaded.drawing.cadAnnotations.size() == 1);
+  const CadAnnotation& b = loaded.drawing.cadAnnotations[0];
   REQUIRE(b.kind == CadAnnotation::Kind::DimAngular);
   REQUIRE(AnnotationKindTag(b.kind) == std::string("dimangular"));
   REQUIRE(b.dimAngVertexX == Catch::Approx(10.f));
@@ -89,10 +89,10 @@ TEST_CASE("kind text in a saved document JSON payload reloads as TEXT, not DIMAN
   a.insY = 2.f;
   a.dimAngVertexX = 99.f;
   a.dimAngVertexY = 88.f;
-  st.cadAnnotations.push_back(a);
+  st.drawing.cadAnnotations.push_back(a);
   EntityAttributes attr;
   attr.id = 1;
-  st.cadAnnotationAttrs.push_back(attr);
+  st.drawing.cadAnnotationAttrs.push_back(attr);
   st.nextEntityId = 2;
 
   const std::filesystem::path path = UniqueGsPath("text-not-angular");
@@ -101,10 +101,10 @@ TEST_CASE("kind text in a saved document JSON payload reloads as TEXT, not DIMAN
 
   AppCommandState loaded;
   REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
-  REQUIRE(loaded.cadAnnotations.size() == 1);
-  REQUIRE(loaded.cadAnnotations[0].kind == CadAnnotation::Kind::Text);
-  REQUIRE(loaded.cadAnnotations[0].text == "just a label");
-  REQUIRE(AnnotationKindTag(loaded.cadAnnotations[0].kind) == std::string("text"));
+  REQUIRE(loaded.drawing.cadAnnotations.size() == 1);
+  REQUIRE(loaded.drawing.cadAnnotations[0].kind == CadAnnotation::Kind::Text);
+  REQUIRE(loaded.drawing.cadAnnotations[0].text == "just a label");
+  REQUIRE(AnnotationKindTag(loaded.drawing.cadAnnotations[0].kind) == std::string("text"));
 
   std::error_code ec;
   std::filesystem::remove(path, ec);

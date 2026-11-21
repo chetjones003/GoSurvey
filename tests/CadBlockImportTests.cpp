@@ -35,12 +35,12 @@ TEST_CASE("DXF model-space drawing imports as a named block definition", "[issue
   AppCommandState st;
   std::vector<std::string> log;
   REQUIRE(ImportCadBlocksFromPath(st, dxf.u8string().c_str(), log));
-  REQUIRE(CadBlockFindDef(st.blockDefs, "MATCH_E") >= 0);
-  const CadBlockDefinition& d = st.blockDefs[static_cast<size_t>(CadBlockFindDef(st.blockDefs, "MATCH_E"))];
+  REQUIRE(CadBlockFindDef(st.drawing.blockDefs, "MATCH_E") >= 0);
+  const CadBlockDefinition& d = st.drawing.blockDefs[static_cast<size_t>(CadBlockFindDef(st.drawing.blockDefs, "MATCH_E"))];
   CHECK(d.content.userLinesFlat.size() >= 6);
   REQUIRE_FALSE(d.attrDefs.empty());
   CHECK(d.attrDefs[0].tag == "EASTING");
-  CHECK(st.cadBlockRefs.empty());
+  CHECK(st.drawing.cadBlockRefs.empty());
 }
 
 TEST_CASE("WBLOCK writes a definition to .dwg and BLOCKIMPORT reads it back", "[issue284][wblock][blockimport]") {
@@ -54,7 +54,7 @@ TEST_CASE("WBLOCK writes a definition to .dwg and BLOCKIMPORT reads it back", "[
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "HYDRANT";
-  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
   def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   def.content.userLineAttrs.resize(1);
   def.content.lineVis.resize(1);
@@ -63,7 +63,7 @@ TEST_CASE("WBLOCK writes a definition to .dwg and BLOCKIMPORT reads it back", "[
   ad.prompt = "Point ID";
   ad.defaultValue = "A";
   def.attrDefs.push_back(ad);
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   std::vector<std::string> log;
   std::istringstream wblockArgs(std::string("HYDRANT, ") + dwg.u8string());
@@ -73,9 +73,9 @@ TEST_CASE("WBLOCK writes a definition to .dwg and BLOCKIMPORT reads it back", "[
   AppCommandState dest;
   std::vector<std::string> importLog;
   REQUIRE(ImportCadBlocksFromPath(dest, dwg.u8string().c_str(), importLog));
-  const int di = CadBlockFindDef(dest.blockDefs, "HYDRANT");
+  const int di = CadBlockFindDef(dest.drawing.blockDefs, "HYDRANT");
   REQUIRE(di >= 0);
-  const CadBlockDefinition& d = dest.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& d = dest.drawing.blockDefs[static_cast<size_t>(di)];
   CHECK(d.content.userLinesFlat.size() == 6);
   REQUIRE(d.attrDefs.size() == 1);
   CHECK(d.attrDefs[0].tag == "ID");
@@ -108,7 +108,7 @@ TEST_CASE("LIBEXPORT writes a tagged fitting to .dwg plus a metadata sidecar",
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "ELBOW90-4IN";
-  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
   def.partType = CadPipePartType::Elbow90;
   def.nominalSize = "4in";
   def.pressureClass = CadPipePressureClass::CS150;
@@ -123,7 +123,7 @@ TEST_CASE("LIBEXPORT writes a tagged fitting to .dwg plus a metadata sidecar",
   b.nominalSize = "4in";
   b.role = CadBlockConnectionRole::Outlet;
   def.connections.push_back(b);
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   std::vector<std::string> log;
   std::istringstream args(std::string("ELBOW90-4IN, ") + dwg.u8string());
@@ -135,9 +135,9 @@ TEST_CASE("LIBEXPORT writes a tagged fitting to .dwg plus a metadata sidecar",
   AppCommandState dest;
   std::vector<std::string> importLog;
   REQUIRE(ImportCadBlocksFromPath(dest, dwg.u8string().c_str(), importLog));
-  const int di = CadBlockFindDef(dest.blockDefs, "ELBOW90-4IN");
+  const int di = CadBlockFindDef(dest.drawing.blockDefs, "ELBOW90-4IN");
   REQUIRE(di >= 0);
-  const CadBlockDefinition& out = dest.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& out = dest.drawing.blockDefs[static_cast<size_t>(di)];
   CHECK(out.partType == CadPipePartType::Elbow90);
   CHECK(out.pressureClass == CadPipePressureClass::CS150);
   CHECK(out.partNumber == "ACME-E90-4");
@@ -157,7 +157,7 @@ TEST_CASE("LIBEXPORT refuses a block with no fitting metadata", "[issue486][libe
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "PLAIN";
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   std::vector<std::string> log;
   std::istringstream args("PLAIN, C:/does/not/matter.dwg");
@@ -199,11 +199,11 @@ TEST_CASE("LIBEXPORT default path lands in CadFittingLibraryExportDir and lists 
   AppCommandState st;
   CadBlockDefinition def;
   def.name = name;
-  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
   def.partType = CadPipePartType::Tee;
   def.nominalSize = "6in";
   def.pressureClass = CadPipePressureClass::CS300;
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   std::vector<std::string> log;
   std::istringstream args(name);
@@ -248,7 +248,7 @@ TEST_CASE("bare BLOCKIMPORT opens the file picker", "[issue124][blockimport]") {
   headless::QueueDialogAnswer(dxf.u8string());
   std::istringstream args("");
   REQUIRE(CadBlocksTryIdleCommand(st, "blockimport", args, log));
-  REQUIRE(CadBlockFindDef(st.blockDefs, "PICKED_BLK") >= 0);
+  REQUIRE(CadBlockFindDef(st.drawing.blockDefs, "PICKED_BLK") >= 0);
   CHECK(headless::PendingDialogAnswers() == 0);
 }
 
@@ -259,7 +259,7 @@ TEST_CASE("cancelled BLOCKIMPORT picker leaves the library unchanged", "[issue12
   headless::QueueDialogCancel();
   std::istringstream args("");
   REQUIRE(CadBlocksTryIdleCommand(st, "blockimport", args, log));
-  CHECK(st.blockDefs.empty());
+  CHECK(st.drawing.blockDefs.empty());
   bool cancelled = false;
   for (const std::string& line : log) {
     if (line.find("BLOCKIMPORT — cancelled") != std::string::npos)
@@ -273,60 +273,60 @@ TEST_CASE("CadBlockPlaceInsert refuses a missing name", "[issue124][block][inser
   CadBlockXform xf;
   std::vector<std::string> log;
   REQUIRE_FALSE(CadBlockPlaceInsert(st, "TREE", xf, false, log));
-  CHECK(st.cadBlockRefs.empty());
+  CHECK(st.drawing.cadBlockRefs.empty());
 }
 
 TEST_CASE("CadBlockPlaceInsert places a BlockRef", "[issue124][block][insert]") {
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "TREE";
-  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
+  def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);  // isolate from unit rescale
   def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
   CadBlockXform xf;
   xf.x = 10.f;
   xf.y = 20.f;
   std::vector<std::string> log;
   REQUIRE(CadBlockPlaceInsert(st, "TREE", xf, false, log));
-  REQUIRE(st.cadBlockRefs.size() == 1);
-  CHECK(st.cadBlockRefs[0].xf.x == Catch::Approx(10.f));
-  CHECK(st.cadBlockRefs[0].xf.y == Catch::Approx(20.f));
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
+  CHECK(st.drawing.cadBlockRefs[0].xf.x == Catch::Approx(10.f));
+  CHECK(st.drawing.cadBlockRefs[0].xf.y == Catch::Approx(20.f));
 }
 
 TEST_CASE("CadBlockPlaceInsert explode writes primitives", "[issue124][block][insert]") {
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "TREE";
-  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
+  def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);  // isolate from unit rescale
   def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
   CadBlockXform xf;
   std::vector<std::string> log;
   REQUIRE(CadBlockPlaceInsert(st, "TREE", xf, true, log));
-  CHECK(st.cadBlockRefs.empty());
-  CHECK(st.userLinesFlat.size() >= 6);
+  CHECK(st.drawing.cadBlockRefs.empty());
+  CHECK(st.drawing.userLinesFlat.size() >= 6);
 }
 
 TEST_CASE("bare INSERT opens dialog state without placing", "[issue124][block][insert]") {
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "TREE";
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
   std::vector<std::string> log;
   StartInsertBlockCommand(st, log);
   CHECK(st.active == AppCommandState::Kind::InsertBlock);
   CHECK(st.insertBlockDialogOpen);
   CHECK(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitDialog);
-  CHECK(st.cadBlockRefs.empty());
+  CHECK(st.drawing.cadBlockRefs.empty());
 }
 
 TEST_CASE("Insert dialog OK places when Specify On-screen is off", "[issue124][block][insert]") {
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "TREE";
-  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
+  def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);  // isolate from unit rescale
   def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
   std::vector<std::string> log;
   StartInsertBlockCommand(st, log);
   st.insertBlockSpecifyPoint = false;
@@ -336,8 +336,8 @@ TEST_CASE("Insert dialog OK places when Specify On-screen is off", "[issue124][b
   st.insertBlockY = 6.f;
   std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "TREE");
   CadBlocksCommitInsertDialog(st, log);
-  REQUIRE(st.cadBlockRefs.size() == 1);
-  CHECK(st.cadBlockRefs[0].xf.x == Catch::Approx(5.f));
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
+  CHECK(st.drawing.cadBlockRefs[0].xf.x == Catch::Approx(5.f));
   CHECK(st.active == AppCommandState::Kind::None);
 }
 
@@ -351,7 +351,7 @@ TEST_CASE("INSERT with attributes opens Edit Attributes after place", "[issue124
   ad.prompt = "Point ID";
   ad.defaultValue = "A";
   def.attrDefs.push_back(ad);
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
   std::vector<std::string> log;
   StartInsertBlockCommand(st, log);
   st.insertBlockSpecifyPoint = false;
@@ -359,14 +359,14 @@ TEST_CASE("INSERT with attributes opens Edit Attributes after place", "[issue124
   st.insertBlockSpecifyRot = false;
   std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "MH");
   CadBlocksCommitInsertDialog(st, log);
-  REQUIRE(st.cadBlockRefs.size() == 1);
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
   CHECK(st.active == AppCommandState::Kind::InsertBlock);
   CHECK(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitAttributes);
   CHECK(st.insertBlockAttrDialogOpen);
   std::snprintf(st.insertBlockAttrBuf[0], sizeof(st.insertBlockAttrBuf[0]), "B9");
   CadBlocksCommitInsertAttrDialog(st, log);
   CHECK(st.active == AppCommandState::Kind::None);
-  CHECK(CadBlockAttrGet(st.cadBlockRefs[0], def, "ID") == "B9");
+  CHECK(CadBlockAttrGet(st.drawing.cadBlockRefs[0], def, "ID") == "B9");
 }
 
 TEST_CASE("bundled _matchline_NORTHING DXF carries ATTDEF and labels", "[issue124][blockimport]") {
@@ -376,9 +376,9 @@ TEST_CASE("bundled _matchline_NORTHING DXF carries ATTDEF and labels", "[issue12
   AppCommandState st;
   std::vector<std::string> log;
   REQUIRE(ImportCadBlocksFromPath(st, dxf.u8string().c_str(), log));
-  const int di = CadBlockFindDef(st.blockDefs, "_matchline_NORTHING");
+  const int di = CadBlockFindDef(st.drawing.blockDefs, "_matchline_NORTHING");
   REQUIRE(di >= 0);
-  const CadBlockDefinition& d = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& d = st.drawing.blockDefs[static_cast<size_t>(di)];
   CHECK(d.attrDefs.size() >= 2);
   CHECK(d.content.cadAnnotations.size() >= 2);
   CHECK(d.content.userLinesFlat.size() >= 12);
@@ -407,7 +407,7 @@ TEST_CASE("bundled _matchline_NORTHING DXF carries ATTDEF and labels", "[issue12
   CadBlockRef r;
   r.defName = "_matchline_NORTHING";
   std::vector<CadBlockWorldSeg> segs;
-  CadBlockCollectWorldLines(st.blockDefs, r, EntityAttributes{}, &segs);
+  CadBlockCollectWorldLines(st.drawing.blockDefs, r, EntityAttributes{}, &segs);
   bool worldDashed = false;
   for (const CadBlockWorldSeg& s : segs) {
     if (s.attr.linetype == "DASHED")
@@ -424,7 +424,7 @@ TEST_CASE("matchline INSERT world annotations follow the insert, not the origin"
   AppCommandState st;
   std::vector<std::string> log;
   REQUIRE(ImportCadBlocksFromPath(st, dxf.u8string().c_str(), log));
-  const int di = CadBlockFindDef(st.blockDefs, "_matchline_NORTHING");
+  const int di = CadBlockFindDef(st.drawing.blockDefs, "_matchline_NORTHING");
   REQUIRE(di >= 0);
 
   CadBlockRef r;
@@ -432,7 +432,7 @@ TEST_CASE("matchline INSERT world annotations follow the insert, not the origin"
   r.xf.x = 10.f;
   r.xf.y = 20.f;
   std::vector<CadAnnotation> anns;
-  CadBlockCollectWorldAnnotations(st.blockDefs, r, &anns);
+  CadBlockCollectWorldAnnotations(st.drawing.blockDefs, r, &anns);
   REQUIRE(anns.size() >= 2);
   for (const CadAnnotation& a : anns) {
     const float cx = (a.kind == CadAnnotation::Kind::Mtext) ? 0.5f * (a.boxMinX + a.boxMaxX) : a.insX;
@@ -460,9 +460,9 @@ TEST_CASE("importing _matchline_ DXF authors DistNeg dynamics", "[issue124][bloc
   AppCommandState st;
   std::vector<std::string> log;
   REQUIRE(ImportCadBlocksFromPath(st, dxf.u8string().c_str(), log));
-  const int di = CadBlockFindDef(st.blockDefs, "_matchline_NORTHING");
+  const int di = CadBlockFindDef(st.drawing.blockDefs, "_matchline_NORTHING");
   REQUIRE(di >= 0);
-  CHECK(CadBlockHasMatchlineDyn(st.blockDefs[static_cast<size_t>(di)]));
+  CHECK(CadBlockHasMatchlineDyn(st.drawing.blockDefs[static_cast<size_t>(di)]));
 }
 
 TEST_CASE("bundled matchline import upgrades a definition that has no attributes", "[issue124][blockimport]") {
@@ -470,15 +470,15 @@ TEST_CASE("bundled matchline import upgrades a definition that has no attributes
   CadBlockDefinition stub;
   stub.name = "_matchline_NORTHING";
   stub.content.userLinesFlat = {0.f, -2.f, 0.f, 0.f, 2.f, 0.f};
-  st.blockDefs.push_back(stub);
+  st.drawing.blockDefs.push_back(stub);
   namespace fs = std::filesystem;
   const fs::path dxf = fs::path(GOSURVEY_SAMPLES_DIR).parent_path() / "resources" / "blocks" / "_matchline_NORTHING.dxf";
   REQUIRE(fs::exists(dxf));
   std::vector<std::string> log;
   REQUIRE(ImportCadBlocksFromPath(st, dxf.u8string().c_str(), log));
-  const int di = CadBlockFindDef(st.blockDefs, "_matchline_NORTHING");
+  const int di = CadBlockFindDef(st.drawing.blockDefs, "_matchline_NORTHING");
   REQUIRE(di >= 0);
-  CHECK(st.blockDefs[static_cast<size_t>(di)].attrDefs.size() >= 2);
+  CHECK(st.drawing.blockDefs[static_cast<size_t>(di)].attrDefs.size() >= 2);
 }
 
 TEST_CASE("INSERT matchline at 90 degrees opens attributes and lays the line horizontal",
@@ -486,9 +486,9 @@ TEST_CASE("INSERT matchline at 90 degrees opens attributes and lays the line hor
   AppCommandState st;
   std::vector<std::string> log;
   LoadBundledBlockLibrary(st, log);
-  const int di = CadBlockFindDef(st.blockDefs, "_matchline_NORTHING");
+  const int di = CadBlockFindDef(st.drawing.blockDefs, "_matchline_NORTHING");
   REQUIRE(di >= 0);
-  REQUIRE_FALSE(st.blockDefs[static_cast<size_t>(di)].attrDefs.empty());
+  REQUIRE_FALSE(st.drawing.blockDefs[static_cast<size_t>(di)].attrDefs.empty());
 
   StartInsertBlockCommand(st, log);
   std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "_matchline_NORTHING");
@@ -503,15 +503,15 @@ TEST_CASE("INSERT matchline at 90 degrees opens attributes and lays the line hor
 
   char ang[32] = "90";
   ProcessCommandLineSubmit(ang, static_cast<int>(sizeof(ang)), st, log);
-  REQUIRE(st.cadBlockRefs.size() == 1);
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
   // 90 = 90° clockwise from north (the app convention); the block frame is CCW-from-east, so rotZ
   // is −π/2. A north-authored matchline rotated 90° CW lands east — horizontal, asserted below.
-  CHECK(st.cadBlockRefs[0].xf.rotZ == Catch::Approx(-1.5707963f).margin(0.01f));
+  CHECK(st.drawing.cadBlockRefs[0].xf.rotZ == Catch::Approx(-1.5707963f).margin(0.01f));
   CHECK(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitAttributes);
   CHECK(st.insertBlockAttrDialogOpen);
 
   std::vector<CadBlockWorldSeg> segs;
-  CadBlockCollectWorldLines(st.blockDefs, st.cadBlockRefs[0], EntityAttributes{}, &segs);
+  CadBlockCollectWorldLines(st.drawing.blockDefs, st.drawing.cadBlockRefs[0], EntityAttributes{}, &segs);
   REQUIRE_FALSE(segs.empty());
   CHECK(segs[0].y0 == Catch::Approx(segs[0].y1).margin(0.05f));
 }
@@ -529,7 +529,7 @@ TEST_CASE("BEDIT picker OK starts the editor", "[issue124][block][bedit]") {
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "HYDRANT";
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
   std::snprintf(st.blockEditPickerName, sizeof(st.blockEditPickerName), "HYDRANT");
   std::vector<std::string> log;
   CadBlocksCommitEditPicker(st, log);
@@ -548,21 +548,21 @@ TEST_CASE("BEDIT loads and BSAVE harvests a block solid", "[issue475][block][bed
   def.name = "SOLFIT";
   def.content.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
   def.content.cadSolidAttrs.push_back(EntityAttributes{});
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   std::vector<std::string> log;
   std::istringstream beditArgs("SOLFIT");
   REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
   REQUIRE(st.blockEditActive);
-  REQUIRE(st.cadSolids.size() == 1);
-  REQUIRE(st.cadSolids[0]);
-  CHECK(st.cadSolids[0]->faces.size() == 6);
+  REQUIRE(st.drawing.cadSolids.size() == 1);
+  REQUIRE(st.drawing.cadSolids[0]);
+  CHECK(st.drawing.cadSolids[0]->faces.size() == 6);
 
   std::istringstream bsaveArgs("");
   REQUIRE(CadBlocksTryIdleCommand(st, "bsave", bsaveArgs, log));
-  const int di = CadBlockFindDef(st.blockDefs, "SOLFIT");
+  const int di = CadBlockFindDef(st.drawing.blockDefs, "SOLFIT");
   REQUIRE(di >= 0);
-  REQUIRE(st.blockDefs[static_cast<size_t>(di)].content.cadSolids.size() == 1);
+  REQUIRE(st.drawing.blockDefs[static_cast<size_t>(di)].content.cadSolids.size() == 1);
 
   std::istringstream bcloseArgs("save");
   REQUIRE(CadBlocksTryIdleCommand(st, "bclose", bcloseArgs, log));
@@ -572,11 +572,11 @@ TEST_CASE("BEDIT loads and BSAVE harvests a block solid", "[issue475][block][bed
   xf.x = 5.f;
   xf.y = 6.f;
   xf.z = 7.f;
-  st.cadBlockRefs.clear();
+  st.drawing.cadBlockRefs.clear();
   REQUIRE(CadBlockPlaceInsert(st, "SOLFIT", xf, false, log));
-  REQUIRE(st.cadBlockRefs.size() == 1);
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
   std::vector<CadBlockWorldSolid> ws;
-  CadBlockCollectWorldSolids(st.blockDefs, st.cadBlockRefs[0], EntityAttributes{}, &ws);
+  CadBlockCollectWorldSolids(st.drawing.blockDefs, st.drawing.cadBlockRefs[0], EntityAttributes{}, &ws);
   REQUIRE(ws.size() == 1);
   REQUIRE(ws[0].solid);
   const brep::Bounds bb = brep::ComputeBounds(*ws[0].solid);
@@ -601,15 +601,15 @@ TEST_CASE("Bundled fittings library imports SAT as block defs only", "[issue475]
   entry.path = sat.u8string();
   entry.isFitting = true;
   REQUIRE(CadBlocksImportLibraryEntry(st, entry, log));
-  const int di = CadBlockFindDef(st.blockDefs, "CJ_4in_WELD_NECK_FLANGE");
+  const int di = CadBlockFindDef(st.drawing.blockDefs, "CJ_4in_WELD_NECK_FLANGE");
   REQUIRE(di >= 0);
-  REQUIRE_FALSE(st.blockDefs[static_cast<size_t>(di)].content.cadSolids.empty());
-  CHECK(st.cadSolids.empty());
+  REQUIRE_FALSE(st.drawing.blockDefs[static_cast<size_t>(di)].content.cadSolids.empty());
+  CHECK(st.drawing.cadSolids.empty());
 }
 
 TEST_CASE("CadBlockInsertUnitsScale honours the INSERT dialog unit override", "[issue475][block][units]") {
   AppCommandState st;
-  st.drawingInsUnits = 2;
+  st.drawing.drawingInsUnits = 2;
   CadBlockDefinition def;
   def.name = "FIT";
   def.units = "inches";
@@ -628,7 +628,7 @@ TEST_CASE("INSERT connector snap places the fitting port on the target", "[issue
   hc.name = "P1";
   hc.nominalSize = "4in";
   host.connections.push_back(hc);
-  st.blockDefs.push_back(host);
+  st.drawing.blockDefs.push_back(host);
 
   CadBlockDefinition tail;
   tail.name = "TAIL";
@@ -641,12 +641,12 @@ TEST_CASE("INSERT connector snap places the fitting port on the target", "[issue
   tc.ny = 0.f;
   tc.nz = 1.f;
   tail.connections.push_back(tc);
-  st.blockDefs.push_back(tail);
+  st.drawing.blockDefs.push_back(tail);
 
   std::vector<std::string> log;
   CadBlockXform hostXf;
   REQUIRE(CadBlockPlaceInsert(st, "HOST", hostXf, false, log));
-  REQUIRE(st.cadBlockRefs.size() == 1);
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
 
   StartInsertBlockCommand(st, log);
   std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "TAIL");
@@ -658,10 +658,10 @@ TEST_CASE("INSERT connector snap places the fitting port on the target", "[issue
   st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
 
   REQUIRE(SubmitInsertBlockConnectorPick(st, 0.f, 0.f, 0.f, log));
-  REQUIRE(st.cadBlockRefs.size() == 2);
+  REQUIRE(st.drawing.cadBlockRefs.size() == 2);
 
   std::vector<CadBlockWorldConnection> world;
-  CadBlockCollectWorldConnections(st.blockDefs, st.cadBlockRefs[1], 1, &world);
+  CadBlockCollectWorldConnections(st.drawing.blockDefs, st.drawing.cadBlockRefs[1], 1, &world);
   REQUIRE(world.size() == 1);
   CHECK(world[0].x == Catch::Approx(0.f).margin(0.002));
   CHECK(world[0].y == Catch::Approx(0.f).margin(0.002));
@@ -677,8 +677,8 @@ TEST_CASE("INSERT connector snap reaches a CadPipeRun's own end (issue #486)",
   CadPipeRun run;
   run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
   run.nominalSize = "4in";
-  st.cadPipeRuns.push_back(run);
-  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+  st.drawing.cadPipeRuns.push_back(run);
+  st.drawing.cadPipeRunAttrs.push_back(EntityAttributes{});
 
   CadBlockDefinition flange;
   flange.name = "FLANGE";
@@ -691,7 +691,7 @@ TEST_CASE("INSERT connector snap reaches a CadPipeRun's own end (issue #486)",
   fc.ny = 0.f;
   fc.nz = 1.f;
   flange.connections.push_back(fc);
-  st.blockDefs.push_back(flange);
+  st.drawing.blockDefs.push_back(flange);
 
   std::vector<std::string> log;
   StartInsertBlockCommand(st, log);
@@ -705,13 +705,13 @@ TEST_CASE("INSERT connector snap reaches a CadPipeRun's own end (issue #486)",
 
   // Click near the run's END (10,0,0), not exactly on it — the snap is a nearest-within-2ft search.
   REQUIRE(SubmitInsertBlockConnectorPick(st, 9.99f, 0.f, 0.f, log));
-  REQUIRE(st.cadBlockRefs.size() == 1);
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
   const bool sawPipeEnd =
       std::any_of(log.begin(), log.end(), [](const std::string& s) { return s.find("pipe end") != std::string::npos; });
   CHECK(sawPipeEnd);
 
   std::vector<CadBlockWorldConnection> world;
-  CadBlockCollectWorldConnections(st.blockDefs, st.cadBlockRefs[0], 0, &world);
+  CadBlockCollectWorldConnections(st.drawing.blockDefs, st.drawing.cadBlockRefs[0], 0, &world);
   REQUIRE(world.size() == 1);
   CHECK(world[0].x == Catch::Approx(10.f).margin(0.002));
   CHECK(world[0].y == Catch::Approx(0.f).margin(0.002));
@@ -726,8 +726,8 @@ TEST_CASE("A connection point configured only for pipe end ignores a CLOSER but 
   CadPipeRun run;
   run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
   run.nominalSize = "4in";
-  st.cadPipeRuns.push_back(run);
-  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+  st.drawing.cadPipeRuns.push_back(run);
+  st.drawing.cadPipeRunAttrs.push_back(EntityAttributes{});
 
   // A real block connection port (generic — no part type) at (9,0,0), CLOSER to the click point.
   CadBlockDefinition host;
@@ -739,11 +739,11 @@ TEST_CASE("A connection point configured only for pipe end ignores a CLOSER but 
   hc.z = 0.f;
   hc.nz = 1.f;
   host.connections.push_back(hc);
-  st.blockDefs.push_back(host);
+  st.drawing.blockDefs.push_back(host);
   CadBlockXform hostXf;
   std::vector<std::string> setupLog;
   REQUIRE(CadBlockPlaceInsert(st, "HOST", hostXf, false, setupLog));
-  REQUIRE(st.cadBlockRefs.size() == 1);
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
 
   // The fitting being inserted has a port configured ONLY for a pipe end — no FlangeFace/GenericPort
   // mode and no isDefault fallback, so a generic block port must never be an acceptable target for it.
@@ -758,7 +758,7 @@ TEST_CASE("A connection point configured only for pipe end ignores a CLOSER but 
   pipeMode.isDefault = false;
   fc.modes.push_back(pipeMode);
   flange.connections.push_back(fc);
-  st.blockDefs.push_back(flange);
+  st.drawing.blockDefs.push_back(flange);
 
   std::vector<std::string> log;
   StartInsertBlockCommand(st, log);
@@ -773,14 +773,14 @@ TEST_CASE("A connection point configured only for pipe end ignores a CLOSER but 
   // Click at (9.3,0,0): 0.3 ft from the host port, 0.7 ft from the pipe end — the host port is
   // geometrically nearer, but incompatible with this connection point's configured mode.
   REQUIRE(SubmitInsertBlockConnectorPick(st, 9.3f, 0.f, 0.f, log));
-  REQUIRE(st.cadBlockRefs.size() == 2);  // HOST (setup) + the placed FLANGE
+  REQUIRE(st.drawing.cadBlockRefs.size() == 2);  // HOST (setup) + the placed FLANGE
 
   const bool sawPipeEnd =
       std::any_of(log.begin(), log.end(), [](const std::string& s) { return s.find("pipe end") != std::string::npos; });
   CHECK(sawPipeEnd);
 
   std::vector<CadBlockWorldConnection> world;
-  CadBlockCollectWorldConnections(st.blockDefs, st.cadBlockRefs[1], 1, &world);
+  CadBlockCollectWorldConnections(st.drawing.blockDefs, st.drawing.cadBlockRefs[1], 1, &world);
   REQUIRE(world.size() == 1);
   CHECK(world[0].x == Catch::Approx(10.f).margin(0.002));  // landed on the FARTHER but compatible pipe end
   CHECK(world[0].y == Catch::Approx(0.f).margin(0.002));
@@ -794,8 +794,8 @@ TEST_CASE("INSERT auto-picks the block's WELD-NECK port (not the FIRST-defined g
   CadPipeRun run;
   run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
   run.nominalSize = "4in";
-  st.cadPipeRuns.push_back(run);
-  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+  st.drawing.cadPipeRuns.push_back(run);
+  st.drawing.cadPipeRunAttrs.push_back(EntityAttributes{});
 
   // A flange with TWO connection points, gasketFace defined FIRST (reproducing the reported bug:
   // InsertSourceConnection used to always default to connections.front()), each with exactly ONE
@@ -821,7 +821,7 @@ TEST_CASE("INSERT auto-picks the block's WELD-NECK port (not the FIRST-defined g
   weldMode.isDefault = true;    // both flagged default is exactly what made the wrong port "match"
   weldNeckFace.modes.push_back(weldMode);
   flange.connections.push_back(weldNeckFace);
-  st.blockDefs.push_back(flange);
+  st.drawing.blockDefs.push_back(flange);
 
   std::vector<std::string> log;
   StartInsertBlockCommand(st, log);
@@ -835,7 +835,7 @@ TEST_CASE("INSERT auto-picks the block's WELD-NECK port (not the FIRST-defined g
   st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
 
   REQUIRE(SubmitInsertBlockConnectorPick(st, 9.99f, 0.f, 0.f, log));
-  REQUIRE(st.cadBlockRefs.size() == 1);
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
 
   const bool usedWeldNeck = std::any_of(log.begin(), log.end(), [](const std::string& s) {
     return s.find("pipe end") != std::string::npos;
@@ -845,7 +845,7 @@ TEST_CASE("INSERT auto-picks the block's WELD-NECK port (not the FIRST-defined g
   // weldNeckFace was authored at the block's local origin (0,0,0), same as gasketFace — but the
   // POINT that mattered is which port's world connection actually lands on the pipe end (10,0,0).
   std::vector<CadBlockWorldConnection> world;
-  CadBlockCollectWorldConnections(st.blockDefs, st.cadBlockRefs[0], 0, &world);
+  CadBlockCollectWorldConnections(st.drawing.blockDefs, st.drawing.cadBlockRefs[0], 0, &world);
   REQUIRE(world.size() == 2);
   const auto weldNeckWorld = std::find_if(world.begin(), world.end(),
                                           [](const CadBlockWorldConnection& c) { return c.name == "weldNeckFace"; });
@@ -861,8 +861,8 @@ TEST_CASE("A connection point configured only for a flange face ignores a nearby
   CadPipeRun run;
   run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
   run.nominalSize = "4in";
-  st.cadPipeRuns.push_back(run);
-  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+  st.drawing.cadPipeRuns.push_back(run);
+  st.drawing.cadPipeRunAttrs.push_back(EntityAttributes{});
 
   CadBlockDefinition flange;
   flange.name = "FLANGE";
@@ -875,7 +875,7 @@ TEST_CASE("A connection point configured only for a flange face ignores a nearby
   faceMode.isDefault = false;
   fc.modes.push_back(faceMode);
   flange.connections.push_back(fc);
-  st.blockDefs.push_back(flange);
+  st.drawing.blockDefs.push_back(flange);
 
   std::vector<std::string> log;
   StartInsertBlockCommand(st, log);
@@ -890,7 +890,7 @@ TEST_CASE("A connection point configured only for a flange face ignores a nearby
   // Only a pipe end is nearby (no flange face anywhere) — this port must refuse rather than snap
   // to a target kind it was never configured to mate with.
   REQUIRE_FALSE(SubmitInsertBlockConnectorPick(st, 9.99f, 0.f, 0.f, log));
-  CHECK(st.cadBlockRefs.empty());
+  CHECK(st.drawing.cadBlockRefs.empty());
   const bool sawRefusal = std::any_of(log.begin(), log.end(), [](const std::string& s) {
     return s.find("configured mode") != std::string::npos;
   });
@@ -902,7 +902,7 @@ TEST_CASE("BEDIT BCONNECT wizard: typed coords persist on the definition",
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "FIT";
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   std::vector<std::string> log;
   std::istringstream beditArgs("FIT");
@@ -918,11 +918,11 @@ TEST_CASE("BEDIT BCONNECT wizard: typed coords persist on the definition",
   BConnectSubmitLine(st, "0, 0, 0, 0, 0, 1", log); // typed point instead of a face pick
   CHECK(st.active == AppCommandState::Kind::None);
 
-  const int di = CadBlockFindDef(st.blockDefs, "FIT");
+  const int di = CadBlockFindDef(st.drawing.blockDefs, "FIT");
   REQUIRE(di >= 0);
-  REQUIRE(st.blockDefs[static_cast<size_t>(di)].connections.size() == 1);
-  CHECK(st.blockDefs[static_cast<size_t>(di)].connections[0].name == "P1");
-  CHECK(st.blockDefs[static_cast<size_t>(di)].connections[0].nz == Catch::Approx(1.f));
+  REQUIRE(st.drawing.blockDefs[static_cast<size_t>(di)].connections.size() == 1);
+  CHECK(st.drawing.blockDefs[static_cast<size_t>(di)].connections[0].name == "P1");
+  CHECK(st.drawing.blockDefs[static_cast<size_t>(di)].connections[0].nz == Catch::Approx(1.f));
 }
 
 TEST_CASE("BEDIT BCONNECT wizard: role, engagement, and compatibility tag prompts are honored",
@@ -930,7 +930,7 @@ TEST_CASE("BEDIT BCONNECT wizard: role, engagement, and compatibility tag prompt
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "FIT";
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   std::vector<std::string> log;
   std::istringstream beditArgs("FIT");
@@ -944,9 +944,9 @@ TEST_CASE("BEDIT BCONNECT wizard: role, engagement, and compatibility tag prompt
   BConnectSubmitLine(st, "class150", log);
   BConnectSubmitLine(st, "0, 0, 0, 0, 0, 1", log);
 
-  const int di = CadBlockFindDef(st.blockDefs, "FIT");
+  const int di = CadBlockFindDef(st.drawing.blockDefs, "FIT");
   REQUIRE(di >= 0);
-  const CadBlockConnection& c = st.blockDefs[static_cast<size_t>(di)].connections[0];
+  const CadBlockConnection& c = st.drawing.blockDefs[static_cast<size_t>(di)].connections[0];
   CHECK(c.role == CadBlockConnectionRole::Branch);
   CHECK(c.engagementLength == Catch::Approx(0.25f));
   CHECK(c.compatibilityTag == "class150");
@@ -961,7 +961,7 @@ TEST_CASE("BCONNECTEDIT wizard updates role, engagement, and compatibility tag o
   c.name = "P1";
   c.nominalSize = "4in";
   def.connections.push_back(c);
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   std::vector<std::string> log;
   std::istringstream beditArgs("FIT");
@@ -977,9 +977,9 @@ TEST_CASE("BCONNECTEDIT wizard updates role, engagement, and compatibility tag o
   BConnectEditSubmitLine(st, "ansi150", log);  // compat tag
   CHECK(st.active == AppCommandState::Kind::None);
 
-  const int di = CadBlockFindDef(st.blockDefs, "FIT");
+  const int di = CadBlockFindDef(st.drawing.blockDefs, "FIT");
   REQUIRE(di >= 0);
-  const CadBlockConnection& out = st.blockDefs[static_cast<size_t>(di)].connections[0];
+  const CadBlockConnection& out = st.drawing.blockDefs[static_cast<size_t>(di)].connections[0];
   CHECK(out.role == CadBlockConnectionRole::Outlet);
   CHECK(out.engagementLength == Catch::Approx(0.5f));
   CHECK(out.compatibilityTag == "ansi150");
@@ -993,7 +993,7 @@ TEST_CASE("BCONNECTEDIT wizard removes a port when the user confirms",
   CadBlockConnection c;
   c.name = "P1";
   def.connections.push_back(c);
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   std::vector<std::string> log;
   std::istringstream beditArgs("FIT");
@@ -1002,9 +1002,9 @@ TEST_CASE("BCONNECTEDIT wizard removes a port when the user confirms",
   REQUIRE(CadBlocksTryIdleCommand(st, "bconnectedit", editArgs, log));
   BConnectEditSubmitLine(st, "y", log);
 
-  const int di = CadBlockFindDef(st.blockDefs, "FIT");
+  const int di = CadBlockFindDef(st.drawing.blockDefs, "FIT");
   REQUIRE(di >= 0);
-  CHECK(st.blockDefs[static_cast<size_t>(di)].connections.empty());
+  CHECK(st.drawing.blockDefs[static_cast<size_t>(di)].connections.empty());
 }
 
 TEST_CASE("BCONNECTMODE adds two modes with a single default on a connection point",
@@ -1015,13 +1015,13 @@ TEST_CASE("BCONNECTMODE adds two modes with a single default on a connection poi
   CadBlockConnection c;
   c.name = "P1";
   def.connections.push_back(c);
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   std::vector<std::string> log;
   std::istringstream beditArgs("FIT");
   REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
 
-  const int di = CadBlockFindDef(st.blockDefs, "FIT");
+  const int di = CadBlockFindDef(st.drawing.blockDefs, "FIT");
   REQUIRE(di >= 0);
 
   // Add mode "pipe": connection name, mode name, target, role, engagement, compat tag, default.
@@ -1044,7 +1044,7 @@ TEST_CASE("BCONNECTMODE adds two modes with a single default on a connection poi
   BConnectModeSubmitLine(st, "class150", log);
   BConnectModeSubmitLine(st, "n", log);
 
-  const CadBlockConnection& out = st.blockDefs[static_cast<size_t>(di)].connections[0];
+  const CadBlockConnection& out = st.drawing.blockDefs[static_cast<size_t>(di)].connections[0];
   REQUIRE(out.modes.size() == 2);
   CHECK(out.modes[0].name == "pipe");
   CHECK(out.modes[0].target == CadConnectionModeTarget::PipeEnd);
@@ -1064,7 +1064,7 @@ TEST_CASE("BCONNECTMODE adds two modes with a single default on a connection poi
   BConnectModeSubmitLine(st, "", log);  // keep engagement
   BConnectModeSubmitLine(st, "", log);  // keep compat tag
   BConnectModeSubmitLine(st, "y", log); // now default
-  const CadBlockConnection& out2 = st.blockDefs[static_cast<size_t>(di)].connections[0];
+  const CadBlockConnection& out2 = st.drawing.blockDefs[static_cast<size_t>(di)].connections[0];
   REQUIRE(out2.modes.size() == 2);
   CHECK_FALSE(out2.modes[0].isDefault);
   CHECK(out2.modes[1].isDefault);
@@ -1073,7 +1073,7 @@ TEST_CASE("BCONNECTMODE adds two modes with a single default on a connection poi
   BConnectModeStart(st, "P1", log);
   BConnectModeSubmitLine(st, "pipe", log);
   BConnectModeSubmitLine(st, "y", log);
-  const CadBlockConnection& out3 = st.blockDefs[static_cast<size_t>(di)].connections[0];
+  const CadBlockConnection& out3 = st.drawing.blockDefs[static_cast<size_t>(di)].connections[0];
   REQUIRE(out3.modes.size() == 1);
   CHECK(out3.modes[0].name == "flange");
 }
@@ -1082,7 +1082,7 @@ TEST_CASE("BCONNECTMODE cancels cleanly on an unknown connection or ESC", "[issu
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "FIT";
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
   std::vector<std::string> log;
   std::istringstream beditArgs("FIT");
   REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
@@ -1103,7 +1103,7 @@ TEST_CASE("BLOCKFITTING wizard tags a block definition with piping metadata",
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "ELBOW90-4IN";
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   std::vector<std::string> log;
   std::istringstream beditArgs("ELBOW90-4IN");
@@ -1117,9 +1117,9 @@ TEST_CASE("BLOCKFITTING wizard tags a block definition with piping metadata",
   BlockFittingSubmitLine(st, "ACME-E90-4", log);
   CHECK(st.active == AppCommandState::Kind::None);
 
-  const int di = CadBlockFindDef(st.blockDefs, "ELBOW90-4IN");
+  const int di = CadBlockFindDef(st.drawing.blockDefs, "ELBOW90-4IN");
   REQUIRE(di >= 0);
-  const CadBlockDefinition& out = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& out = st.drawing.blockDefs[static_cast<size_t>(di)];
   CHECK(out.partType == CadPipePartType::Elbow90);
   CHECK(out.nominalSize == "4in");
   CHECK(out.pressureClass == CadPipePressureClass::CS150);
@@ -1155,15 +1155,15 @@ TEST_CASE("Fitting metadata and connection role/engagement/compat round-trip thr
   b.name = "P2";
   b.role = CadBlockConnectionRole::Branch;
   def.connections.push_back(b);
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   const std::string json = SerializeGoSurveyJson(st);
   AppCommandState loaded;
   std::vector<std::string> log;
   REQUIRE(LoadGoSurveyFromJsonUtf8(loaded, json, log));
-  const int di = CadBlockFindDef(loaded.blockDefs, "ELBOW90-4IN");
+  const int di = CadBlockFindDef(loaded.drawing.blockDefs, "ELBOW90-4IN");
   REQUIRE(di >= 0);
-  const CadBlockDefinition& out = loaded.blockDefs[static_cast<size_t>(di)];
+  const CadBlockDefinition& out = loaded.drawing.blockDefs[static_cast<size_t>(di)];
   CHECK(out.partType == CadPipePartType::Elbow90);
   CHECK(out.nominalSize == "4in");
   CHECK(out.pressureClass == CadPipePressureClass::CS150);
@@ -1179,7 +1179,7 @@ TEST_CASE("BEDIT with a name skips the picker", "[issue124][block][bedit]") {
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "HYDRANT";
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
   std::istringstream args("HYDRANT");
   std::vector<std::string> log;
   REQUIRE(CadBlocksTryIdleCommand(st, "bedit", args, log));
@@ -1192,21 +1192,21 @@ TEST_CASE("BEDIT with a name skips the picker", "[issue124][block][bedit]") {
 // must come in pointing north at rotation 0, and pointing east at rotation 90.
 TEST_CASE("INSERT rotation is clockwise from north", "[issue124][block][rotation]") {
   AppCommandState st;
-  st.blockDefs.emplace_back();
-  st.blockDefs[0].name = "ML";
-  st.blockDefs[0].units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate rotation from unit scaling
-  st.blockDefs[0].content.userLinesFlat = {0.f, 0.f, 0.f, 0.f, 2.f, 0.f};  // points NORTH (+Y)
-  st.blockDefs[0].content.userLineAttrs.resize(1);
-  st.blockDefs[0].content.lineVis.resize(1);
+  st.drawing.blockDefs.emplace_back();
+  st.drawing.blockDefs[0].name = "ML";
+  st.drawing.blockDefs[0].units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);  // isolate rotation from unit scaling
+  st.drawing.blockDefs[0].content.userLinesFlat = {0.f, 0.f, 0.f, 0.f, 2.f, 0.f};  // points NORTH (+Y)
+  st.drawing.blockDefs[0].content.userLineAttrs.resize(1);
+  st.drawing.blockDefs[0].content.lineVis.resize(1);
 
   auto dirAt = [&](const char* deg) {
-    st.cadBlockRefs.clear();
+    st.drawing.cadBlockRefs.clear();
     std::istringstream args(std::string("ML, 10, 10, 1, 1, ") + deg);
     std::vector<std::string> log;
     REQUIRE(CadBlocksTryIdleCommand(st, "insert", args, log));
-    REQUIRE(st.cadBlockRefs.size() == 1);
+    REQUIRE(st.drawing.cadBlockRefs.size() == 1);
     std::vector<CadBlockWorldSeg> segs;
-    CadBlockCollectWorldLines(st.blockDefs, st.cadBlockRefs[0], EntityAttributes{}, &segs);
+    CadBlockCollectWorldLines(st.drawing.blockDefs, st.drawing.cadBlockRefs[0], EntityAttributes{}, &segs);
     REQUIRE(segs.size() == 1);
     return std::pair<float, float>{segs[0].x1 - segs[0].x0, segs[0].y1 - segs[0].y0};
   };
@@ -1229,9 +1229,9 @@ TEST_CASE("INSERT rotation preview transform matches the committed insert", "[is
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "TREE";
-  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
+  def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);  // isolate from unit rescale
   def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
   std::vector<std::string> log;
 
   StartInsertBlockCommand(st, log);
@@ -1249,8 +1249,8 @@ TEST_CASE("INSERT rotation preview transform matches the committed insert", "[is
   REQUIRE(CadBlockInsertPreviewXform(st, 15.f, 6.f, &pv));  // cursor due east -> 90 deg cw-from-north
 
   SubmitInsertBlockPick(st, 15.f, 6.f, log);  // commit rotation
-  REQUIRE(st.cadBlockRefs.size() == 1);
-  CHECK(st.cadBlockRefs[0].xf.rotZ == Catch::Approx(pv.rotZ).margin(1e-4));
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
+  CHECK(st.drawing.cadBlockRefs[0].xf.rotZ == Catch::Approx(pv.rotZ).margin(1e-4));
   CHECK(pv.rotZ == Catch::Approx(-1.57079633f).margin(1e-4));
 }
 
@@ -1258,9 +1258,9 @@ TEST_CASE("INSERT scale preview transform matches the committed insert", "[issue
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "TREE";
-  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
+  def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);  // isolate from unit rescale
   def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
   std::vector<std::string> log;
 
   StartInsertBlockCommand(st, log);
@@ -1280,17 +1280,17 @@ TEST_CASE("INSERT scale preview transform matches the committed insert", "[issue
   CHECK(pv.sx == Catch::Approx(5.f));
 
   SubmitInsertBlockPick(st, 3.f, 4.f, log);  // commit scale (rotation off -> places)
-  REQUIRE(st.cadBlockRefs.size() == 1);
-  CHECK(st.cadBlockRefs[0].xf.sx == Catch::Approx(pv.sx));
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
+  CHECK(st.drawing.cadBlockRefs[0].xf.sx == Catch::Approx(pv.sx));
 }
 
 TEST_CASE("INSERT preview emits a rotated block ghost into the rubber lines", "[issue124][block][insert][preview]") {
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "TREE";
-  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
+  def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);  // isolate from unit rescale
   def.content.userLinesFlat = {0.f, 0.f, 0.f, 0.f, 2.f, 0.f};  // one segment pointing north
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
   std::vector<std::string> log;
 
   StartInsertBlockCommand(st, log);
@@ -1341,22 +1341,22 @@ TEST_CASE("BLOCKIMPORT of a standalone ACIS .sat drops the solid on the origin",
 
   // The solid is in the drawing, re-based: centred in X/Y, its lowest point at Z 0 — NOT ~4999
   // units out where the .sat put it.
-  REQUIRE(st.cadSolids.size() == 1);
-  REQUIRE(st.cadSolids[0]);
-  CHECK(st.cadSolids[0]->faces.size() == 16);
-  CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
-  const brep::Bounds ib = brep::ComputeBounds(*st.cadSolids[0]);
+  REQUIRE(st.drawing.cadSolids.size() == 1);
+  REQUIRE(st.drawing.cadSolids[0]);
+  CHECK(st.drawing.cadSolids[0]->faces.size() == 16);
+  CHECK(brep::Validate(*st.drawing.cadSolids[0]) == brep::Problem::Ok);
+  const brep::Bounds ib = brep::ComputeBounds(*st.drawing.cadSolids[0]);
   REQUIRE(ib.valid);
   CHECK(std::fabs(ib.mn.x + ib.mx.x) < 1e-6);   // centred in X
   CHECK(std::fabs(ib.mn.y + ib.mx.y) < 1e-6);   // centred in Y
   CHECK(ib.mn.z == Catch::Approx(0.0).margin(1e-6));  // sits on Z 0
-  CHECK(st.cadBlockRefs.empty());
+  CHECK(st.drawing.cadBlockRefs.empty());
 
   // The block definition is kept (for a future 3D INSERT), carrying the same re-based solid.
-  const int di = CadBlockFindDef(st.blockDefs, "CJ_4in_WELD_NECK_FLANGE");
+  const int di = CadBlockFindDef(st.drawing.blockDefs, "CJ_4in_WELD_NECK_FLANGE");
   REQUIRE(di >= 0);
-  REQUIRE(st.blockDefs[static_cast<size_t>(di)].content.cadSolids.size() == 1);
-  CHECK(st.blockDefs[static_cast<size_t>(di)].units == CadDrawingInsUnitsName(st.drawingInsUnits));
+  REQUIRE(st.drawing.blockDefs[static_cast<size_t>(di)].content.cadSolids.size() == 1);
+  CHECK(st.drawing.blockDefs[static_cast<size_t>(di)].units == CadDrawingInsUnitsName(st.drawing.drawingInsUnits));
 }
 
 // issue #486 increment A4 — importing a standalone .sat while BEDIT is open used to also spawn a
@@ -1383,27 +1383,27 @@ TEST_CASE("BLOCKIMPORT of a standalone ACIS .sat during BEDIT lands in the block
   std::istringstream beditArgs("FIT");
   REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
   REQUIRE(st.blockEditActive);
-  const size_t defCountBefore = st.blockDefs.size();
-  REQUIRE(CadBlockFindDef(st.blockDefs, "GS_TEST_A4_UNIQUE_SAT") < 0);
+  const size_t defCountBefore = st.drawing.blockDefs.size();
+  REQUIRE(CadBlockFindDef(st.drawing.blockDefs, "GS_TEST_A4_UNIQUE_SAT") < 0);
 
   REQUIRE(ImportCadBlocksFromPath(st, sat.u8string().c_str(), log));
 
   // The solid landed directly in the block being edited (the model arrays ARE its content while
   // BEDIT is open), not floating loose in some other drawing space.
-  REQUIRE(st.cadSolids.size() == 1);
-  CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
+  REQUIRE(st.drawing.cadSolids.size() == 1);
+  CHECK(brep::Validate(*st.drawing.cadSolids[0]) == brep::Problem::Ok);
 
   // No new "GS_TEST_A4_UNIQUE_SAT" definition was spawned alongside it, and the definition count
   // did not grow at all.
-  CHECK(CadBlockFindDef(st.blockDefs, "GS_TEST_A4_UNIQUE_SAT") < 0);
-  CHECK(st.blockDefs.size() == defCountBefore);
+  CHECK(CadBlockFindDef(st.drawing.blockDefs, "GS_TEST_A4_UNIQUE_SAT") < 0);
+  CHECK(st.drawing.blockDefs.size() == defCountBefore);
 
   // BSAVE harvests the solid into the definition actually being edited.
   std::istringstream bsaveArgs("");
   REQUIRE(CadBlocksTryIdleCommand(st, "bsave", bsaveArgs, log));
-  const int di = CadBlockFindDef(st.blockDefs, "FIT");
+  const int di = CadBlockFindDef(st.drawing.blockDefs, "FIT");
   REQUIRE(di >= 0);
-  CHECK(st.blockDefs[static_cast<size_t>(di)].content.cadSolids.size() == 1);
+  CHECK(st.drawing.blockDefs[static_cast<size_t>(di)].content.cadSolids.size() == 1);
 }
 
 TEST_CASE("INSERT of a SAT block in a feet drawing keeps native scale", "[issue475][block][insert][units]") {
@@ -1411,11 +1411,11 @@ TEST_CASE("INSERT of a SAT block in a feet drawing keeps native scale", "[issue4
   REQUIRE(std::filesystem::exists(sat));
 
   AppCommandState st;
-  st.drawingInsUnits = 2;  // feet
+  st.drawing.drawingInsUnits = 2;  // feet
   std::vector<std::string> log;
   REQUIRE(ImportCadBlocksFromPath(st, sat.c_str(), log));
-  st.cadSolids.clear();
-  st.cadSolidAttrs.clear();
+  st.drawing.cadSolids.clear();
+  st.drawing.cadSolidAttrs.clear();
 
   CadBlockXform xf;
   xf.x = 10.f;
@@ -1423,11 +1423,11 @@ TEST_CASE("INSERT of a SAT block in a feet drawing keeps native scale", "[issue4
   xf.z = 0.f;
   xf.sx = xf.sy = xf.sz = 1.f;
   REQUIRE(CadBlockPlaceInsert(st, "CJ_4in_WELD_NECK_FLANGE", xf, false, log));
-  REQUIRE(st.cadBlockRefs.size() == 1);
-  CHECK(st.cadBlockRefs[0].xf.sx == Catch::Approx(1.f));
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
+  CHECK(st.drawing.cadBlockRefs[0].xf.sx == Catch::Approx(1.f));
 
   std::vector<CadBlockWorldSolid> ws;
-  CadBlockCollectWorldSolids(st.blockDefs, st.cadBlockRefs[0], EntityAttributes{}, &ws);
+  CadBlockCollectWorldSolids(st.drawing.blockDefs, st.drawing.cadBlockRefs[0], EntityAttributes{}, &ws);
   REQUIRE(ws.size() == 1);
   REQUIRE(ws[0].solid);
   const brep::Bounds bb = brep::ComputeBounds(*ws[0].solid);
@@ -1450,7 +1450,7 @@ TEST_CASE("BLOCKIMPORT rejects a malformed .sat file with a message, no crash",
   AppCommandState st;
   std::vector<std::string> log;
   CHECK_FALSE(ImportCadBlocksFromPath(st, bad.u8string().c_str(), log));
-  CHECK(st.blockDefs.empty());
+  CHECK(st.drawing.blockDefs.empty());
   bool named = false;
   for (const std::string& l : log)
     if (l.find("BLOCKIMPORT") != std::string::npos)
@@ -1463,16 +1463,16 @@ TEST_CASE("INSERT 3D insertion point stores Z and preview matches commit", "[iss
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "TEST3D";
-  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
   def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
   std::vector<std::string> log;
 
   // --- 2D legacy path still yields Z=0 via the 2-arg overload ---
   {
     AppCommandState s2;
-    s2.blockDefs = st.blockDefs;
-    s2.drawingInsUnits = st.drawingInsUnits;
+    s2.drawing.blockDefs = st.drawing.blockDefs;
+    s2.drawing.drawingInsUnits = st.drawing.drawingInsUnits;
     StartInsertBlockCommand(s2, log);
     std::snprintf(s2.insertBlockName, sizeof(s2.insertBlockName), "TEST3D");
     s2.insertBlockSpecifyPoint = true;
@@ -1481,8 +1481,8 @@ TEST_CASE("INSERT 3D insertion point stores Z and preview matches commit", "[iss
     s2.insertBlockDialogOpen = false;
     s2.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
     SubmitInsertBlockPick(s2, 10.f, 20.f, log);
-    REQUIRE(s2.cadBlockRefs.size() == 1);
-    CHECK(s2.cadBlockRefs[0].xf.z == Catch::Approx(0.f));
+    REQUIRE(s2.drawing.cadBlockRefs.size() == 1);
+    CHECK(s2.drawing.cadBlockRefs[0].xf.z == Catch::Approx(0.f));
   }
 
   // --- 3D pick via the 4-arg overload ---
@@ -1502,18 +1502,18 @@ TEST_CASE("INSERT 3D insertion point stores Z and preview matches commit", "[iss
   CHECK(pv.z == Catch::Approx(5.f));
 
   SubmitInsertBlockPick(st, 10.f, 20.f, 5.f, log);
-  REQUIRE(st.cadBlockRefs.size() == 1);
-  CHECK(st.cadBlockRefs[0].xf.x == Catch::Approx(10.f));
-  CHECK(st.cadBlockRefs[0].xf.y == Catch::Approx(20.f));
-  CHECK(st.cadBlockRefs[0].xf.z == Catch::Approx(5.f));
-  CHECK(st.cadBlockRefs[0].xf.z == Catch::Approx(pv.z));
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
+  CHECK(st.drawing.cadBlockRefs[0].xf.x == Catch::Approx(10.f));
+  CHECK(st.drawing.cadBlockRefs[0].xf.y == Catch::Approx(20.f));
+  CHECK(st.drawing.cadBlockRefs[0].xf.z == Catch::Approx(5.f));
+  CHECK(st.drawing.cadBlockRefs[0].xf.z == Catch::Approx(pv.z));
 
   // --- Typed X,Y,Z via the command line (WCS) ---
   {
     AppCommandState s3;
-    s3.blockDefs = st.blockDefs;
-    s3.drawingInsUnits = st.drawingInsUnits;
-    s3.cadBlockRefs.clear();
+    s3.drawing.blockDefs = st.drawing.blockDefs;
+    s3.drawing.drawingInsUnits = st.drawing.drawingInsUnits;
+    s3.drawing.cadBlockRefs.clear();
     StartInsertBlockCommand(s3, log);
     std::snprintf(s3.insertBlockName, sizeof(s3.insertBlockName), "TEST3D");
     s3.insertBlockSpecifyPoint = true;
@@ -1525,16 +1525,16 @@ TEST_CASE("INSERT 3D insertion point stores Z and preview matches commit", "[iss
     char buf[64];
     std::snprintf(buf, sizeof(buf), "30,40,7.5");
     ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), s3, log);
-    REQUIRE(s3.cadBlockRefs.size() == 1);
-    CHECK(s3.cadBlockRefs[0].xf.z == Catch::Approx(7.5f).margin(1e-4));
+    REQUIRE(s3.drawing.cadBlockRefs.size() == 1);
+    CHECK(s3.drawing.cadBlockRefs[0].xf.z == Catch::Approx(7.5f).margin(1e-4));
   }
 
   // --- Relative @X,Y,Z from origin (WCS) ---
   {
     AppCommandState s4;
-    s4.blockDefs = st.blockDefs;
-    s4.drawingInsUnits = st.drawingInsUnits;
-    s4.cadBlockRefs.clear();
+    s4.drawing.blockDefs = st.drawing.blockDefs;
+    s4.drawing.drawingInsUnits = st.drawing.drawingInsUnits;
+    s4.drawing.cadBlockRefs.clear();
     StartInsertBlockCommand(s4, log);
     std::snprintf(s4.insertBlockName, sizeof(s4.insertBlockName), "TEST3D");
     s4.insertBlockSpecifyPoint = true;
@@ -1546,10 +1546,10 @@ TEST_CASE("INSERT 3D insertion point stores Z and preview matches commit", "[iss
     char buf[64];
     std::snprintf(buf, sizeof(buf), "@5,0,3");
     ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), s4, log);
-    REQUIRE(s4.cadBlockRefs.size() == 1);
-    CHECK(s4.cadBlockRefs[0].xf.x == Catch::Approx(5.f).margin(1e-4));
-    CHECK(s4.cadBlockRefs[0].xf.y == Catch::Approx(0.f).margin(1e-4));
-    CHECK(s4.cadBlockRefs[0].xf.z == Catch::Approx(3.f).margin(1e-4));
+    REQUIRE(s4.drawing.cadBlockRefs.size() == 1);
+    CHECK(s4.drawing.cadBlockRefs[0].xf.x == Catch::Approx(5.f).margin(1e-4));
+    CHECK(s4.drawing.cadBlockRefs[0].xf.y == Catch::Approx(0.f).margin(1e-4));
+    CHECK(s4.drawing.cadBlockRefs[0].xf.z == Catch::Approx(3.f).margin(1e-4));
   }
 }
 
@@ -1557,9 +1557,9 @@ TEST_CASE("INSERT 3D scale preview uses true 3D distance", "[issue475][block][in
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "POST";
-  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
   def.content.userLinesFlat = {0.f, 0.f, 0.f, 0.f, 0.f, 1.f};
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
   std::vector<std::string> log;
 
   StartInsertBlockCommand(st, log);
@@ -1579,17 +1579,17 @@ TEST_CASE("INSERT 3D scale preview uses true 3D distance", "[issue475][block][in
   CHECK(pv.sx == Catch::Approx(3.f));
 
   SubmitInsertBlockPick(st, 0.f, 0.f, 3.f, log);
-  REQUIRE(st.cadBlockRefs.size() == 1);
-  CHECK(st.cadBlockRefs[0].xf.sx == Catch::Approx(3.f));
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
+  CHECK(st.drawing.cadBlockRefs[0].xf.sx == Catch::Approx(3.f));
 }
 
 TEST_CASE("INSERT dialog rotX and rotY apply on place", "[issue475][block][insert][orient]") {
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "FIT";
-  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
   def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
   std::vector<std::string> log;
 
   StartInsertBlockCommand(st, log);
@@ -1602,8 +1602,8 @@ TEST_CASE("INSERT dialog rotX and rotY apply on place", "[issue475][block][inser
   st.insertBlockRotYDeg = 0.f;
   std::snprintf(st.insertBlockRotXBuf, sizeof(st.insertBlockRotXBuf), "90");
   CadBlocksCommitInsertDialog(st, log);
-  REQUIRE(st.cadBlockRefs.size() == 1);
-  CHECK(st.cadBlockRefs[0].xf.rotX == Catch::Approx(CadBlockRotDegToRad(90.f)).margin(1e-4));
+  REQUIRE(st.drawing.cadBlockRefs.size() == 1);
+  CHECK(st.drawing.cadBlockRefs[0].xf.rotX == Catch::Approx(CadBlockRotDegToRad(90.f)).margin(1e-4));
 }
 
 TEST_CASE("INSERT ghost rubber includes solid block wireframe edges", "[issue475][block][insert][preview][solid]") {
@@ -1615,9 +1615,9 @@ TEST_CASE("INSERT ghost rubber includes solid block wireframe edges", "[issue475
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "SOLIDGHOST";
-  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
   def.content.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
   std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "SOLIDGHOST");
 
   CadBlockXform xf;
@@ -1645,7 +1645,7 @@ TEST_CASE("INSERT explode copies block solid into cadSolids", "[issue475][block]
   CadBlockDefinition def;
   def.name = "SOLIDBLK";
   def.content.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   CadBlockXform xf;
   xf.x = 3.f;
@@ -1653,9 +1653,9 @@ TEST_CASE("INSERT explode copies block solid into cadSolids", "[issue475][block]
   xf.z = 5.f;
   std::vector<std::string> log;
   REQUIRE(CadBlockPlaceInsert(st, "SOLIDBLK", xf, true, log));
-  CHECK(st.cadBlockRefs.empty());
-  REQUIRE(st.cadSolids.size() == 1);
-  const brep::Bounds bb = brep::ComputeBounds(*st.cadSolids[0]);
+  CHECK(st.drawing.cadBlockRefs.empty());
+  REQUIRE(st.drawing.cadSolids.size() == 1);
+  const brep::Bounds bb = brep::ComputeBounds(*st.drawing.cadSolids[0]);
   REQUIRE(bb.valid);
   CHECK(bb.mn.z == Catch::Approx(5.0).margin(0.05));
 }
@@ -1709,18 +1709,18 @@ TEST_CASE("SUBTRACT bores a stepped coaxial cylinder stack through a flange", "[
   REQUIRE_FALSE(brep::BooleanSubtract(flange, shaft, &direct, &why));
   CHECK(why == brep::Problem::BooleanCurvedFace);
 
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(flange)));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(shaft)));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(flange)));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(shaft)));
 
   std::vector<std::string> log;
   RunSubtractCommand(st, 0, 1, log);
 
-  REQUIRE(st.cadSolids.size() == 1);
-  REQUIRE(st.cadSolids[0]);
-  CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
+  REQUIRE(st.drawing.cadSolids.size() == 1);
+  REQUIRE(st.drawing.cadSolids[0]);
+  CHECK(brep::Validate(*st.drawing.cadSolids[0]) == brep::Problem::Ok);
   // Removed: r1.5 across z[0,2] (2 ft) + r1.0 across z[2,4] (2 ft).
   const double removed = 3.141592653589793 * (1.5 * 1.5 * 2.0 + 1.0 * 1.0 * 2.0);
-  const double vol = brep::ComputeMassProperties(*st.cadSolids[0]).volume;
+  const double vol = brep::ComputeMassProperties(*st.drawing.cadSolids[0]).volume;
   CHECK(vol == Catch::Approx(400.0 - removed).epsilon(1e-6));
 }
 
@@ -1748,14 +1748,14 @@ TEST_CASE("SUBTRACT still refuses a widening coaxial composite cutter by name", 
   REQUIRE(brep::BooleanUnion(a, b, &unioned, &why));
   REQUIRE(unioned.size() == 1);
 
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(flange)));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(unioned[0])));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(flange)));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(unioned[0])));
 
   std::vector<std::string> log;
   RunSubtractCommand(st, 0, 1, log);
 
   // Refused: both solids are untouched (still 2 in the array, geometry unchanged).
-  REQUIRE(st.cadSolids.size() == 2);
+  REQUIRE(st.drawing.cadSolids.size() == 2);
   bool refused = false;
   for (const std::string& line : log) {
     if (line.find("cannot combine these curved solids") != std::string::npos)
@@ -1799,20 +1799,20 @@ TEST_CASE("SUBTRACT bores axially through a composite coaxial target (issue #495
   brep::Solid nub;
   REQUIRE(brep::MakeCylinder(nubFrame, 0.5, 1.0, &nub, &why));
 
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(target)));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(nub)));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(target)));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(nub)));
 
   std::vector<std::string> log;
   RunSubtractCommand(st, 0, 1, log);
 
-  REQUIRE(st.cadSolids.size() == 1);
-  REQUIRE(st.cadSolids[0]);
-  CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
+  REQUIRE(st.drawing.cadSolids.size() == 1);
+  REQUIRE(st.drawing.cadSolids[0]);
+  CHECK(brep::Validate(*st.drawing.cadSolids[0]) == brep::Problem::Ok);
   // Removed: a clean r0.5 through-bore, the full z[0,8] length of the composite target.
   const double removed = 3.141592653589793 * 0.5 * 0.5 * 8.0;
   const double wideVol = 3.141592653589793 * 2.0 * 2.0 * 4.0;
   const double narrowVol = 3.141592653589793 * 1.0 * 1.0 * 4.0;
-  const double vol = brep::ComputeMassProperties(*st.cadSolids[0]).volume;
+  const double vol = brep::ComputeMassProperties(*st.drawing.cadSolids[0]).volume;
   CHECK(vol == Catch::Approx(wideVol + narrowVol - removed).epsilon(1e-6));
 }
 
@@ -1843,14 +1843,14 @@ TEST_CASE("SUBTRACT still refuses when the bore is wider than the narrow section
   brep::Solid nub;
   REQUIRE(brep::MakeCylinder(nubFrame, 1.3, 1.0, &nub, &why));
 
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(target)));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(nub)));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(target)));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(nub)));
 
   std::vector<std::string> log;
   RunSubtractCommand(st, 0, 1, log);
 
   // Refused: both solids untouched.
-  REQUIRE(st.cadSolids.size() == 2);
+  REQUIRE(st.drawing.cadSolids.size() == 2);
   bool refused = false;
   for (const std::string& line : log) {
     if (line.find("cannot combine these curved solids") != std::string::npos)
@@ -1870,7 +1870,7 @@ TEST_CASE("SUBTRACT cuts a bolt-circle of holes in one command (issue #495 338b)
   brep::Problem why = brep::Problem::Ok;
   brep::Solid flange;
   REQUIRE(brep::MakeBox(ucs::Ucs{}, 10.0, 10.0, 2.0, &flange, &why));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(flange)));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(flange)));
 
   std::vector<int> subIdx;
   const double pi = 3.141592653589793;
@@ -1883,8 +1883,8 @@ TEST_CASE("SUBTRACT cuts a bolt-circle of holes in one command (issue #495 338b)
     REQUIRE(ucs::FromNormal(brep::Vec3{cx, cy, 1.0}, brep::Vec3{0, 0, 1}, &cf));
     brep::Solid hole;
     REQUIRE(brep::MakeCylinder(cf, 0.4, 1.0, &hole, &why));  // short PRESSPULL-style nub
-    st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(hole)));
-    subIdx.push_back(static_cast<int>(st.cadSolids.size()) - 1);
+    st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(hole)));
+    subIdx.push_back(static_cast<int>(st.drawing.cadSolids.size()) - 1);
   }
 
   std::vector<std::string> log;
@@ -1903,11 +1903,11 @@ TEST_CASE("SUBTRACT cuts a bolt-circle of holes in one command (issue #495 338b)
   }
   REQUIRE(HandleBooleanTextInput("", st, log));
 
-  REQUIRE(st.cadSolids.size() == 1);
-  REQUIRE(st.cadSolids[0]);
-  CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
+  REQUIRE(st.drawing.cadSolids.size() == 1);
+  REQUIRE(st.drawing.cadSolids[0]);
+  CHECK(brep::Validate(*st.drawing.cadSolids[0]) == brep::Problem::Ok);
   const double removed = pi * 0.4 * 0.4 * 2.0 * N;
-  const double vol = brep::ComputeMassProperties(*st.cadSolids[0]).volume;
+  const double vol = brep::ComputeMassProperties(*st.drawing.cadSolids[0]).volume;
   CHECK(vol == Catch::Approx(200.0 - removed).epsilon(1e-6));
 }
 
@@ -1936,22 +1936,22 @@ TEST_CASE("SUBTRACT with one unresolvable cutter refuses the whole command (issu
   brep::Problem why = brep::Problem::Ok;
   brep::Solid flange;
   REQUIRE(brep::MakeBox(ucs::Ucs{}, 10.0, 10.0, 2.0, &flange, &why));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(flange)));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(flange)));
   std::vector<int> subIdx;
 
   ucs::Ucs cf1;
   REQUIRE(ucs::FromNormal(brep::Vec3{-2.5, -2.5, 1.0}, brep::Vec3{0, 0, 1}, &cf1));
   brep::Solid hole1;
   REQUIRE(brep::MakeCylinder(cf1, 0.4, 1.0, &hole1, &why));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(hole1)));
-  subIdx.push_back(static_cast<int>(st.cadSolids.size()) - 1);
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(hole1)));
+  subIdx.push_back(static_cast<int>(st.drawing.cadSolids.size()) - 1);
 
   ucs::Ucs cf2;
   REQUIRE(ucs::FromNormal(brep::Vec3{2.5, -2.5, 1.0}, brep::Vec3{0, 0, 1}, &cf2));
   brep::Solid hole2;
   REQUIRE(brep::MakeCylinder(cf2, 0.4, 1.0, &hole2, &why));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(hole2)));
-  subIdx.push_back(static_cast<int>(st.cadSolids.size()) - 1);
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(hole2)));
+  subIdx.push_back(static_cast<int>(st.drawing.cadSolids.size()) - 1);
 
   // Third cutter: a WIDENING coaxial 2-cylinder stack — REQ-337's own scope boundary, genuinely
   // unresolvable. The whole multi-cutter SUBTRACT must refuse, not apply the first two and choke
@@ -1966,10 +1966,10 @@ TEST_CASE("SUBTRACT with one unresolvable cutter refuses the whole command (issu
   REQUIRE(brep::MakeCylinder(bFrame, 1.5, 4.0, &b, &why));
   std::vector<brep::Solid> unioned;
   REQUIRE(brep::BooleanUnion(a, b, &unioned, &why));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(unioned[0])));
-  subIdx.push_back(static_cast<int>(st.cadSolids.size()) - 1);
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(unioned[0])));
+  subIdx.push_back(static_cast<int>(st.drawing.cadSolids.size()) - 1);
 
-  const size_t before = st.cadSolids.size();
+  const size_t before = st.drawing.cadSolids.size();
   std::vector<std::string> log;
   StartBooleanCommand(st, CadBooleanOp::Subtract, log);
   SelectedEntity minuend;
@@ -1986,7 +1986,7 @@ TEST_CASE("SUBTRACT with one unresolvable cutter refuses the whole command (issu
   }
   REQUIRE(HandleBooleanTextInput("", st, log));
 
-  CHECK(st.cadSolids.size() == before);
+  CHECK(st.drawing.cadSolids.size() == before);
   bool refused = false;
   for (const std::string& line : log)
     if (line.find("cannot combine these curved solids") != std::string::npos)
@@ -2082,9 +2082,9 @@ TEST_CASE("UNION command folds a three-piece coaxial selection into one solid (i
   brep::Solid c;
   REQUIRE(brep::MakeCylinder(fC, 2.0, 2.0, &c, &why));
 
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(a)));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(b)));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(c)));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(a)));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(b)));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(c)));
   SelectedEntity e0, e1, e2;
   e0.type = e1.type = e2.type = SelectedEntity::Type::Solid;
   e0.index = 0;
@@ -2096,9 +2096,9 @@ TEST_CASE("UNION command folds a three-piece coaxial selection into one solid (i
   StartBooleanCommand(st, CadBooleanOp::Union, log);  // pre-selected 3 solids commits immediately
   for (auto& l : log) UNSCOPED_INFO(l);
 
-  REQUIRE(st.cadSolids.size() == 1);
-  REQUIRE(st.cadSolids[0]);
-  CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
+  REQUIRE(st.drawing.cadSolids.size() == 1);
+  REQUIRE(st.drawing.cadSolids[0]);
+  CHECK(brep::Validate(*st.drawing.cadSolids[0]) == brep::Problem::Ok);
 }
 
 // issue #495 / REQ-338 increment 338d-1 — coaxial composite stacks may include a conical (tapered)
@@ -2205,16 +2205,16 @@ TEST_CASE("SUBTRACT bores axially through a composite target that includes a tap
   brep::Solid nub;
   REQUIRE(brep::MakeCylinder(nubFrame, 0.5, 1.0, &nub, &why));
 
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(target)));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(nub)));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(target)));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(nub)));
 
   std::vector<std::string> log;
   RunSubtractCommand(st, 0, 1, log);
   for (auto& l : log) UNSCOPED_INFO(l);
 
-  REQUIRE(st.cadSolids.size() == 1);
-  REQUIRE(st.cadSolids[0]);
-  CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
+  REQUIRE(st.drawing.cadSolids.size() == 1);
+  REQUIRE(st.drawing.cadSolids[0]);
+  CHECK(brep::Validate(*st.drawing.cadSolids[0]) == brep::Problem::Ok);
 }
 
 TEST_CASE("SUBTRACT still refuses when the bore is wider than the cone's narrow end "
@@ -2244,14 +2244,14 @@ TEST_CASE("SUBTRACT still refuses when the bore is wider than the cone's narrow 
   brep::Solid nub;
   REQUIRE(brep::MakeCylinder(nubFrame, 1.3, 1.0, &nub, &why));
 
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(target)));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(nub)));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(target)));
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(nub)));
 
   std::vector<std::string> log;
   RunSubtractCommand(st, 0, 1, log);
 
   // Refused: both solids untouched.
-  REQUIRE(st.cadSolids.size() == 2);
+  REQUIRE(st.drawing.cadSolids.size() == 2);
   bool refused = false;
   for (const std::string& line : log) {
     if (line.find("cannot combine these curved solids") != std::string::npos)
@@ -2275,12 +2275,12 @@ TEST_CASE("PickClosestCadEntity finds a block reference made entirely of solid g
   CadBlockDefinition def;
   def.name = "FIT";
   def.content.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   CadBlockRef r;
   r.defName = "FIT";
-  st.cadBlockRefs.push_back(r);
-  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  st.drawing.cadBlockRefs.push_back(r);
+  st.drawing.cadBlockRefAttrs.push_back(EntityAttributes{});
 
   // On the box's top-face edge (y=1, x in [-1,1], z=4) but far from the insertion origin (0,0) —
   // exactly the point the old origin-only fallback would miss by a wide margin.
@@ -2308,7 +2308,7 @@ CadBlockDefinition MakeFittingDef(const std::string& name, CadPipePartType partT
 TEST_CASE("CadPipeCatalogFind matches an already-imported fitting by size, class and type",
           "[issue486][pipecatalog]") {
   AppCommandState st;
-  st.blockDefs.push_back(
+  st.drawing.blockDefs.push_back(
       MakeFittingDef("ELBOW90-4IN-CS150", CadPipePartType::Elbow90, "4in", CadPipePressureClass::CS150));
 
   std::string name;
@@ -2320,7 +2320,7 @@ TEST_CASE("CadPipeCatalogFind matches an already-imported fitting by size, class
 TEST_CASE("CadPipeCatalogFind refuses with a named reason when no part matches",
           "[issue486][pipecatalog]") {
   AppCommandState st;
-  st.blockDefs.push_back(
+  st.drawing.blockDefs.push_back(
       MakeFittingDef("ELBOW90-4IN-CS150", CadPipePartType::Elbow90, "4in", CadPipePressureClass::CS150));
 
   std::string name;
@@ -2342,7 +2342,7 @@ TEST_CASE("CadPipeCatalogFind requires a part type and a nominal size", "[issue4
 TEST_CASE("A requested class falls back to a class-agnostic part when no exact-classed part exists",
           "[issue486][pipecatalog]") {
   AppCommandState st;
-  st.blockDefs.push_back(
+  st.drawing.blockDefs.push_back(
       MakeFittingDef("VALVE-2IN", CadPipePartType::Valve, "2in", CadPipePressureClass::None));
 
   std::string name;
@@ -2353,9 +2353,9 @@ TEST_CASE("A requested class falls back to a class-agnostic part when no exact-c
 
 TEST_CASE("An exact-classed part is preferred over a class-agnostic one", "[issue486][pipecatalog]") {
   AppCommandState st;
-  st.blockDefs.push_back(
+  st.drawing.blockDefs.push_back(
       MakeFittingDef("VALVE-2IN-ANY", CadPipePartType::Valve, "2in", CadPipePressureClass::None));
-  st.blockDefs.push_back(
+  st.drawing.blockDefs.push_back(
       MakeFittingDef("VALVE-2IN-CS300", CadPipePartType::Valve, "2in", CadPipePressureClass::CS300));
 
   std::string name;
@@ -2368,7 +2368,7 @@ TEST_CASE("A requested class with no restriction (None) matches any classed part
           "on ambiguity",
           "[issue486][pipecatalog]") {
   AppCommandState st;
-  st.blockDefs.push_back(
+  st.drawing.blockDefs.push_back(
       MakeFittingDef("FLANGE-6IN-CS150", CadPipePartType::Flange, "6in", CadPipePressureClass::CS150));
 
   std::string name;
@@ -2380,9 +2380,9 @@ TEST_CASE("A requested class with no restriction (None) matches any classed part
 TEST_CASE("CadPipeCatalogFind refuses as ambiguous when two parts tie on size/class/type",
           "[issue486][pipecatalog]") {
   AppCommandState st;
-  st.blockDefs.push_back(
+  st.drawing.blockDefs.push_back(
       MakeFittingDef("ELBOW90-4IN-A", CadPipePartType::Elbow90, "4in", CadPipePressureClass::CS150));
-  st.blockDefs.push_back(
+  st.drawing.blockDefs.push_back(
       MakeFittingDef("ELBOW90-4IN-B", CadPipePartType::Elbow90, "4in", CadPipePressureClass::CS150));
 
   std::string name;
@@ -2398,7 +2398,7 @@ TEST_CASE("A non-fitting block definition (partType None) is never offered as a 
   AppCommandState st;
   CadBlockDefinition ordinary;
   ordinary.name = "4in";  // adversarial: name collides with the nominal size string itself
-  st.blockDefs.push_back(ordinary);
+  st.drawing.blockDefs.push_back(ordinary);
 
   std::string name;
   std::vector<std::string> log;
@@ -2407,7 +2407,7 @@ TEST_CASE("A non-fitting block definition (partType None) is never offered as a 
 
 TEST_CASE("PIPECATALOG command parses part type, size and optional class", "[issue486][pipecatalog][command]") {
   AppCommandState st;
-  st.blockDefs.push_back(
+  st.drawing.blockDefs.push_back(
       MakeFittingDef("TEE-3IN-CS300", CadPipePartType::Tee, "3in", CadPipePressureClass::CS300));
 
   std::vector<std::string> log;
@@ -2444,21 +2444,21 @@ TEST_CASE("BLOCK Convert removes the source solid instead of duplicating it",
   brep::Solid box;
   brep::Problem why = brep::Problem::Ok;
   REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 10.0, 8.0, &box, &why));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
-  st.cadSolidAttrs.resize(1);
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  st.drawing.cadSolidAttrs.resize(1);
   st.selection.push_back({SelectedEntity::Type::Solid, 0});
 
   std::vector<std::string> log;
   std::istringstream args("BOXBLOCK, 0, 0, CONVERT");
   REQUIRE(CadBlocksTryIdleCommand(st, "block", args, log));
 
-  const int di = CadBlockFindDef(st.blockDefs, "BOXBLOCK");
+  const int di = CadBlockFindDef(st.drawing.blockDefs, "BOXBLOCK");
   REQUIRE(di >= 0);
-  CHECK(st.blockDefs[static_cast<size_t>(di)].content.cadSolids.size() == 1);
+  CHECK(st.drawing.blockDefs[static_cast<size_t>(di)].content.cadSolids.size() == 1);
   // The definition holds it, so the drawing must not still hold it too.
-  CHECK(st.cadSolids.empty());
-  CHECK(st.cadSolidAttrs.empty());
-  CHECK(st.cadBlockRefs.size() == 1);
+  CHECK(st.drawing.cadSolids.empty());
+  CHECK(st.drawing.cadSolidAttrs.empty());
+  CHECK(st.drawing.cadBlockRefs.size() == 1);
 }
 
 TEST_CASE("BLOCK Retain leaves the source solid in place", "[issue124][block][solid]") {
@@ -2468,17 +2468,17 @@ TEST_CASE("BLOCK Retain leaves the source solid in place", "[issue124][block][so
   brep::Solid box;
   brep::Problem why = brep::Problem::Ok;
   REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 10.0, 8.0, &box, &why));
-  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
-  st.cadSolidAttrs.resize(1);
+  st.drawing.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  st.drawing.cadSolidAttrs.resize(1);
   st.selection.push_back({SelectedEntity::Type::Solid, 0});
 
   std::vector<std::string> log;
   std::istringstream args("KEEPBLOCK, 0, 0, RETAIN");
   REQUIRE(CadBlocksTryIdleCommand(st, "block", args, log));
 
-  REQUIRE(CadBlockFindDef(st.blockDefs, "KEEPBLOCK") >= 0);
-  CHECK(st.cadSolids.size() == 1);
-  CHECK(st.cadSolidAttrs.size() == 1);
+  REQUIRE(CadBlockFindDef(st.drawing.blockDefs, "KEEPBLOCK") >= 0);
+  CHECK(st.drawing.cadSolids.size() == 1);
+  CHECK(st.drawing.cadSolidAttrs.size() == 1);
 }
 
 TEST_CASE("Bare WBLOCK opens the save dialog instead of printing usage", "[issue284][wblock]") {
@@ -2487,11 +2487,11 @@ TEST_CASE("Bare WBLOCK opens the save dialog instead of printing usage", "[issue
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "HYDRANT";
-  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
   def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   def.content.userLineAttrs.resize(1);
   def.content.lineVis.resize(1);
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   std::vector<std::string> log;
   std::istringstream args("");
@@ -2526,11 +2526,11 @@ TEST_CASE("The WBLOCK dialog writes the chosen block, and stays open when it can
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "HYDRANT";
-  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
   def.content.userLinesFlat = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   def.content.userLineAttrs.resize(1);
   def.content.lineVis.resize(1);
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   std::vector<std::string> log;
   StartWblockDialog(st, log);
@@ -2553,7 +2553,7 @@ TEST_CASE("The WBLOCK dialog writes the chosen block, and stays open when it can
   AppCommandState dest;
   std::vector<std::string> importLog;
   REQUIRE(ImportCadBlocksFromPath(dest, dwg.u8string().c_str(), importLog));
-  CHECK(CadBlockFindDef(dest.blockDefs, "HYDRANT") >= 0);
+  CHECK(CadBlockFindDef(dest.drawing.blockDefs, "HYDRANT") >= 0);
 }
 
 TEST_CASE("Saving a block in BEDIT marks its palette thumbnail stale",
@@ -2570,7 +2570,7 @@ TEST_CASE("Saving a block in BEDIT marks its palette thumbnail stale",
   def.nominalSize = "4in";
   def.content.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
   def.content.cadSolidAttrs.push_back(EntityAttributes{});
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   std::vector<std::string> log;
   std::istringstream beditArgs("PALFIT");
@@ -2639,12 +2639,12 @@ void PlaceTargetFlange(AppCommandState& st, float faceY) {
   m.isDefault = true;
   gasket.modes = {m};
   def.connections = {gasket};
-  st.blockDefs.push_back(def);
+  st.drawing.blockDefs.push_back(def);
 
   CadBlockRef ref;
   ref.defName = "TARGET_WN_FLANGE";
   ref.xf.y = faceY;
-  st.cadBlockRefs.push_back(ref);
+  st.drawing.cadBlockRefs.push_back(ref);
 }
 
 CadBlockLibraryEntry PaletteRowFor(const std::string& name) {
@@ -2660,11 +2660,11 @@ CadBlockLibraryEntry PaletteRowFor(const std::string& name) {
 /// The world position/normal of connection \p connIndex on the placed reference to \p defName.
 bool PlacedPortOf(const AppCommandState& st, const std::string& defName, size_t connIndex,
                   CadBlockWorldConnection* out) {
-  for (int i = 0; i < static_cast<int>(st.cadBlockRefs.size()); ++i) {
-    if (st.cadBlockRefs[static_cast<size_t>(i)].defName != defName)
+  for (int i = 0; i < static_cast<int>(st.drawing.cadBlockRefs.size()); ++i) {
+    if (st.drawing.cadBlockRefs[static_cast<size_t>(i)].defName != defName)
       continue;
     std::vector<CadBlockWorldConnection> world;
-    CadBlockCollectWorldConnections(st.blockDefs, st.cadBlockRefs[static_cast<size_t>(i)], i, &world);
+    CadBlockCollectWorldConnections(st.drawing.blockDefs, st.drawing.cadBlockRefs[static_cast<size_t>(i)], i, &world);
     if (connIndex >= world.size())
       return false;
     *out = world[connIndex];
@@ -2685,7 +2685,7 @@ TEST_CASE("A palette-armed blind flange snaps onto a flange face rather than lan
           "[issue486][req350][palette][connectorsnap]") {
   AppCommandState st;
   PlaceTargetFlange(st, /*faceY=*/10.f);
-  st.blockDefs.push_back(MakeBlindFlangeDef("2IN_BLIND_FLANGE"));
+  st.drawing.blockDefs.push_back(MakeBlindFlangeDef("2IN_BLIND_FLANGE"));
 
   std::vector<std::string> log;
   REQUIRE(CadPipePaletteArmPart(st, PaletteRowFor("2IN_BLIND_FLANGE"), log));
@@ -2710,7 +2710,7 @@ TEST_CASE("With nothing in reach the palette places the part at the point and sa
           "[issue486][req350][palette][connectorsnap]") {
   AppCommandState st;
   PlaceTargetFlange(st, /*faceY=*/10.f);
-  st.blockDefs.push_back(MakeBlindFlangeDef("2IN_BLIND_FLANGE"));
+  st.drawing.blockDefs.push_back(MakeBlindFlangeDef("2IN_BLIND_FLANGE"));
 
   std::vector<std::string> log;
   REQUIRE(CadPipePaletteArmPart(st, PaletteRowFor("2IN_BLIND_FLANGE"), log));
@@ -2731,9 +2731,9 @@ TEST_CASE("A part that cannot splice still lands where it was clicked",
   CadPipeRun run;
   run.vertsXyz = {0.0, 0.0, 0.0, 40.0, 0.0, 0.0};
   run.nominalSize = "2in";
-  st.cadPipeRuns = {run};
-  st.cadPipeRunAttrs = {EntityAttributes{}};
-  st.blockDefs.push_back(MakeBlindFlangeDef("2IN_BLIND_FLANGE"));
+  st.drawing.cadPipeRuns = {run};
+  st.drawing.cadPipeRunAttrs = {EntityAttributes{}};
+  st.drawing.blockDefs.push_back(MakeBlindFlangeDef("2IN_BLIND_FLANGE"));
 
   std::vector<std::string> log;
   REQUIRE(CadPipePaletteArmPart(st, PaletteRowFor("2IN_BLIND_FLANGE"), log));
@@ -2745,7 +2745,7 @@ TEST_CASE("A part that cannot splice still lands where it was clicked",
   CadBlockWorldConnection placed{};
   REQUIRE(PlacedPortOf(st, "2IN_BLIND_FLANGE", 0, &placed));
   CHECK(placed.x == Catch::Approx(20.0).margin(1e-3));
-  CHECK(st.cadPipeRuns.size() == 1);  // and the run was left alone
+  CHECK(st.drawing.cadPipeRuns.size() == 1);  // and the run was left alone
 }
 TEST_CASE("Every bundled fitting yields drawable geometry under its listed name",
           "[issue486][req350][palette][block]") {
@@ -2772,17 +2772,17 @@ TEST_CASE("Every bundled fitting yields drawable geometry under its listed name"
 
     // Under the name the row lists — not under some inner name from the file's own block table,
     // which would leave the palette unable to find what it just imported.
-    const int di = CadBlockFindDef(scratch.blockDefs, e.name);
+    const int di = CadBlockFindDef(scratch.drawing.blockDefs, e.name);
     REQUIRE(di >= 0);
-    const CadBlockDefinition& def = scratch.blockDefs[static_cast<size_t>(di)];
+    const CadBlockDefinition& def = scratch.drawing.blockDefs[static_cast<size_t>(di)];
 
     // Something to picture (and to place).
     CHECK_FALSE(def.content.cadSolids.empty());
 
     // Importing a library part for a PREVIEW must not drop loose geometry into the drawing — the
     // scratch state exists precisely so listing a part changes nothing the user owns.
-    CHECK(scratch.cadSolids.empty());
-    CHECK(scratch.userLinesFlat.empty());
+    CHECK(scratch.drawing.cadSolids.empty());
+    CHECK(scratch.drawing.userLinesFlat.empty());
   }
   // Guards the test itself: if the bundled library ever stops being found, this must fail loudly
   // rather than pass by iterating nothing.
@@ -2791,21 +2791,21 @@ TEST_CASE("Every bundled fitting yields drawable geometry under its listed name"
 TEST_CASE("CadBlockPlaceInsert routes a reference to the active paper layout",
           "[issue124][block][insert][paperspace]") {
   AppCommandState st;
-  st.paperLayouts.emplace_back();
+  st.drawing.paperLayouts.emplace_back();
   st.activeSpaceIndex = 0;
   CadBlockDefinition def;
   def.name = "TREE";
-  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
-  st.blockDefs.push_back(def);
+  def.units = CadDrawingInsUnitsName(st.drawing.drawingInsUnits);
+  st.drawing.blockDefs.push_back(def);
   CadBlockXform xf;
   xf.x = 10.f;
   xf.y = 20.f;
   std::vector<std::string> log;
 
   REQUIRE(CadBlockPlaceInsert(st, "TREE", xf, false, log));
-  REQUIRE(st.paperLayouts[0].paperBlockRefs.size() == 1);
-  CHECK(st.paperLayouts[0].paperBlockRefs[0].xf.x == Catch::Approx(10.f));
-  CHECK(st.paperLayouts[0].paperBlockRefs[0].xf.y == Catch::Approx(20.f));
-  CHECK(st.paperLayouts[0].paperBlockRefAttrs.size() == 1);
-  CHECK(st.cadBlockRefs.empty());
+  REQUIRE(st.drawing.paperLayouts[0].paperBlockRefs.size() == 1);
+  CHECK(st.drawing.paperLayouts[0].paperBlockRefs[0].xf.x == Catch::Approx(10.f));
+  CHECK(st.drawing.paperLayouts[0].paperBlockRefs[0].xf.y == Catch::Approx(20.f));
+  CHECK(st.drawing.paperLayouts[0].paperBlockRefAttrs.size() == 1);
+  CHECK(st.drawing.cadBlockRefs.empty());
 }

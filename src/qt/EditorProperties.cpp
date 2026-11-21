@@ -131,9 +131,9 @@ void EditorWindow::RefreshProperties() {
   for (int i : st.selectedSurveyPointIndices) mix(static_cast<std::uint64_t>(i) + 977);
   mix(st.cadGpuRevision); mix(static_cast<std::uint64_t>(st.displayLinearPrecision));
   mix(qApp->property("cadLightTheme").toBool() ? 1u : 0u);
-  mix(static_cast<std::uint64_t>(std::llround(st.worldDocumentOriginX * 1000))); mix(static_cast<std::uint64_t>(std::llround(st.worldDocumentOriginY * 1000)));
-  mix(st.annotationScales.size());
-  mix(st.drawingLayerTable.size()); mix(static_cast<std::uint64_t>(st.activeDrawingIdx));
+  mix(static_cast<std::uint64_t>(std::llround(st.drawing.worldDocumentOriginX * 1000))); mix(static_cast<std::uint64_t>(std::llround(st.drawing.worldDocumentOriginY * 1000)));
+  mix(st.drawing.annotationScales.size());
+  mix(st.drawing.drawingLayerTable.size()); mix(static_cast<std::uint64_t>(st.activeDrawingIdx));
   mix(st.sectionPlaneSelected ? 1u : 0u);
   mix(st.viewportSectionClip ? 1u : 0u);
   mix(st.viewportSectionClipFrameValid ? 1u : 0u);
@@ -152,14 +152,14 @@ void EditorWindow::RefreshProperties() {
   mix(qHash(m_PropertiesNote));
   // A selected alignment's own fields change without a geometry revision (criteria, name, station) - REQ-501.1.
   for (const auto& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Alignment || e.index < 0 || static_cast<size_t>(e.index) >= st.alignments.size())
+    if (e.type != SelectedEntity::Type::Alignment || e.index < 0 || static_cast<size_t>(e.index) >= st.drawing.alignments.size())
       continue;
-    const alignment::Alignment& al = st.alignments[static_cast<size_t>(e.index)];
+    const alignment::Alignment& al = st.drawing.alignments[static_cast<size_t>(e.index)];
     mix(std::hash<std::string>{}(al.name + '\n' + al.description + '\n' + al.layer + '\n' + al.style + '\n' + al.checkSetName));
     mix(static_cast<std::uint64_t>(std::llround(al.startingStation * 1e6)));
     mix(al.equations.size());
     mix(al.designSpeeds.size());
-    mix(st.alignmentCheckSets.size());
+    mix(st.drawing.alignmentCheckSets.size());
   }
   if (fp == m_PropertiesFingerprint && m_PropertiesScroll->widget()) return;
   m_PropertiesFingerprint = fp;
@@ -385,7 +385,7 @@ void EditorWindow::RefreshProperties() {
   };
   {
     QStringList layers;
-    for (const auto& layer : st.drawingLayerTable) layers.append(Text(layer.name));
+    for (const auto& layer : st.drawing.drawingLayerTable) layers.append(Text(layer.name));
     auto* layer = new QComboBox(body);
     layer->setObjectName("propLayer");
     layer->setEditable(true);
@@ -395,10 +395,10 @@ void EditorWindow::RefreshProperties() {
     layer->setEnabled(!none && general.count > 0);
     // An alignment keeps its layer on itself, not in the entity attributes: show it and set it with ALIGNMENTPROPS.
     const bool oneAlignment = st.selection.size() == 1 && total == 1 && nAlignment == 1 && st.selection[0].index >= 0 &&
-                              static_cast<size_t>(st.selection[0].index) < st.alignments.size();
-    const std::string alignmentName = oneAlignment ? st.alignments[static_cast<size_t>(st.selection[0].index)].name : std::string();
+                              static_cast<size_t>(st.selection[0].index) < st.drawing.alignments.size();
+    const std::string alignmentName = oneAlignment ? st.drawing.alignments[static_cast<size_t>(st.selection[0].index)].name : std::string();
     if (oneAlignment) {
-      layer->setCurrentText(Text(st.alignments[static_cast<size_t>(st.selection[0].index)].layer));
+      layer->setCurrentText(Text(st.drawing.alignments[static_cast<size_t>(st.selection[0].index)].layer));
       layer->setEnabled(true);
     }
     connect(layer, &QComboBox::textActivated, layer, [this, finish, alignmentName](const QString& value) {
@@ -493,10 +493,10 @@ void EditorWindow::RefreshProperties() {
       visibleScaleNames = &items[static_cast<size_t>(index)].annotativeVisibleScaleNames;
     };
     switch (selected.type) {
-      case SelectedEntity::Type::Annotation: bind(m_State.cadAnnotations); break;
-      case SelectedEntity::Type::FilledRegion: bind(m_State.cadFilledRegions); break;
-      case SelectedEntity::Type::BlockRef: bind(m_State.cadBlockRefs); break;
-      case SelectedEntity::Type::Multileader: bind(m_State.cadMultileaders); break;
+      case SelectedEntity::Type::Annotation: bind(m_State.drawing.cadAnnotations); break;
+      case SelectedEntity::Type::FilledRegion: bind(m_State.drawing.cadFilledRegions); break;
+      case SelectedEntity::Type::BlockRef: bind(m_State.drawing.cadBlockRefs); break;
+      case SelectedEntity::Type::Multileader: bind(m_State.drawing.cadMultileaders); break;
       default: break;
     }
     if (annotativeFlag && visibleScaleNames) {
@@ -515,7 +515,7 @@ void EditorWindow::RefreshProperties() {
       auto* scales = new QComboBox(body);
       scales->setObjectName("propertyAnnotationScales");
       auto* scaleModel = new QStandardItemModel(scales);
-      for (const auto& scale : st.annotationScales) {
+      for (const auto& scale : st.drawing.annotationScales) {
         auto* item = new QStandardItem(QString::fromUtf8(CadAnnotationScaleStatusLabel(scale).c_str()));
         item->setData(QString::fromUtf8(scale.name.c_str()), Qt::UserRole);
         item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
@@ -525,7 +525,7 @@ void EditorWindow::RefreshProperties() {
         scaleModel->appendRow(item);
       }
       scales->setModel(scaleModel);
-      scales->setEnabled(*annotativeFlag && !st.annotationScales.empty());
+      scales->setEnabled(*annotativeFlag && !st.drawing.annotationScales.empty());
       addRow(annotationRows, "Visible scales", scales);
       // Unticking the last visible scale is refused: an annotative object must show at some scale.
       connect(scaleModel, &QStandardItemModel::itemChanged, this, [this, visibleScaleNames, scaleModel](QStandardItem* changed) {
@@ -556,7 +556,7 @@ void EditorWindow::RefreshProperties() {
 
   // --- Geometry ---------------------------------------------------------------------------------
   auto* geometryRows = section("Geometry", "propertiesGeometry");
-  const double ox = st.worldDocumentOriginX, oy = st.worldDocumentOriginY;
+  const double ox = st.drawing.worldDocumentOriginX, oy = st.drawing.worldDocumentOriginY;
   const auto angle = CadAngleDisplaySettings(st);
   auto bearing = [&angle](double dx, double dy) {  // clockwise from north, [0, 360)
     double degrees = std::atan2(dx, dy) * (180.0 / 3.14159265358979323846);
@@ -570,7 +570,7 @@ void EditorWindow::RefreshProperties() {
     else if (e.type == SelectedEntity::Type::Annotation) texts.push_back(e);
   }
   const bool pure = nOther == 0 && ((lines.size() == st.selection.size()) || (circles.size() == st.selection.size()) || (texts.size() == st.selection.size()));
-  const size_t lineCount = st.userLinesFlat.size() / 6, circleCount = st.userCirclesCxCyZR.size() / 4;
+  const size_t lineCount = st.drawing.lineCount(), circleCount = st.drawing.circleCount();
   if (none && st.selectedSurveyPointIndices.empty()) {
     for (const char* label : {"Start X", "Start Y", "End X", "End Y"}) {
       auto* dash = new QLabel(QString::fromUtf8("\xE2\x80\x94"), body);
@@ -597,19 +597,19 @@ void EditorWindow::RefreshProperties() {
     }
   } else if (lines.size() == 1 && static_cast<size_t>(lines[0].index) < lineCount) {
     const int i = lines[0].index;
-    const double* v = &st.userLinesFlat[static_cast<size_t>(i) * 6];
+    const CadLineRecord v = st.drawing.line(static_cast<size_t>(i));
     using F = propedit::LineField;
     struct Item { const char* label; const char* name; F field; double shown; char axis; };
     const Item items[] = {
-        {"Start X", "propLineStartX", F::StartX, v[0] + ox, 'X'}, {"Start Y", "propLineStartY", F::StartY, v[1] + oy, 'Y'},
-        {"Start Z", "propLineStartZ", F::StartZ, v[2], 'Z'},     {"End X", "propLineEndX", F::EndX, v[3] + ox, 'X'},
-        {"End Y", "propLineEndY", F::EndY, v[4] + oy, 'Y'},       {"End Z", "propLineEndZ", F::EndZ, v[5], 'Z'}};
+        {"Start X", "propLineStartX", F::StartX, v.x0 + ox, 'X'}, {"Start Y", "propLineStartY", F::StartY, v.y0 + oy, 'Y'},
+        {"Start Z", "propLineStartZ", F::StartZ, v.z0, 'Z'},     {"End X", "propLineEndX", F::EndX, v.x1 + ox, 'X'},
+        {"End Y", "propLineEndY", F::EndY, v.y1 + oy, 'Y'},       {"End Z", "propLineEndZ", F::EndZ, v.z1, 'Z'}};
     for (const auto& item : items) {
       addRow(geometryRows, item.label, numberField(item.name, fmt(item.shown), [this, i, f = item.field](double value) {
         return propedit::SetLineField(m_State, i, f, value);
       }), item.axis);
     }
-    const double dx = v[3] - v[0], dy = v[4] - v[1], dz = v[5] - v[2];
+    const double dx = v.x1 - v.x0, dy = v.y1 - v.y0, dz = v.z1 - v.z0;
     const double horizontal = std::hypot(dx, dy);
     auto* derived = section("Derived", "propertiesDerived");
     readOnly(derived, "Length", fmt(horizontal), "propDerivedLength");
@@ -621,12 +621,12 @@ void EditorWindow::RefreshProperties() {
     readOnly(derived, "Rotation rel. north", bearing(dx, dy), "propDerivedBearing");
   } else if (circles.size() == 1 && static_cast<size_t>(circles[0].index) < circleCount) {
     const int i = circles[0].index;
-    const double* v = &st.userCirclesCxCyZR[static_cast<size_t>(i) * 4];
+    const CadCircleRecord v = st.drawing.circle(static_cast<size_t>(i));
     using F = propedit::CircleField;
     struct Item { const char* label; const char* name; F field; double shown; char axis; };
     const Item items[] = {
-        {"Center X", "propCircleCenterX", F::CenterX, v[0] + ox, 'X'}, {"Center Y", "propCircleCenterY", F::CenterY, v[1] + oy, 'Y'},
-        {"Center Z", "propCircleCenterZ", F::CenterZ, v[2], 'Z'},     {"Radius", "propCircleRadius", F::Radius, v[3], 0}};
+        {"Center X", "propCircleCenterX", F::CenterX, v.cx + ox, 'X'}, {"Center Y", "propCircleCenterY", F::CenterY, v.cy + oy, 'Y'},
+        {"Center Z", "propCircleCenterZ", F::CenterZ, v.cz, 'Z'},     {"Radius", "propCircleRadius", F::Radius, v.r, 0}};
     for (const auto& item : items) {
       addRow(geometryRows, item.label, numberField(item.name, fmt(item.shown), [this, i, f = item.field](double value) {
         return propedit::SetCircleField(m_State, i, f, value);
@@ -634,12 +634,12 @@ void EditorWindow::RefreshProperties() {
     }
     constexpr double kPi = 3.14159265358979323846;
     auto* derived = section("Derived", "propertiesDerived");
-    readOnly(derived, "Diameter", fmt(2 * v[3]), "propDerivedDiameter");
-    readOnly(derived, "Circumference", fmt(2 * kPi * v[3]), "propDerivedCircumference");
-    readOnly(derived, "Area", fmt(kPi * v[3] * v[3]), "propDerivedArea");
-  } else if (texts.size() == 1 && static_cast<size_t>(texts[0].index) < st.cadAnnotations.size()) {
+    readOnly(derived, "Diameter", fmt(2 * v.r), "propDerivedDiameter");
+    readOnly(derived, "Circumference", fmt(2 * kPi * v.r), "propDerivedCircumference");
+    readOnly(derived, "Area", fmt(kPi * v.r * v.r), "propDerivedArea");
+  } else if (texts.size() == 1 && static_cast<size_t>(texts[0].index) < st.drawing.cadAnnotations.size()) {
     const int i = texts[0].index;
-    const CadAnnotation& ann = st.cadAnnotations[static_cast<size_t>(i)];
+    const CadAnnotation& ann = st.drawing.cadAnnotations[static_cast<size_t>(i)];
     using F = propedit::TextField;
     const char* kind = ann.kind == CadAnnotation::Kind::Text ? "TEXT" : ann.kind == CadAnnotation::Kind::Mtext ? "MTEXT"
         : ann.kind == CadAnnotation::Kind::DimAligned ? "DIMALIGNED" : ann.kind == CadAnnotation::Kind::DimLinear ? "DIMLINEAR"
@@ -677,7 +677,7 @@ void EditorWindow::RefreshProperties() {
       addRow(geometryRows, "Content", content);
     }
     auto* derived = section("Derived", "propertiesDerived");
-    readOnly(derived, "Model text height", fmt(CadAnnotationHeightWorld(ann, m_State.modelUnitsPerPlottedInch)) + " model units", "propDerivedTextHeight");
+    readOnly(derived, "Model text height", fmt(CadAnnotationHeightWorld(ann, m_State.drawing.modelUnitsPerPlottedInch)) + " model units", "propDerivedTextHeight");
     if (ann.kind == CadAnnotation::Kind::Mtext) {
       readOnly(derived, "Box width", fmt(std::fabs(ann.boxMaxX - ann.boxMinX)), "propDerivedBoxWidth");
       readOnly(derived, "Box height", fmt(std::fabs(ann.boxMaxY - ann.boxMinY)), "propDerivedBoxHeight");
@@ -686,9 +686,9 @@ void EditorWindow::RefreshProperties() {
     QStringList start, end, length, bear;
     for (const auto& e : lines) {
       if (static_cast<size_t>(e.index) >= lineCount) continue;
-      const double* v = &st.userLinesFlat[static_cast<size_t>(e.index) * 6];
-      start.append(fmt(v[0] + ox) + ", " + fmt(v[1] + oy)); end.append(fmt(v[3] + ox) + ", " + fmt(v[4] + oy));
-      length.append(fmt(std::hypot(v[3] - v[0], v[4] - v[1]))); bear.append(bearing(v[3] - v[0], v[4] - v[1]));
+      const CadLineRecord v = st.drawing.line(static_cast<size_t>(e.index));
+      start.append(fmt(v.x0 + ox) + ", " + fmt(v.y0 + oy)); end.append(fmt(v.x1 + ox) + ", " + fmt(v.y1 + oy));
+      length.append(fmt(std::hypot(v.x1 - v.x0, v.y1 - v.y0))); bear.append(bearing(v.x1 - v.x0, v.y1 - v.y0));
     }
     readOnly(geometryRows, "Start point", Merge(start), "propMultiStart");
     readOnly(geometryRows, "End point", Merge(end), "propMultiEnd");
@@ -699,9 +699,9 @@ void EditorWindow::RefreshProperties() {
     constexpr double kPi = 3.14159265358979323846;
     for (const auto& e : circles) {
       if (static_cast<size_t>(e.index) >= circleCount) continue;
-      const double* v = &st.userCirclesCxCyZR[static_cast<size_t>(e.index) * 4];
-      center.append(fmt(v[0] + ox) + ", " + fmt(v[1] + oy)); radius.append(fmt(v[3])); diameter.append(fmt(2 * v[3]));
-      circumference.append(fmt(2 * kPi * v[3])); area.append(fmt(kPi * v[3] * v[3]));
+      const CadCircleRecord v = st.drawing.circle(static_cast<size_t>(e.index));
+      center.append(fmt(v.cx + ox) + ", " + fmt(v.cy + oy)); radius.append(fmt(v.r)); diameter.append(fmt(2 * v.r));
+      circumference.append(fmt(2 * kPi * v.r)); area.append(fmt(kPi * v.r * v.r));
     }
     readOnly(geometryRows, "Center", Merge(center), "propMultiCenter");
     readOnly(geometryRows, "Radius", Merge(radius), "propMultiRadius");
@@ -711,8 +711,8 @@ void EditorWindow::RefreshProperties() {
   } else if (!texts.empty()) {
     QStringList x, y, height, rotation;
     for (const auto& e : texts) {
-      if (static_cast<size_t>(e.index) >= st.cadAnnotations.size()) continue;
-      const CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(e.index)];
+      if (static_cast<size_t>(e.index) >= st.drawing.cadAnnotations.size()) continue;
+      const CadAnnotation& a = st.drawing.cadAnnotations[static_cast<size_t>(e.index)];
       x.append(fmt(a.insX + ox)); y.append(fmt(a.insY + oy));
       height.append(QString::asprintf("%.4f", static_cast<double>(a.plottedHeightInches)));
       rotation.append(QString::fromStdString(FormatBearing(BearingCwNorthDegFromMathAngleRad(a.rotationRad), angle)));
@@ -761,14 +761,14 @@ void EditorWindow::RefreshProperties() {
       const int i = e.index;
       readOnly(details, "Object index", QString::number(i + 1), "propObjectIndex");
       const auto valid = [i](size_t n) { return i >= 0 && static_cast<size_t>(i) < n; };
-      if (e.type == SelectedEntity::Type::Polyline && valid(st.userPolylineOffsets.size() - (st.userPolylineOffsets.empty() ? 0u : 1u))) {
-        const int first = st.userPolylineOffsets[static_cast<size_t>(i)], last = st.userPolylineOffsets[static_cast<size_t>(i + 1)];
+      if (e.type == SelectedEntity::Type::Polyline && valid(st.drawing.userPolylineOffsets.size() - (st.drawing.userPolylineOffsets.empty() ? 0u : 1u))) {
+        const int first = st.drawing.userPolylineOffsets[static_cast<size_t>(i)], last = st.drawing.userPolylineOffsets[static_cast<size_t>(i + 1)];
         readOnly(details, "Vertices", QString::number(std::max(0, last - first)), "propPolylineVertices");
-        const bool closed = valid(st.userPolylineClosed.size()) && st.userPolylineClosed[static_cast<size_t>(i)];
+        const bool closed = valid(st.drawing.userPolylineClosed.size()) && st.drawing.userPolylineClosed[static_cast<size_t>(i)];
         readOnly(details, "Closed", closed ? "Yes" : "No", "propPolylineClosed");
-        if (last > first && static_cast<size_t>(last) <= st.userPolylineVerts.size() / 3) {
-          double lo = st.userPolylineVerts[static_cast<size_t>(first) * 3 + 2], hi = lo;
-          for (int v = first; v < last; ++v) { const double z = st.userPolylineVerts[static_cast<size_t>(v) * 3 + 2]; lo = std::min(lo, z); hi = std::max(hi, z); }
+        if (last > first && static_cast<size_t>(last) <= st.drawing.vertexCount()) {
+          double lo = st.drawing.vertex(first).z, hi = lo;
+          for (int v = first; v < last; ++v) { const double z = st.drawing.vertex(v).z; lo = std::min(lo, z); hi = std::max(hi, z); }
           readOnly(details, "Elevation range", fmt(lo) + " to " + fmt(hi), "propPolylineElevation");
           const int vertexCount = last - first;
           const int segmentCount = std::max(0, vertexCount - 1) + (closed && vertexCount > 1 ? 1 : 0);
@@ -776,11 +776,11 @@ void EditorWindow::RefreshProperties() {
           for (int seg = 0; seg < segmentCount; ++seg) {
             const int va = first + seg;
             const int vb = seg == vertexCount - 1 ? first : va + 1;
-            const size_t a = static_cast<size_t>(va) * 3, b = static_cast<size_t>(vb) * 3;
-            const double x0 = st.userPolylineVerts[a], y0 = st.userPolylineVerts[a + 1], z0 = st.userPolylineVerts[a + 2];
-            const double x1 = st.userPolylineVerts[b], y1 = st.userPolylineVerts[b + 1], z1 = st.userPolylineVerts[b + 2];
-            const double bulge = static_cast<size_t>(va) < st.userPolylineVertsBulge.size()
-                ? st.userPolylineVertsBulge[static_cast<size_t>(va)] : 0.0;
+            const size_t a = static_cast<size_t>(va), b = static_cast<size_t>(vb);
+            const double x0 = st.drawing.vertex(a).x, y0 = st.drawing.vertex(a).y, z0 = st.drawing.vertex(a).z;
+            const double x1 = st.drawing.vertex(b).x, y1 = st.drawing.vertex(b).y, z1 = st.drawing.vertex(b).z;
+            const double bulge = static_cast<size_t>(va) < st.drawing.userPolylineVertsBulge.size()
+                ? st.drawing.userPolylineVertsBulge[static_cast<size_t>(va)] : 0.0;
             const double segmentPlan = BulgeSegmentLength(x0, y0, x1, y1, bulge);
             planLength += segmentPlan;
             spatialLength += std::hypot(segmentPlan, z1 - z0);
@@ -798,32 +798,32 @@ void EditorWindow::RefreshProperties() {
           readOnly(details, "Spatial length", fmt(spatialLength), "propPolylineSpatialLength");
           if (closed) readOnly(details, "Area", fmt(std::fabs(signedArea)), "propPolylineArea");
         }
-      } else if (e.type == SelectedEntity::Type::FeatureLine && valid(st.featureLineInfo.size())) {
-        const auto& fl = st.featureLineInfo[static_cast<size_t>(i)];
+      } else if (e.type == SelectedEntity::Type::FeatureLine && valid(st.drawing.featureLineInfo.size())) {
+        const auto& fl = st.drawing.featureLineInfo[static_cast<size_t>(i)];
         readOnly(details, "Name", Text(fl.name), "propFeatureLineName");
         readOnly(details, "Description", Text(fl.description), "propFeatureLineDescription");
-        if (valid(st.featureLineOffsets.size() - (st.featureLineOffsets.empty() ? 0u : 1u))) {
-          const int first = st.featureLineOffsets[static_cast<size_t>(i)], last = st.featureLineOffsets[static_cast<size_t>(i + 1)];
+        if (valid(st.drawing.featureLineOffsets.size() - (st.drawing.featureLineOffsets.empty() ? 0u : 1u))) {
+          const int first = st.drawing.featureLineOffsets[static_cast<size_t>(i)], last = st.drawing.featureLineOffsets[static_cast<size_t>(i + 1)];
           const int vertexCount = std::max(0, last - first);
-          const bool closed = valid(st.featureLineClosed.size()) && st.featureLineClosed[static_cast<size_t>(i)];
+          const bool closed = valid(st.drawing.featureLineClosed.size()) && st.drawing.featureLineClosed[static_cast<size_t>(i)];
           readOnly(details, "Vertices", QString::number(vertexCount), "propFeatureLineVertices");
           readOnly(details, "Closed", closed ? "Yes" : "No", "propFeatureLineClosed");
-          if (vertexCount > 0 && static_cast<size_t>(last) <= st.featureLineVerts.size() / 3) {
-            double lo = st.featureLineVerts[static_cast<size_t>(first) * 3 + 2], hi = lo;
+          if (vertexCount > 0 && static_cast<size_t>(last) <= st.drawing.featureLineVerts.size() / 3) {
+            double lo = st.drawing.featureLineVerts[static_cast<size_t>(first) * 3 + 2], hi = lo;
             double planLength = 0.0, spatialLength = 0.0;
             const int segmentCount = std::max(0, vertexCount - 1) + (closed && vertexCount > 1 ? 1 : 0);
             for (int seg = 0; seg < segmentCount; ++seg) {
               const int va = first + seg, vb = seg == vertexCount - 1 ? first : va + 1;
               const size_t a = static_cast<size_t>(va) * 3, b = static_cast<size_t>(vb) * 3;
-              const double dx = st.featureLineVerts[b] - st.featureLineVerts[a];
-              const double dy = st.featureLineVerts[b + 1] - st.featureLineVerts[a + 1];
-              const double dz = st.featureLineVerts[b + 2] - st.featureLineVerts[a + 2];
+              const double dx = st.drawing.featureLineVerts[b] - st.drawing.featureLineVerts[a];
+              const double dy = st.drawing.featureLineVerts[b + 1] - st.drawing.featureLineVerts[a + 1];
+              const double dz = st.drawing.featureLineVerts[b + 2] - st.drawing.featureLineVerts[a + 2];
               const double horizontal = std::hypot(dx, dy);
               planLength += horizontal;
               spatialLength += std::hypot(horizontal, dz);
             }
             for (int v = first; v < last; ++v) {
-              const double z = st.featureLineVerts[static_cast<size_t>(v) * 3 + 2];
+              const double z = st.drawing.featureLineVerts[static_cast<size_t>(v) * 3 + 2];
               lo = std::min(lo, z); hi = std::max(hi, z);
             }
             readOnly(details, "Elevation range", fmt(lo) + " to " + fmt(hi), "propFeatureLineElevation");
@@ -831,14 +831,14 @@ void EditorWindow::RefreshProperties() {
             readOnly(details, "Spatial length", fmt(spatialLength), "propFeatureLineSpatialLength");
           }
         }
-      } else if (e.type == SelectedEntity::Type::Arc && valid(st.userArcs.size())) {
-        const auto& a = st.userArcs[static_cast<size_t>(i)];
+      } else if (e.type == SelectedEntity::Type::Arc && valid(st.drawing.userArcs.size())) {
+        const auto& a = st.drawing.userArcs[static_cast<size_t>(i)];
         readOnly(details, "Center", fmt(a.cx + ox) + ", " + fmt(a.cy + oy) + ", " + fmt(a.z), "propArcCenter");
         readOnly(details, "Radius", fmt(a.r), "propArcRadius");
         readOnly(details, "Sweep", fmt(std::fabs(a.sweepRad) * 180.0 / 3.14159265358979323846) + "°", "propArcSweep");
         readOnly(details, "Length", fmt(a.r * std::fabs(static_cast<double>(a.sweepRad))), "propArcLength");
-      } else if (e.type == SelectedEntity::Type::Ellipse && valid(st.userEllipses.size())) {
-        const auto& a = st.userEllipses[static_cast<size_t>(i)];
+      } else if (e.type == SelectedEntity::Type::Ellipse && valid(st.drawing.userEllipses.size())) {
+        const auto& a = st.drawing.userEllipses[static_cast<size_t>(i)];
         readOnly(details, "Center", fmt(a.cx + ox) + ", " + fmt(a.cy + oy) + ", " + fmt(a.z), "propEllipseCenter");
         const double major = std::hypot(a.majVx, a.majVy), minor = major * a.ratio;
         readOnly(details, "Major radius", fmt(major), "propEllipseMajor");
@@ -858,8 +858,8 @@ void EditorWindow::RefreshProperties() {
         const double area = EllipseIsFullTurn(a) ? kPi * major * minor
             : 0.5 * major * minor * (std::fabs(static_cast<double>(a.sweepRad)) - std::sin(std::fabs(static_cast<double>(a.sweepRad))));
         readOnly(details, EllipseIsFullTurn(a) ? "Area" : "Arc segment area", fmt(area), "propEllipseArea");
-      } else if (e.type == SelectedEntity::Type::PipeRun && valid(st.cadPipeRuns.size())) {
-        const auto& p = st.cadPipeRuns[static_cast<size_t>(i)];
+      } else if (e.type == SelectedEntity::Type::PipeRun && valid(st.drawing.cadPipeRuns.size())) {
+        const auto& p = st.drawing.cadPipeRuns[static_cast<size_t>(i)];
         readOnly(details, "Name", Text(p.name), "propPipeRunName");
         readOnly(details, "Nominal size", Text(p.nominalSize), "propPipeRunSize");
         readOnly(details, "Route vertices", QString::number(p.vertsXyz.size() / 3), "propPipeRunVertices");
@@ -870,11 +870,11 @@ void EditorWindow::RefreshProperties() {
         readOnly(details, "Route length", fmt(routeLength), "propPipeRunLength");
         readOnly(details, "Pressure class", p.pressureClassTag.empty() ? QString("Unspecified") : Text(p.pressureClassTag), "propPipeRunClass");
         if (p.wallThicknessIn > 0.0) readOnly(details, "Wall thickness (in)", fmt(p.wallThicknessIn), "propPipeRunWall");
-      } else if (e.type == SelectedEntity::Type::Point && valid(st.cadPoints.size())) {
-        const auto& p = st.cadPoints[static_cast<size_t>(i)];
+      } else if (e.type == SelectedEntity::Type::Point && valid(st.drawing.cadPoints.size())) {
+        const auto& p = st.drawing.cadPoints[static_cast<size_t>(i)];
         readOnly(details, "Position", fmt(p.x + ox) + ", " + fmt(p.y + oy) + ", " + fmt(p.z), "propCadPointPosition");
-      } else if (e.type == SelectedEntity::Type::Solid && valid(st.cadSolids.size()) && st.cadSolids[static_cast<size_t>(i)]) {
-        const auto& solid = *st.cadSolids[static_cast<size_t>(i)];
+      } else if (e.type == SelectedEntity::Type::Solid && valid(st.drawing.cadSolids.size()) && st.drawing.cadSolids[static_cast<size_t>(i)]) {
+        const auto& solid = *st.drawing.cadSolids[static_cast<size_t>(i)];
         readOnly(details, "Vertices", QString::number(solid.vertices.size()), "propSolidVertices");
         readOnly(details, "Edges", QString::number(solid.edges.size()), "propSolidEdges");
         readOnly(details, "Faces", QString::number(solid.faces.size()), "propSolidFaces");
@@ -889,8 +889,8 @@ void EditorWindow::RefreshProperties() {
           readOnly(details, "Bounds Y", fmt(lo[1] + oy) + " to " + fmt(hi[1] + oy), "propSolidBoundsY");
           readOnly(details, "Bounds Z", fmt(lo[2]) + " to " + fmt(hi[2]), "propSolidBoundsZ");
         }
-      } else if (e.type == SelectedEntity::Type::Mesh && valid(st.cadMeshes.size()) && st.cadMeshes[static_cast<size_t>(i)]) {
-        const auto& mesh = *st.cadMeshes[static_cast<size_t>(i)];
+      } else if (e.type == SelectedEntity::Type::Mesh && valid(st.drawing.cadMeshes.size()) && st.drawing.cadMeshes[static_cast<size_t>(i)]) {
+        const auto& mesh = *st.drawing.cadMeshes[static_cast<size_t>(i)];
         readOnly(details, "Source", Text(mesh.sourceName), "propMeshSource");
         readOnly(details, "Vertices", QString::number(mesh.vertexCount()), "propMeshVertices");
         readOnly(details, "Triangles", QString::number(mesh.triangleCount()), "propMeshTriangles");
@@ -902,45 +902,45 @@ void EditorWindow::RefreshProperties() {
           readOnly(details, "Bounds Y", fmt(lo[1] + oy) + " to " + fmt(hi[1] + oy), "propMeshBoundsY");
           readOnly(details, "Bounds Z", fmt(lo[2]) + " to " + fmt(hi[2]), "propMeshBoundsZ");
         }
-      } else if (e.type == SelectedEntity::Type::BlockRef && valid(st.cadBlockRefs.size())) {
-        const auto& block = st.cadBlockRefs[static_cast<size_t>(i)];
+      } else if (e.type == SelectedEntity::Type::BlockRef && valid(st.drawing.cadBlockRefs.size())) {
+        const auto& block = st.drawing.cadBlockRefs[static_cast<size_t>(i)];
         readOnly(details, "Definition", Text(block.defName), "propBlockDefinition");
         readOnly(details, "Insertion", fmt(block.xf.x + ox) + ", " + fmt(block.xf.y + oy) + ", " + fmt(block.xf.z), "propBlockInsertion");
         readOnly(details, "Scale X / Y / Z", fmt(block.xf.sx) + " / " + fmt(block.xf.sy) + " / " + fmt(block.xf.sz), "propBlockScale");
         readOnly(details, "Rotation Z", fmt(block.xf.rotZ * 180.0 / 3.14159265358979323846) + "°", "propBlockRotation");
         readOnly(details, "Attributes", QString::number(block.attributes.size()), "propBlockAttributes");
-      } else if (e.type == SelectedEntity::Type::Table && valid(st.cadTables.size())) {
-        const auto& table = st.cadTables[static_cast<size_t>(i)];
+      } else if (e.type == SelectedEntity::Type::Table && valid(st.drawing.cadTables.size())) {
+        const auto& table = st.drawing.cadTables[static_cast<size_t>(i)];
         readOnly(details, "Rows × columns", QString("%1 × %2").arg(CadTableRowCount(table)).arg(table.cols), "propTableSize");
         readOnly(details, "Insertion", fmt(table.insX + ox) + ", " + fmt(table.insY + oy) + ", " + fmt(table.insZ), "propTableInsertion");
         readOnly(details, "Width × height", fmt(table.width) + " × " + fmt(table.height), "propTableDimensions");
         readOnly(details, "Style", table.styleName.empty() ? QString("Standard") : Text(table.styleName), "propTableStyle");
-      } else if (e.type == SelectedEntity::Type::FilledRegion && valid(st.cadFilledRegions.size())) {
-        const auto& region = st.cadFilledRegions[static_cast<size_t>(i)];
+      } else if (e.type == SelectedEntity::Type::FilledRegion && valid(st.drawing.cadFilledRegions.size())) {
+        const auto& region = st.drawing.cadFilledRegions[static_cast<size_t>(i)];
         readOnly(details, "Boundary loops", QString::number(region.loopStart.size()), "propRegionLoops");
         readOnly(details, "Boundary vertices", QString::number(region.vertsXyz.size() / 3), "propRegionVertices");
         readOnly(details, "Pattern", region.isSolid() ? QString("SOLID") : Text(region.patternName), "propRegionPattern");
-      } else if (e.type == SelectedEntity::Type::Multileader && valid(st.cadMultileaders.size())) {
-        const auto& leader = st.cadMultileaders[static_cast<size_t>(i)];
+      } else if (e.type == SelectedEntity::Type::Multileader && valid(st.drawing.cadMultileaders.size())) {
+        const auto& leader = st.drawing.cadMultileaders[static_cast<size_t>(i)];
         readOnly(details, "Branches", QString::number(CadMultileaderBranchCount(leader)), "propMleaderBranches");
         readOnly(details, "Path vertices", QString::number(leader.pathXyz.size() / 3), "propMleaderVertices");
         readOnly(details, "Text", Text(leader.label.text), "propMleaderText");
         readOnly(details, "Style", Text(leader.styleName), "propMleaderStyle");
-      } else if (e.type == SelectedEntity::Type::PdfUnderlay && valid(st.pdfAttachments.size())) {
-        const auto& pdf = st.pdfAttachments[static_cast<size_t>(i)];
+      } else if (e.type == SelectedEntity::Type::PdfUnderlay && valid(st.drawing.pdfAttachments.size())) {
+        const auto& pdf = st.drawing.pdfAttachments[static_cast<size_t>(i)];
         readOnly(details, "File", Text(pdf.filePath), "propPdfFile");
         readOnly(details, "Page", QString::number(pdf.pageIndex + 1), "propPdfPage");
         readOnly(details, "Insertion", fmt(pdf.insertX + ox) + ", " + fmt(pdf.insertY + oy), "propPdfInsertion");
         readOnly(details, "Scale", fmt(pdf.scale), "propPdfScale");
         readOnly(details, "Rotation", fmt(pdf.rotationDeg) + "°", "propPdfRotation");
         readOnly(details, "Page size", fmt(pdf.pageWidthPts * pdf.scale) + " × " + fmt(pdf.pageHeightPts * pdf.scale), "propPdfDimensions");
-      } else if (e.type == SelectedEntity::Type::PointCloud && valid(st.cadPointClouds.size()) && st.cadPointClouds[static_cast<size_t>(i)]) {
-        const auto& cloud = *st.cadPointClouds[static_cast<size_t>(i)];
+      } else if (e.type == SelectedEntity::Type::PointCloud && valid(st.drawing.cadPointClouds.size()) && st.drawing.cadPointClouds[static_cast<size_t>(i)]) {
+        const auto& cloud = *st.drawing.cadPointClouds[static_cast<size_t>(i)];
         readOnly(details, "Source", Text(cloud.sourcePath), "propCloudSource");
         readOnly(details, "Points", QString::number(cloud.totalPointCount), "propCloudPoints");
         readOnly(details, "Preview points", QString::number(cloud.pointCount()), "propCloudPreviewPoints");
-      } else if (e.type == SelectedEntity::Type::PositionMarker && valid(st.cadPositionMarkers.size())) {
-        const auto& marker = st.cadPositionMarkers[static_cast<size_t>(i)];
+      } else if (e.type == SelectedEntity::Type::PositionMarker && valid(st.drawing.cadPositionMarkers.size())) {
+        const auto& marker = st.drawing.cadPositionMarkers[static_cast<size_t>(i)];
         readOnly(details, "Position", fmt(marker.x + ox) + ", " + fmt(marker.y + oy) + ", " + fmt(marker.z), "propPositionMarkerPosition");
         readOnly(details, "Latitude / longitude", fmt(marker.latitudeDeg) + ", " + fmt(marker.longitudeDeg), "propPositionMarkerLatLong");
         readOnly(details, "Label", Text(marker.label.text), "propPositionMarkerLabel");
@@ -968,27 +968,27 @@ void EditorWindow::RefreshProperties() {
   }
   if (st.selection.size() == 1 && st.selection.front().type == SelectedEntity::Type::FeatureLine) {
     const int index = st.selection.front().index;
-    if (index >= 0 && static_cast<size_t>(index) < st.featureLineInfo.size() &&
-        st.featureLineInfo[static_cast<size_t>(index)].grading) {
-      const auto& grading = *st.featureLineInfo[static_cast<size_t>(index)].grading;
+    if (index >= 0 && static_cast<size_t>(index) < st.drawing.featureLineInfo.size() &&
+        st.drawing.featureLineInfo[static_cast<size_t>(index)].grading) {
+      const auto& grading = *st.drawing.featureLineInfo[static_cast<size_t>(index)].grading;
       auto* rows = section("Grading criteria", "propertiesGrading");
-      const int baseline = FindEntityIndexById(st.featureLineAttrs, grading.baselineId);
-      const QString baselineName = baseline >= 0 && static_cast<size_t>(baseline) < st.featureLineInfo.size()
-          ? Text(st.featureLineInfo[static_cast<size_t>(baseline)].name) : QString("Missing baseline");
+      const int baseline = FindEntityIndexById(st.drawing.featureLineAttrs, grading.baselineId);
+      const QString baselineName = baseline >= 0 && static_cast<size_t>(baseline) < st.drawing.featureLineInfo.size()
+          ? Text(st.drawing.featureLineInfo[static_cast<size_t>(baseline)].name) : QString("Missing baseline");
       readOnly(rows, "Baseline", baselineName, "propGradingBaseline");
       static const QStringList targets{"Surface", "Distance", "Absolute elevation", "Relative elevation"};
       readOnly(rows, "Target kind", targets.value(static_cast<int>(grading.target)), "propGradingTargetKind");
       QString targetValue = fmt(grading.targetValue);
       if (grading.target == CadGradingDefinition::Target::Surface) {
         const int si = FindSurfaceIndexById(st, grading.surfaceId);
-        targetValue = si >= 0 ? Text(st.cadSurfaces[static_cast<size_t>(si)].name) : QString("Missing surface");
+        targetValue = si >= 0 ? Text(st.drawing.cadSurfaces[static_cast<size_t>(si)].name) : QString("Missing surface");
       }
       readOnly(rows, "Target", targetValue, "propGradingTarget");
       if (grading.target == CadGradingDefinition::Target::Distance)
         readOnly(rows, "Distance grade (%)", fmt(grading.distanceGradePercent), "propGradingDistanceGrade");
       readOnly(rows, "Cut slope (H:V)", fmt(grading.cutRun) + ":1", "propGradingCutSlope");
       readOnly(rows, "Fill slope (H:V)", fmt(grading.fillRun) + ":1", "propGradingFillSlope");
-      if (static_cast<size_t>(index) < st.featureLineClosed.size() && !st.featureLineClosed[static_cast<size_t>(index)])
+      if (static_cast<size_t>(index) < st.drawing.featureLineClosed.size() && !st.drawing.featureLineClosed[static_cast<size_t>(index)])
         readOnly(rows, "Open side", grading.sideLeft ? "Left" : "Right", "propGradingOpenSide");
     }
   }
@@ -999,16 +999,16 @@ void EditorWindow::RefreshProperties() {
   size_t surfaceIndex = 0;
   for (const auto& e : st.selection)
     if (e.type == SelectedEntity::Type::Surface && ++surfaceCount == 1) surfaceIndex = static_cast<size_t>(e.index);
-  if (surfaceCount == 1 && surfaceIndex < st.cadSurfaces.size()) {
-    const CadSurface& surface = st.cadSurfaces[surfaceIndex];
+  if (surfaceCount == 1 && surfaceIndex < st.drawing.cadSurfaces.size()) {
+    const CadSurface& surface = st.drawing.cadSurfaces[surfaceIndex];
     auto* rows = section("Surface", "propertiesSurface");
     readOnly(rows, "Name", Text(surface.name), "propSurfaceName");
     if (surface.gradingGroup) {
       QStringList members;
       for (const auto& member : surface.gradingMembers) {
-        const int fi = FindEntityIndexById(st.featureLineAttrs, member.gradingId);
-        const QString name = fi >= 0 && static_cast<size_t>(fi) < st.featureLineInfo.size()
-            ? Text(st.featureLineInfo[static_cast<size_t>(fi)].name) : QString("Missing grading");
+        const int fi = FindEntityIndexById(st.drawing.featureLineAttrs, member.gradingId);
+        const QString name = fi >= 0 && static_cast<size_t>(fi) < st.drawing.featureLineInfo.size()
+            ? Text(st.drawing.featureLineInfo[static_cast<size_t>(fi)].name) : QString("Missing grading");
         members << name + (member.infill ? " (infill)" : "");
       }
       readOnly(rows, "Grading group", "Yes", "propSurfaceGradingGroup");
@@ -1039,8 +1039,8 @@ void EditorWindow::RefreshProperties() {
   }
   if (st.selection.size() == 1 && st.selection.front().type == SelectedEntity::Type::Spline) {
     const int index = st.selection.front().index;
-    if (index >= 0 && static_cast<size_t>(index) < st.cadSplines.size()) {
-      const CadSpline& sp = st.cadSplines[static_cast<size_t>(index)];
+    if (index >= 0 && static_cast<size_t>(index) < st.drawing.cadSplines.size()) {
+      const CadSpline& sp = st.drawing.cadSplines[static_cast<size_t>(index)];
       auto* rows = section("Spline", "propertiesSpline");
       readOnly(rows, "Method", sp.isFit() ? "Fit points" : "Control vertices", "propSplineMethod");
       readOnly(rows, "Degree", QString::number(sp.degree), "propSplineDegree");
@@ -1051,8 +1051,8 @@ void EditorWindow::RefreshProperties() {
   }
   if (st.selection.size() == 1 && st.selection.front().type == SelectedEntity::Type::Alignment) {  // REQ-501.1
     const int index = st.selection.front().index;
-    if (index >= 0 && static_cast<size_t>(index) < st.alignments.size()) {
-      const alignment::Alignment& al = st.alignments[static_cast<size_t>(index)];
+    if (index >= 0 && static_cast<size_t>(index) < st.drawing.alignments.size()) {
+      const alignment::Alignment& al = st.drawing.alignments[static_cast<size_t>(index)];
       auto* rows = section("Alignment", "propertiesAlignment");
       static const char* const kTypeNames[] = {"", "Centerline", "Offset", "Curb Return", "Miscellaneous", "Rail"};
       editableAlignmentField(rows, "Name", Text(al.name), "propAlignmentName", "NAME", al.name);
@@ -1063,16 +1063,16 @@ void EditorWindow::RefreshProperties() {
       // Offsets name their parent by id (REQ-488).
       QString parentName = QStringLiteral("(none)");
       if (al.parentId != 0) {
-        for (const alignment::Alignment& other : st.alignments) {
+        for (const alignment::Alignment& other : st.drawing.alignments) {
           if (other.id == al.parentId) parentName = Text(other.name);
         }
       }
       readOnly(rows, "Parent alignment", parentName, "propAlignmentParent");
-      const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.alignmentStyles, al);
+      const std::string criteriaName = AlignmentStyles::EffectiveCheckSetName(st.drawing.alignmentStyles, al);
       readOnly(rows, "Design criteria", criteriaName.empty() ? QStringLiteral("none") : Text(criteriaName),
                "propAlignmentDesignCriteria");
       // REQ-501.1 design criteria status: meets, or how many checks the alignment fails (REQ-502).
-      if (const alignment::AlignmentCheckSet* set = alignment::FindCheckSet(st.alignmentCheckSets, criteriaName)) {
+      if (const alignment::AlignmentCheckSet* set = alignment::FindCheckSet(st.drawing.alignmentCheckSets, criteriaName)) {
         const size_t findings = alignment::CheckDesign(al, *set, st.displayLinearPrecision).size();
         readOnly(rows, "Design criteria status", findings == 0 ? QStringLiteral("Meets criteria")
                                                                : QString("%1 violation(s)").arg(findings),
@@ -1082,9 +1082,9 @@ void EditorWindow::RefreshProperties() {
         const double ox = CadCoord::WorldOriginX(st), oy = CadCoord::WorldOriginY(st);
         const AngleDisplaySettings angles = CadAngleDisplaySettings(st);
         constexpr double kRadToDeg = 180.0 / alignment::kPi;
-        editableAlignmentField(rows, "Start station", Text(alignment::FormatStation(al.StartStation(), st.alignmentStationFormat)), "propAlignmentStartStation",
+        editableAlignmentField(rows, "Start station", Text(alignment::FormatStation(al.StartStation(), st.drawing.alignmentStationFormat)), "propAlignmentStartStation",
                                "START", al.name);
-        readOnly(rows, "End station", Text(alignment::FormatStation(al.EndStationWithEquations(), st.alignmentStationFormat)), "propAlignmentEndStation");
+        readOnly(rows, "End station", Text(alignment::FormatStation(al.EndStationWithEquations(), st.drawing.alignmentStationFormat)), "propAlignmentEndStation");
         readOnly(rows, "Length", fmt(al.Length()), "propAlignmentLength");
         readOnly(rows, "Start coordinate", fmt(al.StartPoint().x + ox) + ", " + fmt(al.StartPoint().y + oy),
                  "propAlignmentStart");
@@ -1111,8 +1111,8 @@ void EditorWindow::RefreshProperties() {
     readOnly(rows, "Selected points", QString::number(st.selectedSurveyPointIndices.size()), "propSurveyPointCount");
     if (st.selectedSurveyPointIndices.size() == 1) {
       const int index = st.selectedSurveyPointIndices.front();
-      if (index >= 0 && static_cast<size_t>(index) < st.surveyPoints.size()) {
-        const auto& point = st.surveyPoints[static_cast<size_t>(index)];
+      if (index >= 0 && static_cast<size_t>(index) < st.drawing.surveyPoints.size()) {
+        const auto& point = st.drawing.surveyPoints[static_cast<size_t>(index)];
         readOnly(rows, "Point ID", QString::number(point.id), "propSurveyPointId");
         readOnly(rows, "Easting (X)", fmt(point.easting), "propSurveyPointEasting");
         readOnly(rows, "Northing (Y)", fmt(point.northing), "propSurveyPointNorthing");

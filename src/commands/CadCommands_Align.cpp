@@ -120,31 +120,35 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
   }
 
   // Lines
-  for (size_t i = 0; i + 5 < st.userLinesFlat.size(); i += 6) {
-    if (selective && !sLines.count(static_cast<int>(i / 6))) continue;
-    HelmertPt(a, b, tx, ty, &st.userLinesFlat[i],     &st.userLinesFlat[i + 1]);
-    HelmertPt(a, b, tx, ty, &st.userLinesFlat[i + 3], &st.userLinesFlat[i + 4]);
+  for (size_t li = 0; li < st.drawing.lineCount(); ++li) {
+    if (selective && !sLines.count(static_cast<int>(li))) continue;
+    CadLineRecord ln = st.drawing.line(li);
+    HelmertPt(a, b, tx, ty, &ln.x0, &ln.y0);
+    HelmertPt(a, b, tx, ty, &ln.x1, &ln.y1);
+    st.drawing.setLine(li, ln);
   }
 
   // Circles
-  for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4) {
-    if (selective && !sCircles.count(static_cast<int>(i / 4))) continue;
-    HelmertPt(a, b, tx, ty, &st.userCirclesCxCyZR[i], &st.userCirclesCxCyZR[i + 1]);
-    st.userCirclesCxCyZR[i + 3] *= sc;
+  for (size_t ci = 0; ci < st.drawing.circleCount(); ++ci) {
+    if (selective && !sCircles.count(static_cast<int>(ci))) continue;
+    CadCircleRecord cr = st.drawing.circle(ci);
+    HelmertPt(a, b, tx, ty, &cr.cx, &cr.cy);
+    cr.r *= sc;
+    st.drawing.setCircle(ci, cr);
     float anx = 0.f, any = 0.f, anz = 1.f;   // REQ-312: the plane turns with the circle
-    CircleNormalAt(st.userCircleNormals, i / 4, &anx, &any, &anz);
+    CircleNormalAt(st.drawing.userCircleNormals, ci, &anx, &any, &anz);
     RotateNormalAboutZ(rad, &anx, &any);
-    if (i / 4 * 3 + 2 < st.userCircleNormals.size()) {
-      st.userCircleNormals[i / 4 * 3 + 0] = anx;
-      st.userCircleNormals[i / 4 * 3 + 1] = any;
-      st.userCircleNormals[i / 4 * 3 + 2] = anz;
+    if (ci * 3 + 2 < st.drawing.userCircleNormals.size()) {
+      st.drawing.userCircleNormals[ci * 3 + 0] = anx;
+      st.drawing.userCircleNormals[ci * 3 + 1] = any;
+      st.drawing.userCircleNormals[ci * 3 + 2] = anz;
     }
   }
 
   // Arcs
-  for (size_t ai = 0; ai < st.userArcs.size(); ++ai) {
+  for (size_t ai = 0; ai < st.drawing.userArcs.size(); ++ai) {
     if (selective && !sArcs.count(static_cast<int>(ai))) continue;
-    auto& arc = st.userArcs[ai];
+    auto& arc = st.drawing.userArcs[ai];
     // The start point, taken through the arc's OWN plane before anything moves (REQ-312).
     // `HelmertPt` applies the same rotation + uniform scale + translation the centre gets, so a
     // tilted arc is re-anchored to where its start actually lands rather than trusting `+= rad`,
@@ -162,9 +166,9 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
   }
 
   // Ellipses
-  for (size_t ei = 0; ei < st.userEllipses.size(); ++ei) {
+  for (size_t ei = 0; ei < st.drawing.userEllipses.size(); ++ei) {
     if (selective && !sEllipses.count(static_cast<int>(ei))) continue;
-    auto& el = st.userEllipses[ei];
+    auto& el = st.drawing.userEllipses[ei];
     float mx = el.cx + el.majVx, my = el.cy + el.majVy;
     HelmertPt(a, b, tx, ty, &el.cx, &el.cy);
     HelmertPt(a, b, tx, ty, &mx, &my);
@@ -174,24 +178,27 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
 
   // Polylines
   if (!selective) {
-    for (size_t i = 0; i + 1 < st.userPolylineVerts.size(); i += 3)
-      HelmertPt(a, b, tx, ty, &st.userPolylineVerts[i], &st.userPolylineVerts[i + 1]);
+    for (size_t vi = 0; vi < st.drawing.vertexCount(); ++vi) {
+      CadPolyVertex pv = st.drawing.vertex(vi);
+      HelmertPt(a, b, tx, ty, &pv.x, &pv.y);
+      st.drawing.setVertex(vi, pv);
+    }
   } else {
-    for (size_t pi = 0; pi + 1 < st.userPolylineOffsets.size(); ++pi) {
+    for (size_t pi = 0; pi + 1 < st.drawing.userPolylineOffsets.size(); ++pi) {
       if (!sPolylines.count(static_cast<int>(pi))) continue;
-      const int vStart = st.userPolylineOffsets[pi];
-      const int vEnd   = st.userPolylineOffsets[pi + 1];
+      const int vStart = st.drawing.userPolylineOffsets[pi];
+      const int vEnd   = st.drawing.userPolylineOffsets[pi + 1];
       for (int vi = vStart; vi < vEnd; ++vi) {
-        size_t base = static_cast<size_t>(vi) * 3;
-        if (base + 1 < st.userPolylineVerts.size())
-          HelmertPt(a, b, tx, ty, &st.userPolylineVerts[base], &st.userPolylineVerts[base + 1]);
+        size_t base = static_cast<size_t>(vi);
+        if (base < st.drawing.vertexCount())
+          HelmertPt(a, b, tx, ty, &st.drawing.vertexComponent(base, CadVertexComponent::X), &st.drawing.vertexComponent(base, CadVertexComponent::Y));
       }
     }
   }
 
   // Annotations — skip survey-linked MTEXT; repositioned after survey pts below.
-  for (size_t ani = 0; ani < st.cadAnnotations.size(); ++ani) {
-    auto& ann = st.cadAnnotations[ani];
+  for (size_t ani = 0; ani < st.drawing.cadAnnotations.size(); ++ani) {
+    auto& ann = st.drawing.cadAnnotations[ani];
     if (ann.surveyPointLabelForId >= 0)
       continue;
     if (selective && !sAnns.count(static_cast<int>(ani))) continue;
@@ -236,16 +243,16 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
       HelmertPt(a, b, tx, ty, &ann.dimExt2X, &ann.dimExt2Y);
       ann.dimSignedOffset *= sc;
       ann.plottedHeightInches = std::max(ann.plottedHeightInches * sc, 1e-6f);
-      CadDimAngularSyncTextPlacement(&ann, st.modelUnitsPerPlottedInch);
+      CadDimAngularSyncTextPlacement(&ann, st.drawing.modelUnitsPerPlottedInch);
       CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(st, ann), CadAngleDisplaySettings(st));
       break;
     }
   }
 
-  for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
+  for (size_t ti = 0; ti < st.drawing.cadTables.size(); ++ti) {
     if (selective && !sTables.count(static_cast<int>(ti)))
       continue;
-    CadTable& t = st.cadTables[ti];
+    CadTable& t = st.drawing.cadTables[ti];
     HelmertPt(a, b, tx, ty, &t.insX, &t.insY);
     t.rotationRad += rad;
     t.width = std::max(t.width * sc, 1.e-3f);
@@ -255,7 +262,7 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
 
   // PDF underlays
   constexpr float kR2D = 180.f / 3.14159265f;
-  for (auto& att : st.pdfAttachments) {
+  for (auto& att : st.drawing.pdfAttachments) {
     HelmertPt(a, b, tx, ty, &att.insertX, &att.insertY);
     att.scale      = std::max(att.scale * sc, 1e-9f);
     att.rotationDeg += rad * kR2D;
@@ -266,11 +273,11 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
   std::unordered_set<int> surveySet;
   if (hasSelSurvey)
     for (int idx : *selSurvey) surveySet.insert(idx);
-  for (size_t i = 0; i < st.surveyPoints.size(); ++i) {
+  for (size_t i = 0; i < st.drawing.surveyPoints.size(); ++i) {
     if (hasSelSurvey && !surveySet.count(static_cast<int>(i))) continue;
-    HelmertPt(a, b, tx, ty, &st.surveyPoints[i].easting, &st.surveyPoints[i].northing);
+    HelmertPt(a, b, tx, ty, &st.drawing.surveyPoints[i].easting, &st.drawing.surveyPoints[i].northing);
   }
-  for (size_t i = 0; i < st.surveyPoints.size(); ++i) {
+  for (size_t i = 0; i < st.drawing.surveyPoints.size(); ++i) {
     if (hasSelSurvey && !surveySet.count(static_cast<int>(i))) continue;
     RepositionSurveyLabelMtextForPoint(st, i);
   }
@@ -370,9 +377,9 @@ void ApplyAlignCommand(AppCommandState& st, std::vector<std::string>& log, bool 
   for (int i = 0; i < nPairs; ++i) {
     const auto& cp = st.alignControlPts[static_cast<size_t>(i)];
     float bestSrc = kMatchTol * kMatchTol, bestDst = kMatchTol * kMatchTol;
-    for (int j = 0; j < static_cast<int>(st.surveyPoints.size()); ++j) {
-      const float ex = st.surveyPoints[static_cast<size_t>(j)].easting;
-      const float ny = st.surveyPoints[static_cast<size_t>(j)].northing;
+    for (int j = 0; j < static_cast<int>(st.drawing.surveyPoints.size()); ++j) {
+      const float ex = st.drawing.surveyPoints[static_cast<size_t>(j)].easting;
+      const float ny = st.drawing.surveyPoints[static_cast<size_t>(j)].northing;
       const float dSrc = (ex - cp.srcX) * (ex - cp.srcX) + (ny - cp.srcY) * (ny - cp.srcY);
       const float dDst = (ex - cp.dstX) * (ex - cp.dstX) + (ny - cp.dstY) * (ny - cp.dstY);
       if (dSrc < bestSrc) { bestSrc = dSrc; srcIdx[static_cast<size_t>(i)] = j; }
@@ -393,7 +400,7 @@ void ApplyAlignCommand(AppCommandState& st, std::vector<std::string>& log, bool 
     const int idx = dstIdx[static_cast<size_t>(i)];
     if (idx < 0 || taggedCon.count(idx)) continue;
     taggedCon.insert(idx);
-    auto& p = st.surveyPoints[static_cast<size_t>(idx)];
+    auto& p = st.drawing.surveyPoints[static_cast<size_t>(idx)];
     p.easting  = st.alignControlPts[static_cast<size_t>(i)].dstX;
     p.northing = st.alignControlPts[static_cast<size_t>(i)].dstY;
     if (p.description.find("CON") == std::string::npos)
@@ -405,7 +412,7 @@ void ApplyAlignCommand(AppCommandState& st, std::vector<std::string>& log, bool 
     const int idx = srcIdx[static_cast<size_t>(i)];
     if (idx < 0 || taggedCon.count(idx) || taggedAdj.count(idx)) continue;
     taggedAdj.insert(idx);
-    auto& p = st.surveyPoints[static_cast<size_t>(idx)];
+    auto& p = st.drawing.surveyPoints[static_cast<size_t>(idx)];
     if (p.description.find("ADJ") == std::string::npos)
       p.description += (p.description.empty() ? "ADJ" : " ADJ");
     EnsureSurveyPointLabelMtext(st, static_cast<size_t>(idx), nullptr);

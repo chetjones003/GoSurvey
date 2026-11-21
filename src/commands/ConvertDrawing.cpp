@@ -47,20 +47,24 @@ std::string Plural(size_t n, const char* one, const char* many) {
 
 // The per-kind moves below serve both a whole drawing (ApplyDrawingConversion) and a clipboard
 // (ApplyClipboardConversion): the same objects, the same exact transform.
-template <class V> void MoveLines(V& lines, const Xf& f) {
-  for (size_t i = 0; i + 5 < lines.size(); i += 6) {
-    f.Pt(&lines[i], &lines[i + 1]);
-    f.Z(&lines[i + 2]);
-    f.Pt(&lines[i + 3], &lines[i + 4]);
-    f.Z(&lines[i + 5]);
+template <class S> void MoveLines(S& store, const Xf& f) {
+  for (size_t i = 0; i < store.lineCount(); ++i) {
+    CadLineRecord ln = store.line(i);
+    f.Pt(&ln.x0, &ln.y0);
+    f.Z(&ln.z0);
+    f.Pt(&ln.x1, &ln.y1);
+    f.Z(&ln.z1);
+    store.setLine(i, ln);
   }
 }
 
-template <class V, class N> void MoveCircles(V& cxCyZR, N& normals, const Xf& f) {
-  for (size_t i = 0; i + 3 < cxCyZR.size(); i += 4) {
-    f.Pt(&cxCyZR[i], &cxCyZR[i + 1]);
-    f.Z(&cxCyZR[i + 2]);
-    cxCyZR[i + 3] *= f.s;
+template <class S, class N> void MoveCircles(S& store, N& normals, const Xf& f) {
+  for (size_t i = 0; i < store.circleCount(); ++i) {
+    CadCircleRecord cr = store.circle(i);
+    f.Pt(&cr.cx, &cr.cy);
+    f.Z(&cr.cz);
+    cr.r *= f.s;
+    store.setCircle(i, cr);
   }
   for (size_t i = 0; i + 2 < normals.size(); i += 3)
     f.Dir(&normals[i], &normals[i + 1]);
@@ -152,41 +156,41 @@ void MoveBlockRefs(std::vector<CadBlockRef>& refs, const Xf& f, double rotationR
 
 std::vector<std::string> UnconvertibleKinds(const AppCommandState& st, bool rotates) {
   std::vector<std::string> k;
-  if (!st.cadSurfaces.empty())
-    k.push_back(Plural(st.cadSurfaces.size(), "surface", "surfaces"));
-  if (!st.cadMeshes.empty())
-    k.push_back(Plural(st.cadMeshes.size(), "mesh", "meshes"));
-  if (!st.cadPointClouds.empty())
-    k.push_back(Plural(st.cadPointClouds.size(), "point cloud", "point clouds"));
-  if (!st.cadSolids.empty())
-    k.push_back(Plural(st.cadSolids.size(), "3D solid", "3D solids"));
-  if (!st.cadPipeRuns.empty())
-    k.push_back(Plural(st.cadPipeRuns.size(), "pipe run", "pipe runs"));
-  if (!st.cadPositionMarkers.empty())
-    k.push_back(Plural(st.cadPositionMarkers.size(), "position marker", "position markers"));
-  if (!st.cadMultileaders.empty())
-    k.push_back(Plural(st.cadMultileaders.size(), "multileader", "multileaders"));
-  if (!st.pdfAttachments.empty())
-    k.push_back(Plural(st.pdfAttachments.size(), "PDF underlay", "PDF underlays"));
+  if (!st.drawing.cadSurfaces.empty())
+    k.push_back(Plural(st.drawing.cadSurfaces.size(), "surface", "surfaces"));
+  if (!st.drawing.cadMeshes.empty())
+    k.push_back(Plural(st.drawing.cadMeshes.size(), "mesh", "meshes"));
+  if (!st.drawing.cadPointClouds.empty())
+    k.push_back(Plural(st.drawing.cadPointClouds.size(), "point cloud", "point clouds"));
+  if (!st.drawing.cadSolids.empty())
+    k.push_back(Plural(st.drawing.cadSolids.size(), "3D solid", "3D solids"));
+  if (!st.drawing.cadPipeRuns.empty())
+    k.push_back(Plural(st.drawing.cadPipeRuns.size(), "pipe run", "pipe runs"));
+  if (!st.drawing.cadPositionMarkers.empty())
+    k.push_back(Plural(st.drawing.cadPositionMarkers.size(), "position marker", "position markers"));
+  if (!st.drawing.cadMultileaders.empty())
+    k.push_back(Plural(st.drawing.cadMultileaders.size(), "multileader", "multileaders"));
+  if (!st.drawing.pdfAttachments.empty())
+    k.push_back(Plural(st.drawing.pdfAttachments.size(), "PDF underlay", "PDF underlays"));
   size_t viewports = 0;
-  for (const PaperLayout& l : st.paperLayouts)
+  for (const PaperLayout& l : st.drawing.paperLayouts)
     viewports += l.viewports.size();
   if (viewports > 0)
     k.push_back(Plural(viewports, "paper-space viewport", "paper-space viewports"));
 
   if (rotates) {  // a turn about the vertical axis cannot be applied exactly to a tilted arc or ellipse
     size_t tiltedArcs = 0;
-    for (const CadArc& a : st.userArcs)
+    for (const CadArc& a : st.drawing.userArcs)
       if (!NormalIsVertical(a.nx, a.ny))
         ++tiltedArcs;
-    for (const CadEllipse& e : st.userEllipses)
+    for (const CadEllipse& e : st.drawing.userEllipses)
       if (!NormalIsPlusZ(e.nx, e.ny, e.nz))
         ++tiltedArcs;
-    for (size_t i = 0; i < st.userPolylineVertsBulge.size(); ++i) {
-      if (st.userPolylineVertsBulge[i] == 0.f || i * 3 + 2 >= st.userPolylineVertsNormal.size())
+    for (size_t i = 0; i < st.drawing.userPolylineVertsBulge.size(); ++i) {
+      if (st.drawing.userPolylineVertsBulge[i] == 0.f || i * 3 + 2 >= st.drawing.userPolylineVertsNormal.size())
         continue;
-      if (!NormalIsPlusZ(st.userPolylineVertsNormal[i * 3], st.userPolylineVertsNormal[i * 3 + 1],
-                         st.userPolylineVertsNormal[i * 3 + 2]))
+      if (!NormalIsPlusZ(st.drawing.userPolylineVertsNormal[i * 3], st.drawing.userPolylineVertsNormal[i * 3 + 1],
+                         st.drawing.userPolylineVertsNormal[i * 3 + 2]))
         ++tiltedArcs;
     }
     if (tiltedArcs > 0)
@@ -198,8 +202,8 @@ std::vector<std::string> UnconvertibleKinds(const AppCommandState& st, bool rota
 bool DrawingWorldExtents(const AppCommandState& st, double* minX, double* maxX, double* minY, double* maxY) {
   if (CadCoord::ComputeWorldSpaceExtents(st, minX, maxX, minY, maxY))
     return true;
-  *minX = *maxX = st.worldDocumentOriginX;
-  *minY = *maxY = st.worldDocumentOriginY;
+  *minX = *maxX = st.drawing.worldDocumentOriginX;
+  *minY = *maxY = st.drawing.worldDocumentOriginY;
   return false;
 }
 
@@ -208,23 +212,23 @@ void ApplyDrawingConversion(AppCommandState& st, const geo::Similarity& t, std::
 
   // The new document origin: world' = A + sR·world, and the stored coordinates are sR·local.
   double ox = 0.0, oy = 0.0;
-  t.Apply(st.worldDocumentOriginX, st.worldDocumentOriginY, &ox, &oy);
-  st.worldDocumentOriginX = ox;
-  st.worldDocumentOriginY = oy;
+  t.Apply(st.drawing.worldDocumentOriginX, st.drawing.worldDocumentOriginY, &ox, &oy);
+  st.drawing.worldDocumentOriginX = ox;
+  st.drawing.worldDocumentOriginY = oy;
 
-  MoveLines(st.userLinesFlat, f);
-  MoveCircles(st.userCirclesCxCyZR, st.userCircleNormals, f);
-  MoveArcs(st.userArcs, f, t.rotationRad);
-  MoveEllipses(st.userEllipses, f);
-  MovePolylineVerts(st.userPolylineVerts, f);
-  for (size_t i = 0; i + 2 < st.userPolylineVertsNormal.size(); i += 3)
-    f.Dir(&st.userPolylineVertsNormal[i], &st.userPolylineVertsNormal[i + 1]);
-  MovePolylineVerts(st.featureLineVerts, f);
-  MoveFilledRegions(st.cadFilledRegions, f, t.rotationRad);
-  MoveAnnotations(st.cadAnnotations, f, t.rotationRad);
-  MoveTables(st.cadTables, f, t.rotationRad);
-  MoveBlockRefs(st.cadBlockRefs, f, t.rotationRad);
-  for (SurveyPoint& p : st.surveyPoints) {
+  MoveLines(st.drawing, f);
+  MoveCircles(st.drawing, st.drawing.userCircleNormals, f);
+  MoveArcs(st.drawing.userArcs, f, t.rotationRad);
+  MoveEllipses(st.drawing.userEllipses, f);
+  MovePolylineVerts(st.drawing.userPolylineVerts, f);
+  for (size_t i = 0; i + 2 < st.drawing.userPolylineVertsNormal.size(); i += 3)
+    f.Dir(&st.drawing.userPolylineVertsNormal[i], &st.drawing.userPolylineVertsNormal[i + 1]);
+  MovePolylineVerts(st.drawing.featureLineVerts, f);
+  MoveFilledRegions(st.drawing.cadFilledRegions, f, t.rotationRad);
+  MoveAnnotations(st.drawing.cadAnnotations, f, t.rotationRad);
+  MoveTables(st.drawing.cadTables, f, t.rotationRad);
+  MoveBlockRefs(st.drawing.cadBlockRefs, f, t.rotationRad);
+  for (SurveyPoint& p : st.drawing.surveyPoints) {
     f.Pt(&p.easting, &p.northing);
     f.Z(&p.elevation);
   }
@@ -232,11 +236,11 @@ void ApplyDrawingConversion(AppCommandState& st, const geo::Similarity& t, std::
   // Annotation heights are plotted inches times the scale; keeping the scale in step keeps the text
   // the same size on paper when the unit changes (it is an override of the project's scale, REQ-375).
   if (std::fabs(t.scaleZ - 1.0) > 1e-12)
-    st.modelUnitsPerPlottedInch = static_cast<float>(st.modelUnitsPerPlottedInch * t.scaleZ);
+    st.drawing.modelUnitsPerPlottedInch = static_cast<float>(st.drawing.modelUnitsPerPlottedInch * t.scaleZ);
 
-  size_t views = st.namedViews.size(), ucss = st.ucsNamed.size();
-  st.namedViews.clear();
-  st.ucsNamed.clear();
+  size_t views = st.drawing.namedViews.size(), ucss = st.drawing.ucsNamed.size();
+  st.drawing.namedViews.clear();
+  st.drawing.ucsNamed.clear();
   st.ucsPrevious.clear();
   st.activeUcs = ucs::Ucs{};
   st.activeViewName.clear();
@@ -246,7 +250,7 @@ void ApplyDrawingConversion(AppCommandState& st, const geo::Similarity& t, std::
   if (ucss > 0)
     log.push_back("Convert - " + Plural(ucss, "saved UCS was", "saved UCSs were") +
                   " removed: they pointed at the old coordinates.");
-  DrawingSettings& ds = st.drawingSettings;
+  DrawingSettings& ds = st.drawing.drawingSettings;
   const bool hadLocation = ds.markerX != 0.0 || ds.markerY != 0.0 || !ds.capturedAreas.empty() || ds.transform.apply;
   ds.ResetGeographicMarker();
   ds.transform = DrawingSettings::Transform{};
@@ -286,18 +290,21 @@ bool ClipboardWorldExtents(const CadClipboard& cb, double* minX, double* maxX, d
     y0 = std::min(y0, y - r);
     y1 = std::max(y1, y + r);
   };
-  for (size_t i = 0; i + 5 < cb.content.userLinesFlat.size(); i += 6) {
-    add(cb.content.userLinesFlat[i], cb.content.userLinesFlat[i + 1]);
-    add(cb.content.userLinesFlat[i + 3], cb.content.userLinesFlat[i + 4]);
+  for (size_t i = 0; i < cb.content.lineCount(); ++i) {
+    const CadLineRecord ln = cb.content.line(i);
+    add(ln.x0, ln.y0);
+    add(ln.x1, ln.y1);
   }
-  for (size_t i = 0; i + 3 < cb.content.userCirclesCxCyZR.size(); i += 4)
-    add(cb.content.userCirclesCxCyZR[i], cb.content.userCirclesCxCyZR[i + 1], cb.content.userCirclesCxCyZR[i + 3]);
+  for (size_t i = 0; i < cb.content.circleCount(); ++i) {
+    const CadCircleRecord cr = cb.content.circle(i);
+    add(cr.cx, cr.cy, cr.r);
+  }
   for (const CadArc& a : cb.content.userArcs)
     add(a.cx, a.cy, a.r);
   for (const CadEllipse& e : cb.content.userEllipses)
     add(e.cx, e.cy, std::hypot(static_cast<double>(e.majVx), static_cast<double>(e.majVy)));
-  for (size_t i = 0; i + 2 < cb.content.userPolylineVerts.size(); i += 3)
-    add(cb.content.userPolylineVerts[i], cb.content.userPolylineVerts[i + 1]);
+  for (size_t vi = 0; vi < cb.content.vertexCount(); ++vi)
+    add(cb.content.vertex(vi).x, cb.content.vertex(vi).y);
   for (const CadAnnotation& a : cb.content.cadAnnotations) {
     add(a.insX, a.insY);
     add(a.boxMinX, a.boxMinY);
@@ -331,8 +338,8 @@ void ApplyClipboardConversion(CadClipboard& cb, const geo::Similarity& t, double
   t.Apply(cb.srcOriginX, cb.srcOriginY, &nx, &ny);
   Xf f{t.scale, std::cos(t.rotationRad), std::sin(t.rotationRad), t.scaleZ, t.rotationRad, nx - destOriginX, ny - destOriginY};
 
-  MoveLines(cb.content.userLinesFlat, f);
-  MoveCircles(cb.content.userCirclesCxCyZR, cb.content.userCircleNormals, f);
+  MoveLines(cb.content, f);
+  MoveCircles(cb.content, cb.content.userCircleNormals, f);
   MoveArcs(cb.content.userArcs, f, t.rotationRad);
   MoveEllipses(cb.content.userEllipses, f);
   MovePolylineVerts(cb.content.userPolylineVerts, f);

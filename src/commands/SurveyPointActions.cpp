@@ -54,8 +54,8 @@ std::vector<int> ResolvePointGroup(const AppCommandState& st, const PointGroup& 
   }
 
   std::vector<int> out;
-  for (size_t i = 0; i < st.surveyPoints.size(); ++i) {
-    const SurveyPoint& p = st.surveyPoints[i];
+  for (size_t i = 0; i < st.drawing.surveyPoints.size(); ++i) {
+    const SurveyPoint& p = st.drawing.surveyPoints[i];
     if (PointMatchesRule(group.rule, ranges, p.id, p.description, p.rawDescription))
       out.push_back(static_cast<int>(i));
   }
@@ -77,32 +77,32 @@ int FindPointGroupIndex(const AppCommandState& st, const std::string& name) {
         return false;
     return true;
   };
-  for (size_t i = 0; i < st.pointGroups.size(); ++i)
-    if (eqCI(st.pointGroups[i].name, name))
+  for (size_t i = 0; i < st.drawing.pointGroups.size(); ++i)
+    if (eqCI(st.drawing.pointGroups[i].name, name))
       return static_cast<int>(i);
   return -1;
 }
 
 void ResetCreatePointsNextIdFromSettings(AppCommandState& st) {
-  st.createPointsNextId = st.createPointsOpts.startNumber;
+  st.drawing.createPointsNextId = st.drawing.createPointsOpts.startNumber;
 }
 
 std::string CreatePointsLayer(AppCommandState& st) {
-  const std::string typed = StringUtil::trimCopy(st.createPointsOpts.layer);
-  if (typed.empty() || st.drawingSettings.ObjectLayer(ObjectLayerKind::SurveyPoint).locked)
+  const std::string typed = StringUtil::trimCopy(st.drawing.createPointsOpts.layer);
+  if (typed.empty() || st.drawing.drawingSettings.ObjectLayer(ObjectLayerKind::SurveyPoint).locked)
     return EnsureObjectLayer(st, ObjectLayerKind::SurveyPoint, {});
   return EnsureDrawingLayer(st, typed);
 }
 
 bool TryPlaceSurveyPoint(AppCommandState& st, double easting, double northing, double elevation,
                          std::vector<std::string>& log, bool pushUndo) {
-  auto& opts = st.createPointsOpts;
-  const int idTry = st.createPointsNextId;
+  auto& opts = st.drawing.createPointsOpts;
+  const int idTry = st.drawing.createPointsNextId;
   const int step = opts.pointNumberOffset != 0 ? opts.pointNumberOffset : 1;
 
   auto advanceSequential = [&](int placedId) {
     if (opts.sequentialNumbering)
-      st.createPointsNextId = placedId + step;
+      st.drawing.createPointsNextId = placedId + step;
   };
 
   auto commitNew = [&](int id) {
@@ -119,14 +119,14 @@ bool TryPlaceSurveyPoint(AppCommandState& st, double easting, double northing, d
     // A point created here carries what the user typed, so the raw code is the same string
     // (REQ-066). They diverge only when the description is later edited.
     p.rawDescription = opts.defaultDescription;
-    st.surveyPoints.push_back(std::move(p));
+    st.drawing.surveyPoints.push_back(std::move(p));
     log.push_back("Survey point " + std::to_string(id) + " — E " + std::to_string(easting) + " N " +
                   std::to_string(northing) + " Z " + std::to_string(elevation));
     advanceSequential(id);
-    EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, &log);
+    EnsureSurveyPointLabelMtext(st, st.drawing.surveyPoints.size() - 1, &log);
   };
 
-  if (!SurveyIdExists(st.surveyPoints, idTry)) {
+  if (!SurveyIdExists(st.drawing.surveyPoints, idTry)) {
     commitNew(idTry);
     return true;
   }
@@ -137,17 +137,17 @@ bool TryPlaceSurveyPoint(AppCommandState& st, double easting, double northing, d
     return false;
 
   case SurveyDuplicatePolicy::Renumber: {
-    const int nid = NextFreeId(st.surveyPoints, idTry, step);
+    const int nid = NextFreeId(st.drawing.surveyPoints, idTry, step);
     commitNew(nid);
     log.push_back("ID " + std::to_string(idTry) + " taken — stored as " + std::to_string(nid) + ".");
     return true;
   }
 
   case SurveyDuplicatePolicy::Merge: {
-    const int ix = FindSurveyPointIndexById(st.surveyPoints, idTry);
+    const int ix = FindSurveyPointIndexById(st.drawing.surveyPoints, idTry);
     if (pushUndo)
       PushUndoSnapshot(st, "Merge point");
-    SurveyPoint& p = st.surveyPoints[static_cast<size_t>(ix)];
+    SurveyPoint& p = st.drawing.surveyPoints[static_cast<size_t>(ix)];
     p.easting = easting;
     p.northing = northing;
     p.elevation = elevation;
@@ -163,10 +163,10 @@ bool TryPlaceSurveyPoint(AppCommandState& st, double easting, double northing, d
   }
 
   case SurveyDuplicatePolicy::Overwrite: {
-    const int ix = FindSurveyPointIndexById(st.surveyPoints, idTry);
+    const int ix = FindSurveyPointIndexById(st.drawing.surveyPoints, idTry);
     if (pushUndo)
       PushUndoSnapshot(st, "Create point");
-    SurveyPoint& p = st.surveyPoints[static_cast<size_t>(ix)];
+    SurveyPoint& p = st.drawing.surveyPoints[static_cast<size_t>(ix)];
     p.easting = easting;
     p.northing = northing;
     p.elevation = elevation;
@@ -187,13 +187,13 @@ bool TryPlaceSurveyPoint(AppCommandState& st, double easting, double northing, d
 
 void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, double dx, double dy, double dz,
                                              SurveyDuplicatePolicy policy, std::vector<std::string>& log) {
-  auto& pts = st.surveyPoints;
+  auto& pts = st.drawing.surveyPoints;
   auto& buffers = st.surveyPointIdBuffers;
   std::vector<int> ix = st.selectedSurveyPointIndices;
   std::sort(ix.begin(), ix.end());
   ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
 
-  const int step = st.createPointsOpts.pointNumberOffset != 0 ? st.createPointsOpts.pointNumberOffset : 1;
+  const int step = st.drawing.createPointsOpts.pointNumberOffset != 0 ? st.drawing.createPointsOpts.pointNumberOffset : 1;
   int added = 0;
   int skipped = 0;
   int merged = 0;
@@ -345,13 +345,13 @@ void ReflectSurveyCoords(double x0, double y0, double x1, double y1, double* x, 
 
 void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, double bx, double by, float rad,
                                             SurveyDuplicatePolicy policy, std::vector<std::string>& log) {
-  auto& pts = st.surveyPoints;
+  auto& pts = st.drawing.surveyPoints;
   auto& buffers = st.surveyPointIdBuffers;
   std::vector<int> ix = st.selectedSurveyPointIndices;
   std::sort(ix.begin(), ix.end());
   ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
 
-  const int step = st.createPointsOpts.pointNumberOffset != 0 ? st.createPointsOpts.pointNumberOffset : 1;
+  const int step = st.drawing.createPointsOpts.pointNumberOffset != 0 ? st.drawing.createPointsOpts.pointNumberOffset : 1;
   int added = 0;
   int skipped = 0;
   int merged = 0;
@@ -472,13 +472,13 @@ void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, double bx, double
 
 void DuplicateSelectedSurveyPointsReflected(AppCommandState& st, double x0, double y0, double x1, double y1,
                                             SurveyDuplicatePolicy policy, std::vector<std::string>& log) {
-  auto& pts = st.surveyPoints;
+  auto& pts = st.drawing.surveyPoints;
   auto& buffers = st.surveyPointIdBuffers;
   std::vector<int> ix = st.selectedSurveyPointIndices;
   std::sort(ix.begin(), ix.end());
   ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
 
-  const int step = st.createPointsOpts.pointNumberOffset != 0 ? st.createPointsOpts.pointNumberOffset : 1;
+  const int step = st.drawing.createPointsOpts.pointNumberOffset != 0 ? st.drawing.createPointsOpts.pointNumberOffset : 1;
   int added = 0;
   int skipped = 0;
   int merged = 0;
@@ -611,32 +611,32 @@ int FindSurveyLabelAnnIndex(const AppCommandState& st, const SurveyPoint& p) {
 int SurveyPointIndexForId(const AppCommandState& st, int surveyPointId) {
   if (surveyPointId < 0)
     return -1;
-  return FindSurveyPointIndexById(st.surveyPoints, surveyPointId);
+  return FindSurveyPointIndexById(st.drawing.surveyPoints, surveyPointId);
 }
 
 void RemoveSurveyPointAt(AppCommandState& st, size_t index) {
-  if (index >= st.surveyPoints.size())
+  if (index >= st.drawing.surveyPoints.size())
     return;
-  const int doomedPointId = st.surveyPoints[index].id;
-  int annIx = FindSurveyLabelAnnIndex(st, st.surveyPoints[index]);
+  const int doomedPointId = st.drawing.surveyPoints[index].id;
+  int annIx = FindSurveyLabelAnnIndex(st, st.drawing.surveyPoints[index]);
   // Also honour a label that claims this point but is not claimed back — the two halves can
   // disagree after an import, and dropping such a label is what keeps an orphan off the screen.
-  for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
-    if (st.cadAnnotations[ai].kind == CadAnnotation::Kind::Mtext &&
-        st.cadAnnotations[ai].surveyPointLabelForId == doomedPointId)
+  for (size_t ai = 0; ai < st.drawing.cadAnnotations.size(); ++ai) {
+    if (st.drawing.cadAnnotations[ai].kind == CadAnnotation::Kind::Mtext &&
+        st.drawing.cadAnnotations[ai].surveyPointLabelForId == doomedPointId)
       annIx = static_cast<int>(ai);
   }
-  if (annIx >= 0 && static_cast<size_t>(annIx) < st.cadAnnotations.size())
+  if (annIx >= 0 && static_cast<size_t>(annIx) < st.drawing.cadAnnotations.size())
     EraseCadAnnotationAtIndex(st, static_cast<size_t>(annIx));
 
   // Clear only the links that named *this* point. No renumbering pass: the back-link is a point id
   // (REQ-076), and erasing an earlier point no longer changes what any other link means — which is
   // the entire reason this is an id and not the index it used to be.
-  for (CadAnnotation& a : st.cadAnnotations)
+  for (CadAnnotation& a : st.drawing.cadAnnotations)
     if (a.surveyPointLabelForId == doomedPointId)
       a.surveyPointLabelForId = -1;
 
-  st.surveyPoints.erase(st.surveyPoints.begin() + static_cast<std::ptrdiff_t>(index));
+  st.drawing.surveyPoints.erase(st.drawing.surveyPoints.begin() + static_cast<std::ptrdiff_t>(index));
   if (index < st.surveyPointIdBuffers.size())
     st.surveyPointIdBuffers.erase(st.surveyPointIdBuffers.begin() + static_cast<std::ptrdiff_t>(index));
   auto& sv = st.selectedSurveyPointIndices;
@@ -649,18 +649,18 @@ void RemoveSurveyPointAt(AppCommandState& st, size_t index) {
 }
 
 void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) {
-  if (pointIndex >= st.surveyPoints.size())
+  if (pointIndex >= st.drawing.surveyPoints.size())
     return;
-  const SurveyPoint& p = st.surveyPoints[pointIndex];
+  const SurveyPoint& p = st.drawing.surveyPoints[pointIndex];
   const int aix = FindSurveyLabelAnnIndex(st, p);
   if (aix < 0)
     return;
-  CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(aix)];
+  CadAnnotation& a = st.drawing.cadAnnotations[static_cast<size_t>(aix)];
   if (a.kind != CadAnnotation::Kind::Mtext)
     return;
 
-  const float mup = std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
-  const float hWorld = CadAnnotationHeightWorld(a, st.modelUnitsPerPlottedInch);
+  const float mup = std::max(st.drawing.modelUnitsPerPlottedInch, 1.e-6f);
+  const float hWorld = CadAnnotationHeightWorld(a, st.drawing.modelUnitsPerPlottedInch);
   const float vpH = std::max(st.viewportLastSurveyLayoutHeightPx, 64.f);
   const float halfH = std::max(st.viewportLastSurveyLayoutOrthoHalfH, 1.e-4f);
   const float worldPerPxY = (2.f * halfH) / vpH;
@@ -723,13 +723,13 @@ void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) 
 }
 
 void RepositionAllSurveyPointLabels(AppCommandState& st) {
-  for (size_t i = 0; i < st.surveyPoints.size(); ++i)
+  for (size_t i = 0; i < st.drawing.surveyPoints.size(); ++i)
     RepositionSurveyLabelMtextForPoint(st, i);
 }
 
 void RegenerateAllSurveyPointLabels(AppCommandState& st) {
   // Rebuilds label text (so {north}/{east} reflect the current document origin) and repositions.
-  for (size_t i = 0; i < st.surveyPoints.size(); ++i)
+  for (size_t i = 0; i < st.drawing.surveyPoints.size(); ++i)
     EnsureSurveyPointLabelMtext(st, i, nullptr);
 }
 
@@ -738,29 +738,29 @@ void ResolveConflictingWorldSurveyPoints(AppCommandState& st, const std::vector<
   for (const SurveyPoint& w : conflictsWorld) {
     int id = w.id;
     if (overwrite) {
-      const int idx = FindSurveyPointIndexById(st.surveyPoints, id);
+      const int idx = FindSurveyPointIndexById(st.drawing.surveyPoints, id);
       if (idx >= 0)
         RemoveSurveyPointAt(st, static_cast<size_t>(idx));
     } else {
       id = w.id + offset;
       int guard = 0;
-      while (SurveyIdExists(st.surveyPoints, id) && guard++ < 1000000)
+      while (SurveyIdExists(st.drawing.surveyPoints, id) && guard++ < 1000000)
         ++id;
     }
     SurveyPoint sp = w;
     sp.id = id;
-    sp.easting = w.easting - st.worldDocumentOriginX;
-    sp.northing = w.northing - st.worldDocumentOriginY;
+    sp.easting = w.easting - st.drawing.worldDocumentOriginX;
+    sp.northing = w.northing - st.drawing.worldDocumentOriginY;
     sp.labelMtextAnnId = 0;
-    st.surveyPoints.push_back(sp);
-    EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, log);
+    st.drawing.surveyPoints.push_back(sp);
+    EnsureSurveyPointLabelMtext(st, st.drawing.surveyPoints.size() - 1, log);
   }
 }
 
 void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::vector<std::string>* log) {
-  if (pointIndex >= st.surveyPoints.size())
+  if (pointIndex >= st.drawing.surveyPoints.size())
     return;
-  SurveyPoint& p = st.surveyPoints[pointIndex];
+  SurveyPoint& p = st.drawing.surveyPoints[pointIndex];
   if (p.labelStyle == SurveyPointLabelStyle::None) {
     const int existing = FindSurveyLabelAnnIndex(st, p);
     if (existing >= 0)
@@ -772,10 +772,10 @@ void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::ve
 
   const std::string body =
       FormatSurveyPointLabelPlain(p, p.labelStyle, st.surveyLabelTemplates, st.surveyPointDisplayPrecision,
-                                  st.worldDocumentOriginX, st.worldDocumentOriginY);
+                                  st.drawing.worldDocumentOriginX, st.drawing.worldDocumentOriginY);
   const int existing = FindSurveyLabelAnnIndex(st, p);
   if (existing >= 0) {
-    CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(existing)];
+    CadAnnotation& a = st.drawing.cadAnnotations[static_cast<size_t>(existing)];
     if (a.kind == CadAnnotation::Kind::Mtext) {
       a.text = body;
       a.surveyPointLabelForId = p.id;
@@ -794,15 +794,15 @@ void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::ve
   ann.rotationRad = 0.f;
   ann.surveyPointLabelForId = p.id;
   ann.annotative = true;  // survey point labels are annotative by default (D-2026-11-06-a)
-  st.cadAnnotations.push_back(std::move(ann));
-  while (st.cadAnnotationAttrs.size() < st.cadAnnotations.size())
-    st.cadAnnotationAttrs.emplace_back();
+  st.drawing.cadAnnotations.push_back(std::move(ann));
+  while (st.drawing.cadAnnotationAttrs.size() < st.drawing.cadAnnotations.size())
+    st.drawing.cadAnnotationAttrs.emplace_back();
   // A new label goes on the Object Layers Survey point label layer (REQ-361).
-  st.cadAnnotationAttrs.back().layer = EnsureObjectLayer(st, ObjectLayerKind::SurveyPointLabel, {});
+  st.drawing.cadAnnotationAttrs.back().layer = EnsureObjectLayer(st, ObjectLayerKind::SurveyPointLabel, {});
   // Allocate eagerly rather than waiting for the sweep: the point records the id in the next line,
   // and a reference to id 0 would be a reference to nothing (REQ-076).
   const std::uint64_t labelId = AllocEntityId(st);
-  st.cadAnnotationAttrs.back().id = labelId;
+  st.drawing.cadAnnotationAttrs.back().id = labelId;
   p.labelMtextAnnId = labelId;
   RepositionSurveyLabelMtextForPoint(st, pointIndex);
   if (log)
@@ -839,11 +839,11 @@ bool SaveSurveyPointsToJsonFile(const AppCommandState& st, const char* path, std
     if (!path || !*path) throw std::runtime_error("Choose a file path.");
     PointJson root;
     root["formatVersion"] = 1;
-    root["originX"] = PointJsonCoordinate(st.worldDocumentOriginX);
-    root["originY"] = PointJsonCoordinate(st.worldDocumentOriginY);
+    root["originX"] = PointJsonCoordinate(st.drawing.worldDocumentOriginX);
+    root["originY"] = PointJsonCoordinate(st.drawing.worldDocumentOriginY);
     root["points"] = PointJson::array();
     std::unordered_set<int> ids;
-    for (const auto& point : st.surveyPoints) {
+    for (const auto& point : st.drawing.surveyPoints) {
       if (!ids.insert(point.id).second) throw std::runtime_error("Duplicate point numbers cannot be saved.");
       const int style = static_cast<int>(point.labelStyle);
       if (style < 0 || style > static_cast<int>(SurveyPointLabelStyle::NumberNorthEastElev)) throw std::runtime_error("Invalid point label style.");
@@ -867,7 +867,7 @@ bool SaveSurveyPointsToJsonFile(const AppCommandState& st, const char* path, std
       if (!stream) throw std::runtime_error("The points file could not be closed.");
     }
     std::filesystem::rename(temporary, destination);
-    log.push_back("Saved " + std::to_string(st.surveyPoints.size()) + " survey point(s) to " + path);
+    log.push_back("Saved " + std::to_string(st.drawing.surveyPoints.size()) + " survey point(s) to " + path);
     return true;
   } catch (const std::exception& error) {
     std::error_code ignored;
@@ -893,8 +893,8 @@ bool LoadSurveyPointsFromJsonFile(AppCommandState& st, const char* path, std::ve
     if (root.contains("formatVersion") && PointJsonInteger(root.at("formatVersion")) != 1) throw std::runtime_error("Unsupported points file version.");
     if (root.contains("originX") != root.contains("originY")) throw std::runtime_error("Both coordinate origin values are required.");
     // Old files contained drawing-local coordinates and no origin metadata.
-    const double dx = root.contains("originX") ? PointJsonCoordinate(root.at("originX")) - st.worldDocumentOriginX : 0;
-    const double dy = root.contains("originY") ? PointJsonCoordinate(root.at("originY")) - st.worldDocumentOriginY : 0;
+    const double dx = root.contains("originX") ? PointJsonCoordinate(root.at("originX")) - st.drawing.worldDocumentOriginX : 0;
+    const double dy = root.contains("originY") ? PointJsonCoordinate(root.at("originY")) - st.drawing.worldDocumentOriginY : 0;
     std::unordered_set<int> ids;
     for (const auto& item : root.at("points")) {
       SurveyPoint point;
@@ -918,17 +918,17 @@ bool LoadSurveyPointsFromJsonFile(AppCommandState& st, const char* path, std::ve
   }
   PushUndoSnapshot(st, "Load survey points");
   // Remove the old points through their owner so no orphaned MTEXT labels survive replacement.
-  while (!st.surveyPoints.empty()) RemoveSurveyPointAt(st, st.surveyPoints.size() - 1);
+  while (!st.drawing.surveyPoints.empty()) RemoveSurveyPointAt(st, st.drawing.surveyPoints.size() - 1);
   ClearSelection(st);
-  st.surveyPoints = std::move(points);
+  st.drawing.surveyPoints = std::move(points);
   st.surveyPointIdBuffers.clear();
-  for (auto& point : st.surveyPoints) {
+  for (auto& point : st.drawing.surveyPoints) {
     if (point.layer.empty()) point.layer = EnsureObjectLayer(st, ObjectLayerKind::SurveyPoint, {});
     st.surveyPointIdBuffers.push_back(std::to_string(point.id));
   }
-  for (size_t i = 0; i < st.surveyPoints.size(); ++i) EnsureSurveyPointLabelMtext(st, i, &log);
+  for (size_t i = 0; i < st.drawing.surveyPoints.size(); ++i) EnsureSurveyPointLabelMtext(st, i, &log);
   BumpCadGpuCache(st);
-  log.push_back("Loaded " + std::to_string(st.surveyPoints.size()) + " survey point(s) from " + path);
+  log.push_back("Loaded " + std::to_string(st.drawing.surveyPoints.size()) + " survey point(s) from " + path);
   return true;
 }
 

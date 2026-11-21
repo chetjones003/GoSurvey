@@ -166,14 +166,14 @@ void AlignmentLayoutPanel::FillChooser() {
   const QString keep = chooser_->currentText();
   const QSignalBlocker block(chooser_);
   chooser_->clear();
-  for (const alignment::Alignment& a : state_.alignments) chooser_->addItem(Q(a.name));
+  for (const alignment::Alignment& a : state_.drawing.alignments) chooser_->addItem(Q(a.name));
   const int ix = chooser_->findText(keep, Qt::MatchFixedString);
   if (ix >= 0) chooser_->setCurrentIndex(ix);
 }
 
 const alignment::Alignment* AlignmentLayoutPanel::Current() const {
   const std::string name = chooser_->currentText().toUtf8().toStdString();
-  for (const alignment::Alignment& a : state_.alignments)
+  for (const alignment::Alignment& a : state_.drawing.alignments)
     if (a.name == name) return &a;
   return nullptr;
 }
@@ -194,15 +194,15 @@ void AlignmentLayoutPanel::Populate() {
   summary_->setText(QString("%1   |   %2 to %3   |   length %4%5")
                         .arg(a->parentId != 0 ? QString("Offset (linked: edit the parent)")
                                               : QString(type < kTypeNames.size() ? kTypeNames[type] : ""))
-                        .arg(Q(alignment::FormatStation(a->StartStation(), state_.alignmentStationFormat)))
-                        .arg(Q(alignment::FormatStation(a->EndStationWithEquations(), state_.alignmentStationFormat)))
+                        .arg(Q(alignment::FormatStation(a->StartStation(), state_.drawing.alignmentStationFormat)))
+                        .arg(Q(alignment::FormatStation(a->EndStationWithEquations(), state_.drawing.alignmentStationFormat)))
                         .arg(Q(FormatLinear(a->Length(), state_.displayLinearPrecision)))
                         .arg(a->equations.empty() ? QString() : QString("   |   %1 station equation(s)").arg(a->equations.size())));
   table_->setRowCount(static_cast<int>(a->Entities().size()));
   RowContext ctx;
   ctx.issues = a->CheckContinuity();
   ctx.checkSet =
-      alignment::FindCheckSet(state_.alignmentCheckSets, AlignmentStyles::EffectiveCheckSetName(state_.alignmentStyles, *a));
+      alignment::FindCheckSet(state_.drawing.alignmentCheckSets, AlignmentStyles::EffectiveCheckSetName(state_.drawing.alignmentStyles, *a));
   if (ctx.checkSet != nullptr) ctx.findings = alignment::CheckDesign(*a, *ctx.checkSet, state_.displayLinearPrecision);
   for (int row = 0; row < table_->rowCount(); ++row) PopulateRow(*a, row, ctx);
   for (int col = 0; col < ColDesign; ++col) table_->resizeColumnToContents(col);
@@ -233,8 +233,8 @@ void AlignmentLayoutPanel::PopulateRow(const alignment::Alignment& a, int row, c
   if (spiral) (void)alignment::SpiralDataFor(row, a, &sd);
   set(ColNo, QString::number(row + 1), false);
   set(ColType, arc ? "Curve" : spiral ? "Spiral" : "Tangent", false);
-  set(ColStart, Q(alignment::FormatStation(a.DisplayedStation(a.EntityStartStation(row), true), state_.alignmentStationFormat)), false);
-  set(ColEnd, Q(alignment::FormatStation(a.DisplayedStation(a.EntityEndStation(row), false), state_.alignmentStationFormat)), false);
+  set(ColStart, Q(alignment::FormatStation(a.DisplayedStation(a.EntityStartStation(row), true), state_.drawing.alignmentStationFormat)), false);
+  set(ColEnd, Q(alignment::FormatStation(a.DisplayedStation(a.EntityEndStation(row), false), state_.drawing.alignmentStationFormat)), false);
   set(ColLength, lin(e.length), editable(arc || spiral ? alignment::EditParam::CurveLength : alignment::EditParam::LineLength));
   set(ColRadius, arc || spiral ? lin(e.radius) : Dash(), editable(alignment::EditParam::CurveRadius));
   set(ColStartRadius, spiral ? lin(e.startRadius) : Dash(), editable(alignment::EditParam::SpiralStartRadius));

@@ -323,11 +323,11 @@ template <class VT>
 [[nodiscard]] bool PolylineBoundsArea(const AppCommandState& cmd, int pi, int v0, int v1) {
   if (v1 - v0 < 3)
     return false;
-  if (static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)])
+  if (static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)])
     return true;
   if (v1 - v0 < 4)
     return false;  // first == last leaves only two distinct corners — no area
-  const std::vector<double>& V = cmd.userPolylineVerts;
+  const std::vector<double>& V = cmd.drawing.userPolylineVerts;
   double mnX = V[static_cast<size_t>(v0 * 3)], mxX = mnX;
   double mnY = V[static_cast<size_t>(v0 * 3 + 1)], mxY = mnY;
   for (int i = v0; i < v1; ++i) {
@@ -615,10 +615,10 @@ struct IsectConic {
 /// Collect the segments and conics close enough to the cursor to take part in an intersection.
 void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double tol, const ray3d::Ray* ray,
                       std::vector<IsectSeg>* segs, std::vector<IsectConic>* conics) {
-  const auto& L = cmd.userLinesFlat;
-  if (L.size() % 6 == 0) {
-    for (size_t i = 0; i + 5 < L.size(); i += 6) {
-      IsectSeg s{L[i], L[i + 1], L[i + 2], L[i + 3], L[i + 4], L[i + 5]};
+  if (cmd.drawing.lineStoreWellFormed()) {
+    for (size_t i = 0; i < cmd.drawing.lineCount(); ++i) {
+      const CadLineRecord ln = cmd.drawing.line(i);
+      IsectSeg s{ln.x0, ln.y0, ln.z0, ln.x1, ln.y1, ln.z1};
       const double mx = 0.5 * (s.x0 + s.x1);
       const double my = 0.5 * (s.y0 + s.y1);
       const double mz = 0.5 * (s.z0 + s.z1);
@@ -630,14 +630,14 @@ void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double t
   }
 
   const int polyCount =
-      static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+      static_cast<int>(cmd.drawing.userPolylineOffsets.size() > 0 ? cmd.drawing.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < polyCount; ++pi) {
-    const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
     const bool closed =
-        static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+        static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
     auto addEdge = [&](int ia, int ib) {
-      const auto& V = cmd.userPolylineVerts;
+      const auto& V = cmd.drawing.userPolylineVerts;
       IsectSeg s{V[static_cast<size_t>(ia * 3)],     V[static_cast<size_t>(ia * 3 + 1)],
                  V[static_cast<size_t>(ia * 3 + 2)], V[static_cast<size_t>(ib * 3)],
                  V[static_cast<size_t>(ib * 3 + 1)], V[static_cast<size_t>(ib * 3 + 2)]};
@@ -655,21 +655,21 @@ void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double t
       addEdge(v1 - 1, v0);
   }
 
-  const auto& C = cmd.userCirclesCxCyZR;
-  if (C.size() % 4 == 0) {
-    for (size_t i = 0; i + 3 < C.size(); i += 4) {
-      if (C[i + 3] <= 1.e-6f)
+  if (cmd.drawing.circleStoreWellFormed()) {
+    for (size_t i = 0; i < cmd.drawing.circleCount(); ++i) {
+      const CadCircleRecord c = cmd.drawing.circle(i);
+      if (c.r <= 1.e-6f)
         continue;
       // A tilted circle (REQ-312) is not a planar-XY conic; see IsectConic. Skipped, so INTERSECTION
       // offers nothing on it rather than offering a point that lies on neither curve.
-      if (!CircleIsFlat(cmd.userCircleNormals, i / 4))
+      if (!CircleIsFlat(cmd.drawing.userCircleNormals, i))
         continue;
-      if (NearCursor(ray, wx, wy, C[i], C[i + 1], C[i + 2], C[i + 3], tol))
-        conics->push_back(IsectConic{curveisect::MakeCircle(C[i], C[i + 1], C[i + 3]), C[i + 2]});
+      if (NearCursor(ray, wx, wy, c.cx, c.cy, c.cz, c.r, tol))
+        conics->push_back(IsectConic{curveisect::MakeCircle(c.cx, c.cy, c.r), c.cz});
     }
   }
 
-  for (const CadArc& a : cmd.userArcs) {
+  for (const CadArc& a : cmd.drawing.userArcs) {
     if (a.r <= 1.e-6f)
       continue;
     if (!IsFlatNormal(a.nx, a.ny, a.nz))  // same exclusion as tilted circles above
@@ -678,7 +678,7 @@ void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double t
       conics->push_back(IsectConic{curveisect::MakeArc(a.cx, a.cy, a.r, a.startRad, a.sweepRad), a.z});
   }
 
-  for (const CadEllipse& el : cmd.userEllipses) {
+  for (const CadEllipse& el : cmd.drawing.userEllipses) {
     const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
     if (ma < 1.e-8)
       continue;
@@ -693,8 +693,8 @@ void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double t
   // An entity with a chord near the cursor is sampled again finely, so the crossing found lies on the true curve.
   const double alignChord = std::max(tol * 0.25, 1e-6);
   constexpr double kSnapChord = 1e-4;
-  for (size_t ai = 0; ai < cmd.alignments.size(); ++ai) {
-    const alignment::Alignment& al = cmd.alignments[ai];
+  for (size_t ai = 0; ai < cmd.drawing.alignments.size(); ++ai) {
+    const alignment::Alignment& al = cmd.drawing.alignments[ai];
     if (al.Empty())
       continue;
     const int nEnt = static_cast<int>(al.Entities().size());
@@ -1127,18 +1127,18 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
              tolWorld, cmd.polylineDraftVerts[2]);
   }
 
-  const auto& L = cmd.userLinesFlat;
-  if (L.size() % 6 == 0) {
-    for (size_t i = 0; i + 5 < L.size(); i += 6) {
-      if (isolatedOut(cmd.userLineAttrs, i / 6)) continue;
+  if (cmd.drawing.lineStoreWellFormed()) {
+    for (size_t i = 0; i < cmd.drawing.lineCount(); ++i) {
+      const CadLineRecord ln = cmd.drawing.line(i);
+      if (isolatedOut(cmd.drawing.userLineAttrs, i)) continue;
       if (exclude.valid && exclude.type == SelectedEntity::Type::LineSeg &&
-          exclude.index == static_cast<int>(i / 6)) continue;
-      const float x0 = L[i];
-      const float y0 = L[i + 1];
-      const float x1 = L[i + 3];
-      const float y1 = L[i + 4];
-      const float z0 = L[i + 2];
-      const float z1 = L[i + 5];
+          exclude.index == static_cast<int>(i)) continue;
+      const float x0 = ln.x0;
+      const float y0 = ln.y0;
+      const float x1 = ln.x1;
+      const float y1 = ln.y1;
+      const float z0 = ln.z0;
+      const float z1 = ln.z1;
       if (wantEndpoint) {
         Consider(&acc, wx, wy, x0, y0, Kind::Endpoint, tolWorld, z0);
         Consider(&acc, wx, wy, x1, y1, Kind::Endpoint, tolWorld, z1);
@@ -1160,7 +1160,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   // so this is the third and last place that geometry needed to be reachable from, not a fourth
   // independently-derived one.
   if (wantEndpoint) {
-    for (const CadPipeRun& run : cmd.cadPipeRuns) {
+    for (const CadPipeRun& run : cmd.drawing.cadPipeRuns) {
       CadPipeRunEndPort start, end;
       if (!CadPipeRunEndPorts(run, &start, &end))
         continue;
@@ -1171,16 +1171,16 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     }
   }
 
-  const auto& C = cmd.userCirclesCxCyZR;
-  if (C.size() % 4 == 0 && (wantCenter || wantQuadrant)) {  // cx,cy,z,r
-    for (size_t i = 0; i + 3 < C.size(); i += 4) {
-      if (isolatedOut(cmd.userCircleAttrs, i / 4)) continue;
+  if (cmd.drawing.circleStoreWellFormed() && (wantCenter || wantQuadrant)) {
+    for (size_t i = 0; i < cmd.drawing.circleCount(); ++i) {
+      if (isolatedOut(cmd.drawing.userCircleAttrs, i)) continue;
       if (exclude.valid && exclude.type == SelectedEntity::Type::Circle &&
-          exclude.index == static_cast<int>(i / 4)) continue;
-      const float cx = C[i];
-      const float cy = C[i + 1];
-      const float cz = C[i + 2];
-      const float r = C[i + 3];
+          exclude.index == static_cast<int>(i)) continue;
+      const CadCircleRecord c = cmd.drawing.circle(i);
+      const float cx = static_cast<float>(c.cx);
+      const float cy = static_cast<float>(c.cy);
+      const float cz = static_cast<float>(c.cz);
+      const float r = static_cast<float>(c.r);
       if (wantCenter) {
         float hx = 0.f;
         float hy = 0.f;
@@ -1191,7 +1191,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       if (wantQuadrant && r > 1.e-6f) {
         // REQ-330: four points one radius out along the active UCS X/Y axes projected onto the
         // circle's own plane (REQ-312) — so they land exactly on the circle at any orientation.
-        const ucs::Ucs plane = CircleSnapPlane(cmd.userCircleNormals, i / 4, cx, cy, cz);
+        const ucs::Ucs plane = CircleSnapPlane(cmd.drawing.userCircleNormals, i, cx, cy, cz);
         ray3d::Vec3 dir[4];
         QuadrantDirections(plane, cmd.activeUcs, dir);
         for (const ray3d::Vec3& d : dir) {
@@ -1203,27 +1203,27 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   }
 
   const int polyCount =
-      static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+      static_cast<int>(cmd.drawing.userPolylineOffsets.size() > 0 ? cmd.drawing.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < polyCount; ++pi) {
-    if (isolatedOut(cmd.userPolylineAttrs, static_cast<size_t>(pi))) continue;
+    if (isolatedOut(cmd.drawing.userPolylineAttrs, static_cast<size_t>(pi))) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Polyline && exclude.index == pi) continue;
-    const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
     const bool closed =
-        static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+        static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
     auto considerEdge = [&](int ia, int ib) {
-      const float ax = cmd.userPolylineVerts[static_cast<size_t>(ia * 3)];
-      const float ay = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 1)];
-      const float bx = cmd.userPolylineVerts[static_cast<size_t>(ib * 3)];
-      const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
-      const float az = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 2)];
-      const float bz = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 2)];
+      const float ax = cmd.drawing.vertex(static_cast<size_t>(ia)).x;
+      const float ay = cmd.drawing.vertex(static_cast<size_t>(ia)).y;
+      const float bx = cmd.drawing.vertex(static_cast<size_t>(ib)).x;
+      const float by = cmd.drawing.vertex(static_cast<size_t>(ib)).y;
+      const float az = cmd.drawing.vertex(static_cast<size_t>(ia)).z;
+      const float bz = cmd.drawing.vertex(static_cast<size_t>(ib)).z;
       if (wantEndpoint) {
         Consider(&acc, wx, wy, ax, ay, Kind::Endpoint, tolWorld, az);
         Consider(&acc, wx, wy, bx, by, Kind::Endpoint, tolWorld, bz);
       }
-      const float bulge = static_cast<size_t>(ia) < cmd.userPolylineVertsBulge.size()
-                              ? cmd.userPolylineVertsBulge[static_cast<size_t>(ia)] : 0.f;
+      const float bulge = static_cast<size_t>(ia) < cmd.drawing.userPolylineVertsBulge.size()
+                              ? cmd.drawing.userPolylineVertsBulge[static_cast<size_t>(ia)] : 0.f;
       if (bulge == 0.f) {
         if (wantMidpoint)
           Consider(&acc, wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld, 0.5f * (az + bz));
@@ -1236,10 +1236,10 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       // offers below (kArcSnapSeg) — not the single straight-chord point every polyline bulge
       // segment silently fell back to before, which was wrong even for a flat arc.
       float nx = 0.f, ny = 0.f, nz = 1.f;
-      if (static_cast<size_t>(ia) * 3 + 2 < cmd.userPolylineVertsNormal.size()) {
-        nx = cmd.userPolylineVertsNormal[static_cast<size_t>(ia) * 3];
-        ny = cmd.userPolylineVertsNormal[static_cast<size_t>(ia) * 3 + 1];
-        nz = cmd.userPolylineVertsNormal[static_cast<size_t>(ia) * 3 + 2];
+      if (static_cast<size_t>(ia) * 3 + 2 < cmd.drawing.userPolylineVertsNormal.size()) {
+        nx = cmd.drawing.userPolylineVertsNormal[static_cast<size_t>(ia) * 3];
+        ny = cmd.drawing.userPolylineVertsNormal[static_cast<size_t>(ia) * 3 + 1];
+        nz = cmd.drawing.userPolylineVertsNormal[static_cast<size_t>(ia) * 3 + 2];
       }
       const bool flat = IsFlatNormal(nx, ny, nz);
       ucs::Ucs plane{};
@@ -1296,12 +1296,12 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     if (wantGeometricCenter && PolylineBoundsArea(cmd, pi, v0, v1)) {
       float gcx = 0.f;
       float gcy = 0.f;
-      if (ClosedPolylineCentroid(cmd.userPolylineVerts, v0, v1, &gcx, &gcy)) {
-        const float meanZ = PolylineLoopMeanZ(cmd.userPolylineVerts, v0, v1);
+      if (ClosedPolylineCentroid(cmd.drawing.userPolylineVerts, v0, v1, &gcx, &gcy)) {
+        const float meanZ = PolylineLoopMeanZ(cmd.drawing.userPolylineVerts, v0, v1);
         float hx = 0.f;
         float hy = 0.f;
         const bool heur = CenterHeuristicPoint(acc, wx, wy, meanZ, &hx, &hy);
-        const float p2 = ClosedPolyGeometricPickDistSq(hx, hy, cmd.userPolylineVerts, v0, v1);
+        const float p2 = ClosedPolyGeometricPickDistSq(hx, hy, cmd.drawing.userPolylineVerts, v0, v1);
         ConsiderSnap(&acc, wx, wy, gcx, gcy, Kind::GeometricCenter, p2, tolWorld, meanZ, /*heuristicAccept=*/heur);
       }
     }
@@ -1321,11 +1321,11 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   }
 
   constexpr int kArcSnapSeg = 24;
-  for (size_t arcIdx = 0; arcIdx < cmd.userArcs.size(); ++arcIdx) {
-    if (isolatedOut(cmd.userArcAttrs, arcIdx)) continue;
+  for (size_t arcIdx = 0; arcIdx < cmd.drawing.userArcs.size(); ++arcIdx) {
+    if (isolatedOut(cmd.drawing.userArcAttrs, arcIdx)) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Arc &&
         exclude.index == static_cast<int>(arcIdx)) continue;
-    const CadArc& a = cmd.userArcs[arcIdx];
+    const CadArc& a = cmd.drawing.userArcs[arcIdx];
     if (a.r <= 1e-6f)
       continue;
     ucs::Ucs arcPlane;
@@ -1382,11 +1382,11 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
 
   constexpr int kEllSnapSeg = 36;
   constexpr float kTwoPi = 6.28318530718f;
-  for (size_t ellIdx = 0; ellIdx < cmd.userEllipses.size(); ++ellIdx) {
-    if (isolatedOut(cmd.userEllAttrs, ellIdx)) continue;
+  for (size_t ellIdx = 0; ellIdx < cmd.drawing.userEllipses.size(); ++ellIdx) {
+    if (isolatedOut(cmd.drawing.userEllAttrs, ellIdx)) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Ellipse &&
         exclude.index == static_cast<int>(ellIdx)) continue;
-    const CadEllipse& el = cmd.userEllipses[ellIdx];
+    const CadEllipse& el = cmd.drawing.userEllipses[ellIdx];
     const float ma = std::hypot(el.majVx, el.majVy);
     if (ma < 1e-8f)
       continue;
@@ -1457,11 +1457,11 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
 
   // REQ-443: a spline's editable fit/CV points and its true curve ends participate in Endpoint;
   // perpendicular candidates are projected onto its adaptive tessellation chords.
-  for (size_t splineIdx = 0; splineIdx < cmd.cadSplines.size(); ++splineIdx) {
-    if (isolatedOut(cmd.cadSplineAttrs, splineIdx)) continue;
+  for (size_t splineIdx = 0; splineIdx < cmd.drawing.cadSplines.size(); ++splineIdx) {
+    if (isolatedOut(cmd.drawing.cadSplineAttrs, splineIdx)) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Spline &&
         exclude.index == static_cast<int>(splineIdx)) continue;
-    const CadSpline& sp = cmd.cadSplines[splineIdx];
+    const CadSpline& sp = cmd.drawing.cadSplines[splineIdx];
     if (wantEndpoint) {
       for (size_t p = 0; p < spline::EditablePointCount(sp); ++p) {
         const auto v = spline::EditablePoint(sp, p);
@@ -1501,7 +1501,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   // REQ-490 alignments (issue #121 Phase 1): the geometry points a designer snaps to - beginning, end, PC, PT,
   // PI (a point no geometry passes through), curve centre and midpoints - plus Nearest on the true curve.
   // Computed from the exact geometry, never from a tessellation.
-  for (const alignment::Alignment& al : cmd.alignments) {
+  for (const alignment::Alignment& al : cmd.drawing.alignments) {
     if (al.Empty())
       continue;
     if (wantEndpoint || wantMidpoint || wantCenter || wantNode) {
@@ -1535,7 +1535,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   }
 
   if (wantStation) {
-    for (const alignment::Alignment& al : cmd.alignments) {
+    for (const alignment::Alignment& al : cmd.drawing.alignments) {
       if (al.Empty())
         continue;
       const std::vector<double> raws = al.RawStationsForDisplayed(cmd.objectSnapStationDisplayed);
@@ -1548,11 +1548,11 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   }
 
   if (wantEndpoint || wantNode) {
-    for (size_t pi = 0; pi < cmd.cadPoints.size(); ++pi) {
+    for (size_t pi = 0; pi < cmd.drawing.cadPoints.size(); ++pi) {
       if (exclude.valid && exclude.type == SelectedEntity::Type::Point &&
           exclude.index == static_cast<int>(pi))
         continue;
-      const CadPoint& p = cmd.cadPoints[pi];
+      const CadPoint& p = cmd.drawing.cadPoints[pi];
       if (wantEndpoint)
         Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(p.x),
                  SnapFloatCoordinate(p.y), Kind::Endpoint, tolWorld, SnapFloatCoordinate(p.z));
@@ -1587,15 +1587,15 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   }
 
   if (wantSurveyPoint) {
-    for (const SurveyPoint& sp : cmd.surveyPoints) {
+    for (const SurveyPoint& sp : cmd.drawing.surveyPoints) {
       const float ex = static_cast<float>(sp.easting);
       const float ey = static_cast<float>(sp.northing);
       const float ez = static_cast<float>(sp.elevation);
       // Same size as the drawn marker: annotative markers follow the current annotation scale (D-2026-11-06-a).
-      const SurveyPointStyleDefinition* markerStyle = FindSurveyPointStyle(cmd.surveyPointStyles, sp.styleName);
+      const SurveyPointStyleDefinition* markerStyle = FindSurveyPointStyle(cmd.drawing.surveyPointStyles, sp.styleName);
       const float arm = SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches,
           ModelObjectUnitsPerPlottedInch(markerStyle == nullptr || markerStyle->annotative,
-              cmd.activeSpaceIndex == kModelSpaceIndex, cmd.modelUnitsPerPlottedInch, cmd.annotationScales,
+              cmd.activeSpaceIndex == kModelSpaceIndex, cmd.drawing.modelUnitsPerPlottedInch, cmd.drawing.annotationScales,
               cmd.currentAnnotationScaleIndex));
       // Exact centre: needed when the cursor sits on the point node (ALIGN / IMPORT workflows)
       // even if it is not over the plotted X arms.
@@ -1619,7 +1619,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   // --- Position Markers (REQ-359 item 3): the centre is the marker's node. It answers the survey-point
   // (node) snap, and the Center snap as the centre of its circle.
   if (wantSurveyPoint || wantCenter) {
-    for (const CadPositionMarker& m : cmd.cadPositionMarkers) {
+    for (const CadPositionMarker& m : cmd.drawing.cadPositionMarkers) {
       const float mx = static_cast<float>(m.x);
       const float my = static_cast<float>(m.y);
       Consider(&acc, wx, wy, mx, my, wantSurveyPoint ? Kind::SurveyCenter : Kind::Center, tolWorld, m.z);
@@ -1628,7 +1628,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
 
   // --- Multileaders (REQ-367): path vertices offer Endpoint snap.
   if (wantEndpoint) {
-    for (const CadMultileader& ml : cmd.cadMultileaders) {
+    for (const CadMultileader& ml : cmd.drawing.cadMultileaders) {
       auto snapPath = [&](const std::vector<float>& path) {
         for (size_t i = 0; i + 2 < path.size(); i += 3)
           Consider(&acc, wx, wy, path[i], path[i + 1], Kind::Endpoint, tolWorld, path[i + 2]);
@@ -1647,12 +1647,12 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   if (wantEndpoint || wantMidpoint || wantCenter) {
     std::vector<CadBlockWorldSeg> bsegs;
     std::vector<CadBlockWorldPoint> bctr;
-    for (const CadBlockRef& br : cmd.cadBlockRefs) {
+    for (const CadBlockRef& br : cmd.drawing.cadBlockRefs) {
       if (wantEndpoint)
         Consider(&acc, wx, wy, br.xf.x, br.xf.y, Kind::Endpoint, tolWorld, br.xf.z);
       if (wantEndpoint || wantMidpoint) {
         bsegs.clear();
-        CadBlockCollectWorldLines(cmd.blockDefs, br, EntityAttributes{}, &bsegs);
+        CadBlockCollectWorldLines(cmd.drawing.blockDefs, br, EntityAttributes{}, &bsegs);
         for (const CadBlockWorldSeg& s : bsegs) {
           if (wantEndpoint) {
             Consider(&acc, wx, wy, s.x0, s.y0, Kind::Endpoint, tolWorld, s.z0);
@@ -1665,7 +1665,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       }
       if (wantCenter) {
         bctr.clear();
-        CadBlockCollectWorldCenters(cmd.blockDefs, br, &bctr);
+        CadBlockCollectWorldCenters(cmd.drawing.blockDefs, br, &bctr);
         // Only the centre POINTS are collected, not each shape's radius/extent, so a block circle's
         // CENTRE cannot get the "cursor is over the shape" acceptance native circles get under an
         // orbited camera (issue #372) — it resolves only when the ray passes near the centre point
@@ -1703,7 +1703,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   // face"). Face/CenterOfFace/Knot all need a pick ray and are skipped without one: in a plan view
   // with no ray there is no "under the cursor" to resolve, and answering with the work-plane point
   // would be an invention.
-  if (!cmd.cadSolids.empty() && cmd.objectSnap3dEnabled) {
+  if (!cmd.drawing.cadSolids.empty() && cmd.objectSnap3dEnabled) {
     const bool wantSolidVertex = want(Kind::Endpoint, cmd.objectSnap3dVertex);
     const bool wantSolidMidpoint = want(Kind::Midpoint, cmd.objectSnap3dMidpointEdge);
     const bool wantSolidNearest = want(Kind::Face, cmd.objectSnap3dNearestFace) ||
@@ -1712,13 +1712,13 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     const bool wantSolidKnot = wantKnot;
     const ray3d::Vec3 cursor{wx, wy, acc.ray ? acc.ray->origin.z : 0.0};
 
-    for (size_t si = 0; si < cmd.cadSolids.size(); ++si) {
+    for (size_t si = 0; si < cmd.drawing.cadSolids.size(); ++si) {
       if (!SolidVisible(cmd, si))
         continue;  // layer off/frozen or isolated out — invisible and unclickable must not disagree
       if (exclude.valid && exclude.type == SelectedEntity::Type::Solid &&
           exclude.index == static_cast<int>(si))
         continue;
-      const CadSolidPtr& sp = cmd.cadSolids[si];
+      const CadSolidPtr& sp = cmd.drawing.cadSolids[si];
       if (!sp)
         continue;
 
@@ -1868,10 +1868,10 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     // in memory (`CadPointCloud::octree`) — no disk IO happens at all unless a candidate leaf is
     // actually found near the cursor.
     constexpr int kMaxSnapProbeLeaves = 8;
-    for (size_t pci = 0; pci < cmd.cadPointClouds.size(); ++pci) {
+    for (size_t pci = 0; pci < cmd.drawing.cadPointClouds.size(); ++pci) {
       if (!PointCloudVisible(cmd, pci))
         continue;
-      const std::shared_ptr<const CadPointCloud>& pc = cmd.cadPointClouds[pci];
+      const std::shared_ptr<const CadPointCloud>& pc = cmd.drawing.cadPointClouds[pci];
       if (!pc)
         continue;
       bool found = false;
@@ -1971,7 +1971,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
 
   // --- PDF underlay snap points ---
   if (cmd.objectSnapEnabled) {
-    for (const PdfAttachment& att : cmd.pdfAttachments) {
+    for (const PdfAttachment& att : cmd.drawing.pdfAttachments) {
       if (!att.snapEnabled)
         continue;
       const float cosR = std::cos(att.rotationDeg * 3.14159265f / 180.f);
@@ -2227,45 +2227,45 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
 
   switch (kind) {
   case Kind::Endpoint: {
-    const auto& L = cmd.userLinesFlat;
-    if (L.size() % 6 == 0) {
-      for (size_t i = 0; i + 5 < L.size(); i += 6) {
-        PushSnapPickerEntry(L[i], L[i + 1], Kind::Endpoint, sortWorldX, sortWorldY, out, L[i + 2]);
-        PushSnapPickerEntry(L[i + 3], L[i + 4], Kind::Endpoint, sortWorldX, sortWorldY, out, L[i + 5]);
+    if (cmd.drawing.lineStoreWellFormed()) {
+      for (size_t i = 0; i < cmd.drawing.lineCount(); ++i) {
+        const CadLineRecord ln = cmd.drawing.line(i);
+        PushSnapPickerEntry(ln.x0, ln.y0, Kind::Endpoint, sortWorldX, sortWorldY, out, ln.z0);
+        PushSnapPickerEntry(ln.x1, ln.y1, Kind::Endpoint, sortWorldX, sortWorldY, out, ln.z1);
       }
     }
-    for (const CadBlockRef& br : cmd.cadBlockRefs) {
+    for (const CadBlockRef& br : cmd.drawing.cadBlockRefs) {
       PushSnapPickerEntry(br.xf.x, br.xf.y, Kind::Endpoint, sortWorldX, sortWorldY, out, br.xf.z);
       std::vector<CadBlockWorldSeg> segs;
-      CadBlockCollectWorldLines(cmd.blockDefs, br, EntityAttributes{}, &segs);
+      CadBlockCollectWorldLines(cmd.drawing.blockDefs, br, EntityAttributes{}, &segs);
       for (const CadBlockWorldSeg& s : segs) {
         PushSnapPickerEntry(s.x0, s.y0, Kind::Endpoint, sortWorldX, sortWorldY, out, s.z0);
         PushSnapPickerEntry(s.x1, s.y1, Kind::Endpoint, sortWorldX, sortWorldY, out, s.z1);
       }
     }
     const int polyCount =
-        static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+        static_cast<int>(cmd.drawing.userPolylineOffsets.size() > 0 ? cmd.drawing.userPolylineOffsets.size() - 1 : 0);
     for (int pi = 0; pi < polyCount; ++pi) {
-      const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
       const bool closed =
-          static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+          static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
       auto pushEdge = [&](int ia, int ib) {
-        const float ax = cmd.userPolylineVerts[static_cast<size_t>(ia * 3)];
-        const float ay = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 1)];
-        const float bx = cmd.userPolylineVerts[static_cast<size_t>(ib * 3)];
-        const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
+        const float ax = cmd.drawing.vertex(static_cast<size_t>(ia)).x;
+        const float ay = cmd.drawing.vertex(static_cast<size_t>(ia)).y;
+        const float bx = cmd.drawing.vertex(static_cast<size_t>(ib)).x;
+        const float by = cmd.drawing.vertex(static_cast<size_t>(ib)).y;
         PushSnapPickerEntry(ax, ay, Kind::Endpoint, sortWorldX, sortWorldY, out,
-                            cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 2)]);
+                            cmd.drawing.vertex(static_cast<size_t>(ia)).z);
         PushSnapPickerEntry(bx, by, Kind::Endpoint, sortWorldX, sortWorldY, out,
-                            cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 2)]);
+                            cmd.drawing.vertex(static_cast<size_t>(ib)).z);
       };
       for (int vi = v0; vi + 1 < v1; ++vi)
         pushEdge(vi, vi + 1);
       if (closed && v1 - v0 >= 2)
         pushEdge(v1 - 1, v0);
     }
-    for (const CadArc& a : cmd.userArcs) {
+    for (const CadArc& a : cmd.drawing.userArcs) {
       if (a.r <= 1e-6f)
         continue;
       // Through the arc's own plane (REQ-312), and through the same walk the live snap uses. This
@@ -2285,39 +2285,39 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     break;
   }
   case Kind::Midpoint: {
-    const auto& L = cmd.userLinesFlat;
-    if (L.size() % 6 == 0) {
-      for (size_t i = 0; i + 5 < L.size(); i += 6) {
-        const float x0 = L[i];
-        const float y0 = L[i + 1];
-        const float x1 = L[i + 3];
-        const float y1 = L[i + 4];
+    if (cmd.drawing.lineStoreWellFormed()) {
+      for (size_t i = 0; i < cmd.drawing.lineCount(); ++i) {
+        const CadLineRecord ln = cmd.drawing.line(i);
+        const float x0 = ln.x0;
+        const float y0 = ln.y0;
+        const float x1 = ln.x1;
+        const float y1 = ln.y1;
         PushSnapPickerEntry(0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out,
-                            0.5f * (L[i + 2] + L[i + 5]));
+                            0.5f * (ln.z0 + ln.z1));
       }
     }
-    for (const CadBlockRef& br : cmd.cadBlockRefs) {
+    for (const CadBlockRef& br : cmd.drawing.cadBlockRefs) {
       std::vector<CadBlockWorldSeg> segs;
-      CadBlockCollectWorldLines(cmd.blockDefs, br, EntityAttributes{}, &segs);
+      CadBlockCollectWorldLines(cmd.drawing.blockDefs, br, EntityAttributes{}, &segs);
       for (const CadBlockWorldSeg& s : segs)
         PushSnapPickerEntry(0.5f * (s.x0 + s.x1), 0.5f * (s.y0 + s.y1), Kind::Midpoint, sortWorldX, sortWorldY,
                             out, 0.5f * (s.z0 + s.z1));
     }
     const int polyCount =
-        static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+        static_cast<int>(cmd.drawing.userPolylineOffsets.size() > 0 ? cmd.drawing.userPolylineOffsets.size() - 1 : 0);
     for (int pi = 0; pi < polyCount; ++pi) {
-      const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
       const bool closed =
-          static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+          static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
       auto pushEdgeMid = [&](int ia, int ib) {
-        const float ax = cmd.userPolylineVerts[static_cast<size_t>(ia * 3)];
-        const float ay = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 1)];
-        const float bx = cmd.userPolylineVerts[static_cast<size_t>(ib * 3)];
-        const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
+        const float ax = cmd.drawing.vertex(static_cast<size_t>(ia)).x;
+        const float ay = cmd.drawing.vertex(static_cast<size_t>(ia)).y;
+        const float bx = cmd.drawing.vertex(static_cast<size_t>(ib)).x;
+        const float by = cmd.drawing.vertex(static_cast<size_t>(ib)).y;
         PushSnapPickerEntry(0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, sortWorldX, sortWorldY, out,
-                            0.5f * (cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 2)] +
-                                    cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 2)]));
+                            0.5f * (cmd.drawing.vertex(static_cast<size_t>(ia)).z +
+                                    cmd.drawing.vertex(static_cast<size_t>(ib)).z));
       };
       for (int vi = v0; vi + 1 < v1; ++vi)
         pushEdgeMid(vi, vi + 1);
@@ -2325,7 +2325,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         pushEdgeMid(v1 - 1, v0);
     }
     constexpr int kArcSnapSeg = 24;
-    for (const CadArc& a : cmd.userArcs) {
+    for (const CadArc& a : cmd.drawing.userArcs) {
       if (a.r <= 1e-6f)
         continue;
       ucs::Ucs arcPlane;
@@ -2349,7 +2349,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     }
     constexpr int kEllSnapSeg = 36;
     constexpr double kTwoPi = 6.283185307179586;
-    for (const CadEllipse& el : cmd.userEllipses) {
+    for (const CadEllipse& el : cmd.drawing.userEllipses) {
       const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
       if (ma < 1e-12)
         continue;
@@ -2380,12 +2380,13 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     break;
   }
   case Kind::Center: {
-    const auto& C = cmd.userCirclesCxCyZR;
-    if (C.size() % 4 == 0) {  // cx,cy,z,r
-      for (size_t i = 0; i + 3 < C.size(); i += 4)
-        PushSnapPickerEntry(C[i], C[i + 1], Kind::Center, sortWorldX, sortWorldY, out, C[i + 2]);
+    if (cmd.drawing.circleStoreWellFormed()) {
+      for (size_t i = 0; i < cmd.drawing.circleCount(); ++i) {
+        const CadCircleRecord c = cmd.drawing.circle(i);
+        PushSnapPickerEntry(c.cx, c.cy, Kind::Center, sortWorldX, sortWorldY, out, c.cz);
+      }
     }
-    for (const CadEllipse& el : cmd.userEllipses) {
+    for (const CadEllipse& el : cmd.drawing.userEllipses) {
       const float ma = std::hypot(el.majVx, el.majVy);
       if (ma < 1e-8f)
         continue;
@@ -2397,16 +2398,16 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
   }
   case Kind::Quadrant: {
     // REQ-330: every circle's four quadrant points, and every arc's in-sweep subset.
-    const auto& C = cmd.userCirclesCxCyZR;
-    if (C.size() % 4 == 0) {  // cx,cy,z,r
-      for (size_t i = 0; i + 3 < C.size(); i += 4) {
-        const float cx = C[i];
-        const float cy = C[i + 1];
-        const float cz = C[i + 2];
-        const float r = C[i + 3];
+    if (cmd.drawing.circleStoreWellFormed()) {
+      for (size_t i = 0; i < cmd.drawing.circleCount(); ++i) {
+        const CadCircleRecord c = cmd.drawing.circle(i);
+        const float cx = static_cast<float>(c.cx);
+        const float cy = static_cast<float>(c.cy);
+        const float cz = static_cast<float>(c.cz);
+        const float r = static_cast<float>(c.r);
         if (r <= 1e-6f)
           continue;
-        const ucs::Ucs plane = CircleSnapPlane(cmd.userCircleNormals, i / 4, cx, cy, cz);
+        const ucs::Ucs plane = CircleSnapPlane(cmd.drawing.userCircleNormals, i, cx, cy, cz);
         ray3d::Vec3 dir[4];
         QuadrantDirections(plane, cmd.activeUcs, dir);
         for (const ray3d::Vec3& d : dir)
@@ -2414,7 +2415,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
                               sortWorldX, sortWorldY, out, static_cast<float>(cz + r * d.z));
       }
     }
-    for (const CadArc& a : cmd.userArcs) {
+    for (const CadArc& a : cmd.drawing.userArcs) {
       if (a.r <= 1e-6f)
         continue;
       const ucs::Ucs plane = CurvePlane(a);
@@ -2434,7 +2435,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     break;
   }
   case Kind::Station:
-    for (const alignment::Alignment& al : cmd.alignments) {
+    for (const alignment::Alignment& al : cmd.drawing.alignments) {
       if (al.Empty())
         continue;
       if (!cmd.objectSnapStationDisplayedValid)
@@ -2448,10 +2449,10 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     }
     break;
   case Kind::Node:  // REQ-490.2: drawing points, and every PI and spiral PI of an alignment
-    for (const CadPoint& p : cmd.cadPoints)
+    for (const CadPoint& p : cmd.drawing.cadPoints)
       PushSnapPickerEntry(static_cast<float>(p.x), static_cast<float>(p.y), Kind::Node, sortWorldX, sortWorldY, out,
                           static_cast<float>(p.z));
-    for (const alignment::Alignment& al : cmd.alignments) {
+    for (const alignment::Alignment& al : cmd.drawing.alignments) {
       for (const alignment::GeometryPoint& gp : al.GeometryPoints()) {
         using GC = alignment::GeometryPointCode;
         if (gp.code != GC::TanTan && gp.code != GC::CurvePI && gp.code != GC::SpiralPI) continue;
@@ -2461,7 +2462,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     }
     break;
   case Kind::Nearest:
-    for (const CadSpline& sp : cmd.cadSplines) {
+    for (const CadSpline& sp : cmd.drawing.cadSplines) {
       std::vector<spline::Vec3> points;
       spline::Tessellate(sp, kSplineSampleTolerance, &points);
       if (points.empty()) continue;
@@ -2473,27 +2474,28 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
   case Kind::Perpendicular: {
     if (!havePerpRef)
       break;
-    const auto& L = cmd.userLinesFlat;
-    if (L.size() % 6 == 0) {
-      for (size_t i = 0; i + 5 < L.size(); i += 6)
-        PushPerpFootEntry(refPx, refPy, L[i], L[i + 1], L[i + 3], L[i + 4], sortWorldX, sortWorldY, out, L[i + 2],
-                          L[i + 5]);
+    if (cmd.drawing.lineStoreWellFormed()) {
+      for (size_t i = 0; i < cmd.drawing.lineCount(); ++i) {
+        const CadLineRecord ln = cmd.drawing.line(i);
+        PushPerpFootEntry(refPx, refPy, ln.x0, ln.y0, ln.x1, ln.y1, sortWorldX, sortWorldY, out, ln.z0,
+                          ln.z1);
+      }
     }
     const int polyCount =
-        static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+        static_cast<int>(cmd.drawing.userPolylineOffsets.size() > 0 ? cmd.drawing.userPolylineOffsets.size() - 1 : 0);
     for (int pi = 0; pi < polyCount; ++pi) {
-      const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
       const bool closed =
-          static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+          static_cast<size_t>(pi) < cmd.drawing.userPolylineClosed.size() && cmd.drawing.userPolylineClosed[static_cast<size_t>(pi)];
       auto pushEdgePerp = [&](int ia, int ib) {
-        const float ax = cmd.userPolylineVerts[static_cast<size_t>(ia * 3)];
-        const float ay = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 1)];
-        const float bx = cmd.userPolylineVerts[static_cast<size_t>(ib * 3)];
-        const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
+        const float ax = cmd.drawing.vertex(static_cast<size_t>(ia)).x;
+        const float ay = cmd.drawing.vertex(static_cast<size_t>(ia)).y;
+        const float bx = cmd.drawing.vertex(static_cast<size_t>(ib)).x;
+        const float by = cmd.drawing.vertex(static_cast<size_t>(ib)).y;
         PushPerpFootEntry(refPx, refPy, ax, ay, bx, by, sortWorldX, sortWorldY, out,
-                          cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 2)],
-                          cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 2)]);
+                          cmd.drawing.vertex(static_cast<size_t>(ia)).z,
+                          cmd.drawing.vertex(static_cast<size_t>(ib)).z);
       };
       for (int vi = v0; vi + 1 < v1; ++vi)
         pushEdgePerp(vi, vi + 1);
@@ -2501,7 +2503,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         pushEdgePerp(v1 - 1, v0);
     }
     constexpr int kArcSnapSeg = 24;
-    for (const CadArc& a : cmd.userArcs) {
+    for (const CadArc& a : cmd.drawing.userArcs) {
       if (a.r <= 1e-6f)
         continue;
       ucs::Ucs arcPlane;
@@ -2524,7 +2526,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     }
     constexpr int kEllSnapSeg = 36;
     constexpr float kTwoPi = 6.28318530718f;
-    for (const CadEllipse& el : cmd.userEllipses) {
+    for (const CadEllipse& el : cmd.drawing.userEllipses) {
       const float ma = std::hypot(el.majVx, el.majVy);
       if (ma < 1e-8f)
         continue;
@@ -2553,22 +2555,22 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
   }
   case Kind::GeometricCenter: {
     const int polyCount =
-        static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+        static_cast<int>(cmd.drawing.userPolylineOffsets.size() > 0 ? cmd.drawing.userPolylineOffsets.size() - 1 : 0);
     for (int pi = 0; pi < polyCount; ++pi) {
-      const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int v0 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = cmd.drawing.userPolylineOffsets[static_cast<size_t>(pi + 1)];
       if (!PolylineBoundsArea(cmd, pi, v0, v1))
         continue;
       float gcx = 0.f;
       float gcy = 0.f;
-      if (ClosedPolylineCentroid(cmd.userPolylineVerts, v0, v1, &gcx, &gcy))
+      if (ClosedPolylineCentroid(cmd.drawing.userPolylineVerts, v0, v1, &gcx, &gcy))
         PushSnapPickerEntry(gcx, gcy, Kind::GeometricCenter, sortWorldX, sortWorldY, out,
-                            PolylineLoopMeanZ(cmd.userPolylineVerts, v0, v1));
+                            PolylineLoopMeanZ(cmd.drawing.userPolylineVerts, v0, v1));
     }
     break;
   }
   case Kind::SurveyCenter:
-    for (const SurveyPoint& sp : cmd.surveyPoints)
+    for (const SurveyPoint& sp : cmd.drawing.surveyPoints)
       PushSnapPickerEntry(static_cast<float>(sp.easting), static_cast<float>(sp.northing), Kind::SurveyCenter,
                           sortWorldX, sortWorldY, out,
                           static_cast<float>(sp.elevation));  // elevation IS the point's Z (REQ-057)
@@ -2646,51 +2648,53 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
          sel.index == (cmd.dimGripMoveActive ? cmd.dimGripAnnotationIndex : cmd.mtextGripAnnotationIndex)))
       continue;
     if (sel.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(sel.index) * 6;
-      if (k + 5 < cmd.userLinesFlat.size()) {
-        gripCandidate(cmd.userLinesFlat[k],     cmd.userLinesFlat[k + 1], cmd.userLinesFlat[k + 2]);
-        gripCandidate(cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4], cmd.userLinesFlat[k + 5]);
+      const size_t li = static_cast<size_t>(sel.index);
+      if (li < cmd.drawing.lineCount()) {
+        const CadLineRecord ln = cmd.drawing.line(li);
+        gripCandidate(ln.x0, ln.y0, ln.z0);
+        gripCandidate(ln.x1, ln.y1, ln.z1);
       }
     } else if (sel.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(sel.index) * 4;
-      if (k + 3 < cmd.userCirclesCxCyZR.size()) {
-        const float cx = cmd.userCirclesCxCyZR[k];
-        const float cy = cmd.userCirclesCxCyZR[k + 1];
-        const float cz = cmd.userCirclesCxCyZR[k + 2];
+      const size_t ci = static_cast<size_t>(sel.index);
+      if (ci < cmd.drawing.circleCount()) {
+        const CadCircleRecord c = cmd.drawing.circle(ci);
+        const float cx = static_cast<float>(c.cx);
+        const float cy = static_cast<float>(c.cy);
+        const float cz = static_cast<float>(c.cz);
         gripCandidate(cx, cy, cz);
-        gripCandidate(cx + cmd.userCirclesCxCyZR[k + 3], cy, cz);
+        gripCandidate(cx + static_cast<float>(c.r), cy, cz);
       }
     } else if (sel.type == SelectedEntity::Type::Polyline) {
-      const int np = static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+      const int np = static_cast<int>(cmd.drawing.userPolylineOffsets.size() > 0 ? cmd.drawing.userPolylineOffsets.size() - 1 : 0);
       if (sel.index >= 0 && sel.index < np) {
-        const int startV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index)];
-        const int endV   = cmd.userPolylineOffsets[static_cast<size_t>(sel.index + 1)];
+        const int startV = cmd.drawing.userPolylineOffsets[static_cast<size_t>(sel.index)];
+        const int endV   = cmd.drawing.userPolylineOffsets[static_cast<size_t>(sel.index + 1)];
         for (int vi = 0; vi < endV - startV; ++vi) {
-          const size_t xIdx = static_cast<size_t>(startV + vi) * 3;
-          if (xIdx + 2 >= cmd.userPolylineVerts.size()) break;
-          gripCandidate(cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1],
-                        cmd.userPolylineVerts[xIdx + 2]);
+          const size_t xIdx = static_cast<size_t>(startV + vi);
+          if (xIdx >= cmd.drawing.vertexCount()) break;
+          gripCandidate(cmd.drawing.vertex(xIdx).x, cmd.drawing.vertex(xIdx).y,
+                        cmd.drawing.vertex(xIdx).z);
         }
       }
     } else if (sel.type == SelectedEntity::Type::Arc) {
-      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
-        const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.drawing.userArcs.size()) {
+        const CadArc& a = cmd.drawing.userArcs[static_cast<size_t>(sel.index)];
         const float endRad = a.startRad + a.sweepRad;
         gripCandidate(a.cx, a.cy, a.z);
         gripCandidate(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), a.z);
         gripCandidate(a.cx + a.r * std::cos(endRad),     a.cy + a.r * std::sin(endRad),     a.z);
       }
     } else if (sel.type == SelectedEntity::Type::Ellipse) {
-      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
-        const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.drawing.userEllipses.size()) {
+        const CadEllipse& el = cmd.drawing.userEllipses[static_cast<size_t>(sel.index)];
         const float perpX = -el.majVy, perpY = el.majVx;
         gripCandidate(el.cx, el.cy, el.z);
         gripCandidate(el.cx + el.majVx,            el.cy + el.majVy,            el.z);
         gripCandidate(el.cx + perpX * el.ratio,     el.cy + perpY * el.ratio,    el.z);
       }
     } else if (sel.type == SelectedEntity::Type::Annotation) {
-      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadAnnotations.size()) {
-        const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(sel.index)];
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.drawing.cadAnnotations.size()) {
+        const CadAnnotation& a = cmd.drawing.cadAnnotations[static_cast<size_t>(sel.index)];
         if (a.kind == CadAnnotation::Kind::Mtext) {
           if (a.surveyPointLabelForId >= 0) {
             gripCandidate(0.5f * (a.boxMinX + a.boxMaxX), 0.5f * (a.boxMinY + a.boxMaxY), a.insZ);
@@ -2707,11 +2711,11 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
 
   // Survey point grips (selected survey points)
   for (const int idx : cmd.selectedSurveyPointIndices) {
-    if (idx >= 0 && static_cast<size_t>(idx) < cmd.surveyPoints.size())
-      gripCandidate(static_cast<float>(cmd.surveyPoints[static_cast<size_t>(idx)].easting),
-                    static_cast<float>(cmd.surveyPoints[static_cast<size_t>(idx)].northing),
+    if (idx >= 0 && static_cast<size_t>(idx) < cmd.drawing.surveyPoints.size())
+      gripCandidate(static_cast<float>(cmd.drawing.surveyPoints[static_cast<size_t>(idx)].easting),
+                    static_cast<float>(cmd.drawing.surveyPoints[static_cast<size_t>(idx)].northing),
                     static_cast<float>(
-                        cmd.surveyPoints[static_cast<size_t>(idx)].elevation));  // elevation IS Z (REQ-057)
+                        cmd.drawing.surveyPoints[static_cast<size_t>(idx)].elevation));  // elevation IS Z (REQ-057)
   }
 
   return acc.best;
