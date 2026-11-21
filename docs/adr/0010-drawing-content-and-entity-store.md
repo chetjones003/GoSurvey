@@ -61,3 +61,17 @@ Document, so a single Document-owned type cannot hold their data without creatin
 - `AppCommandState` inheriting `DrawingContent` is a temporary seam. Later phases move access
   behind the entity store interface one entity kind at a time.
 - The system map lists selection under Interaction, not Document.
+
+## Amendment (2026-11-21): remove the inheritance seam in one mechanical step
+
+The rejection of an up-front `st.drawing.…` rename above is narrowed, not reversed. The inheritance
+seam is removed in a single change that does only what the compiler requires:
+
+- `AppCommandState` stops inheriting `DrawingContent` and holds it as a member, `drawing`.
+- Every former inherited member access becomes `st.drawing.<member>` (and `drawing.<member>` inside
+  `AppCommandState`). The compiler locates each site; no logic changes.
+- The change lands as its own commit, separate from any behaviour change, so review can check that
+  the diff is rename-only.
+
+Phase 5's stride-accessor work is complete for circles, lines and polyline vertices before this
+step. Entity-kind access continues through the accessors, not through the drawing member.
