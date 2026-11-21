@@ -225,14 +225,11 @@ bool ModelPathFromEntity(const AppCommandState& st, const SelectedEntity& e, dou
     return out->pts.size() >= 2;
   }
   if (e.type == T::Circle) {
-    const size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 3 >= st.userCirclesCxCyZR.size())
+    const size_t ci = static_cast<size_t>(e.index);
+    if (ci >= st.circleCount())
       return false;
-    const double cx = st.userCirclesCxCyZR[k];
-    const double cy = st.userCirclesCxCyZR[k + 1];
-    const double cz = st.userCirclesCxCyZR[k + 2];
-    const double r = st.userCirclesCxCyZR[k + 3];
-    FillCirclePath(cx, cy, cz, r, pickX, pickY, out);
+    const CadCircleRecord c = st.circle(ci);
+    FillCirclePath(c.cx, c.cy, c.cz, c.r, pickX, pickY, out);
     return !out->pts.empty();
   }
   return false;
@@ -396,14 +393,15 @@ void ListModelEntity(const AppCommandState& st, const SelectedEntity& e, std::ve
     return;
   }
   if (e.type == T::Circle) {
-    const size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 3 >= st.userCirclesCxCyZR.size())
+    const size_t ci = static_cast<size_t>(e.index);
+    if (ci >= st.circleCount())
       return;
+    const CadCircleRecord c = st.circle(ci);
     char buf[192];
     std::snprintf(buf, sizeof(buf), "CIRCLE  layer %s  model  center (%s,%s)  radius %s", layer.c_str(),
-                  FormatLinear(st.userCirclesCxCyZR[k], prec).c_str(),
-                  FormatLinear(st.userCirclesCxCyZR[k + 1], prec).c_str(),
-                  FormatLinear(st.userCirclesCxCyZR[k + 3], prec).c_str());
+                  FormatLinear(c.cx, prec).c_str(),
+                  FormatLinear(c.cy, prec).c_str(),
+                  FormatLinear(c.r, prec).c_str());
     log.push_back(buf);
     return;
   }
@@ -1178,10 +1176,10 @@ bool AreaFromPicked(const AppCommandState& st, const SelectedEntity& e, double* 
   assert(area != nullptr && peri != nullptr);
   using T = SelectedEntity::Type;
   if (e.type == T::Circle) {
-    const size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 3 >= st.userCirclesCxCyZR.size())
+    const size_t ci = static_cast<size_t>(e.index);
+    if (ci >= st.circleCount())
       return false;
-    const double r = st.userCirclesCxCyZR[k + 3];
+    const double r = st.circle(ci).r;
     if (!(r > 0.0))
       return false;
     *area = kPi * r * r;
@@ -2119,12 +2117,13 @@ ExtractRecord DataExtractRecord(const AppCommandState& st, const SelectedEntity&
       r.z = st.userLinesFlat[k + 2];
     }
   } else if (e.type == T::Circle) {
-    const size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 2 < st.userCirclesCxCyZR.size()) {
+    const size_t ci = static_cast<size_t>(e.index);
+    if (ci < st.circleCount()) {
+      const CadCircleRecord c = st.circle(ci);
       r.hasPoint = true;
-      r.x = st.userCirclesCxCyZR[k];
-      r.y = st.userCirclesCxCyZR[k + 1];
-      r.z = st.userCirclesCxCyZR[k + 2];
+      r.x = c.cx;
+      r.y = c.cy;
+      r.z = c.cz;
     }
   } else if (e.type == T::Polyline) {
     if (e.index >= 0 && static_cast<size_t>(e.index) + 1 < st.userPolylineOffsets.size()) {

@@ -675,8 +675,8 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         emitModelChain(w, false);
       }
       // Circles (sampled to a polygon).
-      for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4) {  // cx,cy,z,r
-        const size_t idx = i / 4;
+      for (size_t idx = 0; idx < st.circleCount(); ++idx) {  // cx,cy,z,r
+        const CadCircleRecord c = st.circle(idx);
         if (idx < st.userCircleAttrs.size() &&
             (!plottable(st.userCircleAttrs[idx].layer) || IsLayerFrozenInViewport(vp, st.userCircleAttrs[idx].layer)))
           continue;
@@ -685,9 +685,9 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
                        : 0x000000u;
         setLineStyle(idx < st.userCircleAttrs.size() ? &st.userCircleAttrs[idx] : nullptr,
                      idx < st.userCircleAttrs.size() ? st.userCircleAttrs[idx].layer : std::string("0"));
-        const double cx = st.userCirclesCxCyZR[i] + oX, cy = st.userCirclesCxCyZR[i + 1] + oY;
-        const double cz = st.userCirclesCxCyZR[i + 2];  // REQ-061: carried through the viewport camera
-        const double r = st.userCirclesCxCyZR[i + 3];
+        const double cx = c.cx + oX, cy = c.cy + oY;
+        const double cz = c.cz;  // REQ-061: carried through the viewport camera
+        const double r = c.r;
         constexpr int kSeg = 72;
         std::vector<std::array<double, 3>> w;
         for (int k = 0; k <= kSeg; ++k) {  // the last point repeats the first, closing the polygon

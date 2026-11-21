@@ -1116,10 +1116,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       xf.apply(cx, cy, &ocx, &ocy);
       UpdateCoordMag(coordMagMax, ocx, ocy);
       UpdateCoordMag(coordMagMax, ocx + rad, ocy);
-      st.userCirclesCxCyZR.push_back(ocx - st.worldDocumentOriginX);
-      st.userCirclesCxCyZR.push_back(ocy - st.worldDocumentOriginY);
-      st.userCirclesCxCyZR.push_back(cz);  // group 30 (REQ-057), unrebased
-      st.userCirclesCxCyZR.push_back(rad);
+      // Group 30 (REQ-057) is unrebased; the centre X/Y rebase onto the drawing origin.
+      st.pushCircle(CadCircleRecord{ocx - st.worldDocumentOriginX, ocy - st.worldDocumentOriginY, cz, rad});
       st.userCircleAttrs.push_back(at);
       PushCircleNormal(st.userCircleNormals, static_cast<float>(nx), static_cast<float>(ny),
                        static_cast<float>(nz));  // REQ-312: group 210
@@ -2488,7 +2486,7 @@ void BuildExportLayerRgbHint(const AppCommandState& st, std::unordered_map<std::
   const size_t nSeg = st.userLinesFlat.size() / 6;
   for (size_t i = 0; i < nSeg && i < st.userLineAttrs.size(); ++i)
     layers.insert(st.userLineAttrs[i].layer.empty() ? std::string("0") : st.userLineAttrs[i].layer);
-  const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
+  const size_t nCirc = st.circleCount();
   for (size_t i = 0; i < nCirc && i < st.userCircleAttrs.size(); ++i)
     layers.insert(st.userCircleAttrs[i].layer.empty() ? std::string("0") : st.userCircleAttrs[i].layer);
   for (size_t i = 0; i < st.cadAnnotationAttrs.size(); ++i) {
@@ -3144,7 +3142,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   }
 
   const size_t nLines = st.userLinesFlat.size() / 6;
-  const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
+  const size_t nCirc = st.circleCount();
   const size_t nPoly = st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1;
   std::ostringstream os;
   os << "DXF import — " << nLines << " line segment(s), " << nCirc << " circle(s), " << nPoly
@@ -3791,17 +3789,16 @@ std::vector<DxfOutPair> DxfBlockDefinitionEntityPairs(const AppCommandState& st,
   };
   toFloat(src.userLinesFlat, &block.paperLines);
   block.paperLineAttrs = src.userLineAttrs;
-  for (size_t i = 0; i + 3 < src.userCirclesCxCyZR.size(); i += 4) {
-    const size_t circleIndex = i / 4;
+  for (size_t circleIndex = 0; circleIndex < src.circleCount(); ++circleIndex) {
+    const CadCircleRecord c = src.circle(circleIndex);
     float nx = 0.f, ny = 0.f, nz = 1.f;
     CircleNormalAt(src.userCircleNormals, circleIndex, &nx, &ny, &nz);
-    if (std::fabs(src.userCirclesCxCyZR[i + 2]) > 1e-6 || !IsFlatNormal(nx, ny, nz)) {
+    if (std::fabs(c.cz) > 1e-6 || !IsFlatNormal(nx, ny, nz)) {
       ++*unsupportedCount;  // Paper-space circle codec is planar; do not flatten elevated or tilted circles.
       continue;
     }
-    block.paperCircles.insert(block.paperCircles.end(), {static_cast<float>(src.userCirclesCxCyZR[i]),
-                                                          static_cast<float>(src.userCirclesCxCyZR[i + 1]),
-                                                          static_cast<float>(src.userCirclesCxCyZR[i + 3])});
+    block.paperCircles.insert(block.paperCircles.end(), {static_cast<float>(c.cx), static_cast<float>(c.cy),
+                                                          static_cast<float>(c.r)});
     const size_t attrIndex = circleIndex;
     block.paperCircleAttrs.push_back(attrIndex < src.userCircleAttrs.size() ? src.userCircleAttrs[attrIndex]
                                                                        : EntityAttributes{});
@@ -4017,7 +4014,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   std::sort(plotStyleNames.begin() + 1, plotStyleNames.end());
 
   const size_t nSeg = st.userLinesFlat.size() / 6;
-  const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
+  const size_t nCirc = st.circleCount();
   const size_t nLayerRows = layerNames.size();
   // Symbol handles (hex, unique): fixed small IDs for tables/rows where handle < layer base (0x10),
   // then layer rows 0x10.., then VPORT, VIEW, UCS, APPID, DIMSTYLE, BLOCK_RECORD, BLOCK pairs.
@@ -4227,9 +4224,10 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     accExtZ(static_cast<double>(st.userLinesFlat[i * 6 + 5]));
   }
   for (size_t ci = 0; ci < nCirc; ++ci) {
-    const double cx = q6lx(st.userCirclesCxCyZR[ci * 4]);
-    const double cy = q6ly(st.userCirclesCxCyZR[ci * 4 + 1]);
-    const double rr = q6(std::fabs(st.userCirclesCxCyZR[ci * 4 + 3]));
+    const CadCircleRecord circle = st.circle(ci);
+    const double cx = q6lx(circle.cx);
+    const double cy = q6ly(circle.cy);
+    const double rr = q6(std::fabs(circle.r));
     accExt(cx - rr, cy - rr);
     accExt(cx + rr, cy + rr);
   }
@@ -5292,10 +5290,11 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     const uint32_t rgb =
         AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
     const int entAci = DxfNearestAciFromRgbPacked(rgb);
-    const float cx = st.userCirclesCxCyZR[ci * 4];
-    const float cy = st.userCirclesCxCyZR[ci * 4 + 1];
-    const float cz = st.userCirclesCxCyZR[ci * 4 + 2];
-    const float rr = st.userCirclesCxCyZR[ci * 4 + 3];
+    const CadCircleRecord circle = st.circle(ci);
+    const float cx = static_cast<float>(circle.cx);
+    const float cy = static_cast<float>(circle.cy);
+    const float cz = static_cast<float>(circle.cz);
+    const float rr = static_cast<float>(circle.r);
 
     const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
     const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);

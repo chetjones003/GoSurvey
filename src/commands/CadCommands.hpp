@@ -6202,12 +6202,13 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
     break;
   }
   case SelectedEntity::Type::Circle: {
-    if (idx < 0 || static_cast<size_t>(idx) * 4 + 3 >= st.userCirclesCxCyZR.size())
+    if (idx < 0 || static_cast<size_t>(idx) >= st.circleCount())
       return;
-    const size_t k = static_cast<size_t>(idx) * 4;
-    st.userCirclesCxCyZR[k] = st.entityGripOrigCx;
-    st.userCirclesCxCyZR[k + 1] = st.entityGripOrigCy;
-    st.userCirclesCxCyZR[k + 3] = st.entityGripOrigR;  // [k+2] is Z — a grip drag does not change it
+    CadCircleRecord cr = st.circle(static_cast<size_t>(idx));
+    cr.cx = st.entityGripOrigCx;
+    cr.cy = st.entityGripOrigCy;
+    cr.r = st.entityGripOrigR;  // cz is Z — a grip drag does not change it
+    st.setCircle(static_cast<size_t>(idx), cr);
     break;
   }
   case SelectedEntity::Type::Spline: {  // REQ-443

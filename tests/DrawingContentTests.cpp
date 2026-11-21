@@ -686,3 +686,28 @@ TEST_CASE("Tab-only drawing state stays with its own drawing and is not undone",
   CHECK(st.currentAnnotationScaleIndex == 3);
   CHECK(st.blockFavorites == std::vector<std::string>{"Valve"});
 }
+
+TEST_CASE("Circle records are read and written through the entity store", "[issue1557][phase5][circles]") {
+  CadEntityStore store;
+  CHECK(store.circleCount() == 0);
+
+  store.pushCircle(CadCircleRecord{1.0, 2.0, 3.0, 4.0});
+  store.pushCircle(CadCircleRecord{5.0, 6.0, 7.0, 8.0});
+  CHECK(store.circleCount() == 2);
+  CHECK(store.userCirclesCxCyZR == std::vector<double>{1, 2, 3, 4, 5, 6, 7, 8});
+
+  const CadCircleRecord second = store.circle(1);
+  CHECK(second.cx == 5.0);
+  CHECK(second.cy == 6.0);
+  CHECK(second.cz == 7.0);
+  CHECK(second.r == 8.0);
+
+  store.setCircle(0, CadCircleRecord{9.0, 10.0, 11.0, 12.0});
+  CHECK(store.circle(0).r == 12.0);
+  CHECK(store.circle(1).cx == 5.0);  // neighbour untouched
+
+  store.eraseCircle(0);
+  CHECK(store.circleCount() == 1);
+  CHECK(store.circle(0).cx == 5.0);
+  CHECK(store.circle(0).r == 8.0);
+}

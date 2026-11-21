@@ -349,14 +349,14 @@ void appendBreakRemovedSpan(std::vector<float>* out, const AppCommandState& cmd,
     return;
   }
   case SelectedEntity::Type::Circle: {
-    const size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 3 >= cmd.userCirclesCxCyZR.size())
+    const size_t ci = static_cast<size_t>(e.index);
+    if (ci >= cmd.circleCount())
       return;
     CadArc removed{};
-    removed.cx = cmd.userCirclesCxCyZR[k];
-    removed.cy = cmd.userCirclesCxCyZR[k + 1];
-    removed.z = cmd.userCirclesCxCyZR[k + 2];
-    removed.r = cmd.userCirclesCxCyZR[k + 3];
+    removed.cx = cmd.circle(ci).cx;
+    removed.cy = cmd.circle(ci).cy;
+    removed.z = cmd.circle(ci).cz;
+    removed.r = cmd.circle(ci).r;
     removed.startRad = p1.theta;
     float sweep = std::fmod(p2.theta - p1.theta, kTwoPi);
     if (sweep < 0.f)
@@ -541,17 +541,17 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);  // keep the endpoint's elevation
         }
       } else if (e.type == SelectedEntity::Type::Circle) {
-        const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
-        if (k + 3 >= cmd.userCirclesCxCyZR.size())
+        const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
+        if (ci >= cmd.circleCount())
           continue;
         float cnx = kFlatNormalX;
         float cny = kFlatNormalY;
         float cnz = kFlatNormalZ;
-        CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);  // a translation cannot tilt a plane
-        appendPreviewCircle(prevLines, prevCircles, cmd.userCirclesCxCyZR[k] + dx,
-                            cmd.userCirclesCxCyZR[k + 1] + dy,
-                            cmd.userCirclesCxCyZR[k + 2],  // z rides along unchanged
-                            cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
+        CircleNormalAt(cmd.userCircleNormals, ci, &cnx, &cny, &cnz);  // a translation cannot tilt a plane
+        appendPreviewCircle(prevLines, prevCircles, cmd.circle(ci).cx + dx,
+                            cmd.circle(ci).cy + dy,
+                            cmd.circle(ci).cz,  // z rides along unchanged
+                            cmd.circle(ci).r, cnx, cny, cnz);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
         if (k >= cmd.userArcs.size())
@@ -629,16 +629,16 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
             prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2] + dz);
           }
         } else if (e.type == SelectedEntity::Type::Circle) {
-          const size_t k = static_cast<size_t>(e.index) * 4;
-          if (k + 3 >= cmd.userCirclesCxCyZR.size())
+          const size_t ci = static_cast<size_t>(e.index);
+          if (ci >= cmd.circleCount())
             continue;
           float cnx = kFlatNormalX;
           float cny = kFlatNormalY;
           float cnz = kFlatNormalZ;
-          CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
-          appendPreviewCircle(prevLines, prevCircles, cmd.userCirclesCxCyZR[k] + dx,
-                              cmd.userCirclesCxCyZR[k + 1] + dy, cmd.userCirclesCxCyZR[k + 2] + dz,
-                              cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
+          CircleNormalAt(cmd.userCircleNormals, ci, &cnx, &cny, &cnz);
+          appendPreviewCircle(prevLines, prevCircles, cmd.circle(ci).cx + dx,
+                              cmd.circle(ci).cy + dy, cmd.circle(ci).cz + dz,
+                              cmd.circle(ci).r, cnx, cny, cnz);
         } else if (e.type == SelectedEntity::Type::Arc) {
           const size_t k = static_cast<size_t>(e.index);
           if (k >= cmd.userArcs.size())
@@ -726,17 +726,17 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
             prevLines->push_back(static_cast<float>(p.z));
           }
         } else if (e.type == SelectedEntity::Type::Circle) {
-          const size_t k = static_cast<size_t>(e.index) * 4;
-          if (k + 3 >= cmd.userCirclesCxCyZR.size())
+          const size_t ci = static_cast<size_t>(e.index);
+          if (ci >= cmd.circleCount())
             continue;
-          const ray3d::Vec3 c = rp(cmd.userCirclesCxCyZR[k], cmd.userCirclesCxCyZR[k + 1], cmd.userCirclesCxCyZR[k + 2]);
+          const ray3d::Vec3 c = rp(cmd.circle(ci).cx, cmd.circle(ci).cy, cmd.circle(ci).cz);
           float cnx = kFlatNormalX;
           float cny = kFlatNormalY;
           float cnz = kFlatNormalZ;
-          CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
+          CircleNormalAt(cmd.userCircleNormals, ci, &cnx, &cny, &cnz);
           const ray3d::Vec3 n = rv(cnx, cny, cnz);  // the plane turns with the circle (REQ-312/328)
           appendPreviewCircle(prevLines, prevCircles, static_cast<float>(c.x), static_cast<float>(c.y),
-                              static_cast<float>(c.z), cmd.userCirclesCxCyZR[k + 3], static_cast<float>(n.x),
+                              static_cast<float>(c.z), cmd.circle(ci).r, static_cast<float>(n.x),
                               static_cast<float>(n.y), static_cast<float>(n.z));
         } else if (e.type == SelectedEntity::Type::Arc) {
           const size_t k = static_cast<size_t>(e.index);
@@ -912,17 +912,17 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
         }
       } else if (e.type == SelectedEntity::Type::Circle) {
-        const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
-        if (k + 3 >= cmd.userCirclesCxCyZR.size())
+        const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
+        if (ci >= cmd.circleCount())
           continue;
-        float cx = cmd.userCirclesCxCyZR[k], cy = cmd.userCirclesCxCyZR[k + 1];
+        float cx = cmd.circle(ci).cx, cy = cmd.circle(ci).cy;
         if (inBox(cx, cy)) { cx += dx; cy += dy; }
         float cnx = kFlatNormalX;
         float cny = kFlatNormalY;
         float cnz = kFlatNormalZ;
-        CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);  // STRETCH moves, so the plane holds
-        appendPreviewCircle(prevLines, prevCircles, cx, cy, cmd.userCirclesCxCyZR[k + 2],
-                            cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
+        CircleNormalAt(cmd.userCircleNormals, ci, &cnx, &cny, &cnz);  // STRETCH moves, so the plane holds
+        appendPreviewCircle(prevLines, prevCircles, cx, cy, cmd.circle(ci).cz,
+                            cmd.circle(ci).r, cnx, cny, cnz);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
         if (k >= cmd.userArcs.size())
@@ -991,13 +991,13 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       prevLines->push_back(cb.content.userLinesFlat[i + 5]);
     }
     // Circles
-    for (size_t i = 0; i + 3 < cb.content.userCirclesCxCyZR.size() + 1; i += 4) {  // cx,cy,z,r
+    for (size_t i = 0; i < cb.content.circleCount(); ++i) {  // cx,cy,z,r
       float cnx = kFlatNormalX;
       float cny = kFlatNormalY;
       float cnz = kFlatNormalZ;
-      CircleNormalAt(cb.content.userCircleNormals, i / 4, &cnx, &cny, &cnz);
-      appendPreviewCircle(prevLines, prevCircles, cb.content.userCirclesCxCyZR[i + 0] + dx, cb.content.userCirclesCxCyZR[i + 1] + dy,
-                          cb.content.userCirclesCxCyZR[i + 2], cb.content.userCirclesCxCyZR[i + 3], cnx, cny, cnz);
+      CircleNormalAt(cb.content.userCircleNormals, i, &cnx, &cny, &cnz);
+      const CadCircleRecord c = cb.content.circle(i);
+      appendPreviewCircle(prevLines, prevCircles, c.cx + dx, c.cy + dy, c.cz, c.r, cnx, cny, cnz);
     }
     // Arcs
     for (const auto& a : cb.content.userArcs) {
@@ -1080,20 +1080,20 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
         }
       } else if (e.type == SelectedEntity::Type::Circle) {
-        const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
-        if (k + 3 >= cmd.userCirclesCxCyZR.size())
+        const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
+        if (ci >= cmd.circleCount())
           continue;
-        float x = cmd.userCirclesCxCyZR[k];
-        float y = cmd.userCirclesCxCyZR[k + 1];
-        float r = cmd.userCirclesCxCyZR[k + 3];
+        float x = cmd.circle(ci).cx;
+        float y = cmd.circle(ci).cy;
+        float r = cmd.circle(ci).r;
         scalePreviewPt(bx, by, sc, &x, &y);
         r *= sc;
         float cnx = kFlatNormalX;
         float cny = kFlatNormalY;
         float cnz = kFlatNormalZ;
-        CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);  // a uniform scale keeps the normal
+        CircleNormalAt(cmd.userCircleNormals, ci, &cnx, &cny, &cnz);  // a uniform scale keeps the normal
         appendPreviewCircle(prevLines, prevCircles, x, y,
-                            cmd.userCirclesCxCyZR[k + 2],  // SCALE is planar here - z unscaled
+                            cmd.circle(ci).cz,  // SCALE is planar here - z unscaled
                             r, cnx, cny, cnz);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
@@ -1189,19 +1189,19 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
         }
       } else if (e.type == SelectedEntity::Type::Circle) {
-        const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
-        if (k + 3 >= cmd.userCirclesCxCyZR.size())
+        const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
+        if (ci >= cmd.circleCount())
           continue;
-        float x = cmd.userCirclesCxCyZR[k];
-        float y = cmd.userCirclesCxCyZR[k + 1];
+        float x = cmd.circle(ci).cx;
+        float y = cmd.circle(ci).cy;
         mirrorPreviewPt(x0, y0, x1, y1, &x, &y);
         float cnx = kFlatNormalX;
         float cny = kFlatNormalY;
         float cnz = kFlatNormalZ;
-        CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
+        CircleNormalAt(cmd.userCircleNormals, ci, &cnx, &cny, &cnz);
         ReflectNormalAcrossLine(x0, y0, x1, y1, &cnx, &cny);  // the plane is mirrored too (REQ-312)
-        appendPreviewCircle(prevLines, prevCircles, x, y, cmd.userCirclesCxCyZR[k + 2],
-                            cmd.userCirclesCxCyZR[k + 3],  // radius preserved (isometry)
+        appendPreviewCircle(prevLines, prevCircles, x, y, cmd.circle(ci).cz,
+                            cmd.circle(ci).r,  // radius preserved (isometry)
                             cnx, cny, cnz);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
@@ -1386,20 +1386,20 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
-      if (k + 3 >= cmd.userCirclesCxCyZR.size())
+      const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
+      if (ci >= cmd.circleCount())
         continue;
-      float x = cmd.userCirclesCxCyZR[k];
-      float y = cmd.userCirclesCxCyZR[k + 1];
+      float x = cmd.circle(ci).cx;
+      float y = cmd.circle(ci).cy;
       rotatePreviewPt(bx, by, theta, &x, &y);
       float cnx = kFlatNormalX;
       float cny = kFlatNormalY;
       float cnz = kFlatNormalZ;
-      CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
+      CircleNormalAt(cmd.userCircleNormals, ci, &cnx, &cny, &cnz);
       RotateNormalAboutZ(theta, &cnx, &cny);  // rotation is about the Z axis, and so is the normal's
       appendPreviewCircle(prevLines, prevCircles, x, y,
-                          cmd.userCirclesCxCyZR[k + 2],  // rotation is about the Z axis
-                          cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
+                          cmd.circle(ci).cz,  // rotation is about the Z axis
+                          cmd.circle(ci).r, cnx, cny, cnz);
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= cmd.userArcs.size())
@@ -1489,18 +1489,18 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
       hlLines->push_back(static_cast<LineVert>(cmd.userLinesFlat[k + i * 3 + 2]));
     }
   } else if (e.type == SelectedEntity::Type::Circle) {
-    const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
-    if (k + 3 >= cmd.userCirclesCxCyZR.size())
+    const size_t ci = static_cast<size_t>(e.index);  // cx,cy,z,r
+    if (ci >= cmd.circleCount())
       return;
     // Through the same emitter the previews use, so a selected tilted circle is highlighted on the
     // plane it is drawn on rather than ringed flat beside itself (REQ-312).
     float cnx = kFlatNormalX;
     float cny = kFlatNormalY;
     float cnz = kFlatNormalZ;
-    CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
+    CircleNormalAt(cmd.userCircleNormals, ci, &cnx, &cny, &cnz);
     std::vector<float> strip;
-    appendPreviewCircle(&strip, hlCircles, cmd.userCirclesCxCyZR[k], cmd.userCirclesCxCyZR[k + 1],
-                        cmd.userCirclesCxCyZR[k + 2], cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
+    appendPreviewCircle(&strip, hlCircles, cmd.circle(ci).cx, cmd.circle(ci).cy,
+                        cmd.circle(ci).cz, cmd.circle(ci).r, cnx, cny, cnz);
     AppendFloatLineBatch(strip, hlLines);
   } else if (e.type == SelectedEntity::Type::Alignment) {  // REQ-480: highlight the exact geometry, sampled for display
     const size_t k = static_cast<size_t>(e.index);

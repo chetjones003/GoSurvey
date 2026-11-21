@@ -570,7 +570,7 @@ void EditorWindow::RefreshProperties() {
     else if (e.type == SelectedEntity::Type::Annotation) texts.push_back(e);
   }
   const bool pure = nOther == 0 && ((lines.size() == st.selection.size()) || (circles.size() == st.selection.size()) || (texts.size() == st.selection.size()));
-  const size_t lineCount = st.userLinesFlat.size() / 6, circleCount = st.userCirclesCxCyZR.size() / 4;
+  const size_t lineCount = st.userLinesFlat.size() / 6, circleCount = st.circleCount();
   if (none && st.selectedSurveyPointIndices.empty()) {
     for (const char* label : {"Start X", "Start Y", "End X", "End Y"}) {
       auto* dash = new QLabel(QString::fromUtf8("\xE2\x80\x94"), body);
@@ -621,12 +621,12 @@ void EditorWindow::RefreshProperties() {
     readOnly(derived, "Rotation rel. north", bearing(dx, dy), "propDerivedBearing");
   } else if (circles.size() == 1 && static_cast<size_t>(circles[0].index) < circleCount) {
     const int i = circles[0].index;
-    const double* v = &st.userCirclesCxCyZR[static_cast<size_t>(i) * 4];
+    const CadCircleRecord v = st.circle(static_cast<size_t>(i));
     using F = propedit::CircleField;
     struct Item { const char* label; const char* name; F field; double shown; char axis; };
     const Item items[] = {
-        {"Center X", "propCircleCenterX", F::CenterX, v[0] + ox, 'X'}, {"Center Y", "propCircleCenterY", F::CenterY, v[1] + oy, 'Y'},
-        {"Center Z", "propCircleCenterZ", F::CenterZ, v[2], 'Z'},     {"Radius", "propCircleRadius", F::Radius, v[3], 0}};
+        {"Center X", "propCircleCenterX", F::CenterX, v.cx + ox, 'X'}, {"Center Y", "propCircleCenterY", F::CenterY, v.cy + oy, 'Y'},
+        {"Center Z", "propCircleCenterZ", F::CenterZ, v.cz, 'Z'},     {"Radius", "propCircleRadius", F::Radius, v.r, 0}};
     for (const auto& item : items) {
       addRow(geometryRows, item.label, numberField(item.name, fmt(item.shown), [this, i, f = item.field](double value) {
         return propedit::SetCircleField(m_State, i, f, value);
@@ -634,9 +634,9 @@ void EditorWindow::RefreshProperties() {
     }
     constexpr double kPi = 3.14159265358979323846;
     auto* derived = section("Derived", "propertiesDerived");
-    readOnly(derived, "Diameter", fmt(2 * v[3]), "propDerivedDiameter");
-    readOnly(derived, "Circumference", fmt(2 * kPi * v[3]), "propDerivedCircumference");
-    readOnly(derived, "Area", fmt(kPi * v[3] * v[3]), "propDerivedArea");
+    readOnly(derived, "Diameter", fmt(2 * v.r), "propDerivedDiameter");
+    readOnly(derived, "Circumference", fmt(2 * kPi * v.r), "propDerivedCircumference");
+    readOnly(derived, "Area", fmt(kPi * v.r * v.r), "propDerivedArea");
   } else if (texts.size() == 1 && static_cast<size_t>(texts[0].index) < st.cadAnnotations.size()) {
     const int i = texts[0].index;
     const CadAnnotation& ann = st.cadAnnotations[static_cast<size_t>(i)];
@@ -699,9 +699,9 @@ void EditorWindow::RefreshProperties() {
     constexpr double kPi = 3.14159265358979323846;
     for (const auto& e : circles) {
       if (static_cast<size_t>(e.index) >= circleCount) continue;
-      const double* v = &st.userCirclesCxCyZR[static_cast<size_t>(e.index) * 4];
-      center.append(fmt(v[0] + ox) + ", " + fmt(v[1] + oy)); radius.append(fmt(v[3])); diameter.append(fmt(2 * v[3]));
-      circumference.append(fmt(2 * kPi * v[3])); area.append(fmt(kPi * v[3] * v[3]));
+      const CadCircleRecord v = st.circle(static_cast<size_t>(e.index));
+      center.append(fmt(v.cx + ox) + ", " + fmt(v.cy + oy)); radius.append(fmt(v.r)); diameter.append(fmt(2 * v.r));
+      circumference.append(fmt(2 * kPi * v.r)); area.append(fmt(kPi * v.r * v.r));
     }
     readOnly(geometryRows, "Center", Merge(center), "propMultiCenter");
     readOnly(geometryRows, "Radius", Merge(radius), "propMultiRadius");

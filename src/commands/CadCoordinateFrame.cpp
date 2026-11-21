@@ -33,10 +33,13 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
     add2(&st.userLinesFlat[i], &st.userLinesFlat[i + 1]);
     add2(&st.userLinesFlat[i + 3], &st.userLinesFlat[i + 4]);
   }
-  // Stride 4 (cx,cy,z,r): only the centre's X and Y rebase. Z is absolute (ADR-025 D2) and the
-  // radius is a length, not a position — neither may take a document-origin offset.
-  for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4)
-    add2(&st.userCirclesCxCyZR[i], &st.userCirclesCxCyZR[i + 1]);
+  // Only the centre's X and Y rebase. Z is absolute (ADR-025 D2) and the radius is a length, not
+  // a position — neither may take a document-origin offset.
+  for (size_t i = 0; i < st.circleCount(); ++i) {
+    CadCircleRecord cr = st.circle(i);
+    add2(&cr.cx, &cr.cy);
+    st.setCircle(i, cr);
+  }
   for (CadArc& a : st.userArcs)
     add2(&a.cx, &a.cy);
   for (CadEllipse& el : st.userEllipses)

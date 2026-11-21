@@ -127,17 +127,19 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
   }
 
   // Circles
-  for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4) {
-    if (selective && !sCircles.count(static_cast<int>(i / 4))) continue;
-    HelmertPt(a, b, tx, ty, &st.userCirclesCxCyZR[i], &st.userCirclesCxCyZR[i + 1]);
-    st.userCirclesCxCyZR[i + 3] *= sc;
+  for (size_t ci = 0; ci < st.circleCount(); ++ci) {
+    if (selective && !sCircles.count(static_cast<int>(ci))) continue;
+    CadCircleRecord cr = st.circle(ci);
+    HelmertPt(a, b, tx, ty, &cr.cx, &cr.cy);
+    cr.r *= sc;
+    st.setCircle(ci, cr);
     float anx = 0.f, any = 0.f, anz = 1.f;   // REQ-312: the plane turns with the circle
-    CircleNormalAt(st.userCircleNormals, i / 4, &anx, &any, &anz);
+    CircleNormalAt(st.userCircleNormals, ci, &anx, &any, &anz);
     RotateNormalAboutZ(rad, &anx, &any);
-    if (i / 4 * 3 + 2 < st.userCircleNormals.size()) {
-      st.userCircleNormals[i / 4 * 3 + 0] = anx;
-      st.userCircleNormals[i / 4 * 3 + 1] = any;
-      st.userCircleNormals[i / 4 * 3 + 2] = anz;
+    if (ci * 3 + 2 < st.userCircleNormals.size()) {
+      st.userCircleNormals[ci * 3 + 0] = anx;
+      st.userCircleNormals[ci * 3 + 1] = any;
+      st.userCircleNormals[ci * 3 + 2] = anz;
     }
   }
 

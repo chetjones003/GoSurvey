@@ -121,13 +121,14 @@ void CaptureSelectionInto(const AppCommandState& st, CadBlockContent* c, float b
       c->userLineAttrs.push_back(a);
       c->lineVis.push_back("");
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 >= st.userCirclesCxCyZR.size())
+      const size_t ci = static_cast<size_t>(e.index);
+      if (ci >= st.circleCount())
         continue;
-      c->userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k] - bx);
-      c->userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k + 1] - by);
-      c->userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k + 2] - bz);
-      c->userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k + 3]);
+      CadCircleRecord cr = st.circle(ci);
+      cr.cx -= bx;
+      cr.cy -= by;
+      cr.cz -= bz;
+      c->pushCircle(cr);
       EntityAttributes a{};
       if (static_cast<size_t>(e.index) < st.userCircleAttrs.size())
         a = st.userCircleAttrs[static_cast<size_t>(e.index)];
@@ -201,7 +202,7 @@ void CadBlockCaptureDrawing(const AppCommandState& st, CadBlockContent* c) {
   static_cast<CadEntityStore&>(*c) = static_cast<const CadEntityStore&>(st);
   c->lineVis.assign(st.userLineAttrs.size(), "");
   c->circleVis.assign(st.userCircleAttrs.size(), "");
-  EnsureCircleNormals(c->userCircleNormals, st.userCirclesCxCyZR.size() / 4);
+  EnsureCircleNormals(c->userCircleNormals, st.circleCount());
   for (const CadBlockRef& r : st.cadBlockRefs) {
     CadBlockNested n;
     n.defName = r.defName;
@@ -220,8 +221,8 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   // then the attribute arrays are padded to their entity counts as before.
   static_cast<CadEntityStore&>(st) = static_cast<const CadEntityStore&>(c);
   st.userLineAttrs.resize(st.userLinesFlat.size() / 6);
-  st.userCircleAttrs.resize(st.userCirclesCxCyZR.size() / 4);
-  EnsureCircleNormals(st.userCircleNormals, st.userCirclesCxCyZR.size() / 4);
+  st.userCircleAttrs.resize(st.circleCount());
+  EnsureCircleNormals(st.userCircleNormals, st.circleCount());
   st.userArcAttrs.resize(st.userArcs.size());
   st.userEllAttrs.resize(st.userEllipses.size());
   SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // legacy block defs have none
@@ -273,9 +274,9 @@ void HarvestDrawingPrimitivesIntoContent(const AppCommandState& st, CadBlockCont
   static_cast<CadEntityStore&>(*c) = static_cast<const CadEntityStore&>(st);
   c->userLineAttrs.resize(st.userLinesFlat.size() / 6);
   c->lineVis.assign(st.userLinesFlat.size() / 6, "");
-  c->userCircleAttrs.resize(st.userCirclesCxCyZR.size() / 4);
-  c->circleVis.assign(st.userCirclesCxCyZR.size() / 4, "");
-  EnsureCircleNormals(c->userCircleNormals, st.userCirclesCxCyZR.size() / 4);
+  c->userCircleAttrs.resize(st.circleCount());
+  c->circleVis.assign(st.circleCount(), "");
+  EnsureCircleNormals(c->userCircleNormals, st.circleCount());
   c->userArcAttrs.resize(st.userArcs.size());
   c->userEllAttrs.resize(st.userEllipses.size());
   c->cadAnnotationAttrs.resize(st.cadAnnotations.size());
@@ -569,10 +570,8 @@ void EraseSelectedSources(AppCommandState& st) {
   dedup(circles);
   for (int i = static_cast<int>(circles.size()) - 1; i >= 0; --i) {
     const int k = circles[static_cast<size_t>(i)];
-    const size_t o = static_cast<size_t>(k) * 4;
-    if (o + 3 < st.userCirclesCxCyZR.size())
-      st.userCirclesCxCyZR.erase(st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(o),
-                                 st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(o + 4));
+    if (static_cast<size_t>(k) < st.circleCount())
+      st.eraseCircle(static_cast<size_t>(k));
     if (static_cast<size_t>(k) < st.userCircleAttrs.size())
       st.userCircleAttrs.erase(st.userCircleAttrs.begin() + k);
     EraseCircleNormal(st.userCircleNormals, static_cast<size_t>(k));

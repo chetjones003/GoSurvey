@@ -1350,11 +1350,11 @@ void EditorViewport::paintGL() {
           break;
         }
         case SelectedEntity::Type::Circle: {
-          const std::size_t k = static_cast<std::size_t>(selected.index) * 4;
-          if (selected.index >= 0 && k + 3 < m_State.userCirclesCxCyZR.size()) {
-            const auto& c = m_State.userCirclesCxCyZR;
-            grips.push_back({c[k], c[k + 1], c[k + 2]});
-            grips.push_back({c[k] + c[k + 3], c[k + 1], c[k + 2]});
+          const std::size_t ci = static_cast<std::size_t>(selected.index);
+          if (selected.index >= 0 && ci < m_State.circleCount()) {
+            const CadCircleRecord c = m_State.circle(ci);
+            grips.push_back({c.cx, c.cy, c.cz});
+            grips.push_back({c.cx + c.r, c.cy, c.cz});
           }
           break;
         }

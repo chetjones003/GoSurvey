@@ -56,11 +56,13 @@ template <class V> void MoveLines(V& lines, const Xf& f) {
   }
 }
 
-template <class V, class N> void MoveCircles(V& cxCyZR, N& normals, const Xf& f) {
-  for (size_t i = 0; i + 3 < cxCyZR.size(); i += 4) {
-    f.Pt(&cxCyZR[i], &cxCyZR[i + 1]);
-    f.Z(&cxCyZR[i + 2]);
-    cxCyZR[i + 3] *= f.s;
+template <class S, class N> void MoveCircles(S& store, N& normals, const Xf& f) {
+  for (size_t i = 0; i < store.circleCount(); ++i) {
+    CadCircleRecord cr = store.circle(i);
+    f.Pt(&cr.cx, &cr.cy);
+    f.Z(&cr.cz);
+    cr.r *= f.s;
+    store.setCircle(i, cr);
   }
   for (size_t i = 0; i + 2 < normals.size(); i += 3)
     f.Dir(&normals[i], &normals[i + 1]);
@@ -213,7 +215,7 @@ void ApplyDrawingConversion(AppCommandState& st, const geo::Similarity& t, std::
   st.worldDocumentOriginY = oy;
 
   MoveLines(st.userLinesFlat, f);
-  MoveCircles(st.userCirclesCxCyZR, st.userCircleNormals, f);
+  MoveCircles(st, st.userCircleNormals, f);
   MoveArcs(st.userArcs, f, t.rotationRad);
   MoveEllipses(st.userEllipses, f);
   MovePolylineVerts(st.userPolylineVerts, f);
@@ -290,8 +292,10 @@ bool ClipboardWorldExtents(const CadClipboard& cb, double* minX, double* maxX, d
     add(cb.content.userLinesFlat[i], cb.content.userLinesFlat[i + 1]);
     add(cb.content.userLinesFlat[i + 3], cb.content.userLinesFlat[i + 4]);
   }
-  for (size_t i = 0; i + 3 < cb.content.userCirclesCxCyZR.size(); i += 4)
-    add(cb.content.userCirclesCxCyZR[i], cb.content.userCirclesCxCyZR[i + 1], cb.content.userCirclesCxCyZR[i + 3]);
+  for (size_t i = 0; i < cb.content.circleCount(); ++i) {
+    const CadCircleRecord cr = cb.content.circle(i);
+    add(cr.cx, cr.cy, cr.r);
+  }
   for (const CadArc& a : cb.content.userArcs)
     add(a.cx, a.cy, a.r);
   for (const CadEllipse& e : cb.content.userEllipses)
@@ -332,7 +336,7 @@ void ApplyClipboardConversion(CadClipboard& cb, const geo::Similarity& t, double
   Xf f{t.scale, std::cos(t.rotationRad), std::sin(t.rotationRad), t.scaleZ, t.rotationRad, nx - destOriginX, ny - destOriginY};
 
   MoveLines(cb.content.userLinesFlat, f);
-  MoveCircles(cb.content.userCirclesCxCyZR, cb.content.userCircleNormals, f);
+  MoveCircles(cb.content, cb.content.userCircleNormals, f);
   MoveArcs(cb.content.userArcs, f, t.rotationRad);
   MoveEllipses(cb.content.userEllipses, f);
   MovePolylineVerts(cb.content.userPolylineVerts, f);

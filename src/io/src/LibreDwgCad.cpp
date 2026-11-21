@@ -461,10 +461,7 @@ void LocalLine(AppCommandState& st, double x0, double y0, double z0, double x1, 
 
 void LocalCircle(AppCommandState& st, double cx, double cy, double r, double z, const EntityAttributes& at,
                  double nx = 0.0, double ny = 0.0, double nz = 1.0) {
-  st.userCirclesCxCyZR.push_back(cx - st.worldDocumentOriginX);
-  st.userCirclesCxCyZR.push_back(cy - st.worldDocumentOriginY);
-  st.userCirclesCxCyZR.push_back(z);
-  st.userCirclesCxCyZR.push_back(r);
+  st.pushCircle(CadCircleRecord{cx - st.worldDocumentOriginX, cy - st.worldDocumentOriginY, z, r});
   st.userCircleAttrs.push_back(at);
   PushCircleNormal(st.userCircleNormals, static_cast<float>(nx), static_cast<float>(ny),
                    static_cast<float>(nz));
@@ -1625,7 +1622,7 @@ static void CaptureScratchIntoBlockContent(const AppCommandState& st, CadBlockCo
   c->userCircleAttrs = st.userCircleAttrs;
   c->circleVis.assign(st.userCircleAttrs.size(), "");
   c->userCircleNormals = st.userCircleNormals;
-  EnsureCircleNormals(c->userCircleNormals, st.userCirclesCxCyZR.size() / 4);
+  EnsureCircleNormals(c->userCircleNormals, st.circleCount());
   c->userArcs = st.userArcs;
   c->userArcAttrs = st.userArcAttrs;
   c->userEllipses = st.userEllipses;
@@ -4815,9 +4812,10 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
     if (Dwg_Entity_LINE* e = dwg_add_LINE(blkhdr, &a, &b))
       apply(e->parent, AttrAt(content.userLineAttrs, i));
   }
-  const size_t nC = content.userCirclesCxCyZR.size() / 4;
+  const size_t nC = content.circleCount();
   for (size_t i = 0; i < nC; ++i) {
-    dwg_point_3d c{content.userCirclesCxCyZR[i * 4 + 0], content.userCirclesCxCyZR[i * 4 + 1], content.userCirclesCxCyZR[i * 4 + 2]};
+    const CadCircleRecord rec = content.circle(i);
+    dwg_point_3d c{rec.cx, rec.cy, rec.cz};
     float nx = kFlatNormalX, ny = kFlatNormalY, nz = kFlatNormalZ;
     CircleNormalAt(content.userCircleNormals, i, &nx, &ny, &nz);
     dwg_point_3d ext{0.0, 0.0, 1.0};
@@ -4830,7 +4828,7 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
         ext = {static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)};
       }
     }
-    if (Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(blkhdr, &c, content.userCirclesCxCyZR[i * 4 + 3])) {
+    if (Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(blkhdr, &c, rec.r)) {
       e->extrusion.x = ext.x;
       e->extrusion.y = ext.y;
       e->extrusion.z = ext.z;
@@ -7797,10 +7795,11 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       regEnt(e, la);
     }
   }
-  const size_t nC = st.userCirclesCxCyZR.size() / 4;
+  const size_t nC = st.circleCount();
   for (size_t i = 0; i < nC; ++i) {
     dwg_point_3d c{};
-    world(st.userCirclesCxCyZR[i * 4 + 0], st.userCirclesCxCyZR[i * 4 + 1], st.userCirclesCxCyZR[i * 4 + 2], &c);
+    const CadCircleRecord rec = st.circle(i);
+    world(rec.cx, rec.cy, rec.cz, &c);
     float nx = kFlatNormalX, ny = kFlatNormalY, nz = kFlatNormalZ;
     CircleNormalAt(st.userCircleNormals, i, &nx, &ny, &nz);
     const bool circFlat = IsFlatNormal(nx, ny, nz);
@@ -7818,7 +7817,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         ext.z = static_cast<double>(nz);
       }
     }
-    Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(hdr, &c, static_cast<double>(st.userCirclesCxCyZR[i * 4 + 3]));
+    Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(hdr, &c, static_cast<double>(rec.r));
     if (e != nullptr) {
       e->extrusion.x = ext.x;
       e->extrusion.y = ext.y;
@@ -9197,7 +9196,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
     EnsureSurveyPointLabelMtext(st, i, nullptr);
 
   const size_t nLines = st.userLinesFlat.size() / 6;
-  const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
+  const size_t nCirc = st.circleCount();
   const size_t nPoly = st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1;
   log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) + " import — " + std::to_string(nLines) +
                 " line(s), " + std::to_string(nCirc) + " circle(s), " + std::to_string(nPoly) + " polyline(s), " +

@@ -121,10 +121,9 @@ double PolylinePathLength(const AppCommandState& st, int pi) {
 }
 
 double CircleAreaPlan(const AppCommandState& st, int ci) {
-  if (ci < 0 || static_cast<size_t>(ci) >= st.userCirclesCxCyZR.size() / 4)
+  if (ci < 0 || static_cast<size_t>(ci) >= st.circleCount())
     return 0.0;
-  const size_t k = static_cast<size_t>(ci) * 4;
-  const double r = st.userCirclesCxCyZR[k + 3];
+  const double r = st.circle(static_cast<size_t>(ci)).r;
   if (!(r > 0.0))
     return 0.0;
   constexpr double kPi = 3.14159265358979323846;
@@ -132,10 +131,9 @@ double CircleAreaPlan(const AppCommandState& st, int ci) {
 }
 
 double CircleCircumferencePlan(const AppCommandState& st, int ci) {
-  if (ci < 0 || static_cast<size_t>(ci) >= st.userCirclesCxCyZR.size() / 4)
+  if (ci < 0 || static_cast<size_t>(ci) >= st.circleCount())
     return 0.0;
-  const size_t k = static_cast<size_t>(ci) * 4;
-  const double r = st.userCirclesCxCyZR[k + 3];
+  const double r = st.circle(static_cast<size_t>(ci)).r;
   if (!(r > 0.0))
     return 0.0;
   constexpr double kPi = 3.14159265358979323846;

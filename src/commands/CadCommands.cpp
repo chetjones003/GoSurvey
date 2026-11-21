@@ -810,10 +810,11 @@ static float PaperPointSegDist2(float px, float py, float ax, float ay, float bx
 // header-only box-select + unit tests can share it.
 
 void AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch) {
-  for (size_t i = 0; i + 3 < scratch.userCirclesCxCyZR.size(); i += 4) {
-    L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i]));
-    L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i + 1]));
-    L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i + 3]));
+  for (size_t i = 0; i < scratch.circleCount(); ++i) {
+    const CadCircleRecord c = scratch.circle(i);
+    L.paperCircles.push_back(static_cast<float>(c.cx));
+    L.paperCircles.push_back(static_cast<float>(c.cy));
+    L.paperCircles.push_back(static_cast<float>(c.r));
   }
   L.paperCircleAttrs.insert(L.paperCircleAttrs.end(), scratch.userCircleAttrs.begin(), scratch.userCircleAttrs.end());
   L.paperArcs.insert(L.paperArcs.end(), scratch.userArcs.begin(), scratch.userArcs.end());
@@ -1653,9 +1654,10 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
       break;
     }
     case SelectedEntity::Type::Circle: {
-      const size_t k = static_cast<size_t>(sel.index) * 4;
-      if (k + 3 < cmd.userCirclesCxCyZR.size()) {
-        const float cx = static_cast<float>(cmd.userCirclesCxCyZR[k]), cy = static_cast<float>(cmd.userCirclesCxCyZR[k + 1]), r = static_cast<float>(cmd.userCirclesCxCyZR[k + 3]);
+      const size_t ci = static_cast<size_t>(sel.index);
+      if (ci < cmd.circleCount()) {
+        const CadCircleRecord c = cmd.circle(ci);
+        const float cx = static_cast<float>(c.cx), cy = static_cast<float>(c.cy), r = static_cast<float>(c.r);
         tryGrip(sel, cx, cy, 0);
         tryGrip(sel, cx + r, cy, 1);
       }
@@ -1784,10 +1786,10 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
     break;
   }
   case SelectedEntity::Type::Circle: {
-    const size_t k = static_cast<size_t>(bestSel.index) * 4;
-    cmd.entityGripOrigCx = static_cast<float>(cmd.userCirclesCxCyZR[k]);
-    cmd.entityGripOrigCy = static_cast<float>(cmd.userCirclesCxCyZR[k + 1]);
-    cmd.entityGripOrigR = static_cast<float>(cmd.userCirclesCxCyZR[k + 3]);
+    const CadCircleRecord c = cmd.circle(static_cast<size_t>(bestSel.index));
+    cmd.entityGripOrigCx = static_cast<float>(c.cx);
+    cmd.entityGripOrigCy = static_cast<float>(c.cy);
+    cmd.entityGripOrigR = static_cast<float>(c.r);
     break;
   }
   case SelectedEntity::Type::Polyline: {
@@ -8903,11 +8905,8 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float cz, float r, fl
     L->paperCircles.push_back(r);
     L->paperCircleAttrs.push_back(MakeNewEntityAttrs(st));
   } else {
-    st.userCirclesCxCyZR.push_back(cx);
-    st.userCirclesCxCyZR.push_back(cy);
     // A new circle lands on the active work plane (REQ-058) — the ELEV command moves it.
-    st.userCirclesCxCyZR.push_back(cz);
-    st.userCirclesCxCyZR.push_back(r);
+    st.pushCircle(CadCircleRecord{cx, cy, cz, r});
     st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
     PushCircleNormal(st.userCircleNormals, nx, ny, nz);
   }
@@ -8975,10 +8974,9 @@ void ExecuteCenterMarkFromSelection(AppCommandState& st, std::vector<std::string
   std::vector<Mark> marks;
   for (const SelectedEntity& entity : st.selection) {
     if (entity.type == SelectedEntity::Type::Circle && entity.index >= 0 &&
-        static_cast<std::size_t>(entity.index) * 4 + 3 < st.userCirclesCxCyZR.size()) {
-      const std::size_t i = static_cast<std::size_t>(entity.index) * 4;
-      marks.push_back({st.userCirclesCxCyZR[i], st.userCirclesCxCyZR[i + 1],
-                       st.userCirclesCxCyZR[i + 2], st.userCirclesCxCyZR[i + 3]});
+        static_cast<std::size_t>(entity.index) < st.circleCount()) {
+      const CadCircleRecord c = st.circle(static_cast<std::size_t>(entity.index));
+      marks.push_back({c.cx, c.cy, c.cz, c.r});
     } else if (entity.type == SelectedEntity::Type::Arc && entity.index >= 0 &&
                static_cast<std::size_t>(entity.index) < st.userArcs.size()) {
       const CadArc& arc = st.userArcs[static_cast<std::size_t>(entity.index)];
@@ -9907,12 +9905,12 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       }
     }
   }
-  const auto& C = st.userCirclesCxCyZR;
-  if (C.size() % 4 == 0) {
-    for (size_t ci = 0; ci + 3 < C.size(); ci += 4) {
-      const float cx = static_cast<float>(C[ci]);
-      const float cy = static_cast<float>(C[ci + 1]);
-      const float r = static_cast<float>(C[ci + 3]);
+  if (st.circleStoreWellFormed()) {
+    for (size_t ci = 0; ci < st.circleCount(); ++ci) {
+      const CadCircleRecord cc = st.circle(ci);
+      const float cx = static_cast<float>(cc.cx);
+      const float cy = static_cast<float>(cc.cy);
+      const float r = static_cast<float>(cc.r);
       bool hit = false;
       if (proj) {
         // Orbited: a circle projects to an ELLIPSE, so there is no analytic rim test to reach for —
@@ -9922,11 +9920,11 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
         float cnx = 0.f;
         float cny = 0.f;
         float cnz = 1.f;
-        CircleNormalAt(st.userCircleNormals, ci / 4, &cnx, &cny, &cnz);
+        CircleNormalAt(st.userCircleNormals, ci, &cnx, &cny, &cnz);
         constexpr double kTwoPi = 6.28318530717958647692;
         SampleCurveWorld(curvePts,
                          CurvePlane(static_cast<double>(cx), static_cast<double>(cy),
-                                    static_cast<double>(C[ci + 2]), static_cast<double>(cnx),
+                                    static_cast<double>(cc.cz), static_cast<double>(cnx),
                                     static_cast<double>(cny), static_cast<double>(cnz)),
                          static_cast<double>(r), 0.0, kTwoPi, CurveSegmentCount(kTwoPi));
         hit = CurveHitsRect(curvePts);
@@ -9939,7 +9937,7 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       if (hit) {
         SelectedEntity e{};
         e.type = SelectedEntity::Type::Circle;
-        e.index = static_cast<int>(ci / 4);
+        e.index = static_cast<int>(ci);
         hits.push_back(e);
       }
     }
@@ -10963,12 +10961,13 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         newLineAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
-      size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 < st.userCirclesCxCyZR.size()) {
-        newCircles.push_back(static_cast<float>(st.userCirclesCxCyZR[k] + dx));
-        newCircles.push_back(static_cast<float>(st.userCirclesCxCyZR[k + 1] + dy));
-        newCircles.push_back(static_cast<float>(st.userCirclesCxCyZR[k + 2] + dz));  // z (issue #400: UCS-plane arrays)
-        newCircles.push_back(static_cast<float>(st.userCirclesCxCyZR[k + 3]));  // r
+      size_t ci = static_cast<size_t>(e.index);
+      if (ci < st.circleCount()) {
+        const CadCircleRecord c = st.circle(ci);
+        newCircles.push_back(static_cast<float>(c.cx + dx));
+        newCircles.push_back(static_cast<float>(c.cy + dy));
+        newCircles.push_back(static_cast<float>(c.cz + dz));  // z (issue #400: UCS-plane arrays)
+        newCircles.push_back(static_cast<float>(c.r));  // r
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
           a = st.userCircleAttrs[static_cast<size_t>(e.index)];
@@ -11170,14 +11169,12 @@ static void CommitPasteIntoModel(AppCommandState& st, double dx, double dy) {
     st.selection.push_back({ST::LineSeg, static_cast<int>(st.userLineAttrs.size()) - 1});
   }
   // Clipboard → model: both are cx,cy,z,r, so Z carries through a paste unchanged (REQ-057).
-  for (size_t i = 0; i + 3 < cb.content.userCirclesCxCyZR.size() + 1; i += 4) {
-    st.userCirclesCxCyZR.push_back(cb.content.userCirclesCxCyZR[i + 0] + dx);
-    st.userCirclesCxCyZR.push_back(cb.content.userCirclesCxCyZR[i + 1] + dy);
-    st.userCirclesCxCyZR.push_back(cb.content.userCirclesCxCyZR[i + 2]);
-    st.userCirclesCxCyZR.push_back(cb.content.userCirclesCxCyZR[i + 3]);
-    st.userCircleAttrs.push_back(cb.content.userCircleAttrs[i / 4]);
+  for (size_t i = 0; i < cb.content.circleCount(); ++i) {
+    const CadCircleRecord c = cb.content.circle(i);
+    st.pushCircle(CadCircleRecord{c.cx + dx, c.cy + dy, c.cz, c.r});
+    st.userCircleAttrs.push_back(cb.content.userCircleAttrs[i]);
     float pnx = 0.f, pny = 0.f, pnz = 1.f;
-    CircleNormalAt(cb.content.userCircleNormals, i / 4, &pnx, &pny, &pnz);
+    CircleNormalAt(cb.content.userCircleNormals, i, &pnx, &pny, &pnz);
     PushCircleNormal(st.userCircleNormals, pnx, pny, pnz);
     st.selection.push_back({ST::Circle, static_cast<int>(st.userCircleAttrs.size()) - 1});
   }
@@ -11314,11 +11311,12 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
   // Clipboard (cx,cy,z,r) → paper (cx,cy,r): Z is DROPPED at the sheet boundary, not carried.
   // A sheet is 2D (ADR-025 (g)), so an elevated model circle pasted onto paper lands flat —
   // deliberate and visible, rather than silently keeping an elevation paper cannot represent.
-  for (size_t i = 0; i + 3 < cb.content.userCirclesCxCyZR.size() + 1; i += 4) {
-    L.paperCircles.push_back(static_cast<float>(cb.content.userCirclesCxCyZR[i + 0] + dx));
-    L.paperCircles.push_back(static_cast<float>(cb.content.userCirclesCxCyZR[i + 1] + dy));
-    L.paperCircles.push_back(static_cast<float>(cb.content.userCirclesCxCyZR[i + 3]));  // radius — [i+2] is the discarded Z
-    L.paperCircleAttrs.push_back(cb.content.userCircleAttrs[i / 4]);
+  for (size_t i = 0; i < cb.content.circleCount(); ++i) {
+    const CadCircleRecord c = cb.content.circle(i);
+    L.paperCircles.push_back(static_cast<float>(c.cx + dx));
+    L.paperCircles.push_back(static_cast<float>(c.cy + dy));
+    L.paperCircles.push_back(static_cast<float>(c.r));  // radius — the Z is discarded at the sheet
+    L.paperCircleAttrs.push_back(cb.content.userCircleAttrs[i]);
     st.selectedPaperEntities.push_back({PT::Circle, static_cast<int>(L.paperCircles.size() / 3) - 1});
   }
   for (size_t i = 0; i < cb.content.userArcs.size(); ++i) {
@@ -11544,15 +11542,16 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         newLineAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
-      size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 < st.userCirclesCxCyZR.size()) {
-        float cx = static_cast<float>(st.userCirclesCxCyZR[k]);
-        float cy = static_cast<float>(st.userCirclesCxCyZR[k + 1]);
-        float r = static_cast<float>(st.userCirclesCxCyZR[k + 3]);
+      size_t ci = static_cast<size_t>(e.index);
+      if (ci < st.circleCount()) {
+        const CadCircleRecord c = st.circle(ci);
+        float cx = static_cast<float>(c.cx);
+        float cy = static_cast<float>(c.cy);
+        float r = static_cast<float>(c.r);
         RotateAroundBase(bx, by, rad, &cx, &cy);
         newCircles.push_back(cx);
         newCircles.push_back(cy);
-        newCircles.push_back(static_cast<float>(st.userCirclesCxCyZR[k + 2]));  // z — rotation is about the Z axis
+        newCircles.push_back(static_cast<float>(c.cz));  // z — rotation is about the Z axis
         newCircles.push_back(r);
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
@@ -11820,13 +11819,14 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
         newLineAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 < st.userCirclesCxCyZR.size()) {
-        const ray3d::Vec3 c = rotPt(static_cast<float>(st.userCirclesCxCyZR[k]), static_cast<float>(st.userCirclesCxCyZR[k + 1]), static_cast<float>(st.userCirclesCxCyZR[k + 2]));
+      const size_t ci = static_cast<size_t>(e.index);
+      if (ci < st.circleCount()) {
+        const CadCircleRecord cc = st.circle(ci);
+        const ray3d::Vec3 c = rotPt(static_cast<float>(cc.cx), static_cast<float>(cc.cy), static_cast<float>(cc.cz));
         newCircles.push_back(static_cast<float>(c.x));
         newCircles.push_back(static_cast<float>(c.y));
         newCircles.push_back(static_cast<float>(c.z));
-        newCircles.push_back(static_cast<float>(st.userCirclesCxCyZR[k + 3]));  // r
+        newCircles.push_back(static_cast<float>(cc.r));  // r
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
           a = st.userCircleAttrs[static_cast<size_t>(e.index)];
@@ -12249,14 +12249,16 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
       size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 < st.userCirclesCxCyZR.size()) {
-        float cx = static_cast<float>(st.userCirclesCxCyZR[k]);
-        float cy = static_cast<float>(st.userCirclesCxCyZR[k + 1]);
-        float r = static_cast<float>(st.userCirclesCxCyZR[k + 3]);
+      size_t ci = static_cast<size_t>(e.index);
+      if (ci < st.circleCount()) {
+        const CadCircleRecord c = st.circle(ci);
+        float cx = static_cast<float>(c.cx);
+        float cy = static_cast<float>(c.cy);
+        float r = static_cast<float>(c.r);
         ReflectPtAcrossLine(x0, y0, x1, y1, &cx, &cy);
         newCircles.push_back(cx);
         newCircles.push_back(cy);
-        newCircles.push_back(static_cast<float>(st.userCirclesCxCyZR[k + 2]));  // z — reflection is about a vertical plane
+        newCircles.push_back(static_cast<float>(c.cz));  // z — reflection is about a vertical plane
         newCircles.push_back(r);                            // radius is preserved (isometry)
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
@@ -12519,9 +12521,11 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Circle)
       continue;
-    size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 3 < st.userCirclesCxCyZR.size()) {
-      RotateAroundBase(bx, by, rad, &st.userCirclesCxCyZR[k], &st.userCirclesCxCyZR[k + 1]);
+    const size_t ci = static_cast<size_t>(e.index);
+    if (ci < st.circleCount()) {
+      CadCircleRecord rotated = st.circle(ci);
+      RotateAroundBase(bx, by, rad, &rotated.cx, &rotated.cy);
+      st.setCircle(ci, rotated);
       // REQ-312: the plane turns with the circle. This function rotates the selection IN PLACE and
       // was missed when the normal was threaded through the copying paths -- with every normal +Z
       // there was nothing here to see, and a tilted circle rotated by ROTATESEL kept the plane it
@@ -12716,13 +12720,12 @@ static void RotateSelectionInPlaceAboutAxis(AppCommandState& st, const ray3d::Ve
       break;
     }
     case SelectedEntity::Type::Circle: {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 >= st.userCirclesCxCyZR.size())
+      const size_t ci = static_cast<size_t>(e.index);
+      if (ci >= st.circleCount())
         break;
-      const ray3d::Vec3 c = rotPt(static_cast<float>(st.userCirclesCxCyZR[k]), static_cast<float>(st.userCirclesCxCyZR[k + 1]), static_cast<float>(st.userCirclesCxCyZR[k + 2]));
-      st.userCirclesCxCyZR[k] = static_cast<float>(c.x);
-      st.userCirclesCxCyZR[k + 1] = static_cast<float>(c.y);
-      st.userCirclesCxCyZR[k + 2] = static_cast<float>(c.z);
+      const CadCircleRecord cc = st.circle(ci);
+      const ray3d::Vec3 c = rotPt(static_cast<float>(cc.cx), static_cast<float>(cc.cy), static_cast<float>(cc.cz));
+      st.setCircle(ci, CadCircleRecord{c.x, c.y, c.z, cc.r});
       float nx = 0.f, ny = 0.f, nz = 1.f;
       CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &nx, &ny, &nz);
       const ray3d::Vec3 n = rotDir(nx, ny, nz);
@@ -12893,11 +12896,13 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Circle)
       continue;
-    size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 3 < st.userCirclesCxCyZR.size()) {
-      st.userCirclesCxCyZR[k] += dx;
-      st.userCirclesCxCyZR[k + 1] += dy;
-      st.userCirclesCxCyZR[k + 2] += dz;  // cx, cy, Z, r - the plane the circle sits in
+    const size_t ci = static_cast<size_t>(e.index);
+    if (ci < st.circleCount()) {
+      CadCircleRecord moved = st.circle(ci);
+      moved.cx += dx;
+      moved.cy += dy;
+      moved.cz += dz;  // cx, cy, Z, r - the plane the circle sits in
+      st.setCircle(ci, moved);
     }
   }
   for (const auto& e : st.selection) {
@@ -13079,10 +13084,10 @@ static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outC
         ++n;
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 < st.userCirclesCxCyZR.size()) {
-        accx += static_cast<double>(st.userCirclesCxCyZR[k]);
-        accy += static_cast<double>(st.userCirclesCxCyZR[k + 1]);
+      const size_t ci = static_cast<size_t>(e.index);
+      if (ci < st.circleCount()) {
+        accx += st.circle(ci).cx;
+        accy += st.circle(ci).cy;
         ++n;
       }
     } else if (e.type == SelectedEntity::Type::Arc) {
@@ -13191,11 +13196,12 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
         }
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 < st.userCirclesCxCyZR.size()) {
-        const float cx = static_cast<float>(st.userCirclesCxCyZR[k]);
-        const float cy = static_cast<float>(st.userCirclesCxCyZR[k + 1]);
-        const float r = static_cast<float>(st.userCirclesCxCyZR[k + 3]);
+      const size_t ci = static_cast<size_t>(e.index);
+      if (ci < st.circleCount()) {
+        const CadCircleRecord c = st.circle(ci);
+        const float cx = static_cast<float>(c.cx);
+        const float cy = static_cast<float>(c.cy);
+        const float r = static_cast<float>(c.r);
         m = static_cast<float>(std::max<double>(m, std::hypot(cx - bx, cy - by) + r));
       }
     } else if (e.type == SelectedEntity::Type::Arc) {
@@ -13413,10 +13419,12 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Circle)
       continue;
-    size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 3 < st.userCirclesCxCyZR.size()) {
-      ScalePtAroundBase(bx, by, sc, &st.userCirclesCxCyZR[k], &st.userCirclesCxCyZR[k + 1]);
-      st.userCirclesCxCyZR[k + 3] *= sc;
+    const size_t ci = static_cast<size_t>(e.index);
+    if (ci < st.circleCount()) {
+      CadCircleRecord scaled = st.circle(ci);
+      ScalePtAroundBase(bx, by, sc, &scaled.cx, &scaled.cy);
+      scaled.r *= sc;
+      st.setCircle(ci, scaled);
     }
   }
   for (const auto& e : st.selection) {
@@ -13524,9 +13532,9 @@ static void ScaleSelectionZAboutBase(AppCommandState& st, float bz, float sc) {
       break;
     }
     case SelectedEntity::Type::Circle: {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 < st.userCirclesCxCyZR.size())
-        sz(&st.userCirclesCxCyZR[k + 2]);
+      const size_t ci = static_cast<size_t>(e.index);
+      if (ci < st.circleCount())
+        sz(&st.circleComponent(ci, CadCircleComponent::Z));
       break;
     }
     case SelectedEntity::Type::Arc: {
@@ -15443,23 +15451,20 @@ static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std
 }
 
 static bool CommitOffsetCircle(AppCommandState& st, int ci, float signedD, std::vector<std::string>& log) {
-  const size_t k = static_cast<size_t>(ci) * 4;
-  if (k + 3 >= st.userCirclesCxCyZR.size())
+  if (ci < 0 || static_cast<size_t>(ci) >= st.circleCount())
     return false;
   PushUndoSnapshot(st, "Offset circle");
-  const double cx = st.userCirclesCxCyZR[k];
-  const double cy = st.userCirclesCxCyZR[k + 1];
-  const double cz = st.userCirclesCxCyZR[k + 2];  // read before any push_back reallocates
-  const double r = st.userCirclesCxCyZR[k + 3];
+  const CadCircleRecord src = st.circle(static_cast<size_t>(ci));  // copied before any push_back reallocates
+  const double cx = src.cx;
+  const double cy = src.cy;
+  const double cz = src.cz;
+  const double r = src.r;
   const double nr = r + signedD;
   if (nr <= 1e-6) {
     log.push_back("OFFSET — resulting circle radius too small.");
     return false;
   }
-  st.userCirclesCxCyZR.push_back(cx);
-  st.userCirclesCxCyZR.push_back(cy);
-  st.userCirclesCxCyZR.push_back(cz);  // the offset copy stays on the source circle's plane
-  st.userCirclesCxCyZR.push_back(nr);
+  st.pushCircle(CadCircleRecord{cx, cy, cz, nr});  // the offset copy stays on the source circle's plane
   PushOffsetCopyAttrs(st, st.userCircleAttrs, ci);
   float onx = 0.f, ony = 0.f, onz = 1.f;
   CircleNormalAt(st.userCircleNormals, static_cast<size_t>(ci), &onx, &ony, &onz);
@@ -15695,13 +15700,13 @@ static void HandleOffsetThroughPick(AppCommandState& st, double px, double py, s
     break;
   }
   case SelectedEntity::Type::Circle: {
-    const size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 3 >= st.userCirclesCxCyZR.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.circleCount())
       return;
-    double cx = st.userCirclesCxCyZR[k], cy = st.userCirclesCxCyZR[k + 1];
-    const double r = st.userCirclesCxCyZR[k + 3];
+    const CadCircleRecord circle = st.circle(static_cast<size_t>(e.index));
+    double cx = circle.cx, cy = circle.cy;
+    const double r = circle.r;
     if (tilted) {
-      const ucs::Point2D c = OffsetPlaneLocal(st, cx, cy, st.userCirclesCxCyZR[k + 2]);
+      const ucs::Point2D c = OffsetPlaneLocal(st, cx, cy, circle.cz);
       cx = c.x; cy = c.y;
     }
     signedD = static_cast<float>(SignedSideCircle(cx, cy, r, cur.x, cur.y));
@@ -15765,13 +15770,13 @@ static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std:
     break;
   }
   case SelectedEntity::Type::Circle: {
-    const size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 3 >= st.userCirclesCxCyZR.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.circleCount())
       return;
-    double cx = st.userCirclesCxCyZR[k], cy = st.userCirclesCxCyZR[k + 1];
-    const double r = st.userCirclesCxCyZR[k + 3];
+    const CadCircleRecord circle = st.circle(static_cast<size_t>(e.index));
+    double cx = circle.cx, cy = circle.cy;
+    const double r = circle.r;
     if (tilted) {
-      const ucs::Point2D c = OffsetPlaneLocal(st, cx, cy, st.userCirclesCxCyZR[k + 2]);
+      const ucs::Point2D c = OffsetPlaneLocal(st, cx, cy, circle.cz);
       cx = c.x; cy = c.y;
     }
     const double side = SignedSideCircle(cx, cy, r, cur.x, cur.y);
@@ -15910,8 +15915,9 @@ static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::ve
   case SelectedEntity::Type::Circle: {
     const size_t k = static_cast<size_t>(index) * 3;
     if (index < 0 || k + 2 >= sourceLayout.paperCircles.size()) return false;
-    staged.userCirclesCxCyZR = {sourceLayout.paperCircles[k], sourceLayout.paperCircles[k + 1], 0.0,
-                                sourceLayout.paperCircles[k + 2]};
+    staged.userCirclesCxCyZR.clear();
+    staged.pushCircle(CadCircleRecord{sourceLayout.paperCircles[k], sourceLayout.paperCircles[k + 1], 0.0,
+                                      sourceLayout.paperCircles[k + 2]});
     staged.userCircleNormals = {0.f, 0.f, 1.f};
     if (static_cast<size_t>(index) < sourceLayout.paperCircleAttrs.size()) inherited = sourceLayout.paperCircleAttrs[index];
     staged.userCircleAttrs.push_back(inherited);
@@ -15954,7 +15960,7 @@ static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::ve
     HandleOffsetThroughPick(staged, px, py, stagedLog, false);
   else
     HandleOffsetSidePick(staged, px, py, stagedLog, false);
-  const bool produced = staged.userLinesFlat.size() > 6 || staged.userCirclesCxCyZR.size() > 4 ||
+  const bool produced = staged.userLinesFlat.size() > 6 || staged.circleCount() > 1 ||
                         staged.userArcs.size() > 1 || staged.userEllipses.size() > 1 ||
                         staged.userPolylineOffsets.size() > 2;
   if (!produced) {
@@ -15969,8 +15975,8 @@ static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::ve
     updated.paperLineAttrs.push_back(inherited);
     break;
   case SelectedEntity::Type::Circle:
-    updated.paperCircles.insert(updated.paperCircles.end(), {static_cast<float>(staged.userCirclesCxCyZR[4]),
-        static_cast<float>(staged.userCirclesCxCyZR[5]), static_cast<float>(staged.userCirclesCxCyZR[7])});
+    updated.paperCircles.insert(updated.paperCircles.end(), {static_cast<float>(staged.circle(1).cx),
+        static_cast<float>(staged.circle(1).cy), static_cast<float>(staged.circle(1).r)});
     updated.paperCircleAttrs.push_back(inherited);
     break;
   case SelectedEntity::Type::Arc:
@@ -17621,12 +17627,9 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
       break;
     }
     case T::Circle: {
-      const size_t b = k * 4;  // cx, cy, z, r
-      if (b + 3 < st.userCirclesCxCyZR.size()) {
-        const double cx = st.userCirclesCxCyZR[b];
-        const double cy = st.userCirclesCxCyZR[b + 1];
-        const double cz = st.userCirclesCxCyZR[b + 2];
-        const double r = st.userCirclesCxCyZR[b + 3];
+      if (k < st.circleCount()) {
+        const CadCircleRecord c = st.circle(k);
+        const double cx = c.cx, cy = c.cy, cz = c.cz, r = c.r;
         grow(cx - r, cy - r, cz);
         grow(cx + r, cy + r, cz);
       }
@@ -18855,10 +18858,7 @@ static void CopyPaperSelectionToClipboard(AppCommandState& st, PaperLayout& L, s
       if (k + 2 >= L.paperCircles.size())
         break;
       // Paper (cx,cy,r) → clipboard (cx,cy,z,r): a sheet has no elevation, so Z enters as 0.
-      cb.content.userCirclesCxCyZR.push_back(L.paperCircles[k]);
-      cb.content.userCirclesCxCyZR.push_back(L.paperCircles[k + 1]);
-      cb.content.userCirclesCxCyZR.push_back(0.f);
-      cb.content.userCirclesCxCyZR.push_back(L.paperCircles[k + 2]);  // radius
+      cb.content.pushCircle(CadCircleRecord{L.paperCircles[k], L.paperCircles[k + 1], 0.0, L.paperCircles[k + 2]});  // radius last
       cb.content.userCircleAttrs.push_back(attrAt(L.paperCircleAttrs, r.index));
       PushCircleNormal(cb.content.userCircleNormals);   // a sheet is 2D (ADR-025 (g)): the plane is world XY
       expandBbox(L.paperCircles[k], L.paperCircles[k + 1]);
@@ -18999,19 +18999,16 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       expandBbox(static_cast<float>(st.userLinesFlat[k]), static_cast<float>(st.userLinesFlat[k + 1]));
       expandBbox(static_cast<float>(st.userLinesFlat[k + 3]), static_cast<float>(st.userLinesFlat[k + 4]));
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 >= st.userCirclesCxCyZR.size())
+      const size_t ci = static_cast<size_t>(e.index);
+      if (ci >= st.circleCount())
         continue;
-      cb.content.userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k]);
-      cb.content.userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k + 1]);
-      cb.content.userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k + 2]);  // z survives a model copy
-      cb.content.userCirclesCxCyZR.push_back(st.userCirclesCxCyZR[k + 3]);
+      cb.content.pushCircle(st.circle(ci));  // z survives a model copy
       cb.content.userCircleAttrs.push_back(static_cast<size_t>(e.index) < st.userCircleAttrs.size()
                                    ? st.userCircleAttrs[static_cast<size_t>(e.index)] : EntityAttributes{});
       float ccx = 0.f, ccy = 0.f, ccz = 1.f;
       CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &ccx, &ccy, &ccz);
       PushCircleNormal(cb.content.userCircleNormals, ccx, ccy, ccz);
-      expandBbox(static_cast<float>(st.userCirclesCxCyZR[k]), static_cast<float>(st.userCirclesCxCyZR[k + 1]));
+      expandBbox(static_cast<float>(st.circle(ci).cx), static_cast<float>(st.circle(ci).cy));
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= st.userArcs.size())
@@ -19625,11 +19622,10 @@ static void AppendModelBoundaryShapes(const AppCommandState& st, const SelectedE
     segs->push_back({{st.userLinesFlat[k], st.userLinesFlat[k + 1]},
                      {st.userLinesFlat[k + 3], st.userLinesFlat[k + 4]}});
   } else if (e.type == T::Circle) {
-    const size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 3 >= st.userCirclesCxCyZR.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.circleCount())
       return;
-    conics->push_back(curveisect::MakeCircle(st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1],
-                                             st.userCirclesCxCyZR[k + 3]));
+    const CadCircleRecord c = st.circle(static_cast<size_t>(e.index));
+    conics->push_back(curveisect::MakeCircle(c.cx, c.cy, c.r));
   } else if (e.type == T::Arc) {
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
       return;
@@ -20560,11 +20556,11 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
     return true;
   }
   case SelectedEntity::Type::Circle: {
-    const size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 3 >= st.userCirclesCxCyZR.size())
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.circleCount())
       return false;
-    const float cx = static_cast<float>(st.userCirclesCxCyZR[k]), cy = static_cast<float>(st.userCirclesCxCyZR[k + 1]), r = static_cast<float>(st.userCirclesCxCyZR[k + 3]);
-    out->z = static_cast<float>(st.userCirclesCxCyZR[k + 2]);  // the circle's plane (REQ-057 / ADR-025)
+    const CadCircleRecord c = st.circle(static_cast<size_t>(e.index));
+    const float cx = static_cast<float>(c.cx), cy = static_cast<float>(c.cy), r = static_cast<float>(c.r);
+    out->z = static_cast<float>(c.cz);  // the circle's plane (REQ-057 / ADR-025)
     out->theta = std::atan2(py - cy, px - cx);
     out->x = cx + r * std::cos(out->theta);
     out->y = cy + r * std::sin(out->theta);
@@ -20685,11 +20681,11 @@ static void ApplyBreakToLine(AppCommandState& st, int index, const BreakPoint& p
 
 static void ApplyBreakToCircle(AppCommandState& st, int index, const BreakPoint& p1, const BreakPoint& p2,
                                std::vector<std::string>& log) {
-  const size_t k = static_cast<size_t>(index) * 4;
-  if (k + 3 >= st.userCirclesCxCyZR.size())
+  if (index < 0 || static_cast<size_t>(index) >= st.circleCount())
     return;
-  const float cx = static_cast<float>(st.userCirclesCxCyZR[k]), cy = static_cast<float>(st.userCirclesCxCyZR[k + 1]);
-  const float z = static_cast<float>(st.userCirclesCxCyZR[k + 2]), r = static_cast<float>(st.userCirclesCxCyZR[k + 3]);
+  const CadCircleRecord c = st.circle(static_cast<size_t>(index));
+  const float cx = static_cast<float>(c.cx), cy = static_cast<float>(c.cy);
+  const float z = static_cast<float>(c.cz), r = static_cast<float>(c.r);
   float bnx = 0.f, bny = 0.f, bnz = 1.f;   // read before the erase below drops the side-car entry
   CircleNormalAt(st.userCircleNormals, static_cast<size_t>(index), &bnx, &bny, &bnz);
   float startRad = 0.f, sweepRad = 0.f;
@@ -20699,8 +20695,7 @@ static void ApplyBreakToCircle(AppCommandState& st, int index, const BreakPoint&
                                                                 : EntityAttributes{};
   const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
   PushUndoSnapshot(st, "Break");
-  st.userCirclesCxCyZR.erase(st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k),
-                             st.userCirclesCxCyZR.begin() + (static_cast<std::ptrdiff_t>(k)+ 4));
+  st.eraseCircle(static_cast<size_t>(index));
   if (static_cast<size_t>(index) < st.userCircleAttrs.size())
     st.userCircleAttrs.erase(st.userCircleAttrs.begin() + index);
   EraseCircleNormal(st.userCircleNormals, static_cast<size_t>(index));
@@ -21533,13 +21528,15 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, 
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Circle)
       continue;
-    const size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 3 >= st.userCirclesCxCyZR.size())
+    const size_t ci = static_cast<size_t>(e.index);
+    if (ci >= st.circleCount())
       continue;
-    if (inBox(static_cast<float>(st.userCirclesCxCyZR[k]), static_cast<float>(st.userCirclesCxCyZR[k + 1]), static_cast<float>(st.userCirclesCxCyZR[k + 2]))) {
-      st.userCirclesCxCyZR[k] += dx;
-      st.userCirclesCxCyZR[k + 1] += dy;
-      st.userCirclesCxCyZR[k + 2] += dz;
+    CadCircleRecord cr = st.circle(ci);
+    if (inBox(static_cast<float>(cr.cx), static_cast<float>(cr.cy), static_cast<float>(cr.cz))) {
+      cr.cx += dx;
+      cr.cy += dy;
+      cr.cz += dz;
+      st.setCircle(ci, cr);
     }
   }
   for (const auto& e : st.selection) {
@@ -24583,14 +24580,14 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
       consider(static_cast<double>(L[i + 3]), static_cast<double>(L[i + 4]));
     }
   }
-  const auto& C = st.userCirclesCxCyZR;
-  if (C.size() % 4 == 0) {
-    for (size_t ci = 0; ci + 3 < C.size(); ci += 4) {
-      if (EntityHiddenInViewport(vpFilter, st.userCircleAttrs, ci / 4))
+  if (st.circleStoreWellFormed()) {
+    for (size_t ci = 0; ci < st.circleCount(); ++ci) {
+      if (EntityHiddenInViewport(vpFilter, st.userCircleAttrs, ci))
         continue;
-      const double cx = static_cast<double>(C[ci]);
-      const double cy = static_cast<double>(C[ci + 1]);
-      const double r = std::fabs(static_cast<double>(C[ci + 3]));
+      const CadCircleRecord c = st.circle(ci);
+      const double cx = c.cx;
+      const double cy = c.cy;
+      const double r = std::fabs(c.r);
       if (r <= 1e-12)
         continue;
       consider(cx - r, cy - r);
@@ -24954,14 +24951,14 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       out.push_back(b);
     }
   }
-  const auto& C = st.userCirclesCxCyZR;
-  if (C.size() % 4 == 0) {
-    for (size_t ci = 0; ci + 3 < C.size(); ci += 4) {
-      if (EntityHiddenInViewport(vpFilter, st.userCircleAttrs, ci / 4))
+  if (st.circleStoreWellFormed()) {
+    for (size_t ci = 0; ci < st.circleCount(); ++ci) {
+      if (EntityHiddenInViewport(vpFilter, st.userCircleAttrs, ci))
         continue;
-      const double cx = static_cast<double>(C[ci]);
-      const double cy = static_cast<double>(C[ci + 1]);
-      const double r = std::fabs(static_cast<double>(C[ci + 3]));
+      const CadCircleRecord c = st.circle(ci);
+      const double cx = c.cx;
+      const double cy = c.cy;
+      const double r = std::fabs(c.r);
       if (r <= 1e-12)
         continue;
       EntityBox b{};
@@ -24972,11 +24969,11 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       b.cx = cx;
       b.cy = cy;
       // A tilted circle (REQ-312) rises and falls by up to its radius; a flat one sits at its Z.
-      const size_t ni = (ci / 4) * 3;
+      const size_t ni = ci * 3;
       const bool flat = ni + 2 >= st.userCircleNormals.size() ||
                         IsFlatNormal(st.userCircleNormals[ni], st.userCircleNormals[ni + 1],
                                      st.userCircleNormals[ni + 2]);
-      const double cz = static_cast<double>(C[ci + 2]);
+      const double cz = c.cz;
       EntityBoxGrowZ(b, flat ? cz : cz - r, true);
       EntityBoxGrowZ(b, flat ? cz : cz + r, false);
       out.push_back(b);
@@ -25407,7 +25404,7 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
   if (outSkipped)
     *outSkipped = 0;
   std::vector<EntityBox> ents;
-  ents.reserve(st.userLinesFlat.size() / 6 + st.userCirclesCxCyZR.size() / 4 + st.userArcs.size() +
+  ents.reserve(st.userLinesFlat.size() / 6 + st.circleCount() + st.userArcs.size() +
                st.userEllipses.size() + st.cadSplines.size() + st.cadPoints.size() + st.cadAnnotations.size() +
                st.surveyPoints.size() +
                (st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1));
@@ -28584,7 +28581,7 @@ void EnsureAttrCounts(AppCommandState& st) {
     st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
-  const size_t nc = st.userCirclesCxCyZR.size() / 4;
+  const size_t nc = st.circleCount();
   while (st.userCircleAttrs.size() < nc) {
     st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
@@ -29960,12 +29957,12 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
     return;
   }
   case SelectedEntity::Type::Circle: {
-    if (static_cast<size_t>(idx) * 4 + 3 >= st.userCirclesCxCyZR.size())
+    if (static_cast<size_t>(idx) >= st.circleCount())
       return;
-    const size_t k = static_cast<size_t>(idx) * 4;
-    double& cx = st.userCirclesCxCyZR[k];
-    double& cy = st.userCirclesCxCyZR[k + 1];
-    double& r = st.userCirclesCxCyZR[k + 3];
+    const size_t ci = static_cast<size_t>(idx);
+    double& cx = st.circleComponent(ci, CadCircleComponent::X);
+    double& cy = st.circleComponent(ci, CadCircleComponent::Y);
+    double& r = st.circleComponent(ci, CadCircleComponent::Radius);
     if (st.entityGripWhich == 0) {
       cx = x;
       cy = y;
@@ -30176,7 +30173,7 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
       break;
     }
     case SelectedEntity::Type::Circle: {
-      const size_t n = st.userCirclesCxCyZR.size() / 4;
+      const size_t n = st.circleCount();
       for (size_t i = 0; i < n; ++i)
         consider(SelectedEntity::Type::Circle, static_cast<int>(i));
       break;
@@ -30977,7 +30974,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::set<int> markerIx;  // REQ-359
   std::set<int> multileaderIx;  // REQ-367
   const size_t nLines = st.userLinesFlat.size() / 6;
-  const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
+  const size_t nCirc = st.circleCount();
   const size_t nAnn = st.cadAnnotations.size();
   const size_t nArc = st.userArcs.size();
   const size_t nEll = st.userEllipses.size();
@@ -31040,15 +31037,11 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::vector<int> cv(circIx.begin(), circIx.end());
   std::sort(cv.begin(), cv.end(), std::greater<int>());
   for (int idx : cv) {
-    const size_t k = static_cast<size_t>(idx) * 4;
-    if (k + 3 >= st.userCirclesCxCyZR.size())
+    if (static_cast<size_t>(idx) >= st.circleCount())
       continue;
-    // k + 4, not k + 3: erase() takes a HALF-OPEN range and this store is stride 4
-    // (cx, cy, z, r — architecture §11.8). Removing three floats left the array a non-multiple of
-    // the stride and shifted every later circle by one slot, so each read its predecessor's radius
-    // as its centre X — and SAVEAS wrote that out. Issue #62.
-    st.userCirclesCxCyZR.erase(st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k),
-                               st.userCirclesCxCyZR.begin() + (static_cast<std::ptrdiff_t>(k)+ 4));
+    // One whole record (stride 4) comes out. Removing three floats left the array a non-multiple of
+    // the stride and shifted every later circle by one slot (issue #62); eraseCircle removes all four.
+    st.eraseCircle(static_cast<size_t>(idx));
     if (static_cast<size_t>(idx) < st.userCircleAttrs.size())
       st.userCircleAttrs.erase(st.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
     EraseCircleNormal(st.userCircleNormals, static_cast<size_t>(idx));
@@ -31231,7 +31224,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
 static void EraseMirroredSourceNoUndo(AppCommandState& st) {
   std::set<int> lineIx, circIx, annIx, arcIx, ellIx, polyIx, flIx, tableIx, blockIx;
   const size_t nLines = st.userLinesFlat.size() / 6;
-  const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
+  const size_t nCirc = st.circleCount();
   const size_t nAnn = st.cadAnnotations.size();
   const size_t nArc = st.userArcs.size();
   const size_t nEll = st.userEllipses.size();
@@ -31303,11 +31296,9 @@ static void EraseMirroredSourceNoUndo(AppCommandState& st) {
   std::vector<int> cv(circIx.begin(), circIx.end());
   std::sort(cv.begin(), cv.end(), std::greater<int>());
   for (int idx : cv) {
-    const size_t k = static_cast<size_t>(idx) * 4;
-    if (k + 3 >= st.userCirclesCxCyZR.size())
+    if (static_cast<size_t>(idx) >= st.circleCount())
       continue;
-    st.userCirclesCxCyZR.erase(st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k),
-                               st.userCirclesCxCyZR.begin() + (static_cast<std::ptrdiff_t>(k)+ 4));
+    st.eraseCircle(static_cast<size_t>(idx));
     if (static_cast<size_t>(idx) < st.userCircleAttrs.size())
       st.userCircleAttrs.erase(st.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
     EraseCircleNormal(st.userCircleNormals, static_cast<size_t>(idx));
@@ -31419,14 +31410,15 @@ static void DuplicateCadSelectionReflectedAcrossPlane(AppCommandState& st, const
       break;
     }
     case SelectedEntity::Type::Circle: {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 >= st.userCirclesCxCyZR.size())
+      const size_t ci = static_cast<size_t>(e.index);
+      if (ci >= st.circleCount())
         break;
-      const ray3d::Vec3 c = rp(static_cast<float>(st.userCirclesCxCyZR[k]), static_cast<float>(st.userCirclesCxCyZR[k + 1]), static_cast<float>(st.userCirclesCxCyZR[k + 2]));
+      const CadCircleRecord cc = st.circle(ci);
+      const ray3d::Vec3 c = rp(static_cast<float>(cc.cx), static_cast<float>(cc.cy), static_cast<float>(cc.cz));
       newCircles.push_back(static_cast<float>(c.x));
       newCircles.push_back(static_cast<float>(c.y));
       newCircles.push_back(static_cast<float>(c.z));
-      newCircles.push_back(static_cast<float>(st.userCirclesCxCyZR[k + 3]));  // radius preserved (an isometry)
+      newCircles.push_back(static_cast<float>(cc.r));  // radius preserved (an isometry)
       EntityAttributes a{};
       if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
         a = st.userCircleAttrs[static_cast<size_t>(e.index)];
@@ -31637,12 +31629,13 @@ static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& 
     return;
   }
   if (cut.type == ST::Circle) {
-    const size_t k = static_cast<size_t>(cut.index) * 4;
-    if (k + 3 >= st.userCirclesCxCyZR.size())
+    const size_t ci = static_cast<size_t>(cut.index);
+    if (ci >= st.circleCount())
       return;
-    const float cx = static_cast<float>(st.userCirclesCxCyZR[k]);
-    const float cy = static_cast<float>(st.userCirclesCxCyZR[k + 1]);
-    const float r = static_cast<float>(st.userCirclesCxCyZR[k + 3]);
+    const CadCircleRecord cc = st.circle(ci);
+    const float cx = static_cast<float>(cc.cx);
+    const float cy = static_cast<float>(cc.cy);
+    const float r = static_cast<float>(cc.r);
     constexpr int n = 48;
     const double dcx = static_cast<double>(cx);
     const double dcy = static_cast<double>(cy);
@@ -31788,12 +31781,11 @@ static void CollectAllDrawingCutSegmentsExceptTarget(const AppCommandState& st, 
       CollectCutSegments(st, cut, out);
     }
   }
-  const auto& C = st.userCirclesCxCyZR;
-  if (C.size() % 4 == 0) {
-    for (size_t ci = 0; ci + 3 < C.size(); ci += 4) {
+  if (st.circleStoreWellFormed()) {
+    for (size_t ci = 0; ci < st.circleCount(); ++ci) {
       SelectedEntity cut{};
       cut.type = SelectedEntity::Type::Circle;
-      cut.index = static_cast<int>(ci / 4);
+      cut.index = static_cast<int>(ci);
       CollectCutSegments(st, cut, out);
     }
   }
@@ -32186,15 +32178,15 @@ double CadEntityPickDepthAtPick(const AppCommandState& st, const SelectedEntity&
     return az + u * (bz - az);
   }
   case T::Circle: {
-    const size_t k = static_cast<size_t>(e.index) * 4;
-    const auto& C = st.userCirclesCxCyZR;
-    if (k + 3 >= C.size())
+    const size_t ci = static_cast<size_t>(e.index);
+    if (ci >= st.circleCount())
       return 0.0;
+    const CadCircleRecord cc = st.circle(ci);
     if (useRay) {
       double bestT = 1e300;
       constexpr int n = 24;
       constexpr double twopi = 6.28318530717958647692;
-      const double cx = C[k], cy = C[k + 1], cz = C[k + 2], r = C[k + 3];
+      const double cx = cc.cx, cy = cc.cy, cz = cc.cz, r = cc.r;
       for (int i = 0; i < n; ++i) {
         const double ang = twopi * static_cast<double>(i) / static_cast<double>(n);
         double t = 0.0;
@@ -32204,7 +32196,7 @@ double CadEntityPickDepthAtPick(const AppCommandState& st, const SelectedEntity&
       }
       return bestT;
     }
-    return static_cast<double>(C[k + 2]);
+    return cc.cz;
   }
   case T::Arc: {
     if (static_cast<size_t>(e.index) >= st.userArcs.size())
@@ -32425,16 +32417,16 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       consider(e, d2);
     }
   }
-  const auto& C = st.userCirclesCxCyZR;
-  if (C.size() % 4 == 0) {
-    for (size_t ci = 0; ci + 3 < C.size(); ci += 4) {
+  if (st.circleStoreWellFormed()) {
+    for (size_t ci = 0; ci < st.circleCount(); ++ci) {
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Circle;
-      e.index = static_cast<int>(ci / 4);
-      const double cx = static_cast<double>(C[ci]);
-      const double cy = static_cast<double>(C[ci + 1]);
-      const double cz = static_cast<double>(C[ci + 2]);
-      const double r = static_cast<double>(C[ci + 3]);
+      e.index = static_cast<int>(ci);
+      const CadCircleRecord cr = st.circle(ci);
+      const double cx = cr.cx;
+      const double cy = cr.cy;
+      const double cz = cr.cz;
+      const double r = cr.r;
       if (!useRay) {
         // Plan view keeps the exact analytic distance-to-circumference — unchanged.
         const double d = std::hypot(wx - cx, wy - cy);
@@ -32448,7 +32440,7 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
         double bestD2 = 1e300;
         constexpr int n = 48;
         constexpr double twopi = 6.28318530717958647692;
-        const size_t nIdx = (ci / 4) * 3;
+        const size_t nIdx = ci * 3;
         float nx = 0.f, ny = 0.f, nz = 1.f;
         if (nIdx + 2 < st.userCircleNormals.size()) {
           nx = st.userCircleNormals[nIdx];
@@ -32976,9 +32968,9 @@ static void CadCollectBoundarySegments(const AppCommandState& st, std::vector<ha
       py = y;
     }
   };
-  const auto& C = st.userCirclesCxCyZR;
-  for (size_t ci = 0; ci + 3 < C.size(); ci += 4) {
-    const float cx = static_cast<float>(C[ci]), cy = static_cast<float>(C[ci + 1]), r = static_cast<float>(C[ci + 3]);
+  for (size_t ci = 0; ci < st.circleCount(); ++ci) {
+    const CadCircleRecord cr = st.circle(ci);
+    const float cx = static_cast<float>(cr.cx), cy = static_cast<float>(cr.cy), r = static_cast<float>(cr.r);
     tessellate([&](int i, float* x, float* y) {
       const double a = 6.283185307179586 * i / 48.0;
       *x = cx + r * static_cast<float>(std::cos(a));
@@ -33133,12 +33125,13 @@ static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, floa
       break;
     }
     case T::Circle: {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 >= st.userCirclesCxCyZR.size())
+      const size_t ci = static_cast<size_t>(e.index);
+      if (ci >= st.circleCount())
         return false;
-      const float cx = static_cast<float>(st.userCirclesCxCyZR[k]);
-      const float cy = static_cast<float>(st.userCirclesCxCyZR[k + 1]);
-      const float r = static_cast<float>(st.userCirclesCxCyZR[k + 3]);
+      const CadCircleRecord cr = st.circle(ci);
+      const float cx = static_cast<float>(cr.cx);
+      const float cy = static_cast<float>(cr.cy);
+      const float r = static_cast<float>(cr.r);
       const float side = OfsSignedSideCircle(cx, cy, r, px, py);
       sgn = side >= 0.f ? 1.f : -1.f;
       break;
@@ -33232,10 +33225,11 @@ static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, floa
       break;
     }
     case T::Circle: {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 >= st.userCirclesCxCyZR.size())
+      const size_t ci = static_cast<size_t>(e.index);
+      if (ci >= st.circleCount())
         return false;
-      signedD = OfsSignedSideCircle(static_cast<float>(st.userCirclesCxCyZR[k]), static_cast<float>(st.userCirclesCxCyZR[k + 1]), static_cast<float>(st.userCirclesCxCyZR[k + 3]), px,
+      const CadCircleRecord cr = st.circle(ci);
+      signedD = OfsSignedSideCircle(static_cast<float>(cr.cx), static_cast<float>(cr.cy), static_cast<float>(cr.r), px,
                                   py);
       break;
     }
@@ -33439,12 +33433,13 @@ void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, floa
     break;
   }
   case T::Circle: {
-    const size_t k = static_cast<size_t>(e.index) * 4;
-    if (k + 3 >= cmd.userCirclesCxCyZR.size())
+    const size_t ci = static_cast<size_t>(e.index);
+    if (ci >= cmd.circleCount())
       return;
-    const float cx = static_cast<float>(cmd.userCirclesCxCyZR[k]);
-    const float cy = static_cast<float>(cmd.userCirclesCxCyZR[k + 1]);
-    const float r = static_cast<float>(cmd.userCirclesCxCyZR[k + 3]);
+    const CadCircleRecord cc = cmd.circle(ci);
+    const float cx = static_cast<float>(cc.cx);
+    const float cy = static_cast<float>(cc.cy);
+    const float r = static_cast<float>(cc.r);
     const float nr = r + signedD;
     if (nr <= 1e-6f)
       return;
@@ -33632,15 +33627,16 @@ static bool CutterCurvePlaneAndConic(const AppCommandState& st, const SelectedEn
                                      curveisect::Conic* outConic) {
   using ST = SelectedEntity::Type;
   if (c.type == ST::Circle) {
-    const size_t k = static_cast<size_t>(c.index) * 4;
-    if (k + 3 >= st.userCirclesCxCyZR.size())
+    const size_t ci = static_cast<size_t>(c.index);
+    if (ci >= st.circleCount())
       return false;
-    const float r = static_cast<float>(st.userCirclesCxCyZR[k + 3]);
+    const CadCircleRecord cc = st.circle(ci);
+    const float r = static_cast<float>(cc.r);
     if (!(r > 1e-9f))
       return false;
     float nx = 0.f, ny = 0.f, nz = 1.f;
-    CircleNormalAt(st.userCircleNormals, static_cast<size_t>(c.index), &nx, &ny, &nz);
-    *outPlane = CurvePlane(st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1], st.userCirclesCxCyZR[k + 2], nx, ny, nz);
+    CircleNormalAt(st.userCircleNormals, ci, &nx, &ny, &nz);
+    *outPlane = CurvePlane(cc.cx, cc.cy, cc.cz, nx, ny, nz);
     *outConic = curveisect::MakeCircle(0.0, 0.0, r);
     return true;
   }
@@ -34087,7 +34083,7 @@ static bool Solve3DDrawnLineTrim(const AppCommandState& st, const ray3d::Vec3& f
     }
   };
   addAll(SelectedEntity::Type::LineSeg, static_cast<int>(st.userLinesFlat.size() / 6));
-  addAll(SelectedEntity::Type::Circle, static_cast<int>(st.userCirclesCxCyZR.size() / 4));
+  addAll(SelectedEntity::Type::Circle, static_cast<int>(st.circleCount()));
   addAll(SelectedEntity::Type::Arc, static_cast<int>(st.userArcs.size()));
   addAll(SelectedEntity::Type::Ellipse, static_cast<int>(st.userEllipses.size()));
   addAll(SelectedEntity::Type::Polyline, nPoly);
@@ -34191,10 +34187,7 @@ static bool StagePaperTrimGeometry(const PaperLayout& layout, AppCommandState* s
   staged->userPolylineAttrs = layout.paperPolyAttrs;
   staged->userCirclesCxCyZR.clear();
   for (size_t i = 0; i + 2 < layout.paperCircles.size(); i += 3) {
-    staged->userCirclesCxCyZR.push_back(layout.paperCircles[i]);
-    staged->userCirclesCxCyZR.push_back(layout.paperCircles[i + 1]);
-    staged->userCirclesCxCyZR.push_back(0.f);
-    staged->userCirclesCxCyZR.push_back(layout.paperCircles[i + 2]);
+    staged->pushCircle(CadCircleRecord{layout.paperCircles[i], layout.paperCircles[i + 1], 0.0, layout.paperCircles[i + 2]});
   }
   return true;
 }
@@ -35108,9 +35101,8 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
     cleanup.userPolylineVertsBulge = layout->paperPolyVertsBulge;
     cleanup.userPolylineAttrs = layout->paperPolyAttrs;
     for (size_t i = 0; i + 2 < layout->paperCircles.size(); i += 3) {
-      cleanup.userCirclesCxCyZR.insert(cleanup.userCirclesCxCyZR.end(),
-                                       {layout->paperCircles[i], layout->paperCircles[i + 1], 0.f,
-                                        layout->paperCircles[i + 2]});
+      cleanup.pushCircle(CadCircleRecord{layout->paperCircles[i], layout->paperCircles[i + 1], 0.0,
+                                         layout->paperCircles[i + 2]});
       PushCircleNormal(cleanup.userCircleNormals);
     }
     cleanup.userCircleAttrs = layout->paperCircleAttrs;
@@ -35132,11 +35124,10 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
     layout->paperPolyAttrs = std::move(cleanup.userPolylineAttrs);
     layout->paperCircles.clear();
     layout->paperCircleAttrs = std::move(cleanup.userCircleAttrs);
-    for (size_t i = 0; i + 3 < cleanup.userCirclesCxCyZR.size(); i += 4) {
+    for (size_t i = 0; i < cleanup.circleCount(); ++i) {
+      const CadCircleRecord c = cleanup.circle(i);
       layout->paperCircles.insert(layout->paperCircles.end(),
-                                  {static_cast<float>(cleanup.userCirclesCxCyZR[i]),
-                                   static_cast<float>(cleanup.userCirclesCxCyZR[i + 1]),
-                                   static_cast<float>(cleanup.userCirclesCxCyZR[i + 3])});
+                                  {static_cast<float>(c.cx), static_cast<float>(c.cy), static_cast<float>(c.r)});
     }
     st.selectedPaperEntities.clear();
     BumpCadGpuCache(st);
@@ -35420,16 +35411,15 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
   // 2. CIRCLES — remove exact duplicates (same center + radius)
   // =========================================================================
   {
-    const size_t nC = st.userCirclesCxCyZR.size() / 4;
+    const size_t nC = st.circleCount();
     struct Circ { double cx, cy, z, r; float nx, ny, nz; EntityAttributes attr; };
     std::vector<Circ> cs;
     cs.reserve(nC);
     for (size_t i = 0; i < nC; ++i) {
-      const size_t k = i * 4;
       float cnx = 0.f, cny = 0.f, cnz = 1.f;
       CircleNormalAt(st.userCircleNormals, i, &cnx, &cny, &cnz);
-      cs.push_back({ st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1], st.userCirclesCxCyZR[k + 2],
-                     st.userCirclesCxCyZR[k + 3], cnx, cny, cnz,
+      const CadCircleRecord c = st.circle(i);
+      cs.push_back({ c.cx, c.cy, c.cz, c.r, cnx, cny, cnz,
                      i < st.userCircleAttrs.size() ? st.userCircleAttrs[i] : MakeNewEntityAttrs(st) });
     }
     // Sort by radius then center; allows early break on radius mismatch
@@ -35459,10 +35449,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
     st.userCircleNormals.clear();
     for (size_t i = 0; i < cs.size(); ++i) {
       if (!dead[i]) {
-        st.userCirclesCxCyZR.push_back(cs[i].cx);
-        st.userCirclesCxCyZR.push_back(cs[i].cy);
-        st.userCirclesCxCyZR.push_back(cs[i].z);
-        st.userCirclesCxCyZR.push_back(cs[i].r);
+        st.pushCircle(CadCircleRecord{cs[i].cx, cs[i].cy, cs[i].z, cs[i].r});
         st.userCircleAttrs.push_back(cs[i].attr);
         PushCircleNormal(st.userCircleNormals, cs[i].nx, cs[i].ny, cs[i].nz);
       }
@@ -35476,7 +35463,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
   // =========================================================================
   {
     const size_t nA = st.userArcs.size();
-    const size_t nC = st.userCirclesCxCyZR.size() / 4;
+    const size_t nC = st.circleCount();
     std::vector<bool> dead(nA, false);
 
     // 3a — arcs over full circles
@@ -35484,9 +35471,10 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
       if (dead[i]) continue;
       const CadArc& a = st.userArcs[i];
       for (size_t c = 0; c < nC; ++c) {
-        const double dx = a.cx - st.userCirclesCxCyZR[c * 4];
-        const double dy = a.cy - st.userCirclesCxCyZR[c * 4 + 1];
-        const double dr = a.r  - st.userCirclesCxCyZR[c * 4 + 3];
+        const CadCircleRecord cc = st.circle(c);
+        const double dx = a.cx - cc.cx;
+        const double dy = a.cy - cc.cy;
+        const double dr = a.r  - cc.r;
         if (dx * dx + dy * dy < tolSq && dr * dr < tolSq) { dead[i] = true; ++nRemoved; break; }
       }
     }
@@ -38454,12 +38442,13 @@ bool ExtrudeProfileFromSelection(const AppCommandState& st, const SelectedEntity
 
   if (sel.type == SelectedEntity::Type::Circle) {
     const size_t ci = static_cast<size_t>(sel.index);
-    if (ci * 4 + 3 >= st.userCirclesCxCyZR.size())
+    if (ci >= st.circleCount())
       return false;
-    const double cx = static_cast<double>(st.userCirclesCxCyZR[ci * 4 + 0]);
-    const double cy = static_cast<double>(st.userCirclesCxCyZR[ci * 4 + 1]);
-    const double cz = static_cast<double>(st.userCirclesCxCyZR[ci * 4 + 2]);
-    const double r = static_cast<double>(st.userCirclesCxCyZR[ci * 4 + 3]);
+    const CadCircleRecord cc = st.circle(ci);
+    const double cx = cc.cx;
+    const double cy = cc.cy;
+    const double cz = cc.cz;
+    const double r = cc.r;
     if (!(r > 0.0))
       return false;
     ray3d::Vec3 nrm{0, 0, 1};
@@ -38991,12 +38980,13 @@ namespace {
     // profile role first for every selected entity in order, so a Circle only reaches here when it
     // is not the first closed shape selected.
     const std::size_t ci = static_cast<std::size_t>(sel.index);
-    if (sel.index < 0 || ci * 4 + 3 >= st.userCirclesCxCyZR.size())
+    if (sel.index < 0 || ci >= st.circleCount())
       return false;
-    const double cx = static_cast<double>(st.userCirclesCxCyZR[ci * 4 + 0]);
-    const double cy = static_cast<double>(st.userCirclesCxCyZR[ci * 4 + 1]);
-    const double cz = static_cast<double>(st.userCirclesCxCyZR[ci * 4 + 2]);
-    const double r = static_cast<double>(st.userCirclesCxCyZR[ci * 4 + 3]);
+    const CadCircleRecord cc = st.circle(ci);
+    const double cx = cc.cx;
+    const double cy = cc.cy;
+    const double cz = cc.cz;
+    const double r = cc.r;
     if (!(r > 0.0))
       return false;
     ray3d::Vec3 nrm{0, 0, 1};
@@ -39438,7 +39428,7 @@ std::vector<int> SelectedSolidIndices(const AppCommandState& st) {
 }
 
 std::vector<int> SelectedCircleIndices(const AppCommandState& st) {
-  const int n = static_cast<int>(st.userCirclesCxCyZR.size() / 4);
+  const int n = static_cast<int>(st.circleCount());
   std::vector<int> idx;
   for (const SelectedEntity& e : st.selection) {
     if (e.type == SelectedEntity::Type::Circle && e.index >= 0 && e.index < n &&
@@ -39730,12 +39720,12 @@ void CommitBoolean(AppCommandState& st, CadBooleanOp op, const std::vector<int>&
     // Circles as cylindrical cutters (centre+normal+radius, auto-depth through hole)
     const std::vector<int> circleCutters = SelectedCircleIndices(st);
     for (int ci : circleCutters) {
-      const size_t base = static_cast<size_t>(ci) * 4;
-      if (base + 3 >= st.userCirclesCxCyZR.size()) continue;
-      const double cx = st.userCirclesCxCyZR[base + 0];
-      const double cy = st.userCirclesCxCyZR[base + 1];
-      const double cz = st.userCirclesCxCyZR[base + 2];
-      const double r = st.userCirclesCxCyZR[base + 3];
+      if (ci < 0 || static_cast<size_t>(ci) >= st.circleCount()) continue;
+      const CadCircleRecord cr = st.circle(static_cast<size_t>(ci));
+      const double cx = cr.cx;
+      const double cy = cr.cy;
+      const double cz = cr.cz;
+      const double r = cr.r;
       double nx = 0, ny = 0, nz = 1;
       const size_t ni = static_cast<size_t>(ci) * 3;
       if (ni + 2 < st.userCircleNormals.size()) {
@@ -42081,10 +42071,11 @@ bool RevcloudCornersFromObject(const AppCommandState& st, const SelectedEntity& 
       log.push_back("REVCLOUD - that circle is not flat in the XY plane; a cloud can only follow a flat shape.");
       return false;
     }
-    const double cx = st.userCirclesCxCyZR[i * 4 + 0];
-    const double cy = st.userCirclesCxCyZR[i * 4 + 1];
-    const double r = st.userCirclesCxCyZR[i * 4 + 3];
-    *z = st.userCirclesCxCyZR[i * 4 + 2];
+    const CadCircleRecord circle = st.circle(i);
+    const double cx = circle.cx;
+    const double cy = circle.cy;
+    const double r = circle.r;
+    *z = circle.cz;
     // Corners spaced so each chord's scallop is no longer than the arc length, never fewer than 8
     // or the polygon is a poor stand-in for the circle.
     const double chord = st.revcloudArcLength / RevisionCloudArcPerChord();
@@ -44428,10 +44419,11 @@ void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
     anchor = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
     break;
   }
-  case T::Circle:
-    anchor = ray3d::Vec3{st.userCirclesCxCyZR[i * 4 + 0] + st.userCirclesCxCyZR[i * 4 + 3],
-                         st.userCirclesCxCyZR[i * 4 + 1], st.userCirclesCxCyZR[i * 4 + 2]};
+  case T::Circle: {
+    const CadCircleRecord circle = st.circle(i);
+    anchor = ray3d::Vec3{circle.cx + circle.r, circle.cy, circle.cz};
     break;
+  }
   default: {
     const std::size_t base = static_cast<std::size_t>(st.userPolylineOffsets[i]) * 3u;
     anchor = ray3d::Vec3{st.userPolylineVerts[base + 0], st.userPolylineVerts[base + 1],
@@ -44487,10 +44479,9 @@ void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
       flat = false;
       break;
     }
-    const double r = st.userCirclesCxCyZR[i * 4 + 3];
-    const ucs::Point2D c = ucs::WorldToPlane(
-        frame, ray3d::Vec3{st.userCirclesCxCyZR[i * 4 + 0], st.userCirclesCxCyZR[i * 4 + 1],
-                           st.userCirclesCxCyZR[i * 4 + 2]});
+    const CadCircleRecord circle = st.circle(i);
+    const double r = circle.r;
+    const ucs::Point2D c = ucs::WorldToPlane(frame, ray3d::Vec3{circle.cx, circle.cy, circle.cz});
     const double kPiLocal = 3.14159265358979323846;
     path.start = ucs::Point2D{c.x + r, c.y};
     path.segs.push_back(brep::PathSeg{ucs::Point2D{c.x - r, c.y}, kPiLocal});
@@ -52428,8 +52419,7 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
       double r = 0.0;
       if (e.type == T::Spline) return false;
       if (e.type == T::Circle) {
-        const size_t k = (size_t)e.index * 4;
-        if (k + 3 < cmd.userCirclesCxCyZR.size()) r = cmd.userCirclesCxCyZR[k + 3];
+        if ((size_t)e.index < cmd.circleCount()) r = cmd.circle((size_t)e.index).r;
       } else if (e.type == T::Arc && (size_t)e.index < cmd.userArcs.size()) {
         r = cmd.userArcs[(size_t)e.index].r;
       }
@@ -52498,7 +52488,7 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
   if (cmd.qsApplyTo == AppCommandState::QsApplyTo::EntireDrawing) {
     const int nLines = (int)(cmd.userLinesFlat.size() / 6);
     for (int i = 0; i < nLines; ++i)  addCad({SelectedEntity::Type::LineSeg, i});
-    const int nCirc = (int)(cmd.userCirclesCxCyZR.size() / 4);
+    const int nCirc = (int)cmd.circleCount();
     for (int i = 0; i < nCirc; ++i)   addCad({SelectedEntity::Type::Circle, i});
     for (int i = 0; i < (int)cmd.userArcs.size(); ++i)      addCad({SelectedEntity::Type::Arc, i});
     for (int i = 0; i < (int)cmd.userEllipses.size(); ++i)  addCad({SelectedEntity::Type::Ellipse, i});

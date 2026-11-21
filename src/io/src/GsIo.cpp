@@ -609,7 +609,7 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
     c.circleVis = o["circleVis"].get<std::vector<std::string>>();
   if (o.contains("circleNormals") && o["circleNormals"].is_array())
     c.userCircleNormals = o["circleNormals"].get<std::vector<float>>();   // REQ-312
-  EnsureCircleNormals(c.userCircleNormals, c.userCirclesCxCyZR.size() / 4);   // absent or short → flat default
+  EnsureCircleNormals(c.userCircleNormals, c.circleCount());   // absent or short → flat default
 
   if (o.contains("arcs") && o["arcs"].is_array())
     for (const auto& aj : o["arcs"])
@@ -1833,19 +1833,20 @@ json BuildRoot(const AppCommandState& st) {
     json cn = json::array();
     bool anyZ = false;
     bool anyTilted = false;
-    for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4) {
-      cxyr.push_back(st.userCirclesCxCyZR[i + 0]);
-      cxyr.push_back(st.userCirclesCxCyZR[i + 1]);
-      cxyr.push_back(st.userCirclesCxCyZR[i + 3]);  // radius
-      cz.push_back(st.userCirclesCxCyZR[i + 2]);    // z
-      anyZ = anyZ || st.userCirclesCxCyZR[i + 2] != 0.f;
+    for (size_t ci = 0; ci < st.circleCount(); ++ci) {
+      const CadCircleRecord c = st.circle(ci);
+      cxyr.push_back(c.cx);
+      cxyr.push_back(c.cy);
+      cxyr.push_back(c.r);  // radius
+      cz.push_back(c.cz);   // z
+      anyZ = anyZ || c.cz != 0.f;
       // The plane normal (REQ-312), in an additive "circlesN" of 3 floats per circle — the same
       // shape and the same bargain as "circlesZ" above. Omitted when every circle is flat, which is
       // every drawing that predates the field, so those still save byte-identically.
       float nx = kFlatNormalX;
       float ny = kFlatNormalY;
       float nz = kFlatNormalZ;
-      CircleNormalAt(st.userCircleNormals, i / 4, &nx, &ny, &nz);
+      CircleNormalAt(st.userCircleNormals, ci, &nx, &ny, &nz);
       cn.push_back(nx);
       cn.push_back(ny);
       cn.push_back(nz);
@@ -4209,10 +4210,12 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     const auto& cz = hasZ ? doc["circlesZ"] : cxyr;  // cz unread unless hasZ
     size_t ci = 0;
     for (size_t i = 0; i + 2 < cxyr.size(); i += 3, ++ci) {
-      st.userCirclesCxCyZR.push_back(cxyr[i + 0].get<double>());          // cx
-      st.userCirclesCxCyZR.push_back(cxyr[i + 1].get<double>());          // cy
-      st.userCirclesCxCyZR.push_back(hasZ && ci < cz.size() ? cz[ci].get<double>() : 0.0);
-      st.userCirclesCxCyZR.push_back(cxyr[i + 2].get<double>());          // r
+      CadCircleRecord c;
+      c.cx = cxyr[i + 0].get<double>();
+      c.cy = cxyr[i + 1].get<double>();
+      c.cz = hasZ && ci < cz.size() ? cz[ci].get<double>() : 0.0;
+      c.r = cxyr[i + 2].get<double>();
+      st.pushCircle(c);
     }
   }
   // The plane normals (REQ-312), from the additive "circlesN" written beside "circles". Absent
@@ -4229,7 +4232,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.userCircleNormals.push_back(v.get<float>());
   // Short, long or absent, the side-car ends up matching the circle count, so `docinvariants`
   // cannot fire on a freshly loaded document (REQ-204).
-  EnsureCircleNormals(st.userCircleNormals, st.userCirclesCxCyZR.size() / 4);
+  EnsureCircleNormals(st.userCircleNormals, st.circleCount());
   st.userCircleAttrs.clear();
   for (const auto& o : doc["circleAttrs"])
     st.userCircleAttrs.push_back(EntityAttributesFromJson(o));

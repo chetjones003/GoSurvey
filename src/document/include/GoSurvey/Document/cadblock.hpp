@@ -315,6 +315,17 @@ struct CadBlockWorldConnection {
   CadPipePartType ownerPartType = CadPipePartType::None;
 };
 
+/// One circle of \ref CadEntityStore::userCirclesCxCyZR: centre X, Y and Z, and radius (world units).
+struct CadCircleRecord {
+  double cx = 0.0;
+  double cy = 0.0;
+  double cz = 0.0;
+  double r = 0.0;
+};
+
+/// Position of a component inside one circle record (the order of \ref CadCircleRecord).
+enum class CadCircleComponent : uint8_t { X = 0, Y = 1, Z = 2, Radius = 3 };
+
 struct CadEntityStore {
   /// Line vertices for GL: pairs (x,y,z) per endpoint; each segment is two endpoints.
   std::vector<double> userLinesFlat;
@@ -358,6 +369,48 @@ struct CadEntityStore {
   /// never written through.
   std::vector<CadSolidPtr> cadSolids;
   std::vector<EntityAttributes> cadSolidAttrs;
+
+  // --- Circle records (ADR-0010 phase 5) ---------------------------------------------------------
+  // Callers use these instead of computing `i * 4` into \ref userCirclesCxCyZR. The side-cars
+  // (\ref userCircleAttrs, \ref userCircleNormals) stay the caller's to keep in step.
+
+  /// Number of circle records in \ref userCirclesCxCyZR.
+  [[nodiscard]] size_t circleCount() const { return userCirclesCxCyZR.size() / kCircleStride; }
+  /// False when the flat store is not a whole number of records; readers that must skip a corrupt
+  /// store check this first, as they did with `size() % 4`.
+  [[nodiscard]] bool circleStoreWellFormed() const { return userCirclesCxCyZR.size() % kCircleStride == 0; }
+  /// Circle \p i (requires `i < circleCount()`).
+  [[nodiscard]] CadCircleRecord circle(size_t i) const {
+    const size_t k = i * kCircleStride;
+    return CadCircleRecord{userCirclesCxCyZR[k], userCirclesCxCyZR[k + 1], userCirclesCxCyZR[k + 2],
+                           userCirclesCxCyZR[k + 3]};
+  }
+  /// Overwrites circle \p i in place (requires `i < circleCount()`).
+  void setCircle(size_t i, const CadCircleRecord& c) {
+    const size_t k = i * kCircleStride;
+    userCirclesCxCyZR[k] = c.cx;
+    userCirclesCxCyZR[k + 1] = c.cy;
+    userCirclesCxCyZR[k + 2] = c.cz;
+    userCirclesCxCyZR[k + 3] = c.r;
+  }
+  /// Appends one circle record.
+  void pushCircle(const CadCircleRecord& c) {
+    userCirclesCxCyZR.push_back(c.cx);
+    userCirclesCxCyZR.push_back(c.cy);
+    userCirclesCxCyZR.push_back(c.cz);
+    userCirclesCxCyZR.push_back(c.r);
+  }
+  /// Removes circle \p i and shifts later records down (requires `i < circleCount()`).
+  void eraseCircle(size_t i) {
+    const auto first = userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(i * kCircleStride);
+    userCirclesCxCyZR.erase(first, first + static_cast<std::ptrdiff_t>(kCircleStride));
+  }
+  /// One component of circle \p i by reference, for edit paths that store through an undo wrapper.
+  [[nodiscard]] double& circleComponent(size_t i, CadCircleComponent which) {
+    return userCirclesCxCyZR[i * kCircleStride + static_cast<size_t>(which)];
+  }
+
+  static constexpr size_t kCircleStride = 4;
 };
 
 /// A block definition's own geometry (ADR-0010 / #1557 phase 3). The entity collections are the
@@ -1017,10 +1070,12 @@ inline void CadBlockShiftContent(CadBlockContent* c, float dx, float dy, float d
     c->userLinesFlat[i + 4] += dy;
     c->userLinesFlat[i + 5] += dz;
   }
-  for (size_t i = 0; i + 3 < c->userCirclesCxCyZR.size(); i += 4) {
-    c->userCirclesCxCyZR[i] += dx;
-    c->userCirclesCxCyZR[i + 1] += dy;
-    c->userCirclesCxCyZR[i + 2] += dz;
+  for (size_t i = 0; i < c->circleCount(); ++i) {
+    CadCircleRecord cr = c->circle(i);
+    cr.cx += dx;
+    cr.cy += dy;
+    cr.cz += dz;
+    c->setCircle(i, cr);
   }
   for (CadArc& a : c->userArcs) {
     a.cx += dx;
@@ -1135,14 +1190,15 @@ inline void CadBlockCollectWorldLines(const std::vector<CadBlockDefinition>& def
       s.attr = CadBlockResolveAttr(pa, insertAttr);
       out->push_back(s);
     }
-    const size_t nC = c.userCirclesCxCyZR.size() / 4;
+    const size_t nC = c.circleCount();
     for (size_t i = 0; i < nC; ++i) {
       if (i < c.circleVis.size() && CadBlockVisHidden(c.circleVis[i], fr.vis))
         continue;
-      const float cx = c.userCirclesCxCyZR[i * 4 + 0];
-      const float cy = c.userCirclesCxCyZR[i * 4 + 1];
-      const float cz = c.userCirclesCxCyZR[i * 4 + 2];
-      const float r = c.userCirclesCxCyZR[i * 4 + 3];
+      const CadCircleRecord cr = c.circle(i);
+      const float cx = static_cast<float>(cr.cx);
+      const float cy = static_cast<float>(cr.cy);
+      const float cz = static_cast<float>(cr.cz);
+      const float r = static_cast<float>(cr.r);
       EntityAttributes pa{};
       if (i < c.userCircleAttrs.size())
         pa = c.userCircleAttrs[i];
@@ -1264,8 +1320,10 @@ inline void CadBlockCollectWorldCenters(const std::vector<CadBlockDefinition>& d
       CadBlockXformPoint(fr.xf, ax, ay, lz, &p.x, &p.y, &p.z);
       out->push_back(p);
     };
-    for (size_t i = 0; i + 3 < c.userCirclesCxCyZR.size(); i += 4)
-      emit(c.userCirclesCxCyZR[i], c.userCirclesCxCyZR[i + 1], c.userCirclesCxCyZR[i + 2]);
+    for (size_t i = 0; i < c.circleCount(); ++i) {
+      const CadCircleRecord cr = c.circle(i);
+      emit(cr.cx, cr.cy, cr.cz);
+    }
     for (const CadArc& a : c.userArcs)
       emit(a.cx, a.cy, a.z);
     for (const CadEllipse& e : c.userEllipses)

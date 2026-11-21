@@ -466,11 +466,11 @@ static bool UcsFromObjectPick(const AppCommandState& st, const ray3d::Vec3& pick
       return true;
     }
     case SelectedEntity::Type::Circle: {
-      const size_t i = static_cast<size_t>(hit.index) * 4;
-      if (i + 3 >= st.userCirclesCxCyZR.size())
+      const size_t ci = static_cast<size_t>(hit.index);
+      if (ci >= st.circleCount())
         return false;
-      const ray3d::Vec3 c =
-          storageToWorld(st.userCirclesCxCyZR[i], st.userCirclesCxCyZR[i + 1], st.userCirclesCxCyZR[i + 2]);
+      const CadCircleRecord cr = st.circle(ci);
+      const ray3d::Vec3 c = storageToWorld(cr.cx, cr.cy, cr.cz);
       // AutoCAD's rule: origin at the centre, +X from the centre out through the pick point.
       if (!UcsAlignedToDirection(c, ray3d::Sub(pickWorld, c), out)) {
         log.push_back("UCS Object - click away from the centre so the X axis has a direction.");

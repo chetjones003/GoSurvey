@@ -44,24 +44,24 @@ Outcome SetLineField(AppCommandState& st, int lineIndex, LineField field, double
 Outcome SetCircleField(AppCommandState& st, int circleIndex, CircleField field, double value) {
   if (!std::isfinite(value))
     return NotFinite();
-  const size_t k = static_cast<size_t>(circleIndex) * 4;
-  if (circleIndex < 0 || k + 3 >= st.userCirclesCxCyZR.size())
+  if (circleIndex < 0 || static_cast<size_t>(circleIndex) >= st.circleCount())
     return Rejected("That circle no longer exists.");
+  const size_t k = static_cast<size_t>(circleIndex);
   using F = CircleField;
   switch (field) {
   case F::CenterX:
-    return Store(st, st.userCirclesCxCyZR[k], value - st.worldDocumentOriginX, "Edit circle X");
+    return Store(st, st.circleComponent(k, CadCircleComponent::X), value - st.worldDocumentOriginX, "Edit circle X");
   case F::CenterY:
-    return Store(st, st.userCirclesCxCyZR[k + 1], value - st.worldDocumentOriginY, "Edit circle Y");
+    return Store(st, st.circleComponent(k, CadCircleComponent::Y), value - st.worldDocumentOriginY, "Edit circle Y");
   case F::CenterZ:
-    return Store(st, st.userCirclesCxCyZR[k + 2], value, "Edit circle Z");
+    return Store(st, st.circleComponent(k, CadCircleComponent::Z), value, "Edit circle Z");
   case F::Radius:
     break;
   }
   // The 0.7.4 panel floors a typed radius rather than refusing it; keep the outcome but say so.
   if (value >= kMinCircleRadius)
-    return Store(st, st.userCirclesCxCyZR[k + 3], value, "Edit circle radius");
-  return Store(st, st.userCirclesCxCyZR[k + 3], kMinCircleRadius, "Edit circle radius",
+    return Store(st, st.circleComponent(k, CadCircleComponent::Radius), value, "Edit circle radius");
+  return Store(st, st.circleComponent(k, CadCircleComponent::Radius), kMinCircleRadius, "Edit circle radius",
                "A radius must be positive; it was set to the minimum, 0.000001.");
 }
 

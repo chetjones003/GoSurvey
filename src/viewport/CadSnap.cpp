@@ -655,17 +655,17 @@ void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double t
       addEdge(v1 - 1, v0);
   }
 
-  const auto& C = cmd.userCirclesCxCyZR;
-  if (C.size() % 4 == 0) {
-    for (size_t i = 0; i + 3 < C.size(); i += 4) {
-      if (C[i + 3] <= 1.e-6f)
+  if (cmd.circleStoreWellFormed()) {
+    for (size_t i = 0; i < cmd.circleCount(); ++i) {
+      const CadCircleRecord c = cmd.circle(i);
+      if (c.r <= 1.e-6f)
         continue;
       // A tilted circle (REQ-312) is not a planar-XY conic; see IsectConic. Skipped, so INTERSECTION
       // offers nothing on it rather than offering a point that lies on neither curve.
-      if (!CircleIsFlat(cmd.userCircleNormals, i / 4))
+      if (!CircleIsFlat(cmd.userCircleNormals, i))
         continue;
-      if (NearCursor(ray, wx, wy, C[i], C[i + 1], C[i + 2], C[i + 3], tol))
-        conics->push_back(IsectConic{curveisect::MakeCircle(C[i], C[i + 1], C[i + 3]), C[i + 2]});
+      if (NearCursor(ray, wx, wy, c.cx, c.cy, c.cz, c.r, tol))
+        conics->push_back(IsectConic{curveisect::MakeCircle(c.cx, c.cy, c.r), c.cz});
     }
   }
 
@@ -1171,16 +1171,16 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     }
   }
 
-  const auto& C = cmd.userCirclesCxCyZR;
-  if (C.size() % 4 == 0 && (wantCenter || wantQuadrant)) {  // cx,cy,z,r
-    for (size_t i = 0; i + 3 < C.size(); i += 4) {
-      if (isolatedOut(cmd.userCircleAttrs, i / 4)) continue;
+  if (cmd.circleStoreWellFormed() && (wantCenter || wantQuadrant)) {
+    for (size_t i = 0; i < cmd.circleCount(); ++i) {
+      if (isolatedOut(cmd.userCircleAttrs, i)) continue;
       if (exclude.valid && exclude.type == SelectedEntity::Type::Circle &&
-          exclude.index == static_cast<int>(i / 4)) continue;
-      const float cx = C[i];
-      const float cy = C[i + 1];
-      const float cz = C[i + 2];
-      const float r = C[i + 3];
+          exclude.index == static_cast<int>(i)) continue;
+      const CadCircleRecord c = cmd.circle(i);
+      const float cx = static_cast<float>(c.cx);
+      const float cy = static_cast<float>(c.cy);
+      const float cz = static_cast<float>(c.cz);
+      const float r = static_cast<float>(c.r);
       if (wantCenter) {
         float hx = 0.f;
         float hy = 0.f;
@@ -1191,7 +1191,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       if (wantQuadrant && r > 1.e-6f) {
         // REQ-330: four points one radius out along the active UCS X/Y axes projected onto the
         // circle's own plane (REQ-312) — so they land exactly on the circle at any orientation.
-        const ucs::Ucs plane = CircleSnapPlane(cmd.userCircleNormals, i / 4, cx, cy, cz);
+        const ucs::Ucs plane = CircleSnapPlane(cmd.userCircleNormals, i, cx, cy, cz);
         ray3d::Vec3 dir[4];
         QuadrantDirections(plane, cmd.activeUcs, dir);
         for (const ray3d::Vec3& d : dir) {
@@ -2380,10 +2380,11 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     break;
   }
   case Kind::Center: {
-    const auto& C = cmd.userCirclesCxCyZR;
-    if (C.size() % 4 == 0) {  // cx,cy,z,r
-      for (size_t i = 0; i + 3 < C.size(); i += 4)
-        PushSnapPickerEntry(C[i], C[i + 1], Kind::Center, sortWorldX, sortWorldY, out, C[i + 2]);
+    if (cmd.circleStoreWellFormed()) {
+      for (size_t i = 0; i < cmd.circleCount(); ++i) {
+        const CadCircleRecord c = cmd.circle(i);
+        PushSnapPickerEntry(c.cx, c.cy, Kind::Center, sortWorldX, sortWorldY, out, c.cz);
+      }
     }
     for (const CadEllipse& el : cmd.userEllipses) {
       const float ma = std::hypot(el.majVx, el.majVy);
@@ -2397,16 +2398,16 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
   }
   case Kind::Quadrant: {
     // REQ-330: every circle's four quadrant points, and every arc's in-sweep subset.
-    const auto& C = cmd.userCirclesCxCyZR;
-    if (C.size() % 4 == 0) {  // cx,cy,z,r
-      for (size_t i = 0; i + 3 < C.size(); i += 4) {
-        const float cx = C[i];
-        const float cy = C[i + 1];
-        const float cz = C[i + 2];
-        const float r = C[i + 3];
+    if (cmd.circleStoreWellFormed()) {
+      for (size_t i = 0; i < cmd.circleCount(); ++i) {
+        const CadCircleRecord c = cmd.circle(i);
+        const float cx = static_cast<float>(c.cx);
+        const float cy = static_cast<float>(c.cy);
+        const float cz = static_cast<float>(c.cz);
+        const float r = static_cast<float>(c.r);
         if (r <= 1e-6f)
           continue;
-        const ucs::Ucs plane = CircleSnapPlane(cmd.userCircleNormals, i / 4, cx, cy, cz);
+        const ucs::Ucs plane = CircleSnapPlane(cmd.userCircleNormals, i, cx, cy, cz);
         ray3d::Vec3 dir[4];
         QuadrantDirections(plane, cmd.activeUcs, dir);
         for (const ray3d::Vec3& d : dir)
@@ -2652,13 +2653,14 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
         gripCandidate(cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4], cmd.userLinesFlat[k + 5]);
       }
     } else if (sel.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(sel.index) * 4;
-      if (k + 3 < cmd.userCirclesCxCyZR.size()) {
-        const float cx = cmd.userCirclesCxCyZR[k];
-        const float cy = cmd.userCirclesCxCyZR[k + 1];
-        const float cz = cmd.userCirclesCxCyZR[k + 2];
+      const size_t ci = static_cast<size_t>(sel.index);
+      if (ci < cmd.circleCount()) {
+        const CadCircleRecord c = cmd.circle(ci);
+        const float cx = static_cast<float>(c.cx);
+        const float cy = static_cast<float>(c.cy);
+        const float cz = static_cast<float>(c.cz);
         gripCandidate(cx, cy, cz);
-        gripCandidate(cx + cmd.userCirclesCxCyZR[k + 3], cy, cz);
+        gripCandidate(cx + static_cast<float>(c.r), cy, cz);
       }
     } else if (sel.type == SelectedEntity::Type::Polyline) {
       const int np = static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
