@@ -23,3 +23,27 @@ _Avoid_: geometry snapshot (for the content itself; the undo frame wraps it).
 
 **Selection**: The transient set of picked entities. Not saved, not undone, and not part of
 drawing content. Interaction owns selection intent.
+
+**Entity-kind operation**: A Document-owned operation implemented once per entity kind: transform,
+duplicate, bounding box, snap candidates and hit distance. Every kind declares whether it supports
+each operation, or refuses it with a stated reason. Commands combines these operations with the kinds
+other systems own, such as survey points and PDF underlays. See
+[ADR-0011](docs/adr/0011-entity-kind-operations.md).
+_Avoid_: per-command transform loop.
+
+**Similarity transform**: The one transform entity-kind operations accept: rotation about any axis,
+uniform scale, translation and reflection across a plane, computed in `double`. It cannot express
+shear or non-uniform scale. See [ADR-0011](docs/adr/0011-entity-kind-operations.md).
+_Avoid_: affine matrix (it allows shear and non-uniform scale).
+
+## Commands
+
+**Command module**: One file per command or small family under `src/commands/<family>/`. It declares
+the command's name, aliases, description, steps, completion and cancel behaviour, and its own state.
+The registry built from command modules is the only command list. See
+[ADR-0012](docs/adr/0012-command-modules-and-step-engine.md).
+
+**Step engine**: The shared Commands code that drives a command module's steps. It owns click,
+Enter, Esc and dynamic-input routing, prompt text and the select-objects box for every command. See
+[ADR-0012](docs/adr/0012-command-modules-and-step-engine.md).
+_Avoid_: per-command click/Enter/Esc handler.
