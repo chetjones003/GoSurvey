@@ -231,6 +231,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Commands
   src/commands/CadCommands.cpp
   src/commands/pipe/CadPipeCommands.cpp
+  src/commands/surface/CadSurfaceCommands.cpp
   src/commands/CadCommands_Align.cpp
   src/commands/CadCommands_Alignment.cpp
   src/commands/CadCommands_Bench.cpp
