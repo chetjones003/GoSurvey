@@ -209,7 +209,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.ucsPrevious                = doc.ucsPrevious;
   cmd.activeViewName             = doc.activeViewName;
   cmd.ucsFollow                  = doc.ucsFollow;
-  static_cast<DrawingContent&>(cmd.drawing) = doc.content;  // ADR-0010
+  cmd.drawing = doc.content;  // ADR-0010
   FillEmptyDrawingContentTables(cmd.drawing);
   cmd.dwgImportedLights           = doc.dwgImportedLights;
   cmd.dwgImportedSun              = doc.dwgImportedSun;
@@ -2067,7 +2067,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   // A restored plot scale resizes the survey-point labels exactly as setting it does (REQ-357),
   // so remember the live one before the content swap overwrites it.
   const float previousPlotScale = st.drawing.modelUnitsPerPlottedInch;
-  static_cast<DrawingContent&>(st.drawing) = snap.content;  // ADR-0010
+  st.drawing = snap.content;  // ADR-0010
   FillEmptyDrawingContentTables(st.drawing);
   st.pipeRunWorldSolidsSig = 0;  // force RebuildPipeRunWorldSolids to re-derive from the swap
   st.mleaderStyleDraft = st.drawing.activeMultileaderStyle;

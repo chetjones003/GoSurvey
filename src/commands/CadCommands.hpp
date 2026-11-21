@@ -974,8 +974,7 @@ struct UnsavedProject {
 };
 
 struct AppCommandState {
-  /// The drawing's saved content (ADR-0010, amended): formerly inherited, now a member so every
-  /// access says `drawing.`.
+  /// Saved drawing content (ADR-0010). Members are reached as `drawing.<member>`.
   DrawingContent drawing;
 
   /// Seeds the tables a live drawing always has. `DrawingContent` leaves them empty because undo

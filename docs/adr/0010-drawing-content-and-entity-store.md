@@ -73,5 +73,7 @@ seam is removed in a single change that does only what the compiler requires:
 - The change lands as its own commit, separate from any behaviour change, so review can check that
   the diff is rename-only.
 
-Phase 5's stride-accessor work is complete for circles, lines and polyline vertices before this
-step. Entity-kind access continues through the accessors, not through the drawing member.
+Phase 5's stride-accessor work covers the stride kinds: lines, circles and polyline vertices.
+Kinds without stride arithmetic (arcs, ellipses, solids, annotations, block-store arrays) keep direct
+member access through `drawing` until a later phase moves them behind the entity store.
+The stride kinds go through their accessors, not through `drawing`.
