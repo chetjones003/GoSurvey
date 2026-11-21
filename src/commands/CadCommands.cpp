@@ -1646,10 +1646,11 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
   for (const SelectedEntity& sel : cmd.selection) {
     switch (sel.type) {
     case SelectedEntity::Type::LineSeg: {
-      const size_t k = static_cast<size_t>(sel.index) * 6;
-      if (k + 5 < cmd.userLinesFlat.size()) {
-        tryGrip(sel, static_cast<float>(cmd.userLinesFlat[k]), static_cast<float>(cmd.userLinesFlat[k + 1]), 0);
-        tryGrip(sel, static_cast<float>(cmd.userLinesFlat[k + 3]), static_cast<float>(cmd.userLinesFlat[k + 4]), 1);
+      const size_t li = static_cast<size_t>(sel.index);
+      if (li < cmd.lineCount()) {
+        const CadLineRecord ln = cmd.line(li);
+        tryGrip(sel, static_cast<float>(ln.x0), static_cast<float>(ln.y0), 0);
+        tryGrip(sel, static_cast<float>(ln.x1), static_cast<float>(ln.y1), 1);
       }
       break;
     }
@@ -1778,11 +1779,11 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
   cmd.entityGripTypedDistanceValid = false;
   switch (bestSel.type) {  // store originals for RMB / Esc cancel
   case SelectedEntity::Type::LineSeg: {
-    const size_t k = static_cast<size_t>(bestSel.index) * 6;
-    cmd.entityGripOrigX0 = static_cast<float>(cmd.userLinesFlat[k]);
-    cmd.entityGripOrigY0 = static_cast<float>(cmd.userLinesFlat[k + 1]);
-    cmd.entityGripOrigX1 = static_cast<float>(cmd.userLinesFlat[k + 3]);
-    cmd.entityGripOrigY1 = static_cast<float>(cmd.userLinesFlat[k + 4]);
+    const CadLineRecord ln = cmd.line(static_cast<size_t>(bestSel.index));
+    cmd.entityGripOrigX0 = static_cast<float>(ln.x0);
+    cmd.entityGripOrigY0 = static_cast<float>(ln.y0);
+    cmd.entityGripOrigX1 = static_cast<float>(ln.x1);
+    cmd.entityGripOrigY1 = static_cast<float>(ln.y1);
     break;
   }
   case SelectedEntity::Type::Circle: {
@@ -2931,15 +2932,12 @@ bool ResolveDefinitionChain(const AppCommandState& st, std::uint64_t id, bool re
   if (ref.kind == EntityKind::Line) {
     if (requireClosed)
       return false;  // a 2-point line can never be a closed boundary ring
-    const size_t base = static_cast<size_t>(ref.index) * 6;
-    if (base + 5 >= st.userLinesFlat.size())
+    const size_t li = static_cast<size_t>(ref.index);
+    if (li >= st.lineCount())
       return false;
-    out.verts.push_back({static_cast<double>(st.userLinesFlat[base + 0]) + st.worldDocumentOriginX,
-                         static_cast<double>(st.userLinesFlat[base + 1]) + st.worldDocumentOriginY,
-                         static_cast<double>(st.userLinesFlat[base + 2])});
-    out.verts.push_back({static_cast<double>(st.userLinesFlat[base + 3]) + st.worldDocumentOriginX,
-                         static_cast<double>(st.userLinesFlat[base + 4]) + st.worldDocumentOriginY,
-                         static_cast<double>(st.userLinesFlat[base + 5])});
+    const CadLineRecord ln = st.line(li);
+    out.verts.push_back({ln.x0 + st.worldDocumentOriginX, ln.y0 + st.worldDocumentOriginY, ln.z0});
+    out.verts.push_back({ln.x1 + st.worldDocumentOriginX, ln.y1 + st.worldDocumentOriginY, ln.z1});
     return true;
   }
 
@@ -4926,20 +4924,20 @@ bool RefreshSurfaceProfilesForSurface(AppCommandState& st, const CadSurface& sur
   bool changed = false;
   auto eraseEntities = [&](const std::vector<std::uint64_t>& ids) {
     const std::unordered_set<std::uint64_t> remove(ids.begin(), ids.end());
-    std::vector<double> lines;
+    std::vector<CadLineRecord> lines;
     std::vector<EntityAttributes> attrs;
     std::vector<int> oldToNew(st.userLineAttrs.size(), -1);
-    lines.reserve(st.userLinesFlat.size()); attrs.reserve(st.userLineAttrs.size());
+    lines.reserve(st.lineCount()); attrs.reserve(st.userLineAttrs.size());
     for (size_t i = 0; i < st.userLineAttrs.size(); ++i) {
       if (remove.find(st.userLineAttrs[i].id) != remove.end()) continue;
-      const size_t start = i * 6;
-      if (start + 5 >= st.userLinesFlat.size()) continue;
+      if (i >= st.lineCount()) continue;
       oldToNew[i] = static_cast<int>(attrs.size());
-      lines.insert(lines.end(), st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(start),
-                   st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(start + 6));
+      lines.push_back(st.line(i));
       attrs.push_back(st.userLineAttrs[i]);
     }
-    st.userLinesFlat.swap(lines); st.userLineAttrs.swap(attrs);
+    st.userLinesFlat.clear();
+    for (const CadLineRecord& l : lines) st.pushLine(l);
+    st.userLineAttrs.swap(attrs);
     for (size_t i = st.selection.size(); i > 0; --i) {
       SelectedEntity& selected = st.selection[i - 1];
       if (selected.type != SelectedEntity::Type::LineSeg || selected.index < 0 ||
@@ -4993,7 +4991,7 @@ bool RefreshSurfaceProfilesForSurface(AppCommandState& st, const CadSurface& sur
     changed = true;
     const size_t firstLine = st.userLineAttrs.size();
     auto addLine = [&](double x0, double y0, double x1, double y1) {
-      st.userLinesFlat.insert(st.userLinesFlat.end(), {x0, y0, 0.0, x1, y1, 0.0});
+      st.pushLine(CadLineRecord{x0, y0, 0.0, x1, y1, 0.0});
       EntityAttributes attrs = MakeNewEntityAttrs(st);
       attrs.id = st.nextEntityId++;
       st.userLineAttrs.push_back(std::move(attrs));
@@ -6420,12 +6418,8 @@ EntityAttributes WaterDropEntityAttrs(const AppCommandState& st) {
 void AppendYellowLineSegs(AppCommandState& st, const std::vector<float>& glLines) {
   const EntityAttributes a = WaterDropEntityAttrs(st);
   for (size_t i = 0; i + 5 < glLines.size(); i += 6) {
-    st.userLinesFlat.push_back(glLines[i + 0]);
-    st.userLinesFlat.push_back(glLines[i + 1]);
-    st.userLinesFlat.push_back(glLines[i + 2]);
-    st.userLinesFlat.push_back(glLines[i + 3]);
-    st.userLinesFlat.push_back(glLines[i + 4]);
-    st.userLinesFlat.push_back(glLines[i + 5]);
+    st.pushLine(CadLineRecord{glLines[i + 0], glLines[i + 1], glLines[i + 2], glLines[i + 3], glLines[i + 4],
+                              glLines[i + 5]});
     st.userLineAttrs.push_back(a);
   }
 }
@@ -6832,7 +6826,7 @@ bool SurfaceSightVisible(const CadTin& tin, double ox, double oy, double oz,
 
 void AddSurfaceResultLine(AppCommandState& st, double ax, double ay, double az,
                           double bx, double by, double bz, const char* color) {
-  st.userLinesFlat.insert(st.userLinesFlat.end(), {ax, ay, az, bx, by, bz});
+  st.pushLine(CadLineRecord{ax, ay, az, bx, by, bz});
   EntityAttributes attrs = MakeNewEntityAttrs(st);
   attrs.color = color;
   st.userLineAttrs.push_back(std::move(attrs));
@@ -8988,10 +8982,10 @@ void ExecuteCenterMarkFromSelection(AppCommandState& st, std::vector<std::string
   for (const Mark& mark : marks) {
     const double half = std::max(mark.radius * 0.18, 0.01);
     const double gap = half * 0.16;
-    st.userLinesFlat.insert(st.userLinesFlat.end(), {mark.x - half, mark.y, mark.z, mark.x - gap, mark.y, mark.z,
-                                                     mark.x + gap, mark.y, mark.z, mark.x + half, mark.y, mark.z,
-                                                     mark.x, mark.y - half, mark.z, mark.x, mark.y - gap, mark.z,
-                                                     mark.x, mark.y + gap, mark.z, mark.x, mark.y + half, mark.z});
+    st.pushLine(CadLineRecord{mark.x - half, mark.y, mark.z, mark.x - gap, mark.y, mark.z});
+    st.pushLine(CadLineRecord{mark.x + gap, mark.y, mark.z, mark.x + half, mark.y, mark.z});
+    st.pushLine(CadLineRecord{mark.x, mark.y - half, mark.z, mark.x, mark.y - gap, mark.z});
+    st.pushLine(CadLineRecord{mark.x, mark.y + gap, mark.z, mark.x, mark.y + half, mark.z});
     for (int i = 0; i < 4; ++i) st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
   }
   BumpCadGpuCache(st);
@@ -9002,20 +8996,16 @@ void ExecuteCenterlineFromSelection(AppCommandState& st, std::vector<std::string
   std::vector<const SelectedEntity*> lines;
   for (const SelectedEntity& entity : st.selection)
     if (entity.type == SelectedEntity::Type::LineSeg && entity.index >= 0 &&
-        static_cast<std::size_t>(entity.index) * 6 + 5 < st.userLinesFlat.size()) lines.push_back(&entity);
+        static_cast<std::size_t>(entity.index) < st.lineCount()) lines.push_back(&entity);
   if (lines.size() != 2) { log.push_back("CENTERLINE — select exactly two lines first, then run CENTERLINE."); return; }
-  const std::size_t a = static_cast<std::size_t>(lines[0]->index) * 6;
-  const std::size_t b = static_cast<std::size_t>(lines[1]->index) * 6;
-  const double ax0 = st.userLinesFlat[a], ay0 = st.userLinesFlat[a + 1], az0 = st.userLinesFlat[a + 2];
-  const double ax1 = st.userLinesFlat[a + 3], ay1 = st.userLinesFlat[a + 4], az1 = st.userLinesFlat[a + 5];
-  double bx0 = st.userLinesFlat[b], by0 = st.userLinesFlat[b + 1], bz0 = st.userLinesFlat[b + 2];
-  double bx1 = st.userLinesFlat[b + 3], by1 = st.userLinesFlat[b + 4], bz1 = st.userLinesFlat[b + 5];
-  const double same = std::hypot(ax0 - bx0, ay0 - by0) + std::hypot(ax1 - bx1, ay1 - by1);
-  const double reverse = std::hypot(ax0 - bx1, ay0 - by1) + std::hypot(ax1 - bx0, ay1 - by0);
-  if (reverse < same) { std::swap(bx0, bx1); std::swap(by0, by1); std::swap(bz0, bz1); }
+  const CadLineRecord la = st.line(static_cast<std::size_t>(lines[0]->index));
+  CadLineRecord lb = st.line(static_cast<std::size_t>(lines[1]->index));
+  const double same = std::hypot(la.x0 - lb.x0, la.y0 - lb.y0) + std::hypot(la.x1 - lb.x1, la.y1 - lb.y1);
+  const double reverse = std::hypot(la.x0 - lb.x1, la.y0 - lb.y1) + std::hypot(la.x1 - lb.x0, la.y1 - lb.y0);
+  if (reverse < same) { std::swap(lb.x0, lb.x1); std::swap(lb.y0, lb.y1); std::swap(lb.z0, lb.z1); }
   PushUndoSnapshot(st, "CENTERLINE");
-  st.userLinesFlat.insert(st.userLinesFlat.end(), {(ax0 + bx0) * 0.5, (ay0 + by0) * 0.5, (az0 + bz0) * 0.5,
-                                                   (ax1 + bx1) * 0.5, (ay1 + by1) * 0.5, (az1 + bz1) * 0.5});
+  st.pushLine(CadLineRecord{(la.x0 + lb.x0) * 0.5, (la.y0 + lb.y0) * 0.5, (la.z0 + lb.z0) * 0.5,
+                            (la.x1 + lb.x1) * 0.5, (la.y1 + lb.y1) * 0.5, (la.z1 + lb.z1) * 0.5});
   st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
   log.push_back("CENTERLINE — centerline created between the two selected lines.");
@@ -9883,14 +9873,14 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
   std::vector<SelectedEntity> hits;
   std::vector<int> surveyHits;
   std::vector<ray3d::Vec3> curvePts;  // reused by the circle / arc / ellipse walks below
-  const auto& L = st.userLinesFlat;
-  if (L.size() % 6 == 0) {
-    for (size_t i = 0; i + 5 < L.size(); i += 6) {
+  if (st.lineStoreWellFormed()) {
+    for (size_t li = 0; li < st.lineCount(); ++li) {
+      const CadLineRecord ln = st.line(li);
       // Endpoint-wise projection keeps the line test EXACT in screen space (each endpoint carries
       // its own Z, so a sloped line is tested where it actually appears).
       float x0, y0, x1, y1;
-      SP(static_cast<float>(L[i]), static_cast<float>(L[i + 1]), static_cast<float>(L[i + 2]), &x0, &y0);
-      SP(static_cast<float>(L[i + 3]), static_cast<float>(L[i + 4]), static_cast<float>(L[i + 5]), &x1, &y1);
+      SP(static_cast<float>(ln.x0), static_cast<float>(ln.y0), static_cast<float>(ln.z0), &x0, &y0);
+      SP(static_cast<float>(ln.x1), static_cast<float>(ln.y1), static_cast<float>(ln.z1), &x1, &y1);
       bool hit = false;
       if (windowMode)
         hit = PointInsideClosedRect(x0, y0, mnX, mxX, mnY, mxY) &&
@@ -9900,7 +9890,7 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       if (hit) {
         SelectedEntity e{};
         e.type = SelectedEntity::Type::LineSeg;
-        e.index = static_cast<int>(i / 6);
+        e.index = static_cast<int>(li);
         hits.push_back(e);
       }
     }
@@ -10945,10 +10935,11 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
             fk < st.cadFilledRegionAttrs.size() ? st.cadFilledRegionAttrs[fk] : EntityAttributes{}));
       }
     } else if (e.type == SelectedEntity::Type::LineSeg) {
-      size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 < st.userLinesFlat.size()) {
-        for (int j = 0; j < 6; ++j)
-          newLines.push_back(static_cast<float>(st.userLinesFlat[k + static_cast<size_t>(j)]));
+      size_t li = static_cast<size_t>(e.index);
+      if (li < st.lineCount()) {
+        const CadLineRecord ln = st.line(li);
+        for (const double v : {ln.x0, ln.y0, ln.z0, ln.x1, ln.y1, ln.z1})
+          newLines.push_back(static_cast<float>(v));
         newLines[newLines.size() - 6] += dx;
         newLines[newLines.size() - 5] += dy;
         newLines[newLines.size() - 4] += dz;
@@ -11158,14 +11149,10 @@ static void CommitPasteIntoModel(AppCommandState& st, double dx, double dy) {
   using ST = SelectedEntity::Type;
   st.selection.clear();
 
-  for (size_t i = 0; i + 5 < cb.content.userLinesFlat.size() + 1; i += 6) {
-    st.userLinesFlat.push_back(cb.content.userLinesFlat[i + 0] + dx);
-    st.userLinesFlat.push_back(cb.content.userLinesFlat[i + 1] + dy);
-    st.userLinesFlat.push_back(cb.content.userLinesFlat[i + 2]);
-    st.userLinesFlat.push_back(cb.content.userLinesFlat[i + 3] + dx);
-    st.userLinesFlat.push_back(cb.content.userLinesFlat[i + 4] + dy);
-    st.userLinesFlat.push_back(cb.content.userLinesFlat[i + 5]);
-    st.userLineAttrs.push_back(cb.content.userLineAttrs[i / 6]);
+  for (size_t i = 0; i < cb.content.lineCount(); ++i) {
+    const CadLineRecord ln = cb.content.line(i);
+    st.pushLine(CadLineRecord{ln.x0 + dx, ln.y0 + dy, ln.z0, ln.x1 + dx, ln.y1 + dy, ln.z1});
+    st.userLineAttrs.push_back(cb.content.userLineAttrs[i]);
     st.selection.push_back({ST::LineSeg, static_cast<int>(st.userLineAttrs.size()) - 1});
   }
   // Clipboard → model: both are cx,cy,z,r, so Z carries through a paste unchanged (REQ-057).
@@ -11298,14 +11285,15 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
   st.selectedPaperEntities.clear();
   int skipped = 0;
 
-  for (size_t i = 0; i + 5 < cb.content.userLinesFlat.size() + 1; i += 6) {
-    L.paperLines.push_back(static_cast<float>(cb.content.userLinesFlat[i + 0] + dx));
-    L.paperLines.push_back(static_cast<float>(cb.content.userLinesFlat[i + 1] + dy));
-    L.paperLines.push_back(static_cast<float>(cb.content.userLinesFlat[i + 2]));
-    L.paperLines.push_back(static_cast<float>(cb.content.userLinesFlat[i + 3] + dx));
-    L.paperLines.push_back(static_cast<float>(cb.content.userLinesFlat[i + 4] + dy));
-    L.paperLines.push_back(static_cast<float>(cb.content.userLinesFlat[i + 5]));
-    L.paperLineAttrs.push_back(cb.content.userLineAttrs[i / 6]);
+  for (size_t i = 0; i < cb.content.lineCount(); ++i) {
+    const CadLineRecord ln = cb.content.line(i);
+    L.paperLines.push_back(static_cast<float>(ln.x0 + dx));
+    L.paperLines.push_back(static_cast<float>(ln.y0 + dy));
+    L.paperLines.push_back(static_cast<float>(ln.z0));
+    L.paperLines.push_back(static_cast<float>(ln.x1 + dx));
+    L.paperLines.push_back(static_cast<float>(ln.y1 + dy));
+    L.paperLines.push_back(static_cast<float>(ln.z1));
+    L.paperLineAttrs.push_back(cb.content.userLineAttrs[i]);
     st.selectedPaperEntities.push_back({PT::Line, static_cast<int>(L.paperLines.size() / 6) - 1});
   }
   // Clipboard (cx,cy,z,r) → paper (cx,cy,r): Z is DROPPED at the sheet boundary, not carried.
@@ -11520,14 +11508,15 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
 
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
-      size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 < st.userLinesFlat.size()) {
-        float x0 = static_cast<float>(st.userLinesFlat[k]);
-        float y0 = static_cast<float>(st.userLinesFlat[k + 1]);
-        float z0 = static_cast<float>(st.userLinesFlat[k + 2]);
-        float x1 = static_cast<float>(st.userLinesFlat[k + 3]);
-        float y1 = static_cast<float>(st.userLinesFlat[k + 4]);
-        float z1 = static_cast<float>(st.userLinesFlat[k + 5]);
+      const size_t li = static_cast<size_t>(e.index);
+      if (li < st.lineCount()) {
+        const CadLineRecord ln = st.line(li);
+        float x0 = static_cast<float>(ln.x0);
+        float y0 = static_cast<float>(ln.y0);
+        float z0 = static_cast<float>(ln.z0);
+        float x1 = static_cast<float>(ln.x1);
+        float y1 = static_cast<float>(ln.y1);
+        float z1 = static_cast<float>(ln.z1);
         RotateAroundBase(bx, by, rad, &x0, &y0);
         RotateAroundBase(bx, by, rad, &x1, &y1);
         newLines.push_back(x0);
@@ -11803,10 +11792,11 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
 
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 < st.userLinesFlat.size()) {
-        const ray3d::Vec3 p0 = rotPt(static_cast<float>(st.userLinesFlat[k]), static_cast<float>(st.userLinesFlat[k + 1]), static_cast<float>(st.userLinesFlat[k + 2]));
-        const ray3d::Vec3 p1 = rotPt(static_cast<float>(st.userLinesFlat[k + 3]), static_cast<float>(st.userLinesFlat[k + 4]), static_cast<float>(st.userLinesFlat[k + 5]));
+      const size_t li = static_cast<size_t>(e.index);
+      if (li < st.lineCount()) {
+        const CadLineRecord ln = st.line(li);
+        const ray3d::Vec3 p0 = rotPt(static_cast<float>(ln.x0), static_cast<float>(ln.y0), static_cast<float>(ln.z0));
+        const ray3d::Vec3 p1 = rotPt(static_cast<float>(ln.x1), static_cast<float>(ln.y1), static_cast<float>(ln.z1));
         newLines.push_back(static_cast<float>(p0.x));
         newLines.push_back(static_cast<float>(p0.y));
         newLines.push_back(static_cast<float>(p0.z));
@@ -12226,14 +12216,14 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
 
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
-      size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 < st.userLinesFlat.size()) {
-        float lx0 = static_cast<float>(st.userLinesFlat[k]);
-        float ly0 = static_cast<float>(st.userLinesFlat[k + 1]);
-        float lz0 = static_cast<float>(st.userLinesFlat[k + 2]);
-        float lx1 = static_cast<float>(st.userLinesFlat[k + 3]);
-        float ly1 = static_cast<float>(st.userLinesFlat[k + 4]);
-        float lz1 = static_cast<float>(st.userLinesFlat[k + 5]);
+      size_t k = static_cast<size_t>(e.index);
+      if (k < st.lineCount()) {
+        float lx0 = static_cast<float>(st.line(k).x0);
+        float ly0 = static_cast<float>(st.line(k).y0);
+        float lz0 = static_cast<float>(st.line(k).z0);
+        float lx1 = static_cast<float>(st.line(k).x1);
+        float ly1 = static_cast<float>(st.line(k).y1);
+        float lz1 = static_cast<float>(st.line(k).z1);
         ReflectPtAcrossLine(x0, y0, x1, y1, &lx0, &ly0);
         ReflectPtAcrossLine(x0, y0, x1, y1, &lx1, &ly1);
         newLines.push_back(lx0);
@@ -12500,7 +12490,7 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
                        rad, log);
   RotateSelectedPipeRuns(st, {static_cast<double>(bx), static_cast<double>(by), 0.0}, {0.0, 0.0, 1.0},
                          rad, /*duplicate=*/false);  // REQ-351
-  std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
+  std::vector<bool> lineMark(std::max<size_t>(1, st.lineCount()), false);
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
       continue;
@@ -12511,10 +12501,11 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     for (size_t i = 0; i < lineMark.size(); ++i) {
       if (!lineMark[i])
         continue;
-      size_t k = i * 6;
-      if (k + 5 < st.userLinesFlat.size()) {
-        RotateAroundBase(bx, by, rad, &st.userLinesFlat[k], &st.userLinesFlat[k + 1]);
-        RotateAroundBase(bx, by, rad, &st.userLinesFlat[k + 3], &st.userLinesFlat[k + 4]);
+      if (i < st.lineCount()) {
+        CadLineRecord ln = st.line(i);
+        RotateAroundBase(bx, by, rad, &ln.x0, &ln.y0);
+        RotateAroundBase(bx, by, rad, &ln.x1, &ln.y1);
+        st.setLine(i, ln);
       }
     }
   }
@@ -12706,17 +12697,17 @@ static void RotateSelectionInPlaceAboutAxis(AppCommandState& st, const ray3d::Ve
   for (const auto& e : st.selection) {
     switch (e.type) {
     case SelectedEntity::Type::LineSeg: {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= st.userLinesFlat.size())
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= st.lineCount())
         break;
-      const ray3d::Vec3 p0 = rotPt(static_cast<float>(st.userLinesFlat[k]), static_cast<float>(st.userLinesFlat[k + 1]), static_cast<float>(st.userLinesFlat[k + 2]));
-      const ray3d::Vec3 p1 = rotPt(static_cast<float>(st.userLinesFlat[k + 3]), static_cast<float>(st.userLinesFlat[k + 4]), static_cast<float>(st.userLinesFlat[k + 5]));
-      st.userLinesFlat[k] = static_cast<float>(p0.x);
-      st.userLinesFlat[k + 1] = static_cast<float>(p0.y);
-      st.userLinesFlat[k + 2] = static_cast<float>(p0.z);
-      st.userLinesFlat[k + 3] = static_cast<float>(p1.x);
-      st.userLinesFlat[k + 4] = static_cast<float>(p1.y);
-      st.userLinesFlat[k + 5] = static_cast<float>(p1.z);
+      const ray3d::Vec3 p0 = rotPt(static_cast<float>(st.line(k).x0), static_cast<float>(st.line(k).y0), static_cast<float>(st.line(k).z0));
+      const ray3d::Vec3 p1 = rotPt(static_cast<float>(st.line(k).x1), static_cast<float>(st.line(k).y1), static_cast<float>(st.line(k).z1));
+      st.lineComponent(k, CadLineComponent::X0) = static_cast<float>(p0.x);
+      st.lineComponent(k, CadLineComponent::Y0) = static_cast<float>(p0.y);
+      st.lineComponent(k, CadLineComponent::Z0) = static_cast<float>(p0.z);
+      st.lineComponent(k, CadLineComponent::X1) = static_cast<float>(p1.x);
+      st.lineComponent(k, CadLineComponent::Y1) = static_cast<float>(p1.y);
+      st.lineComponent(k, CadLineComponent::Z1) = static_cast<float>(p1.z);
       break;
     }
     case SelectedEntity::Type::Circle: {
@@ -12874,7 +12865,7 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
   TranslateSelectedSolids(st, dx, dy, dz);
   if (dx != 0.f || dy != 0.f || dz != 0.f)
     TranslateSelectedPipeRuns(st, dx, dy, dz, /*duplicate=*/false);
-  std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
+  std::vector<bool> lineMark(std::max<size_t>(1, st.lineCount()), false);
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 &&
         static_cast<size_t>(e.index) < lineMark.size())
@@ -12883,14 +12874,14 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
   for (size_t i = 0; i < lineMark.size(); ++i) {
     if (!lineMark[i])
       continue;
-    size_t k = i * 6;
-    if (k + 5 < st.userLinesFlat.size()) {
-      st.userLinesFlat[k] += dx;
-      st.userLinesFlat[k + 1] += dy;
-      st.userLinesFlat[k + 2] += dz;
-      st.userLinesFlat[k + 3] += dx;
-      st.userLinesFlat[k + 4] += dy;
-      st.userLinesFlat[k + 5] += dz;
+    size_t k = i;
+    if (k < st.lineCount()) {
+      st.lineComponent(k, CadLineComponent::X0) += dx;
+      st.lineComponent(k, CadLineComponent::Y0) += dy;
+      st.lineComponent(k, CadLineComponent::Z0) += dz;
+      st.lineComponent(k, CadLineComponent::X1) += dx;
+      st.lineComponent(k, CadLineComponent::Y1) += dy;
+      st.lineComponent(k, CadLineComponent::Z1) += dz;
     }
   }
   for (const auto& e : st.selection) {
@@ -13077,10 +13068,10 @@ static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outC
   int n = 0;
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 < st.userLinesFlat.size()) {
-        accx += 0.5 * static_cast<double>(st.userLinesFlat[k] + st.userLinesFlat[k + 3]);
-        accy += 0.5 * static_cast<double>(st.userLinesFlat[k + 1] + st.userLinesFlat[k + 4]);
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.lineCount()) {
+        accx += 0.5 * static_cast<double>(st.line(k).x0 + st.line(k).x1);
+        accy += 0.5 * static_cast<double>(st.line(k).y0 + st.line(k).y1);
         ++n;
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
@@ -13187,12 +13178,11 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
   float m = 0.f;
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 < st.userLinesFlat.size()) {
-        for (int i = 0; i < 2; ++i) {
-          const float x = static_cast<float>(st.userLinesFlat[k + static_cast<size_t>(i) * 3]);
-          const float y = static_cast<float>(st.userLinesFlat[k + static_cast<size_t>(i) * 3 + 1]);
-          m = static_cast<float>(std::max<double>(m, std::hypot(x - bx, y - by)));
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.lineCount()) {
+        const CadLineRecord ln = st.line(k);
+        for (const auto [x, y] : {std::pair<double, double>{ln.x0, ln.y0}, std::pair<double, double>{ln.x1, ln.y1}}) {
+          m = static_cast<float>(std::max<double>(m, std::hypot(static_cast<float>(x) - bx, static_cast<float>(y) - by)));
         }
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
@@ -13398,7 +13388,7 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
     TransformSelectedAlignments(  // REQ-487.1: the plan scale; an alignment has no elevation to scale
         st, [&](alignment::Alignment& a) { return a.Scale(static_cast<double>(bx), static_cast<double>(by), k); }, /*duplicate=*/false);
   }
-  std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
+  std::vector<bool> lineMark(std::max<size_t>(1, st.lineCount()), false);
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
       continue;
@@ -13409,10 +13399,10 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
     for (size_t i = 0; i < lineMark.size(); ++i) {
       if (!lineMark[i])
         continue;
-      size_t k = i * 6;
-      if (k + 5 < st.userLinesFlat.size()) {
-        ScalePtAroundBase(bx, by, sc, &st.userLinesFlat[k], &st.userLinesFlat[k + 1]);
-        ScalePtAroundBase(bx, by, sc, &st.userLinesFlat[k + 3], &st.userLinesFlat[k + 4]);
+      size_t k = i;
+      if (k < st.lineCount()) {
+        ScalePtAroundBase(bx, by, sc, &st.lineComponent(k, CadLineComponent::X0), &st.lineComponent(k, CadLineComponent::Y0));
+        ScalePtAroundBase(bx, by, sc, &st.lineComponent(k, CadLineComponent::X1), &st.lineComponent(k, CadLineComponent::Y1));
       }
     }
   }
@@ -13524,10 +13514,10 @@ static void ScaleSelectionZAboutBase(AppCommandState& st, float bz, float sc) {
   for (const auto& e : st.selection) {
     switch (e.type) {
     case SelectedEntity::Type::LineSeg: {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 < st.userLinesFlat.size()) {
-        sz(&st.userLinesFlat[k + 2]);
-        sz(&st.userLinesFlat[k + 5]);
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.lineCount()) {
+        sz(&st.lineComponent(k, CadLineComponent::Z0));
+        sz(&st.lineComponent(k, CadLineComponent::Z1));
       }
       break;
     }
@@ -15386,16 +15376,16 @@ static void PushOffsetCopyAttrs(AppCommandState& st, std::vector<EntityAttribute
 }
 
 static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std::vector<std::string>& log) {
-  const size_t k = static_cast<size_t>(lineIx) * 6;
-  if (k + 5 >= st.userLinesFlat.size())
+  const size_t k = static_cast<size_t>(lineIx);
+  if (k >= st.lineCount())
     return false;
   PushUndoSnapshot(st, "Offset line");
-  const double x0 = st.userLinesFlat[k];
-  const double y0 = st.userLinesFlat[k + 1];
-  const double z0 = st.userLinesFlat[k + 2];  // read before push_back may reallocate
-  const double x1 = st.userLinesFlat[k + 3];
-  const double y1 = st.userLinesFlat[k + 4];
-  const double z1 = st.userLinesFlat[k + 5];
+  const double x0 = st.line(k).x0;
+  const double y0 = st.line(k).y0;
+  const double z0 = st.line(k).z0;  // read before push_back may reallocate
+  const double x1 = st.line(k).x1;
+  const double y1 = st.line(k).y1;
+  const double z1 = st.line(k).z1;
   const double dx = x1 - x0;
   const double dy = y1 - y0;
   const double dz = z1 - z0;
@@ -15439,12 +15429,7 @@ static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std
   // The offset copy stays on the source line's plane — under the World UCS the offset is horizontal
   // so each end keeps its own Z; under a tilted UCS the perpendicular carries a Z component so the
   // copy stays in the work plane (REQ-057 / REQ-329 increment 7).
-  st.userLinesFlat.push_back(ox0);
-  st.userLinesFlat.push_back(oy0);
-  st.userLinesFlat.push_back(oz0);
-  st.userLinesFlat.push_back(ox1);
-  st.userLinesFlat.push_back(oy1);
-  st.userLinesFlat.push_back(oz1);
+  st.pushLine(CadLineRecord{ox0, oy0, oz0, ox1, oy1, oz1});
   PushOffsetCopyAttrs(st, st.userLineAttrs, lineIx);
   BumpCadGpuCache(st);
   return true;
@@ -15685,14 +15670,14 @@ static void HandleOffsetThroughPick(AppCommandState& st, double px, double py, s
   float signedD = 0.f;
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.lineCount())
       return;
-    double x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
-    double x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
+    double x0 = st.line(k).x0, y0 = st.line(k).y0;
+    double x1 = st.line(k).x1, y1 = st.line(k).y1;
     if (tilted) {
-      const ucs::Point2D a = OffsetPlaneLocal(st, x0, y0, st.userLinesFlat[k + 2]);
-      const ucs::Point2D b = OffsetPlaneLocal(st, x1, y1, st.userLinesFlat[k + 5]);
+      const ucs::Point2D a = OffsetPlaneLocal(st, x0, y0, st.line(k).z0);
+      const ucs::Point2D b = OffsetPlaneLocal(st, x1, y1, st.line(k).z1);
       x0 = a.x; y0 = a.y;
       x1 = b.x; y1 = b.y;
     }
@@ -15754,14 +15739,14 @@ static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std:
   float sgn = 1.f;
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.lineCount())
       return;
-    double ax = st.userLinesFlat[k], ay = st.userLinesFlat[k + 1];
-    double bx = st.userLinesFlat[k + 3], by = st.userLinesFlat[k + 4];
+    double ax = st.line(k).x0, ay = st.line(k).y0;
+    double bx = st.line(k).x1, by = st.line(k).y1;
     if (tilted) {
-      const ucs::Point2D a = OffsetPlaneLocal(st, ax, ay, st.userLinesFlat[k + 2]);
-      const ucs::Point2D b = OffsetPlaneLocal(st, bx, by, st.userLinesFlat[k + 5]);
+      const ucs::Point2D a = OffsetPlaneLocal(st, ax, ay, st.line(k).z0);
+      const ucs::Point2D b = OffsetPlaneLocal(st, bx, by, st.line(k).z1);
       ax = a.x; ay = a.y;
       bx = b.x; by = b.y;
     }
@@ -17619,10 +17604,10 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
     const size_t k = static_cast<size_t>(std::max(e.index, 0));
     switch (e.type) {
     case T::LineSeg: {
-      const size_t b = k * 6;
-      if (b + 5 < st.userLinesFlat.size()) {
-        grow(st.userLinesFlat[b], st.userLinesFlat[b + 1], st.userLinesFlat[b + 2]);
-        grow(st.userLinesFlat[b + 3], st.userLinesFlat[b + 4], st.userLinesFlat[b + 5]);
+      const size_t b = k;
+      if (b < st.lineCount()) {
+        grow(st.line(b).x0, st.line(b).y0, st.line(b).z0);
+        grow(st.line(b).x1, st.line(b).y1, st.line(b).z1);
       }
       break;
     }
@@ -18989,15 +18974,14 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
 
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= st.userLinesFlat.size())
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= st.lineCount())
         continue;
-      for (int j = 0; j < 6; ++j)
-        cb.content.userLinesFlat.push_back(st.userLinesFlat[k + static_cast<size_t>(j)]);
+      cb.content.pushLine(st.line(k));
       cb.content.userLineAttrs.push_back(static_cast<size_t>(e.index) < st.userLineAttrs.size()
                                  ? st.userLineAttrs[static_cast<size_t>(e.index)] : EntityAttributes{});
-      expandBbox(static_cast<float>(st.userLinesFlat[k]), static_cast<float>(st.userLinesFlat[k + 1]));
-      expandBbox(static_cast<float>(st.userLinesFlat[k + 3]), static_cast<float>(st.userLinesFlat[k + 4]));
+      expandBbox(static_cast<float>(st.line(k).x0), static_cast<float>(st.line(k).y0));
+      expandBbox(static_cast<float>(st.line(k).x1), static_cast<float>(st.line(k).y1));
     } else if (e.type == SelectedEntity::Type::Circle) {
       const size_t ci = static_cast<size_t>(e.index);
       if (ci >= st.circleCount())
@@ -19386,11 +19370,11 @@ static bool NearerToFirstPoint(float px, float py, float x0, float y0, float x1,
 /// nothing, the same convention TRIM's degenerate-length delete and OFFSET's refusals follow).
 static bool ApplyLengthenToLine(AppCommandState& st, int index, bool nearFirst, float newLength,
                                 std::vector<std::string>& log, bool pushUndo = true) {
-  const size_t k = static_cast<size_t>(index) * 6;
-  if (k + 5 >= st.userLinesFlat.size())
+  const size_t k = static_cast<size_t>(index);
+  if (k >= st.lineCount())
     return false;
-  const float x0 = static_cast<float>(st.userLinesFlat[k]), y0 = static_cast<float>(st.userLinesFlat[k + 1]);
-  const float x1 = static_cast<float>(st.userLinesFlat[k + 3]), y1 = static_cast<float>(st.userLinesFlat[k + 4]);
+  const float x0 = static_cast<float>(st.line(k).x0), y0 = static_cast<float>(st.line(k).y0);
+  const float x1 = static_cast<float>(st.line(k).x1), y1 = static_cast<float>(st.line(k).y1);
   const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
   const float movingX = nearFirst ? x0 : x1, movingY = nearFirst ? y0 : y1;
   const float dx = movingX - fixedX, dy = movingY - fixedY;
@@ -19412,11 +19396,11 @@ static bool ApplyLengthenToLine(AppCommandState& st, int index, bool nearFirst, 
   if (pushUndo)
     PushUndoSnapshot(st, "Lengthen");
   if (nearFirst) {
-    st.userLinesFlat[k] = newX;
-    st.userLinesFlat[k + 1] = newY;
+    st.lineComponent(k, CadLineComponent::X0) = newX;
+    st.lineComponent(k, CadLineComponent::Y0) = newY;
   } else {
-    st.userLinesFlat[k + 3] = newX;
-    st.userLinesFlat[k + 4] = newY;
+    st.lineComponent(k, CadLineComponent::X1) = newX;
+    st.lineComponent(k, CadLineComponent::Y1) = newY;
   }
   return true;
 }
@@ -19534,11 +19518,11 @@ static bool LengthenEligibility(const AppCommandState& st, const SelectedEntity&
   constexpr float kTwoPi = 6.28318530717958647692f;
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.lineCount())
       return false;
-    const float x0 = static_cast<float>(st.userLinesFlat[k]), y0 = static_cast<float>(st.userLinesFlat[k + 1]);
-    const float x1 = static_cast<float>(st.userLinesFlat[k + 3]), y1 = static_cast<float>(st.userLinesFlat[k + 4]);
+    const float x0 = static_cast<float>(st.line(k).x0), y0 = static_cast<float>(st.line(k).y0);
+    const float x1 = static_cast<float>(st.line(k).x1), y1 = static_cast<float>(st.line(k).y1);
     *outNearFirst = NearerToFirstPoint(pickX, pickY, x0, y0, x1, y1);
     *outCurLen = std::hypot(x1 - x0, y1 - y0);
     return true;
@@ -19616,11 +19600,11 @@ static void AppendModelBoundaryShapes(const AppCommandState& st, const SelectedE
                                       std::vector<curveisect::Seg>* segs, std::vector<curveisect::Conic>* conics) {
   using T = SelectedEntity::Type;
   if (e.type == T::LineSeg) {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.lineCount())
       return;
-    segs->push_back({{st.userLinesFlat[k], st.userLinesFlat[k + 1]},
-                     {st.userLinesFlat[k + 3], st.userLinesFlat[k + 4]}});
+    segs->push_back({{st.line(k).x0, st.line(k).y0},
+                     {st.line(k).x1, st.line(k).y1}});
   } else if (e.type == T::Circle) {
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.circleCount())
       return;
@@ -19991,11 +19975,11 @@ static bool LengthenDynamicTargetLength(const AppCommandState& st, float wx, flo
   const bool nearFirst = st.lengthenPendingNearFirst;
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.lineCount())
       return false;
-    const float x0 = static_cast<float>(st.userLinesFlat[k]), y0 = static_cast<float>(st.userLinesFlat[k + 1]);
-    const float x1 = static_cast<float>(st.userLinesFlat[k + 3]), y1 = static_cast<float>(st.userLinesFlat[k + 4]);
+    const float x0 = static_cast<float>(st.line(k).x0), y0 = static_cast<float>(st.line(k).y0);
+    const float x1 = static_cast<float>(st.line(k).x1), y1 = static_cast<float>(st.line(k).y1);
     const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
     const float movingX = nearFirst ? x0 : x1, movingY = nearFirst ? y0 : y1;
     const float dx = movingX - fixedX, dy = movingY - fixedY;
@@ -20174,9 +20158,9 @@ void HandleExtendViewportPick(AppCommandState& st, float wx, float wy, std::vect
     const CadArc& a = st.userArcs[static_cast<size_t>(hit.index)];
     found = FindExtendArcTarget(segs, conics, static_cast<float>(a.cx), static_cast<float>(a.cy), static_cast<float>(a.r), a.startRad, a.sweepRad, nearFirst, &newLen);
   } else if (hit.type == SelectedEntity::Type::LineSeg) {
-    const size_t k = static_cast<size_t>(hit.index) * 6;
-    const float x0 = static_cast<float>(st.userLinesFlat[k]), y0 = static_cast<float>(st.userLinesFlat[k + 1]);
-    const float x1 = static_cast<float>(st.userLinesFlat[k + 3]), y1 = static_cast<float>(st.userLinesFlat[k + 4]);
+    const size_t k = static_cast<size_t>(hit.index);
+    const float x0 = static_cast<float>(st.line(k).x0), y0 = static_cast<float>(st.line(k).y0);
+    const float x1 = static_cast<float>(st.line(k).x1), y1 = static_cast<float>(st.line(k).y1);
     const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
     const float movingX = nearFirst ? x0 : x1, movingY = nearFirst ? y0 : y1;
     found = FindExtendLineTarget(segs, conics, fixedX, fixedY, movingX, movingY, &newLen);
@@ -20538,11 +20522,11 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
                                  BreakPoint* out) {
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.lineCount())
       return false;
-    const float x0 = static_cast<float>(st.userLinesFlat[k]), y0 = static_cast<float>(st.userLinesFlat[k + 1]);
-    const float x1 = static_cast<float>(st.userLinesFlat[k + 3]), y1 = static_cast<float>(st.userLinesFlat[k + 4]);
+    const float x0 = static_cast<float>(st.line(k).x0), y0 = static_cast<float>(st.line(k).y0);
+    const float x1 = static_cast<float>(st.line(k).x1), y1 = static_cast<float>(st.line(k).y1);
     ClosestPointOnSegment(x0, y0, x1, y1, px, py, &out->x, &out->y);
     out->param = std::hypot(out->x - x0, out->y - y0);
     // The cut's elevation, interpolated along the line (issue 01). ApplyBreakToLine already carried
@@ -20551,7 +20535,7 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
     {
       const float len = std::hypot(x1 - x0, y1 - y0);
       const float t = (len > 1e-9f) ? (out->param / len) : 0.f;
-      out->z = static_cast<float>(st.userLinesFlat[k + 2] + (st.userLinesFlat[k + 5] - st.userLinesFlat[k + 2]) * t);
+      out->z = static_cast<float>(st.line(k).z0 + (st.line(k).z1 - st.line(k).z0) * t);
     }
     return true;
   }
@@ -20642,11 +20626,11 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
 
 static void ApplyBreakToLine(AppCommandState& st, int index, const BreakPoint& p1, const BreakPoint& p2,
                              std::vector<std::string>& log) {
-  const size_t k = static_cast<size_t>(index) * 6;
-  if (k + 5 >= st.userLinesFlat.size())
+  const size_t k = static_cast<size_t>(index);
+  if (k >= st.lineCount())
     return;
-  const double x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1], z0 = st.userLinesFlat[k + 2];
-  const double x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4], z1 = st.userLinesFlat[k + 5];
+  const double x0 = st.line(k).x0, y0 = st.line(k).y0, z0 = st.line(k).z0;
+  const double x1 = st.line(k).x1, y1 = st.line(k).y1, z1 = st.line(k).z1;
   const double totalLen = std::hypot(x1 - x0, y1 - y0);
   constexpr double kTol = 0.002;  // REQ-101 endpoint-coincidence tolerance
   const double nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
@@ -20659,20 +20643,20 @@ static void ApplyBreakToLine(AppCommandState& st, int index, const BreakPoint& p
   const double ux = (x1 - x0) / std::max(totalLen, 1e-9), uy = (y1 - y0) / std::max(totalLen, 1e-9);
   PushUndoSnapshot(st, "Break");
   if (nearIsStart) {
-    st.userLinesFlat[k] = x0 + ux * farP;
-    st.userLinesFlat[k + 1] = y0 + uy * farP;
+    st.lineComponent(k, CadLineComponent::X0) = x0 + ux * farP;
+    st.lineComponent(k, CadLineComponent::Y0) = y0 + uy * farP;
   } else if (farIsEnd) {
-    st.userLinesFlat[k + 3] = x0 + ux * nearP;
-    st.userLinesFlat[k + 4] = y0 + uy * nearP;
+    st.lineComponent(k, CadLineComponent::X1) = x0 + ux * nearP;
+    st.lineComponent(k, CadLineComponent::Y1) = y0 + uy * nearP;
   } else {
     const EntityAttributes srcAttrs =
         (static_cast<size_t>(index) < st.userLineAttrs.size()) ? st.userLineAttrs[static_cast<size_t>(index)]
                                                                 : EntityAttributes{};
     const float nx = static_cast<float>(x0 + ux * nearP), ny = static_cast<float>(y0 + uy * nearP);
     const float fx = static_cast<float>(x0 + ux * farP), fy = static_cast<float>(y0 + uy * farP);
-    st.userLinesFlat[k + 3] = nx;
-    st.userLinesFlat[k + 4] = ny;
-    st.userLinesFlat.insert(st.userLinesFlat.end(), {fx, fy, z0, x1, y1, z1});
+    st.lineComponent(k, CadLineComponent::X1) = nx;
+    st.lineComponent(k, CadLineComponent::Y1) = ny;
+    st.pushLine(CadLineRecord{fx, fy, z0, x1, y1, z1});
     st.userLineAttrs.push_back(DuplicatedEntityAttrs(srcAttrs));
   }
   BumpCadGpuCache(st);
@@ -21511,18 +21495,18 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, 
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
       continue;
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.lineCount())
       continue;
-    if (inBox(static_cast<float>(st.userLinesFlat[k]), static_cast<float>(st.userLinesFlat[k + 1]), static_cast<float>(st.userLinesFlat[k + 2]))) {
-      st.userLinesFlat[k] += dx;
-      st.userLinesFlat[k + 1] += dy;
-      st.userLinesFlat[k + 2] += dz;
+    if (inBox(static_cast<float>(st.line(k).x0), static_cast<float>(st.line(k).y0), static_cast<float>(st.line(k).z0))) {
+      st.lineComponent(k, CadLineComponent::X0) += dx;
+      st.lineComponent(k, CadLineComponent::Y0) += dy;
+      st.lineComponent(k, CadLineComponent::Z0) += dz;
     }
-    if (inBox(static_cast<float>(st.userLinesFlat[k + 3]), static_cast<float>(st.userLinesFlat[k + 4]), static_cast<float>(st.userLinesFlat[k + 5]))) {
-      st.userLinesFlat[k + 3] += dx;
-      st.userLinesFlat[k + 4] += dy;
-      st.userLinesFlat[k + 5] += dz;
+    if (inBox(static_cast<float>(st.line(k).x1), static_cast<float>(st.line(k).y1), static_cast<float>(st.line(k).z1))) {
+      st.lineComponent(k, CadLineComponent::X1) += dx;
+      st.lineComponent(k, CadLineComponent::Y1) += dy;
+      st.lineComponent(k, CadLineComponent::Z1) += dz;
     }
   }
   for (const auto& e : st.selection) {
@@ -21897,16 +21881,16 @@ static bool BuildFilletCurveFromEntity(const AppCommandState& st, const Selected
                                        FilletCurve* out) {
   using T = SelectedEntity::Type;
   if (e.type == T::LineSeg) {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.lineCount())
       return false;
     out->isLine = true;
-    out->ax = static_cast<float>(st.userLinesFlat[k]);
-    out->ay = static_cast<float>(st.userLinesFlat[k + 1]);
-    out->az0 = static_cast<float>(st.userLinesFlat[k + 2]);
-    out->bx = static_cast<float>(st.userLinesFlat[k + 3]);
-    out->by = static_cast<float>(st.userLinesFlat[k + 4]);
-    out->az1 = static_cast<float>(st.userLinesFlat[k + 5]);
+    out->ax = static_cast<float>(st.line(k).x0);
+    out->ay = static_cast<float>(st.line(k).y0);
+    out->az0 = static_cast<float>(st.line(k).z0);
+    out->bx = static_cast<float>(st.line(k).x1);
+    out->by = static_cast<float>(st.line(k).y1);
+    out->az1 = static_cast<float>(st.line(k).z1);
     return true;
   }
   if (e.type == T::Arc) {
@@ -21960,11 +21944,11 @@ static bool FilletRadiusFitsCurve(const AppCommandState& st, const SelectedEntit
                                   float tangentX, float tangentY) {
   using T = SelectedEntity::Type;
   if (e.type == T::LineSeg) {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.lineCount())
       return true;  // let the mutation itself refuse for real on a bad index
-    const float x0 = static_cast<float>(st.userLinesFlat[k]), y0 = static_cast<float>(st.userLinesFlat[k + 1]);
-    const float x1 = static_cast<float>(st.userLinesFlat[k + 3]), y1 = static_cast<float>(st.userLinesFlat[k + 4]);
+    const float x0 = static_cast<float>(st.line(k).x0), y0 = static_cast<float>(st.line(k).y0);
+    const float x1 = static_cast<float>(st.line(k).x1), y1 = static_cast<float>(st.line(k).y1);
     const bool nearIsFirst = NearerToFirstPoint(p0x, p0y, x0, y0, x1, y1);
     const float nearX = nearIsFirst ? x0 : x1, nearY = nearIsFirst ? y0 : y1;
     const float farX = nearIsFirst ? x1 : x0, farY = nearIsFirst ? y1 : y0;
@@ -21984,11 +21968,11 @@ static bool ApplyFilletTrimSingle(AppCommandState& st, const SelectedEntity& e, 
                                   float tangentY, std::vector<std::string>& log) {
   using T = SelectedEntity::Type;
   if (e.type == T::LineSeg) {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.lineCount())
       return false;
-    const float x0 = static_cast<float>(st.userLinesFlat[k]), y0 = static_cast<float>(st.userLinesFlat[k + 1]);
-    const float x1 = static_cast<float>(st.userLinesFlat[k + 3]), y1 = static_cast<float>(st.userLinesFlat[k + 4]);
+    const float x0 = static_cast<float>(st.line(k).x0), y0 = static_cast<float>(st.line(k).y0);
+    const float x1 = static_cast<float>(st.line(k).x1), y1 = static_cast<float>(st.line(k).y1);
     // Which end moves is decided by nearness to the TANGENT POINT, not the pick — unlike LENGTHEN,
     // where the pick directly names the end to change, FILLET's pick only disambiguates which
     // corner/candidate solution to build (SolveFilletCenter); a pick anywhere along the KEPT
@@ -22204,11 +22188,11 @@ struct Fillet3DCurve {
 static bool ReadFillet3DCurve(const AppCommandState& st, const SelectedEntity& e, int polySeg, Fillet3DCurve* out) {
   using T = SelectedEntity::Type;
   if (e.type == T::LineSeg) {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.lineCount())
       return false;
-    out->p0 = {st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 2]};
-    out->p1 = {st.userLinesFlat[k + 3], st.userLinesFlat[k + 4], st.userLinesFlat[k + 5]};
+    out->p0 = {st.line(k).x0, st.line(k).y0, st.line(k).z0};
+    out->p1 = {st.line(k).x1, st.line(k).y1, st.line(k).z1};
     out->isPolyline = false;
     return true;
   }
@@ -22356,8 +22340,8 @@ static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1
       st.userPolylineVerts[k + 2] = static_cast<float>(t3d.z);
       return true;
     }
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.lineCount())
       return false;
     const ucs::Point2D pp0 = ucs::WorldToPlane(frame, curve.p0);
     const ucs::Point2D pp1b = ucs::WorldToPlane(frame, curve.p1);
@@ -22373,13 +22357,13 @@ static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1
       return false;
     }
     if (nearFirst) {
-      st.userLinesFlat[k] = static_cast<float>(t3d.x);
-      st.userLinesFlat[k + 1] = static_cast<float>(t3d.y);
-      st.userLinesFlat[k + 2] = static_cast<float>(t3d.z);
+      st.lineComponent(k, CadLineComponent::X0) = static_cast<float>(t3d.x);
+      st.lineComponent(k, CadLineComponent::Y0) = static_cast<float>(t3d.y);
+      st.lineComponent(k, CadLineComponent::Z0) = static_cast<float>(t3d.z);
     } else {
-      st.userLinesFlat[k + 3] = static_cast<float>(t3d.x);
-      st.userLinesFlat[k + 4] = static_cast<float>(t3d.y);
-      st.userLinesFlat[k + 5] = static_cast<float>(t3d.z);
+      st.lineComponent(k, CadLineComponent::X1) = static_cast<float>(t3d.x);
+      st.lineComponent(k, CadLineComponent::Y1) = static_cast<float>(t3d.y);
+      st.lineComponent(k, CadLineComponent::Z1) = static_cast<float>(t3d.z);
     }
     return true;
   };
@@ -23543,16 +23527,11 @@ static bool ApplyChamferPolylineCorner(AppCommandState& st, int pi, int edgeA, i
   PushUndoSnapshot(st, "Chamfer");
   ReplacePolylineVerts(st, pi, newXY);
   if (!bothZero) {
-    const size_t li = st.userLinesFlat.size() / 6;
+    const size_t li = st.lineCount();
     // The chamfer segment joins two points that have real elevations, so it is built at them.
     // It used to be born at datum while the polyline it connects kept its height - a corner whose
     // two ends were at grade and whose connector was hundreds of feet below (issue 01).
-    st.userLinesFlat.push_back(inX);
-    st.userLinesFlat.push_back(inY);
-    st.userLinesFlat.push_back(inZ);
-    st.userLinesFlat.push_back(outX);
-    st.userLinesFlat.push_back(outY);
-    st.userLinesFlat.push_back(outZ);
+    st.pushLine(CadLineRecord{inX, inY, inZ, outX, outY, outZ});
     st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
     (void)li;
   }
@@ -23707,12 +23686,7 @@ void HandleChamferViewportPick(AppCommandState& st, float wx, float wy, std::vec
             BreakPoint bz1{}, bz2{};
             const float z1 = ClosestPointOnEntity(st, st.chamferFirstEntity, d1x, d1y, &bz1) ? bz1.z : 0.f;
             const float z2 = ClosestPointOnEntity(st, hit, d2x, d2y, &bz2) ? bz2.z : 0.f;
-            st.userLinesFlat.push_back(d1x);
-            st.userLinesFlat.push_back(d1y);
-            st.userLinesFlat.push_back(z1);
-            st.userLinesFlat.push_back(d2x);
-            st.userLinesFlat.push_back(d2y);
-            st.userLinesFlat.push_back(z2);
+            st.pushLine(CadLineRecord{d1x, d1y, z1, d2x, d2y, z2});
             st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
           }
           BumpCadGpuCache(st);
@@ -24571,13 +24545,13 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   double mxY = 0.;
   auto consider = [&](double x, double y) { ExpandExtents(x, y, &mnX, &mxX, &mnY, &mxY, &any); };
 
-  const auto& L = st.userLinesFlat;
-  if (L.size() % 6 == 0) {
-    for (size_t i = 0; i + 5 < L.size(); i += 6) {
-      if (EntityHiddenInViewport(vpFilter, st.userLineAttrs, i / 6))
+  if (st.lineStoreWellFormed()) {
+    for (size_t i = 0; i < st.lineCount(); ++i) {
+      const CadLineRecord ln = st.line(i);
+      if (EntityHiddenInViewport(vpFilter, st.userLineAttrs, i))
         continue;
-      consider(static_cast<double>(L[i]), static_cast<double>(L[i + 1]));
-      consider(static_cast<double>(L[i + 3]), static_cast<double>(L[i + 4]));
+      consider(static_cast<double>(ln.x0), static_cast<double>(ln.y0));
+      consider(static_cast<double>(ln.x1), static_cast<double>(ln.y1));
     }
   }
   if (st.circleStoreWellFormed()) {
@@ -24934,18 +24908,18 @@ inline void EntityBoxGrowZ(EntityBox& b, double z, bool first) {
 // \p vpFilter as on ComputeWorldExtents (REQ-123): both sweeps must agree, or the robust path and
 // the small-drawing path would answer differently for the same viewport.
 void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, const Viewport* vpFilter) {
-  const auto& L = st.userLinesFlat;
-  if (L.size() % 6 == 0) {
-    for (size_t i = 0; i + 5 < L.size(); i += 6) {
-      if (EntityHiddenInViewport(vpFilter, st.userLineAttrs, i / 6))
+  if (st.lineStoreWellFormed()) {
+    for (size_t i = 0; i < st.lineCount(); ++i) {
+      const CadLineRecord ln = st.line(i);
+      if (EntityHiddenInViewport(vpFilter, st.userLineAttrs, i))
         continue;
       EntityBox b{};
-      b.mnX = std::min(static_cast<double>(L[i]), static_cast<double>(L[i + 3]));
-      b.mxX = std::max(static_cast<double>(L[i]), static_cast<double>(L[i + 3]));
-      b.mnY = std::min(static_cast<double>(L[i + 1]), static_cast<double>(L[i + 4]));
-      b.mxY = std::max(static_cast<double>(L[i + 1]), static_cast<double>(L[i + 4]));
-      EntityBoxGrowZ(b, static_cast<double>(L[i + 2]), true);
-      EntityBoxGrowZ(b, static_cast<double>(L[i + 5]), false);
+      b.mnX = std::min(static_cast<double>(ln.x0), static_cast<double>(ln.x1));
+      b.mxX = std::max(static_cast<double>(ln.x0), static_cast<double>(ln.x1));
+      b.mnY = std::min(static_cast<double>(ln.y0), static_cast<double>(ln.y1));
+      b.mxY = std::max(static_cast<double>(ln.y0), static_cast<double>(ln.y1));
+      EntityBoxGrowZ(b, static_cast<double>(ln.z0), true);
+      EntityBoxGrowZ(b, static_cast<double>(ln.z1), false);
       b.cx = 0.5 * (b.mnX + b.mxX);
       b.cy = 0.5 * (b.mnY + b.mxY);
       out.push_back(b);
@@ -25404,7 +25378,7 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
   if (outSkipped)
     *outSkipped = 0;
   std::vector<EntityBox> ents;
-  ents.reserve(st.userLinesFlat.size() / 6 + st.circleCount() + st.userArcs.size() +
+  ents.reserve(st.lineCount() + st.circleCount() + st.userArcs.size() +
                st.userEllipses.size() + st.cadSplines.size() + st.cadPoints.size() + st.cadAnnotations.size() +
                st.surveyPoints.size() +
                (st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1));
@@ -28576,7 +28550,7 @@ void ClearCadSelection(AppCommandState& st) {
 
 void EnsureAttrCounts(AppCommandState& st) {
   bool grew = false;
-  const size_t nl = st.userLinesFlat.size() / 6;
+  const size_t nl = st.lineCount();
   while (st.userLineAttrs.size() < nl) {
     st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
@@ -28956,14 +28930,15 @@ void GatherDrapeRun(DrapeTarget& t, const std::vector<int>& offsets, std::vector
   t.sel = sel;
   switch (sel.type) {
   case SelectedEntity::Type::LineSeg: {
-    const size_t k = static_cast<size_t>(sel.index) * 6;
-    if (sel.index < 0 || k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(sel.index);
+    if (sel.index < 0 || k >= st.lineCount())
       return t;
-    for (size_t e = 0; e < 2; ++e) {
-      t.x.push_back(st.userLinesFlat[k + e * 3]);
-      t.y.push_back(st.userLinesFlat[k + e * 3 + 1]);
-      t.z.push_back(&st.userLinesFlat[k + e * 3 + 2]);
-    }
+    t.x.push_back(st.line(k).x0);
+    t.y.push_back(st.line(k).y0);
+    t.z.push_back(&st.lineComponent(k, CadLineComponent::Z0));
+    t.x.push_back(st.line(k).x1);
+    t.y.push_back(st.line(k).y1);
+    t.z.push_back(&st.lineComponent(k, CadLineComponent::Z1));
     return t;
   }
   case SelectedEntity::Type::Polyline:
@@ -29921,14 +29896,14 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
     return;
   switch (st.entityGripType) {
   case SelectedEntity::Type::LineSeg: {
-    if (static_cast<size_t>(idx) * 6 + 5 >= st.userLinesFlat.size())
+    if (static_cast<size_t>(idx) >= st.lineCount())
       return;
-    const size_t k = static_cast<size_t>(idx) * 6;
+    const size_t k = static_cast<size_t>(idx);
     if (st.entityGripLengthenMode) {
-      const float x0 = static_cast<float>(st.userLinesFlat[k]);
-      const float y0 = static_cast<float>(st.userLinesFlat[k + 1]);
-      const float x1 = static_cast<float>(st.userLinesFlat[k + 3]);
-      const float y1 = static_cast<float>(st.userLinesFlat[k + 4]);
+      const float x0 = static_cast<float>(st.line(k).x0);
+      const float y0 = static_cast<float>(st.line(k).y0);
+      const float x1 = static_cast<float>(st.line(k).x1);
+      const float y1 = static_cast<float>(st.line(k).y1);
       const float fixedX = st.entityGripWhich == 0 ? x1 : x0;
       const float fixedY = st.entityGripWhich == 0 ? y1 : y0;
       float along = (x - fixedX) * st.entityGripLengthenDirX + (y - fixedY) * st.entityGripLengthenDirY;
@@ -29938,11 +29913,11 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
       y = fixedY + st.entityGripLengthenDirY * along;
     }
     if (st.entityGripWhich == 0) {
-      st.userLinesFlat[k] = x;
-      st.userLinesFlat[k + 1] = y;
+      st.lineComponent(k, CadLineComponent::X0) = x;
+      st.lineComponent(k, CadLineComponent::Y0) = y;
     } else if (st.entityGripWhich == 1) {
-      st.userLinesFlat[k + 3] = x;
-      st.userLinesFlat[k + 4] = y;
+      st.lineComponent(k, CadLineComponent::X1) = x;
+      st.lineComponent(k, CadLineComponent::Y1) = y;
     }
     return;
   }
@@ -30167,7 +30142,7 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
 
     switch (lead.type) {
     case SelectedEntity::Type::LineSeg: {
-      const size_t n = st.userLinesFlat.size() / 6;
+      const size_t n = st.lineCount();
       for (size_t i = 0; i < n; ++i)
         consider(SelectedEntity::Type::LineSeg, static_cast<int>(i));
       break;
@@ -30684,12 +30659,7 @@ int ExplodeSelectedPolylines(AppCommandState& st, std::vector<std::string>& log)
     ErasePolylineByIndex(st, polyIdx[static_cast<size_t>(i)]);
 
   for (const OutLine& L : outLines) {
-    st.userLinesFlat.push_back(L.x0);
-    st.userLinesFlat.push_back(L.y0);
-    st.userLinesFlat.push_back(L.z0);
-    st.userLinesFlat.push_back(L.x1);
-    st.userLinesFlat.push_back(L.y1);
-    st.userLinesFlat.push_back(L.z1);
+    st.pushLine(CadLineRecord{L.x0, L.y0, L.z0, L.x1, L.y1, L.z1});
     st.userLineAttrs.push_back(L.at);
   }
   for (const OutArc& A : outArcs) {
@@ -30973,7 +30943,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::set<int> flIx;  // REQ-087
   std::set<int> markerIx;  // REQ-359
   std::set<int> multileaderIx;  // REQ-367
-  const size_t nLines = st.userLinesFlat.size() / 6;
+  const size_t nLines = st.lineCount();
   const size_t nCirc = st.circleCount();
   const size_t nAnn = st.cadAnnotations.size();
   const size_t nArc = st.userArcs.size();
@@ -31025,11 +30995,10 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::vector<int> lv(lineIx.begin(), lineIx.end());
   std::sort(lv.begin(), lv.end(), std::greater<int>());
   for (int idx : lv) {
-    const size_t k = static_cast<size_t>(idx) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(idx);
+    if (k >= st.lineCount())
       continue;
-    st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(k),
-                           st.userLinesFlat.begin() + (static_cast<std::ptrdiff_t>(k)+ 6));
+    st.eraseLine(k);
     if (static_cast<size_t>(idx) < st.userLineAttrs.size())
       st.userLineAttrs.erase(st.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
@@ -31223,7 +31192,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
 /// four kinds already stripped, with a logged reason).
 static void EraseMirroredSourceNoUndo(AppCommandState& st) {
   std::set<int> lineIx, circIx, annIx, arcIx, ellIx, polyIx, flIx, tableIx, blockIx;
-  const size_t nLines = st.userLinesFlat.size() / 6;
+  const size_t nLines = st.lineCount();
   const size_t nCirc = st.circleCount();
   const size_t nAnn = st.cadAnnotations.size();
   const size_t nArc = st.userArcs.size();
@@ -31284,11 +31253,10 @@ static void EraseMirroredSourceNoUndo(AppCommandState& st) {
   std::vector<int> lv(lineIx.begin(), lineIx.end());
   std::sort(lv.begin(), lv.end(), std::greater<int>());
   for (int idx : lv) {
-    const size_t k = static_cast<size_t>(idx) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(idx);
+    if (k >= st.lineCount())
       continue;
-    st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(k),
-                           st.userLinesFlat.begin() + (static_cast<std::ptrdiff_t>(k)+ 6));
+    st.eraseLine(k);
     if (static_cast<size_t>(idx) < st.userLineAttrs.size())
       st.userLineAttrs.erase(st.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
@@ -31393,11 +31361,11 @@ static void DuplicateCadSelectionReflectedAcrossPlane(AppCommandState& st, const
   for (const auto& e : st.selection) {
     switch (e.type) {
     case SelectedEntity::Type::LineSeg: {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= st.userLinesFlat.size())
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= st.lineCount())
         break;
-      const ray3d::Vec3 p0 = rp(static_cast<float>(st.userLinesFlat[k]), static_cast<float>(st.userLinesFlat[k + 1]), static_cast<float>(st.userLinesFlat[k + 2]));
-      const ray3d::Vec3 p1 = rp(static_cast<float>(st.userLinesFlat[k + 3]), static_cast<float>(st.userLinesFlat[k + 4]), static_cast<float>(st.userLinesFlat[k + 5]));
+      const ray3d::Vec3 p0 = rp(static_cast<float>(st.line(k).x0), static_cast<float>(st.line(k).y0), static_cast<float>(st.line(k).z0));
+      const ray3d::Vec3 p1 = rp(static_cast<float>(st.line(k).x1), static_cast<float>(st.line(k).y1), static_cast<float>(st.line(k).z1));
       for (const ray3d::Vec3& p : {p0, p1}) {
         newLines.push_back(static_cast<float>(p.x));
         newLines.push_back(static_cast<float>(p.y));
@@ -31622,10 +31590,10 @@ static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& 
                                std::vector<std::array<double, 4>>* out) {
   using ST = SelectedEntity::Type;
   if (cut.type == ST::LineSeg) {
-    const size_t k = static_cast<size_t>(cut.index) * 6;
-    if (k + 5 < st.userLinesFlat.size())
-      out->push_back({st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 3],
-                      st.userLinesFlat[k + 4]});
+    const size_t k = static_cast<size_t>(cut.index);
+    if (k < st.lineCount())
+      out->push_back({st.line(k).x0, st.line(k).y0, st.line(k).x1,
+                      st.line(k).y1});
     return;
   }
   if (cut.type == ST::Circle) {
@@ -31769,10 +31737,10 @@ static void AppendPolylineCutEdgesExcept(const AppCommandState& st, int pi, int 
 static void CollectAllDrawingCutSegmentsExceptTarget(const AppCommandState& st, const TrimTargetEdge* excludeEdge,
                                                      std::vector<std::array<double, 4>>* out) {
   out->clear();
-  const auto& Lf = st.userLinesFlat;
-  if (Lf.size() % 6 == 0) {
-    for (size_t li = 0; li + 5 < Lf.size(); li += 6) {
-      const int idx = static_cast<int>(li / 6);
+  if (st.lineStoreWellFormed()) {
+    for (size_t li = 0; li < st.lineCount(); ++li) {
+      const CadLineRecord ln = st.line(li);
+      const int idx = static_cast<int>(li);
       if (excludeEdge && excludeEdge->kind == TrimTargetEdge::Line && excludeEdge->lineIx == idx)
         continue;
       SelectedEntity cut{};
@@ -31842,10 +31810,10 @@ static bool PickClosestTrimTarget(const AppCommandState& st, float wx, float wy,
   TrimTargetEdge bestR{};
   double bax = 0.0, bay = 0.0, bbx = 0.0, bby = 0.0;
 
-  const auto& Lf = st.userLinesFlat;
-  if (Lf.size() % 6 == 0) {
-    for (size_t li = 0; li + 5 < Lf.size(); li += 6) {
-      const double x0 = Lf[li], y0 = Lf[li + 1], x1 = Lf[li + 3], y1 = Lf[li + 4];
+  if (st.lineStoreWellFormed()) {
+    for (size_t li = 0; li < st.lineCount(); ++li) {
+      const CadLineRecord ln = st.line(li);
+      const double x0 = ln.x0, y0 = ln.y0, x1 = ln.x1, y1 = ln.y1;
       const float d2 = static_cast<float>(PickDistSqPointSegmentD(wx, wy, x0, y0, x1, y1));
       if (d2 > tol2)
         continue;
@@ -31853,7 +31821,7 @@ static bool PickClosestTrimTarget(const AppCommandState& st, float wx, float wy,
         any = true;
         best = d2;
         bestR.kind = TrimTargetEdge::Line;
-        bestR.lineIx = static_cast<int>(li / 6);
+        bestR.lineIx = static_cast<int>(li);
         bax = x0;
         bay = y0;
         bbx = x1;
@@ -31918,10 +31886,10 @@ static bool PickTrimTargetClosestToDrawnSegment(const AppCommandState& st, float
   TrimTargetEdge bestR{};
   double bax = 0.0, bay = 0.0, bbx = 0.0, bby = 0.0;
 
-  const auto& Lf = st.userLinesFlat;
-  if (Lf.size() % 6 == 0) {
-    for (size_t li = 0; li + 5 < Lf.size(); li += 6) {
-      const double x0 = Lf[li], y0 = Lf[li + 1], x1 = Lf[li + 3], y1 = Lf[li + 4];
+  if (st.lineStoreWellFormed()) {
+    for (size_t li = 0; li < st.lineCount(); ++li) {
+      const CadLineRecord ln = st.line(li);
+      const double x0 = ln.x0, y0 = ln.y0, x1 = ln.x1, y1 = ln.y1;
       const float d2 = CadCmdGeom::MinDistSqSegSeg(u1x, u1y, u2x, u2y, x0, y0, x1, y1);
       if (d2 > tol2)
         continue;
@@ -31929,7 +31897,7 @@ static bool PickTrimTargetClosestToDrawnSegment(const AppCommandState& st, float
         any = true;
         best = d2;
         bestR.kind = TrimTargetEdge::Line;
-        bestR.lineIx = static_cast<int>(li / 6);
+        bestR.lineIx = static_cast<int>(li);
         bax = x0;
         bay = y0;
         bbx = x1;
@@ -32097,21 +32065,20 @@ static bool TrimSegmentToCuttingEdges(AppCommandState& st, const TrimTargetEdge&
   const double ry = iy;
 
   if (tgt.kind == TrimTargetEdge::Line) {
-    const size_t k = static_cast<size_t>(tgt.lineIx) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(tgt.lineIx);
+    if (k >= st.lineCount())
       return false;
     if (trimA) {
-      st.userLinesFlat[k] = rx;
-      st.userLinesFlat[k + 1] = ry;
+      st.lineComponent(k, CadLineComponent::X0) = rx;
+      st.lineComponent(k, CadLineComponent::Y0) = ry;
     } else {
-      st.userLinesFlat[k + 3] = rx;
-      st.userLinesFlat[k + 4] = ry;
+      st.lineComponent(k, CadLineComponent::X1) = rx;
+      st.lineComponent(k, CadLineComponent::Y1) = ry;
     }
-    const double exx = st.userLinesFlat[k + 3] - st.userLinesFlat[k];
-    const double eyy = st.userLinesFlat[k + 4] - st.userLinesFlat[k + 1];
+    const double exx = st.line(k).x1 - st.line(k).x0;
+    const double eyy = st.line(k).y1 - st.line(k).y0;
     if (exx * exx + eyy * eyy < 1e-24) {
-      st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(k),
-                             st.userLinesFlat.begin() + (static_cast<std::ptrdiff_t>(k)+ 6));
+      st.eraseLine(k);
       if (static_cast<size_t>(tgt.lineIx) < st.userLineAttrs.size())
         st.userLineAttrs.erase(st.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(tgt.lineIx));
     }
@@ -32158,18 +32125,18 @@ double CadEntityPickDepthAtPick(const AppCommandState& st, const SelectedEntity&
   using T = SelectedEntity::Type;
   switch (e.type) {
   case T::LineSeg: {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    const auto& L = st.userLinesFlat;
-    if (k + 5 >= L.size())
+    const size_t li = static_cast<size_t>(e.index);
+    if (li >= st.lineCount())
       return 0.0;
+    const CadLineRecord seg = st.line(li);
     if (useRay) {
       double t = 0.0;
-      (void)ray3d::RaySegmentDistance(*pickRay, ray3d::Vec3{L[k], L[k + 1], L[k + 2]},
-                                      ray3d::Vec3{L[k + 3], L[k + 4], L[k + 5]}, &t);
+      (void)ray3d::RaySegmentDistance(*pickRay, ray3d::Vec3{seg.x0, seg.y0, seg.z0},
+                                      ray3d::Vec3{seg.x1, seg.y1, seg.z1}, &t);
       return t;
     }
-    const double ax = L[k], ay = L[k + 1], az = L[k + 2];
-    const double bx = L[k + 3], by = L[k + 4], bz = L[k + 5];
+    const double ax = seg.x0, ay = seg.y0, az = seg.z0;
+    const double bx = seg.x1, by = seg.y1, bz = seg.z1;
     const double vx = bx - ax, vy = by - ay;
     const double len2 = vx * vx + vy * vy;
     if (len2 < 1e-24)
@@ -32407,13 +32374,13 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     }
   };
 
-  const auto& L = st.userLinesFlat;
-  if (L.size() % 6 == 0) {
-    for (size_t i = 0; i + 5 < L.size(); i += 6) {
+  if (st.lineStoreWellFormed()) {
+    for (size_t i = 0; i < st.lineCount(); ++i) {
+      const CadLineRecord ln = st.line(i);
       SelectedEntity e{};
       e.type = SelectedEntity::Type::LineSeg;
-      e.index = static_cast<int>(i / 6);
-      const double d2 = d2Segment(L[i], L[i + 1], L[i + 2], L[i + 3], L[i + 4], L[i + 5]);
+      e.index = static_cast<int>(i);
+      const double d2 = d2Segment(ln.x0, ln.y0, ln.z0, ln.x1, ln.y1, ln.z1);
       consider(e, d2);
     }
   }
@@ -32935,9 +32902,10 @@ void StartHatchCommand(AppCommandState& st, std::vector<std::string>& log) {
 // Gather every model boundary segment into \p out (local coordinates): line segments, polyline edges
 // (closing edge when closed), and tessellated arcs/circles/ellipses. Used by the HATCH boundary trace.
 static void CadCollectBoundarySegments(const AppCommandState& st, std::vector<hatchboundary::Seg>* out) {
-  const auto& L = st.userLinesFlat;
-  for (size_t i = 0; i + 5 < L.size(); i += 6)
-    out->push_back({L[i], L[i + 1], L[i + 3], L[i + 4]});
+  for (size_t li = 0; li < st.lineCount(); ++li) {
+    const CadLineRecord ln = st.line(li);
+    out->push_back({ln.x0, ln.y0, ln.x1, ln.y1});
+  }
 
   const int nPoly = static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < nPoly; ++pi) {
@@ -33116,11 +33084,11 @@ static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, floa
     float sgn = 1.f;
     switch (e.type) {
     case T::LineSeg: {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= st.userLinesFlat.size())
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= st.lineCount())
         return false;
-      const float sd = OfsSignedSideLine(static_cast<float>(st.userLinesFlat[k]), static_cast<float>(st.userLinesFlat[k + 1]), static_cast<float>(st.userLinesFlat[k + 3]),
-                                         static_cast<float>(st.userLinesFlat[k + 4]), px, py);
+      const float sd = OfsSignedSideLine(static_cast<float>(st.line(k).x0), static_cast<float>(st.line(k).y0), static_cast<float>(st.line(k).x1),
+                                         static_cast<float>(st.line(k).y1), px, py);
       sgn = sd >= 0.f ? 1.f : -1.f;
       break;
     }
@@ -33217,11 +33185,11 @@ static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, floa
     float signedD = 0.f;
     switch (e.type) {
     case T::LineSeg: {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= st.userLinesFlat.size())
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= st.lineCount())
         return false;
-      signedD = OfsSignedSideLine(static_cast<float>(st.userLinesFlat[k]), static_cast<float>(st.userLinesFlat[k + 1]), static_cast<float>(st.userLinesFlat[k + 3]),
-                                  static_cast<float>(st.userLinesFlat[k + 4]), px, py);
+      signedD = OfsSignedSideLine(static_cast<float>(st.line(k).x0), static_cast<float>(st.line(k).y0), static_cast<float>(st.line(k).x1),
+                                  static_cast<float>(st.line(k).y1), px, py);
       break;
     }
     case T::Circle: {
@@ -33411,13 +33379,13 @@ void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, floa
 
   switch (e.type) {
   case T::LineSeg: {
-    const size_t k = static_cast<size_t>(e.index) * 6;
-    if (k + 5 >= cmd.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= cmd.lineCount())
       return;
-    const float x0 = static_cast<float>(cmd.userLinesFlat[k]);
-    const float y0 = static_cast<float>(cmd.userLinesFlat[k + 1]);
-    const float x1 = static_cast<float>(cmd.userLinesFlat[k + 3]);
-    const float y1 = static_cast<float>(cmd.userLinesFlat[k + 4]);
+    const float x0 = static_cast<float>(cmd.line(k).x0);
+    const float y0 = static_cast<float>(cmd.line(k).y0);
+    const float x1 = static_cast<float>(cmd.line(k).x1);
+    const float y1 = static_cast<float>(cmd.line(k).y1);
     const float dx = x1 - x0;
     const float dy = y1 - y0;
     if (std::hypot(dx, dy) < 1e-8f)
@@ -33737,11 +33705,11 @@ static void Collect3DTrimCrossings(const AppCommandState& st, const std::vector<
     if (c.type == SelectedEntity::Type::LineSeg) {
       if (c.index == targetIndex && !targetIsPoly)
         continue;  // a line can't cut itself
-      const size_t ck = static_cast<size_t>(c.index) * 6;
-      if (ck + 5 >= st.userLinesFlat.size())
+      const size_t ck = static_cast<size_t>(c.index);
+      if (ck >= st.lineCount())
         continue;
-      const ray3d::Vec3 qa{st.userLinesFlat[ck], st.userLinesFlat[ck + 1], st.userLinesFlat[ck + 2]};
-      const ray3d::Vec3 qb{st.userLinesFlat[ck + 3], st.userLinesFlat[ck + 4], st.userLinesFlat[ck + 5]};
+      const ray3d::Vec3 qa{st.line(ck).x0, st.line(ck).y0, st.line(ck).z0};
+      const ray3d::Vec3 qb{st.line(ck).x1, st.line(ck).y1, st.line(ck).z1};
       tryLineCutSeg(qa, qb);
       continue;
     }
@@ -33811,21 +33779,14 @@ static void Apply3DTrimCut(AppCommandState& st, const SelectedEntity& hit, bool 
     st.userPolylineVerts[vk + 1] = static_cast<float>(cut.y);
     st.userPolylineVerts[vk + 2] = static_cast<float>(cut.z);
   } else {
-    if (trimA) {
-      st.userLinesFlat[tk] = static_cast<float>(cut.x);
-      st.userLinesFlat[tk + 1] = static_cast<float>(cut.y);
-      st.userLinesFlat[tk + 2] = static_cast<float>(cut.z);
-    } else {
-      st.userLinesFlat[tk + 3] = static_cast<float>(cut.x);
-      st.userLinesFlat[tk + 4] = static_cast<float>(cut.y);
-      st.userLinesFlat[tk + 5] = static_cast<float>(cut.z);
-    }
+    st.lineComponent(tk, trimA ? CadLineComponent::X0 : CadLineComponent::X1) = static_cast<float>(cut.x);
+    st.lineComponent(tk, trimA ? CadLineComponent::Y0 : CadLineComponent::Y1) = static_cast<float>(cut.y);
+    st.lineComponent(tk, trimA ? CadLineComponent::Z0 : CadLineComponent::Z1) = static_cast<float>(cut.z);
+    const CadLineRecord cutLine = st.line(tk);
     const double newLen = ray3d::Length(ray3d::Sub(
-        ray3d::Vec3{st.userLinesFlat[tk + 3], st.userLinesFlat[tk + 4], st.userLinesFlat[tk + 5]},
-        ray3d::Vec3{st.userLinesFlat[tk], st.userLinesFlat[tk + 1], st.userLinesFlat[tk + 2]}));
+        ray3d::Vec3{cutLine.x1, cutLine.y1, cutLine.z1}, ray3d::Vec3{cutLine.x0, cutLine.y0, cutLine.z0}));
     if (newLen < 1e-6) {
-      st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(tk),
-                             st.userLinesFlat.begin() + (static_cast<std::ptrdiff_t>(tk)+ 6));
+      st.eraseLine(tk);
       if (static_cast<size_t>(hit.index) < st.userLineAttrs.size())
         st.userLineAttrs.erase(st.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(hit.index));
     }
@@ -33906,13 +33867,14 @@ static bool Try3DLineTrim(AppCommandState& st, double wx, double wy, float tolWo
       return false;
     }
   } else {
-    tk = static_cast<size_t>(hit.index) * 6;
-    if (tk + 5 >= st.userLinesFlat.size()) {
+    tk = static_cast<size_t>(hit.index);
+    if (tk >= st.lineCount()) {
       log.push_back("TRIM — nothing to trim at pick.");
       return false;
     }
-    ta = {st.userLinesFlat[tk], st.userLinesFlat[tk + 1], st.userLinesFlat[tk + 2]};
-    tb = {st.userLinesFlat[tk + 3], st.userLinesFlat[tk + 4], st.userLinesFlat[tk + 5]};
+    const CadLineRecord tl = st.line(tk);
+    ta = {tl.x0, tl.y0, tl.z0};
+    tb = {tl.x1, tl.y1, tl.z1};
   }
   const double targetLen = ray3d::Length(ray3d::Sub(tb, ta));
   if (targetLen < 1e-9) {
@@ -33966,7 +33928,7 @@ static bool Try3DLineTrim(AppCommandState& st, double wx, double wy, float tolWo
 struct DrawnLineTrimSolution {
   SelectedEntity hit{};
   bool targetIsPoly = false;
-  size_t tk = 0;          ///< userLinesFlat offset (Line target); unused for a polyline target
+  size_t tk = 0;          ///< line index (Line target); unused for a polyline target
   int targetVi = -1;      ///< picked chord's near vertex (polyline target)
   ray3d::Vec3 ta{}, tb{}; ///< the target segment
   ray3d::Vec3 cut{};      ///< the 3D crossing the trim shortens to
@@ -34034,10 +33996,9 @@ static bool Solve3DDrawnLineTrim(const AppCommandState& st, const ray3d::Vec3& f
     ta = a;
     tb = b;
   };
-  for (size_t li = 0; li + 5 < st.userLinesFlat.size(); li += 6) {
-    consider(false, static_cast<int>(li / 6), -1,
-             ray3d::Vec3{st.userLinesFlat[li], st.userLinesFlat[li + 1], st.userLinesFlat[li + 2]},
-             ray3d::Vec3{st.userLinesFlat[li + 3], st.userLinesFlat[li + 4], st.userLinesFlat[li + 5]});
+  for (size_t li = 0; li < st.lineCount(); ++li) {
+    const CadLineRecord ln = st.line(li);
+    consider(false, static_cast<int>(li), -1, ray3d::Vec3{ln.x0, ln.y0, ln.z0}, ray3d::Vec3{ln.x1, ln.y1, ln.z1});
   }
   const int nPoly =
       static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
@@ -34082,7 +34043,7 @@ static bool Solve3DDrawnLineTrim(const AppCommandState& st, const ray3d::Vec3& f
       cutters.push_back(e);
     }
   };
-  addAll(SelectedEntity::Type::LineSeg, static_cast<int>(st.userLinesFlat.size() / 6));
+  addAll(SelectedEntity::Type::LineSeg, static_cast<int>(st.lineCount()));
   addAll(SelectedEntity::Type::Circle, static_cast<int>(st.circleCount()));
   addAll(SelectedEntity::Type::Arc, static_cast<int>(st.userArcs.size()));
   addAll(SelectedEntity::Type::Ellipse, static_cast<int>(st.userEllipses.size()));
@@ -34125,7 +34086,7 @@ static bool Solve3DDrawnLineTrim(const AppCommandState& st, const ray3d::Vec3& f
   out->hit.type = targetIsPoly ? SelectedEntity::Type::Polyline : SelectedEntity::Type::LineSeg;
   out->hit.index = targetIndex;
   out->targetIsPoly = targetIsPoly;
-  out->tk = targetIsPoly ? 0 : static_cast<size_t>(targetIndex) * 6;
+  out->tk = targetIsPoly ? 0 : static_cast<size_t>(targetIndex);
   out->targetVi = targetVi;
   out->ta = ta;
   out->tb = tb;
@@ -34488,7 +34449,7 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     int unsupported = 0;
     for (const PaperEntityRef& ref : st.selectedPaperEntities) {
       if (ref.type == PaperEntityRef::Type::Line) {
-        if (ref.index < 0 || static_cast<size_t>(ref.index) * 6 + 5 >= paperJoin.userLinesFlat.size()) {
+        if (ref.index < 0 || static_cast<size_t>(ref.index) >= paperJoin.lineCount()) {
           ++unsupported;
           continue;
         }
@@ -34602,15 +34563,15 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     tol = std::max(1e-5f, static_cast<float>(1e-4 * std::max(mxX - mnX, mxY - mnY)));
 
   auto readLine = [&](int idx, float* x0, float* y0, float* z0, float* x1, float* y1, float* z1) -> bool {
-    const size_t k = static_cast<size_t>(idx) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(idx);
+    if (k >= st.lineCount())
       return false;
-    *x0 = static_cast<float>(st.userLinesFlat[k]);
-    *y0 = static_cast<float>(st.userLinesFlat[k + 1]);
-    *z0 = static_cast<float>(st.userLinesFlat[k + 2]);
-    *x1 = static_cast<float>(st.userLinesFlat[k + 3]);
-    *y1 = static_cast<float>(st.userLinesFlat[k + 4]);
-    *z1 = static_cast<float>(st.userLinesFlat[k + 5]);
+    *x0 = static_cast<float>(st.line(k).x0);
+    *y0 = static_cast<float>(st.line(k).y0);
+    *z0 = static_cast<float>(st.line(k).z0);
+    *x1 = static_cast<float>(st.line(k).x1);
+    *y1 = static_cast<float>(st.line(k).y1);
+    *z1 = static_cast<float>(st.line(k).z1);
     return true;
   };
 
@@ -35038,11 +34999,10 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
   std::vector<int> lDel(lineDel.begin(), lineDel.end());
   std::sort(lDel.begin(), lDel.end(), std::greater<int>());
   for (int idx : lDel) {
-    const size_t k = static_cast<size_t>(idx) * 6;
-    if (k + 5 >= st.userLinesFlat.size())
+    const size_t k = static_cast<size_t>(idx);
+    if (k >= st.lineCount())
       continue;
-    st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(k),
-                           st.userLinesFlat.begin() + (static_cast<std::ptrdiff_t>(k)+ 6));
+    st.eraseLine(k);
     if (static_cast<size_t>(idx) < st.userLineAttrs.size())
       st.userLineAttrs.erase(st.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
@@ -35166,14 +35126,14 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
     struct LSeg { double x0 = 0, y0 = 0, x1 = 0, y1 = 0; double z0 = 0, z1 = 0; EntityAttributes attr; };
 
     // Snapshot into a working vector that carries attrs
-    const size_t nL = st.userLinesFlat.size() / 6;
+    const size_t nL = st.lineCount();
     std::vector<LSeg> segs;
     segs.reserve(nL);
     for (size_t i = 0; i < nL; ++i) {
-      const size_t k = i * 6;
-      segs.push_back({ st.userLinesFlat[k],     st.userLinesFlat[k + 1],
-                       st.userLinesFlat[k + 3], st.userLinesFlat[k + 4],
-                       st.userLinesFlat[k + 2], st.userLinesFlat[k + 5],
+      const size_t k = i;
+      segs.push_back({ st.line(k).x0,     st.line(k).y0,
+                       st.line(k).x1, st.line(k).y1,
+                       st.line(k).z0, st.line(k).z1,
                        i < st.userLineAttrs.size() ? st.userLineAttrs[i] : MakeNewEntityAttrs(st) });
     }
 
@@ -35399,10 +35359,9 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
     // Write back
     st.userLinesFlat.clear();
     st.userLineAttrs.clear();
-    st.userLinesFlat.reserve(segs.size() * 6);
     st.userLineAttrs.reserve(segs.size());
     for (const auto& s : segs) {
-      st.userLinesFlat.insert(st.userLinesFlat.end(), { s.x0, s.y0, s.z0, s.x1, s.y1, s.z1 });
+      st.pushLine(CadLineRecord{s.x0, s.y0, s.z0, s.x1, s.y1, s.z1});
       st.userLineAttrs.push_back(s.attr);
     }
   }
@@ -36993,12 +36952,7 @@ void SubmitExtractCenterlineViewportPick(AppCommandState& st, std::vector<std::s
     return;
   }
   PushUndoSnapshot(st, "Extract Centerline");
-  st.userLinesFlat.push_back(st.extractCenterlineP0X);
-  st.userLinesFlat.push_back(st.extractCenterlineP0Y);
-  st.userLinesFlat.push_back(st.extractCenterlineP0Z);
-  st.userLinesFlat.push_back(st.extractCenterlineP1X);
-  st.userLinesFlat.push_back(st.extractCenterlineP1Y);
-  st.userLinesFlat.push_back(st.extractCenterlineP1Z);
+  st.pushLine(CadLineRecord{st.extractCenterlineP0X, st.extractCenterlineP0Y, st.extractCenterlineP0Z, st.extractCenterlineP1X, st.extractCenterlineP1Y, st.extractCenterlineP1Z});
   st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
   log.push_back("EXTRACTCENTERLINE — line placed along the fitted cylinder axis.");
@@ -37882,12 +37836,7 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
       float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
       CadCoord::LocalFromWorld(st, c.ellipseArc.chordA.x, c.ellipseArc.chordA.y, &ax, &ay);
       CadCoord::LocalFromWorld(st, c.ellipseArc.chordB.x, c.ellipseArc.chordB.y, &bx, &by);
-      st.userLinesFlat.push_back(ax);
-      st.userLinesFlat.push_back(ay);
-      st.userLinesFlat.push_back(static_cast<float>(c.ellipseArc.chordA.z));
-      st.userLinesFlat.push_back(bx);
-      st.userLinesFlat.push_back(by);
-      st.userLinesFlat.push_back(static_cast<float>(c.ellipseArc.chordB.z));
+      st.pushLine(CadLineRecord{ax, ay, static_cast<float>(c.ellipseArc.chordA.z), bx, by, static_cast<float>(c.ellipseArc.chordB.z)});
       st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
       made += 2;
       continue;
@@ -38941,15 +38890,15 @@ namespace {
     return true;
   }
   if (sel.type == SelectedEntity::Type::LineSeg) {
-    const std::size_t b = static_cast<std::size_t>(sel.index) * 6;
-    if (sel.index < 0 || b + 5 >= st.userLinesFlat.size())
+    const std::size_t b = static_cast<std::size_t>(sel.index);
+    if (sel.index < 0 || b >= st.lineCount())
       return false;
-    const ray3d::Vec3 p0{static_cast<double>(st.userLinesFlat[b + 0]),
-                         static_cast<double>(st.userLinesFlat[b + 1]),
-                         static_cast<double>(st.userLinesFlat[b + 2])};
-    const ray3d::Vec3 p1{static_cast<double>(st.userLinesFlat[b + 3]),
-                         static_cast<double>(st.userLinesFlat[b + 4]),
-                         static_cast<double>(st.userLinesFlat[b + 5])};
+    const ray3d::Vec3 p0{static_cast<double>(st.line(b).x0),
+                         static_cast<double>(st.line(b).y0),
+                         static_cast<double>(st.line(b).z0)};
+    const ray3d::Vec3 p1{static_cast<double>(st.line(b).x1),
+                         static_cast<double>(st.line(b).y1),
+                         static_cast<double>(st.line(b).z1)};
     out->points = {p0, p1};
     out->segments = {brep::SweepSegment{}};  // one straight segment
     return true;
@@ -44411,8 +44360,7 @@ void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
   const std::size_t i = static_cast<std::size_t>(hit.index);
   switch (hit.type) {
   case T::LineSeg:
-    anchor = ray3d::Vec3{st.userLinesFlat[i * 6 + 0], st.userLinesFlat[i * 6 + 1],
-                         st.userLinesFlat[i * 6 + 2]};
+    anchor = ray3d::Vec3{st.line(i).x0, st.line(i).y0, st.line(i).z0};
     break;
   case T::Arc: {
     const CadArc& a = st.userArcs[i];
@@ -44443,8 +44391,7 @@ void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
   case T::LineSeg: {
     flat = AppendFlatPoint(frame, anchor, planeTol, &path, true) &&
            AppendFlatPoint(frame,
-                           ray3d::Vec3{st.userLinesFlat[i * 6 + 3], st.userLinesFlat[i * 6 + 4],
-                                       st.userLinesFlat[i * 6 + 5]},
+                           ray3d::Vec3{st.line(i).x1, st.line(i).y1, st.line(i).z1},
                            planeTol, &path, false);
     break;
   }
@@ -47455,12 +47402,8 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
   } else {
     // New geometry lands on the active work plane (REQ-058); ELEV moves that plane, and the
     // default is world XY, so this is 0 until the user changes it.
-    st.userLinesFlat.push_back(st.anchorX);
-    st.userLinesFlat.push_back(st.anchorY);
-    st.userLinesFlat.push_back(st.anchorZ);          // the anchor's own elevation
-    st.userLinesFlat.push_back(x);
-    st.userLinesFlat.push_back(y);
-    st.userLinesFlat.push_back(CadCommitElevation(st));  // this end's (snap overrides ELEV)
+    // Anchor's own elevation, then this end's (snap overrides ELEV).
+    st.pushLine(CadLineRecord{st.anchorX, st.anchorY, st.anchorZ, x, y, CadCommitElevation(st)});
     st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
   }
   BumpCadGpuCache(st);
@@ -52190,18 +52133,13 @@ void VectorizePdfAttachmentLines(AppCommandState& st, int pdfIndex, std::vector<
     const float sx2 = snap[i + 2] * att.scale, sy2 = snap[i + 3] * att.scale;
     // Z = 0 is correct here regardless of the UCS: a PDF underlay is a flat raster/vector
     // sheet with no elevation of its own.
-    st.userLinesFlat.push_back(att.insertX + sx1 * cosR - sy1 * sinR);
-    st.userLinesFlat.push_back(att.insertY + sx1 * sinR + sy1 * cosR);
-    st.userLinesFlat.push_back(0.f);
-    st.userLinesFlat.push_back(att.insertX + sx2 * cosR - sy2 * sinR);
-    st.userLinesFlat.push_back(att.insertY + sx2 * sinR + sy2 * cosR);
-    st.userLinesFlat.push_back(0.f);
+    st.pushLine(CadLineRecord{att.insertX + sx1 * cosR - sy1 * sinR, att.insertY + sx1 * sinR + sy1 * cosR, 0.f, att.insertX + sx2 * cosR - sy2 * sinR, att.insertY + sx2 * sinR + sy2 * cosR, 0.f});
     ++n;
   }
   EnsureAttrCounts(st);
   // Tag newly-added lines with this underlay's layer.
   if (!att.layer.empty()) {
-    const size_t total = st.userLinesFlat.size() / 6;
+    const size_t total = st.lineCount();
     const size_t firstNew = total - static_cast<size_t>(n);
     for (size_t k = firstNew; k < total && k < st.userLineAttrs.size(); ++k)
       st.userLineAttrs[k].layer = att.layer;
@@ -52394,10 +52332,10 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
     case QP::Length: {
       double len = 0.0;
       if (e.type == T::LineSeg) {
-        const size_t k = (size_t)e.index * 6;
-        if (k + 4 < cmd.userLinesFlat.size())
-          len = std::hypot(cmd.userLinesFlat[k+3] - cmd.userLinesFlat[k],
-                           cmd.userLinesFlat[k+4] - cmd.userLinesFlat[k+1]);
+        const size_t k = (size_t)e.index;
+        if (k < cmd.lineCount())
+          len = std::hypot(cmd.line(k).x1 - cmd.line(k).x0,
+                           cmd.line(k).y1 - cmd.line(k).y0);
       } else if (e.type == T::Polyline) {
         const int np = (int)cmd.userPolylineOffsets.size();
         if (e.index >= 0 && e.index + 1 < np) {
@@ -52486,7 +52424,7 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
   };
 
   if (cmd.qsApplyTo == AppCommandState::QsApplyTo::EntireDrawing) {
-    const int nLines = (int)(cmd.userLinesFlat.size() / 6);
+    const int nLines = (int)(cmd.lineCount());
     for (int i = 0; i < nLines; ++i)  addCad({SelectedEntity::Type::LineSeg, i});
     const int nCirc = (int)cmd.circleCount();
     for (int i = 0; i < nCirc; ++i)   addCad({SelectedEntity::Type::Circle, i});
