@@ -12257,19 +12257,6 @@
       "note": "Intercepts PlaySoundW and MessageBeep in test processes and writes a call-stack log. Headless test infrastructure with a Windows API dependency."
     },
     {
-      "path": "tests/TestSoundGuardTests.cpp",
-      "lines": [
-        1,
-        85
-      ],
-      "system": "Headless",
-      "concern": "test-sound-guard",
-      "symbols": [
-        "TestSoundGuard"
-      ],
-      "note": "Tests for the sound guard."
-    },
-    {
       "path": "src/qt/EditorWindow.cpp",
       "lines": [
         1,
@@ -13594,20 +13581,15 @@
       },
       "existingTests": [
         "tests/Ray3dTests.cpp",
-        "tests/UcsTests.cpp",
-        "tests/OrthoConstrainTests.cpp",
-        "tests/OrthoUcsConstrainTests.cpp"
+        "tests/UcsTests.cpp"
       ],
       "testsCoveringMathNotOwned": [
         "tests/CadBlockImportTests.cpp",
         "tests/CadBlockTests.cpp",
-        "tests/CadPipeRunCommandTests.cpp",
         "tests/CameraTests.cpp",
         "tests/LibreDwgCadTests.cpp",
         "tests/SectionClipTests.cpp",
-        "tests/SolidMeasure.hpp",
-        "tests/Trim3DDrawnLineTests.cpp",
-        "tests/Trim3DLineLineTests.cpp"
+        "tests/SolidMeasure.hpp"
       ],
       "testGaps": [
         "No test calls the 2D rotation or affine helpers in sections directly (RotateNormalAboutZ, RotateExtrusionByXf, Affine2D, Xf, Xf2, RotateSurveyCoords, RotatePdfInsertAroundBase, RotatePtForAnnotationPreview, RotateDeltaFromReferenceAndNewSegment, ReflectPtAcrossLine, ReflectAngleAcrossLine, ReflectSurveyCoords). tests/Ray3dTests.cpp:324 checks RotatePointAboutAxis against RotateAroundBase's arithmetic (equivalence only, not the helper itself).",
@@ -13666,9 +13648,7 @@
         "Document dirty tracking compares cadGpuRevision with activeDocSavedRevision for the active drawing and documents[i].cadGpuRevision with documents[i].savedRevision for other tabs; there is no DocumentChangedEvent publisher/subscriber contract.",
         "No typed command-state changed publisher exists today; the viewport changed callback is an untyped refresh callback, not dedicated command-state event coverage."
       ],
-      "testsCoveringNotOwned": [
-        "tests/RightClickTests.cpp and tests/CadPropertyEditTests.cpp: CadClassifyRightClick/CadRightClickHoldIsMenu command-policy tests; not Events-owned."
-      ]
+      "testsCoveringNotOwned": []
     },
     "UI": {
       "tier": "T0 Foundation",
@@ -13753,9 +13733,7 @@
         "No test covers WinFileDialogs.cpp filter-to-FileKind mapping or the Windows Browse* functions; the Windows implementation is only reachable on a real desktop.",
         "No test covers the MessageBoxW confirmation or error paths in FailureReportUi.cpp; they run only on a real Windows desktop."
       ],
-      "testsCoveringUiNotOwned": [
-        "tests/WhatsNewLogicTests.cpp: What's New version-gating rules (not UI-owned; see notUiDecisions)"
-      ],
+      "testsCoveringUiNotOwned": [],
       "forbiddenDependencies": []
     },
     "Debug": {
@@ -13981,12 +13959,8 @@
       "testsCoveringGeometryCodeNotOwned": [
         "tests/BrepJsonTests.cpp (IO serialization of Geometry values)",
         "tests/AcisSatParserTests.cpp (IO SAT parsing into B-rep/NURBS)",
-        "tests/SolidPickTests.cpp (Interaction sub-object picking)",
-        "tests/CadSnapTests.cpp (Interaction consumers of curves and intersections)",
         "tests/CadBlockTests.cpp and tests/CadBlockImportTests.cpp (Document storage/import integration)",
-        "tests/CadPipeRunTests.cpp and tests/CadPipeRunCommandTests.cpp (Document/Commands pipe-run integration)",
-        "tests/HatchGeomTests.cpp::hatchboundary cases (the other filled-region cases exercise Document-owned HatchGeom)",
-        "tests/ExtendedGeometryGateTests.cpp (Renderer predicate for whether committed extended geometry is drawable)"
+        "tests/HatchGeomTests.cpp::hatchboundary cases (the other filled-region cases exercise Document-owned HatchGeom)"
       ],
       "testGaps": [
         "B-rep serialization and SAT import tests remain in IO-owned test suites because those tests cover format conversion, not Geometry ownership."
@@ -14199,14 +14173,9 @@
       ],
       "testsCoveringDocumentNotOwned": [
         "tests/CadBlockImportTests.cpp (block import is IO parsing reached from Commands)",
-        "tests/CadPipeRunCommandTests.cpp (uses DoUndo; piping is homeless)",
-        "tests/CadPropertyEditTests.cpp and tests/PropertyCommandTests.cpp (Commands property edits)",
-        "tests/SubObjectSelectionTests.cpp and tests/BoxSelectionPreviewTests.cpp (Interaction selection policy)",
-        "tests/LinetypeTessellationTests.cpp (Renderer tessellation of linetypes)",
         "tests/ViewportCameraTests.cpp (Renderer camera)",
         "tests/UcsTests.cpp (Math)",
-        "tests/DxfEntityEmitTests.cpp and tests/PlotFontTests.cpp (IO)",
-        "tests/ColorContrastTests.cpp, tests/RichTextLayoutTests.cpp and tests/MtextToolbarTests.cpp (UI)"
+        "tests/DxfEntityEmitTests.cpp and tests/PlotFontTests.cpp (IO)"
       ],
       "forbiddenDependencies": [
         {
@@ -14512,13 +14481,8 @@
       "testsCoveringSurveyNotOwned": [
         "tests/AlignmentDwgTests.cpp (DWG IO round trip)",
         "tests/AlignmentFeatureLineTests.cpp (Terrain feature lines)",
-        "tests/AlignmentGroundTests.cpp (Terrain surface query used by alignments)",
         "tests/CadSurfaceEditTests.cpp (Terrain)",
-        "tests/ProjectPointDbTests.cpp and tests/SurveyCsvValidateTests.cpp (IO)",
-        "tests/ProjectPointsSyncTests.cpp, tests/ProjectWarningsTests.cpp and tests/ProjectSettingsTests.cpp (Commands project workflows)",
-        "tests/GeolocationTests.cpp and tests/GeoDataReadTests.cpp (Commands and IO GEODATA)",
-        "tests/CadFieldTests.cpp (Document field codes)",
-        "tests/ViewFrameSheetTests.cpp and tests/SectionSheetTests.cpp (sheets are Document paper layouts built by Commands)"
+        "tests/ProjectPointDbTests.cpp and tests/SurveyCsvValidateTests.cpp (IO)"
       ],
       "forbiddenDependencies": [
         {
@@ -14746,7 +14710,6 @@
       ],
       "testsCoveringTerrainNotOwned": [
         "tests/AlignmentFeatureLineTests.cpp (Terrain behavior in Survey-mapped feature-line files)",
-        "tests/AlignmentGroundTests.cpp (Survey consumer of Terrain surface queries)",
         "tests/headless/transcripts/req068-surface-selection.txt",
         "tests/headless/transcripts/req069-surface-definition-commands.txt",
         "tests/headless/transcripts/req070-surface-style-detach.txt",
@@ -15126,8 +15089,6 @@
       ],
       "testsCoveringOtherSystems": [
         "tests/ProjectFilesFlowTests.cpp (PDF placements in project files and undo; Commands and IO)",
-        "tests/CadSnapTests.cpp (PDF underlay snapping and visibility mask; Interaction)",
-        "tests/PlotSheetPdfTests.cpp and tests/ViewFrameSheetTests.cpp (vector PDF plot placement; IO)",
         "tests/headless/transcripts/mirror-erase.txt (PdfUnderlay exclusion in MIRROR; Commands)"
       ],
       "forbiddenDependencies": [
@@ -15361,14 +15322,7 @@
         "tests/ZoomExtents3dTests.cpp"
       ],
       "testsCoveringOtherSystems": [
-        "tests/ExtendedGeometryGateTests.cpp (guards the hasExt bug in ViewportRenderer.cpp; Commands)",
         "tests/headless/HeadlessDriver.cpp (batch dump of what the renderer would be handed; harness, Headless)",
-        "tests/ViewCubeTests.cpp and tests/Crosshair3dTests.cpp (Camera projection through Interaction overlays; Interaction)",
-        "tests/OrthoUcsConstrainTests.cpp (Camera calls in ortho constraints; Interaction)",
-        "tests/LinetypeTessellationTests.cpp and tests/PlotStrokeTests.cpp (GL_LINES output of linetype tessellation and stroke output; Document and IO)",
-        "tests/ZoomFramingTests.cpp (REQ-122 zoom framing: ZoomFraming.hpp is Commands framing policy that writes camera pan and zoom; Commands)",
-        "tests/ViewFrameSheetTests.cpp (calls ModelToPaperInThroughCamera; Commands and IO)",
-        "tests/SubObjectSelectionTests.cpp (includes render/SectionClip.hpp; Interaction)",
         "tests/WatershedTests.cpp (AppendPathFlowArrows and watershed display lines; Terrain)"
       ],
       "forbiddenDependencies": [
@@ -15576,9 +15530,6 @@
       "testsCoveringOtherSystems": [
         "Project and point-cloud tests also exercise persistence or readers alongside their owning domain behavior.",
         "tests/CadBlockImportTests.cpp (Commands block-import workflow over IO drawing readers).",
-        "tests/GsMigrateLegacyBreaklineTests.cpp (Terrain legacy payload migration).",
-        "tests/ProjectFilesFlowTests.cpp and tests/ProjectAddFlowTests.cpp (Commands project-file workflows).",
-        "tests/ProjectPointsSyncTests.cpp and tests/ProjectSettingsTests.cpp (Survey/Commands project data with persistence).",
         "tests/TraverseTests.cpp (Survey calculation and IO format persistence/import).",
         "tests/AlignmentDwgTests.cpp (Survey alignment conversion through DWG)."
       ],
@@ -15620,8 +15571,7 @@
         "src/update/UpdateCheck.cpp, src/update/UpdateCheck.hpp: version ordering, manifest parsing, compatibility classification, and the update decision. Pure, with no network (folder-mapped Network).",
         "src/update/UpdateService.cpp, src/update/UpdateService.hpp: startup check, download and hash worker, and the phase machine (folder-mapped Network). LaunchInstallerAndExit and its UAC bootstrap call ShellExecuteW and are pending a Windows adapter.",
         "src/platform/MapTileService.cpp, src/platform/MapTileService.hpp: tile fetch worker, disk cache, cache prune, and image decode. Network-owned, but in the Windows-mapped platform folder. The fetch function is injected.",
-        "src/commands/CadOnlineMap.cpp, src/commands/CadOnlineMap.hpp: online-map controller (wanted tiles, retry, message latch, capture job, draw list). Network-owned, but in the Commands folder. PlaceMapTile and LocalRectToMercator are pending separation (see pendingAssignment).",
-        "src/network/include/GoSurvey/Network/WebMercator.hpp, src/geo/WebMercator.cpp: Web Mercator tile index math. Its only consumers are CadOnlineMap.* and tests/OnlineMapTests.cpp. The Network section in sections assigns it to Network."
+        "src/commands/CadOnlineMap.cpp, src/commands/CadOnlineMap.hpp: online-map controller (wanted tiles, retry, message latch, capture job, draw list). Network-owned, but in the Commands folder. PlaceMapTile and LocalRectToMercator are pending separation (see pendingAssignment)."
       ],
       "platformImplementations": [
         "src/platform/HttpFetch.cpp: WinHTTP, BCrypt and Network List Manager implementation of the transport (Windows).",
@@ -15647,8 +15597,6 @@
         "Transport seam (not yet created): an injected HTTP interface with get, download, and post operations that return status and body. Today the same operations are the Windows-owned functions in HttpFetch.hpp."
       ],
       "existingTests": [
-        "tests/OnlineMapTests.cpp",
-        "tests/TelemetryPingTests.cpp",
         "tests/UpdateCheckTests.cpp"
       ],
       "testsCoveringOtherSystems": [
@@ -15864,50 +15812,23 @@
       },
       "existingTests": [
         "tests/CommandRegistryHandlerTests.cpp",
-        "tests/ViewportPickPolicyTests.cpp",
-        "tests/PropertyCommandTests.cpp",
-        "tests/CadPropertyEditTests.cpp",
         "tests/CadSurfaceEditTests.cpp",
-        "tests/DynInputTests.cpp",
-        "tests/ProjectAddFlowTests.cpp",
         "tests/ProjectFilesFlowTests.cpp",
         "tests/ProjectPointsSyncTests.cpp",
-        "tests/ProjectSettingsTests.cpp",
-        "tests/ProjectWarningsTests.cpp",
-        "tests/CadPipeRunCommandTests.cpp",
-        "tests/CadPipePaletteTests.cpp",
-        "tests/ModifyPipeRunTests.cpp",
-        "tests/OffsetCommandTests.cpp",
-        "tests/StretchGeomTests.cpp",
-        "tests/TrimLinePreviewTests.cpp",
         "tests/FilletGeomTests.cpp",
         "tests/ChamferGeomTests.cpp",
         "tests/TransformationTests.cpp",
-        "tests/CutClipboardTests.cpp",
         "tests/PaperSpaceTests.cpp",
         "tests/PaperTypedPointsTests.cpp",
         "tests/PaperLeaderTests.cpp",
         "tests/PaperTableTests.cpp",
         "tests/ViewportZoomScaleTests.cpp",
-        "tests/ZoomFramingTests.cpp",
         "tests/ZoomExtents3dTests.cpp",
-        "tests/OnlineMapTests.cpp (Network controller plus Commands drawing placement; cross-system)",
-        "tests/GeolocationTests.cpp (Commands workflow plus IO)",
         "tests/GeoDataReadTests.cpp (Commands workflow plus IO)",
         "tests/AlignmentCommandTests.cpp and tests/AlignmentCreateTests.cpp (Commands runners over Survey data)",
-        "tests/RightClickTests.cpp",
-        "tests/DistCommandTests.cpp",
-        "tests/Issue1019CommandTests.cpp",
-        "tests/DrapeCommandTests.cpp",
-        "tests/PadSolidCommandTests.cpp",
-        "tests/PressPullTypedDistanceDirectionTests.cpp",
         "tests/CadBlockImportTests.cpp (INSERT/BEDIT/BCONNECT workflows; Commands plus IO/Document)",
         "tests/AlignmentSpiralCommandTests.cpp (typed command dispatch over Survey alignments)",
-        "tests/PipeSizePaletteTests.cpp (pipe-run and pipe-split workflows)",
         "tests/PointCloudExportTests.cpp (typed export command workflow plus PointCloud/IO)",
-        "tests/ToolspaceCatalogTests.cpp",
-        "tests/Task078InteractionTests.cpp (mixed Interaction and Commands; includes the empty MOVE prompt lifecycle case)",
-        "tests/CadFieldTests.cpp (Commands field behavior over Document-owned records)",
         "tests/SectionClipStateTests.cpp (mixed Commands section command and Renderer/Document clip state)"
       ],
       "homelessConcepts": [
@@ -16032,29 +15953,12 @@
         "These are draft seams, not current public headers. CadSnap.hpp currently includes CadCommands.hpp, and AppCommandState carries interaction state; both are coupling points to remove during the move."
       ],
       "tests": [
-        "tests/CadSnapTests.cpp",
         "tests/PdfSnapTests.cpp",
         "tests/AlignmentGripTests.cpp",
-        "tests/HoverDwellTests.cpp",
-        "tests/HoverPickGateTests.cpp",
-        "tests/GizmoTranslateTests.cpp",
-        "tests/GizmoRotateScaleTests.cpp",
-        "tests/GizmoSubObjectMoveTests.cpp",
-        "tests/ViewportPickPolicyTests.cpp",
-        "tests/ViewportPickDepthTests.cpp",
-        "tests/PickDisambiguationTests.cpp",
-        "tests/SolidPickTests.cpp",
         "tests/ViewportCameraTests.cpp",
-        "tests/ViewportUcsTests.cpp",
         "tests/ViewportZoomScaleTests.cpp",
         "tests/CameraTests.cpp",
-        "tests/DimViewportTests.cpp",
-        "tests/GsIoViewportCameraTests.cpp",
-        "tests/BoxSelectionPreviewTests.cpp",
-        "tests/ViewCubeTests.cpp",
-        "tests/Crosshair3dTests.cpp",
-        "tests/SubObjectSelectionTests.cpp",
-        "tests/MoveSubObjectTests.cpp"
+        "tests/GsIoViewportCameraTests.cpp"
       ],
       "testNotes": "CameraTests and GsIoViewportCameraTests primarily cover Renderer/IO camera persistence and are listed as shared boundary coverage, not wholly Interaction-owned suites. DimViewportTests contains mixed annotation/render/pick coverage.",
       "homelessConcepts": [
@@ -16130,13 +16034,7 @@
         "EditorViewport widget boundary in src/qt/EditorViewport.hpp",
         "RibbonCatalog and ModelingRibbon button catalog consumed by editor composition"
       ],
-      "existingTests": [
-        "tests/ToolspaceCatalogTests.cpp",
-        "tests/ViewCubeTests.cpp and tests/ZoomFramingTests.cpp for editor-facing viewport workflows; underlying policy is Renderer/Interaction",
-        "tests/WhatsNewLogicTests.cpp covers the pure What's New version-gating logic, which is homeless (see homelessConcepts)",
-        "tests/ModelingRibbonTests.cpp and tests/RibbonWiringGapTests.cpp cover the ribbon button catalog assigned here",
-        "tests/StartScreenTests.cpp covers the start-screen recent-drawing state assigned here"
-      ],
+      "existingTests": [],
       "homelessConcepts": [
         "Recent-drawing thumbnail cache ownership and invalidation lifecycle (ThumbnailCache.hpp).",
         "Application orchestration embedded in CadCommands.hpp and other god files; final-map work must split by symbol.",
@@ -16191,8 +16089,7 @@
         "src/qt/EditorChrome.cpp and EditorWindow.cpp: Win32 frameless-window sections (Windows); the rest of these files is GoSurveyEditor.",
         "src/qt/*, other files: Qt presentation adapters where listed in sections; otherwise GoSurveyEditor composition (windows, dialogs, ribbon, panels). The folder mapping is provisional.",
         "src/pdf/PdfAttach.cpp: Windows, OpenGL and the link-time seam sections; the pdfium and document logic stays Pdf.",
-        "src/update/UpdateService.cpp, src/io/Project.cpp, src/util/SaveTrace.cpp: Win32 calls recorded as couplings (owned by Network, IO and Debug).",
-        "tests/TestSoundGuard.cpp/.hpp, tests/TestSoundGuardTests.cpp, tests/headless/* (HeadlessDriver.cpp, FuzzMain.cpp, Minimizer, FuzzGenerator, transcripts/): Headless."
+        "src/update/UpdateService.cpp, src/io/Project.cpp, src/util/SaveTrace.cpp: Win32 calls recorded as couplings (owned by Network, IO and Debug)."
       ],
       "currentSections": [
         "src/render/ViewportRenderer.cpp:41-204 (GLSL source and compile/link helpers)",
@@ -16224,16 +16121,10 @@
         "Headless: the transcript driver and FuzzMain drive the domain through the same seams; TestSoundGuard blocks Windows sound APIs in test processes."
       ],
       "tests": [
-        "tests/GpuPreferenceTests.cpp",
         "tests/CrashReporterTests.cpp",
-        "tests/TestSoundGuardTests.cpp",
-        "tests/StartScreenTests.cpp (ThumbnailCache)",
         "tests/CameraTests.cpp, tests/SectionClipTests.cpp (ViewportRenderer; shared with Renderer)",
-        "tests/OnlineMapTests.cpp (map tile service; shared with Network)",
         "tests/CadBlockImportTests.cpp, tests/PointCloudExportTests.cpp (HeadlessFileDialogs seam)",
-        "tests/headless/HeadlessDriver.cpp and tests/headless/transcripts/ (182 files)",
-        "tests/FuzzHarnessTests.cpp (headless FuzzGenerator and Minimizer)",
-        "tests/ExtendedGeometryGateTests.cpp (references ViewportRenderer; shared with Renderer)"
+        "tests/headless/HeadlessDriver.cpp and tests/headless/transcripts/ (182 files)"
       ],
       "testNotes": "Gaps: no test references StbImage, WinFileDialogs, MapTilePlatform, CrashReporterWireReason, HeadlessPdfAttach, QtViewCube or ProcessRun; FuzzMain.cpp mentions ProcessRun but does not test it. ViewportRenderer is covered only indirectly. The Qt GUI tests were removed; Qt platform code is tested by hand. HeadlessDriver.cpp (3,235 lines) is also grandfathered. No test exercises a render device seam, because none exists yet.",
       "homelessConcepts": [
@@ -16508,7 +16399,6 @@
       "Swept and not assigned to Math: nurbs.cpp Rotate and Mirror and the brep Rotate, Mirror and Scale transforms are Geometry body transforms. They call Math helpers."
     ],
     "notEventsDecisions": [
-      "Swept and not assigned to Events: CadClassifyRightClick and CadRightClickHoldIsMenu in src/commands/CadCommands.hpp, plus tests/RightClickTests.cpp. They classify a timed click using command mode and last-command state, so the policy belongs to Commands; Qt only supplies press duration and dispatches the result.",
       "Swept and not assigned to Events: mouse selection, snap/hover, grip, ViewCube, and camera navigation behavior in EditorViewport.cpp. The Qt override transports the input, while behavior belongs to Interaction, Commands, Renderer, or Qt as recorded in the section notes.",
       "Swept and not assigned to Events: cadGpuRevision and savedRevision fields/comparisons. They implement Document/Commands dirty tracking and currently have no event publisher contract.",
       "Swept and not assigned to Events: widget-local Qt event overrides in src/qt/AdjustmentEditor.*, src/qt/AdjustmentWindow.cpp/.hpp (except drawingChanged), src/qt/EditorChrome.* widget-local handlers (excluding EditorWindow::nativeEvent, classified separately), src/qt/DrawingDocumentTabBar.*, src/qt/EditorProperties.cpp, src/qt/NonDismissableDialog.hpp, src/qt/PdfCanvas.hpp, src/qt/PdfWindow.*, src/qt/EditorRibbon.cpp, src/qt/EditorLayerManager.cpp, src/qt/PdfScaleUi.cpp, src/qt/PdfRibbon.hpp, src/qt/EditorProjectAttach.cpp, and src/qt/EditorAlignmentCreate.hpp/.cpp. In src/qt/EditorWindow.cpp, changeEvent/showEvent/resizeEvent are Qt-owned; closeEvent workflow is recorded separately; its app-wide eventFilter is separately listed in Events sections. These are widget presentation, local gestures, or domain-specific PDF input; app-wide command/interaction input adapters are listed in Events sections.",
@@ -16518,7 +16408,6 @@
       "Swept and not assigned to Events: changed_ in src/qt/EditorAlignmentLayout.cpp and afterChange in src/qt/EditorDialogs.cpp. They refresh their local editor/dialog workflows after edits; they are not a shared document or command-state event contract.",
       "Swept and not assigned to Events: PdfCanvas pointer callbacks and PdfWindow::DispatchInput in src/qt/PdfCanvas.hpp/src/qt/PdfWindow.cpp. These are Qt-typed, PDF-page-local hit/gesture adapters with Pdf policy, not the app-level command/interaction input stream.",
       "Swept and not assigned to Events: src/util/framewatch.hpp::Event. It is a Debug frame-stall enum (also noted by notCoreDespiteName), not an input or document-change event.",
-      "Swept and not assigned to Events: CadClassifyRightClick tests in tests/CadPropertyEditTests.cpp; they test Commands policy, not event transport.",
       "Swept and not assigned to Events: EditorViewport::RefreshCommandCursor and FloatingCommandBar::refreshViewportCursor in src/qt/EditorViewport.cpp/src/qt/EditorChrome.*. They update native cursor presentation in response to local pointer position; the callback is Qt-owned.",
       "The Qt event exclusions include local window lifecycle handlers in src/qt/AdjustmentWindow.cpp/.hpp; Qt delivers closeEvent/changeEvent, while AdjustmentWindow handles local lifecycle and ConfirmDiscard is an adjustment/document workflow. Only drawingChanged is Events-facing.",
       "Swept and not assigned to Events: FloatingCommandBar::eventFilter in src/qt/EditorChrome.cpp. It handles local grip dragging and persists the bar width/anchor through Qt settings; it does not publish app input or change events.",
@@ -16541,8 +16430,7 @@
       "Swept and not assigned to UI: ui/MtextRichSpans.hpp, ui/MtextRichFormat.*, and ui/MtextTextOps.hpp are the MTEXT wire format and text operations used by IO and Commands, so they are Document.",
       "Swept and not assigned to UI: ui/ModelingRibbon.hpp is the ribbon button table, which ADR-0002 keeps in GoSurveyEditor.",
       "Swept and not assigned to UI: platform/HeadlessFileDialogs.* is the Headless backend's answer queue, which is an implementation, not the interface.",
-      "Swept and not assigned to UI: src/qt/* (EditorDialogs.cpp, EditorChrome.cpp, EditorRibbon.cpp, QtSplash.cpp, FailureReport.cpp, and others) are Qt implementation or GoSurveyEditor composition, not interface. Their folder mapping is provisional.",
-      "Swept and not assigned to UI: util/WhatsNewLogic.hpp and .cpp are pure version-gating rules for the What's New billboard (no UI, no filesystem, REQ-336). The billboard window is GoSurveyEditor's; the rules have no toolkit dependency. The final map picks Core or GoSurveyEditor. Tested by tests/WhatsNewLogicTests.cpp."
+      "Swept and not assigned to UI: src/qt/* (EditorDialogs.cpp, EditorChrome.cpp, EditorRibbon.cpp, QtSplash.cpp, FailureReport.cpp, and others) are Qt implementation or GoSurveyEditor composition, not interface. Their folder mapping is provisional."
     ],
     "notDocumentDecisions": [
       "Swept and not assigned to Document: CadClipboard (CadCommands.hpp 1031-1085) and clipboard copy/paste are Commands workflow; they copy Document records but do not own drawing state.",

@@ -1273,73 +1273,23 @@ if(GOSURVEY_BUILD_TESTS)
 
   add_executable(GoSurveyTests
     tests/TestSoundGuard.cpp
-    tests/TestSoundGuardTests.cpp
     tests/Survey/TraverseTests.cpp
     tests/Document/PaperSpaceTests.cpp
-    tests/Document/PaperLeaderTests.cpp
-    tests/Document/PaperTableTests.cpp
-    tests/DimViewportTests.cpp
     tests/IO/SpreadsheetIoTests.cpp
-    tests/Document/TableStyleTests.cpp
-    tests/Renderer/ViewportCameraTests.cpp
-    tests/RightClickTests.cpp
     tests/IO/SurveyCsvValidateTests.cpp
-    # REQ-083: the save dialog's default-extension rule. Header-only and pure, because
-    # WinFileDialogs.cpp is Win32-only and cannot be linked here.
-    tests/IO/PointFileExtTests.cpp
     tests/HatchGeomTests.cpp
     tests/ZStoreTests.cpp
-    # REQ-059 / #1034: the ViewCube is header-only and pure, like Camera.
-    tests/ViewCubeTests.cpp
-    # REQ-341 live section clip (GitHub #149 acceptance 6). Header-only and pure for the same reason
-    # Camera is, and for one more: the plane the shader receives is NOT in world coordinates, and a
-    # version that forgets that is exact at the origin and 2,196,000 ft out at state-plane
-    # coordinates. That cannot be checked by looking at a window.
-    # REQ-310 3D crosshair (GitHub #144). Header-only and pure for the same reason Camera is: an
-    # axis arm drawn along the wrong screen direction still looks like a 3D cursor, so the sign
-    # conventions need a test that does not depend on a window.
-    tests/Crosshair3dTests.cpp
-    # REQ-122 zoom framing (GitHub issue #88, TASK-117). Header-only and pure, like OrthoConstrain
-    # above it: the ZOOMEXTENTS acceptance list (margin, aspect, no edge clipping, degenerate extents,
-    # never a NaN camera) is decided entirely in this arithmetic, and the deferred consumer that calls
-    # it cannot be reached from any test target (TASK-113 DEBT-1).
-    tests/ZoomFramingTests.cpp
-    tests/Document/TextStyleTests.cpp
-    tests/OrthoConstrainTests.cpp
-    tests/ColorContrastTests.cpp
     tests/IO/PlotFontTests.cpp
     # REQ-446 PDF plot lineweights and linetypes: pure width/dash-unit helpers and the dash runs the plot lays.
     tests/IO/PlotStrokeTests.cpp
-    # REQ-445 PDF plot Page Setup options: pure sheet placement rules and the measured PDF output.
-    tests/PlotSheetTests.cpp
-    tests/Document/CadFontNameTests.cpp
-    tests/CutClipboardTests.cpp
     tests/IO/DxfEntityEmitTests.cpp
     tests/IO/DwgProbeTests.cpp
     tests/IO/LibreDwgTests.cpp
-    tests/LinetypeTessellationTests.cpp
-    # BenchSceneTests moved to GoSurveyDebugTests.
-    tests/Renderer/VisualStyleTests.cpp
     # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). The whole point of the kernel being
     # graphics-free is that this suite can exist: every primitive's topology, its closed-form volume
     # and surface area, its refusals, and its behaviour at state-plane coordinate magnitudes are all
     # decided here, with no window and no document.
     tests/BrepTests.cpp
-    # REQ-323 / ADR-046 (j) — FILLET. Closed-form acceptance numbers, written before the code.
-    # REQ-319 / ADR-046 amendment (i) — push/pull, the first kernel op that EDITS a solid. Its own
-    # file because its subject is the PRECONDITION Validate cannot enforce, not another builder.
-    tests/PushPullTests.cpp
-    # REQ-333 / ADR-046 amendment (n) — moving a VERTEX or an EDGE. Its own file because its subject
-    # is the DEFINITION: moving a corner and leaving everything else alone is not representable, so
-    # the operation is "offset the adjacent planes and re-solve", and these cases pin that.
-    tests/MoveSubObjectTests.cpp
-    # REQ-332 / ADR-046 amendment (m) — rigid rotation and uniform scale. Its own file because its
-    # subject is the point/direction split: a frame's origin and its axes transform by different
-    # rules, and getting that wrong still produces a solid Validate accepts.
-    tests/RotateSolidTests.cpp
-    # REQ-351 / D-2026-09-28-f — mirror. Its own file because its subject is ORIENTATION: a naive
-    # reflection leaves left-handed frames and inside-out loops, and these cases pin the repair.
-    tests/MirrorSolidTests.cpp
     # REQ-320 / ADR-051 — the ACIS SAT parser (GitHub issue #299). Pure, so a hand-authored SAT
     # fixture pins the supported plane/cylinder/cone shapes and every refusal without a DWG file.
     tests/IO/AcisSatParserTests.cpp
@@ -1349,7 +1299,6 @@ if(GOSURVEY_BUILD_TESTS)
     # volume/area stable. BrepJson.hpp is header-only and pulls in only nlohmann/json + brep.hpp, so
     # the serializer the saver actually runs is exercised directly here (GsIo.cpp is not linkable).
     tests/IO/BrepJsonTests.cpp
-    tests/SolidPickTests.cpp
     src/util/solidpick.cpp
     # REQ-172 — E57 reader round-trip (writes a tiny fixture E57 with libE57Format's own Simple
     # Writer, then reads it back) and malformed/missing-file refusal. Pinned directly, same as
@@ -1380,58 +1329,17 @@ if(GOSURVEY_BUILD_TESTS)
     tests/IO/GltfImportTests.cpp
     tests/IO/StlImportTests.cpp
     tests/Document/EntityIdTests.cpp
-    tests/Document/CadTableTests.cpp
     tests/Document/CadBlockTests.cpp
     tests/CadPipeRunTests.cpp
-    tests/Survey/AlignmentCommandTests.cpp
-    tests/Survey/AlignmentViewFrameTests.cpp
-    tests/ViewFrameSheetTests.cpp
     tests/Survey/AlignmentProfileTests.cpp  # REQ-521 (issue #1163)
-    tests/SectionSheetTests.cpp
-    tests/Survey/AlignmentStyleTests.cpp
-    tests/Survey/AlignmentLabelTests.cpp
-    tests/AlignmentGroundTests.cpp
-    tests/Survey/AlignmentTableTests.cpp
-    tests/Survey/AlignmentLabelOffsetTests.cpp
-    tests/Survey/AlignmentStyleFieldTests.cpp
-    tests/Terrain/AlignmentFeatureLineTests.cpp
-    tests/Survey/AlignmentProfileSeamTests.cpp
-    tests/Survey/AlignmentCogoTests.cpp
-    tests/Survey/AlignmentDesignTests.cpp
-    tests/Survey/AlignmentSpiralCommandTests.cpp
-    tests/Survey/AlignmentEditTests.cpp
-    tests/Survey/AlignmentCreateTests.cpp
     tests/AlignmentDwgTests.cpp
     tests/Survey/AlignmentSpecTests.cpp
-    tests/Survey/AlignmentAnnotationTests.cpp
-    tests/Survey/AlignmentGripTests.cpp
-    tests/ToolspaceCatalogTests.cpp
-    # REQ-089 surface rollover dwell. Header-only and pure, like the style table above. It is the
-    # feature's ONLY new logic — the readout's numbers come from TinQueryTests' and
-    # SurfaceStyleTests' already-pinned calls — and the one-shot it asserts is what keeps the
-    # per-rest surface query off the per-frame path REQ-100 profile (c) measures.
-    tests/HoverDwellTests.cpp
-    # GitHub issue #166. Header-only and pure, like HoverDwellTests above. The gate is the only new
-    # logic in the fix for the TRIM frame-rate drop — it decides whether the per-frame entity hover
-    # scan re-runs — and both failure directions (scans too often / highlight goes stale) are the
-    # ones a user would report, so both are pinned here with no GL context.
-    tests/HoverPickGateTests.cpp
-    # GitHub issue #168. Header-only and pure, like HoverPickGateTests above. The stall detector is
-    # the only new logic in the investigation instrument for the multi-select freeze — it decides
-    # where in a stall episode a frame sits — and its edges (began / ended) are what gate the one
-    # diagnostic snapshot per episode, so both are pinned here with no GL context.
-    # FrameWatchTests moved to GoSurveyDebugTests.
     # REQ-443 (issue #803): the SPLINE mathematics. Needs CadCommands.hpp and viewport code, so it
     # stays here; spline.cpp itself is compiled into GoSurvey::Geometry.
     tests/SplineTests.cpp
     tests/UpdateCheckTests.cpp
-    # REQ-308 Start screen. RecentDrawingsTests drives the MRU store; StartScreenTests covers the
-    # tab-index sentinel invariant and the thumbnail-cache naming/eviction (header-only, pure).
-    tests/RecentDrawingsTests.cpp
-    # REQ-336 What's New dismiss / auto-open predicates (pure).
-    tests/WhatsNewLogicTests.cpp
+    tests/CutClipboardTests.cpp
     src/util/WhatsNewLogic.cpp
-    tests/StartScreenTests.cpp
     src/io/src/RecentDrawings.cpp
     # REQ-373/374/382 (#696 P1)
     tests/ProjectTests.cpp
@@ -1452,27 +1360,10 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-381 (#696 P8): the pure turnover records
     tests/ProjectTurnoverTests.cpp
     src/io/src/ProjectTurnover.cpp
-    tests/TelemetryPingTests.cpp
     tests/CrashReporterTests.cpp
     src/platform/CrashReporterWireReason.cpp
     src/platform/CrashBuildInfo.cpp
     tests/IO/GsMigrateTests.cpp
-    tests/GpuPreferenceTests.cpp
-    # REQ-103 STRETCH (TASK-098). Header-only against CadCommands.hpp — RecomputeArcFromEndpoints
-    # is inline and pure (<cmath> + CadArc only), the same reasoning as the gate test above.
-    tests/StretchGeomTests.cpp
-    # REQ-087: the gate that decides the viewport has geometry to draw. Header-only against
-    # CadCommands.hpp — the predicate is pure, which is the whole reason it is testable at all
-    # while the rendering around it is not.
-    tests/ExtendedGeometryGateTests.cpp
-    # TASK-099: the viewport's click-routing policy. Header-only against CadCommands.hpp, like the
-    # gate above, and for the same reason — the decision is pure, the UI around it is not, and the
-    # decision is where three separate "the command ignores every click" bugs actually lived.
-    tests/ViewportPickPolicyTests.cpp
-    # REQ-204 generator + minimizer. Both are pure — the generator takes its command list as a
-    # parameter, the minimizer takes a predicate — so reproducibility, termination and the attempt
-    # cap are testable here with no process launch and no GL.
-    tests/FuzzHarnessTests.cpp
     tests/headless/FuzzGenerator.cpp
     tests/headless/Minimizer.cpp
     # BUG-013 per-application GPU preference. Win32 registry only — no GL, no window — so the value
@@ -1750,139 +1641,32 @@ if(GOSURVEY_BUILD_TESTS)
   target_sources(GoSurveyTests PRIVATE
     src/platform/HeadlessFileDialogs.cpp
     src/platform/HeadlessPdfAttach.cpp
-    tests/CadFieldTests.cpp
-    tests/CadSnapTests.cpp
-    # DRAPE needs the surface stores and ProcessCommandLineSubmit, both in gosurvey_domain,
-    # so it rides with GoSurveyTests like the other command tests above.
-    tests/DrapeCommandTests.cpp
     # Issue #916: shared point-cloud export and import-progress behavior.
     tests/IO/PointCloudExportTests.cpp
     tests/IO/LandXmlExportTests.cpp
     # Issue #1003: LandXML import (REQ-506) reads what the export writes.
     tests/IO/LandXmlImportTests.cpp
-    # PADSOLID needs the surface stores, the brep kernel and ProcessCommandLineSubmit, so it rides
-    # with GoSurveyTests like the other command tests above.
-    tests/PadSolidCommandTests.cpp
     tests/IO/GsIoDimAngularTests.cpp
     tests/IO/GsIoPipeRunTests.cpp
     tests/IO/GsIoViewportCameraTests.cpp
-    tests/GsMigrateLegacyBreaklineTests.cpp
-    tests/ViewportUcsTests.cpp
-    # REQ-154 / issue #371 — ORTHO squaring to a vertical (Front/Left/Right-style) UCS. Needs
-    # gosurvey_domain for ApplyOrthoConstrainFromAnchor, so it rides with GoSurveyTests like
-    # ViewportUcsTests.cpp above.
-    tests/OrthoUcsConstrainTests.cpp
-    # REQ-318 increment 2 (issue #148) — the sub-object SELECTION: its store, the expiring
-    # reference, mutual exclusion and cross-solid depth order. Needs gosurvey_domain for
-    # SubmitSubObjectPick / ExpireSubObjectSelection, like ViewportUcsTests above.
-    tests/SubObjectSelectionTests.cpp
-    # REQ-341 (code review on #478): the section clip's command-layer half — per-tab state, picks
-    # and snaps that honour it, SECTION's selection guard, and the indicator's sizing. Needs
-    # gosurvey_domain, like SubObjectSelectionTests above.
-    tests/Renderer/SectionClipStateTests.cpp
-    # REQ-060 (issue #148 Phase 5 slice 4b) — the TRANSLATE gizmo: the skew-line solve, the anchor,
-    # and the two negatives (a click that misses every handle, an empty selection). Needs
-    # gosurvey_domain for SubmitGizmoClick / ApplyTranslationToSelection.
-    tests/GizmoTranslateTests.cpp
-    # GitHub issue #564 s1: orbited ZOOM EXTENTS, driven through ProcessPendingViewportZoom (domain).
-    tests/Renderer/ZoomExtents3dTests.cpp
-    # GitHub issue #564 s2: depth-ordered hover/click resolution (ResolveViewportPick, domain).
-    tests/ViewportPickDepthTests.cpp
-    # REQ-060 rotate/scale handles (TASK-232, slice 4c). Its own file because its subject is the
-    # AGREEMENT: a gizmo drag and the function the typed command calls, compared coordinate for
-    # coordinate — which is the acceptance itself rather than a proxy for it.
-    tests/GizmoRotateScaleTests.cpp
-    # REQ-333 increment 2 (TASK-234) — the vertex and edge grips. Its own file because its subject is
-    # the handle COUNTS (each a statement about degrees of freedom) and the rule that no handle is
-    # drawn where the kernel would refuse the drag.
-    tests/GizmoSubObjectMoveTests.cpp
     tests/IO/LibreDwgCadTests.cpp
     tests/CadBlockImportTests.cpp
-    tests/Survey/SurveyLabelMeasureTests.cpp
-    # REQ-375 (#696 P2): project settings resolve against AppCommandState (EnforceProjectSettings), so
-    # this rides with gosurvey_domain like CadBlockImportTests.
-    tests/ProjectSettingsTests.cpp
     tests/ProjectPointsSyncTests.cpp
-    # REQ-383 (#696 P9): delete / number-conflict / paste / unsaved-close warnings against AppCommandState
-    tests/ProjectWarningsTests.cpp
-    # REQ-378 (#696 P5): Add Drawing to Project end to end + Convert (needs AppCommandState, CS-MAP, LibreDWG)
-    tests/ProjectAddFlowTests.cpp
     # REQ-379 (#696 P6): attach prompt, save-time record and open-time re-attach against AppCommandState
     tests/ProjectFilesFlowTests.cpp
-    # issue #486 increment B2 (REQ-347) — the PIPERUN command layer: StartPipeRunCommand /
-    # HandlePipeRunTextInput / SubmitPipeRunViewportPick live in CadCommands.cpp, so this rides
-    # with gosurvey_domain, like CadBlockImportTests above.
-    tests/CadPipeRunCommandTests.cpp
-    # REQ-350 / TASK-275 — the Pipe Fittings palette's filtering and grouping rules. Pure functions,
-    # but they live in CadBlocks.cpp beside the library scan they filter, so this rides with
-    # GoSurveyTests (gosurvey_domain) for the same reason CadPipeRunCommandTests above does.
-    tests/CadPipePaletteTests.cpp
-    # Issue #891: property-panel edit services and the shared right-click classifier
-    tests/CadPropertyEditTests.cpp
-    tests/Terrain/CadSurfaceEditTests.cpp
-    # REQ-351 / D-2026-09-28-f — MOVE / ROTATE / SCALE / MIRROR / COPY / ARRAY on a pipe run.
-    tests/ModifyPipeRunTests.cpp
-    # REQ-352 / D-2026-09-28-g — layer and colour edits on solids and pipe runs.
-    tests/Document/SolidLayerColorTests.cpp
-    # REQ-353 / D-2026-09-28-i — pipe colour by nominal size (issue #564 section 7).
-    tests/PipeSizePaletteTests.cpp
-    # REQ-354 / D-2026-09-28-j — the dynamic input shows its mode (issue #564 section 5).
-    tests/DynInputTests.cpp
-    tests/ModelingRibbonTests.cpp
-    # GitHub issue #762 — regression guard for Home/Insert ribbon wiring gaps.
-    tests/RibbonWiringGapTests.cpp
-    # REQ-356 / D-2026-09-29-a — CHPROP, MATCHPROP, LAYMCUR, the current colour (issue #575).
-    tests/PropertyCommandTests.cpp
-    # TASK-0.7.8 — modify selection accumulate, annotation MOVE preview, REQ-121 prompt.
-    tests/Task078InteractionTests.cpp
-    tests/Document/ViewportZoomScaleTests.cpp
     # Issue #1557 / ADR-0010 — undo and tab switching round-trip every kind of drawing content.
     tests/DrawingContentTests.cpp
-    # REQ-370 / D-2026-10-05-a — box-selection live preview.
-    tests/BoxSelectionPreviewTests.cpp
     # REQ-357 / D-2026-09-29-b,c — the Drawing Settings window (issue #582 increment 1).
     tests/Document/DrawingSettingsTests.cpp
     # REQ-358: the CS-MAP wrapper + the zone as drawing data (loads the staged dictionary).
     tests/Survey/CoordinateSystemsTests.cpp
-    # REQ-359 / D-2026-09-29-e: the Geolocation tab's commands and the Position Marker.
-    tests/GeolocationTests.cpp
     # REQ-360: the Drawing Settings Transformation tab (local <-> grid).
     tests/TransformationTests.cpp
-    # REQ-361 / D-2026-09-29-f: the Object Layers tab and every creation path that uses it.
-    tests/Document/ObjectLayersTests.cpp
     # REQ-362 / D-2026-09-29-g: reading an AutoCAD / Civil 3D GEODATA (write deferred to #590).
     tests/IO/GeoDataReadTests.cpp
-    # REQ-363 / D-2026-09-30-b / ADR-064: the online base map (issue #583 increment 1).
-    tests/OnlineMapTests.cpp
-    # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
-    # CadCommands.cpp's trim helpers), so it rides with gosurvey_domain.
-    tests/TrimLinePreviewTests.cpp
-    # issue #399 increment 1 — 3D Line-vs-Line TRIM via a pick ray. Same reason as
-    # TrimLinePreviewTests above (needs gosurvey_domain for SubmitTrimViewportPick).
-    tests/Trim3DLineLineTests.cpp
-    # issue #399 increment 4 — smart (drawn-line) TRIM in true 3D. Same reason as above.
-    tests/Trim3DDrawnLineTests.cpp
-    # REQ-105 (issue #382) — DIST. Needs gosurvey_domain for ProcessCommandLineSubmit /
-    # StartDistCommand, like TrimLinePreviewTests above.
-    tests/DistCommandTests.cpp
-    tests/Issue1019CommandTests.cpp
     # Issue #785 — regression test that every row in the command registry still has code behind
     # it. Needs gosurvey_domain for ProcessCommandLineSubmit / RegisteredCommandPrimariesForTest.
     tests/CommandRegistryHandlerTests.cpp
-    # OFFSET distance-first flow + select/side loop (REQ-103), and double-precision offset math at
-    # state-plane coordinate magnitude. Needs gosurvey_domain for ProcessCommandLineSubmit /
-    # SubmitViewportPick, like DistCommandTests above.
-    tests/OffsetCommandTests.cpp
-    tests/DefaultTemplateOriginTests.cpp
-    # GitHub issue #396 — EXTRUDE's typed height must take its sign from the live preview
-    # direction. Needs gosurvey_domain for HandleExtrudeTextInput, like DistCommandTests above.
-    tests/ExtrudeTypedHeightDirectionTests.cpp
-    # GitHub issue #396 (PRESSPULL addendum) — PRESSPULL was brought in line with EXTRUDE's own
-    # select-target / wait-distance flow and widened to closed 2D shapes. Needs gosurvey_domain
-    # for HandlePressPullTextInput / StartPressPullCommand, like DistCommandTests above.
-    tests/PressPullTypedDistanceDirectionTests.cpp
-    # Overlapping pick disambiguation — depth tie-break when SEL is off.
-    tests/PickDisambiguationTests.cpp
   )
   target_include_directories(GoSurveyTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
