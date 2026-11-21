@@ -77,3 +77,15 @@ Phase 5's stride-accessor work covers the stride kinds: lines, circles and polyl
 Kinds without stride arithmetic (arcs, ellipses, solids, annotations, block-store arrays) keep direct
 member access through `drawing` until a later phase moves them behind the entity store.
 The stride kinds go through their accessors, not through `drawing`.
+
+## Amendment (2026-11-21): define CAD geometry clearing at the content boundary
+
+`ClearCadGeometry` replaces model-space CAD content for OPEN and CAD imports. It clears the CAD
+entity collections, their per-entity attributes, annotation and viewport scale lists, alignments,
+sample lines, profiles, surfaces, and named UCS and view records. Drawing setup (layer and style
+tables, units and settings), survey points, feature lines, underlays, and paper layouts stay with
+the drawing. The entity ID space and origin reset; application-owned selection, isolation, derived
+geometry caches and in-flight surface work are cleared at the application boundary. These rules
+preserve the established OPEN/import behavior;
+`DrawingContent::clearCadGeometry` owns the content portion so it cannot drift from the value that
+undo and tabs copy.
