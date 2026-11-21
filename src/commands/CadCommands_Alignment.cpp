@@ -608,9 +608,8 @@ bool TitleBlockBounds(const AppCommandState& tb, Box* out) {
     out->maxY = std::max(out->maxY, y);
   };
   for (size_t i = 0; i < tb.drawing.lineCount(); ++i) {
-    const CadLineRecord ln = tb.drawing.line(i);
-    add(ln.x0, ln.y0);
-    add(ln.x1, ln.y1);
+    add(tb.drawing.line(i).x0, tb.drawing.line(i).y0);
+    add(tb.drawing.line(i).x1, tb.drawing.line(i).y1);
   }
   for (size_t v = 0; v < tb.drawing.vertexCount(); ++v) add(tb.drawing.vertex(v).x, tb.drawing.vertex(v).y);
   return any;
@@ -653,12 +652,8 @@ bool TitleBlockBorder(const AppCommandState& tb, Box* out) {
 void CopyTitleBlockOntoSheet(PaperLayout& sheet, const AppCommandState& tb, double dx, double dy) {
   for (size_t i = 0; i < tb.drawing.lineCount(); ++i) {
     const CadLineRecord ln = tb.drawing.line(i);
-    sheet.paperLines.push_back(static_cast<float>(ln.x0 + dx));
-    sheet.paperLines.push_back(static_cast<float>(ln.y0 + dy));
-    sheet.paperLines.push_back(0.f);
-    sheet.paperLines.push_back(static_cast<float>(ln.x1 + dx));
-    sheet.paperLines.push_back(static_cast<float>(ln.y1 + dy));
-    sheet.paperLines.push_back(0.f);
+    sheet.paperLines.insert(sheet.paperLines.end(), {static_cast<float>(ln.x0 + dx), static_cast<float>(ln.y0 + dy), 0.f,
+                                                     static_cast<float>(ln.x1 + dx), static_cast<float>(ln.y1 + dy), 0.f});
     EntityAttributes attr = i < tb.drawing.userLineAttrs.size() ? tb.drawing.userLineAttrs[i] : EntityAttributes{};
     attr.id = 0;  // the sheet's own copy takes a fresh identity when it is saved
     sheet.paperLineAttrs.push_back(attr);
@@ -763,8 +758,7 @@ double FieldColumnLeftOnSheet(const SheetTitleBlock& tb) {
   bool found = false;
   for (size_t i = 0; i < tb.state.drawing.lineCount(); ++i) {
     const CadLineRecord ln = tb.state.drawing.line(i);
-    const double x0 = ln.x0, y0 = ln.y0;
-    const double y1 = ln.y1;
+    const double x0 = ln.x0, y0 = ln.y0, y1 = ln.y1;
     if (std::fabs(y0 - y1) > 1e-6) continue;                                // horizontal lines only
     if (x0 < tb.border.maxX - 0.05) continue;                               // the column beside the main border
     if (y0 < (tb.border.minY + tb.border.maxY) * 0.5) continue;             // the field cells above the middle
@@ -970,8 +964,7 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
   std::vector<double> lineYs;
   for (size_t i = 0; i < titleBlock.drawing.lineCount(); ++i) {
     const CadLineRecord ln = titleBlock.drawing.line(i);
-    const double x0 = ln.x0, y0 = ln.y0;
-    const double y1 = ln.y1;
+    const double x0 = ln.x0, y0 = ln.y0, y1 = ln.y1;
     if (std::fabs(y0 - y1) > 1e-6) continue;                                      // horizontal lines only
     if (x0 < border.maxX - 0.05) continue;                                        // the column beside the main border
     if (y0 < (border.minY + border.maxY) * 0.5) continue;                         // the cells above the middle of the block
@@ -990,8 +983,7 @@ void RunCreateSheets(AppCommandState& st, const std::string& args, std::vector<s
     const double fieldsLow = lineYs.back(), fieldsHigh = lineYs.front();
     for (size_t i = 0; i < titleBlock.drawing.lineCount(); ++i) {
       const CadLineRecord ln = titleBlock.drawing.line(i);
-      const double x0 = ln.x0 + dx, x1 = ln.x1 + dx;
-      const double y0 = ln.y0 + dy, y1 = ln.y1 + dy;
+      const double x0 = ln.x0 + dx, x1 = ln.x1 + dx, y0 = ln.y0 + dy, y1 = ln.y1 + dy;
       if (std::fabs(x0 - x1) > 1e-6) continue;                                  // vertical lines only
       if (std::max(y0, y1) < fieldsLow || std::min(y0, y1) > fieldsHigh) continue;  // beside the fields
       if (x0 > columnLeft + 0.05 && x0 < fieldRight - 0.01) fieldRight = x0;
@@ -5239,9 +5231,7 @@ bool AddVertexSourceSegments(const AppCommandState& st, const SelectedEntity& se
                               : (ix < st.drawing.userPolylineClosed.size() && st.drawing.userPolylineClosed[ix] != 0);
   auto vert = [&](int k, int c) {
     const size_t vi = static_cast<size_t>(v0 + k);
-    if (feature) return st.drawing.featureLineVerts[vi * 3 + static_cast<size_t>(c)];
-    const CadPolyVertex pv = st.drawing.vertex(vi);
-    return c == 0 ? pv.x : c == 1 ? pv.y : pv.z;
+    return feature ? st.drawing.featureLineVerts[vi * 3 + static_cast<size_t>(c)] : (c == 0 ? st.drawing.vertex(vi).x : c == 1 ? st.drawing.vertex(vi).y : st.drawing.vertex(vi).z);
   };
   double zMin = std::numeric_limits<double>::infinity(), zMax = -zMin;
   for (int k = 0; k < cnt; ++k) {

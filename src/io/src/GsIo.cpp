@@ -4210,12 +4210,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     const auto& cz = hasZ ? doc["circlesZ"] : cxyr;  // cz unread unless hasZ
     size_t ci = 0;
     for (size_t i = 0; i + 2 < cxyr.size(); i += 3, ++ci) {
-      CadCircleRecord c;
-      c.cx = cxyr[i + 0].get<double>();
-      c.cy = cxyr[i + 1].get<double>();
-      c.cz = hasZ && ci < cz.size() ? cz[ci].get<double>() : 0.0;
-      c.r = cxyr[i + 2].get<double>();
-      st.drawing.pushCircle(c);
+      st.drawing.pushCircle(CadCircleRecord{cxyr[i + 0].get<double>(), cxyr[i + 1].get<double>(),
+                                            hasZ && ci < cz.size() ? cz[ci].get<double>() : 0.0, cxyr[i + 2].get<double>()});
     }
   }
   // The plane normals (REQ-312), from the additive "circlesN" written beside "circles". Absent

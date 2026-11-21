@@ -974,8 +974,7 @@ struct UnsavedProject {
 };
 
 struct AppCommandState {
-  /// Saved drawing content (ADR-0010). Members are reached as `drawing.<member>`.
-  DrawingContent drawing;
+  DrawingContent drawing;  // saved drawing content (ADR-0010); members are reached as drawing.<member>
 
   /// Seeds the tables a live drawing always has. `DrawingContent` leaves them empty because undo
   /// frames and stored tabs started empty before ADR-0010 (issue #1557 phase 1a is a pure move).
@@ -6195,8 +6194,7 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
   const int idx = st.entityGripEntityIndex;
   switch (st.entityGripType) {
   case SelectedEntity::Type::LineSeg: {
-    if (idx < 0 || static_cast<size_t>(idx) >= st.drawing.lineCount())
-      return;
+    if (idx < 0 || static_cast<size_t>(idx) >= st.drawing.lineCount()) return;
     CadLineRecord ln = st.drawing.line(static_cast<size_t>(idx));
     ln.x0 = st.entityGripOrigX0;
     ln.y0 = st.entityGripOrigY0;
@@ -6206,8 +6204,7 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
     break;
   }
   case SelectedEntity::Type::Circle: {
-    if (idx < 0 || static_cast<size_t>(idx) >= st.drawing.circleCount())
-      return;
+    if (idx < 0 || static_cast<size_t>(idx) >= st.drawing.circleCount()) return;
     CadCircleRecord cr = st.drawing.circle(static_cast<size_t>(idx));
     cr.cx = st.entityGripOrigCx;
     cr.cy = st.entityGripOrigCy;
