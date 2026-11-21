@@ -25,7 +25,6 @@ class QOpenGLTextureBlitter;
 class QOpenGLVertexArrayObject;
 
 class EditorViewport final : public QOpenGLWidget {
-  friend class QtEditorTests;
 public:
   EditorViewport(AppCommandState& state, std::vector<std::string>& log, QWidget* parent);
   ~EditorViewport() override;

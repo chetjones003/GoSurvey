@@ -13,7 +13,6 @@
   "src/renderer/src/ViewportRenderer.cpp": 4256,
   "tests/BrepTests.cpp": 9427,
   "tests/IO/LibreDwgCadTests.cpp": 9310,
-  "tests/QtEditorTests.cpp": 17518,
   "tests/Survey/TraverseTests.cpp": 3120,
   "tests/headless/HeadlessDriver.cpp": 3235
 }

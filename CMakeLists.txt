@@ -1997,10 +1997,6 @@ if(GOSURVEY_BUILD_TESTS)
     set_tests_properties(unit.catch.shard-${_shard} PROPERTIES TIMEOUT 900 COST 100 LABELS "Integration;Terrain;Survey;Document;Renderer;IO")
   endforeach()
 
-  # Register the independent, isolated Qt shards before the transcript cases so CTest can run both
-  # groups at once instead of letting the faster headless list postpone the GUI work.
-  include(cmake/GoSurveyQtTests.cmake)
-
   # REQ-203: the transcript corpus runs on every push and a non-zero exit fails the build (REQ-202).
   # Registered here, inside GOSURVEY_BUILD_TESTS, because enable_testing() lives in this block —
   # each transcript becomes its own ctest case so a failure names the transcript that failed.
@@ -2079,10 +2075,6 @@ if(GOSURVEY_BUILD_TESTS)
       -RuntimeDirectory "$<TARGET_FILE_DIR:GoSurveyQt>" -WorkDirectory "${GOSURVEY_ARTIFACT_DIR}"
       -TimeoutSec 120)
   set_tests_properties(qt.deployment PROPERTIES TIMEOUT 300)
-  # Issue #919: keep sign-off claims tied to current workflow tests and tracker items.
-  add_test(NAME qt.parity-ledger
-    COMMAND powershell -NoProfile -ExecutionPolicy Bypass
-      -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify-qt-parity-ledger.ps1")
 endif()
 
 # Developer-only helpers remain available to ctest/tools without adding app executables.

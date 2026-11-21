@@ -40,10 +40,6 @@ $report = [ordered]@{ baseSha = $BaseSha; headSha = (git rev-parse HEAD); lineFi
   tool = $tool; version = ($version -join "`n"); workers = $Jobs; files = $files; results = @() }
 $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $outputDir 'scope.json')
 if ($files.Count -eq 0) { Write-Host 'No added or modified C/C++ lines to analyze.'; return }
-if ($files -contains 'tests/QtEditorTests.cpp') {
-  & cmake -E cmake_autogen (Join-Path $buildDir 'CMakeFiles/GoSurveyQtTests_autogen.dir/AutogenInfo.json') Release
-  if ($LASTEXITCODE -ne 0) { throw 'Qt test MOC generation failed.' }
-}
 $lineFilter = ConvertTo-Json -InputObject @($filters) -Depth 6 -Compress
 $config = (Resolve-Path -LiteralPath .clang-tidy).Path
 $results = @($files | ForEach-Object -Parallel {

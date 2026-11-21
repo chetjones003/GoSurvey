@@ -101,7 +101,6 @@ protected:
   void keyPressEvent(QKeyEvent* event) override;
   bool eventFilter(QObject* watched, QEvent* event) override;
 private:
-  friend class QtEditorTests;
   struct SaveResult { bool succeeded = false; std::string error; };
   void ApplyAppearance();
   void RefreshAppearanceIcons();

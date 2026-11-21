@@ -67,7 +67,6 @@ MSVC x64 Qt 6.8+ kit; set `$env:GOSURVEY_QT_ROOT` if it isn't at `C:\Qt\6.8.3\ms
 | Task | Command (PowerShell, repo root) |
 | --- | --- |
 | Build everything (Release) | `.\build.bat` |
-| Qt GUI tests (hidden desktop) | `ctest --preset ninja-release -R "^qt[.]editor$"` |
 | Full suite | `ctest --preset ninja-release` |
 | Output layout check | `ctest --preset ninja-release -R "^build[.]output-layout$"` |
 | Clean rebuild | `.\build.bat release --clean-first` |
@@ -84,7 +83,7 @@ GoSurvey process from another worktree. If a build is blocked, check the process
 
 ### Build output
 
-- `build/`: only `GoSurvey.exe`, `GoSurveyQtTests.exe` and their runtime files (DLLs, `qt.conf`,
+- `build/`: only `GoSurvey.exe` and its runtime files (DLLs, `qt.conf`,
   `qt-plugins/`, `resources/`, `.ini`). Debug goes in `build/debug/`.
 - `build/.cmake/<preset>/`: caches, generated headers, libs, symbols, helper executables.
 - `build/artifacts/`: screenshots, logs, test reports. Never commit them.

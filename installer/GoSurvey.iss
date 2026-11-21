@@ -111,7 +111,7 @@ Type: filesandordirs; Name: "{app}\licenses"
 Source: "{#BuildDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\resources\*"; DestDir: "{app}\resources"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#BuildDir}\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
-; Qt6Test.dll is for the test runner only (cmake/GoSurveyQtTests.cmake); tools/verify-qt-deployment.ps1 excludes it from the deployed set too.
+; Qt6Test.dll is not part of the app; tools/verify-qt-deployment.ps1 excludes it from the deployed set too.
 Source: "{#BuildDir}\*.dll"; DestDir: "{app}"; Excludes: "Qt6Test.dll"; Flags: ignoreversion
 Source: "{#BuildDir}\qt.conf"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\qt-plugins\*"; DestDir: "{app}\qt-plugins"; Flags: ignoreversion recursesubdirs createallsubdirs

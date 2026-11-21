@@ -244,7 +244,7 @@ try {
       '-DCMAKE_C_COMPILER_LAUNCHER=sccache', '-DCMAKE_CXX_COMPILER_LAUNCHER=sccache',
       "-DCMAKE_PREFIX_PATH=$env:GOSURVEY_QT_ROOT")
   }
-  $targets = @('--target', 'GoSurveyQt', 'GoSurveyTests', 'gosurvey_headless', 'GoSurveyQtTests')
+  $targets = @('--target', 'GoSurveyQt', 'GoSurveyTests', 'gosurvey_headless')
   Invoke-CompilerCacheCommand @('--zero-stats') cache-zero-initial | Out-Host
   Measure-BenchmarkStage initial_build {
     Invoke-BenchmarkCommand cmake (@('--build', '--preset', 'ninja-release') + $targets)
