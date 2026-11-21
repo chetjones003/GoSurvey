@@ -4,7 +4,6 @@
 #include "CadBlocks.hpp"
 #include <GoSurvey/Core/StringUtil.hpp>
 
-bool ParseSolidBasePoint(AppCommandState& st, const std::string& raw, ray3d::Vec3* out, std::vector<std::string>& log, const char* verbUpper, const ray3d::Vec3* relativeBase = nullptr, bool zInUcs = false);
 
 // ---------------------------------------------------------------------------------------------
 // PIPERUN (issue #486 increment B2 / REQ-345): prompted nominal size + pressure class, then
