@@ -490,7 +490,7 @@ json CadBlockContentToJson(const CadBlockContent& c) {
   // inside it on the way out.
   {
     bool anyTilted = false;
-    for (size_t i = 0; i * 4 + 3 < c.userCirclesCxCyZR.size(); ++i)
+    for (size_t i = 0; i < c.circleCount(); ++i)
       anyTilted = anyTilted || !CircleIsFlat(c.userCircleNormals, i);
     if (anyTilted)
       o["circleNormals"] = c.userCircleNormals;

@@ -371,7 +371,8 @@ struct CadEntityStore {
   std::vector<EntityAttributes> cadSolidAttrs;
 
   // --- Circle records (ADR-0010 phase 5) ---------------------------------------------------------
-  // Callers use these instead of computing `i * 4` into \ref userCirclesCxCyZR. The side-cars
+  // Migrated callers use these instead of computing `i * 4` into \ref userCirclesCxCyZR. Layout
+  // readers (the GsIo file format, DocumentInvariants, the headless driver) still index it directly. The side-cars
   // (\ref userCircleAttrs, \ref userCircleNormals) stay the caller's to keep in step.
 
   /// Number of circle records in \ref userCirclesCxCyZR.
