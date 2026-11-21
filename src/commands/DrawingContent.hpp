@@ -203,4 +203,65 @@ struct DrawingContent : CadDrawingEntityStore {
   float modelUnitsPerPlottedInch = 50.f;
   /// The drawing's Drawing Settings (REQ-357): per tab, undoable, saved in the trailer JSON.
   DrawingSettings drawingSettings;
+
+  /// Removes the CAD entities and alignment/surface collections replaced by OPEN and CAD imports.
+  /// Drawing setup (layers, styles, units and settings), survey points, feature lines, underlays
+  /// and paper layouts remain attached to the drawing. Application-owned caches and interaction
+  /// state are cleared by ClearCadGeometry after this content-level reset.
+  void clearCadGeometry() {
+    worldDocumentOriginX = 0.0;
+    worldDocumentOriginY = 0.0;
+    userLinesFlat.clear();
+    userLineAttrs.clear();
+    userCirclesCxCyZR.clear();
+    userCircleAttrs.clear();
+    userCircleNormals.clear();
+    userArcs.clear();
+    userArcAttrs.clear();
+    userEllipses.clear();
+    userEllAttrs.clear();
+    userPolylineVerts.clear();
+    userPolylineVertsBulge.clear();
+    userPolylineVertsNormal.clear();
+    userPolylineOffsets.clear();
+    userPolylineClosed.clear();
+    userPolylineAttrs.clear();
+    cadAnnotations.clear();
+    cadAnnotationAttrs.clear();
+    cadFilledRegions.clear();
+    cadFilledRegionAttrs.clear();
+    annotationScales.clear();
+    viewportZoomScales.clear();
+    cadMeshes.clear();
+    cadMeshAttrs.clear();
+    cadPointClouds.clear();
+    cadPointCloudAttrs.clear();
+    cadSolids.clear();
+    cadSolidAttrs.clear();
+    cadSurfaces.clear();
+    cadSurfaceAttrs.clear();
+    cadTables.clear();
+    cadTableAttrs.clear();
+    cadPositionMarkers.clear();
+    cadPositionMarkerAttrs.clear();
+    cadMultileaders.clear();
+    cadMultileaderAttrs.clear();
+    cadSplines.clear();
+    cadSplineAttrs.clear();
+    cadPoints.clear();
+    cadPointAttrs.clear();
+    alignments.clear();
+    sampleLines.clear();
+    profiles.clear();
+    pdMode = 0;
+    pdSize = 0.0;
+    cadPipeRuns.clear();
+    cadPipeRunAttrs.clear();
+    cadPipingSystems.clear();
+    blockDefs.clear();
+    cadBlockRefs.clear();
+    cadBlockRefAttrs.clear();
+    ucsNamed.clear();
+    namedViews.clear();
+  }
 };

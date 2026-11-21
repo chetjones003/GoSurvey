@@ -30214,8 +30214,7 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
 }
 
 void ClearCadGeometry(AppCommandState& st) {
-  st.drawing.worldDocumentOriginX = 0.0;
-  st.drawing.worldDocumentOriginY = 0.0;
+  st.drawing.clearCadGeometry();
   // A cleared drawing starts in the WCS with no saved frames (REQ-154), for the same reason the id
   // space restarts below: the UCS belongs to the drawing, and carrying the previous drawing's
   // coordinate frame into a new one would read every coordinate typed next in a frame that has
@@ -30223,49 +30222,20 @@ void ClearCadGeometry(AppCommandState& st) {
   // after clearing.
   st.activeUcs = ucs::Ucs{};
   st.ucsPrevious.clear();
-  st.drawing.ucsNamed.clear();
   st.ucsFollow = false;
-  st.drawing.namedViews.clear();
   st.activeViewName.clear();
   // A cleared drawing is a new drawing: its id space restarts. Ids are unique *within* a drawing
   // (REQ-076), not globally, and every entity that could have held one is about to be erased. A
   // `internal document payload` load overwrites this from the file immediately after clearing.
   st.nextEntityId = 1;
   st.entityIdSweepRevision = kEntityIdSweepNever;  // whatever is loaded next must be swept
-  st.drawing.userLinesFlat.clear();
-  st.drawing.userLineAttrs.clear();
-  st.drawing.userCirclesCxCyZR.clear();
-  st.drawing.userCircleAttrs.clear();
-  st.drawing.userCircleNormals.clear();
-  st.drawing.userArcs.clear();
-  st.drawing.userArcAttrs.clear();
-  st.drawing.userEllipses.clear();
-  st.drawing.userEllAttrs.clear();
-  st.drawing.userPolylineVerts.clear();
-  st.drawing.userPolylineVertsBulge.clear();  // REQ-316 / ADR-047
-  st.drawing.userPolylineVertsNormal.clear();  // REQ-325 / ADR-053
-  st.drawing.userPolylineOffsets.clear();
-  st.drawing.userPolylineClosed.clear();
-  st.drawing.userPolylineAttrs.clear();
-  st.drawing.cadAnnotations.clear();
-  st.drawing.cadAnnotationAttrs.clear();
-  st.drawing.cadFilledRegions.clear();
-  st.drawing.cadFilledRegionAttrs.clear();
-  st.drawing.annotationScales.clear();
   st.currentAnnotationScaleIndex = -1;
-  st.drawing.viewportZoomScales.clear();
   st.currentViewportZoomScaleIndex = -1;
   st.dwgImportedLights.clear();
   st.dwgImportedSunPresent = false;
   st.dwgImportedLightList = {};
   st.dwgImportedLightListPresent = false;
   st.dwgImportedLightListDictKey.clear();
-  st.drawing.cadMeshes.clear();
-  st.drawing.cadMeshAttrs.clear();
-  st.drawing.cadPointClouds.clear();
-  st.drawing.cadPointCloudAttrs.clear();
-  st.drawing.cadSolids.clear();
-  st.drawing.cadSolidAttrs.clear();
   st.solidDisplayCache.clear();
   st.solidDisplayGeometry.solids.clear();
   // TIN surfaces (REQ-068) and their generated display geometry (ADR-036 (e)). The cache is keyed
@@ -30273,8 +30243,6 @@ void ClearCadGeometry(AppCommandState& st) {
   // dropped whenever the drawing's geometry is cleared or replaced. Leaving it across OPEN/IMPORT
   // let a cache entry for the same id early-out against a new triangulation and, worse, hand the
   // renderer buffers built for the previous document (issue #663).
-  st.drawing.cadSurfaces.clear();
-  st.drawing.cadSurfaceAttrs.clear();
   st.surfaceDisplayCache.clear();
   st.surfaceWatershedCache.clear();
   st.surfaceDisplayGeometry.lines.clear();
@@ -30284,35 +30252,14 @@ void ClearCadGeometry(AppCommandState& st) {
   st.blockRefWorldSolids.clear();
   st.blockRefWorldSolidAttrs.clear();
   st.blockRefWorldSolidsSig = 0;
-  st.drawing.cadTables.clear();
-  st.drawing.cadTableAttrs.clear();
-  st.drawing.cadPositionMarkers.clear();  // REQ-359
-  st.drawing.cadPositionMarkerAttrs.clear();
-  st.drawing.cadMultileaders.clear();  // REQ-367
-  st.drawing.cadMultileaderAttrs.clear();
-  st.drawing.cadSplines.clear();  // REQ-443
-  st.drawing.cadSplineAttrs.clear();
-  st.drawing.cadPoints.clear();  // REQ-456
-  st.drawing.cadPointAttrs.clear();
-  st.drawing.alignments.clear();  // REQ-480
-  st.drawing.sampleLines.clear();  // REQ-519: sample lines belong to the alignments just removed
-  st.drawing.profiles.clear();  // REQ-521: profiles belong to the alignments just removed
-  st.drawing.pdMode = 0;
-  st.drawing.pdSize = 0.0;
   // Pipe runs are CAD geometry too (issue #486 / REQ-345). Left behind, an import into a drawing
   // that already had runs would keep them alongside the imported content — the same "written before
   // pipe runs existed" miss the document snapshot had. The derived solids go with them, the way
   // blockRefWorldSolids does just above.
-  st.drawing.cadPipeRuns.clear();
-  st.drawing.cadPipeRunAttrs.clear();
-  st.drawing.cadPipingSystems.clear();
   st.pipeRunWorldSolids.clear();
   st.pipeRunWorldSolidAttrs.clear();
   st.pipeRunWorldSolidOwnerIndex.clear();
   st.pipeRunWorldSolidsSig = 0;
-  st.drawing.blockDefs.clear();
-  st.drawing.cadBlockRefs.clear();
-  st.drawing.cadBlockRefAttrs.clear();
   st.blockEditorName.clear();
   st.importedDxfAttrDefs.clear();
   ClearPendingOneShotObjectSnap(st);

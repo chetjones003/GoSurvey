@@ -771,3 +771,54 @@ TEST_CASE("Polyline vertices are read, written and erased through the entity sto
   CHECK(store.vertex(0).y == 80.0);
   CHECK(store.userPolylineVerts.size() % 3 == 0);
 }
+
+TEST_CASE("Clearing CAD geometry replaces CAD content but keeps drawing setup", "[issue1557][phase6]") {
+  AppCommandState state;
+  state.drawing.userLinesFlat = {1, 2, 3, 4, 5, 6};
+  state.drawing.userPolylineVerts = {1, 2, 3};
+  state.drawing.userPolylineVertsNormal = {0, 1, 0};
+  state.drawing.cadTables.emplace_back();
+  state.drawing.cadPoints.emplace_back();
+  state.drawing.cadSurfaces.emplace_back();
+  state.drawing.alignments.emplace_back();
+  state.drawing.featureLineVerts = {1, 2, 3};
+  state.drawing.annotationScales.emplace_back();
+  state.drawing.viewportZoomScales.emplace_back();
+  state.drawing.cadPipeRuns.emplace_back();
+  state.drawing.drawingLayerTable.push_back(CadLayerRow{});
+  state.drawing.textStyles.emplace_back();
+  state.drawing.drawingInsUnits = 6;
+  state.drawing.surveyPoints.emplace_back();
+  state.drawing.paperLayouts.emplace_back();
+  const size_t layerCountBefore = state.drawing.drawingLayerTable.size();
+  const size_t textStyleCountBefore = state.drawing.textStyles.size();
+  state.drawing.worldDocumentOriginX = 123.0;
+  state.drawing.worldDocumentOriginY = 456.0;
+  state.currentAnnotationScaleIndex = 0;
+  state.currentViewportZoomScaleIndex = 0;
+  state.nextEntityId = 42;
+
+  ClearCadGeometry(state);
+
+  CHECK(state.drawing.userLinesFlat.empty());
+  CHECK(state.drawing.userPolylineVerts.empty());
+  CHECK(state.drawing.userPolylineVertsNormal.empty());
+  CHECK(state.drawing.cadTables.empty());
+  CHECK(state.drawing.cadPoints.empty());
+  CHECK(state.drawing.cadSurfaces.empty());
+  CHECK(state.drawing.alignments.empty());
+  CHECK(state.drawing.featureLineVerts == std::vector<double>{1, 2, 3});
+  CHECK(state.drawing.annotationScales.empty());
+  CHECK(state.drawing.viewportZoomScales.empty());
+  CHECK(state.drawing.cadPipeRuns.empty());
+  CHECK(state.drawing.drawingLayerTable.size() == layerCountBefore);
+  CHECK(state.drawing.textStyles.size() == textStyleCountBefore);
+  CHECK(state.drawing.drawingInsUnits == 6);
+  CHECK(state.drawing.surveyPoints.size() == 1);
+  CHECK(state.drawing.paperLayouts.size() == 1);
+  CHECK(state.drawing.worldDocumentOriginX == 0.0);
+  CHECK(state.drawing.worldDocumentOriginY == 0.0);
+  CHECK(state.currentAnnotationScaleIndex == -1);
+  CHECK(state.currentViewportZoomScaleIndex == -1);
+  CHECK(state.nextEntityId == 1);
+}
